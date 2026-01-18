@@ -9,6 +9,7 @@
     "@gent/core": "workspace:*"
   },
   "peerDependencies": {
+    "@effect/platform": "catalog:",
     "effect": "catalog:"
   }
 }

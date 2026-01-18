@@ -1,4 +1,4 @@
-import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
+import { BunHttpServer, BunRuntime, BunFileSystem, BunContext } from "@effect/platform-bun"
 import {
   HttpApiBuilder,
   HttpApiScalar,
@@ -158,9 +158,12 @@ const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
 
 // Services Layer
 
+const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
+const StorageLive = Storage.Live(".gent/data.db").pipe(Layer.provide(PlatformLayer))
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const BaseServicesLive = Layer.mergeAll(
-  Storage.Live(".gent/data.db"),
+  StorageLive,
   Provider.Live,
   ToolRegistry.Live(AllTools as any),
   EventBus.Live,

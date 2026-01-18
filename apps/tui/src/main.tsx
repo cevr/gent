@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
-import { BunContext, BunRuntime } from "@effect/platform-bun"
+import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
 import { Console, Effect, Layer } from "effect"
 import { Storage } from "@gent/storage"
 import {
@@ -23,8 +23,11 @@ const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
 const DB_PATH = path.join(DATA_DIR, "data.db")
 
 // Runtime layer
+const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
+const StorageLayer = Storage.Live(DB_PATH).pipe(Layer.provide(PlatformLayer))
+
 const RuntimeLayer = Layer.mergeAll(
-  Storage.Live(DB_PATH),
+  StorageLayer,
   Provider.Live,
   ToolRegistry.Live(AllTools as any),
   EventBus.Live,
