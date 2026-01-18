@@ -3,9 +3,12 @@ import type { InputRenderable } from "@opentui/core"
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
 import type { AgentMode } from "@gent/core"
 import { extractText, type GentClient } from "./client.js"
-import { StatusBar } from "./components/StatusBar.js"
-import { MessageList, type Message } from "./components/MessageList.js"
-import { useGitInfo } from "./hooks/useGitStatus.js"
+import { StatusBar } from "./components/status-bar.js"
+import { MessageList, type Message } from "./components/message-list.js"
+import { CommandPalette } from "./components/command-palette.js"
+import { useGitInfo } from "./hooks/use-git-status.js"
+import { ThemeProvider, useTheme } from "./theme/index.js"
+import { CommandProvider, useCommand, type Command } from "./command/index.js"
 
 interface AppProps {
   client: GentClient
@@ -16,9 +19,11 @@ interface AppProps {
   model?: string
 }
 
-export function App(props: AppProps) {
+function AppContent(props: AppProps) {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
+  const { theme, mode, setMode, all, set } = useTheme()
+  const command = useCommand()
   const cwd = props.cwd ?? process.cwd()
   const model = props.model ?? "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
 
@@ -26,12 +31,53 @@ export function App(props: AppProps) {
 
   const [, setInputValue] = createSignal("")
   const [messages, setMessages] = createSignal<Message[]>([])
-  const [mode, setMode] = createSignal<AgentMode>("auto")
+  const [agentMode, setAgentMode] = createSignal<AgentMode>("auto")
   const [cost] = createSignal(0)
   const [status, setStatus] = createSignal<"idle" | "streaming" | "error">("idle")
   const [error, setError] = createSignal<string | null>(null)
 
   const gitInfo = useGitInfo(cwd)
+
+  // Theme helpers
+  const cycleThemeMode = () => setMode(mode() === "dark" ? "light" : "dark")
+
+  // Register commands
+  onMount(() => {
+    const themeCommands: Command[] = Object.keys(all()).map((name) => ({
+      id: `theme.${name}`,
+      title: `Use ${name} theme`,
+      category: "Theme",
+      onSelect: () => set(name),
+    }))
+
+    const commands: Command[] = [
+      {
+        id: "theme.mode.cycle",
+        title: "Toggle dark/light mode",
+        description: "Switch between dark and light",
+        category: "Theme",
+        onSelect: cycleThemeMode,
+      },
+      ...themeCommands,
+      {
+        id: "mode.cycle",
+        title: "Cycle agent mode",
+        description: "Switch between auto/plan",
+        category: "Agent",
+        keybind: "shift+tab",
+        onSelect: () => setAgentMode((m) => (m === "auto" ? "plan" : "auto")),
+      },
+      {
+        id: "app.quit",
+        title: "Quit",
+        category: "Application",
+        onSelect: exit,
+      },
+    ]
+
+    const unregister = command.register(commands)
+    onCleanup(unregister)
+  })
 
   // Load messages and subscribe to events
   onMount(() => {
@@ -120,14 +166,25 @@ export function App(props: AppProps) {
 
   // Keyboard handlers
   useKeyboard((e) => {
-    // ESC or Ctrl+C to quit
-    if (e.name === "escape" || (e.ctrl && e.name === "c")) {
-      exit()
+    // Let command system handle keybinds first
+    if (command.handleKeybind(e)) {
+      return
     }
 
-    // Shift+Tab to cycle mode
-    if (e.name === "tab" && e.shift) {
-      setMode((m) => (m === "auto" ? "plan" : "auto"))
+    // ESC closes palette or quits
+    if (e.name === "escape") {
+      if (command.paletteOpen()) {
+        command.closePalette()
+      } else {
+        exit()
+      }
+      return
+    }
+
+    // Ctrl+C to quit
+    if (e.ctrl && e.name === "c") {
+      exit()
+      return
     }
   })
 
@@ -170,16 +227,16 @@ export function App(props: AppProps) {
 
       {/* Separator line */}
       <box flexShrink={0}>
-        <text style={{ fg: "gray" }}>{"─".repeat(dimensions().width)}</text>
+        <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
       </box>
 
       {/* Input */}
       <box flexShrink={0} flexDirection="row" paddingLeft={1}>
-        <text style={{ fg: "cyan" }}>❯ </text>
+        <text style={{ fg: theme.primary }}>❯ </text>
         <box flexGrow={1}>
           <input
             ref={(r) => (inputRef = r)}
-            focused
+            focused={!command.paletteOpen()}
             onInput={setInputValue}
             onSubmit={handleSubmit}
             backgroundColor="transparent"
@@ -190,12 +247,12 @@ export function App(props: AppProps) {
 
       {/* Separator line */}
       <box flexShrink={0}>
-        <text style={{ fg: "gray" }}>{"─".repeat(dimensions().width)}</text>
+        <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
       </box>
 
       {/* Status Bar */}
       <StatusBar
-        mode={mode()}
+        mode={agentMode()}
         model={model}
         cwd={cwd}
         gitRoot={gitInfo()?.root ?? null}
@@ -204,6 +261,19 @@ export function App(props: AppProps) {
         status={status()}
         error={error()}
       />
+
+      {/* Command Palette */}
+      <CommandPalette />
     </box>
+  )
+}
+
+export function App(props: AppProps) {
+  return (
+    <ThemeProvider mode={undefined}>
+      <CommandProvider>
+        <AppContent {...props} />
+      </CommandProvider>
+    </ThemeProvider>
   )
 }

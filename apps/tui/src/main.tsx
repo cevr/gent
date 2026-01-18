@@ -7,7 +7,7 @@ import { DevTracerLive, clearLog } from "@gent/telemetry"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
-import { App } from "./App.js"
+import { App } from "./app.js"
 import { createClient } from "./client.js"
 
 // Data directory

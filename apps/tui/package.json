@@ -18,9 +18,13 @@
     "@gent/telemetry": "workspace:*",
     "@opentui/core": "^0.1.74",
     "@opentui/solid": "^0.1.74",
+    "figlet": "^1.9.4",
     "solid-js": "^1.9.10"
   },
   "peerDependencies": {
     "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/figlet": "^1.7.0"
   }
 }

@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { PermissionRule } from "./Permission.js"
+import { PermissionRule } from "./permission.js"
 
 // Agent Mode
 

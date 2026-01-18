@@ -2,9 +2,9 @@ export {
   AgentLoop,
   AgentLoopError,
   SteerCommand,
-} from "./AgentLoop.js"
+} from "./agent-loop.js"
 
 export {
   CompactionService,
   COMPACTION_THRESHOLD,
-} from "./Compaction.js"
+} from "./compaction.js"

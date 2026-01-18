@@ -1,6 +1,7 @@
 import { Show } from "solid-js"
 import type { AgentMode } from "@gent/core"
-import type { GitStatus } from "../hooks/useGitStatus.js"
+import type { GitStatus } from "../hooks/use-git-status.js"
+import { useTheme } from "../theme/index.js"
 
 interface StatusBarProps {
   mode: AgentMode
@@ -48,40 +49,40 @@ function relativePath(cwd: string, gitRoot: string | null): string {
   return parts[parts.length - 1] ?? cwd
 }
 
-function statusIndicator(status: "idle" | "streaming" | "error"): { text: string; color: string } {
-  switch (status) {
-    case "streaming":
-      return { text: "thinking...", color: "cyan" }
-    case "error":
-      return { text: "error", color: "red" }
-    default:
-      return { text: "", color: "gray" }
-  }
-}
-
 export function StatusBar(props: StatusBarProps) {
-  const indicator = () => statusIndicator(props.status)
+  const { theme } = useTheme()
+
+  const statusIndicator = () => {
+    switch (props.status) {
+      case "streaming":
+        return { text: "thinking...", color: theme.info }
+      case "error":
+        return { text: "error", color: theme.error }
+      default:
+        return { text: "", color: theme.textMuted }
+    }
+  }
 
   return (
     <box flexDirection="column" flexShrink={0}>
       {/* Error row if error */}
       <Show when={props.error}>
         <box paddingLeft={1} paddingRight={1}>
-          <text style={{ fg: "red" }}>{props.error}</text>
+          <text style={{ fg: theme.error }}>{props.error}</text>
         </box>
       </Show>
 
       {/* Row 1: mode · model · status */}
       <box paddingLeft={1} paddingRight={1}>
         <text>
-          <span style={{ fg: props.mode === "auto" ? "green" : "yellow" }}>
+          <span style={{ fg: props.mode === "auto" ? theme.success : theme.warning }}>
             {props.mode}
           </span>
-          <span style={{ fg: "gray" }}> · </span>
-          <span style={{ fg: "gray" }}>{shortenModel(props.model)}</span>
-          <Show when={indicator().text}>
-            <span style={{ fg: "gray" }}> · </span>
-            <span style={{ fg: indicator().color }}>{indicator().text}</span>
+          <span style={{ fg: theme.textMuted }}> · </span>
+          <span style={{ fg: theme.textMuted }}>{shortenModel(props.model)}</span>
+          <Show when={statusIndicator().text}>
+            <span style={{ fg: theme.textMuted }}> · </span>
+            <span style={{ fg: statusIndicator().color }}>{statusIndicator().text}</span>
           </Show>
         </text>
       </box>
@@ -89,27 +90,27 @@ export function StatusBar(props: StatusBarProps) {
       {/* Row 2: cwd · git · cost */}
       <box paddingLeft={1} paddingRight={1}>
         <text>
-          <span style={{ fg: "gray" }}>{relativePath(props.cwd, props.gitRoot)}</span>
+          <span style={{ fg: theme.textMuted }}>{relativePath(props.cwd, props.gitRoot)}</span>
           <Show when={props.git}>
             {(git) => (
               <>
-                <span style={{ fg: "gray" }}> · </span>
-                <span style={{ fg: "yellow" }}>{git().branch}</span>
+                <span style={{ fg: theme.textMuted }}> · </span>
+                <span style={{ fg: theme.warning }}>{git().branch}</span>
                 <Show when={git().files > 0}>
-                  <span style={{ fg: "white" }}> {git().files} files</span>
+                  <span style={{ fg: theme.text }}> ~{git().files}</span>
                   <Show when={git().additions > 0}>
-                    <span style={{ fg: "green" }}> +{git().additions}</span>
+                    <span style={{ fg: theme.success }}> +{git().additions}</span>
                   </Show>
                   <Show when={git().deletions > 0}>
-                    <span style={{ fg: "red" }}> -{git().deletions}</span>
+                    <span style={{ fg: theme.error }}> -{git().deletions}</span>
                   </Show>
                 </Show>
-                <span style={{ fg: "gray" }}> · {formatCost(props.cost)}</span>
+                <span style={{ fg: theme.textMuted }}> · {formatCost(props.cost)}</span>
               </>
             )}
           </Show>
           <Show when={!props.git}>
-            <span style={{ fg: "gray" }}> · {formatCost(props.cost)}</span>
+            <span style={{ fg: theme.textMuted }}> · {formatCost(props.cost)}</span>
           </Show>
         </text>
       </box>

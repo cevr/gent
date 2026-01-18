@@ -58,6 +58,7 @@ Use `effect` skill. Key patterns:
 - Every service: `Live` + `Test` layers
 - Schema validation everywhere
 - Discriminated unions via `Schema.TaggedClass`
+- **File naming**: kebab-case everywhere (`agent-loop.ts`, `message-list.tsx`)
 
 ## Package Structure
 
@@ -85,7 +86,7 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 | File | Purpose |
 |------|---------|
-| `packages/storage/src/SqliteStorage.ts` | `decodeMessageParts` for JSON→Schema roundtrip |
+| `packages/storage/src/sqlite-storage.ts` | `decodeMessageParts` for JSON→Schema roundtrip |
 | `packages/test-utils/src/index.ts` | `SequenceRecorder`, recording layers, assertions |
 | `apps/tui/tsconfig.json` | `jsxImportSource: "@opentui/solid"` required |
 

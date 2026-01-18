@@ -11,17 +11,17 @@ export {
   Session,
   Branch,
   Compaction,
-} from "./Message.js"
+} from "./message.js"
 
 // Tool Types
-export type { ToolDefinition, ToolContext } from "./Tool.js"
+export type { ToolDefinition, ToolContext } from "./tool.js"
 export {
   defineTool,
   ToolRegistry,
   ToolSuccess,
   ToolError,
   ToolExecutionResult,
-} from "./Tool.js"
+} from "./tool.js"
 
 // Event Types
 export {
@@ -44,10 +44,10 @@ export {
   ErrorOccurred,
   AskUserRequested,
   AskUserResponded,
-} from "./Event.js"
+} from "./event.js"
 
 // Permission Types
-export { Permission, PermissionRule, PermissionResult } from "./Permission.js"
+export { Permission, PermissionRule, PermissionResult } from "./permission.js"
 
 // Config Types
-export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./Config.js"
+export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./config.js"

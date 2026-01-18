@@ -1,4 +1,4 @@
-export type { ProviderRequest, ProviderService } from "./Provider.js"
+export type { ProviderRequest, ProviderService } from "./provider.js"
 export {
   Provider,
   ProviderError,
@@ -7,4 +7,4 @@ export {
   ToolCallChunk,
   ReasoningChunk,
   FinishChunk,
-} from "./Provider.js"
+} from "./provider.js"

@@ -1,1 +1,1 @@
-export { Storage, StorageError } from "./SqliteStorage.js"
+export { Storage, StorageError } from "./sqlite-storage.js"

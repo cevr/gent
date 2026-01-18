@@ -7,4 +7,4 @@ export {
   CreateSessionRequest,
   CreateSessionResponse,
   SteerRequest,
-} from "./HttpApi.js"
+} from "./http-api.js"
