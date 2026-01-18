@@ -1,0 +1,16 @@
+{
+  "name": "@gent/tui",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --preload @opentui/solid/preload src/main.tsx"
+  },
+  "dependencies": {
+    "@gent/api": "workspace:*",
+    "@opentui/solid": "^0.1.74",
+    "solid-js": "^1.9.9"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  }
+}

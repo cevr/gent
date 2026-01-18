@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+.gent/data.db
+bun.lock

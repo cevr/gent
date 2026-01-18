@@ -1,0 +1,374 @@
+import { Context, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
+import {
+  Message,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+  EventBus,
+  StreamStarted,
+  StreamChunk as EventStreamChunk,
+  StreamEnded,
+  ToolCallStarted,
+  ToolCallCompleted,
+  MessageReceived,
+  ToolRegistry,
+  ToolContext,
+  Permission,
+  ErrorOccurred,
+} from "@gent/core"
+import { Storage, StorageError } from "@gent/storage"
+import { Provider, ProviderError } from "@gent/providers"
+
+// Agent Loop Error
+
+export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()(
+  "AgentLoopError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  }
+) {}
+
+// Steer Command
+
+export const SteerCommand = Schema.Union(
+  Schema.TaggedStruct("Cancel", {}),
+  Schema.TaggedStruct("Interrupt", { message: Schema.String }),
+  Schema.TaggedStruct("SwitchModel", { model: Schema.String })
+)
+export type SteerCommand = typeof SteerCommand.Type
+
+// Agent Loop State
+
+interface AgentLoopState {
+  running: boolean
+  model: string
+  followUpQueue: Message[]
+}
+
+// Agent Loop Service
+
+export interface AgentLoopService {
+  readonly run: (message: Message) => Effect.Effect<void, AgentLoopError>
+  readonly steer: (command: SteerCommand) => Effect.Effect<void>
+  readonly followUp: (message: Message) => Effect.Effect<void>
+  readonly isRunning: () => Effect.Effect<boolean>
+}
+
+export class AgentLoop extends Context.Tag("AgentLoop")<
+  AgentLoop,
+  AgentLoopService
+>() {
+  static Live = (config: {
+    systemPrompt: string
+    defaultModel: string
+  }): Layer.Layer<
+    AgentLoop,
+    never,
+    Storage | Provider | ToolRegistry | EventBus | Permission
+  > =>
+    Layer.scoped(
+      AgentLoop,
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const provider = yield* Provider
+        const toolRegistry = yield* ToolRegistry
+        const eventBus = yield* EventBus
+        const permission = yield* Permission
+        const runtime = yield* Effect.runtime<never>()
+
+        const stateRef = yield* Ref.make<AgentLoopState>({
+          running: false,
+          model: config.defaultModel,
+          followUpQueue: [],
+        })
+
+        const steerQueue = yield* Queue.unbounded<SteerCommand>()
+
+        const executeToolCall = Effect.fn("AgentLoop.executeToolCall")(
+          function* (toolCall: ToolCallPart, ctx: ToolContext) {
+            const tool = yield* toolRegistry.get(toolCall.toolName)
+
+            if (!tool) {
+              return new ToolResultPart({
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                result: { error: `Unknown tool: ${toolCall.toolName}` },
+                isError: true,
+              })
+            }
+
+            // Check permission
+            const permResult = yield* permission.check(
+              toolCall.toolName,
+              toolCall.args
+            )
+
+            if (permResult === "denied") {
+              return new ToolResultPart({
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                result: { error: "Permission denied" },
+                isError: true,
+              })
+            }
+
+            // Execute tool using runtime
+            const result = yield* Effect.tryPromise({
+              try: () => {
+                const effect = tool.execute(toolCall.args as never, ctx)
+                return Runtime.runPromise(runtime)(
+                  effect as Effect.Effect<unknown>
+                )
+              },
+              catch: (e) =>
+                new AgentLoopError({
+                  message: `Tool execution failed: ${e}`,
+                  cause: e,
+                }),
+            })
+
+            return new ToolResultPart({
+              toolCallId: toolCall.toolCallId,
+              toolName: toolCall.toolName,
+              result,
+              isError: false,
+            })
+          }
+        )
+
+        const runLoop = Effect.fn("AgentLoop.runLoop")(function* (
+          sessionId: string,
+          branchId: string,
+          initialMessage: Message
+        ): Generator<
+          any,
+          void,
+          any
+        > {
+          // Save user message
+          yield* storage.createMessage(initialMessage)
+          yield* eventBus.publish(
+            new MessageReceived({
+              sessionId,
+              branchId,
+              messageId: initialMessage.id,
+              role: "user",
+            })
+          )
+
+          let continueLoop = true
+
+          while (continueLoop) {
+            // Check for steer commands
+            const steerCmd = yield* Queue.poll(steerQueue)
+            if (steerCmd._tag === "Some") {
+              const cmd = steerCmd.value
+              if (cmd._tag === "Cancel") {
+                continueLoop = false
+                break
+              } else if (cmd._tag === "SwitchModel") {
+                yield* Ref.update(stateRef, (s) => ({
+                  ...s,
+                  model: cmd.model,
+                }))
+              }
+            }
+
+            const state = yield* Ref.get(stateRef)
+            const messages = yield* storage.listMessages(branchId)
+            const tools = yield* toolRegistry.list()
+
+            // Start streaming
+            yield* eventBus.publish(new StreamStarted({ sessionId, branchId }))
+
+            const streamEffect = yield* provider.stream({
+              model: state.model,
+              messages: [...messages],
+              tools: [...tools],
+              systemPrompt: config.systemPrompt,
+            })
+
+            // Collect response parts
+            const textParts: string[] = []
+            const toolCalls: ToolCallPart[] = []
+
+            yield* Stream.runForEach(streamEffect, (chunk) =>
+              Effect.gen(function* () {
+                if (chunk._tag === "TextChunk") {
+                  textParts.push(chunk.text)
+                  yield* eventBus.publish(
+                    new EventStreamChunk({
+                      sessionId,
+                      branchId,
+                      chunk: chunk.text,
+                    })
+                  )
+                } else if (chunk._tag === "ToolCallChunk") {
+                  toolCalls.push(
+                    new ToolCallPart({
+                      toolCallId: chunk.toolCallId,
+                      toolName: chunk.toolName,
+                      args: chunk.args,
+                    })
+                  )
+                }
+              })
+            )
+
+            yield* eventBus.publish(new StreamEnded({ sessionId, branchId }))
+
+            // Build assistant message
+            const assistantParts: Array<TextPart | ToolCallPart> = []
+            const fullText = textParts.join("")
+            if (fullText) {
+              assistantParts.push(new TextPart({ text: fullText }))
+            }
+            assistantParts.push(...toolCalls)
+
+            const assistantMessage = new Message({
+              id: crypto.randomUUID(),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: assistantParts,
+              createdAt: new Date(),
+            })
+
+            yield* storage.createMessage(assistantMessage)
+            yield* eventBus.publish(
+              new MessageReceived({
+                sessionId,
+                branchId,
+                messageId: assistantMessage.id,
+                role: "assistant",
+              })
+            )
+
+            // Execute tool calls if any
+            if (toolCalls.length > 0) {
+              const toolResults: ToolResultPart[] = []
+
+              for (const toolCall of toolCalls) {
+                yield* eventBus.publish(
+                  new ToolCallStarted({
+                    sessionId,
+                    branchId,
+                    toolCallId: toolCall.toolCallId,
+                    toolName: toolCall.toolName,
+                  })
+                )
+
+                const result = yield* executeToolCall(toolCall, {
+                  sessionId,
+                  branchId,
+                  toolCallId: toolCall.toolCallId,
+                })
+
+                toolResults.push(result)
+
+                yield* eventBus.publish(
+                  new ToolCallCompleted({
+                    sessionId,
+                    branchId,
+                    toolCallId: toolCall.toolCallId,
+                    toolName: toolCall.toolName,
+                    isError: result.isError ?? false,
+                  })
+                )
+              }
+
+              // Create tool result message
+              const toolResultMessage = new Message({
+                id: crypto.randomUUID(),
+                sessionId,
+                branchId,
+                role: "user",
+                parts: toolResults,
+                createdAt: new Date(),
+              })
+
+              yield* storage.createMessage(toolResultMessage)
+
+              // Continue loop to process tool results
+              continueLoop = true
+            } else {
+              // No tool calls, loop ends
+              continueLoop = false
+            }
+          }
+
+          // Process follow-up queue
+          const finalState = yield* Ref.get(stateRef)
+          if (finalState.followUpQueue.length > 0) {
+            const nextMessage = finalState.followUpQueue[0]!
+            yield* Ref.update(stateRef, (s) => ({
+              ...s,
+              followUpQueue: s.followUpQueue.slice(1),
+            }))
+            yield* runLoop(sessionId, branchId, nextMessage)
+          }
+        })
+
+        const service: AgentLoopService = {
+          run: Effect.fn("AgentLoop.run")(function* (message: Message) {
+            const isRunning = yield* Ref.get(stateRef).pipe(
+              Effect.map((s) => s.running)
+            )
+
+            if (isRunning) {
+              // Queue as follow-up
+              yield* Ref.update(stateRef, (s) => ({
+                ...s,
+                followUpQueue: [...s.followUpQueue, message],
+              }))
+              return
+            }
+
+            yield* Ref.update(stateRef, (s) => ({ ...s, running: true }))
+
+            yield* (
+              runLoop(
+                message.sessionId,
+                message.branchId,
+                message
+              ) as Effect.Effect<void, AgentLoopError | StorageError | ProviderError>
+            ).pipe(
+              Effect.catchAll((e) =>
+                eventBus.publish(
+                  new ErrorOccurred({
+                    sessionId: message.sessionId,
+                    branchId: message.branchId,
+                    error: "message" in e ? e.message : String(e),
+                  })
+                )
+              ),
+              Effect.ensuring(
+                Ref.update(stateRef, (s) => ({ ...s, running: false }))
+              )
+            )
+          }),
+
+          steer: (command) => Queue.offer(steerQueue, command),
+
+          followUp: (message) =>
+            Ref.update(stateRef, (s) => ({
+              ...s,
+              followUpQueue: [...s.followUpQueue, message],
+            })),
+
+          isRunning: () => Ref.get(stateRef).pipe(Effect.map((s) => s.running)),
+        }
+
+        return service
+      })
+    )
+
+  static Test = (): Layer.Layer<AgentLoop> =>
+    Layer.succeed(AgentLoop, {
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+    })
+}

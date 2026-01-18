@@ -1,0 +1,14 @@
+{
+  "name": "@gent/storage",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@gent/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  }
+}

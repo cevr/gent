@@ -1,0 +1,17 @@
+{
+  "name": "@gent/runtime",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@gent/core": "workspace:*",
+    "@gent/providers": "workspace:*",
+    "@gent/storage": "workspace:*",
+    "@gent/tools": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  }
+}

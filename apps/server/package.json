@@ -1,0 +1,24 @@
+{
+  "name": "@gent/server",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/main.ts"
+  },
+  "dependencies": {
+    "@effect/platform": "catalog:",
+    "@effect/platform-bun": "catalog:",
+    "@gent/api": "workspace:*",
+    "@gent/core": "workspace:*",
+    "@gent/providers": "workspace:*",
+    "@gent/runtime": "workspace:*",
+    "@gent/storage": "workspace:*",
+    "@gent/tools": "workspace:*",
+    "find-my-way-ts": "catalog:",
+    "msgpackr": "catalog:",
+    "multipasta": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@gent/core": ["packages/core/src/index.ts"],
+      "@gent/storage": ["packages/storage/src/index.ts"],
+      "@gent/tools": ["packages/tools/src/index.ts"],
+      "@gent/providers": ["packages/providers/src/index.ts"],
+      "@gent/runtime": ["packages/runtime/src/index.ts"],
+      "@gent/api": ["packages/api/src/index.ts"],
+      "@gent/test-utils": ["packages/test-utils/src/index.ts"]
+    },
+    "plugins": [
+      {
+        "name": "@effect/language-service"
+      }
+    ]
+  },
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/storage" },
+    { "path": "packages/tools" },
+    { "path": "packages/providers" },
+    { "path": "packages/runtime" },
+    { "path": "packages/api" },
+    { "path": "packages/test-utils" },
+    { "path": "apps/server" },
+    { "path": "apps/tui" }
+  ]
+}
