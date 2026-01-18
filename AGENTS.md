@@ -64,11 +64,6 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 | File | Purpose |
 |------|---------|
-| `packages/storage/src/SqliteStorage.ts` | Uses `decodeMessageParts` for JSON→Schema roundtrip, requires platform layer |
+| `packages/storage/src/SqliteStorage.ts` | `decodeMessageParts` for JSON→Schema roundtrip |
 | `packages/test-utils/src/index.ts` | `SequenceRecorder`, recording layers, assertions |
 | `apps/tui/tsconfig.json` | `jsxImportSource: "@opentui/solid"` required |
-| `apps/tui/scripts/build.ts` | Binary compilation with `autoloadBunfig: false` |
-
-## CLI/TUI Architecture
-
-Single app: CLI parses args via `@effect/cli`, launches TUI via `@opentui/solid`. Binary compiles to `~/.bun/bin/gent`.

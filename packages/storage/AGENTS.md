@@ -4,9 +4,8 @@
 
 - **JSON→Schema roundtrip** - `JSON.parse` returns plain objects. Must use `decodeMessageParts(JSON.parse(row.parts))` to reconstruct `MessagePart` class instances.
 - **bun:sqlite scoped** - DB opened in `Layer.scoped`, closed via `Effect.addFinalizer`.
-- **Test layer** - `Storage.Test()` uses `:memory:` SQLite. Each test gets fresh DB. No platform deps needed.
-- **Live layer requires platform** - `Storage.Live(path)` needs `FileSystem | Path` context. Provide via `Layer.provide(BunFileSystem.layer, BunContext.layer)`.
-- **Directory auto-creation** - `Storage.Live` creates parent directory if missing using Effect FileSystem.
+- **Test layer** - `Storage.Test()` uses `:memory:` SQLite. No platform deps.
+- **Live layer requires platform** - `Storage.Live(path)` needs `FileSystem | Path`. Provide via `BunFileSystem.layer` + `BunContext.layer`.
 
 ## Schema
 
