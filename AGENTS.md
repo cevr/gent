@@ -9,6 +9,24 @@ bun install
 bun run typecheck  # Must pass clean (no errors, no suggestions)
 bun run lint       # ESLint: no any, no floating promises
 bun run test       # Uses bun test, NOT vitest (bun:sqlite compat)
+bun run smoke      # Headless mode smoke test
+bun run clean      # Remove dist and tsbuildinfo files
+```
+
+## CLI Usage
+
+```bash
+# TUI mode (default)
+bun run --cwd apps/tui dev
+
+# Headless mode - streams to stdout, exits after response
+bun run --cwd apps/tui dev -H "your prompt here"
+
+# Continue session
+bun run --cwd apps/tui dev -s <session-id>
+
+# List sessions
+bun run --cwd apps/tui dev sessions
 ```
 
 ## Gotchas

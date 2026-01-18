@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime } from "effect"
-import { GentServer } from "@gent/server"
+import { Console, Effect, Layer, ManagedRuntime, Stream } from "effect"
+import { GentServer, type GentServerService, type GentServerError } from "@gent/server"
 import { DevTracerLive, clearLog } from "@gent/telemetry"
 import * as path from "node:path"
 
@@ -37,7 +37,49 @@ clearLog(TRACE_LOG)
 // Create managed runtime for GentServer
 const serverRuntime = ManagedRuntime.make(ServerLayer)
 
-// Main command - launches TUI
+// Headless runner - streams events to stdout
+const runHeadless = (
+  server: GentServerService,
+  sessionId: string,
+  branchId: string,
+  promptText: string
+): Effect.Effect<void, GentServerError, never> =>
+  Effect.gen(function* () {
+    // Subscribe to events before sending message
+    const events = server.subscribeEvents(sessionId)
+
+    // Send the message
+    yield* server.sendMessage({ sessionId, branchId, content: promptText })
+
+    // Stream events until complete
+    yield* events.pipe(
+      Stream.tap((event) =>
+        Effect.sync(() => {
+          switch (event._tag) {
+            case "StreamChunk":
+              process.stdout.write(event.chunk)
+              break
+            case "ToolCallStarted":
+              process.stdout.write(`\n[tool: ${event.toolName}]\n`)
+              break
+            case "ToolCallCompleted":
+              process.stdout.write(`[tool done: ${event.toolName}${event.isError ? " (error)" : ""}]\n`)
+              break
+            case "StreamEnded":
+              process.stdout.write("\n")
+              break
+            case "ErrorOccurred":
+              process.stderr.write(`\nError: ${event.error}\n`)
+              break
+          }
+        })
+      ),
+      Stream.takeUntil((e) => e._tag === "StreamEnded" || e._tag === "ErrorOccurred"),
+      Stream.runDrain
+    )
+  })
+
+// Main command - launches TUI or runs headless
 const main = Command.make(
   "gent",
   {
@@ -46,12 +88,17 @@ const main = Command.make(
       Options.withDescription("Session ID to continue"),
       Options.optional
     ),
+    headless: Options.boolean("headless").pipe(
+      Options.withAlias("H"),
+      Options.withDescription("Run in headless mode (no TUI, streams to stdout)"),
+      Options.withDefault(false)
+    ),
     prompt: Args.text({ name: "prompt" }).pipe(
       Args.withDescription("Initial prompt to start with"),
       Args.optional
     ),
   },
-  ({ session, prompt }) =>
+  ({ session, headless, prompt }) =>
     Effect.gen(function* () {
       // Build the runtime
       const runtime = yield* serverRuntime.runtimeEffect
@@ -75,6 +122,16 @@ const main = Command.make(
       }
 
       const initialPrompt = prompt._tag === "Some" ? prompt.value : undefined
+
+      // Headless mode: run prompt and exit
+      if (headless) {
+        if (!initialPrompt) {
+          yield* Console.error("Error: --headless requires a prompt argument")
+          process.exit(1)
+        }
+        yield* runHeadless(server, sessionId, branchId, initialPrompt)
+        return
+      }
 
       // Launch TUI
       yield* Effect.promise(() =>

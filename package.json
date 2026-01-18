@@ -28,7 +28,9 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "bun test",
-    "prepare": "bunx @effect/language-service patch"
+    "clean": "rm -rf packages/*/dist apps/*/dist .tsbuildinfo */.tsbuildinfo */*/.tsbuildinfo",
+    "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
+    "prepare": "husky"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.19",
@@ -49,6 +51,7 @@
     "@typescript-eslint/parser": "^8.53.0",
     "effect": "catalog:",
     "eslint": "^9.39.2",
+    "husky": "^9.1.7",
     "typescript": "^5.9.3",
     "vitest": "catalog:"
   }
