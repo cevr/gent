@@ -1,149 +1,140 @@
-import { render, useKeyboard, useRenderer } from "@opentui/solid"
-import { createSignal, createEffect, For, Show, onMount } from "solid-js"
+#!/usr/bin/env bun
+import { Command, Options, Args } from "@effect/cli"
+import { BunContext, BunRuntime } from "@effect/platform-bun"
+import { Console, Effect, Layer } from "effect"
+import { Storage } from "@gent/storage"
+import {
+  ToolRegistry,
+  EventBus,
+  Permission,
+  Session,
+  Branch,
+} from "@gent/core"
+import { Provider } from "@gent/providers"
+import { AllTools, AskUserHandler } from "@gent/tools"
+import { AgentLoop } from "@gent/runtime"
+import * as path from "node:path"
 
-// Types
-interface Message {
-  id: string
-  role: "user" | "assistant" | "system"
-  content: string
-  createdAt: number
-}
+import { render } from "@opentui/solid"
+import { App } from "./App.js"
 
-// API client
-const API_URL = "http://localhost:3000"
+// Data directory
+const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
+const DB_PATH = path.join(DATA_DIR, "data.db")
 
-async function createSession(name: string): Promise<{ sessionId: string; branchId: string }> {
-  const res = await fetch(`${API_URL}/sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  })
-  return res.json()
-}
+// Runtime layer
+const RuntimeLayer = Layer.mergeAll(
+  Storage.Live(DB_PATH),
+  Provider.Live,
+  ToolRegistry.Live(AllTools as any),
+  EventBus.Live,
+  Permission.Live(),
+  AskUserHandler.Test([]) // TUI handles user interaction
+)
 
-async function sendMessage(sessionId: string, branchId: string, content: string): Promise<void> {
-  await fetch(`${API_URL}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, branchId, content }),
-  })
-}
+const AgentLoopLayer = AgentLoop.Live({
+  systemPrompt: "You are a helpful assistant.",
+  defaultModel: "anthropic/claude-sonnet-4-20250514",
+}).pipe(Layer.provide(RuntimeLayer))
 
-async function listMessages(branchId: string): Promise<Message[]> {
-  const res = await fetch(`${API_URL}/messages/${branchId}`)
-  const data = await res.json()
-  return data.map((m: any) => ({
-    id: m.id,
-    role: m.role,
-    content: m.parts.find((p: any) => p._tag === "TextPart")?.text ?? "",
-    createdAt: m.createdAt,
-  }))
-}
+const FullLayer = Layer.merge(RuntimeLayer, AgentLoopLayer)
 
-// Components
-function MessageBubble(props: { message: Message }) {
-  const isUser = () => props.message.role === "user"
-  return (
-    <box marginTop={1} marginBottom={1}>
-      <text style={{ fg: isUser() ? "cyan" : "green" }}>
-        <b>{isUser() ? "You" : "Assistant"}: </b>
-        <span>{props.message.content}</span>
-      </text>
-    </box>
-  )
-}
+// Main command - launches TUI
+const main = Command.make(
+  "gent",
+  {
+    session: Options.text("session").pipe(
+      Options.withAlias("s"),
+      Options.withDescription("Session ID to continue"),
+      Options.optional
+    ),
+    prompt: Args.text({ name: "prompt" }).pipe(
+      Args.withDescription("Initial prompt to start with"),
+      Args.optional
+    ),
+  },
+  ({ session, prompt }) =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
 
-function App() {
-  const renderer = useRenderer()
-  const [inputValue, setInputValue] = createSignal("")
-  const [messages, setMessages] = createSignal<Message[]>([])
-  const [sessionId, setSessionId] = createSignal<string | null>(null)
-  const [branchId, setBranchId] = createSignal<string | null>(null)
-  const [status, setStatus] = createSignal("Connecting...")
+      // Get or create session
+      let sessionId: string
+      let branchId: string
 
-  // Initialize session
-  onMount(async () => {
-    try {
-      const session = await createSession("TUI Session")
-      setSessionId(session.sessionId)
-      setBranchId(session.branchId)
-      setStatus("Ready")
-    } catch (e) {
-      setStatus("Failed to connect - is server running?")
-    }
-  })
+      if (session._tag === "Some") {
+        sessionId = session.value
+        const branches = yield* storage.listBranches(sessionId)
+        branchId = branches[0]?.id ?? crypto.randomUUID()
+      } else {
+        sessionId = crypto.randomUUID()
+        branchId = crypto.randomUUID()
 
-  // Poll for messages
-  createEffect(() => {
-    const bid = branchId()
-    if (!bid) return
-
-    const interval = setInterval(async () => {
-      try {
-        const msgs = await listMessages(bid)
-        setMessages(msgs)
-      } catch {
-        // ignore
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            name: "gent session",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: branchId,
+            sessionId,
+            createdAt: new Date(),
+          })
+        )
       }
-    }, 1000)
 
-    return () => clearInterval(interval)
-  })
+      const initialPrompt = prompt._tag === "Some" ? prompt.value : undefined
 
-  // ESC to quit
-  useKeyboard((e) => {
-    if (e.name === "escape") {
-      renderer.destroy()
+      // Launch TUI
+      yield* Effect.sync(() => {
+        render(() => (
+          <App
+            sessionId={sessionId}
+            branchId={branchId}
+            initialPrompt={initialPrompt}
+          />
+        ))
+      })
+
+      // Keep process alive until TUI exits
+      return yield* Effect.never
+    }).pipe(Effect.provide(FullLayer))
+)
+
+// Sessions subcommand
+const sessions = Command.make("sessions", {}, () =>
+  Effect.gen(function* () {
+    const storage = yield* Storage
+    const allSessions = yield* storage.listSessions()
+
+    if (allSessions.length === 0) {
+      yield* Console.log("No sessions found.")
+      return
     }
-  })
 
-  const handleSubmit = (value: string) => {
-    const text = value.trim()
-    if (text && sessionId() && branchId()) {
-      sendMessage(sessionId()!, branchId()!, text)
-      setInputValue("")
+    yield* Console.log("Sessions:")
+    for (const s of allSessions) {
+      yield* Console.log(
+        `  ${s.id} - ${s.name ?? "Unnamed"} (${s.updatedAt.toISOString()})`
+      )
     }
-  }
+  }).pipe(Effect.provide(RuntimeLayer))
+)
 
-  return (
-    <box flexDirection="column" width="100%" height="100%">
-      {/* Header */}
-      <box flexShrink={0} border paddingLeft={1} paddingRight={1}>
-        <text>
-          <b style={{ fg: "magenta" }}>gent</b>
-          <span style={{ fg: "gray" }}> | {status()}</span>
-          <span style={{ fg: "gray" }}> | ESC to quit</span>
-        </text>
-      </box>
+// Root command with subcommands
+const command = main.pipe(
+  Command.withSubcommands([sessions]),
+  Command.withDescription("Gent - Effect-native agent harness")
+)
 
-      {/* Messages */}
-      <scrollbox flexGrow={1} stickyScroll stickyStart="bottom" paddingLeft={1} paddingRight={1}>
-        <Show
-          when={messages().length > 0}
-          fallback={
-            <box marginTop={2} marginBottom={2}>
-              <text style={{ fg: "gray" }}>No messages yet. Type below and press Enter!</text>
-            </box>
-          }
-        >
-          <For each={messages()}>{(msg) => <MessageBubble message={msg} />}</For>
-        </Show>
-      </scrollbox>
+// CLI
+const cli = Command.run(command, {
+  name: "gent",
+  version: "0.0.0",
+})
 
-      {/* Input */}
-      <box flexShrink={0} height={3} border>
-        <input
-          focused
-          placeholder="Type a message..."
-          value={inputValue()}
-          onInput={setInputValue}
-          onSubmit={handleSubmit}
-          width="100%"
-        />
-      </box>
-    </box>
-  )
-}
-
-// Start
-render(() => <App />)
+// Run
+cli(process.argv).pipe(Effect.provide(BunContext.layer), BunRuntime.runMain)

@@ -7,5 +7,12 @@
     "jsxImportSource": "@opentui/solid"
   },
   "include": ["src"],
-  "references": [{ "path": "../../packages/api" }]
+  "references": [
+    { "path": "../../packages/api" },
+    { "path": "../../packages/core" },
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/providers" },
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/tools" }
+  ]
 }

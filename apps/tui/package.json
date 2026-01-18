@@ -2,11 +2,23 @@
   "name": "@gent/tui",
   "version": "0.0.0",
   "type": "module",
+  "bin": {
+    "gent": "bin/gent"
+  },
   "scripts": {
-    "dev": "bun --preload @opentui/solid/preload src/main.tsx"
+    "dev": "bun src/main.tsx",
+    "build": "bun scripts/build.ts"
   },
   "dependencies": {
     "@gent/api": "workspace:*",
+    "@gent/core": "workspace:*",
+    "@gent/storage": "workspace:*",
+    "@gent/providers": "workspace:*",
+    "@gent/runtime": "workspace:*",
+    "@gent/tools": "workspace:*",
+    "@effect/cli": "catalog:",
+    "@effect/platform": "catalog:",
+    "@effect/platform-bun": "catalog:",
     "@opentui/solid": "^0.1.74",
     "solid-js": "^1.9.9"
   },
