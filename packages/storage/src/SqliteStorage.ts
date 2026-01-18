@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, ParseResult } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import {
   Message,
   Session,
@@ -369,7 +369,7 @@ const makeStorage = (db: Database): StorageService => {
                 id: string
                 session_id: string
                 branch_id: string
-                role: "user" | "assistant" | "system"
+                role: "user" | "assistant" | "system" | "tool"
                 parts: string
                 created_at: number
               }
@@ -403,7 +403,7 @@ const makeStorage = (db: Database): StorageService => {
             id: string
             session_id: string
             branch_id: string
-            role: "user" | "assistant" | "system"
+            role: "user" | "assistant" | "system" | "tool"
             parts: string
             created_at: number
           }>

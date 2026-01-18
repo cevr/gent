@@ -1,8 +1,11 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Schema, Stream, JSONSchema } from "effect"
 import type { Message, ToolDefinition } from "@gent/core"
-import { streamText, type CoreMessage, type CoreTool } from "ai"
+import { TextPart, ToolCallPart, ToolResultPart, ImagePart } from "@gent/core"
+import { streamText, tool, jsonSchema, type ToolSet, type ModelMessage, type ToolModelMessage, type ToolResultPart as AIToolResultPart } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
+import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
+import { fromIni } from "@aws-sdk/credential-providers"
 
 // Provider Error
 
@@ -26,7 +29,7 @@ export class ToolCallChunk extends Schema.TaggedClass<ToolCallChunk>()(
   {
     toolCallId: Schema.String,
     toolName: Schema.String,
-    args: Schema.Unknown,
+    input: Schema.Unknown,
   }
 ) {}
 
@@ -43,8 +46,8 @@ export class FinishChunk extends Schema.TaggedClass<FinishChunk>()(
     finishReason: Schema.String,
     usage: Schema.optional(
       Schema.Struct({
-        promptTokens: Schema.Number,
-        completionTokens: Schema.Number,
+        inputTokens: Schema.Number,
+        outputTokens: Schema.Number,
       })
     ),
   }
@@ -97,6 +100,7 @@ export class Provider extends Context.Tag("Provider")<
       const tools = request.tools ? convertTools(request.tools) : undefined
 
       return Stream.async<StreamChunk, ProviderError>((emit) => {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises -- intentional fire-and-forget async IIFE for Stream.async
         ;(async () => {
           try {
             const opts: Parameters<typeof streamText>[0] = {
@@ -105,7 +109,7 @@ export class Provider extends Context.Tag("Provider")<
             }
             if (tools) opts.tools = tools
             if (request.systemPrompt) opts.system = request.systemPrompt
-            if (request.maxTokens) opts.maxTokens = request.maxTokens
+            if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
             if (request.temperature) opts.temperature = request.temperature
 
             const result = streamText(opts)
@@ -113,38 +117,48 @@ export class Provider extends Context.Tag("Provider")<
             for await (const part of result.fullStream) {
               switch (part.type) {
                 case "text-delta":
-                  emit.single(new TextChunk({ text: part.textDelta }))
+                  await emit.single(new TextChunk({ text: part.text }))
                   break
                 case "tool-call":
-                  emit.single(
+                  await emit.single(
                     new ToolCallChunk({
                       toolCallId: part.toolCallId,
                       toolName: part.toolName,
-                      args: part.args,
+                      input: part.input,
                     })
                   )
                   break
-                case "reasoning":
-                  emit.single(new ReasoningChunk({ text: part.textDelta }))
+                case "reasoning-delta":
+                  await emit.single(new ReasoningChunk({ text: part.text }))
                   break
                 case "finish":
-                  emit.single(
+                  await emit.single(
                     new FinishChunk({
                       finishReason: part.finishReason ?? "stop",
-                      usage: part.usage
+                      usage: part.totalUsage
                         ? {
-                            promptTokens: part.usage.promptTokens,
-                            completionTokens: part.usage.completionTokens,
+                            inputTokens: part.totalUsage.inputTokens ?? 0,
+                            outputTokens: part.totalUsage.outputTokens ?? 0,
                           }
                         : undefined,
                     })
                   )
                   break
+                case "error":
+                  const err = part.error as Error
+                  await emit.fail(
+                    new ProviderError({
+                      message: `API error: ${err?.message ?? String(part.error)}`,
+                      model: request.model,
+                      cause: part.error,
+                    })
+                  )
+                  return
               }
             }
-            emit.end()
+            await emit.end()
           } catch (e) {
-            emit.fail(
+            await emit.fail(
               new ProviderError({
                 message: `Stream failed: ${e}`,
                 model: request.model,
@@ -188,59 +202,73 @@ function getProvider(name: string) {
       return createAnthropic()
     case "openai":
       return createOpenAI()
+    case "bedrock":
+      return createAmazonBedrock({
+        region: process.env["AWS_REGION"] ?? "us-east-1",
+        credentialProvider: async () => {
+          const creds = await fromIni()()
+          return {
+            accessKeyId: creds.accessKeyId,
+            secretAccessKey: creds.secretAccessKey,
+            ...(creds.sessionToken && { sessionToken: creds.sessionToken }),
+          }
+        },
+      })
     default:
       return undefined
   }
 }
 
-function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[] {
-  const result: CoreMessage[] = []
+// Convert our Messages to AI SDK ModelMessages
+// Since our types now match AI SDK's shape, this is mostly direct mapping
+function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
+  const result: ModelMessage[] = []
 
   for (const msg of messages) {
     const parts = msg.parts
 
     if (msg.role === "system") {
-      const textParts = parts.filter((p) => p._tag === "TextPart")
+      const textParts = parts.filter((p): p is TextPart => p.type === "text")
       if (textParts.length > 0) {
         result.push({
           role: "system",
-          content: textParts.map((p) => (p as any).text).join("\n"),
+          content: textParts.map((p) => p.text).join("\n"),
         })
       }
       continue
     }
 
-    if (msg.role === "user") {
-      // Check for tool results first
-      const toolResults = parts.filter((p) => p._tag === "ToolResultPart")
+    if (msg.role === "tool") {
+      const toolResults = parts.filter((p): p is ToolResultPart => p.type === "tool-result")
       if (toolResults.length > 0) {
-        for (const part of toolResults) {
-          result.push({
-            role: "tool",
-            content: [
-              {
-                type: "tool-result",
-                toolCallId: (part as any).toolCallId,
-                toolName: (part as any).toolName,
-                result: (part as any).result,
-                isError: (part as any).isError,
-              },
-            ],
-          })
+        const toolMessage: ToolModelMessage = {
+          role: "tool",
+          content: toolResults.map((p): AIToolResultPart => ({
+            type: "tool-result",
+            toolCallId: p.toolCallId,
+            toolName: p.toolName,
+            // AI SDK v6 ToolResultOutput - cast to match expected type
+            output: (p.output.type === "json"
+              ? { type: "json" as const, value: p.output.value }
+              : { type: "error-json" as const, value: p.output.value }) as AIToolResultPart["output"],
+          })),
         }
-        continue
+        result.push(toolMessage)
+      }
+      continue
+    }
+
+    if (msg.role === "user") {
+      const content: Array<{ type: "text"; text: string } | { type: "image"; image: string }> = []
+
+      for (const part of parts) {
+        if (part.type === "text") {
+          content.push({ type: "text", text: (part as TextPart).text })
+        } else if (part.type === "image") {
+          content.push({ type: "image", image: (part as ImagePart).image })
+        }
       }
 
-      const content: Array<
-        { type: "text"; text: string } | { type: "image"; image: string }
-      > = []
-      for (const part of parts) {
-        if (part._tag === "TextPart") {
-          content.push({ type: "text", text: (part as any).text })
-        } else if (part._tag === "ImagePart") {
-          content.push({ type: "image", image: (part as any).url })
-        }
-      }
       if (content.length > 0) {
         result.push({ role: "user", content })
       }
@@ -250,23 +278,19 @@ function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[] {
     if (msg.role === "assistant") {
       const content: Array<
         | { type: "text"; text: string }
-        | {
-            type: "tool-call"
-            toolCallId: string
-            toolName: string
-            args: unknown
-          }
+        | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown }
       > = []
 
       for (const part of parts) {
-        if (part._tag === "TextPart") {
-          content.push({ type: "text", text: (part as any).text })
-        } else if (part._tag === "ToolCallPart") {
+        if (part.type === "text") {
+          content.push({ type: "text", text: (part as TextPart).text })
+        } else if (part.type === "tool-call") {
+          const tc = part as ToolCallPart
           content.push({
             type: "tool-call",
-            toolCallId: (part as any).toolCallId,
-            toolName: (part as any).toolName,
-            args: (part as any).args,
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            input: tc.input,
           })
         }
       }
@@ -280,16 +304,16 @@ function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[] {
   return result
 }
 
-function convertTools(
-  tools: ReadonlyArray<ToolDefinition>
-): Record<string, CoreTool> {
-  const result: Record<string, CoreTool> = {}
+function convertTools(tools: ReadonlyArray<ToolDefinition>): ToolSet {
+  const result: ToolSet = {}
 
-  for (const tool of tools) {
-    result[tool.name] = {
-      description: tool.description,
-      parameters: tool.params as any,
-    }
+  for (const t of tools) {
+    // Convert Effect Schema to JSON Schema, then wrap with AI SDK's jsonSchema helper
+    const effectJsonSchema = JSONSchema.make(t.params as Schema.Schema<unknown, unknown, never>)
+    result[t.name] = tool({
+      description: t.description,
+      inputSchema: jsonSchema(effectJsonSchema),
+    })
   }
 
   return result

@@ -191,7 +191,7 @@ describe("Storage", () => {
             sessionId: "msg-session",
             branchId: "msg-branch",
             role: "user",
-            parts: [new TextPart({ text: "Hello" })],
+            parts: [new TextPart({ type: "text", text: "Hello" })],
             createdAt: new Date(),
           })
 
@@ -200,7 +200,7 @@ describe("Storage", () => {
 
           expect(retrieved).toBeDefined()
           expect(retrieved?.role).toBe("user")
-          expect(retrieved?.parts[0]?._tag).toBe("TextPart")
+          expect(retrieved?.parts[0]?.type).toBe("text")
         })
       )
     })
@@ -231,7 +231,7 @@ describe("Storage", () => {
               sessionId: "list-msg-session",
               branchId: "list-msg-branch",
               role: "user",
-              parts: [new TextPart({ text: "First" })],
+              parts: [new TextPart({ type: "text", text: "First" })],
               createdAt: new Date(),
             })
           )
@@ -241,7 +241,7 @@ describe("Storage", () => {
               sessionId: "list-msg-session",
               branchId: "list-msg-branch",
               role: "assistant",
-              parts: [new TextPart({ text: "Response" })],
+              parts: [new TextPart({ type: "text", text: "Response" })],
               createdAt: new Date(),
             })
           )

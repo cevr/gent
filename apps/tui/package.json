@@ -6,21 +6,19 @@
     "gent": "bin/gent"
   },
   "scripts": {
-    "dev": "bun src/main.tsx",
+    "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "bun scripts/build.ts"
   },
   "dependencies": {
-    "@gent/api": "workspace:*",
-    "@gent/core": "workspace:*",
-    "@gent/storage": "workspace:*",
-    "@gent/providers": "workspace:*",
-    "@gent/runtime": "workspace:*",
-    "@gent/tools": "workspace:*",
     "@effect/cli": "catalog:",
     "@effect/platform": "catalog:",
     "@effect/platform-bun": "catalog:",
+    "@gent/core": "workspace:*",
+    "@gent/server": "workspace:*",
+    "@gent/telemetry": "workspace:*",
+    "@opentui/core": "^0.1.74",
     "@opentui/solid": "^0.1.74",
-    "solid-js": "^1.9.9"
+    "solid-js": "^1.9.10"
   },
   "peerDependencies": {
     "effect": "catalog:"

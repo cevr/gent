@@ -2,9 +2,10 @@ import { Context, Effect, Layer, Schema } from "effect"
 
 // Tool Definition
 
+// Params must have no context requirement (never) for sync decoding
 export interface ToolDefinition<
   Name extends string = string,
-  Params extends Schema.Schema.Any = Schema.Schema.Any,
+  Params extends Schema.Schema.AnyNoContext = Schema.Schema.AnyNoContext,
   Result = unknown,
   Error = never,
   Deps = never,
@@ -28,7 +29,7 @@ export interface ToolContext {
 
 export const defineTool = <
   Name extends string,
-  Params extends Schema.Schema.Any,
+  Params extends Schema.Schema.AnyNoContext,
   Result,
   Error,
   Deps,

@@ -23,7 +23,7 @@ export class MessageReceived extends Schema.TaggedClass<MessageReceived>()(
     sessionId: Schema.String,
     branchId: Schema.String,
     messageId: Schema.String,
-    role: Schema.Literal("user", "assistant", "system"),
+    role: Schema.Literal("user", "assistant", "system", "tool"),
   }
 ) {}
 

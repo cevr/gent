@@ -91,32 +91,42 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
 
             if (!tool) {
               return new ToolResultPart({
+                type: "tool-result",
                 toolCallId: toolCall.toolCallId,
                 toolName: toolCall.toolName,
-                result: { error: `Unknown tool: ${toolCall.toolName}` },
-                isError: true,
+                output: { type: "error-json", value: { error: `Unknown tool: ${toolCall.toolName}` } },
               })
             }
 
             // Check permission
             const permResult = yield* permission.check(
               toolCall.toolName,
-              toolCall.args
+              toolCall.input
             )
 
             if (permResult === "denied") {
               return new ToolResultPart({
+                type: "tool-result",
                 toolCallId: toolCall.toolCallId,
                 toolName: toolCall.toolName,
-                result: { error: "Permission denied" },
-                isError: true,
+                output: { type: "error-json", value: { error: "Permission denied" } },
               })
             }
+
+            // Decode input using tool's params schema
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- decodedInput type depends on dynamic tool schema
+            const decodedInput = yield* Effect.try({
+              try: () => Schema.decodeUnknownSync(tool.params)(toolCall.input),
+              catch: (e) => new AgentLoopError({
+                message: `Invalid tool input: ${e instanceof Error ? e.message : String(e)}`,
+                cause: e,
+              }),
+            })
 
             // Execute tool using runtime
             const result = yield* Effect.tryPromise({
               try: () => {
-                const effect = tool.execute(toolCall.args as never, ctx)
+                const effect = tool.execute(decodedInput, ctx)
                 return Runtime.runPromise(runtime)(
                   effect as Effect.Effect<unknown>
                 )
@@ -129,23 +139,23 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             })
 
             return new ToolResultPart({
+              type: "tool-result",
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
-              result,
-              isError: false,
+              output: { type: "json", value: result },
             })
           }
         )
 
-        const runLoop = Effect.fn("AgentLoop.runLoop")(function* (
+        const runLoop: (
           sessionId: string,
           branchId: string,
           initialMessage: Message
-        ): Generator<
-          any,
-          void,
-          any
-        > {
+        ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError> = Effect.fn("AgentLoop.runLoop")(function* (
+          sessionId: string,
+          branchId: string,
+          initialMessage: Message
+        ) {
           // Save user message
           yield* storage.createMessage(initialMessage)
           yield* eventBus.publish(
@@ -187,7 +197,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
               messages: [...messages],
               tools: [...tools],
               systemPrompt: config.systemPrompt,
-            })
+            }).pipe(Effect.withSpan("AgentLoop.provider.stream"))
 
             // Collect response parts
             const textParts: string[] = []
@@ -207,9 +217,10 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 } else if (chunk._tag === "ToolCallChunk") {
                   toolCalls.push(
                     new ToolCallPart({
+                      type: "tool-call",
                       toolCallId: chunk.toolCallId,
                       toolName: chunk.toolName,
-                      args: chunk.args,
+                      input: chunk.input,
                     })
                   )
                 }
@@ -222,7 +233,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             const assistantParts: Array<TextPart | ToolCallPart> = []
             const fullText = textParts.join("")
             if (fullText) {
-              assistantParts.push(new TextPart({ text: fullText }))
+              assistantParts.push(new TextPart({ type: "text", text: fullText }))
             }
             assistantParts.push(...toolCalls)
 
@@ -273,7 +284,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     branchId,
                     toolCallId: toolCall.toolCallId,
                     toolName: toolCall.toolName,
-                    isError: result.isError ?? false,
+                    isError: result.output.type === "error-json",
                   })
                 )
               }
@@ -283,7 +294,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 id: crypto.randomUUID(),
                 sessionId,
                 branchId,
-                role: "user",
+                role: "tool",
                 parts: toolResults,
                 createdAt: new Date(),
               })
@@ -334,6 +345,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 message
               ) as Effect.Effect<void, AgentLoopError | StorageError | ProviderError>
             ).pipe(
+              Effect.withSpan("AgentLoop.run"),
               Effect.catchAll((e) =>
                 eventBus.publish(
                   new ErrorOccurred({

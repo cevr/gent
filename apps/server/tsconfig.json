@@ -7,10 +7,6 @@
   "include": ["src"],
   "references": [
     { "path": "../../packages/api" },
-    { "path": "../../packages/core" },
-    { "path": "../../packages/runtime" },
-    { "path": "../../packages/storage" },
-    { "path": "../../packages/providers" },
-    { "path": "../../packages/tools" }
+    { "path": "../../packages/server" }
   ]
 }

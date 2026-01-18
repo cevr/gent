@@ -1,46 +1,41 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer } from "effect"
-import { Storage } from "@gent/storage"
-import {
-  ToolRegistry,
-  EventBus,
-  Permission,
-  Session,
-  Branch,
-} from "@gent/core"
-import { Provider } from "@gent/providers"
-import { AllTools, AskUserHandler } from "@gent/tools"
-import { AgentLoop } from "@gent/runtime"
+import { Console, Effect, Layer, ManagedRuntime } from "effect"
+import { GentServer } from "@gent/server"
+import { DevTracerLive, clearLog } from "@gent/telemetry"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
 import { App } from "./App.js"
+import { createClient } from "./client.js"
 
 // Data directory
 const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
 const DB_PATH = path.join(DATA_DIR, "data.db")
+const TRACE_LOG = "/tmp/gent-trace.log"
 
-// Runtime layer
+// Platform layer
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
-const StorageLayer = Storage.Live(DB_PATH).pipe(Layer.provide(PlatformLayer))
 
-const RuntimeLayer = Layer.mergeAll(
-  StorageLayer,
-  Provider.Live,
-  ToolRegistry.Live(AllTools as any),
-  EventBus.Live,
-  Permission.Live(),
-  AskUserHandler.Test([]) // TUI handles user interaction
+// Dev tracer layer
+const TracerLayer = DevTracerLive(TRACE_LOG)
+
+// GentServer layer with tracing
+const ServerLayer = GentServer.Live({
+  systemPrompt: "You are a helpful assistant.",
+  defaultModel: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+  dbPath: DB_PATH,
+}).pipe(
+  Layer.provide(PlatformLayer),
+  Layer.provide(TracerLayer)
 )
 
-const AgentLoopLayer = AgentLoop.Live({
-  systemPrompt: "You are a helpful assistant.",
-  defaultModel: "anthropic/claude-sonnet-4-20250514",
-}).pipe(Layer.provide(RuntimeLayer))
+// Clear trace log on startup
+clearLog(TRACE_LOG)
 
-const FullLayer = Layer.merge(RuntimeLayer, AgentLoopLayer)
+// Create managed runtime for GentServer
+const serverRuntime = ManagedRuntime.make(ServerLayer)
 
 // Main command - launches TUI
 const main = Command.make(
@@ -58,7 +53,10 @@ const main = Command.make(
   },
   ({ session, prompt }) =>
     Effect.gen(function* () {
-      const storage = yield* Storage
+      // Build the runtime
+      const runtime = yield* serverRuntime.runtimeEffect
+      const client = createClient(runtime)
+      const server = yield* GentServer
 
       // Get or create session
       let sessionId: string
@@ -66,52 +64,40 @@ const main = Command.make(
 
       if (session._tag === "Some") {
         sessionId = session.value
-        const branches = yield* storage.listBranches(sessionId)
-        branchId = branches[0]?.id ?? crypto.randomUUID()
+        // Get existing session's branch
+        const messages = yield* server.listMessages(sessionId)
+        branchId = messages[0]?.branchId ?? crypto.randomUUID()
       } else {
-        sessionId = crypto.randomUUID()
-        branchId = crypto.randomUUID()
-
-        yield* storage.createSession(
-          new Session({
-            id: sessionId,
-            name: "gent session",
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: branchId,
-            sessionId,
-            createdAt: new Date(),
-          })
-        )
+        // Create new session
+        const result = yield* server.createSession({ name: "gent session" })
+        sessionId = result.sessionId
+        branchId = result.branchId
       }
 
       const initialPrompt = prompt._tag === "Some" ? prompt.value : undefined
 
       // Launch TUI
-      yield* Effect.sync(() => {
+      yield* Effect.promise(() =>
         render(() => (
           <App
+            client={client}
             sessionId={sessionId}
             branchId={branchId}
             initialPrompt={initialPrompt}
           />
         ))
-      })
+      )
 
       // Keep process alive until TUI exits
       return yield* Effect.never
-    }).pipe(Effect.provide(FullLayer))
+    }).pipe(Effect.provide(ServerLayer))
 )
 
 // Sessions subcommand
 const sessions = Command.make("sessions", {}, () =>
   Effect.gen(function* () {
-    const storage = yield* Storage
-    const allSessions = yield* storage.listSessions()
+    const server = yield* GentServer
+    const allSessions = yield* server.listSessions()
 
     if (allSessions.length === 0) {
       yield* Console.log("No sessions found.")
@@ -120,11 +106,10 @@ const sessions = Command.make("sessions", {}, () =>
 
     yield* Console.log("Sessions:")
     for (const s of allSessions) {
-      yield* Console.log(
-        `  ${s.id} - ${s.name ?? "Unnamed"} (${s.updatedAt.toISOString()})`
-      )
+      const date = new Date(s.updatedAt).toISOString()
+      yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
     }
-  }).pipe(Effect.provide(RuntimeLayer))
+  }).pipe(Effect.provide(ServerLayer))
 )
 
 // Root command with subcommands
@@ -139,5 +124,8 @@ const cli = Command.run(command, {
   version: "0.0.0",
 })
 
-// Run
-cli(process.argv).pipe(Effect.provide(BunContext.layer), BunRuntime.runMain)
+// Run with tracer
+cli(process.argv).pipe(
+  Effect.provide(Layer.merge(BunContext.layer, TracerLayer)),
+  BunRuntime.runMain
+)

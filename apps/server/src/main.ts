@@ -6,146 +6,73 @@ import {
   HttpServerResponse,
   OpenApi,
 } from "@effect/platform"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Stream, Schema } from "effect"
 import { GentApi } from "@gent/api"
-import {
-  Session,
-  Branch,
-  Message,
-  TextPart,
-  EventBus,
-  ToolRegistry,
-  Permission,
-} from "@gent/core"
-import { Storage } from "@gent/storage"
-import { Provider } from "@gent/providers"
-import { AgentLoop } from "@gent/runtime"
-import { AllTools } from "@gent/tools"
+import { GentServer, SteerCommand } from "@gent/server"
 
 // Sessions API Handlers
-
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const server = yield* GentServer
     return handlers
       .handle("create", ({ payload }) =>
-        Effect.gen(function* () {
-          const sessionId = crypto.randomUUID()
-          const branchId = crypto.randomUUID()
-          const now = new Date()
-
-          const session = new Session({
-            id: sessionId,
-            name: payload.name,
-            createdAt: now,
-            updatedAt: now,
-          })
-
-          const branch = new Branch({
-            id: branchId,
-            sessionId,
-            createdAt: now,
-          })
-
-          yield* storage.createSession(session)
-          yield* storage.createBranch(branch)
-
-          return { sessionId, branchId }
-        }).pipe(Effect.orDie)
+        server.createSession({ name: payload.name ?? "New Session" }).pipe(Effect.orDie)
       )
-      .handle("list", () =>
-        Effect.gen(function* () {
-          const sessions = yield* storage.listSessions()
-          return sessions.map((s) => ({
-            id: s.id,
-            name: s.name,
-            createdAt: s.createdAt.getTime(),
-            updatedAt: s.updatedAt.getTime(),
-          }))
-        }).pipe(Effect.orDie)
-      )
+      .handle("list", () => server.listSessions().pipe(Effect.orDie))
       .handle("get", ({ path }) =>
-        Effect.gen(function* () {
-          const session = yield* storage.getSession(path.sessionId)
-          if (!session) {
-            return yield* Effect.die(new Error("Session not found"))
-          }
-          return {
-            id: session.id,
-            name: session.name,
-            createdAt: session.createdAt.getTime(),
-            updatedAt: session.updatedAt.getTime(),
-          }
-        }).pipe(Effect.orDie)
+        server.getSession(path.sessionId).pipe(
+          Effect.flatMap((s) =>
+            s ? Effect.succeed(s) : Effect.die(new Error("Session not found"))
+          ),
+          Effect.orDie
+        )
       )
       .handle("delete", ({ path }) =>
-        storage.deleteSession(path.sessionId).pipe(Effect.orDie)
+        server.deleteSession(path.sessionId).pipe(Effect.orDie)
       )
   })
 )
 
 // Messages API Handlers
-
 const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
   Effect.gen(function* () {
-    const agentLoop = yield* AgentLoop
-    const storage = yield* Storage
+    const server = yield* GentServer
     return handlers
       .handle("send", ({ payload }) =>
-        Effect.gen(function* () {
-          const message = new Message({
-            id: crypto.randomUUID(),
+        server
+          .sendMessage({
             sessionId: payload.sessionId,
             branchId: payload.branchId,
-            role: "user",
-            parts: [new TextPart({ text: payload.content })],
-            createdAt: new Date(),
+            content: payload.content,
           })
-
-          // Run in background - don't wait for completion
-          yield* Effect.fork(agentLoop.run(message))
-        }).pipe(Effect.orDie)
+          .pipe(Effect.orDie)
       )
       .handle("list", ({ path }) =>
-        Effect.gen(function* () {
-          const messages = yield* storage.listMessages(path.branchId)
-          return messages.map((m) => ({
-            id: m.id,
-            sessionId: m.sessionId,
-            branchId: m.branchId,
-            role: m.role,
-            parts: m.parts as unknown[],
-            createdAt: m.createdAt.getTime(),
-          }))
-        }).pipe(Effect.orDie)
+        server.listMessages(path.branchId).pipe(Effect.orDie)
       )
       .handle("steer", ({ payload }) =>
-        agentLoop.steer(payload).pipe(Effect.orDie)
+        Effect.gen(function* () {
+          const command = yield* Schema.decode(SteerCommand)(payload)
+          yield* server.steer(command)
+        }).pipe(Effect.orDie)
       )
   })
 )
 
 // Events API Handlers (SSE)
-
 const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
   Effect.gen(function* () {
-    const eventBus = yield* EventBus
+    const server = yield* GentServer
     return handlers.handle("subscribe", ({ path }) =>
       Effect.gen(function* () {
-        const events = eventBus.subscribe()
+        const events = server.subscribeEvents(path.sessionId)
 
-        // Filter events for this session and format as SSE
+        // Format as SSE
         const sseStream = events.pipe(
-          Stream.filter((e) => {
-            if ("sessionId" in e) {
-              return (e as { sessionId: string }).sessionId === path.sessionId
-            }
-            return false
-          }),
           Stream.map((e) => `data: ${JSON.stringify(e)}\n\n`)
         )
 
-        // Return SSE stream as string (simplified - real impl would use HttpServerResponse.stream)
+        // Return SSE stream as string (simplified)
         const chunks: string[] = []
         yield* Stream.runForEach(Stream.take(sseStream, 100), (chunk) =>
           Effect.sync(() => chunks.push(chunk))
@@ -156,37 +83,21 @@ const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
   })
 )
 
-// Services Layer
-
+// Platform layer for Storage
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
-const StorageLive = Storage.Live(".gent/data.db").pipe(Layer.provide(PlatformLayer))
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const BaseServicesLive = Layer.mergeAll(
-  StorageLive,
-  Provider.Live,
-  ToolRegistry.Live(AllTools as any),
-  EventBus.Live,
-  Permission.Live()
-)
-
-const AgentLoopLive = AgentLoop.Live({
+// Server service
+const ServerLive = GentServer.Live({
   systemPrompt: "You are a helpful AI assistant.",
   defaultModel: "anthropic/claude-sonnet-4-20250514",
-})
+  dbPath: ".gent/data.db",
+}).pipe(Layer.provide(PlatformLayer))
 
-// AgentLoop depends on BaseServices, merge both outputs
-const ServicesLive = Layer.merge(
-  BaseServicesLive,
-  Layer.provide(AgentLoopLive, BaseServicesLive)
-)
-
-// API Groups Layer - merge all group implementations and provide services
-const HttpGroupsLive = Layer.mergeAll(
-  SessionsApiLive,
-  MessagesApiLive,
+// API Groups Layer
+const HttpGroupsLive = Layer.provideMerge(
+  Layer.provideMerge(SessionsApiLive, MessagesApiLive),
   EventsApiLive
-).pipe(Layer.provide(ServicesLive))
+).pipe(Layer.provide(ServerLive))
 
 // API Routes
 const HttpApiRoutes = HttpLayerRouter.addHttpApi(GentApi).pipe(
@@ -212,12 +123,12 @@ const AllRoutes = Layer.mergeAll(HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pip
 )
 
 // Server
-const ServerLive = HttpLayerRouter.serve(AllRoutes).pipe(
+const HttpServerLive = HttpLayerRouter.serve(AllRoutes).pipe(
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
-  Layer.provide(ServicesLive)
+  Layer.provide(ServerLive)
 )
 
 // Main
 console.log("Gent server starting on http://localhost:3000")
 console.log("Swagger UI: http://localhost:3000/docs")
-BunRuntime.runMain(Layer.launch(ServerLive))
+BunRuntime.runMain(Layer.launch(HttpServerLive))

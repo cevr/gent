@@ -50,4 +50,4 @@ export {
 export { Permission, PermissionRule, PermissionResult } from "./Permission.js"
 
 // Config Types
-export { GentConfig, ModelConfig, defaultConfig } from "./Config.js"
+export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./Config.js"

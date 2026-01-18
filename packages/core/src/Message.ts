@@ -1,54 +1,53 @@
 import { Schema } from "effect"
 
-// Message Part Types
+// Message Part Types - matching AI SDK v6 shape
 
-export class TextPart extends Schema.TaggedClass<TextPart>()("TextPart", {
+export class TextPart extends Schema.Class<TextPart>("TextPart")({
+  type: Schema.Literal("text"),
   text: Schema.String,
 }) {}
 
-export class ToolCallPart extends Schema.TaggedClass<ToolCallPart>()(
-  "ToolCallPart",
-  {
-    toolCallId: Schema.String,
-    toolName: Schema.String,
-    args: Schema.Unknown,
-  }
-) {}
+export class ImagePart extends Schema.Class<ImagePart>("ImagePart")({
+  type: Schema.Literal("image"),
+  image: Schema.String, // URL or base64
+  mediaType: Schema.optional(Schema.String),
+}) {}
 
-export class ToolResultPart extends Schema.TaggedClass<ToolResultPart>()(
-  "ToolResultPart",
-  {
-    toolCallId: Schema.String,
-    toolName: Schema.String,
-    result: Schema.Unknown,
-    isError: Schema.optional(Schema.Boolean),
-  }
-) {}
+export class ToolCallPart extends Schema.Class<ToolCallPart>("ToolCallPart")({
+  type: Schema.Literal("tool-call"),
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+  input: Schema.Unknown, // AI SDK v6 uses 'input' not 'args'
+}) {}
 
-export class ReasoningPart extends Schema.TaggedClass<ReasoningPart>()(
-  "ReasoningPart",
-  {
-    text: Schema.String,
-  }
-) {}
+// Simplified ToolResultOutput - just JSON for now
+export class ToolResultPart extends Schema.Class<ToolResultPart>("ToolResultPart")({
+  type: Schema.Literal("tool-result"),
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+  output: Schema.Struct({
+    type: Schema.Literal("json", "error-json"),
+    value: Schema.Unknown,
+  }),
+}) {}
 
-export class ImagePart extends Schema.TaggedClass<ImagePart>()("ImagePart", {
-  url: Schema.String,
-  mimeType: Schema.optional(Schema.String),
+export class ReasoningPart extends Schema.Class<ReasoningPart>("ReasoningPart")({
+  type: Schema.Literal("reasoning"),
+  text: Schema.String,
 }) {}
 
 export const MessagePart = Schema.Union(
   TextPart,
+  ImagePart,
   ToolCallPart,
   ToolResultPart,
-  ReasoningPart,
-  ImagePart
+  ReasoningPart
 )
 export type MessagePart = typeof MessagePart.Type
 
 // Message Role
 
-export const MessageRole = Schema.Literal("user", "assistant", "system")
+export const MessageRole = Schema.Literal("user", "assistant", "system", "tool")
 export type MessageRole = typeof MessageRole.Type
 
 // Message

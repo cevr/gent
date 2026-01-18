@@ -222,7 +222,7 @@ export const RepoExplorerTool = defineTool({
               const res = await fetch(
                 `https://api.github.com/repos/${parsed.name}`
               )
-              return res.json()
+              return res.json() as Promise<Record<string, unknown>>
             },
             catch: (e) =>
               new RepoExplorerError({

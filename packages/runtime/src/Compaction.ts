@@ -1,5 +1,5 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
-import { Compaction, Message, TextPart } from "@gent/core"
+import { Context, Effect, Layer, Stream } from "effect"
+import { Compaction, Message, TextPart, ToolCallPart, ToolResultPart } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import { Provider, ProviderError } from "@gent/providers"
 
@@ -36,12 +36,12 @@ export class CompactionService extends Context.Tag("CompactionService")<
           let chars = 0
           for (const msg of messages) {
             for (const part of msg.parts) {
-              if (part._tag === "TextPart") {
+              if (part.type === "text") {
                 chars += (part as TextPart).text.length
-              } else if (part._tag === "ToolCallPart") {
-                chars += JSON.stringify((part as any).args).length
-              } else if (part._tag === "ToolResultPart") {
-                chars += JSON.stringify((part as any).result).length
+              } else if (part.type === "tool-call") {
+                chars += JSON.stringify((part as ToolCallPart).input).length
+              } else if (part.type === "tool-result") {
+                chars += JSON.stringify((part as ToolResultPart).output).length
               }
             }
           }
@@ -70,7 +70,7 @@ Conversation:
 ${messages
   .map((m) => {
     const text = m.parts
-      .filter((p) => p._tag === "TextPart")
+      .filter((p) => p.type === "text")
       .map((p) => (p as TextPart).text)
       .join("\n")
     return `${m.role}: ${text}`
@@ -82,7 +82,7 @@ ${messages
               sessionId: messages[0]?.sessionId ?? "",
               branchId,
               role: "user",
-              parts: [new TextPart({ text: summaryPrompt })],
+              parts: [new TextPart({ type: "text", text: summaryPrompt })],
               createdAt: new Date(),
             })
 

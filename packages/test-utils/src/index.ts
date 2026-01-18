@@ -251,9 +251,9 @@ export const mockTextResponse = (text: string): StreamChunk[] => [
 export const mockToolCallResponse = (
   toolCallId: string,
   toolName: string,
-  args: unknown
+  input: unknown
 ): StreamChunk[] => [
-  new ToolCallChunk({ toolCallId, toolName, args }),
+  new ToolCallChunk({ toolCallId, toolName, input }),
   new FinishChunk({ finishReason: "tool_calls" }),
 ]
 

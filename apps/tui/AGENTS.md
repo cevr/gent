@@ -7,6 +7,8 @@
 - **No shorthand props** - Use `marginTop`/`marginBottom` not `marginY`.
 - **Border placement** - `border` prop goes on `<box>`, not `<input>`.
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
+- **Types from core** - Import `MessagePart`, `TextPart` from `@gent/core`. Never redeclare.
+- **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 
 ## Components
 

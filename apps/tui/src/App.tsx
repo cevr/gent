@@ -1,153 +1,209 @@
-import { useKeyboard, useRenderer } from "@opentui/solid"
-import { createSignal, createEffect, For, Show, onMount } from "solid-js"
-
-// Types
-interface Message {
-  id: string
-  role: "user" | "assistant" | "system"
-  content: string
-  createdAt: number
-}
-
-// API client
-const API_URL = "http://localhost:3000"
-
-async function sendMessage(
-  sessionId: string,
-  branchId: string,
-  content: string
-): Promise<void> {
-  await fetch(`${API_URL}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, branchId, content }),
-  })
-}
-
-async function listMessages(branchId: string): Promise<Message[]> {
-  const res = await fetch(`${API_URL}/messages/${branchId}`)
-  const data = await res.json()
-  return data.map((m: any) => ({
-    id: m.id,
-    role: m.role,
-    content: m.parts.find((p: any) => p._tag === "TextPart")?.text ?? "",
-    createdAt: m.createdAt,
-  }))
-}
-
-// Components
-function MessageBubble(props: { message: Message }) {
-  const isUser = () => props.message.role === "user"
-  return (
-    <box marginTop={1} marginBottom={1}>
-      <text style={{ fg: isUser() ? "cyan" : "green" }}>
-        <b>{isUser() ? "You" : "Assistant"}: </b>
-        <span>{props.message.content}</span>
-      </text>
-    </box>
-  )
-}
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import type { InputRenderable } from "@opentui/core"
+import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
+import type { AgentMode } from "@gent/core"
+import { extractText, type GentClient } from "./client.js"
+import { StatusBar } from "./components/StatusBar.js"
+import { MessageList, type Message } from "./components/MessageList.js"
+import { useGitInfo } from "./hooks/useGitStatus.js"
 
 interface AppProps {
+  client: GentClient
   sessionId: string
   branchId: string
   initialPrompt: string | undefined
+  cwd?: string
+  model?: string
 }
 
 export function App(props: AppProps) {
   const renderer = useRenderer()
-  const [inputValue, setInputValue] = createSignal("")
+  const dimensions = useTerminalDimensions()
+  const cwd = props.cwd ?? process.cwd()
+  const model = props.model ?? "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+
+  let inputRef: InputRenderable | null = null
+
+  const [, setInputValue] = createSignal("")
   const [messages, setMessages] = createSignal<Message[]>([])
-  const [status, setStatus] = createSignal("Ready")
+  const [mode, setMode] = createSignal<AgentMode>("auto")
+  const [cost] = createSignal(0)
+  const [status, setStatus] = createSignal<"idle" | "streaming" | "error">("idle")
+  const [error, setError] = createSignal<string | null>(null)
 
-  // Send initial prompt if provided
-  onMount(async () => {
-    if (props.initialPrompt) {
-      setStatus("Sending...")
-      await sendMessage(props.sessionId, props.branchId, props.initialPrompt)
-      setStatus("Ready")
-    }
-  })
+  const gitInfo = useGitInfo(cwd)
 
-  // Poll for messages
-  createEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const msgs = await listMessages(props.branchId)
-        setMessages(msgs)
-      } catch {
-        // ignore
+  // Load messages and subscribe to events
+  onMount(() => {
+    // Focus input
+    inputRef?.focus()
+
+    // Load existing messages
+    void props.client.listMessages(props.branchId).then((msgs) => {
+      setMessages(
+        msgs.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: extractText(m.parts),
+          createdAt: m.createdAt,
+        }))
+      )
+
+      // Send initial prompt if provided
+      if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
+        void props.client.sendMessage({
+          sessionId: props.sessionId,
+          branchId: props.branchId,
+          content: props.initialPrompt,
+        })
       }
-    }, 1000)
-
-    return () => clearInterval(interval)
+    })
   })
 
-  // ESC to quit
+  // Subscribe to agent events
+  createEffect(() => {
+    const unsubscribe = props.client.subscribeEvents(props.sessionId, (event) => {
+      // Handle different event types
+      if (event._tag === "MessageReceived") {
+        // Refresh messages when a new message is received
+        void props.client.listMessages(props.branchId).then((msgs) => {
+          setMessages(
+            msgs.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: extractText(m.parts),
+              createdAt: m.createdAt,
+            }))
+          )
+        })
+      } else if (event._tag === "StreamStarted") {
+        setStatus("streaming")
+        setError(null)
+        // Add placeholder assistant message
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            createdAt: Date.now(),
+          },
+        ])
+      } else if (event._tag === "StreamChunk") {
+        // Update last message with chunk
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last && last.role === "assistant") {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: last.content + event.chunk },
+            ]
+          }
+          return prev
+        })
+      } else if (event._tag === "StreamEnded") {
+        setStatus("idle")
+      } else if (event._tag === "ErrorOccurred") {
+        setStatus("error")
+        setError(event.error)
+      }
+      // TODO: handle cost from events when available
+    })
+
+    onCleanup(unsubscribe)
+  })
+
+  const exit = () => {
+    renderer.destroy()
+    process.exit(0)
+  }
+
+  // Keyboard handlers
   useKeyboard((e) => {
-    if (e.name === "escape") {
-      renderer.destroy()
-      process.exit(0)
+    // ESC or Ctrl+C to quit
+    if (e.name === "escape" || (e.ctrl && e.name === "c")) {
+      exit()
+    }
+
+    // Shift+Tab to cycle mode
+    if (e.name === "tab" && e.shift) {
+      setMode((m) => (m === "auto" ? "plan" : "auto"))
     }
   })
 
   const handleSubmit = (value: string) => {
     const text = value.trim()
     if (text) {
-      setStatus("Sending...")
-      sendMessage(props.sessionId, props.branchId, text).then(() => {
-        setStatus("Ready")
+      setStatus("streaming")
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "user",
+          content: text,
+          createdAt: Date.now(),
+        },
+      ])
+
+      void props.client.sendMessage({
+        sessionId: props.sessionId,
+        branchId: props.branchId,
+        content: text,
+      }).catch((err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err))
+        setStatus("error")
+        setError(error.message)
       })
+      // Clear input
+      if (inputRef) {
+        inputRef.value = ""
+      }
       setInputValue("")
     }
   }
 
+
   return (
     <box flexDirection="column" width="100%" height="100%">
-      {/* Header */}
-      <box flexShrink={0} border paddingLeft={1} paddingRight={1}>
-        <text>
-          <b style={{ fg: "magenta" }}>gent</b>
-          <span style={{ fg: "gray" }}> | {status()}</span>
-          <span style={{ fg: "gray" }}> | ESC to quit</span>
-        </text>
-      </box>
-
       {/* Messages */}
-      <scrollbox
-        flexGrow={1}
-        stickyScroll
-        stickyStart="bottom"
-        paddingLeft={1}
-        paddingRight={1}
-      >
-        <Show
-          when={messages().length > 0}
-          fallback={
-            <box marginTop={2} marginBottom={2}>
-              <text style={{ fg: "gray" }}>
-                No messages yet. Type below and press Enter!
-              </text>
-            </box>
-          }
-        >
-          <For each={messages()}>
-            {(msg) => <MessageBubble message={msg} />}
-          </For>
-        </Show>
-      </scrollbox>
+      <MessageList messages={messages()} />
+
+      {/* Separator line */}
+      <box flexShrink={0}>
+        <text style={{ fg: "gray" }}>{"─".repeat(dimensions().width)}</text>
+      </box>
 
       {/* Input */}
-      <box flexShrink={0} height={3} border>
-        <input
-          focused
-          placeholder="Type a message..."
-          value={inputValue()}
-          onInput={setInputValue}
-          onSubmit={handleSubmit}
-          width="100%"
-        />
+      <box flexShrink={0} flexDirection="row" paddingLeft={1}>
+        <text style={{ fg: "cyan" }}>❯ </text>
+        <box flexGrow={1}>
+          <input
+            ref={(r) => (inputRef = r)}
+            focused
+            onInput={setInputValue}
+            onSubmit={handleSubmit}
+            backgroundColor="transparent"
+            focusedBackgroundColor="transparent"
+          />
+        </box>
       </box>
+
+      {/* Separator line */}
+      <box flexShrink={0}>
+        <text style={{ fg: "gray" }}>{"─".repeat(dimensions().width)}</text>
+      </box>
+
+      {/* Status Bar */}
+      <StatusBar
+        mode={mode()}
+        model={model}
+        cwd={cwd}
+        gitRoot={gitInfo()?.root ?? null}
+        git={gitInfo()?.status ?? null}
+        cost={cost()}
+        status={status()}
+        error={error()}
+      />
     </box>
   )
 }

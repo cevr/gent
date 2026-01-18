@@ -1,6 +1,11 @@
 import { Schema } from "effect"
 import { PermissionRule } from "./Permission.js"
 
+// Agent Mode
+
+export const AgentMode = Schema.Literal("auto", "plan")
+export type AgentMode = typeof AgentMode.Type
+
 // Model Configuration
 
 export class ModelConfig extends Schema.Class<ModelConfig>("ModelConfig")({

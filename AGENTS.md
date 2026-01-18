@@ -7,6 +7,7 @@ Building gent - minimal, opinionated, Effect-native agent harness.
 ```bash
 bun install
 bun run typecheck  # Must pass clean (no errors, no suggestions)
+bun run lint       # ESLint: no any, no floating promises
 bun run test       # Uses bun test, NOT vitest (bun:sqlite compat)
 ```
 
@@ -18,6 +19,8 @@ bun run test       # Uses bun test, NOT vitest (bun:sqlite compat)
 - **Effect LSP suggestions** - TS41 messages are suggestions, not errors. Still must fix them.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
+- **No `any` casts** - ESLint enforces. Causes type drift bugs. Import types from `@gent/core`, don't redeclare.
+- **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 
 ## Architecture
 
@@ -67,3 +70,14 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 | `packages/storage/src/SqliteStorage.ts` | `decodeMessageParts` for JSON→Schema roundtrip |
 | `packages/test-utils/src/index.ts` | `SequenceRecorder`, recording layers, assertions |
 | `apps/tui/tsconfig.json` | `jsxImportSource: "@opentui/solid"` required |
+
+## Documentation
+
+| Path | Focus |
+|------|-------|
+| `packages/core/AGENTS.md` | Type exports, schema patterns |
+| `packages/runtime/AGENTS.md` | AgentLoop, tracing |
+| `packages/providers/AGENTS.md` | Provider setup, Stream.async |
+| `packages/storage/AGENTS.md` | SQLite, JSON roundtrip |
+| `packages/test-utils/AGENTS.md` | Test layers, mocking |
+| `apps/tui/AGENTS.md` | OpenTUI, Solid patterns |
