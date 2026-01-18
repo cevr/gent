@@ -17,6 +17,7 @@ bun run test       # Uses bun test, NOT vitest (bun:sqlite compat)
 - **exactOptionalPropertyTypes** - `string | undefined` ≠ `string?`. Define explicit interface types.
 - **Effect LSP suggestions** - TS41 messages are suggestions, not errors. Still must fix them.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
+- **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
 
 ## Architecture
 
@@ -63,6 +64,11 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 | File | Purpose |
 |------|---------|
-| `packages/storage/src/SqliteStorage.ts` | Uses `decodeMessageParts` for JSON→Schema roundtrip |
+| `packages/storage/src/SqliteStorage.ts` | Uses `decodeMessageParts` for JSON→Schema roundtrip, requires platform layer |
 | `packages/test-utils/src/index.ts` | `SequenceRecorder`, recording layers, assertions |
 | `apps/tui/tsconfig.json` | `jsxImportSource: "@opentui/solid"` required |
+| `apps/tui/scripts/build.ts` | Binary compilation with `autoloadBunfig: false` |
+
+## CLI/TUI Architecture
+
+Single app: CLI parses args via `@effect/cli`, launches TUI via `@opentui/solid`. Binary compiles to `~/.bun/bin/gent`.
