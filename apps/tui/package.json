@@ -20,6 +20,7 @@
     "@gent/telemetry": "workspace:*",
     "@opentui/core": "^0.1.74",
     "@opentui/solid": "^0.1.74",
+    "diff": "^8.0.2",
     "figlet": "^1.9.4",
     "solid-js": "^1.9.10"
   },

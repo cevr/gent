@@ -1,5 +1,6 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
 import figlet from "figlet"
+import { createPatch } from "diff"
 import { useTheme } from "../theme/index.js"
 
 export interface Message {
@@ -153,20 +154,67 @@ function formatToolInput(toolName: string, input: unknown): string {
   }
 }
 
-// Extract edit diff info (oldString -> newString) truncated for display
-function getEditDiff(input: unknown): { old: string; new: string } | null {
+// Detect filetype from path extension
+function getFiletype(path: string): string | undefined {
+  const ext = path.split(".").pop()?.toLowerCase()
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
+    py: "python", rs: "rust", go: "go", md: "markdown",
+    json: "json", yaml: "yaml", yml: "yaml", toml: "toml",
+  }
+  return ext ? map[ext] : undefined
+}
+
+// Count lines added/removed from old and new strings
+function countDiffLines(oldStr: string, newStr: string): { added: number; removed: number } {
+  const oldLines = oldStr ? oldStr.split("\n").length : 0
+  const newLines = newStr ? newStr.split("\n").length : 0
+  if (newLines > oldLines) {
+    return { added: newLines - oldLines, removed: 0 }
+  } else if (oldLines > newLines) {
+    return { added: 0, removed: oldLines - newLines }
+  }
+  // Same line count - count actual changed lines
+  const oldArr = oldStr.split("\n")
+  const newArr = newStr.split("\n")
+  let changed = 0
+  for (let i = 0; i < oldArr.length; i++) {
+    if (oldArr[i] !== newArr[i]) changed++
+  }
+  return { added: changed, removed: changed }
+}
+
+// Extract read tool info: line count from output
+// Note: output is truncated JSON from runtime, so we extract line count from pattern
+function getReadInfo(output: string | undefined): { lines: number } | null {
+  if (!output) return null
+
+  // Output is truncated JSON like: {"content":"   1\tline1\n   2\t..."}
+  // Count line numbers by finding all occurrences of the pattern: digits followed by tab
+  // The last line number tells us total lines read
+  const lineNumMatches = output.match(/\d+\\t/g)
+  if (!lineNumMatches || lineNumMatches.length === 0) return null
+
+  // Get the highest line number found
+  const lineNums = lineNumMatches.map(m => parseInt(m.replace("\\t", ""), 10))
+  const maxLine = Math.max(...lineNums)
+
+  return { lines: maxLine }
+}
+
+// Generate unified diff from edit input for <diff> component
+function getEditUnifiedDiff(input: unknown): { diff: string; filetype: string | undefined; added: number; removed: number } | null {
   if (!input || typeof input !== "object") return null
   const obj = input as Record<string, unknown>
+  const path = obj["path"]
   const oldStr = obj["oldString"] ?? obj["old_string"]
   const newStr = obj["newString"] ?? obj["new_string"]
-  if (typeof oldStr !== "string" || typeof newStr !== "string") return null
+  if (typeof path !== "string" || typeof oldStr !== "string" || typeof newStr !== "string") return null
 
-  // Truncate to first line, max 60 chars
-  const truncate = (s: string) => {
-    const line = s.split("\n")[0] ?? ""
-    return line.length > 60 ? line.slice(0, 57) + "..." : line
-  }
-  return { old: truncate(oldStr), new: truncate(newStr) }
+  const diff = createPatch(path, oldStr, newStr)
+  const filetype = getFiletype(path)
+  const { added, removed } = countDiffLines(oldStr, newStr)
+  return { diff, filetype, added, removed }
 }
 
 function SingleToolCall(props: { toolCall: ToolCall }) {
@@ -190,7 +238,9 @@ function SingleToolCall(props: { toolCall: ToolCall }) {
 
   const inputSummary = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
   const isEdit = () => toolName() === "edit"
-  const editDiff = () => isEdit() ? getEditDiff(props.toolCall.input) : null
+  const isRead = () => toolName() === "read"
+  const editData = () => isEdit() && props.toolCall.status !== "running" ? getEditUnifiedDiff(props.toolCall.input) : null
+  const readInfo = () => isRead() && props.toolCall.status !== "running" ? getReadInfo(props.toolCall.output) : null
 
   // Only show generic output for bash (not edit/read/glob/grep/write)
   const noOutputTools = ["edit", "read", "glob", "grep", "write"]
@@ -207,14 +257,40 @@ function SingleToolCall(props: { toolCall: ToolCall }) {
           <span style={{ fg: theme.textMuted }}>({inputSummary()})</span>
         </Show>
       </text>
-      <Show when={editDiff()}>
-        {(diff) => (
-          <box paddingLeft={6} flexDirection="column">
+      <Show when={editData()}>
+        {(data) => (
+          <box paddingLeft={4} flexDirection="column">
             <text>
-              <span style={{ fg: theme.error }}>- {diff().old}</span>
+              <span style={{ fg: theme.textMuted }}>└ Added </span>
+              <span style={{ fg: theme.success, bold: true }}>{data().added}</span>
+              <span style={{ fg: theme.textMuted }}> lines, removed </span>
+              <span style={{ fg: theme.error, bold: true }}>{data().removed}</span>
+              <span style={{ fg: theme.textMuted }}> lines</span>
             </text>
+            <box marginTop={1}>
+              <diff
+                diff={data().diff}
+                view="unified"
+                filetype={data().filetype}
+                showLineNumbers={true}
+                addedBg="#1a4d1a"
+                removedBg="#4d1a1a"
+                addedSignColor="#22c55e"
+                removedSignColor="#ef4444"
+                lineNumberFg={theme.textMuted}
+                width="100%"
+              />
+            </box>
+          </box>
+        )}
+      </Show>
+      <Show when={readInfo()}>
+        {(info) => (
+          <box paddingLeft={4}>
             <text>
-              <span style={{ fg: theme.success }}>+ {diff().new}</span>
+              <span style={{ fg: theme.textMuted }}>└ Read </span>
+              <span style={{ fg: theme.success, bold: true }}>{info().lines}</span>
+              <span style={{ fg: theme.textMuted }}> lines</span>
             </text>
           </box>
         )}
