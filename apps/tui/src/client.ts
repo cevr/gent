@@ -43,22 +43,22 @@ export interface GentClient {
 /**
  * Creates a GentClient from an RPC client.
  * Uses provided runtime for all Effect execution.
+ * RPC methods return Effect<T, E, never> so runtime context is unused.
  */
-export function createClient<R>(
+export function createClient(
   rpcClient: GentRpcClient,
-  runtime: Runtime.Runtime<R>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Runtime context unused by RPC calls
+  runtime: Runtime.Runtime<any>
 ): GentClient {
-  const runPromise = Runtime.runPromise(runtime)
-
   return {
     sendMessage: (input) =>
-      runPromise(rpcClient.sendMessage(input) as Effect.Effect<void, never, R>).catch((err) => {
+      Runtime.runPromise(runtime)(rpcClient.sendMessage(input)).catch((err) => {
         console.error("sendMessage error:", err)
         throw err
       }),
 
     listMessages: (branchId) =>
-      runPromise(rpcClient.listMessages({ branchId }) as Effect.Effect<readonly MessageInfoReadonly[], never, R>),
+      Runtime.runPromise(runtime)(rpcClient.listMessages({ branchId })) as Promise<readonly MessageInfoReadonly[]>,
 
     subscribeEvents: (sessionId, onEvent) => {
       let cancelled = false
@@ -73,9 +73,9 @@ export function createClient<R>(
             onEvent(event)
           }
         })
-      ) as Effect.Effect<void, never, R>
+      )
 
-      void runPromise(streamEffect).catch(() => {
+      void Runtime.runPromise(runtime)(streamEffect).catch(() => {
         // Stream ended or cancelled
       })
 

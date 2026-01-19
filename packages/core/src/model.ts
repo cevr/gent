@@ -133,3 +133,6 @@ export const DEFAULT_MODELS: readonly Model[] = [
     contextLength: 256000,
   }),
 ]
+
+// Default model ID for the application
+export const DEFAULT_MODEL_ID = "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0" as ModelId

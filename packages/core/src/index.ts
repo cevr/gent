@@ -14,7 +14,7 @@ export {
 } from "./message.js"
 
 // Tool Types
-export type { ToolDefinition, ToolContext } from "./tool.js"
+export type { ToolDefinition, ToolContext, AnyToolDefinition } from "./tool.js"
 export {
   defineTool,
   ToolRegistry,
@@ -60,4 +60,5 @@ export {
   ProviderId,
   SUPPORTED_PROVIDERS,
   DEFAULT_MODELS,
+  DEFAULT_MODEL_ID,
 } from "./model.js"

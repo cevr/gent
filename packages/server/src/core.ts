@@ -42,6 +42,12 @@ export interface SessionInfo {
   updatedAt: number
 }
 
+export interface BranchInfo {
+  id: string
+  sessionId: string
+  createdAt: number
+}
+
 export interface MessageInfo {
   id: string
   sessionId: string
@@ -79,6 +85,10 @@ export interface GentCoreService {
   readonly listMessages: (
     branchId: string
   ) => Effect.Effect<MessageInfo[], GentCoreError>
+
+  readonly listBranches: (
+    sessionId: string
+  ) => Effect.Effect<BranchInfo[], GentCoreError>
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
@@ -182,16 +192,21 @@ export class GentCore extends Context.Tag("GentCore")<
               }))
             }),
 
+          listBranches: (sessionId) =>
+            Effect.gen(function* () {
+              const branches = yield* storage.listBranches(sessionId)
+              return branches.map((b) => ({
+                id: b.id,
+                sessionId: b.sessionId,
+                createdAt: b.createdAt.getTime(),
+              }))
+            }),
+
           steer: (command) => agentLoop.steer(command),
 
           subscribeEvents: (sessionId) =>
             eventBus.subscribe().pipe(
-              Stream.filter((e) => {
-                if ("sessionId" in e) {
-                  return (e as { sessionId: string }).sessionId === sessionId
-                }
-                return false
-              })
+              Stream.filter((e) => e.sessionId === sessionId)
             ),
         }
 

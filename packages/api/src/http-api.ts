@@ -1,44 +1,21 @@
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "@effect/platform"
 import { Schema } from "effect"
+import {
+  CreateSessionPayload,
+  CreateSessionSuccess,
+  SessionInfo,
+  SendMessagePayload,
+  MessageInfo,
+  SteerPayload,
+} from "./operations.js"
 
-// Request/Response Schemas
-
-export const SendMessageRequest = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
-  content: Schema.String,
-})
-
-export const CreateSessionRequest = Schema.Struct({
-  name: Schema.optional(Schema.String),
-})
-
-export const CreateSessionResponse = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
-})
-
-export const SessionResponse = Schema.Struct({
-  id: Schema.String,
-  name: Schema.optional(Schema.String),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
-})
-
-export const MessageResponse = Schema.Struct({
-  id: Schema.String,
-  sessionId: Schema.String,
-  branchId: Schema.String,
-  role: Schema.Literal("user", "assistant", "system", "tool"),
-  parts: Schema.Array(Schema.Unknown),
-  createdAt: Schema.Number,
-})
-
-export const SteerRequest = Schema.Union(
-  Schema.TaggedStruct("Cancel", {}),
-  Schema.TaggedStruct("Interrupt", { message: Schema.String }),
-  Schema.TaggedStruct("SwitchModel", { model: Schema.String })
-)
+// Re-export schemas under HTTP-friendly names for backward compatibility
+export const SendMessageRequest = SendMessagePayload
+export const CreateSessionRequest = CreateSessionPayload
+export const CreateSessionResponse = CreateSessionSuccess
+export const SessionResponse = SessionInfo
+export const MessageResponse = MessageInfo
+export const SteerRequest = SteerPayload
 
 // API Groups
 

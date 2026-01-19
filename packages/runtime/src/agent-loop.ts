@@ -114,8 +114,8 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             }
 
             // Decode input using tool's params schema
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- decodedInput type depends on dynamic tool schema
             const decodedInput = yield* Effect.try({
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- tool.params is AnyToolDefinition with any schema type
               try: () => Schema.decodeUnknownSync(tool.params)(toolCall.input),
               catch: (e) => new AgentLoopError({
                 message: `Invalid tool input: ${e instanceof Error ? e.message : String(e)}`,

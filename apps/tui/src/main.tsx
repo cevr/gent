@@ -12,7 +12,7 @@ import {
 } from "@gent/server"
 import { GentRpcs } from "@gent/api"
 import { DevTracerLive, clearLog } from "@gent/telemetry"
-import type { ModelId } from "@gent/core"
+import { DEFAULT_MODEL_ID, type ModelId } from "@gent/core"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
@@ -33,7 +33,7 @@ const TracerLayer = DevTracerLive(TRACE_LOG)
 // GentServer layer with tracing (provides dependencies for GentCore)
 const ServerDepsLayer = GentServer.Dependencies({
   systemPrompt: "You are a helpful assistant.",
-  defaultModel: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+  defaultModel: DEFAULT_MODEL_ID,
   dbPath: DB_PATH,
 }).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
 
@@ -128,8 +128,8 @@ const main = Command.make(
       if (session._tag === "Some") {
         sessionId = session.value
         // Get existing session's branch
-        const messages = yield* core.listMessages(sessionId)
-        branchId = messages[0]?.branchId ?? crypto.randomUUID()
+        const branches = yield* core.listBranches(sessionId)
+        branchId = branches[0]?.id ?? crypto.randomUUID()
       } else {
         // Create new session
         const result = yield* core.createSession({ name: "gent session" })

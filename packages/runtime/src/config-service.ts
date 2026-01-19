@@ -28,15 +28,17 @@ export class ConfigService extends Context.Tag("ConfigService")<
   ConfigService,
   ConfigServiceService
 >() {
-  static USER_CONFIG_PATH = ".gent/config.json"
-  static PROJECT_CONFIG_PATH = ".gent/config.json"
+  /** Relative path from $HOME for user config */
+  static USER_CONFIG_RELATIVE = ".gent/config.json"
+  /** Relative path from project root for project config */
+  static PROJECT_CONFIG_RELATIVE = ".gent/config.json"
 
   static Live: Layer.Layer<ConfigService> = Layer.scoped(
     ConfigService,
     Effect.gen(function* () {
       const home = process.env["HOME"] ?? "~"
-      const userConfigPath = `${home}/${ConfigService.USER_CONFIG_PATH}`
-      const projectConfigPath = `${process.cwd()}/${ConfigService.PROJECT_CONFIG_PATH}`
+      const userConfigPath = `${home}/${ConfigService.USER_CONFIG_RELATIVE}`
+      const projectConfigPath = `${process.cwd()}/${ConfigService.PROJECT_CONFIG_RELATIVE}`
 
       // State: current config
       const configRef = yield* Ref.make<UserConfig>(new UserConfig({}))

@@ -1,4 +1,4 @@
-import { createSignal, For, Show, onMount } from "solid-js"
+import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import type { ModelId } from "@gent/core"
@@ -180,9 +180,11 @@ export function CommandPalette() {
     }
   })
 
-  onMount(() => {
-    // Reset palette state when it opens
-    resetPalette()
+  // Reset palette state when it opens
+  createEffect(() => {
+    if (command.paletteOpen()) {
+      resetPalette()
+    }
   })
 
   // Calculate palette dimensions

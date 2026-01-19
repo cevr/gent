@@ -1,7 +1,7 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { InputRenderable } from "@opentui/core"
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
-import type { AgentMode, ModelId } from "@gent/core"
+import { DEFAULT_MODEL_ID, type AgentMode, type ModelId } from "@gent/core"
 import { extractText, type GentClient } from "./client.js"
 import { StatusBar } from "./components/status-bar.js"
 import { MessageList, type Message } from "./components/message-list.js"
@@ -235,7 +235,7 @@ function AppContent(props: AppProps) {
 }
 
 export function App(props: AppProps) {
-  const initialModel = (props.model ?? "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0") as ModelId
+  const initialModel = (props.model ?? DEFAULT_MODEL_ID) as ModelId
 
   return (
     <ThemeProvider mode={undefined}>

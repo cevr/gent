@@ -39,10 +39,14 @@ export const defineTool = <
 
 // Tool Registry Service
 
+// Use any for variance - tools have varying params/result/error/deps types
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyToolDefinition = ToolDefinition<string, any, any, any, any>
+
 export interface ToolRegistryService {
-  readonly get: (name: string) => Effect.Effect<ToolDefinition | undefined>
-  readonly list: () => Effect.Effect<ReadonlyArray<ToolDefinition>>
-  readonly register: (tool: ToolDefinition) => Effect.Effect<void>
+  readonly get: (name: string) => Effect.Effect<AnyToolDefinition | undefined>
+  readonly list: () => Effect.Effect<ReadonlyArray<AnyToolDefinition>>
+  readonly register: (tool: AnyToolDefinition) => Effect.Effect<void>
 }
 
 export class ToolRegistry extends Context.Tag("ToolRegistry")<
@@ -50,7 +54,7 @@ export class ToolRegistry extends Context.Tag("ToolRegistry")<
   ToolRegistryService
 >() {
   static Live = (
-    tools: ReadonlyArray<ToolDefinition>
+    tools: ReadonlyArray<AnyToolDefinition>
   ): Layer.Layer<ToolRegistry> =>
     Layer.succeed(ToolRegistry, {
       get: (name) => Effect.succeed(tools.find((t) => t.name === name)),

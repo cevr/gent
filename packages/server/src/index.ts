@@ -19,6 +19,7 @@ import {
   type CreateSessionOutput,
   type SendMessageInput,
   type SessionInfo,
+  type BranchInfo,
   type MessageInfo,
   StorageError,
 } from "./core.js"
@@ -33,6 +34,7 @@ export {
   type CreateSessionOutput,
   type SendMessageInput,
   type SessionInfo,
+  type BranchInfo,
   type MessageInfo,
 }
 
@@ -111,8 +113,7 @@ export class GentServer extends Context.Tag("GentServer")<
     const BaseServicesLive = Layer.mergeAll(
       StorageLive,
       Provider.Live,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- ToolDefinition type variance requires any
-      ToolRegistry.Live(AllTools as any),
+      ToolRegistry.Live(AllTools),
       EventBus.Live,
       Permission.Live()
     )

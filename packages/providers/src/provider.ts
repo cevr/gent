@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema, Stream, JSONSchema } from "effect"
-import type { Message, ToolDefinition } from "@gent/core"
+import type { Message, AnyToolDefinition } from "@gent/core"
 import { TextPart, ToolCallPart, ToolResultPart, ImagePart } from "@gent/core"
 import { streamText, tool, jsonSchema, type ToolSet, type ModelMessage, type ToolModelMessage, type ToolResultPart as AIToolResultPart } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
@@ -66,7 +66,7 @@ export type StreamChunk = typeof StreamChunk.Type
 export interface ProviderRequest {
   readonly model: string
   readonly messages: ReadonlyArray<Message>
-  readonly tools?: ReadonlyArray<ToolDefinition>
+  readonly tools?: ReadonlyArray<AnyToolDefinition>
   readonly systemPrompt?: string
   readonly maxTokens?: number
   readonly temperature?: number
@@ -304,7 +304,7 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
   return result
 }
 
-function convertTools(tools: ReadonlyArray<ToolDefinition>): ToolSet {
+function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
   const result: ToolSet = {}
 
   for (const t of tools) {
