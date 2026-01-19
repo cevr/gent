@@ -36,18 +36,12 @@ export class ReasoningPart extends Schema.Class<ReasoningPart>("ReasoningPart")(
   text: Schema.String,
 }) {}
 
-export class StepDurationPart extends Schema.Class<StepDurationPart>("StepDurationPart")({
-  type: Schema.Literal("step-duration"),
-  durationMs: Schema.Number,
-}) {}
-
 export const MessagePart = Schema.Union(
   TextPart,
   ImagePart,
   ToolCallPart,
   ToolResultPart,
-  ReasoningPart,
-  StepDurationPart
+  ReasoningPart
 )
 export type MessagePart = typeof MessagePart.Type
 
@@ -65,6 +59,7 @@ export class Message extends Schema.Class<Message>("Message")({
   role: MessageRole,
   parts: Schema.Array(MessagePart),
   createdAt: Schema.DateFromNumber,
+  turnDurationMs: Schema.optional(Schema.Number),
 }) {}
 
 // Session

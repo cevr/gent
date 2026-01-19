@@ -38,6 +38,7 @@ export const MessageInfo = Schema.Struct({
   role: Schema.Literal("user", "assistant", "system", "tool"),
   parts: Schema.Array(MessagePart),
   createdAt: Schema.Number,
+  turnDurationMs: Schema.optional(Schema.Number),
 })
 
 export const ListMessagesPayload = Schema.Struct({

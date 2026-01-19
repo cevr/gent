@@ -67,6 +67,10 @@ export interface StorageService {
     branchId: string,
     afterMessageId?: string
   ) => Effect.Effect<void, StorageError>
+  readonly updateMessageTurnDuration: (
+    messageId: string,
+    durationMs: number
+  ) => Effect.Effect<void, StorageError>
 
   // Compactions
   readonly createCompaction: (
@@ -117,6 +121,7 @@ const makeStorage = (db: Database): StorageService => {
       role TEXT NOT NULL,
       parts TEXT NOT NULL,
       created_at INTEGER NOT NULL,
+      turn_duration_ms INTEGER,
       FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
     )
   `)
@@ -363,7 +368,7 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
               message.id,
               message.sessionId,
@@ -371,6 +376,7 @@ const makeStorage = (db: Database): StorageService => {
               message.role,
               JSON.stringify(message.parts),
               message.createdAt.getTime(),
+              message.turnDurationMs ?? null,
             ]
           )
           return message
@@ -387,7 +393,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at FROM messages WHERE id = ?`
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE id = ?`
             )
             .get(id) as
             | {
@@ -397,6 +403,7 @@ const makeStorage = (db: Database): StorageService => {
                 role: "user" | "assistant" | "system" | "tool"
                 parts: string
                 created_at: number
+                turn_duration_ms: number | null
               }
             | null
           if (!row) return undefined
@@ -408,6 +415,7 @@ const makeStorage = (db: Database): StorageService => {
             role: row.role,
             parts,
             createdAt: new Date(row.created_at),
+            turnDurationMs: row.turn_duration_ms ?? undefined,
           })
         },
         catch: (e) =>
@@ -422,7 +430,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at FROM messages WHERE branch_id = ? ORDER BY created_at ASC`
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC`
             )
             .all(branchId) as Array<{
             id: string
@@ -431,6 +439,7 @@ const makeStorage = (db: Database): StorageService => {
             role: "user" | "assistant" | "system" | "tool"
             parts: string
             created_at: number
+            turn_duration_ms: number | null
           }>
           return rows.map((row) => {
             const parts = decodeMessageParts(JSON.parse(row.parts))
@@ -441,6 +450,7 @@ const makeStorage = (db: Database): StorageService => {
               role: row.role,
               parts,
               createdAt: new Date(row.created_at),
+              turnDurationMs: row.turn_duration_ms ?? undefined,
             })
           })
         },
@@ -471,6 +481,21 @@ const makeStorage = (db: Database): StorageService => {
         catch: (e) =>
           new StorageError({
             message: "Failed to delete messages",
+            cause: e,
+          }),
+      }),
+
+    updateMessageTurnDuration: (messageId, durationMs) =>
+      Effect.try({
+        try: () => {
+          db.run(
+            `UPDATE messages SET turn_duration_ms = ? WHERE id = ?`,
+            [durationMs, messageId]
+          )
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to update message turn duration",
             cause: e,
           }),
       }),

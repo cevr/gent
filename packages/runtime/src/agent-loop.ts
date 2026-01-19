@@ -4,7 +4,6 @@ import {
   TextPart,
   ToolCallPart,
   ToolResultPart,
-  StepDurationPart,
   EventBus,
   StreamStarted,
   StreamChunk as EventStreamChunk,
@@ -183,8 +182,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             })
           )
 
-          // Track turn start time for total duration
+          // Track turn start time
           const turnStartTime = yield* DateTime.now
+
           let continueLoop = true
 
           while (continueLoop) {
@@ -204,11 +204,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             }
 
             const state = yield* Ref.get(stateRef)
-            const allMessages = yield* storage.listMessages(branchId)
-            // Filter out step-duration-only messages (UI-only, not for LLM context)
-            const messages = allMessages.filter((m) =>
-              !m.parts.every((p) => p.type === "step-duration")
-            )
+            const messages = yield* storage.listMessages(branchId)
             const tools = yield* toolRegistry.list()
 
             // Start streaming
@@ -347,26 +343,10 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             }
           }
 
-          // Create step-end message with total turn duration
+          // Update user message with turn duration
           const turnEndTime = yield* DateTime.now
           const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - DateTime.toEpochMillis(turnStartTime)
-          const stepMessage = new Message({
-            id: crypto.randomUUID(),
-            sessionId,
-            branchId,
-            role: "assistant",
-            parts: [new StepDurationPart({ type: "step-duration", durationMs: turnDurationMs })],
-            createdAt: new Date(),
-          })
-          yield* storage.createMessage(stepMessage)
-          yield* eventBus.publish(
-            new MessageReceived({
-              sessionId,
-              branchId,
-              messageId: stepMessage.id,
-              role: "assistant",
-            })
-          )
+          yield* storage.updateMessageTurnDuration(initialMessage.id, turnDurationMs)
 
           // Process follow-up queue
           const finalState = yield* Ref.get(stateRef)

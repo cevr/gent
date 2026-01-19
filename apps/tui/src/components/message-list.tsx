@@ -66,7 +66,9 @@ function AssistantMessage(props: {
         <text style={{ fg: theme.text }}>{props.content}</text>
       </Show>
       <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
-        <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime!)}</text>
+        <box marginTop={1}>
+          <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime!)}</text>
+        </box>
       </Show>
     </box>
   )

@@ -2,7 +2,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { InputRenderable } from "@opentui/core"
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
 import { DEFAULT_MODEL_ID, calculateCost, type AgentMode, type ModelId } from "@gent/core"
-import { extractText, extractStepDuration, buildToolResultMap, extractToolCallsWithResults, type GentClient } from "./client.js"
+import { extractText, buildToolResultMap, extractToolCallsWithResults, type GentClient, type MessageInfoReadonly } from "./client.js"
 import { StatusBar } from "./components/status-bar.js"
 import { MessageList, ThinkingIndicator, type Message } from "./components/message-list.js"
 import { CommandPalette } from "./components/command-palette.js"
@@ -62,6 +62,55 @@ function AppContent(props: AppProps) {
     if (elapsedInterval) clearInterval(elapsedInterval)
   })
 
+  // Build messages from raw messages
+  // Duration is stored on user message, but displayed after the last assistant message of that turn
+  const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
+    const resultMap = buildToolResultMap(msgs)
+    const filteredMsgs = msgs.filter((m) => m.role !== "tool")
+
+    // Build a map: for each user message index, store its turnDurationMs
+    // Then assign to the previous assistant message
+    const userMsgDurations = new Map<number, number>()
+    filteredMsgs.forEach((m, i) => {
+      if (m.role === "user" && m.turnDurationMs !== undefined) {
+        userMsgDurations.set(i, m.turnDurationMs)
+      }
+    })
+
+    return filteredMsgs.map((m, i) => {
+      const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
+      let thinkTime: number | undefined
+
+      if (m.role === "assistant") {
+        // Check if next message is a user message with duration
+        const nextIdx = i + 1
+        const nextUserDuration = userMsgDurations.get(nextIdx)
+        if (nextUserDuration !== undefined) {
+          thinkTime = Math.round(nextUserDuration / 1000)
+        } else if (nextIdx >= filteredMsgs.length) {
+          // Last assistant message - check if there's a duration on the initiating user message
+          // Find the user message that started this turn (last user message before this assistant)
+          for (let j = i - 1; j >= 0; j--) {
+            const prev = filteredMsgs[j]
+            if (prev?.role === "user" && prev.turnDurationMs !== undefined) {
+              thinkTime = Math.round(prev.turnDurationMs / 1000)
+              break
+            }
+          }
+        }
+      }
+
+      return {
+        id: m.id,
+        role: m.role,
+        content: extractText(m.parts),
+        createdAt: m.createdAt,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        thinkTime,
+      }
+    })
+  }
+
   // Load messages and subscribe to events
   onMount(() => {
     // Focus input
@@ -69,23 +118,7 @@ function AppContent(props: AppProps) {
 
     // Load existing messages
     void props.client.listMessages(props.branchId).then((msgs) => {
-      const resultMap = buildToolResultMap(msgs)
-      setMessages(
-        msgs
-          .filter((m) => m.role !== "tool") // Don't show tool result messages separately
-          .map((m) => {
-            const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
-            const durationMs = extractStepDuration(m.parts)
-            return {
-              id: m.id,
-              role: m.role,
-              content: extractText(m.parts),
-              createdAt: m.createdAt,
-              toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-              thinkTime: durationMs !== undefined ? Math.round(durationMs / 1000) : undefined,
-            }
-          })
-      )
+      setMessages(buildMessages(msgs))
 
       // Send initial prompt if provided
       if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
@@ -105,23 +138,7 @@ function AppContent(props: AppProps) {
       if (event._tag === "MessageReceived") {
         // Refresh messages when a new message is received
         void props.client.listMessages(props.branchId).then((msgs) => {
-          const resultMap = buildToolResultMap(msgs)
-          setMessages(
-            msgs
-              .filter((m) => m.role !== "tool")
-              .map((m) => {
-                const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
-                const durationMs = extractStepDuration(m.parts)
-                return {
-                  id: m.id,
-                  role: m.role,
-                  content: extractText(m.parts),
-                  createdAt: m.createdAt,
-                  toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-                  thinkTime: durationMs !== undefined ? Math.round(durationMs / 1000) : undefined,
-                }
-              })
-          )
+          setMessages(buildMessages(msgs))
         })
       } else if (event._tag === "StreamStarted") {
         setStatus("streaming")

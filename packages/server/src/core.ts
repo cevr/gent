@@ -55,6 +55,7 @@ export interface MessageInfo {
   role: "user" | "assistant" | "system" | "tool"
   parts: readonly MessagePart[]
   createdAt: number
+  turnDurationMs: number | undefined
 }
 
 export type GentCoreError = StorageError | AgentLoopError | PlatformError
@@ -189,6 +190,7 @@ export class GentCore extends Context.Tag("GentCore")<
                 role: m.role,
                 parts: m.parts,
                 createdAt: m.createdAt.getTime(),
+                turnDurationMs: m.turnDurationMs,
               }))
             }),
 

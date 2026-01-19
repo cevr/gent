@@ -46,3 +46,8 @@ Ported from opencode. Key patterns:
 - Wrap async operations in try/catch blocks
 - Use Effect.tryPromise for operations that might fail
 - Display errors in status bar or modal, don't crash the TUI
+
+## Debugging
+
+- Use `console.log()` for debug output - it appears in terminal after TUI exits
+- `process.exit()` cleanly exits TUI without cleanup warnings

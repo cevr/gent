@@ -13,7 +13,7 @@
 ```sql
 sessions(id, name, created_at, updated_at)
 branches(id, session_id, parent_branch_id, parent_message_id, name, created_at)
-messages(id, session_id, branch_id, role, parts, created_at)  -- parts is JSON, includes StepDurationPart
+messages(id, session_id, branch_id, role, parts, created_at, turn_duration_ms)  -- parts is JSON, turn_duration_ms on user messages
 compactions(id, branch_id, summary, message_count, token_count, created_at)
 todos(id, branch_id, content, status, priority, created_at, updated_at)
 ```
