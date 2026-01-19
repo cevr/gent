@@ -10,7 +10,7 @@ import { HomeView } from "./routes/home-view.js"
 import { SessionView } from "./routes/session-view.js"
 
 export interface AppProps {
-  initialPrompt: string | undefined
+  initialPrompt?: string
   model?: string
   onModelChange?: (modelId: ModelId) => void
 }

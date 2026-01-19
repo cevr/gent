@@ -17,7 +17,7 @@ const FONT = FONTS[Math.floor(Math.random() * FONTS.length)]!
 const LOGO = figlet.textSync("gent", { font: FONT })
 
 export interface HomeViewProps {
-  initialPrompt: string | undefined
+  initialPrompt?: string
 }
 
 export function HomeView(props: HomeViewProps) {

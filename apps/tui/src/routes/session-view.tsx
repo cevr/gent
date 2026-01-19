@@ -23,7 +23,7 @@ import { useAgentState } from "../agent-state/index.js"
 export interface SessionViewProps {
   sessionId: string
   branchId: string
-  initialPrompt: string | undefined
+  initialPrompt?: string
 }
 
 export function SessionView(props: SessionViewProps) {

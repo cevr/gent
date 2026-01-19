@@ -30,7 +30,7 @@ import type { GentRpcClient } from "./client.js"
 
 type InitialState =
   | { _tag: "home" }
-  | { _tag: "session"; session: SessionInfo; prompt: string | undefined }
+  | { _tag: "session"; session: SessionInfo; prompt?: string }
   | { _tag: "headless"; session: SessionInfo; prompt: string }
 
 // Pure function for state resolution

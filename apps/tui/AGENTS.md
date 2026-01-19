@@ -11,7 +11,6 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
-- **exactOptionalPropertyTypes** - Use `prop: string | undefined` not `prop?: string` when passing through providers/props.
 
 ## Components
 

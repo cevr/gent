@@ -39,7 +39,6 @@ bun run --cwd apps/tui dev sessions
 
 - **bun:sqlite** - Can't use vitest (runs in Node). Use `bun test` directly.
 - **Schema.Class JSON roundtrip** - `JSON.parse` returns plain objects. Use `Schema.decodeUnknownSync` to reconstruct instances.
-- **exactOptionalPropertyTypes** - `string | undefined` ≠ `string?`. Define explicit interface types.
 - **Effect LSP suggestions** - TS41 messages are suggestions, not errors. Still must fix them.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
