@@ -4,6 +4,7 @@ import {
   TextPart,
   ToolCallPart,
   ToolResultPart,
+  StepDurationPart,
   EventBus,
   StreamStarted,
   StreamChunk as EventStreamChunk,
@@ -257,15 +258,17 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             )
 
             // Build assistant message
-            const assistantParts: Array<TextPart | ToolCallPart> = []
+            const assistantParts: Array<TextPart | ToolCallPart | StepDurationPart> = []
             const fullText = textParts.join("")
             if (fullText) {
               assistantParts.push(new TextPart({ type: "text", text: fullText }))
             }
             assistantParts.push(...toolCalls)
 
+            // Add step duration part
             const streamEndTime = yield* DateTime.now
-            const thinkTimeMs = DateTime.toEpochMillis(streamEndTime) - DateTime.toEpochMillis(streamStartTime)
+            const durationMs = DateTime.toEpochMillis(streamEndTime) - DateTime.toEpochMillis(streamStartTime)
+            assistantParts.push(new StepDurationPart({ type: "step-duration", durationMs }))
 
             const assistantMessage = new Message({
               id: crypto.randomUUID(),
@@ -274,7 +277,6 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
               role: "assistant",
               parts: assistantParts,
               createdAt: new Date(),
-              thinkTimeMs,
             })
 
             yield* storage.createMessage(assistantMessage)

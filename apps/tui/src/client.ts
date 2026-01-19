@@ -2,9 +2,9 @@ import { Effect, Stream, Runtime } from "effect"
 import type { RpcClient } from "@effect/rpc"
 import type { RpcGroup } from "@effect/rpc"
 import type { GentRpcs } from "@gent/api"
-import type { AgentEvent, MessagePart, TextPart, ToolCallPart, ToolResultPart } from "@gent/core"
+import type { AgentEvent, MessagePart, TextPart, ToolCallPart, ToolResultPart, StepDurationPart } from "@gent/core"
 
-export type { MessagePart, TextPart, ToolCallPart, ToolResultPart }
+export type { MessagePart, TextPart, ToolCallPart, ToolResultPart, StepDurationPart }
 
 export function extractText(parts: readonly MessagePart[]): string {
   const textPart = parts.find((p): p is TextPart => p.type === "text")
@@ -100,7 +100,12 @@ export interface MessageInfoReadonly {
   readonly role: "user" | "assistant" | "system" | "tool"
   readonly parts: readonly MessagePart[]
   readonly createdAt: number
-  readonly thinkTimeMs: number | undefined
+}
+
+// Extract step duration from message parts (in ms)
+export function extractStepDuration(parts: readonly MessagePart[]): number | undefined {
+  const durationPart = parts.find((p): p is StepDurationPart => p.type === "step-duration")
+  return durationPart?.durationMs
 }
 
 // Steer command types

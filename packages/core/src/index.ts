@@ -8,6 +8,7 @@ export {
   ToolResultPart,
   ReasoningPart,
   ImagePart,
+  StepDurationPart,
   Session,
   Branch,
   Compaction,

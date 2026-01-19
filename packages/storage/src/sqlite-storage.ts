@@ -117,7 +117,6 @@ const makeStorage = (db: Database): StorageService => {
       role TEXT NOT NULL,
       parts TEXT NOT NULL,
       created_at INTEGER NOT NULL,
-      think_time_ms INTEGER,
       FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
     )
   `)
@@ -364,7 +363,7 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, think_time_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
             [
               message.id,
               message.sessionId,
@@ -372,7 +371,6 @@ const makeStorage = (db: Database): StorageService => {
               message.role,
               JSON.stringify(message.parts),
               message.createdAt.getTime(),
-              message.thinkTimeMs ?? null,
             ]
           )
           return message
@@ -389,7 +387,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, think_time_ms FROM messages WHERE id = ?`
+              `SELECT id, session_id, branch_id, role, parts, created_at FROM messages WHERE id = ?`
             )
             .get(id) as
             | {
@@ -399,7 +397,6 @@ const makeStorage = (db: Database): StorageService => {
                 role: "user" | "assistant" | "system" | "tool"
                 parts: string
                 created_at: number
-                think_time_ms: number | null
               }
             | null
           if (!row) return undefined
@@ -411,7 +408,6 @@ const makeStorage = (db: Database): StorageService => {
             role: row.role,
             parts,
             createdAt: new Date(row.created_at),
-            ...(row.think_time_ms !== null ? { thinkTimeMs: row.think_time_ms } : {}),
           })
         },
         catch: (e) =>
@@ -426,7 +422,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, think_time_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC`
+              `SELECT id, session_id, branch_id, role, parts, created_at FROM messages WHERE branch_id = ? ORDER BY created_at ASC`
             )
             .all(branchId) as Array<{
             id: string
@@ -435,7 +431,6 @@ const makeStorage = (db: Database): StorageService => {
             role: "user" | "assistant" | "system" | "tool"
             parts: string
             created_at: number
-            think_time_ms: number | null
           }>
           return rows.map((row) => {
             const parts = decodeMessageParts(JSON.parse(row.parts))
@@ -446,7 +441,6 @@ const makeStorage = (db: Database): StorageService => {
               role: row.role,
               parts,
               createdAt: new Date(row.created_at),
-              ...(row.think_time_ms !== null ? { thinkTimeMs: row.think_time_ms } : {}),
             })
           })
         },

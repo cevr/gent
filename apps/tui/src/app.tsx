@@ -2,7 +2,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { InputRenderable } from "@opentui/core"
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
 import { DEFAULT_MODEL_ID, calculateCost, type AgentMode, type ModelId } from "@gent/core"
-import { extractText, buildToolResultMap, extractToolCallsWithResults, type GentClient } from "./client.js"
+import { extractText, extractStepDuration, buildToolResultMap, extractToolCallsWithResults, type GentClient } from "./client.js"
 import { StatusBar } from "./components/status-bar.js"
 import { MessageList, ThinkingIndicator, type Message } from "./components/message-list.js"
 import { CommandPalette } from "./components/command-palette.js"
@@ -75,13 +75,14 @@ function AppContent(props: AppProps) {
           .filter((m) => m.role !== "tool") // Don't show tool result messages separately
           .map((m) => {
             const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
+            const durationMs = extractStepDuration(m.parts)
             return {
               id: m.id,
               role: m.role,
               content: extractText(m.parts),
               createdAt: m.createdAt,
               toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-              thinkTime: m.thinkTimeMs !== undefined ? Math.round(m.thinkTimeMs / 1000) : undefined,
+              thinkTime: durationMs !== undefined ? Math.round(durationMs / 1000) : undefined,
             }
           })
       )
@@ -110,13 +111,14 @@ function AppContent(props: AppProps) {
               .filter((m) => m.role !== "tool")
               .map((m) => {
                 const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
+                const durationMs = extractStepDuration(m.parts)
                 return {
                   id: m.id,
                   role: m.role,
                   content: extractText(m.parts),
                   createdAt: m.createdAt,
                   toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-                  thinkTime: m.thinkTimeMs !== undefined ? Math.round(m.thinkTimeMs / 1000) : undefined,
+                  thinkTime: durationMs !== undefined ? Math.round(durationMs / 1000) : undefined,
                 }
               })
           )
