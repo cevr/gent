@@ -1,5 +1,6 @@
 import { RGBA } from "@opentui/core"
 
+// Core color palette for the application theme
 export interface ThemeColors {
   primary: RGBA
   secondary: RGBA

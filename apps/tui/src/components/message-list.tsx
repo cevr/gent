@@ -53,9 +53,6 @@ function AssistantMessage(props: {
   const { theme } = useTheme()
   return (
     <box marginTop={1} paddingLeft={2} flexDirection="column">
-      <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
-        <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime!)}</text>
-      </Show>
       <Show when={props.toolCalls && props.toolCalls.length > 0}>
         <box flexDirection="column" marginBottom={props.content ? 1 : 0}>
           <For each={props.toolCalls}>
@@ -65,6 +62,9 @@ function AssistantMessage(props: {
       </Show>
       <Show when={props.content}>
         <text style={{ fg: theme.text }}>{props.content}</text>
+      </Show>
+      <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
+        <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime!)}</text>
       </Show>
     </box>
   )
