@@ -6,10 +6,12 @@ import {
   Message,
   TextPart,
   EventBus,
+  SessionNameUpdated,
   type AgentEvent,
   type MessagePart,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
+import { Provider, ProviderError } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError } from "@gent/runtime"
 
 // Re-export for consumers
@@ -22,10 +24,22 @@ export { StorageError }
 
 export interface CreateSessionInput {
   name?: string
+  cwd?: string
+  firstMessage?: string
 }
 
 export interface CreateSessionOutput {
   sessionId: string
+  branchId: string
+  name: string
+}
+
+export interface CreateBranchInput {
+  sessionId: string
+  name?: string
+}
+
+export interface CreateBranchOutput {
   branchId: string
 }
 
@@ -38,6 +52,8 @@ export interface SendMessageInput {
 export interface SessionInfo {
   id: string
   name: string | undefined
+  cwd: string | undefined
+  branchId: string | undefined
   createdAt: number
   updatedAt: number
 }
@@ -58,7 +74,7 @@ export interface MessageInfo {
   turnDurationMs: number | undefined
 }
 
-export type GentCoreError = StorageError | AgentLoopError | PlatformError
+export type GentCoreError = StorageError | AgentLoopError | PlatformError | ProviderError
 
 // ============================================================================
 // GentCore Service
@@ -75,9 +91,17 @@ export interface GentCoreService {
     sessionId: string
   ) => Effect.Effect<SessionInfo | null, GentCoreError>
 
+  readonly getLastSessionByCwd: (
+    cwd: string
+  ) => Effect.Effect<SessionInfo | null, GentCoreError>
+
   readonly deleteSession: (
     sessionId: string
   ) => Effect.Effect<void, GentCoreError>
+
+  readonly createBranch: (
+    input: CreateBranchInput
+  ) => Effect.Effect<CreateBranchOutput, GentCoreError>
 
   readonly sendMessage: (
     input: SendMessageInput
@@ -98,17 +122,36 @@ export interface GentCoreService {
   ) => Stream.Stream<AgentEvent, never, never>
 }
 
+// Name generation model - using haiku for speed/cost
+const NAME_GEN_MODEL = "anthropic/claude-3-haiku-20240307"
+
+// Generate session name from first message (fire-and-forget)
+const generateSessionName = (
+  provider: Provider["Type"],
+  firstMessage: string
+): Effect.Effect<string, ProviderError> =>
+  Effect.gen(function* () {
+    const prompt = `Generate a 2-4 word title for a chat starting with: "${firstMessage.slice(0, 200)}". Reply with just the title, no quotes or punctuation.`
+    const result = yield* provider.generate({
+      model: NAME_GEN_MODEL,
+      prompt,
+      maxTokens: 20,
+    })
+    return result.trim() || "New Chat"
+  }).pipe(Effect.catchAll(() => Effect.succeed("New Chat")))
+
 export class GentCore extends Context.Tag("GentCore")<
   GentCore,
   GentCoreService
 >() {
-  static Live: Layer.Layer<GentCore, never, Storage | AgentLoop | EventBus> =
+  static Live: Layer.Layer<GentCore, never, Storage | AgentLoop | EventBus | Provider> =
     Layer.effect(
       GentCore,
       Effect.gen(function* () {
         const storage = yield* Storage
         const agentLoop = yield* AgentLoop
         const eventBus = yield* EventBus
+        const provider = yield* Provider
 
         const service: GentCoreService = {
           createSession: (input) =>
@@ -117,9 +160,13 @@ export class GentCore extends Context.Tag("GentCore")<
               const branchId = crypto.randomUUID()
               const now = new Date()
 
+              // Start with placeholder name
+              const placeholderName = input.name ?? "New Chat"
+
               const session = new Session({
                 id: sessionId,
-                name: input.name ?? "New Session",
+                name: placeholderName,
+                cwd: input.cwd,
                 createdAt: now,
                 updatedAt: now,
               })
@@ -133,33 +180,95 @@ export class GentCore extends Context.Tag("GentCore")<
               yield* storage.createSession(session)
               yield* storage.createBranch(branch)
 
-              return { sessionId, branchId }
+              // Fork name generation if firstMessage provided (non-blocking)
+              if (input.firstMessage) {
+                yield* Effect.forkDaemon(
+                  Effect.gen(function* () {
+                    const generatedName = yield* generateSessionName(provider, input.firstMessage!)
+                    // Update session with generated name
+                    const updatedSession = new Session({
+                      ...session,
+                      name: generatedName,
+                      updatedAt: new Date(),
+                    })
+                    yield* storage.updateSession(updatedSession)
+                    // Publish event for clients
+                    yield* eventBus.publish(
+                      new SessionNameUpdated({ sessionId, name: generatedName })
+                    )
+                  }).pipe(Effect.catchAll(() => Effect.void))
+                )
+              }
+
+              return { sessionId, branchId, name: placeholderName }
             }),
 
           listSessions: () =>
             Effect.gen(function* () {
               const sessions = yield* storage.listSessions()
-              return sessions.map((s) => ({
-                id: s.id,
-                name: s.name,
-                createdAt: s.createdAt.getTime(),
-                updatedAt: s.updatedAt.getTime(),
-              }))
+              // Include first branch ID for each session
+              const sessionsWithBranch = yield* Effect.all(
+                sessions.map((s) =>
+                  Effect.gen(function* () {
+                    const branches = yield* storage.listBranches(s.id)
+                    return {
+                      id: s.id,
+                      name: s.name,
+                      cwd: s.cwd,
+                      branchId: branches[0]?.id,
+                      createdAt: s.createdAt.getTime(),
+                      updatedAt: s.updatedAt.getTime(),
+                    }
+                  })
+                )
+              )
+              return sessionsWithBranch
             }),
 
           getSession: (sessionId) =>
             Effect.gen(function* () {
               const session = yield* storage.getSession(sessionId)
               if (!session) return null
+              const branches = yield* storage.listBranches(sessionId)
               return {
                 id: session.id,
                 name: session.name,
+                cwd: session.cwd,
+                branchId: branches[0]?.id,
+                createdAt: session.createdAt.getTime(),
+                updatedAt: session.updatedAt.getTime(),
+              }
+            }),
+
+          getLastSessionByCwd: (cwd) =>
+            Effect.gen(function* () {
+              const session = yield* storage.getLastSessionByCwd(cwd)
+              if (!session) return null
+              const branches = yield* storage.listBranches(session.id)
+              return {
+                id: session.id,
+                name: session.name,
+                cwd: session.cwd,
+                branchId: branches[0]?.id,
                 createdAt: session.createdAt.getTime(),
                 updatedAt: session.updatedAt.getTime(),
               }
             }),
 
           deleteSession: (sessionId) => storage.deleteSession(sessionId),
+
+          createBranch: (input) =>
+            Effect.gen(function* () {
+              const branchId = crypto.randomUUID()
+              const branch = new Branch({
+                id: branchId,
+                sessionId: input.sessionId,
+                name: input.name,
+                createdAt: new Date(),
+              })
+              yield* storage.createBranch(branch)
+              return { branchId }
+            }),
 
           sendMessage: Effect.fn("GentCore.sendMessage")(function* (input) {
             const message = new Message({

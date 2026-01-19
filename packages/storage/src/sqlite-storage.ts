@@ -35,6 +35,9 @@ export interface StorageService {
   readonly getSession: (
     id: string
   ) => Effect.Effect<Session | undefined, StorageError>
+  readonly getLastSessionByCwd: (
+    cwd: string
+  ) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: () => Effect.Effect<
     ReadonlyArray<Session>,
     StorageError
@@ -96,10 +99,18 @@ const makeStorage = (db: Database): StorageService => {
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       name TEXT,
+      cwd TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
   `)
+
+  // Migration: add cwd column to existing sessions table
+  try {
+    db.run(`ALTER TABLE sessions ADD COLUMN cwd TEXT`)
+  } catch {
+    // Column already exists - ignore
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS branches (
@@ -162,10 +173,11 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+            `INSERT INTO sessions (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
             [
               session.id,
               session.name ?? null,
+              session.cwd ?? null,
               session.createdAt.getTime(),
               session.updatedAt.getTime(),
             ]
@@ -184,12 +196,13 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, name, created_at, updated_at FROM sessions WHERE id = ?`
+              `SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE id = ?`
             )
             .get(id) as
             | {
                 id: string
                 name: string | null
+                cwd: string | null
                 created_at: number
                 updated_at: number
               }
@@ -198,6 +211,7 @@ const makeStorage = (db: Database): StorageService => {
           return new Session({
             id: row.id,
             name: row.name ?? undefined,
+            cwd: row.cwd ?? undefined,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
           })
@@ -209,16 +223,49 @@ const makeStorage = (db: Database): StorageService => {
           }),
       }),
 
+    getLastSessionByCwd: (cwd) =>
+      Effect.try({
+        try: () => {
+          const row = db
+            .query(
+              `SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`
+            )
+            .get(cwd) as
+            | {
+                id: string
+                name: string | null
+                cwd: string | null
+                created_at: number
+                updated_at: number
+              }
+            | null
+          if (!row) return undefined
+          return new Session({
+            id: row.id,
+            name: row.name ?? undefined,
+            cwd: row.cwd ?? undefined,
+            createdAt: new Date(row.created_at),
+            updatedAt: new Date(row.updated_at),
+          })
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to get last session by cwd",
+            cause: e,
+          }),
+      }),
+
     listSessions: () =>
       Effect.try({
         try: () => {
           const rows = db
             .query(
-              `SELECT id, name, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+              `SELECT id, name, cwd, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
             )
             .all() as Array<{
             id: string
             name: string | null
+            cwd: string | null
             created_at: number
             updated_at: number
           }>
@@ -227,6 +274,7 @@ const makeStorage = (db: Database): StorageService => {
               new Session({
                 id: row.id,
                 name: row.name ?? undefined,
+                cwd: row.cwd ?? undefined,
                 createdAt: new Date(row.created_at),
                 updatedAt: new Date(row.updated_at),
               })

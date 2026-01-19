@@ -16,7 +16,14 @@ export interface ExtractedToolCall {
   toolName: string
   status: "completed" | "error"
   input: unknown | undefined
+  summary: string | undefined
   output: string | undefined
+}
+
+// Stringify tool output to full string
+function stringifyOutput(value: unknown): string {
+  if (typeof value === "string") return value
+  return JSON.stringify(value, null, 2)
 }
 
 // Summarize tool output for display - truncate long strings and format objects
@@ -43,6 +50,7 @@ export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCa
       toolName: tc.toolName,
       status: "completed" as const,
       input: tc.input,
+      summary: undefined,
       output: undefined,
     }))
 }
@@ -50,8 +58,8 @@ export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCa
 // Build tool result map from all messages for joining
 export function buildToolResultMap(
   messages: readonly MessageInfoReadonly[]
-): Map<string, { output: string; isError: boolean }> {
-  const resultMap = new Map<string, { output: string; isError: boolean }>()
+): Map<string, { summary: string; output: string; isError: boolean }> {
+  const resultMap = new Map<string, { summary: string; output: string; isError: boolean }>()
 
   for (const msg of messages) {
     if (msg.role === "tool") {
@@ -59,7 +67,8 @@ export function buildToolResultMap(
         if (part.type === "tool-result") {
           const result = part as ToolResultPart
           resultMap.set(result.toolCallId, {
-            output: summarizeOutput(result.output),
+            summary: summarizeOutput(result.output),
+            output: stringifyOutput(result.output.value),
             isError: result.output.type === "error-json",
           })
         }
@@ -73,7 +82,7 @@ export function buildToolResultMap(
 // Extract tool calls with results joined from result map
 export function extractToolCallsWithResults(
   parts: readonly MessagePart[],
-  resultMap: Map<string, { output: string; isError: boolean }>
+  resultMap: Map<string, { summary: string; output: string; isError: boolean }>
 ): ExtractedToolCall[] {
   return parts
     .filter((p): p is ToolCallPart => p.type === "tool-call")
@@ -84,6 +93,7 @@ export function extractToolCallsWithResults(
         toolName: tc.toolName,
         status: result?.isError ? "error" as const : "completed" as const,
         input: tc.input,
+        summary: result?.summary,
         output: result?.output,
       }
     })
@@ -108,6 +118,7 @@ export type SteerCommand =
   | { _tag: "Cancel" }
   | { _tag: "Interrupt"; message: string }
   | { _tag: "SwitchModel"; model: string }
+  | { _tag: "SwitchMode"; mode: "build" | "plan" }
 
 // GentClient interface - adapts RPC client to callback-based subscriptions
 export interface GentClient {

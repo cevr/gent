@@ -14,7 +14,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     return {
       createSession: (input) =>
         core
-          .createSession(input.name !== undefined ? { name: input.name } : {})
+          .createSession({
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
+          })
           .pipe(Effect.orDie),
 
       listSessions: () => core.listSessions().pipe(Effect.orDie),
@@ -24,6 +27,15 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       deleteSession: ({ sessionId }) =>
         core.deleteSession(sessionId).pipe(Effect.orDie),
+
+      listBranches: ({ sessionId }) =>
+        core.listBranches(sessionId).pipe(Effect.orDie),
+
+      createBranch: ({ sessionId, name }) =>
+        core.createBranch({
+          sessionId,
+          ...(name !== undefined ? { name } : {}),
+        }).pipe(Effect.orDie),
 
       sendMessage: ({ sessionId, branchId, content }) =>
         core.sendMessage({ sessionId, branchId, content }).pipe(Effect.orDie),

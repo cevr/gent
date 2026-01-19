@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime, Runtime, Stream } from "effect"
+import { Console, Effect, Layer, ManagedRuntime, Option, Runtime, Stream } from "effect"
 import { RpcTest } from "@effect/rpc"
 import {
   GentServer,
@@ -10,6 +10,7 @@ import {
   DEFAULT_SYSTEM_PROMPT,
   type GentCoreService,
   type GentCoreError,
+  type SessionInfo,
 } from "@gent/server"
 import { GentRpcs } from "@gent/api"
 import { DevTracerLive, clearLog } from "@gent/telemetry"
@@ -18,7 +19,108 @@ import * as path from "node:path"
 
 import { render } from "@opentui/solid"
 import { App } from "./app.js"
-import { createClient, type GentRpcClient } from "./client.js"
+import { ClientProvider, type Session } from "./client/index.js"
+import { RouterProvider, Route } from "./router/index.js"
+import { WorkspaceProvider } from "./workspace/index.js"
+import type { GentRpcClient } from "./client.js"
+
+// ============================================================================
+// Initial State - discriminated union for clarity
+// ============================================================================
+
+type InitialState =
+  | { _tag: "home" }
+  | { _tag: "session"; session: SessionInfo; prompt: string | undefined }
+  | { _tag: "headless"; session: SessionInfo; prompt: string }
+
+// Pure function for state resolution
+const resolveInitialState = (input: {
+  core: GentCoreService
+  cwd: string
+  session: Option.Option<string>
+  continue_: boolean
+  headless: boolean
+  prompt: Option.Option<string>
+  promptArg: Option.Option<string>
+}): Effect.Effect<InitialState, GentCoreError> =>
+  Effect.gen(function* () {
+    const { core, cwd, session, continue_, headless, prompt, promptArg } = input
+
+    // 1. Headless mode
+    if (headless) {
+      const promptText = Option.isSome(promptArg) ? promptArg.value : undefined
+      if (!promptText) {
+        yield* Console.error("Error: --headless requires a prompt argument")
+        return process.exit(1)
+      }
+      // Get or create session
+      let sess: SessionInfo | null = null
+      if (Option.isSome(session)) {
+        sess = yield* core.getSession(session.value)
+        if (!sess) {
+          yield* Console.error(`Error: session ${session.value} not found`)
+          return process.exit(1)
+        }
+      } else {
+        const result = yield* core.createSession({ name: "headless session", cwd })
+        sess = {
+          id: result.sessionId,
+          name: result.name,
+          cwd,
+          branchId: result.branchId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      }
+      return { _tag: "headless" as const, session: sess, prompt: promptText }
+    }
+
+    // 2. Explicit session ID
+    if (Option.isSome(session)) {
+      const sess = yield* core.getSession(session.value)
+      if (!sess) {
+        yield* Console.error(`Error: session ${session.value} not found`)
+        return process.exit(1)
+      }
+      const promptText = Option.isSome(prompt) ? prompt.value : undefined
+      return { _tag: "session" as const, session: sess, prompt: promptText }
+    }
+
+    // 3. Continue from cwd
+    if (continue_) {
+      let sess = yield* core.getLastSessionByCwd(cwd)
+      if (!sess) {
+        const result = yield* core.createSession({ cwd })
+        sess = {
+          id: result.sessionId,
+          name: result.name,
+          cwd,
+          branchId: result.branchId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      }
+      const promptText = Option.isSome(prompt) ? prompt.value : undefined
+      return { _tag: "session" as const, session: sess, prompt: promptText }
+    }
+
+    // 4. Prompt without session - create new
+    if (Option.isSome(prompt)) {
+      const result = yield* core.createSession({ cwd })
+      const sess: SessionInfo = {
+        id: result.sessionId,
+        name: result.name,
+        cwd,
+        branchId: result.branchId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+      return { _tag: "session" as const, session: sess, prompt: prompt.value }
+    }
+
+    // 5. Home view
+    return { _tag: "home" as const }
+  })
 
 // Data directory
 const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
@@ -104,55 +206,58 @@ const main = Command.make(
       Options.withDescription("Session ID to continue"),
       Options.optional
     ),
+    continue_: Options.boolean("continue").pipe(
+      Options.withAlias("c"),
+      Options.withDescription("Continue last session from current directory"),
+      Options.withDefault(false)
+    ),
     headless: Options.boolean("headless").pipe(
       Options.withAlias("H"),
       Options.withDescription("Run in headless mode (no TUI, streams to stdout)"),
       Options.withDefault(false)
     ),
-    prompt: Args.text({ name: "prompt" }).pipe(
-      Args.withDescription("Initial prompt to start with"),
+    prompt: Options.text("prompt").pipe(
+      Options.withAlias("p"),
+      Options.withDescription("Initial prompt (TUI mode)"),
+      Options.optional
+    ),
+    promptArg: Args.text({ name: "prompt" }).pipe(
+      Args.withDescription("Prompt for headless mode"),
       Args.optional
     ),
   },
-  ({ session, headless, prompt }) =>
+  ({ session, continue_, headless, prompt, promptArg }) =>
     Effect.gen(function* () {
       // Get core service for direct access (headless, session management)
       const core = yield* GentCore
+      const cwd = process.cwd()
+
+      // Resolve initial state (discriminated union)
+      const state = yield* resolveInitialState({
+        core,
+        cwd,
+        session,
+        continue_,
+        headless,
+        prompt,
+        promptArg,
+      })
+
+      // Handle headless mode
+      if (state._tag === "headless") {
+        if (!state.session.branchId) {
+          yield* Console.error("Error: session has no branch")
+          return process.exit(1)
+        }
+        yield* runHeadless(core, state.session.id, state.session.branchId, state.prompt)
+        return
+      }
 
       // Create RPC client for TUI
       const rpcClient: GentRpcClient = yield* RpcTest.makeClient(GentRpcs)
 
-      // Get or create session
-      let sessionId: string
-      let branchId: string
-
-      if (session._tag === "Some") {
-        sessionId = session.value
-        // Get existing session's branch
-        const branches = yield* core.listBranches(sessionId)
-        branchId = branches[0]?.id ?? crypto.randomUUID()
-      } else {
-        // Create new session
-        const result = yield* core.createSession({ name: "gent session" })
-        sessionId = result.sessionId
-        branchId = result.branchId
-      }
-
-      const initialPrompt = prompt._tag === "Some" ? prompt.value : undefined
-
-      // Headless mode: run prompt and exit
-      if (headless) {
-        if (!initialPrompt) {
-          yield* Console.error("Error: --headless requires a prompt argument")
-          process.exit(1)
-        }
-        yield* runHeadless(core, sessionId, branchId, initialPrompt)
-        return
-      }
-
-      // Create client adapter for the TUI using managed runtime
+      // Get runtime for client
       const runtime = yield* serverRuntime.runtimeEffect
-      const client = createClient(rpcClient, runtime)
 
       // Model change handler - steers agent to new model
       const handleModelChange = (modelId: ModelId) => {
@@ -163,16 +268,35 @@ const main = Command.make(
         })
       }
 
-      // Launch TUI
+      // Derive initial session and route from state
+      let initialSession: Session | undefined
+      let initialRoute = Route.home()
+      let initialPrompt: string | undefined
+
+      if (state._tag === "session" && state.session.branchId) {
+        initialSession = {
+          sessionId: state.session.id,
+          branchId: state.session.branchId,
+          name: state.session.name ?? "Unnamed",
+        }
+        initialRoute = Route.session(state.session.id, state.session.branchId)
+        initialPrompt = state.prompt
+      }
+
+      // Launch TUI with providers
       yield* Effect.promise(() =>
         render(() => (
-          <App
-            client={client}
-            sessionId={sessionId}
-            branchId={branchId}
-            initialPrompt={initialPrompt}
-            onModelChange={handleModelChange}
-          />
+          <WorkspaceProvider cwd={cwd}>
+            <ClientProvider
+              rpcClient={rpcClient}
+              runtime={runtime}
+              initialSession={initialSession}
+            >
+              <RouterProvider initialRoute={initialRoute}>
+                <App initialPrompt={initialPrompt} onModelChange={handleModelChange} />
+              </RouterProvider>
+            </ClientProvider>
+          </WorkspaceProvider>
         ))
       )
 

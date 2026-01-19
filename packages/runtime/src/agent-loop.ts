@@ -15,10 +15,18 @@ import {
   ToolContext,
   Permission,
   ErrorOccurred,
+  PlanModeEntered,
+  PlanModeExited,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import { Provider, ProviderError, FinishChunk } from "@gent/providers"
 import { withRetry } from "./retry.js"
+
+// Stringify tool output to string
+function stringifyOutput(value: unknown): string {
+  if (typeof value === "string") return value
+  return JSON.stringify(value, null, 2)
+}
 
 // Summarize tool output for display (first line, truncated)
 function summarizeToolOutput(result: ToolResultPart): string {
@@ -49,15 +57,30 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()(
 export const SteerCommand = Schema.Union(
   Schema.TaggedStruct("Cancel", {}),
   Schema.TaggedStruct("Interrupt", { message: Schema.String }),
-  Schema.TaggedStruct("SwitchModel", { model: Schema.String })
+  Schema.TaggedStruct("SwitchModel", { model: Schema.String }),
+  Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") })
 )
 export type SteerCommand = typeof SteerCommand.Type
 
 // Agent Loop State
 
+type AgentMode = "build" | "plan"
+
+// Tools allowed in plan mode (read-only operations)
+const PLAN_MODE_TOOLS = new Set([
+  "read",
+  "glob",
+  "grep",
+  "webfetch",
+  "todo_read",
+  "todo_write",
+  "question",
+])
+
 interface AgentLoopState {
   running: boolean
   model: string
+  mode: AgentMode
   followUpQueue: Message[]
 }
 
@@ -95,6 +118,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
         const stateRef = yield* Ref.make<AgentLoopState>({
           running: false,
           model: config.defaultModel,
+          mode: "build",
           followUpQueue: [],
         })
 
@@ -194,18 +218,41 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
               const cmd = steerCmd.value
               if (cmd._tag === "Cancel") {
                 continueLoop = false
+                yield* eventBus.publish(
+                  new StreamEnded({
+                    sessionId,
+                    branchId,
+                    interrupted: true,
+                  })
+                )
                 break
               } else if (cmd._tag === "SwitchModel") {
                 yield* Ref.update(stateRef, (s) => ({
                   ...s,
                   model: cmd.model,
                 }))
+              } else if (cmd._tag === "SwitchMode") {
+                const newMode = cmd.mode
+                yield* Ref.update(stateRef, (s) => ({
+                  ...s,
+                  mode: newMode,
+                }))
+                // Emit mode change event
+                if (newMode === "plan") {
+                  yield* eventBus.publish(new PlanModeEntered({ sessionId, branchId }))
+                } else {
+                  yield* eventBus.publish(new PlanModeExited({ sessionId, branchId, planPath: "" }))
+                }
               }
             }
 
             const state = yield* Ref.get(stateRef)
             const messages = yield* storage.listMessages(branchId)
-            const tools = yield* toolRegistry.list()
+            const allTools = yield* toolRegistry.list()
+            // Filter tools based on mode
+            const tools = state.mode === "plan"
+              ? allTools.filter((t) => PLAN_MODE_TOOLS.has(t.name.toLowerCase()))
+              : allTools
 
             // Start streaming
             yield* eventBus.publish(new StreamStarted({ sessionId, branchId }))
@@ -318,7 +365,8 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     toolCallId: toolCall.toolCallId,
                     toolName: toolCall.toolName,
                     isError: result.output.type === "error-json",
-                    output: outputSummary,
+                    summary: outputSummary,
+                    output: stringifyOutput(result.output.value),
                   })
                 )
               }

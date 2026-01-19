@@ -1,18 +1,12 @@
-import { Show } from "solid-js"
-import type { AgentMode } from "@gent/core"
-import type { GitStatus } from "../hooks/use-git-status.js"
+import { Show, type JSX } from "solid-js"
 import { useTheme } from "../theme/index.js"
+import { useModel } from "../model/index.js"
+import { useWorkspace } from "../workspace/index.js"
+import { useAgentState } from "../agent-state/index.js"
 
-interface StatusBarProps {
-  mode: AgentMode
-  model: string
-  cwd: string
-  gitRoot: string | null
-  git: GitStatus | null
-  cost: number
-  status: "idle" | "streaming" | "error"
-  error: string | null
-}
+// ============================================================================
+// Helper functions
+// ============================================================================
 
 function formatCost(cost: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -22,38 +16,83 @@ function formatCost(cost: number): string {
 }
 
 function shortenModel(model: string): string {
-  // anthropic/claude-sonnet-4-20250514 -> claude-sonnet-4
   const parts = model.split("/")
   const name = parts[parts.length - 1] ?? model
-  // Remove date suffix
   const match = name.match(/^(claude-[a-z0-9-]+)-\d+$/)
   return match?.[1] ?? name
 }
 
 function relativePath(cwd: string, gitRoot: string | null): string {
   if (gitRoot) {
-    // Get repo dirname
     const repoParts = gitRoot.split("/")
     const repoName = repoParts[repoParts.length - 1] ?? ""
-
-    // At repo root
     if (cwd === gitRoot) return repoName
-
-    // In subdirectory
     if (cwd.startsWith(gitRoot + "/")) {
       return repoName + "/" + cwd.slice(gitRoot.length + 1)
     }
   }
-  // Fall back to just dirname
   const parts = cwd.split("/")
   return parts[parts.length - 1] ?? cwd
 }
 
-export function StatusBar(props: StatusBarProps) {
+// ============================================================================
+// Compound Components
+// ============================================================================
+
+interface RootProps {
+  children: JSX.Element
+}
+
+function Root(props: RootProps) {
+  return (
+    <box flexDirection="column" flexShrink={0}>
+      {props.children}
+    </box>
+  )
+}
+
+function ErrorRow() {
+  const { error } = useAgentState()
   const { theme } = useTheme()
 
-  const statusIndicator = () => {
-    switch (props.status) {
+  return (
+    <Show when={error()}>
+      <box paddingLeft={1} paddingRight={1}>
+        <text style={{ fg: theme.error }}>{error()}</text>
+      </box>
+    </Show>
+  )
+}
+
+function Mode() {
+  const { mode } = useAgentState()
+  const { theme } = useTheme()
+
+  return (
+    <span style={{ fg: mode() === "build" ? theme.success : theme.warning }}>
+      {mode()}
+    </span>
+  )
+}
+
+function Model() {
+  const { theme } = useTheme()
+  const model = useModel()
+
+  const display = () => {
+    const info = model.currentModelInfo()
+    return shortenModel(info?.name ?? model.currentModel())
+  }
+
+  return <span style={{ fg: theme.textMuted }}>{display()}</span>
+}
+
+function Status() {
+  const { status } = useAgentState()
+  const { theme } = useTheme()
+
+  const indicator = () => {
+    switch (status()) {
       case "streaming":
         return { text: "thinking...", color: theme.info }
       case "error":
@@ -64,56 +103,84 @@ export function StatusBar(props: StatusBarProps) {
   }
 
   return (
-    <box flexDirection="column" flexShrink={0}>
-      {/* Error row if error */}
-      <Show when={props.error}>
-        <box paddingLeft={1} paddingRight={1}>
-          <text style={{ fg: theme.error }}>{props.error}</text>
-        </box>
-      </Show>
+    <Show when={indicator().text}>
+      <span style={{ fg: indicator().color }}>{indicator().text}</span>
+    </Show>
+  )
+}
 
-      {/* Row 1: mode · model · status */}
-      <box paddingLeft={1} paddingRight={1}>
-        <text>
-          <span style={{ fg: props.mode === "build" ? theme.success : theme.warning }}>
-            {props.mode}
-          </span>
-          <span style={{ fg: theme.textMuted }}> · </span>
-          <span style={{ fg: theme.textMuted }}>{shortenModel(props.model)}</span>
-          <Show when={statusIndicator().text}>
-            <span style={{ fg: theme.textMuted }}> · </span>
-            <span style={{ fg: statusIndicator().color }}>{statusIndicator().text}</span>
-          </Show>
-        </text>
-      </box>
+function Cwd() {
+  const { theme } = useTheme()
+  const workspace = useWorkspace()
 
-      {/* Row 2: cwd · git · cost */}
-      <box paddingLeft={1} paddingRight={1}>
-        <text>
-          <span style={{ fg: theme.textMuted }}>{relativePath(props.cwd, props.gitRoot)}</span>
-          <Show when={props.git}>
-            {(git) => (
-              <>
-                <span style={{ fg: theme.textMuted }}> · </span>
-                <span style={{ fg: theme.warning }}>{git().branch}</span>
-                <Show when={git().files > 0}>
-                  <span style={{ fg: theme.text }}> ~{git().files}</span>
-                  <Show when={git().additions > 0}>
-                    <span style={{ fg: theme.success }}> +{git().additions}</span>
-                  </Show>
-                  <Show when={git().deletions > 0}>
-                    <span style={{ fg: theme.error }}> -{git().deletions}</span>
-                  </Show>
-                </Show>
-                <span style={{ fg: theme.textMuted }}> · {formatCost(props.cost)}</span>
-              </>
-            )}
+  return (
+    <span style={{ fg: theme.textMuted }}>
+      {relativePath(workspace.cwd, workspace.gitRoot())}
+    </span>
+  )
+}
+
+function Git() {
+  const { theme } = useTheme()
+  const workspace = useWorkspace()
+
+  return (
+    <Show when={workspace.gitStatus()}>
+      {(git) => (
+        <>
+          <span style={{ fg: theme.warning }}>{git().branch}</span>
+          <Show when={git().files > 0}>
+            <span style={{ fg: theme.text }}> ~{git().files}</span>
+            <Show when={git().additions > 0}>
+              <span style={{ fg: theme.success }}> +{git().additions}</span>
+            </Show>
+            <Show when={git().deletions > 0}>
+              <span style={{ fg: theme.error }}> -{git().deletions}</span>
+            </Show>
           </Show>
-          <Show when={!props.git}>
-            <span style={{ fg: theme.textMuted }}> · {formatCost(props.cost)}</span>
-          </Show>
-        </text>
-      </box>
+        </>
+      )}
+    </Show>
+  )
+}
+
+function Cost() {
+  const { cost } = useAgentState()
+  const { theme } = useTheme()
+
+  return <span style={{ fg: theme.textMuted }}>{formatCost(cost())}</span>
+}
+
+function Separator() {
+  const { theme } = useTheme()
+  return <span style={{ fg: theme.textMuted }}> · </span>
+}
+
+interface RowProps {
+  children: JSX.Element
+}
+
+function Row(props: RowProps) {
+  return (
+    <box paddingLeft={1} paddingRight={1}>
+      <text>{props.children}</text>
     </box>
   )
+}
+
+// ============================================================================
+// Export compound component
+// ============================================================================
+
+export const StatusBar = {
+  Root,
+  Row,
+  ErrorRow,
+  Mode,
+  Model,
+  Status,
+  Cwd,
+  Git,
+  Cost,
+  Separator,
 }

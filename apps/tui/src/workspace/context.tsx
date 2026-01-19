@@ -1,4 +1,5 @@
-import { createSignal, onCleanup, onMount } from "solid-js"
+import { createContext, useContext, onMount, onCleanup, createSignal } from "solid-js"
+import type { JSX } from "solid-js"
 import { spawn } from "bun"
 
 export interface GitStatus {
@@ -8,7 +9,28 @@ export interface GitStatus {
   deletions: number
 }
 
-export interface GitInfo {
+interface WorkspaceContextValue {
+  cwd: string
+  gitRoot: () => string | null
+  gitStatus: () => GitStatus | null
+  isGitRepo: () => boolean
+  projectName: () => string
+}
+
+const WorkspaceContext = createContext<WorkspaceContextValue>()
+
+export function useWorkspace(): WorkspaceContextValue {
+  const ctx = useContext(WorkspaceContext)
+  if (!ctx) throw new Error("useWorkspace must be used within WorkspaceProvider")
+  return ctx
+}
+
+interface WorkspaceProviderProps {
+  cwd: string
+  children: JSX.Element
+}
+
+interface GitInfo {
   root: string
   status: GitStatus
 }
@@ -70,20 +92,39 @@ async function getGitInfo(cwd: string): Promise<GitInfo | null> {
   }
 }
 
-export function useGitInfo(cwd: string) {
+function deriveProjectName(cwd: string, gitRoot: string | null): string {
+  // Prefer git repo name
+  if (gitRoot) {
+    const parts = gitRoot.split("/")
+    return parts[parts.length - 1] ?? gitRoot
+  }
+  // Fall back to cwd dirname
+  const parts = cwd.split("/")
+  return parts[parts.length - 1] ?? cwd
+}
+
+export function WorkspaceProvider(props: WorkspaceProviderProps) {
   const [gitInfo, setGitInfo] = createSignal<GitInfo | null>(null)
 
   onMount(() => {
     // Initial fetch
-    void getGitInfo(cwd).then(setGitInfo)
+    void getGitInfo(props.cwd).then(setGitInfo)
 
     // Poll every 2 seconds
     const interval = setInterval(() => {
-      void getGitInfo(cwd).then(setGitInfo)
+      void getGitInfo(props.cwd).then(setGitInfo)
     }, 2000)
 
     onCleanup(() => clearInterval(interval))
   })
 
-  return gitInfo
+  const value: WorkspaceContextValue = {
+    cwd: props.cwd,
+    gitRoot: () => gitInfo()?.root ?? null,
+    gitStatus: () => gitInfo()?.status ?? null,
+    isGitRepo: () => gitInfo() !== null,
+    projectName: () => deriveProjectName(props.cwd, gitInfo()?.root ?? null),
+  }
+
+  return <WorkspaceContext.Provider value={value}>{props.children}</WorkspaceContext.Provider>
 }

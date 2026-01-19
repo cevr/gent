@@ -5,6 +5,8 @@ import type { ModelId } from "@gent/core"
 import { useCommand } from "../command/index.js"
 import { useTheme } from "../theme/index.js"
 import { useModel } from "../model/index.js"
+import { useClient, type SessionInfo } from "../client/index.js"
+import { useRouter } from "../router/index.js"
 import { useScrollSync } from "../hooks/use-scroll-sync.js"
 
 interface MenuItem {
@@ -22,10 +24,13 @@ export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
   const model = useModel()
+  const client = useClient()
+  const router = useRouter()
   const dimensions = useTerminalDimensions()
 
   const [levelStack, setLevelStack] = createSignal<MenuLevel[]>([])
   const [selectedIndex, setSelectedIndex] = createSignal(0)
+  const [sessions, setSessions] = createSignal<SessionInfo[]>([])
 
   let scrollRef!: ScrollBoxRenderable
 
@@ -35,6 +40,16 @@ export function CommandPalette() {
   const rootMenu = (): MenuLevel => ({
     title: "Commands",
     items: [
+      {
+        id: "sessions",
+        title: "Sessions",
+        onSelect: () => {
+          void client.listSessions().then((list) => {
+            setSessions([...list])
+            pushLevel(sessionsMenu())
+          })
+        },
+      },
       {
         id: "theme",
         title: "Theme",
@@ -47,6 +62,43 @@ export function CommandPalette() {
       },
     ],
   })
+
+  // Sessions submenu
+  const sessionsMenu = (): MenuLevel => {
+    const currentSession = client.session()
+    const sessionList = sessions()
+
+    const items: MenuItem[] = [
+      {
+        id: "session.new",
+        title: "+ New Session",
+        onSelect: () => {
+          client.clearSession()
+          router.navigateToHome()
+          command.closePalette()
+        },
+      },
+      ...sessionList.map((s) => {
+        const isActive = currentSession?.sessionId === s.id
+        return {
+          id: `session.${s.id}`,
+          title: isActive ? `${s.name ?? "Unnamed"} •` : (s.name ?? "Unnamed"),
+          onSelect: () => {
+            if (s.branchId) {
+              void client.switchSession(s.id, s.branchId, s.name ?? "Unnamed")
+              router.navigateToSession(s.id, s.branchId)
+            }
+            command.closePalette()
+          },
+        }
+      }),
+    ]
+
+    return {
+      title: "Sessions",
+      items,
+    }
+  }
 
   // Theme submenu
   const themeMenu = (): MenuLevel => {

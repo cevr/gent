@@ -67,6 +67,7 @@ export class Message extends Schema.Class<Message>("Message")({
 export class Session extends Schema.Class<Session>("Session")({
   id: Schema.String,
   name: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
   createdAt: Schema.DateFromNumber,
   updatedAt: Schema.DateFromNumber,
 }) {}

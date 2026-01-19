@@ -49,6 +49,7 @@ export {
   TodoUpdated,
   QuestionsAsked,
   QuestionsAnswered,
+  SessionNameUpdated,
 } from "./event.js"
 
 // Permission Types

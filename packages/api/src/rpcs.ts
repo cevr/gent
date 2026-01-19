@@ -4,6 +4,10 @@ import {
   CreateSessionPayload,
   CreateSessionSuccess,
   SessionInfo,
+  BranchInfo,
+  ListBranchesPayload,
+  CreateBranchPayload,
+  CreateBranchSuccess,
   SendMessagePayload,
   ListMessagesPayload,
   MessageInfo,
@@ -32,6 +36,16 @@ export class GentRpcs extends RpcGroup.make(
   }),
   Rpc.make("deleteSession", {
     payload: { sessionId: Schema.String },
+  }),
+
+  // Branch RPCs
+  Rpc.make("listBranches", {
+    payload: ListBranchesPayload.fields,
+    success: Schema.Array(BranchInfo),
+  }),
+  Rpc.make("createBranch", {
+    payload: CreateBranchPayload.fields,
+    success: CreateBranchSuccess,
   }),
 
   // Message RPCs

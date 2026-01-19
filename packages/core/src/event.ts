@@ -56,6 +56,7 @@ export class StreamEnded extends Schema.TaggedClass<StreamEnded>()(
     sessionId: Schema.String,
     branchId: Schema.String,
     usage: Schema.optional(UsageSchema),
+    interrupted: Schema.optional(Schema.Boolean),
   }
 ) {}
 
@@ -78,6 +79,7 @@ export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
     toolCallId: Schema.String,
     toolName: Schema.String,
     isError: Schema.Boolean,
+    summary: Schema.optional(Schema.String),
     output: Schema.optional(Schema.String),
   }
 ) {}
@@ -203,6 +205,14 @@ export class QuestionsAnswered extends Schema.TaggedClass<QuestionsAnswered>()(
   }
 ) {}
 
+export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()(
+  "SessionNameUpdated",
+  {
+    sessionId: Schema.String,
+    name: Schema.String,
+  }
+) {}
+
 export const AgentEvent = Schema.Union(
   SessionStarted,
   SessionEnded,
@@ -223,7 +233,8 @@ export const AgentEvent = Schema.Union(
   AskUserResponded,
   TodoUpdated,
   QuestionsAsked,
-  QuestionsAnswered
+  QuestionsAnswered,
+  SessionNameUpdated
 )
 export type AgentEvent = typeof AgentEvent.Type
 
