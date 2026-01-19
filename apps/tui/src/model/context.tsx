@@ -2,12 +2,14 @@ import { createContext, useContext, onMount } from "solid-js"
 import type { JSX } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import type { Model, ModelId, Provider, ProviderId } from "@gent/core"
-import { DEFAULT_MODELS, SUPPORTED_PROVIDERS } from "@gent/core"
+import { DEFAULT_MODELS, SUPPORTED_PROVIDERS, CURRENT_GEN_MODEL_IDS } from "@gent/core"
 
 interface ModelContextValue {
   providers: () => readonly Provider[]
   models: () => readonly Model[]
+  currentGenModels: () => readonly Model[]
   modelsByProvider: (providerId: ProviderId) => readonly Model[]
+  currentGenByProvider: (providerId: ProviderId) => readonly Model[]
   currentModel: () => ModelId
   currentModelInfo: () => Model | undefined
   setModel: (modelId: ModelId) => void
@@ -41,11 +43,17 @@ export function ModelProvider(props: ModelProviderProps) {
     // For now using defaults
   })
 
+  const currentGenSet = new Set(CURRENT_GEN_MODEL_IDS as readonly string[])
+
   const value: ModelContextValue = {
     providers: () => store.providers,
     models: () => store.models,
+    currentGenModels: () =>
+      store.models.filter((m) => currentGenSet.has(m.id)),
     modelsByProvider: (providerId: ProviderId) =>
       store.models.filter((m) => m.provider === providerId),
+    currentGenByProvider: (providerId: ProviderId) =>
+      store.models.filter((m) => m.provider === providerId && currentGenSet.has(m.id)),
     currentModel: () => store.currentModel,
     currentModelInfo: () =>
       store.models.find((m) => m.id === store.currentModel),

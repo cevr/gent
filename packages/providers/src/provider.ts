@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema, Stream, JSONSchema } from "effect"
 import type { Message, AnyToolDefinition } from "@gent/core"
 import { TextPart, ToolCallPart, ToolResultPart, ImagePart } from "@gent/core"
-import { streamText, tool, jsonSchema, type ToolSet, type ModelMessage, type ToolModelMessage, type ToolResultPart as AIToolResultPart } from "ai"
+import { streamText, generateText, tool, jsonSchema, type ToolSet, type ModelMessage, type ToolModelMessage, type ToolResultPart as AIToolResultPart } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
@@ -72,12 +72,25 @@ export interface ProviderRequest {
   readonly temperature?: number
 }
 
+// Simple generate request (no tools, no streaming)
+
+export interface GenerateRequest {
+  readonly model: string
+  readonly prompt: string
+  readonly systemPrompt?: string
+  readonly maxTokens?: number
+}
+
 // Provider Service
 
 export interface ProviderService {
   readonly stream: (
     request: ProviderRequest
   ) => Effect.Effect<Stream.Stream<StreamChunk, ProviderError>, ProviderError>
+
+  readonly generate: (
+    request: GenerateRequest
+  ) => Effect.Effect<string, ProviderError>
 }
 
 export class Provider extends Context.Tag("Provider")<
@@ -169,6 +182,37 @@ export class Provider extends Context.Tag("Provider")<
         })()
       })
     }),
+
+    generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
+      const [providerName, modelName] = parseModelId(request.model)
+      const provider = getProvider(providerName)
+
+      if (!provider) {
+        return yield* new ProviderError({
+          message: `Unknown provider: ${providerName}`,
+          model: request.model,
+        })
+      }
+
+      const opts: Parameters<typeof generateText>[0] = {
+        model: provider(modelName),
+        prompt: request.prompt,
+      }
+      if (request.systemPrompt) opts.system = request.systemPrompt
+      if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
+
+      const result = yield* Effect.tryPromise({
+        try: () => generateText(opts),
+        catch: (e) =>
+          new ProviderError({
+            message: `Generate failed: ${e}`,
+            model: request.model,
+            cause: e,
+          }),
+      })
+
+      return result.text
+    }),
   })
 
   static Test = (
@@ -182,6 +226,7 @@ export class Provider extends Context.Tag("Provider")<
             responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]
           )
         ),
+      generate: () => Effect.succeed("test response"),
     })
   }
 }

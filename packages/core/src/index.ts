@@ -62,3 +62,6 @@ export {
   DEFAULT_MODELS,
   DEFAULT_MODEL_ID,
 } from "./model.js"
+
+// Current Gen (auto-generated)
+export { CURRENT_GEN_MODEL_IDS } from "./current-gen.js"

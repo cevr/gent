@@ -85,20 +85,22 @@ export function CommandPalette() {
     }
   }
 
-  // Provider submenu - lists all providers
+  // Provider submenu - lists providers with current gen models
   const providerMenu = (): MenuLevel => ({
     title: "Model",
-    items: model.providers().map((provider) => ({
-      id: `provider.${provider.id}`,
-      title: provider.name,
-      onSelect: () => pushLevel(modelMenu(provider.id)),
-    })),
+    items: model.providers()
+      .filter((provider) => model.currentGenByProvider(provider.id).length > 0)
+      .map((provider) => ({
+        id: `provider.${provider.id}`,
+        title: provider.name,
+        onSelect: () => pushLevel(modelMenu(provider.id)),
+      })),
   })
 
-  // Model submenu for a specific provider
+  // Model submenu for a specific provider (current gen only)
   const modelMenu = (providerId: string): MenuLevel => {
     const currentModelId = model.currentModel()
-    const providerModels = model.modelsByProvider(providerId as Parameters<typeof model.modelsByProvider>[0])
+    const providerModels = model.currentGenByProvider(providerId as Parameters<typeof model.currentGenByProvider>[0])
     const providerInfo = model.providers().find((p) => p.id === providerId)
 
     return {

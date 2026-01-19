@@ -82,6 +82,14 @@ export const RecordingProvider = (
             responses[idx] ?? [new FinishChunk({ finishReason: "stop" })]
           return Stream.fromIterable(chunks)
         }),
+        generate: Effect.fn("RecordingProvider.generate")(function* (request) {
+          yield* recorder.record({
+            service: "Provider",
+            method: "generate",
+            args: { model: request.model },
+          })
+          return "test response"
+        }),
       }
     })
   )
