@@ -51,8 +51,10 @@ function AssistantMessage(props: {
   thinkTime: number | undefined
 }) {
   const { theme } = useTheme()
+  const hasContent = () => props.content || (props.toolCalls && props.toolCalls.length > 0)
+
   return (
-    <box marginTop={1} paddingLeft={2} flexDirection="column">
+    <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
       <Show when={props.toolCalls && props.toolCalls.length > 0}>
         <box flexDirection="column" marginBottom={props.content ? 1 : 0}>
           <For each={props.toolCalls}>

@@ -183,6 +183,8 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             })
           )
 
+          // Track turn start time for total duration
+          const turnStartTime = yield* DateTime.now
           let continueLoop = true
 
           while (continueLoop) {
@@ -206,7 +208,6 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             const tools = yield* toolRegistry.list()
 
             // Start streaming
-            const streamStartTime = yield* DateTime.now
             yield* eventBus.publish(new StreamStarted({ sessionId, branchId }))
 
             const streamEffect = yield* withRetry(
@@ -258,17 +259,12 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             )
 
             // Build assistant message
-            const assistantParts: Array<TextPart | ToolCallPart | StepDurationPart> = []
+            const assistantParts: Array<TextPart | ToolCallPart> = []
             const fullText = textParts.join("")
             if (fullText) {
               assistantParts.push(new TextPart({ type: "text", text: fullText }))
             }
             assistantParts.push(...toolCalls)
-
-            // Add step duration part
-            const streamEndTime = yield* DateTime.now
-            const durationMs = DateTime.toEpochMillis(streamEndTime) - DateTime.toEpochMillis(streamStartTime)
-            assistantParts.push(new StepDurationPart({ type: "step-duration", durationMs }))
 
             const assistantMessage = new Message({
               id: crypto.randomUUID(),
@@ -346,6 +342,27 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
               continueLoop = false
             }
           }
+
+          // Create step-end message with total turn duration
+          const turnEndTime = yield* DateTime.now
+          const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - DateTime.toEpochMillis(turnStartTime)
+          const stepMessage = new Message({
+            id: crypto.randomUUID(),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [new StepDurationPart({ type: "step-duration", durationMs: turnDurationMs })],
+            createdAt: new Date(),
+          })
+          yield* storage.createMessage(stepMessage)
+          yield* eventBus.publish(
+            new MessageReceived({
+              sessionId,
+              branchId,
+              messageId: stepMessage.id,
+              role: "assistant",
+            })
+          )
 
           // Process follow-up queue
           const finalState = yield* Ref.get(stateRef)

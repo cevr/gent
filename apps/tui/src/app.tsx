@@ -339,7 +339,7 @@ function AppContent(props: AppProps) {
     }
   }
 
-  // Current model display name
+  // Get the friendly display name for the current model, falling back to model ID
   const currentModelDisplay = () => {
     const info = model.currentModelInfo()
     return info?.name ?? model.currentModel()
