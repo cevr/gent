@@ -7,7 +7,8 @@ export interface Message {
   role: "user" | "assistant" | "system" | "tool"
   content: string
   createdAt: number
-  toolCalls?: ToolCall[]
+  toolCalls: ToolCall[] | undefined
+  thinkTime: number | undefined
 }
 
 export interface ToolCall {
@@ -16,10 +17,6 @@ export interface ToolCall {
   status: "running" | "completed" | "error"
   input: unknown | undefined
   output: string | undefined
-}
-
-interface MessageListProps {
-  messages: Message[]
 }
 
 const FONTS = ["Slant", "Calvin S", "ANSI Shadow", "Thin"] as const
@@ -41,10 +38,24 @@ function UserMessage(props: { content: string }) {
   )
 }
 
-function AssistantMessage(props: { content: string; toolCalls: ToolCall[] | undefined }) {
+function formatThinkTime(secs: number): string {
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  const remainingSecs = secs % 60
+  return `${mins}m ${remainingSecs}s`
+}
+
+function AssistantMessage(props: {
+  content: string
+  toolCalls: ToolCall[] | undefined
+  thinkTime: number | undefined
+}) {
   const { theme } = useTheme()
   return (
     <box marginTop={1} paddingLeft={2} flexDirection="column">
+      <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
+        <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime!)}</text>
+      </Show>
       <Show when={props.toolCalls && props.toolCalls.length > 0}>
         <box flexDirection="column" marginBottom={props.content ? 1 : 0}>
           <For each={props.toolCalls}>
@@ -96,7 +107,21 @@ function useSpinner(toolName: string) {
   return () => frames[frame()]!
 }
 
-// Format tool input for display (e.g., "git status" for bash)
+// Truncate path from start, keeping filename visible
+// e.g., "/Users/cvr/Developer/personal/gent/apps/tui/src/app.tsx" -> "…/tui/src/app.tsx"
+function truncatePath(path: string, maxLen = 40): string {
+  if (path.length <= maxLen) return path
+  const parts = path.split("/")
+  let result = parts[parts.length - 1] ?? ""
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const next = parts[i] + "/" + result
+    if (next.length + 1 > maxLen) break
+    result = next
+  }
+  return "…/" + result
+}
+
+// Format tool input for display in parenthesis
 function formatToolInput(toolName: string, input: unknown): string {
   if (!input || typeof input !== "object") return ""
   const obj = input as Record<string, unknown>
@@ -105,22 +130,45 @@ function formatToolInput(toolName: string, input: unknown): string {
     case "bash":
       return typeof obj["command"] === "string" ? obj["command"] : ""
     case "read":
-      return typeof obj["file_path"] === "string" ? obj["file_path"] : ""
     case "write":
+      return typeof obj["path"] === "string" ? truncatePath(obj["path"]) : ""
     case "edit":
-      return typeof obj["file_path"] === "string" ? obj["file_path"] : ""
-    case "glob":
-      return typeof obj["pattern"] === "string" ? obj["pattern"] : ""
-    case "grep":
-      return typeof obj["pattern"] === "string" ? obj["pattern"] : ""
+      return typeof obj["path"] === "string" ? truncatePath(obj["path"]) : ""
+    case "glob": {
+      const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
+      const searchPath = typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(process.cwd(), 30)
+      return pattern ? `${pattern} in ${searchPath}` : ""
+    }
+    case "grep": {
+      const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
+      const searchPath = typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(process.cwd(), 30)
+      return pattern ? `${pattern} in ${searchPath}` : ""
+    }
     default:
       return ""
   }
 }
 
+// Extract edit diff info (oldString -> newString) truncated for display
+function getEditDiff(input: unknown): { old: string; new: string } | null {
+  if (!input || typeof input !== "object") return null
+  const obj = input as Record<string, unknown>
+  const oldStr = obj["oldString"] ?? obj["old_string"]
+  const newStr = obj["newString"] ?? obj["new_string"]
+  if (typeof oldStr !== "string" || typeof newStr !== "string") return null
+
+  // Truncate to first line, max 60 chars
+  const truncate = (s: string) => {
+    const line = s.split("\n")[0] ?? ""
+    return line.length > 60 ? line.slice(0, 57) + "..." : line
+  }
+  return { old: truncate(oldStr), new: truncate(newStr) }
+}
+
 function SingleToolCall(props: { toolCall: ToolCall }) {
   const { theme } = useTheme()
   const spinner = useSpinner(props.toolCall.toolName)
+  const toolName = () => props.toolCall.toolName.toLowerCase()
 
   const statusColor = () =>
     props.toolCall.status === "running"
@@ -137,6 +185,14 @@ function SingleToolCall(props: { toolCall: ToolCall }) {
         : " + "
 
   const inputSummary = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
+  const isEdit = () => toolName() === "edit"
+  const editDiff = () => isEdit() ? getEditDiff(props.toolCall.input) : null
+
+  // Only show generic output for bash (not edit/read/glob/grep/write)
+  const noOutputTools = ["edit", "read", "glob", "grep", "write"]
+  const showGenericOutput = () =>
+    !noOutputTools.includes(toolName()) &&
+    props.toolCall.output && props.toolCall.status !== "running"
 
   return (
     <box flexDirection="column">
@@ -147,7 +203,19 @@ function SingleToolCall(props: { toolCall: ToolCall }) {
           <span style={{ fg: theme.textMuted }}>({inputSummary()})</span>
         </Show>
       </text>
-      <Show when={props.toolCall.output && props.toolCall.status !== "running"}>
+      <Show when={editDiff()}>
+        {(diff) => (
+          <box paddingLeft={6} flexDirection="column">
+            <text>
+              <span style={{ fg: theme.error }}>- {diff().old}</span>
+            </text>
+            <text>
+              <span style={{ fg: theme.success }}>+ {diff().new}</span>
+            </text>
+          </box>
+        )}
+      </Show>
+      <Show when={showGenericOutput()}>
         <box paddingLeft={6}>
           <text style={{ fg: theme.textMuted }}>{props.toolCall.output}</text>
         </box>
@@ -165,6 +233,58 @@ function Logo() {
   )
 }
 
+const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"]
+const DOTS_FRAMES = ["   ", ".  ", ".. ", "..."]
+
+export interface ThinkingIndicatorProps {
+  elapsed: number
+  visible: boolean
+}
+
+export function ThinkingIndicator(props: ThinkingIndicatorProps) {
+  const { theme } = useTheme()
+  const [frame, setFrame] = createSignal(0)
+
+  onMount(() => {
+    const interval = setInterval(() => {
+      if (props.visible) {
+        setFrame((f) => (f + 1) % SPINNER_FRAMES.length)
+      }
+    }, 150)
+    onCleanup(() => clearInterval(interval))
+  })
+
+  const formatTime = () => {
+    const secs = props.elapsed
+    if (secs < 60) return `${secs}s`
+    const mins = Math.floor(secs / 60)
+    const remainingSecs = secs % 60
+    return `${mins}m ${remainingSecs}s`
+  }
+
+  const spinner = () => SPINNER_FRAMES[frame()]
+  const dots = () => DOTS_FRAMES[frame()]
+
+  return (
+    <Show when={props.visible}>
+      <box flexShrink={0} paddingLeft={1}>
+        <text>
+          <span style={{ fg: theme.warning }}>{spinner()} </span>
+          <span style={{ fg: theme.text }}>Thinking{dots()}</span>
+          <span style={{ fg: theme.textMuted }}> {formatTime()} </span>
+          <span style={{ fg: theme.textMuted }}>(</span>
+          <span style={{ fg: theme.info, bold: true }}>ctrl+c</span>
+          <span style={{ fg: theme.textMuted }}> to interrupt)</span>
+        </text>
+      </box>
+    </Show>
+  )
+}
+
+interface MessageListProps {
+  messages: Message[]
+}
+
 export function MessageList(props: MessageListProps) {
   return (
     <scrollbox
@@ -180,7 +300,11 @@ export function MessageList(props: MessageListProps) {
             <Show
               when={msg.role === "user"}
               fallback={
-                <AssistantMessage content={msg.content} toolCalls={msg.toolCalls} />
+                <AssistantMessage
+                  content={msg.content}
+                  toolCalls={msg.toolCalls}
+                  thinkTime={msg.thinkTime}
+                />
               }
             >
               <UserMessage content={msg.content} />

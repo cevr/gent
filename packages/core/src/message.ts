@@ -59,6 +59,7 @@ export class Message extends Schema.Class<Message>("Message")({
   role: MessageRole,
   parts: Schema.Array(MessagePart),
   createdAt: Schema.DateFromNumber,
+  thinkTimeMs: Schema.optional(Schema.Number), // Time spent generating this message in ms
 }) {}
 
 // Session

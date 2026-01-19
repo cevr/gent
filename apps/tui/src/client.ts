@@ -2,13 +2,91 @@ import { Effect, Stream, Runtime } from "effect"
 import type { RpcClient } from "@effect/rpc"
 import type { RpcGroup } from "@effect/rpc"
 import type { GentRpcs } from "@gent/api"
-import type { AgentEvent, MessagePart, TextPart } from "@gent/core"
+import type { AgentEvent, MessagePart, TextPart, ToolCallPart, ToolResultPart } from "@gent/core"
 
-export type { MessagePart, TextPart }
+export type { MessagePart, TextPart, ToolCallPart, ToolResultPart }
 
 export function extractText(parts: readonly MessagePart[]): string {
   const textPart = parts.find((p): p is TextPart => p.type === "text")
   return textPart?.text ?? ""
+}
+
+export interface ExtractedToolCall {
+  id: string
+  toolName: string
+  status: "completed" | "error"
+  input: unknown | undefined
+  output: string | undefined
+}
+
+// Summarize tool output for display - truncate long strings and format objects
+function summarizeOutput(output: { type: "json" | "error-json"; value: unknown }): string {
+  const value = output.value
+  if (typeof value === "string") {
+    const firstLine = value.split("\n")[0] ?? ""
+    // Limit to 100 characters to prevent UI overflow
+    return firstLine.length > 100 ? firstLine.slice(0, 100) + "..." : firstLine
+  }
+  if (value && typeof value === "object") {
+    const str = JSON.stringify(value)
+    return str.length > 100 ? str.slice(0, 100) + "..." : str
+  }
+  return String(value)
+}
+
+// Extract tool calls from a single message's parts (no result joining)
+export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCall[] {
+  return parts
+    .filter((p): p is ToolCallPart => p.type === "tool-call")
+    .map((tc) => ({
+      id: tc.toolCallId,
+      toolName: tc.toolName,
+      status: "completed" as const,
+      input: tc.input,
+      output: undefined,
+    }))
+}
+
+// Build tool result map from all messages for joining
+export function buildToolResultMap(
+  messages: readonly MessageInfoReadonly[]
+): Map<string, { output: string; isError: boolean }> {
+  const resultMap = new Map<string, { output: string; isError: boolean }>()
+
+  for (const msg of messages) {
+    if (msg.role === "tool") {
+      for (const part of msg.parts) {
+        if (part.type === "tool-result") {
+          const result = part as ToolResultPart
+          resultMap.set(result.toolCallId, {
+            output: summarizeOutput(result.output),
+            isError: result.output.type === "error-json",
+          })
+        }
+      }
+    }
+  }
+
+  return resultMap
+}
+
+// Extract tool calls with results joined from result map
+export function extractToolCallsWithResults(
+  parts: readonly MessagePart[],
+  resultMap: Map<string, { output: string; isError: boolean }>
+): ExtractedToolCall[] {
+  return parts
+    .filter((p): p is ToolCallPart => p.type === "tool-call")
+    .map((tc) => {
+      const result = resultMap.get(tc.toolCallId)
+      return {
+        id: tc.toolCallId,
+        toolName: tc.toolName,
+        status: result?.isError ? "error" as const : "completed" as const,
+        input: tc.input,
+        output: result?.output,
+      }
+    })
 }
 
 // RPC client type from GentRpcs
@@ -22,7 +100,14 @@ export interface MessageInfoReadonly {
   readonly role: "user" | "assistant" | "system" | "tool"
   readonly parts: readonly MessagePart[]
   readonly createdAt: number
+  readonly thinkTimeMs: number | undefined
 }
+
+// Steer command types
+export type SteerCommand =
+  | { _tag: "Cancel" }
+  | { _tag: "Interrupt"; message: string }
+  | { _tag: "SwitchModel"; model: string }
 
 // GentClient interface - adapts RPC client to callback-based subscriptions
 export interface GentClient {
@@ -38,6 +123,8 @@ export interface GentClient {
     sessionId: string,
     onEvent: (event: AgentEvent) => void
   ) => () => void
+
+  steer: (command: SteerCommand) => Promise<void>
 }
 
 /**
@@ -59,6 +146,9 @@ export function createClient(
 
     listMessages: (branchId) =>
       Runtime.runPromise(runtime)(rpcClient.listMessages({ branchId })) as Promise<readonly MessageInfoReadonly[]>,
+
+    steer: (command) =>
+      Runtime.runPromise(runtime)(rpcClient.steer({ command })),
 
     subscribeEvents: (sessionId, onEvent) => {
       let cancelled = false

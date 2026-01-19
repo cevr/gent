@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
+import { Context, DateTime, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
 import {
   Message,
   TextPart,
@@ -205,6 +205,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             const tools = yield* toolRegistry.list()
 
             // Start streaming
+            const streamStartTime = yield* DateTime.now
             yield* eventBus.publish(new StreamStarted({ sessionId, branchId }))
 
             const streamEffect = yield* withRetry(
@@ -263,6 +264,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             }
             assistantParts.push(...toolCalls)
 
+            const streamEndTime = yield* DateTime.now
+            const thinkTimeMs = DateTime.toEpochMillis(streamEndTime) - DateTime.toEpochMillis(streamStartTime)
+
             const assistantMessage = new Message({
               id: crypto.randomUUID(),
               sessionId,
@@ -270,6 +274,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
               role: "assistant",
               parts: assistantParts,
               createdAt: new Date(),
+              thinkTimeMs,
             })
 
             yield* storage.createMessage(assistantMessage)

@@ -2,9 +2,9 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { InputRenderable } from "@opentui/core"
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
 import { DEFAULT_MODEL_ID, calculateCost, type AgentMode, type ModelId } from "@gent/core"
-import { extractText, type GentClient } from "./client.js"
+import { extractText, buildToolResultMap, extractToolCallsWithResults, type GentClient } from "./client.js"
 import { StatusBar } from "./components/status-bar.js"
-import { MessageList, type Message } from "./components/message-list.js"
+import { MessageList, ThinkingIndicator, type Message } from "./components/message-list.js"
 import { CommandPalette } from "./components/command-palette.js"
 import { useGitInfo } from "./hooks/use-git-status.js"
 import { ThemeProvider, useTheme } from "./theme/index.js"
@@ -37,8 +37,30 @@ function AppContent(props: AppProps) {
   const [cost, setCost] = createSignal(0)
   const [status, setStatus] = createSignal<"idle" | "streaming" | "error">("idle")
   const [error, setError] = createSignal<string | null>(null)
+  const [elapsed, setElapsed] = createSignal(0)
 
   const gitInfo = useGitInfo(cwd)
+
+  // Track elapsed time while streaming
+  let elapsedInterval: ReturnType<typeof setInterval> | null = null
+
+  createEffect(() => {
+    if (status() === "streaming") {
+      setElapsed(0)
+      elapsedInterval = setInterval(() => {
+        setElapsed((e) => e + 1)
+      }, 1000)
+    } else {
+      if (elapsedInterval) {
+        clearInterval(elapsedInterval)
+        elapsedInterval = null
+      }
+    }
+  })
+
+  onCleanup(() => {
+    if (elapsedInterval) clearInterval(elapsedInterval)
+  })
 
   // Load messages and subscribe to events
   onMount(() => {
@@ -47,13 +69,21 @@ function AppContent(props: AppProps) {
 
     // Load existing messages
     void props.client.listMessages(props.branchId).then((msgs) => {
+      const resultMap = buildToolResultMap(msgs)
       setMessages(
-        msgs.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: extractText(m.parts),
-          createdAt: m.createdAt,
-        }))
+        msgs
+          .filter((m) => m.role !== "tool") // Don't show tool result messages separately
+          .map((m) => {
+            const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
+            return {
+              id: m.id,
+              role: m.role,
+              content: extractText(m.parts),
+              createdAt: m.createdAt,
+              toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+              thinkTime: m.thinkTimeMs !== undefined ? Math.round(m.thinkTimeMs / 1000) : undefined,
+            }
+          })
       )
 
       // Send initial prompt if provided
@@ -74,13 +104,21 @@ function AppContent(props: AppProps) {
       if (event._tag === "MessageReceived") {
         // Refresh messages when a new message is received
         void props.client.listMessages(props.branchId).then((msgs) => {
+          const resultMap = buildToolResultMap(msgs)
           setMessages(
-            msgs.map((m) => ({
-              id: m.id,
-              role: m.role,
-              content: extractText(m.parts),
-              createdAt: m.createdAt,
-            }))
+            msgs
+              .filter((m) => m.role !== "tool")
+              .map((m) => {
+                const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
+                return {
+                  id: m.id,
+                  role: m.role,
+                  content: extractText(m.parts),
+                  createdAt: m.createdAt,
+                  toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+                  thinkTime: m.thinkTimeMs !== undefined ? Math.round(m.thinkTimeMs / 1000) : undefined,
+                }
+              })
           )
         })
       } else if (event._tag === "StreamStarted") {
@@ -94,6 +132,8 @@ function AppContent(props: AppProps) {
             role: "assistant",
             content: "",
             createdAt: Date.now(),
+            toolCalls: undefined,
+            thinkTime: undefined,
           },
         ])
       } else if (event._tag === "StreamChunk") {
@@ -109,6 +149,20 @@ function AppContent(props: AppProps) {
           return prev
         })
       } else if (event._tag === "StreamEnded") {
+        // Set thinkTime on last assistant message before changing status
+        const thinkTime = elapsed()
+        if (thinkTime > 0) {
+          setMessages((prev) => {
+            const last = prev[prev.length - 1]
+            if (last && last.role === "assistant") {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, thinkTime },
+              ]
+            }
+            return prev
+          })
+        }
         setStatus("idle")
         // Calculate cost from usage
         if (event.usage) {
@@ -225,9 +279,14 @@ function AppContent(props: AppProps) {
       return
     }
 
-    // Ctrl+C to quit
+    // Ctrl+C: interrupt if streaming, otherwise quit
     if (e.ctrl && e.name === "c") {
-      exit()
+      if (status() === "streaming") {
+        void props.client.steer({ _tag: "Cancel" })
+        setStatus("idle")
+      } else {
+        exit()
+      }
       return
     }
 
@@ -256,6 +315,8 @@ function AppContent(props: AppProps) {
           role: "user",
           content: text,
           createdAt: Date.now(),
+          toolCalls: undefined,
+          thinkTime: undefined,
         },
       ])
 
@@ -286,6 +347,9 @@ function AppContent(props: AppProps) {
     <box flexDirection="column" width="100%" height="100%">
       {/* Messages */}
       <MessageList messages={messages()} />
+
+      {/* Thinking indicator - fixed between messages and input */}
+      <ThinkingIndicator elapsed={elapsed()} visible={status() === "streaming"} />
 
       {/* Separator line */}
       <box flexShrink={0}>
