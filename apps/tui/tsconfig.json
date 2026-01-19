@@ -9,6 +9,7 @@
   },
   "include": ["src", "src/theme/themes/*.json"],
   "references": [
+    { "path": "../../packages/api" },
     { "path": "../../packages/core" },
     { "path": "../../packages/server" },
     { "path": "../../packages/storage" },

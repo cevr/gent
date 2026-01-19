@@ -2,14 +2,22 @@
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
 import { Console, Effect, Layer, ManagedRuntime, Runtime, Stream } from "effect"
-import { GentServer, type GentServerService, type GentServerError } from "@gent/server"
+import { RpcTest } from "@effect/rpc"
+import {
+  GentServer,
+  GentCore,
+  RpcHandlersLive,
+  type GentCoreService,
+  type GentCoreError,
+} from "@gent/server"
+import { GentRpcs } from "@gent/api"
 import { DevTracerLive, clearLog } from "@gent/telemetry"
 import type { ModelId } from "@gent/core"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
 import { App } from "./app.js"
-import { createClient } from "./client.js"
+import { createClient, type GentRpcClient } from "./client.js"
 
 // Data directory
 const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
@@ -22,35 +30,41 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 // Dev tracer layer
 const TracerLayer = DevTracerLive(TRACE_LOG)
 
-// GentServer layer with tracing
-const ServerLayer = GentServer.Live({
+// GentServer layer with tracing (provides dependencies for GentCore)
+const ServerDepsLayer = GentServer.Dependencies({
   systemPrompt: "You are a helpful assistant.",
   defaultModel: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
   dbPath: DB_PATH,
-}).pipe(
-  Layer.provide(PlatformLayer),
-  Layer.provide(TracerLayer)
-)
+}).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
+
+// GentCore layer on top of dependencies
+const GentCoreLive = GentCore.Live.pipe(Layer.provide(ServerDepsLayer))
+
+// RPC handlers layer (requires GentCore)
+const RpcLayer = RpcHandlersLive.pipe(Layer.provide(GentCoreLive))
+
+// Full layer stack for RPC client
+const FullLayer = Layer.mergeAll(RpcLayer, GentCoreLive)
 
 // Clear trace log on startup
 clearLog(TRACE_LOG)
 
-// Create managed runtime for GentServer
-const serverRuntime = ManagedRuntime.make(ServerLayer)
+// Create managed runtime
+const serverRuntime = ManagedRuntime.make(FullLayer)
 
 // Headless runner - streams events to stdout
 const runHeadless = (
-  server: GentServerService,
+  core: GentCoreService,
   sessionId: string,
   branchId: string,
   promptText: string
-): Effect.Effect<void, GentServerError, never> =>
+): Effect.Effect<void, GentCoreError, never> =>
   Effect.gen(function* () {
     // Subscribe to events before sending message
-    const events = server.subscribeEvents(sessionId)
+    const events = core.subscribeEvents(sessionId)
 
     // Send the message
-    yield* server.sendMessage({ sessionId, branchId, content: promptText })
+    yield* core.sendMessage({ sessionId, branchId, content: promptText })
 
     // Stream events until complete
     yield* events.pipe(
@@ -101,10 +115,11 @@ const main = Command.make(
   },
   ({ session, headless, prompt }) =>
     Effect.gen(function* () {
-      // Build the runtime
-      const runtime = yield* serverRuntime.runtimeEffect
-      const client = createClient(runtime)
-      const server = yield* GentServer
+      // Get core service for direct access (headless, session management)
+      const core = yield* GentCore
+
+      // Create RPC client for TUI
+      const rpcClient: GentRpcClient = yield* RpcTest.makeClient(GentRpcs)
 
       // Get or create session
       let sessionId: string
@@ -113,11 +128,11 @@ const main = Command.make(
       if (session._tag === "Some") {
         sessionId = session.value
         // Get existing session's branch
-        const messages = yield* server.listMessages(sessionId)
+        const messages = yield* core.listMessages(sessionId)
         branchId = messages[0]?.branchId ?? crypto.randomUUID()
       } else {
         // Create new session
-        const result = yield* server.createSession({ name: "gent session" })
+        const result = yield* core.createSession({ name: "gent session" })
         sessionId = result.sessionId
         branchId = result.branchId
       }
@@ -130,14 +145,18 @@ const main = Command.make(
           yield* Console.error("Error: --headless requires a prompt argument")
           process.exit(1)
         }
-        yield* runHeadless(server, sessionId, branchId, initialPrompt)
+        yield* runHeadless(core, sessionId, branchId, initialPrompt)
         return
       }
+
+      // Create client adapter for the TUI using managed runtime
+      const runtime = yield* serverRuntime.runtimeEffect
+      const client = createClient(rpcClient, runtime)
 
       // Model change handler - steers agent to new model
       const handleModelChange = (modelId: ModelId) => {
         Runtime.runPromise(runtime)(
-          server.steer({ _tag: "SwitchModel", model: modelId as string })
+          core.steer({ _tag: "SwitchModel", model: modelId as string })
         ).catch(() => {
           // Ignore steer errors (e.g., if agent not running)
         })
@@ -158,14 +177,14 @@ const main = Command.make(
 
       // Keep process alive until TUI exits
       return yield* Effect.never
-    }).pipe(Effect.provide(ServerLayer))
+    }).pipe(Effect.scoped)
 )
 
 // Sessions subcommand
 const sessions = Command.make("sessions", {}, () =>
   Effect.gen(function* () {
-    const server = yield* GentServer
-    const allSessions = yield* server.listSessions()
+    const core = yield* GentCore
+    const allSessions = yield* core.listSessions()
 
     if (allSessions.length === 0) {
       yield* Console.log("No sessions found.")
@@ -177,7 +196,7 @@ const sessions = Command.make("sessions", {}, () =>
       const date = new Date(s.updatedAt).toISOString()
       yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
     }
-  }).pipe(Effect.provide(ServerLayer))
+  })
 )
 
 // Root command with subcommands
@@ -192,8 +211,11 @@ const cli = Command.run(command, {
   version: "0.0.0",
 })
 
-// Run with tracer
+// Full runtime layer for CLI
+const CliLayer = Layer.mergeAll(FullLayer, BunContext.layer, TracerLayer)
+
+// Run with all layers
 cli(process.argv).pipe(
-  Effect.provide(Layer.merge(BunContext.layer, TracerLayer)),
+  Effect.provide(CliLayer),
   BunRuntime.runMain
 )
