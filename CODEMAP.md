@@ -17,7 +17,8 @@ tests/            # Integration tests (bun test)
 | `tools` | File/process tools | `AllTools`, `defineTool` |
 | `providers` | ai-sdk wrapper | `Provider.Live`, `StreamChunk` variants |
 | `runtime` | Agent orchestration | `AgentLoop.Live(config)` |
-| `api` | HttpApi definitions | `GentApi` |
+| `server` | Business logic + RPC handlers | `GentCore`, `RpcHandlersLive` |
+| `api` | RPC/HTTP API definitions | `GentRpcs`, `GentApi` |
 | `test-utils` | Mock layers | `createTestLayer`, `createRecordingTestLayer` |
 
 ## Apps
@@ -31,31 +32,29 @@ tests/            # Integration tests (bun test)
 ## Data Flow
 
 ```
-User Input → TUI/CLI
-     ↓
-HTTP POST /messages → Server
-     ↓
-AgentLoop.run() → Storage.createMessage()
-     ↓
-Provider.stream() → ai-sdk → LLM
-     ↓
-Stream chunks → EventBus.publish()
-     ↓
-Tool calls → ToolRegistry.get() → tool.execute()
-     ↓
-Results → Storage.createMessage() → loop continues
+TUI → RpcTest.makeClient(GentRpcs) → RpcHandlersLive → GentCore
+                                                         ↓
+                                                    AgentLoop.run()
+                                                         ↓
+                                          Provider.stream() → ai-sdk → LLM
+                                                         ↓
+                                          EventBus.publish() → Stream to client
 ```
 
 ## Layer Composition
 
 ```
-AgentLoop.Live
-├── Storage
-├── Provider
-├── ToolRegistry
-├── EventBus
-├── Permission
-└── AskUserHandler (for tools needing user input)
+CliLayer (TUI entry point)
+├── FullLayer
+│   ├── RpcHandlersLive (provides RPC handlers)
+│   │   └── GentCore (business logic)
+│   │       ├── Storage
+│   │       ├── AgentLoop
+│   │       │   ├── Storage, Provider, ToolRegistry, EventBus, Permission
+│   │       └── EventBus
+│   └── GentCoreLive (for direct access)
+├── BunContext.layer
+└── TracerLayer
 ```
 
 ## Testing Layers

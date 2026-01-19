@@ -94,6 +94,8 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 | Path | Focus |
 |------|-------|
+| `packages/api/AGENTS.md` | @effect/rpc patterns, RpcGroup |
+| `packages/server/AGENTS.md` | GentCore, RpcHandlersLive, layer composition |
 | `packages/core/AGENTS.md` | Type exports, schema patterns |
 | `packages/runtime/AGENTS.md` | AgentLoop, tracing |
 | `packages/providers/AGENTS.md` | Provider setup, Stream.async |
