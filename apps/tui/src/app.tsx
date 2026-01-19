@@ -4,7 +4,7 @@ import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
 import { DEFAULT_MODEL_ID, calculateCost, type AgentMode, type ModelId } from "@gent/core"
 import { extractText, type GentClient } from "./client.js"
 import { StatusBar } from "./components/status-bar.js"
-import { MessageList, type Message, type ToolCall } from "./components/message-list.js"
+import { MessageList, type Message } from "./components/message-list.js"
 import { CommandPalette } from "./components/command-palette.js"
 import { useGitInfo } from "./hooks/use-git-status.js"
 import { ThemeProvider, useTheme } from "./theme/index.js"
@@ -33,7 +33,6 @@ function AppContent(props: AppProps) {
 
   const [, setInputValue] = createSignal("")
   const [messages, setMessages] = createSignal<Message[]>([])
-  const [toolCalls, setToolCalls] = createSignal<ToolCall[]>([])
   const [agentMode] = createSignal<AgentMode>("build")
   const [cost, setCost] = createSignal(0)
   const [status, setStatus] = createSignal<"idle" | "streaming" | "error">("idle")
@@ -87,7 +86,6 @@ function AppContent(props: AppProps) {
       } else if (event._tag === "StreamStarted") {
         setStatus("streaming")
         setError(null)
-        setToolCalls([]) // Clear tool calls for new stream
         // Add placeholder assistant message
         setMessages((prev) => [
           ...prev,
@@ -122,22 +120,47 @@ function AppContent(props: AppProps) {
         setStatus("error")
         setError(event.error)
       } else if (event._tag === "ToolCallStarted") {
-        setToolCalls((prev) => [
-          ...prev,
-          {
-            id: event.toolCallId,
-            toolName: event.toolName,
-            status: "running",
-          },
-        ])
+        // Add tool call to last assistant message
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last && last.role === "assistant") {
+            const toolCalls = last.toolCalls ?? []
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                toolCalls: [
+                  ...toolCalls,
+                  {
+                    id: event.toolCallId,
+                    toolName: event.toolName,
+                    status: "running" as const,
+                  },
+                ],
+              },
+            ]
+          }
+          return prev
+        })
       } else if (event._tag === "ToolCallCompleted") {
-        setToolCalls((prev) =>
-          prev.map((tc) =>
-            tc.id === event.toolCallId
-              ? { ...tc, status: event.isError ? "error" : "completed" }
-              : tc
-          )
-        )
+        // Update tool call status in last assistant message
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last && last.role === "assistant" && last.toolCalls) {
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                toolCalls: last.toolCalls.map((tc) =>
+                  tc.id === event.toolCallId
+                    ? { ...tc, status: event.isError ? ("error" as const) : ("completed" as const) }
+                    : tc
+                ),
+              },
+            ]
+          }
+          return prev
+        })
       }
       // TODO: handle cost from events when available
     })
@@ -256,7 +279,7 @@ function AppContent(props: AppProps) {
   return (
     <box flexDirection="column" width="100%" height="100%">
       {/* Messages */}
-      <MessageList messages={messages()} toolCalls={toolCalls()} />
+      <MessageList messages={messages()} />
 
       {/* Separator line */}
       <box flexShrink={0}>

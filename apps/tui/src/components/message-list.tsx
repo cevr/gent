@@ -7,6 +7,7 @@ export interface Message {
   role: "user" | "assistant" | "system" | "tool"
   content: string
   createdAt: number
+  toolCalls?: ToolCall[]
 }
 
 export interface ToolCall {
@@ -17,7 +18,6 @@ export interface ToolCall {
 
 interface MessageListProps {
   messages: Message[]
-  toolCalls?: ToolCall[]
 }
 
 const FONTS = ["Slant", "Calvin S", "ANSI Shadow", "Thin"] as const
@@ -39,11 +39,20 @@ function UserMessage(props: { content: string }) {
   )
 }
 
-function AssistantMessage(props: { content: string }) {
+function AssistantMessage(props: { content: string; toolCalls: ToolCall[] | undefined }) {
   const { theme } = useTheme()
   return (
-    <box marginTop={1} paddingLeft={2}>
-      <text style={{ fg: theme.text }}>{props.content}</text>
+    <box marginTop={1} paddingLeft={2} flexDirection="column">
+      <Show when={props.toolCalls && props.toolCalls.length > 0}>
+        <box flexDirection="row" gap={2} marginBottom={props.content ? 1 : 0}>
+          <For each={props.toolCalls}>
+            {(tc) => <SingleToolCall toolCall={tc} />}
+          </For>
+        </box>
+      </Show>
+      <Show when={props.content}>
+        <text style={{ fg: theme.text }}>{props.content}</text>
+      </Show>
     </box>
   )
 }
@@ -110,16 +119,6 @@ function SingleToolCall(props: { toolCall: ToolCall }) {
   )
 }
 
-function ToolCallIndicator(props: { toolCalls: ToolCall[] }) {
-  return (
-    <box marginTop={1} paddingLeft={2} flexDirection="row" gap={2}>
-      <For each={props.toolCalls}>
-        {(tc) => <SingleToolCall toolCall={tc} />}
-      </For>
-    </box>
-  )
-}
-
 function Logo() {
   const { theme } = useTheme()
   return (
@@ -130,8 +129,6 @@ function Logo() {
 }
 
 export function MessageList(props: MessageListProps) {
-  const activeToolCalls = () => props.toolCalls?.filter((tc) => tc.status === "running") ?? []
-
   return (
     <scrollbox
       flexGrow={1}
@@ -145,15 +142,14 @@ export function MessageList(props: MessageListProps) {
           {(msg) => (
             <Show
               when={msg.role === "user"}
-              fallback={<AssistantMessage content={msg.content} />}
+              fallback={
+                <AssistantMessage content={msg.content} toolCalls={msg.toolCalls} />
+              }
             >
               <UserMessage content={msg.content} />
             </Show>
           )}
         </For>
-        <Show when={activeToolCalls().length > 0}>
-          <ToolCallIndicator toolCalls={activeToolCalls()} />
-        </Show>
       </Show>
     </scrollbox>
   )

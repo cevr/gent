@@ -39,3 +39,9 @@ Ported from opencode. Key patterns:
 - `Ctrl+P` opens palette
 - Register commands via `command.register([...])` in `onMount`
 - Commands have `id`, `title`, `category`, optional `keybind`, `onSelect`
+
+## Error Handling
+
+- Wrap async operations in try/catch blocks
+- Use Effect.tryPromise for operations that might fail
+- Display errors in status bar or modal, don't crash the TUI
