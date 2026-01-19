@@ -9,7 +9,7 @@ import {
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
-import { AgentLoop, SteerCommand, AgentLoopError } from "@gent/runtime"
+import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
 import { AllTools } from "@gent/tools"
 import {
   GentCore,
@@ -110,8 +110,9 @@ export class GentServer extends Context.Tag("GentServer")<
     systemPrompt: string
     defaultModel: string
     dbPath?: string
+    compactionModel?: string
   }): Layer.Layer<
-    Storage | Provider | ToolRegistry | EventBus | Permission | AgentLoop,
+    Storage | Provider | ToolRegistry | EventBus | Permission | AgentLoop | CheckpointService,
     PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -125,14 +126,27 @@ export class GentServer extends Context.Tag("GentServer")<
       Permission.Live()
     )
 
+    // CheckpointService requires Storage and Provider
+    const CheckpointServiceLive = CheckpointService.Live(
+      config.compactionModel ?? "anthropic/claude-3-haiku-20240307"
+    )
+    const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseServicesLive)
+
+    // AgentLoop requires CheckpointService and FileSystem
     const AgentLoopLive = AgentLoop.Live({
       systemPrompt: config.systemPrompt,
       defaultModel: config.defaultModel,
     })
 
-    return Layer.merge(
+    // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
+    const AllDeps = Layer.mergeAll(
       BaseServicesLive,
-      Layer.provide(AgentLoopLive, BaseServicesLive)
+      CheckpointLayer
+    )
+
+    return Layer.merge(
+      AllDeps,
+      Layer.provide(AgentLoopLive, AllDeps)
     )
   }
 }

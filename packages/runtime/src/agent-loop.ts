@@ -21,6 +21,8 @@ import {
 import { Storage, StorageError } from "@gent/storage"
 import { Provider, ProviderError, FinishChunk } from "@gent/providers"
 import { withRetry } from "./retry.js"
+import { CheckpointService } from "./checkpoint.js"
+import { FileSystem } from "@effect/platform"
 
 // Stringify tool output to string
 function stringifyOutput(value: unknown): string {
@@ -103,7 +105,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
   }): Layer.Layer<
     AgentLoop,
     never,
-    Storage | Provider | ToolRegistry | EventBus | Permission
+    Storage | Provider | ToolRegistry | EventBus | Permission | CheckpointService | FileSystem.FileSystem
   > =>
     Layer.scoped(
       AgentLoop,
@@ -113,6 +115,8 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
         const toolRegistry = yield* ToolRegistry
         const eventBus = yield* EventBus
         const permission = yield* Permission
+        const checkpointService = yield* CheckpointService
+        const fs = yield* FileSystem.FileSystem
         const runtime = yield* Effect.runtime<never>()
 
         const stateRef = yield* Ref.make<AgentLoopState>({
@@ -247,12 +251,42 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             }
 
             const state = yield* Ref.get(stateRef)
-            const messages = yield* storage.listMessages(branchId)
+
+            // Checkpoint-aware message loading
+            const checkpoint = yield* checkpointService.getLatestCheckpoint(branchId)
+            const { messages, contextPrefix } = yield* Effect.gen(function* () {
+              if (!checkpoint) {
+                return {
+                  messages: yield* storage.listMessages(branchId),
+                  contextPrefix: "",
+                }
+              }
+              if (checkpoint._tag === "PlanCheckpoint") {
+                const planContent = yield* fs.readFileString(checkpoint.planPath).pipe(
+                  Effect.catchAll(() => Effect.succeed(""))
+                )
+                return {
+                  messages: yield* storage.listMessagesSince(branchId, checkpoint.createdAt),
+                  contextPrefix: planContent ? `Plan to execute:\n${planContent}\n\n` : "",
+                }
+              }
+              // CompactionCheckpoint
+              return {
+                messages: yield* storage.listMessagesAfter(branchId, checkpoint.firstKeptMessageId),
+                contextPrefix: checkpoint.summary ? `Previous context:\n${checkpoint.summary}\n\n` : "",
+              }
+            })
+
             const allTools = yield* toolRegistry.list()
             // Filter tools based on mode
             const tools = state.mode === "plan"
               ? allTools.filter((t) => PLAN_MODE_TOOLS.has(t.name.toLowerCase()))
               : allTools
+
+            // Build system prompt with context prefix
+            const systemPrompt = contextPrefix
+              ? `${contextPrefix}${config.systemPrompt}`
+              : config.systemPrompt
 
             // Start streaming
             yield* eventBus.publish(new StreamStarted({ sessionId, branchId }))
@@ -262,7 +296,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 model: state.model,
                 messages: [...messages],
                 tools: [...tools],
-                systemPrompt: config.systemPrompt,
+                systemPrompt,
               })
             ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
 
@@ -314,7 +348,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             assistantParts.push(...toolCalls)
 
             const assistantMessage = new Message({
-              id: crypto.randomUUID(),
+              id: Bun.randomUUIDv7(),
               sessionId,
               branchId,
               role: "assistant",
@@ -373,7 +407,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
 
               // Create tool result message
               const toolResultMessage = new Message({
-                id: crypto.randomUUID(),
+                id: Bun.randomUUIDv7(),
                 sessionId,
                 branchId,
                 role: "tool",

@@ -1,11 +1,13 @@
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import {
-  Compaction,
+  CompactionCheckpoint,
+  PlanCheckpoint,
   Message,
   MessagePart,
   TextPart,
   ToolCallPart,
   ToolResultPart,
+  type Checkpoint,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import { Provider, ProviderError } from "@gent/providers"
@@ -139,15 +141,22 @@ export const pruneToolOutputs = (
   return result
 }
 
-// Compaction Service
+// Checkpoint Service
 
-export interface CompactionServiceApi {
+export interface CheckpointServiceApi {
   readonly shouldCompact: (
     branchId: string
   ) => Effect.Effect<boolean, StorageError>
-  readonly compact: (
+  readonly createCompactionCheckpoint: (
     branchId: string
-  ) => Effect.Effect<Compaction, StorageError | ProviderError>
+  ) => Effect.Effect<CompactionCheckpoint, StorageError | ProviderError>
+  readonly createPlanCheckpoint: (
+    branchId: string,
+    planPath: string
+  ) => Effect.Effect<PlanCheckpoint, StorageError>
+  readonly getLatestCheckpoint: (
+    branchId: string
+  ) => Effect.Effect<Checkpoint | undefined, StorageError>
   readonly prune: (
     messages: ReadonlyArray<Message>
   ) => Effect.Effect<Message[]>
@@ -156,22 +165,22 @@ export interface CompactionServiceApi {
   ) => Effect.Effect<number>
 }
 
-export class CompactionService extends Context.Tag("CompactionService")<
-  CompactionService,
-  CompactionServiceApi
+export class CheckpointService extends Context.Tag("CheckpointService")<
+  CheckpointService,
+  CheckpointServiceApi
 >() {
   static Live = (
     model: string,
     config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
-  ): Layer.Layer<CompactionService, never, Storage | Provider> =>
+  ): Layer.Layer<CheckpointService, never, Storage | Provider> =>
     Layer.effect(
-      CompactionService,
+      CheckpointService,
       Effect.gen(function* () {
         const storage = yield* Storage
         const provider = yield* Provider
 
-        const service: CompactionServiceApi = {
-          shouldCompact: Effect.fn("CompactionService.shouldCompact")(
+        const service: CheckpointServiceApi = {
+          shouldCompact: Effect.fn("CheckpointService.shouldCompact")(
             function* (branchId: string) {
               const messages = yield* storage.listMessages(branchId)
               const tokens = estimateTokens(messages)
@@ -179,17 +188,48 @@ export class CompactionService extends Context.Tag("CompactionService")<
             }
           ),
 
-          compact: Effect.fn("CompactionService.compact")(function* (
+          createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(function* (
             branchId: string
           ) {
             const messages = yield* storage.listMessages(branchId)
             const tokens = estimateTokens(messages)
 
+            // Find the first message to keep (last 20% of messages or last 10 messages, whichever is more)
+            const keepCount = Math.max(Math.ceil(messages.length * 0.2), 10)
+            const firstKeptIndex = Math.max(0, messages.length - keepCount)
+            const firstKeptMessage = messages[firstKeptIndex]
+            if (!firstKeptMessage) {
+              // No messages to compact
+              return new CompactionCheckpoint({
+                id: Bun.randomUUIDv7(),
+                branchId,
+                summary: "",
+                firstKeptMessageId: "",
+                messageCount: 0,
+                tokenCount: 0,
+                createdAt: new Date(),
+              })
+            }
+
+            // Summarize messages before the kept ones
+            const messagesToSummarize = messages.slice(0, firstKeptIndex)
+            if (messagesToSummarize.length === 0) {
+              return new CompactionCheckpoint({
+                id: Bun.randomUUIDv7(),
+                branchId,
+                summary: "",
+                firstKeptMessageId: firstKeptMessage.id,
+                messageCount: messages.length,
+                tokenCount: tokens,
+                createdAt: new Date(),
+              })
+            }
+
             // Build conversation summary request
             const summaryPrompt = `Summarize this conversation concisely, preserving key context, decisions, and outcomes. Focus on information needed to continue the conversation effectively.
 
 Conversation:
-${messages
+${messagesToSummarize
   .map((m) => {
     const text = m.parts
       .filter((p) => p.type === "text")
@@ -200,7 +240,7 @@ ${messages
   .join("\n\n")}`
 
             const summaryMessage = new Message({
-              id: crypto.randomUUID(),
+              id: Bun.randomUUIDv7(),
               sessionId: messages[0]?.sessionId ?? "",
               branchId,
               role: "user",
@@ -225,19 +265,43 @@ ${messages
 
             const summary = summaryParts.join("")
 
-            const compaction = new Compaction({
-              id: crypto.randomUUID(),
+            const checkpoint = new CompactionCheckpoint({
+              id: Bun.randomUUIDv7(),
               branchId,
               summary,
+              firstKeptMessageId: firstKeptMessage.id,
               messageCount: messages.length,
               tokenCount: tokens,
               createdAt: new Date(),
             })
 
-            yield* storage.createCompaction(compaction)
+            yield* storage.createCheckpoint(checkpoint)
 
-            return compaction
+            return checkpoint
           }),
+
+          createPlanCheckpoint: Effect.fn("CheckpointService.createPlanCheckpoint")(function* (
+            branchId: string,
+            planPath: string
+          ) {
+            const messages = yield* storage.listMessages(branchId)
+            const tokens = estimateTokens(messages)
+
+            const checkpoint = new PlanCheckpoint({
+              id: Bun.randomUUIDv7(),
+              branchId,
+              planPath,
+              messageCount: messages.length,
+              tokenCount: tokens,
+              createdAt: new Date(),
+            })
+
+            yield* storage.createCheckpoint(checkpoint)
+
+            return checkpoint
+          }),
+
+          getLatestCheckpoint: (branchId) => storage.getLatestCheckpoint(branchId),
 
           prune: (messages) => Effect.succeed(pruneToolOutputs(messages, config)),
 
@@ -248,21 +312,35 @@ ${messages
       })
     )
 
-  static Test = (): Layer.Layer<CompactionService> =>
-    Layer.succeed(CompactionService, {
+  static Test = (): Layer.Layer<CheckpointService> =>
+    Layer.succeed(CheckpointService, {
       shouldCompact: () => Effect.succeed(false),
-      compact: (branchId) =>
+      createCompactionCheckpoint: (branchId) =>
         Effect.succeed(
-          new Compaction({
+          new CompactionCheckpoint({
             id: "test",
             branchId,
             summary: "Test summary",
+            firstKeptMessageId: "test-msg",
             messageCount: 0,
             tokenCount: 0,
             createdAt: new Date(),
           })
         ),
+      createPlanCheckpoint: (branchId, planPath) =>
+        Effect.succeed(
+          new PlanCheckpoint({
+            id: "test",
+            branchId,
+            planPath,
+            messageCount: 0,
+            tokenCount: 0,
+            createdAt: new Date(),
+          })
+        ),
+      getLatestCheckpoint: () => Effect.succeed(undefined),
       prune: (messages) => Effect.succeed([...messages]),
       estimateTokens: (messages) => Effect.succeed(estimateTokens(messages)),
     })
 }
+

@@ -83,13 +83,34 @@ export class Branch extends Schema.Class<Branch>("Branch")({
   createdAt: Schema.DateFromNumber,
 }) {}
 
-// Compaction
+// Checkpoint - discriminated union for context management
 
-export class Compaction extends Schema.Class<Compaction>("Compaction")({
+const CheckpointBase = {
   id: Schema.String,
   branchId: Schema.String,
-  summary: Schema.String,
   messageCount: Schema.Number,
   tokenCount: Schema.Number,
   createdAt: Schema.DateFromNumber,
-}) {}
+}
+
+// Compaction checkpoint: summarizes history, keeps recent messages
+export class CompactionCheckpoint extends Schema.TaggedClass<CompactionCheckpoint>()(
+  "CompactionCheckpoint",
+  {
+    ...CheckpointBase,
+    summary: Schema.String,
+    firstKeptMessageId: Schema.String,
+  }
+) {}
+
+// Plan checkpoint: hard reset, only plan file as context
+export class PlanCheckpoint extends Schema.TaggedClass<PlanCheckpoint>()(
+  "PlanCheckpoint",
+  {
+    ...CheckpointBase,
+    planPath: Schema.String,
+  }
+) {}
+
+export const Checkpoint = Schema.Union(CompactionCheckpoint, PlanCheckpoint)
+export type Checkpoint = typeof Checkpoint.Type

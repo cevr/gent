@@ -7,12 +7,13 @@ import {
   TextPart,
   EventBus,
   SessionNameUpdated,
+  PlanApproved,
   type AgentEvent,
   type MessagePart,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import { Provider, ProviderError } from "@gent/providers"
-import { AgentLoop, SteerCommand, AgentLoopError } from "@gent/runtime"
+import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
 
 // Re-export for consumers
 export { SteerCommand, AgentLoopError }
@@ -80,6 +81,12 @@ export type GentCoreError = StorageError | AgentLoopError | PlatformError | Prov
 // GentCore Service
 // ============================================================================
 
+export interface ApprovePlanInput {
+  sessionId: string
+  branchId: string
+  planPath: string
+}
+
 export interface GentCoreService {
   readonly createSession: (
     input: CreateSessionInput
@@ -117,6 +124,10 @@ export interface GentCoreService {
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
+  readonly approvePlan: (
+    input: ApprovePlanInput
+  ) => Effect.Effect<void, GentCoreError>
+
   readonly subscribeEvents: (
     sessionId: string
   ) => Stream.Stream<AgentEvent, never, never>
@@ -144,7 +155,7 @@ export class GentCore extends Context.Tag("GentCore")<
   GentCore,
   GentCoreService
 >() {
-  static Live: Layer.Layer<GentCore, never, Storage | AgentLoop | EventBus | Provider> =
+  static Live: Layer.Layer<GentCore, never, Storage | AgentLoop | EventBus | Provider | CheckpointService> =
     Layer.effect(
       GentCore,
       Effect.gen(function* () {
@@ -152,12 +163,13 @@ export class GentCore extends Context.Tag("GentCore")<
         const agentLoop = yield* AgentLoop
         const eventBus = yield* EventBus
         const provider = yield* Provider
+        const checkpointService = yield* CheckpointService
 
         const service: GentCoreService = {
           createSession: (input) =>
             Effect.gen(function* () {
-              const sessionId = crypto.randomUUID()
-              const branchId = crypto.randomUUID()
+              const sessionId = Bun.randomUUIDv7()
+              const branchId = Bun.randomUUIDv7()
               const now = new Date()
 
               // Start with placeholder name
@@ -259,7 +271,7 @@ export class GentCore extends Context.Tag("GentCore")<
 
           createBranch: (input) =>
             Effect.gen(function* () {
-              const branchId = crypto.randomUUID()
+              const branchId = Bun.randomUUIDv7()
               const branch = new Branch({
                 id: branchId,
                 sessionId: input.sessionId,
@@ -272,7 +284,7 @@ export class GentCore extends Context.Tag("GentCore")<
 
           sendMessage: Effect.fn("GentCore.sendMessage")(function* (input) {
             const message = new Message({
-              id: crypto.randomUUID(),
+              id: Bun.randomUUIDv7(),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "user",
@@ -314,6 +326,21 @@ export class GentCore extends Context.Tag("GentCore")<
             }),
 
           steer: (command) => agentLoop.steer(command),
+
+          approvePlan: (input) =>
+            Effect.gen(function* () {
+              // Create plan checkpoint - hard reset context
+              yield* checkpointService.createPlanCheckpoint(input.branchId, input.planPath)
+
+              // Emit plan approved event
+              yield* eventBus.publish(
+                new PlanApproved({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  planPath: input.planPath,
+                })
+              )
+            }),
 
           subscribeEvents: (sessionId) =>
             eventBus.subscribe().pipe(

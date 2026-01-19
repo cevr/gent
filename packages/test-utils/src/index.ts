@@ -12,10 +12,13 @@ import {
   EventBus,
   Permission,
   AgentEvent,
+  CompactionCheckpoint,
+  PlanCheckpoint,
+  type Checkpoint,
   type ToolDefinition,
 } from "@gent/core"
 import { AskUserHandler, AllTools } from "@gent/tools"
-import { AgentLoop } from "@gent/runtime"
+import { AgentLoop, CheckpointService } from "@gent/runtime"
 
 // Re-export @effect/vitest
 export { it, describe, expect } from "@effect/vitest"
@@ -148,6 +151,107 @@ export const RecordingAskUserHandler = (
     })
   )
 
+// Recording CheckpointService
+
+export interface CheckpointServiceTestConfig {
+  shouldCompact?: boolean
+  latestCheckpoint?: Checkpoint
+}
+
+export const RecordingCheckpointService = (
+  config: CheckpointServiceTestConfig = {}
+): Layer.Layer<CheckpointService, never, SequenceRecorder | Storage> =>
+  Layer.effect(
+    CheckpointService,
+    Effect.gen(function* () {
+      const recorder = yield* SequenceRecorder
+      const storage = yield* Storage
+      const checkpointRef = yield* Ref.make<Checkpoint | undefined>(config.latestCheckpoint)
+
+      return {
+        shouldCompact: Effect.fn("CheckpointService.shouldCompact")(function* (branchId: string) {
+          yield* recorder.record({
+            service: "CheckpointService",
+            method: "shouldCompact",
+            args: { branchId },
+          })
+          return config.shouldCompact ?? false
+        }),
+
+        createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(function* (
+          branchId: string
+        ) {
+          const checkpoint = new CompactionCheckpoint({
+            id: Bun.randomUUIDv7(),
+            branchId,
+            summary: "Test compaction summary",
+            firstKeptMessageId: "test-kept-msg",
+            messageCount: 10,
+            tokenCount: 5000,
+            createdAt: new Date(),
+          })
+          yield* recorder.record({
+            service: "CheckpointService",
+            method: "createCompactionCheckpoint",
+            args: { branchId },
+            result: checkpoint,
+          })
+          yield* storage.createCheckpoint(checkpoint)
+          yield* Ref.set(checkpointRef, checkpoint)
+          return checkpoint
+        }),
+
+        createPlanCheckpoint: Effect.fn("CheckpointService.createPlanCheckpoint")(function* (
+          branchId: string,
+          planPath: string
+        ) {
+          const checkpoint = new PlanCheckpoint({
+            id: Bun.randomUUIDv7(),
+            branchId,
+            planPath,
+            messageCount: 10,
+            tokenCount: 5000,
+            createdAt: new Date(),
+          })
+          yield* recorder.record({
+            service: "CheckpointService",
+            method: "createPlanCheckpoint",
+            args: { branchId, planPath },
+            result: checkpoint,
+          })
+          yield* storage.createCheckpoint(checkpoint)
+          yield* Ref.set(checkpointRef, checkpoint)
+          return checkpoint
+        }),
+
+        getLatestCheckpoint: Effect.fn("CheckpointService.getLatestCheckpoint")(function* (
+          branchId: string
+        ) {
+          yield* recorder.record({
+            service: "CheckpointService",
+            method: "getLatestCheckpoint",
+            args: { branchId },
+          })
+          return yield* Ref.get(checkpointRef)
+        }),
+
+        prune: (messages) => Effect.succeed([...messages]),
+
+        estimateTokens: (messages) => {
+          let chars = 0
+          for (const msg of messages) {
+            for (const part of msg.parts) {
+              if (part.type === "text") {
+                chars += (part as { text: string }).text.length
+              }
+            }
+          }
+          return Effect.succeed(Math.ceil(chars / 4))
+        },
+      }
+    })
+  )
+
 // Test Layer Config
 
 export interface TestLayerConfig {
@@ -155,6 +259,7 @@ export interface TestLayerConfig {
   askUserResponses?: ReadonlyArray<string>
   tools?: ReadonlyArray<ToolDefinition>
   recording?: boolean
+  checkpoint?: CheckpointServiceTestConfig
 }
 
 // Create Test Layer (no recording)
@@ -173,7 +278,8 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     EventBus.Test(),
     Permission.Test(),
     AskUserHandler.Test(askUserResponses),
-    AgentLoop.Test()
+    AgentLoop.Test(),
+    CheckpointService.Test()
   )
 }
 
@@ -187,9 +293,12 @@ export const createRecordingTestLayer = (
   ]
   const askUserResponses = config.askUserResponses ?? ["yes"]
   const tools = config.tools ?? (AllTools as unknown as ToolDefinition[])
+  const checkpointConfig = config.checkpoint ?? {}
+
+  const StorageLayer = Storage.Test()
 
   return Layer.mergeAll(
-    Storage.Test(),
+    StorageLayer,
     Permission.Test(),
     ToolRegistry.Live(tools),
     AgentLoop.Test()
@@ -197,6 +306,9 @@ export const createRecordingTestLayer = (
     Layer.provideMerge(RecordingProvider(providerResponses)),
     Layer.provideMerge(RecordingEventBus),
     Layer.provideMerge(RecordingAskUserHandler(askUserResponses)),
+    Layer.provideMerge(
+      Layer.provide(RecordingCheckpointService(checkpointConfig), StorageLayer)
+    ),
     Layer.provideMerge(SequenceRecorder.Live)
   )
 }

@@ -3,7 +3,9 @@ import {
   Message,
   Session,
   Branch,
-  Compaction,
+  Checkpoint,
+  CompactionCheckpoint,
+  PlanCheckpoint,
   MessagePart,
   TodoItem,
 } from "@gent/core"
@@ -75,13 +77,21 @@ export interface StorageService {
     durationMs: number
   ) => Effect.Effect<void, StorageError>
 
-  // Compactions
-  readonly createCompaction: (
-    compaction: Compaction
-  ) => Effect.Effect<Compaction, StorageError>
-  readonly getLatestCompaction: (
+  // Checkpoints
+  readonly createCheckpoint: (
+    checkpoint: Checkpoint
+  ) => Effect.Effect<Checkpoint, StorageError>
+  readonly getLatestCheckpoint: (
     branchId: string
-  ) => Effect.Effect<Compaction | undefined, StorageError>
+  ) => Effect.Effect<Checkpoint | undefined, StorageError>
+  readonly listMessagesAfter: (
+    branchId: string,
+    afterMessageId: string
+  ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
+  readonly listMessagesSince: (
+    branchId: string,
+    sinceTimestamp: Date
+  ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
 
   // Todos
   readonly listTodos: (
@@ -138,10 +148,13 @@ const makeStorage = (db: Database): StorageService => {
   `)
 
   db.run(`
-    CREATE TABLE IF NOT EXISTS compactions (
+    CREATE TABLE IF NOT EXISTS checkpoints (
       id TEXT PRIMARY KEY,
       branch_id TEXT NOT NULL,
-      summary TEXT NOT NULL,
+      _tag TEXT NOT NULL,
+      summary TEXT,
+      plan_path TEXT,
+      first_kept_message_id TEXT,
       message_count INTEGER NOT NULL,
       token_count INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
@@ -164,7 +177,7 @@ const makeStorage = (db: Database): StorageService => {
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
-  db.run(`CREATE INDEX IF NOT EXISTS idx_compactions_branch ON compactions(branch_id)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
 
   return {
@@ -548,60 +561,176 @@ const makeStorage = (db: Database): StorageService => {
           }),
       }),
 
-    // Compactions
-    createCompaction: (compaction) =>
+    // Checkpoints
+    createCheckpoint: (checkpoint) =>
       Effect.try({
         try: () => {
-          db.run(
-            `INSERT INTO compactions (id, branch_id, summary, message_count, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-            [
-              compaction.id,
-              compaction.branchId,
-              compaction.summary,
-              compaction.messageCount,
-              compaction.tokenCount,
-              compaction.createdAt.getTime(),
-            ]
-          )
-          return compaction
+          if (checkpoint._tag === "CompactionCheckpoint") {
+            db.run(
+              `INSERT INTO checkpoints (id, branch_id, _tag, summary, first_kept_message_id, message_count, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                checkpoint.id,
+                checkpoint.branchId,
+                checkpoint._tag,
+                checkpoint.summary,
+                checkpoint.firstKeptMessageId,
+                checkpoint.messageCount,
+                checkpoint.tokenCount,
+                checkpoint.createdAt.getTime(),
+              ]
+            )
+          } else {
+            db.run(
+              `INSERT INTO checkpoints (id, branch_id, _tag, plan_path, message_count, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [
+                checkpoint.id,
+                checkpoint.branchId,
+                checkpoint._tag,
+                checkpoint.planPath,
+                checkpoint.messageCount,
+                checkpoint.tokenCount,
+                checkpoint.createdAt.getTime(),
+              ]
+            )
+          }
+          return checkpoint
         },
         catch: (e) =>
           new StorageError({
-            message: "Failed to create compaction",
+            message: "Failed to create checkpoint",
             cause: e,
           }),
       }),
 
-    getLatestCompaction: (branchId) =>
+    getLatestCheckpoint: (branchId) =>
       Effect.try({
         try: () => {
           const row = db
             .query(
-              `SELECT id, branch_id, summary, message_count, token_count, created_at FROM compactions WHERE branch_id = ? ORDER BY created_at DESC LIMIT 1`
+              `SELECT id, branch_id, _tag, summary, plan_path, first_kept_message_id, message_count, token_count, created_at FROM checkpoints WHERE branch_id = ? ORDER BY created_at DESC LIMIT 1`
             )
             .get(branchId) as
             | {
                 id: string
                 branch_id: string
-                summary: string
+                _tag: string
+                summary: string | null
+                plan_path: string | null
+                first_kept_message_id: string | null
                 message_count: number
                 token_count: number
                 created_at: number
               }
             | null
           if (!row) return undefined
-          return new Compaction({
-            id: row.id,
-            branchId: row.branch_id,
-            summary: row.summary,
-            messageCount: row.message_count,
-            tokenCount: row.token_count,
-            createdAt: new Date(row.created_at),
+          if (row._tag === "CompactionCheckpoint") {
+            if (row.summary === null || row.first_kept_message_id === null) {
+              throw new Error("Corrupt CompactionCheckpoint: missing summary or firstKeptMessageId")
+            }
+            return new CompactionCheckpoint({
+              id: row.id,
+              branchId: row.branch_id,
+              summary: row.summary,
+              firstKeptMessageId: row.first_kept_message_id,
+              messageCount: row.message_count,
+              tokenCount: row.token_count,
+              createdAt: new Date(row.created_at),
+            })
+          } else {
+            if (row.plan_path === null) {
+              throw new Error("Corrupt PlanCheckpoint: missing planPath")
+            }
+            return new PlanCheckpoint({
+              id: row.id,
+              branchId: row.branch_id,
+              planPath: row.plan_path,
+              messageCount: row.message_count,
+              tokenCount: row.token_count,
+              createdAt: new Date(row.created_at),
+            })
+          }
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to get latest checkpoint",
+            cause: e,
+          }),
+      }),
+
+    listMessagesAfter: (branchId, afterMessageId) =>
+      Effect.try({
+        try: () => {
+          // First get the created_at of the afterMessageId
+          const afterMsg = db
+            .query(`SELECT created_at FROM messages WHERE id = ?`)
+            .get(afterMessageId) as { created_at: number } | null
+          if (!afterMsg) return []
+
+          const rows = db
+            .query(
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`
+            )
+            .all(branchId, afterMsg.created_at) as Array<{
+            id: string
+            session_id: string
+            branch_id: string
+            role: "user" | "assistant" | "system" | "tool"
+            parts: string
+            created_at: number
+            turn_duration_ms: number | null
+          }>
+          return rows.map((row) => {
+            const parts = decodeMessageParts(JSON.parse(row.parts))
+            return new Message({
+              id: row.id,
+              sessionId: row.session_id,
+              branchId: row.branch_id,
+              role: row.role,
+              parts,
+              createdAt: new Date(row.created_at),
+              turnDurationMs: row.turn_duration_ms ?? undefined,
+            })
           })
         },
         catch: (e) =>
           new StorageError({
-            message: "Failed to get latest compaction",
+            message: "Failed to list messages after",
+            cause: e,
+          }),
+      }),
+
+    listMessagesSince: (branchId, sinceTimestamp) =>
+      Effect.try({
+        try: () => {
+          const rows = db
+            .query(
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`
+            )
+            .all(branchId, sinceTimestamp.getTime()) as Array<{
+            id: string
+            session_id: string
+            branch_id: string
+            role: "user" | "assistant" | "system" | "tool"
+            parts: string
+            created_at: number
+            turn_duration_ms: number | null
+          }>
+          return rows.map((row) => {
+            const parts = decodeMessageParts(JSON.parse(row.parts))
+            return new Message({
+              id: row.id,
+              sessionId: row.session_id,
+              branchId: row.branch_id,
+              role: row.role,
+              parts,
+              createdAt: new Date(row.created_at),
+              turnDurationMs: row.turn_duration_ms ?? undefined,
+            })
+          })
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to list messages since",
             cause: e,
           }),
       }),

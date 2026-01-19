@@ -81,7 +81,7 @@ describe("buildToolResultMap", () => {
     role: "user" | "assistant" | "tool",
     parts: MessagePart[]
   ): MessageInfoReadonly => ({
-    id: crypto.randomUUID(),
+    id: Bun.randomUUIDv7(),
     sessionId: "s1",
     branchId: "b1",
     role,

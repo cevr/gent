@@ -5,7 +5,8 @@ export {
 } from "./agent-loop.js"
 
 export {
-  CompactionService,
+  CheckpointService,
+  type CheckpointServiceApi,
   CompactionConfig,
   DEFAULT_COMPACTION_CONFIG,
   COMPACTION_THRESHOLD,
@@ -13,7 +14,7 @@ export {
   PRUNE_MINIMUM,
   estimateTokens,
   pruneToolOutputs,
-} from "./compaction.js"
+} from "./checkpoint.js"
 
 export {
   ModelRegistry,

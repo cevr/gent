@@ -12,6 +12,7 @@
     "@gent/tools": "workspace:*"
   },
   "peerDependencies": {
+    "@effect/platform": "catalog:",
     "effect": "catalog:"
   }
 }

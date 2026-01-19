@@ -10,7 +10,9 @@ export {
   ImagePart,
   Session,
   Branch,
-  Compaction,
+  Checkpoint,
+  CompactionCheckpoint,
+  PlanCheckpoint,
 } from "./message.js"
 
 // Tool Types
