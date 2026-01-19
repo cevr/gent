@@ -4,8 +4,15 @@
 
 - `MessagePart`, `TextPart`, etc. - Import from here, never redeclare locally
 - `ToolDefinition` - `Params` must extend `Schema.Schema.AnyNoContext` (no context for sync decode)
+- `AnyToolDefinition` - Use for heterogeneous tool arrays (variance workaround)
 
 ## Schema Patterns
 
 - `Schema.Unknown` for dynamic JSON (`ToolCallPart.input`, `ToolResultPart.output.value`)
 - Decode with `Schema.decodeUnknownSync(schema)(value)` before use
+
+## Current Gen Models
+
+- `CURRENT_GEN_MODEL_IDS` - Auto-generated list of latest models per provider
+- Updated via `packages/providers/scripts/update-current-gen.ts`
+- Bedrock limited to Claude models only (alt Anthropic provider)
