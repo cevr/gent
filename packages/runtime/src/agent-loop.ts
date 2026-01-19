@@ -17,7 +17,7 @@ import {
   ErrorOccurred,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
-import { Provider, ProviderError } from "@gent/providers"
+import { Provider, ProviderError, FinishChunk } from "@gent/providers"
 import { withRetry } from "./retry.js"
 
 // Agent Loop Error
@@ -205,6 +205,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             // Collect response parts
             const textParts: string[] = []
             const toolCalls: ToolCallPart[] = []
+            let lastFinishChunk: FinishChunk | undefined
 
             yield* Stream.runForEach(streamEffect, (chunk) =>
               Effect.gen(function* () {
@@ -226,11 +227,19 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                       input: chunk.input,
                     })
                   )
+                } else if (chunk._tag === "FinishChunk") {
+                  lastFinishChunk = chunk
                 }
               })
             )
 
-            yield* eventBus.publish(new StreamEnded({ sessionId, branchId }))
+            yield* eventBus.publish(
+              new StreamEnded({
+                sessionId,
+                branchId,
+                usage: lastFinishChunk?.usage,
+              })
+            )
 
             // Build assistant message
             const assistantParts: Array<TextPart | ToolCallPart> = []

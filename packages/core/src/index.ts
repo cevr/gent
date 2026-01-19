@@ -33,6 +33,8 @@ export {
   StreamStarted,
   StreamChunk,
   StreamEnded,
+  UsageSchema,
+  type Usage,
   ToolCallStarted,
   ToolCallCompleted,
   PlanModeEntered,
@@ -59,11 +61,13 @@ export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./config.js"
 export {
   Model,
   ModelId,
+  ModelPricing,
   Provider,
   ProviderId,
   SUPPORTED_PROVIDERS,
   DEFAULT_MODELS,
   DEFAULT_MODEL_ID,
+  calculateCost,
 } from "./model.js"
 
 // Current Gen (auto-generated)

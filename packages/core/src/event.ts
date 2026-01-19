@@ -44,11 +44,18 @@ export class StreamChunk extends Schema.TaggedClass<StreamChunk>()(
   }
 ) {}
 
+export const UsageSchema = Schema.Struct({
+  inputTokens: Schema.Number,
+  outputTokens: Schema.Number,
+})
+export type Usage = typeof UsageSchema.Type
+
 export class StreamEnded extends Schema.TaggedClass<StreamEnded>()(
   "StreamEnded",
   {
     sessionId: Schema.String,
     branchId: Schema.String,
+    usage: Schema.optional(UsageSchema),
   }
 ) {}
 

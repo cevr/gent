@@ -1,10 +1,10 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { InputRenderable } from "@opentui/core"
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
-import { DEFAULT_MODEL_ID, type AgentMode, type ModelId } from "@gent/core"
+import { DEFAULT_MODEL_ID, calculateCost, type AgentMode, type ModelId } from "@gent/core"
 import { extractText, type GentClient } from "./client.js"
 import { StatusBar } from "./components/status-bar.js"
-import { MessageList, type Message } from "./components/message-list.js"
+import { MessageList, type Message, type ToolCall } from "./components/message-list.js"
 import { CommandPalette } from "./components/command-palette.js"
 import { useGitInfo } from "./hooks/use-git-status.js"
 import { ThemeProvider, useTheme } from "./theme/index.js"
@@ -33,8 +33,9 @@ function AppContent(props: AppProps) {
 
   const [, setInputValue] = createSignal("")
   const [messages, setMessages] = createSignal<Message[]>([])
+  const [toolCalls, setToolCalls] = createSignal<ToolCall[]>([])
   const [agentMode] = createSignal<AgentMode>("build")
-  const [cost] = createSignal(0)
+  const [cost, setCost] = createSignal(0)
   const [status, setStatus] = createSignal<"idle" | "streaming" | "error">("idle")
   const [error, setError] = createSignal<string | null>(null)
 
@@ -86,6 +87,7 @@ function AppContent(props: AppProps) {
       } else if (event._tag === "StreamStarted") {
         setStatus("streaming")
         setError(null)
+        setToolCalls([]) // Clear tool calls for new stream
         // Add placeholder assistant message
         setMessages((prev) => [
           ...prev,
@@ -110,9 +112,32 @@ function AppContent(props: AppProps) {
         })
       } else if (event._tag === "StreamEnded") {
         setStatus("idle")
+        // Calculate cost from usage
+        if (event.usage) {
+          const pricing = model.currentModelInfo()?.pricing
+          const turnCost = calculateCost(event.usage, pricing)
+          setCost((prev) => prev + turnCost)
+        }
       } else if (event._tag === "ErrorOccurred") {
         setStatus("error")
         setError(event.error)
+      } else if (event._tag === "ToolCallStarted") {
+        setToolCalls((prev) => [
+          ...prev,
+          {
+            id: event.toolCallId,
+            toolName: event.toolName,
+            status: "running",
+          },
+        ])
+      } else if (event._tag === "ToolCallCompleted") {
+        setToolCalls((prev) =>
+          prev.map((tc) =>
+            tc.id === event.toolCallId
+              ? { ...tc, status: event.isError ? "error" : "completed" }
+              : tc
+          )
+        )
       }
       // TODO: handle cost from events when available
     })
@@ -123,6 +148,35 @@ function AppContent(props: AppProps) {
   const exit = () => {
     renderer.destroy()
     process.exit(0)
+  }
+
+  // Delete word backward (Option+Backspace)
+  const deleteWordBackward = () => {
+    if (!inputRef) return
+    const value = inputRef.value
+    const cursor = inputRef.cursorPosition
+    if (cursor === 0) return
+
+    // Find start of current/previous word
+    let pos = cursor - 1
+    // Skip trailing spaces
+    while (pos > 0 && value[pos - 1] === " ") pos--
+    // Skip word characters
+    while (pos > 0 && value[pos - 1] !== " ") pos--
+
+    inputRef.value = value.slice(0, pos) + value.slice(cursor)
+    inputRef.cursorPosition = pos
+  }
+
+  // Delete line backward (Cmd+Backspace)
+  const deleteLineBackward = () => {
+    if (!inputRef) return
+    const value = inputRef.value
+    const cursor = inputRef.cursorPosition
+    if (cursor === 0) return
+
+    inputRef.value = value.slice(cursor)
+    inputRef.cursorPosition = 0
   }
 
   // Keyboard handlers
@@ -145,6 +199,19 @@ function AppContent(props: AppProps) {
     // Ctrl+C to quit
     if (e.ctrl && e.name === "c") {
       exit()
+      return
+    }
+
+    // Option+Backspace / Ctrl+W: delete word backward
+    if ((e.meta && e.name === "backspace") || (e.ctrl && e.name === "w")) {
+      deleteWordBackward()
+      return
+    }
+
+    // Cmd+Backspace / Ctrl+U: delete line backward
+    // Note: Cmd (super) often doesn't reach terminal apps, so Ctrl+U is the fallback
+    if ((e.super && e.name === "backspace") || (e.ctrl && e.name === "u")) {
+      deleteLineBackward()
       return
     }
   })
@@ -189,7 +256,7 @@ function AppContent(props: AppProps) {
   return (
     <box flexDirection="column" width="100%" height="100%">
       {/* Messages */}
-      <MessageList messages={messages()} />
+      <MessageList messages={messages()} toolCalls={toolCalls()} />
 
       {/* Separator line */}
       <box flexShrink={0}>
