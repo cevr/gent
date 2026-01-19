@@ -7,6 +7,7 @@ import {
   GentServer,
   GentCore,
   RpcHandlersLive,
+  DEFAULT_SYSTEM_PROMPT,
   type GentCoreService,
   type GentCoreError,
 } from "@gent/server"
@@ -32,7 +33,7 @@ const TracerLayer = DevTracerLive(TRACE_LOG)
 
 // GentServer layer with tracing (provides dependencies for GentCore)
 const ServerDepsLayer = GentServer.Dependencies({
-  systemPrompt: "You are a helpful assistant.",
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
   defaultModel: DEFAULT_MODEL_ID,
   dbPath: DB_PATH,
 }).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))

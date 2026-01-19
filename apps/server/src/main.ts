@@ -8,7 +8,8 @@ import {
 } from "@effect/platform"
 import { Effect, Layer, Stream, Schema } from "effect"
 import { GentApi } from "@gent/api"
-import { GentServer, SteerCommand } from "@gent/server"
+import { GentServer, SteerCommand, DEFAULT_SYSTEM_PROMPT } from "@gent/server"
+import { DEFAULT_MODEL_ID } from "@gent/core"
 
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
@@ -88,8 +89,8 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 
 // Server service
 const ServerLive = GentServer.Live({
-  systemPrompt: "You are a helpful AI assistant.",
-  defaultModel: "anthropic/claude-sonnet-4-20250514",
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  defaultModel: DEFAULT_MODEL_ID,
   dbPath: ".gent/data.db",
 }).pipe(Layer.provide(PlatformLayer))
 
