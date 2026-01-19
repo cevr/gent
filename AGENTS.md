@@ -19,11 +19,17 @@ bun run clean      # Remove dist and tsbuildinfo files
 # TUI mode (default)
 bun run --cwd apps/tui dev
 
+# Continue last session for cwd
+bun run --cwd apps/tui dev -c
+
+# Start with prompt (creates session, goes straight to session view)
+bun run --cwd apps/tui dev -p "your prompt"
+
+# Continue specific session
+bun run --cwd apps/tui dev -s <session-id>
+
 # Headless mode - streams to stdout, exits after response
 bun run --cwd apps/tui dev -H "your prompt here"
-
-# Continue session
-bun run --cwd apps/tui dev -s <session-id>
 
 # List sessions
 bun run --cwd apps/tui dev sessions

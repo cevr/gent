@@ -9,8 +9,9 @@
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
 - **Types from core** - Import `MessagePart`, `TextPart` from `@gent/core`. Never redeclare.
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
-- **File naming** - All files kebab-case: `message-list.tsx`, `use-git-status.ts`.
+- **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
+- **exactOptionalPropertyTypes** - Use `prop: string | undefined` not `prop?: string` when passing through providers/props.
 
 ## Components
 
@@ -51,3 +52,45 @@ Ported from opencode. Key patterns:
 
 - Use `console.log()` for debug output - it appears in terminal after TUI exits
 - `process.exit()` cleanly exits TUI without cleanup warnings
+
+## Architecture
+
+Providers wrap app in `main.tsx`:
+```
+ThemeProvider → CommandProvider → ModelProvider → AgentStateProvider → RouterProvider → ClientProvider
+```
+
+| Provider | Purpose |
+|----------|---------|
+| `WorkspaceProvider` | cwd, gitRoot, gitStatus - static workspace info |
+| `AgentStateProvider` | mode, status, cost, error - reactive agent state |
+| `RouterProvider` | route, navigate - discriminated union routes |
+| `ClientProvider` | RPC client, event subscriptions |
+
+Routes: `home-view.tsx` (logo, first message) → `session-view.tsx` (messages, streaming)
+
+## Compound Components
+
+StatusBar uses compound pattern - compose what you need:
+```tsx
+<StatusBar.Root>
+  <StatusBar.Row>
+    <StatusBar.Mode />
+    <StatusBar.Separator />
+    <StatusBar.Model />
+  </StatusBar.Row>
+</StatusBar.Root>
+```
+
+Components derive state from providers, not props. Add/remove rows per view.
+
+## CLI Flags
+
+| Flag | Purpose |
+|------|---------|
+| `-c, --continue` | Resume last session for cwd |
+| `-p, --prompt` | Initial message (goes straight to session view) |
+| `-s, --session` | Resume specific session ID |
+| `-H, --headless` | Headless mode + prompt arg |
+
+Priority: headless → session → continue → prompt → home
