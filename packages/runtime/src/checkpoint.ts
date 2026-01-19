@@ -3,14 +3,14 @@ import {
   CompactionCheckpoint,
   PlanCheckpoint,
   Message,
-  MessagePart,
   TextPart,
-  ToolCallPart,
   ToolResultPart,
+  type MessagePart,
+  type ToolCallPart,
   type Checkpoint,
 } from "@gent/core"
-import { Storage, StorageError } from "@gent/storage"
-import { Provider, ProviderError } from "@gent/providers"
+import { Storage, type StorageError } from "@gent/storage"
+import { Provider, type ProviderError } from "@gent/providers"
 
 // Compaction Config
 

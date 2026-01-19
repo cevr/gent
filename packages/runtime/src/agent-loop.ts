@@ -1,4 +1,6 @@
 import { Context, DateTime, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
+import type {
+  ToolContext} from "@gent/core";
 import {
   Message,
   TextPart,
@@ -12,14 +14,15 @@ import {
   ToolCallCompleted,
   MessageReceived,
   ToolRegistry,
-  ToolContext,
   Permission,
   ErrorOccurred,
   PlanModeEntered,
   PlanModeExited,
 } from "@gent/core"
-import { Storage, StorageError } from "@gent/storage"
-import { Provider, ProviderError, FinishChunk } from "@gent/providers"
+import type { StorageError } from "@gent/storage";
+import { Storage } from "@gent/storage"
+import type { ProviderError, FinishChunk } from "@gent/providers";
+import { Provider } from "@gent/providers"
 import { withRetry } from "./retry.js"
 import { CheckpointService } from "./checkpoint.js"
 import { FileSystem } from "@effect/platform"
@@ -432,8 +435,8 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
 
           // Process follow-up queue
           const finalState = yield* Ref.get(stateRef)
-          if (finalState.followUpQueue.length > 0) {
-            const nextMessage = finalState.followUpQueue[0]!
+          const nextMessage = finalState.followUpQueue[0]
+          if (nextMessage) {
             yield* Ref.update(stateRef, (s) => ({
               ...s,
               followUpQueue: s.followUpQueue.slice(1),

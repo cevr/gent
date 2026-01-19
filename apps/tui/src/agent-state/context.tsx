@@ -1,5 +1,4 @@
-import { createContext, useContext, type JSX, type Accessor, type Setter } from "solid-js"
-import { createSignal } from "solid-js"
+import { createContext, useContext, createSignal, type JSX, type Accessor, type Setter } from "solid-js"
 import type { AgentMode } from "@gent/core"
 
 export type AgentStatus = "idle" | "streaming" | "error"

@@ -7,21 +7,26 @@ import {
   OpenApi,
 } from "@effect/platform"
 import { Effect, Layer, Stream, Schema } from "effect"
-import { GentApi } from "@gent/api"
-import { GentServer, SteerCommand, DEFAULT_SYSTEM_PROMPT } from "@gent/server"
+import {
+  GentApi,
+  GentCore,
+  createDependencies,
+  SteerCommand,
+  DEFAULT_SYSTEM_PROMPT,
+} from "@gent/server"
 import { DEFAULT_MODEL_ID } from "@gent/core"
 
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
   Effect.gen(function* () {
-    const server = yield* GentServer
+    const core = yield* GentCore
     return handlers
       .handle("create", ({ payload }) =>
-        server.createSession({ name: payload.name ?? "New Session" }).pipe(Effect.orDie)
+        core.createSession({ name: payload.name ?? "New Session" }).pipe(Effect.orDie)
       )
-      .handle("list", () => server.listSessions().pipe(Effect.orDie))
+      .handle("list", () => core.listSessions().pipe(Effect.orDie))
       .handle("get", ({ path }) =>
-        server.getSession(path.sessionId).pipe(
+        core.getSession(path.sessionId).pipe(
           Effect.flatMap((s) =>
             s ? Effect.succeed(s) : Effect.die(new Error("Session not found"))
           ),
@@ -29,7 +34,7 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
         )
       )
       .handle("delete", ({ path }) =>
-        server.deleteSession(path.sessionId).pipe(Effect.orDie)
+        core.deleteSession(path.sessionId).pipe(Effect.orDie)
       )
   })
 )
@@ -37,10 +42,10 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
 // Messages API Handlers
 const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
   Effect.gen(function* () {
-    const server = yield* GentServer
+    const core = yield* GentCore
     return handlers
       .handle("send", ({ payload }) =>
-        server
+        core
           .sendMessage({
             sessionId: payload.sessionId,
             branchId: payload.branchId,
@@ -49,12 +54,12 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
           .pipe(Effect.orDie)
       )
       .handle("list", ({ path }) =>
-        server.listMessages(path.branchId).pipe(Effect.orDie)
+        core.listMessages(path.branchId).pipe(Effect.orDie)
       )
       .handle("steer", ({ payload }) =>
         Effect.gen(function* () {
           const command = yield* Schema.decode(SteerCommand)(payload)
-          yield* server.steer(command)
+          yield* core.steer(command)
         }).pipe(Effect.orDie)
       )
   })
@@ -63,10 +68,10 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
 // Events API Handlers (SSE)
 const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
   Effect.gen(function* () {
-    const server = yield* GentServer
+    const core = yield* GentCore
     return handlers.handle("subscribe", ({ path }) =>
       Effect.gen(function* () {
-        const events = server.subscribeEvents(path.sessionId)
+        const events = core.subscribeEvents(path.sessionId)
 
         // Format as SSE
         const sseStream = events.pipe(
@@ -87,18 +92,21 @@ const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
 // Platform layer for Storage
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 
-// Server service
-const ServerLive = GentServer.Live({
+// Dependencies layer
+const DepsLive = createDependencies({
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   defaultModel: DEFAULT_MODEL_ID,
   dbPath: ".gent/data.db",
 }).pipe(Layer.provide(PlatformLayer))
 
+// GentCore layer
+const GentCoreLive = GentCore.Live.pipe(Layer.provide(DepsLive))
+
 // API Groups Layer
 const HttpGroupsLive = Layer.provideMerge(
   Layer.provideMerge(SessionsApiLive, MessagesApiLive),
   EventsApiLive
-).pipe(Layer.provide(ServerLive))
+).pipe(Layer.provide(GentCoreLive))
 
 // API Routes
 const HttpApiRoutes = HttpLayerRouter.addHttpApi(GentApi).pipe(
@@ -126,7 +134,7 @@ const AllRoutes = Layer.mergeAll(HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pip
 // Server
 const HttpServerLive = HttpLayerRouter.serve(AllRoutes).pipe(
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
-  Layer.provide(ServerLive)
+  Layer.provide(GentCoreLive)
 )
 
 // Main

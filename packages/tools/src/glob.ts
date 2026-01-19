@@ -1,8 +1,7 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
+import { FileSystem, Path } from "@effect/platform"
 import { defineTool } from "@gent/core"
 import { Glob } from "bun"
-import * as path from "node:path"
-import * as fs from "node:fs/promises"
 
 // Glob Tool Error
 
@@ -45,40 +44,43 @@ export const GlobTool = defineTool({
     "Find files matching glob pattern. Returns paths sorted by mtime.",
   params: GlobParams,
   execute: Effect.fn("GlobTool.execute")(function* (params) {
-    const basePath = params.path ? path.resolve(params.path) : process.cwd()
+    const fs = yield* FileSystem.FileSystem
+    const pathService = yield* Path.Path
+
+    const basePath = params.path ? pathService.resolve(params.path) : process.cwd()
     const limit = params.limit ?? 100
 
     const glob = new Glob(params.pattern)
-    const matches: Array<{ path: string; mtime: number }> = []
 
-    yield* Effect.tryPromise({
-      try: async () => {
-        for await (const file of glob.scan({
-          cwd: basePath,
-          absolute: true,
-        })) {
-          try {
-            const stat = await fs.stat(file)
-            matches.push({ path: file, mtime: stat.mtimeMs })
-          } catch {
-            // Skip files we can't stat
-          }
-        }
-      },
-      catch: (e) =>
+    // Create stream from async iterable
+    const fileStream = Stream.fromAsyncIterable(
+      glob.scan({ cwd: basePath, absolute: true }),
+      (e) =>
         new GlobError({
           message: `Failed to glob: ${e}`,
           pattern: params.pattern,
           cause: e,
-        }),
-    })
+        })
+    )
+
+    // Collect all files, stat each for mtime
+    const files = yield* Stream.runCollect(fileStream)
+
+    const matches: Array<{ path: string; mtime: number }> = []
+    for (const file of files) {
+      const statResult = yield* fs.stat(file).pipe(Effect.option)
+      if (Option.isSome(statResult)) {
+        const mtime = Option.getOrElse(statResult.value.mtime, () => new Date(0))
+        matches.push({ path: file, mtime: mtime.getTime() })
+      }
+    }
 
     // Sort by mtime desc
     matches.sort((a, b) => b.mtime - a.mtime)
 
     const truncated = matches.length > limit
-    const files = matches.slice(0, limit).map((m) => m.path)
+    const resultFiles = matches.slice(0, limit).map((m) => m.path)
 
-    return { files, truncated }
+    return { files: resultFiles, truncated }
   }),
 })

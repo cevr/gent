@@ -22,9 +22,7 @@
       "@gent/tools": ["packages/tools/src/index.ts"],
       "@gent/providers": ["packages/providers/src/index.ts"],
       "@gent/runtime": ["packages/runtime/src/index.ts"],
-      "@gent/api": ["packages/api/src/index.ts"],
       "@gent/server": ["packages/server/src/index.ts"],
-      "@gent/telemetry": ["packages/telemetry/src/index.ts"],
       "@gent/test-utils": ["packages/test-utils/src/index.ts"]
     },
     "plugins": [
@@ -39,9 +37,7 @@
     { "path": "packages/tools" },
     { "path": "packages/providers" },
     { "path": "packages/runtime" },
-    { "path": "packages/api" },
     { "path": "packages/server" },
-    { "path": "packages/telemetry" },
     { "path": "packages/test-utils" },
     { "path": "apps/server" },
     { "path": "apps/tui" }

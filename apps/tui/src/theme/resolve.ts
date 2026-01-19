@@ -14,8 +14,10 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
       if (c.startsWith("#")) return RGBA.fromHex(c)
       if (defs[c] != null) {
         return resolveColor(defs[c])
-      } else if (theme.theme[c as keyof ThemeColors] !== undefined) {
-        return resolveColor(theme.theme[c as keyof ThemeColors]!)
+      }
+      const themeColor = theme.theme[c as keyof ThemeColors]
+      if (themeColor !== undefined) {
+        return resolveColor(themeColor)
       } else {
         throw new Error(`Color reference "${c}" not found in defs or theme`)
       }
@@ -33,9 +35,10 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
   ) as Partial<ThemeColors>
 
   // Handle selectedListItemText separately since it's optional
-  const hasSelectedListItemText = theme.theme.selectedListItemText !== undefined
+  const selectedListItemTextValue = theme.theme.selectedListItemText
+  const hasSelectedListItemText = selectedListItemTextValue !== undefined
   if (hasSelectedListItemText) {
-    resolved.selectedListItemText = resolveColor(theme.theme.selectedListItemText!)
+    resolved.selectedListItemText = resolveColor(selectedListItemTextValue)
   } else if (resolved.background) {
     resolved.selectedListItemText = resolved.background
   }
@@ -105,8 +108,8 @@ export function tint(base: RGBA, overlay: RGBA, alpha: number): RGBA {
  * Generate a theme from terminal colors (system theme)
  */
 export function generateSystemTheme(colors: TerminalColors, mode: "dark" | "light"): ThemeJson {
-  const bg = RGBA.fromHex(colors.defaultBackground ?? colors.palette[0]!)
-  const fg = RGBA.fromHex(colors.defaultForeground ?? colors.palette[7]!)
+  const bg = RGBA.fromHex(colors.defaultBackground ?? colors.palette[0] ?? "#000000")
+  const fg = RGBA.fromHex(colors.defaultForeground ?? colors.palette[7] ?? "#ffffff")
   const isDark = mode === "dark"
 
   const col = (i: number) => {

@@ -62,7 +62,7 @@ function AssistantMessage(props: {
       <Show when={props.interrupted} fallback={
         <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
           <box marginTop={1}>
-            <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime!)}</text>
+            <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime ?? 0)}</text>
           </box>
         </Show>
       }>
@@ -85,7 +85,7 @@ function useSpinner(toolName: string) {
     onCleanup(() => clearInterval(interval))
   })
 
-  return () => frames[frame()]!
+  return () => frames[frame()] ?? frames[0]
 }
 
 function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {

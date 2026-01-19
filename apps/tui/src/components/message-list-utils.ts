@@ -51,7 +51,7 @@ export const TOOL_SPINNERS: Record<string, readonly string[]> = {
  */
 export function getSpinnerFrames(toolName: string): readonly string[] {
   const name = toolName.toLowerCase()
-  return TOOL_SPINNERS[name] ?? TOOL_SPINNERS["default"]!
+  return TOOL_SPINNERS[name] ?? TOOL_SPINNERS["default"] ?? [" | "]
 }
 
 /**

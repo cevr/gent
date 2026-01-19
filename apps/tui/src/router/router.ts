@@ -24,7 +24,8 @@ export function routerReducer(state: AppRouterState, action: RouterAction): AppR
     case "back": {
       if (state.history.length === 0) return state
       const newHistory = [...state.history]
-      const previous = newHistory.pop()!
+      const previous = newHistory.pop()
+      if (!previous) return state
       return { current: previous, history: newHistory }
     }
   }

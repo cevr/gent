@@ -1,9 +1,10 @@
 import { Context, Effect, Layer, Schema } from "effect"
+import type {
+  Checkpoint} from "@gent/core";
 import {
   Message,
   Session,
   Branch,
-  Checkpoint,
   CompactionCheckpoint,
   PlanCheckpoint,
   MessagePart,
@@ -13,8 +14,10 @@ import { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
 import { Database } from "bun:sqlite"
 
-// Schema decoders
-const decodeMessageParts = Schema.decodeUnknownSync(Schema.Array(MessagePart))
+// Schema decoders - using parseJson for combined JSON.parse + decode
+const MessagePartsJson = Schema.parseJson(Schema.Array(MessagePart))
+const decodeMessageParts = Schema.decodeUnknownSync(MessagePartsJson)
+const encodeMessageParts = Schema.encodeSync(MessagePartsJson)
 const decodeTodoItem = Schema.decodeUnknownSync(TodoItem)
 
 // Storage Error
@@ -435,7 +438,7 @@ const makeStorage = (db: Database): StorageService => {
               message.sessionId,
               message.branchId,
               message.role,
-              JSON.stringify(message.parts),
+              encodeMessageParts([...message.parts]),
               message.createdAt.getTime(),
               message.turnDurationMs ?? null,
             ]
@@ -468,7 +471,7 @@ const makeStorage = (db: Database): StorageService => {
               }
             | null
           if (!row) return undefined
-          const parts = decodeMessageParts(JSON.parse(row.parts))
+          const parts = decodeMessageParts(row.parts)
           return new Message({
             id: row.id,
             sessionId: row.session_id,
@@ -503,7 +506,7 @@ const makeStorage = (db: Database): StorageService => {
             turn_duration_ms: number | null
           }>
           return rows.map((row) => {
-            const parts = decodeMessageParts(JSON.parse(row.parts))
+            const parts = decodeMessageParts(row.parts)
             return new Message({
               id: row.id,
               sessionId: row.session_id,
@@ -680,7 +683,7 @@ const makeStorage = (db: Database): StorageService => {
             turn_duration_ms: number | null
           }>
           return rows.map((row) => {
-            const parts = decodeMessageParts(JSON.parse(row.parts))
+            const parts = decodeMessageParts(row.parts)
             return new Message({
               id: row.id,
               sessionId: row.session_id,
@@ -716,7 +719,7 @@ const makeStorage = (db: Database): StorageService => {
             turn_duration_ms: number | null
           }>
           return rows.map((row) => {
-            const parts = decodeMessageParts(JSON.parse(row.parts))
+            const parts = decodeMessageParts(row.parts)
             return new Message({
               id: row.id,
               sessionId: row.session_id,

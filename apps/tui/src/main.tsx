@@ -4,16 +4,16 @@ import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
 import { Console, Effect, Layer, ManagedRuntime, Option, Runtime, Stream } from "effect"
 import { RpcTest } from "@effect/rpc"
 import {
-  GentServer,
+  createDependencies,
   GentCore,
   RpcHandlersLive,
   DEFAULT_SYSTEM_PROMPT,
+  GentRpcs,
   type GentCoreService,
   type GentCoreError,
   type SessionInfo,
 } from "@gent/server"
-import { GentRpcs } from "@gent/api"
-import { DevTracerLive, clearLog } from "@gent/telemetry"
+import { DevTracerLive, clearLog } from "@gent/runtime"
 import { DEFAULT_MODEL_ID, type ModelId } from "@gent/core"
 import * as path from "node:path"
 
@@ -133,8 +133,8 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 // Dev tracer layer
 const TracerLayer = DevTracerLive(TRACE_LOG)
 
-// GentServer layer with tracing (provides dependencies for GentCore)
-const ServerDepsLayer = GentServer.Dependencies({
+// Dependencies layer with tracing
+const ServerDepsLayer = createDependencies({
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   defaultModel: DEFAULT_MODEL_ID,
   dbPath: DB_PATH,

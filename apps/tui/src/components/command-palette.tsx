@@ -32,7 +32,7 @@ export function CommandPalette() {
   const [selectedIndex, setSelectedIndex] = createSignal(0)
   const [sessions, setSessions] = createSignal<SessionInfo[]>([])
 
-  let scrollRef!: ScrollBoxRenderable
+  let scrollRef: ScrollBoxRenderable | undefined = undefined
 
   useScrollSync(() => `item-${selectedIndex()}`, { getRef: () => scrollRef })
 
@@ -173,7 +173,7 @@ export function CommandPalette() {
 
   const currentLevel = () => {
     const stack = levelStack()
-    return stack.length > 0 ? stack[stack.length - 1]! : rootMenu()
+    return stack.length > 0 ? stack[stack.length - 1] ?? rootMenu() : rootMenu()
   }
 
   const pushLevel = (level: MenuLevel) => {

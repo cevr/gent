@@ -1,7 +1,6 @@
 import { Effect, Stream, Runtime } from "effect"
-import type { RpcClient } from "@effect/rpc"
-import type { RpcGroup } from "@effect/rpc"
-import type { GentRpcs } from "@gent/api"
+import type { RpcClient, RpcGroup } from "@effect/rpc"
+import type { GentRpcs } from "@gent/server"
 import type { AgentEvent, MessagePart, TextPart, ToolCallPart, ToolResultPart } from "@gent/core"
 
 export type { MessagePart, TextPart, ToolCallPart, ToolResultPart }

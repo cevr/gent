@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { FileSystem, Path } from "@effect/platform"
 import { ModelId, ProviderId } from "@gent/core"
 
 // User config schema - stored at ~/.gent/config.json
@@ -33,43 +34,44 @@ export class ConfigService extends Context.Tag("ConfigService")<
   /** Relative path from project root for project config */
   static PROJECT_CONFIG_RELATIVE = ".gent/config.json"
 
-  static Live: Layer.Layer<ConfigService> = Layer.scoped(
+  static Live: Layer.Layer<ConfigService, never, FileSystem.FileSystem | Path.Path> = Layer.scoped(
     ConfigService,
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+
       const home = process.env["HOME"] ?? "~"
-      const userConfigPath = `${home}/${ConfigService.USER_CONFIG_RELATIVE}`
-      const projectConfigPath = `${process.cwd()}/${ConfigService.PROJECT_CONFIG_RELATIVE}`
+      const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
+      const projectConfigPath = path.join(process.cwd(), ConfigService.PROJECT_CONFIG_RELATIVE)
+
+      const UserConfigJson = Schema.parseJson(UserConfig)
 
       // State: current config
       const configRef = yield* Ref.make<UserConfig>(new UserConfig({}))
 
       // Load config from disk (merges project over user)
-      const loadConfig = Effect.try({
-        try: () => {
-          const fs = require("node:fs") as typeof import("node:fs")
-          let config = new UserConfig({})
+      const loadConfig = Effect.gen(function* () {
+        let config = new UserConfig({})
 
-          // Load user config
-          if (fs.existsSync(userConfigPath)) {
-            const content = fs.readFileSync(userConfigPath, "utf-8")
-            const parsed = JSON.parse(content) as unknown
-            config = Schema.decodeUnknownSync(UserConfig)(parsed)
-          }
+        // Load user config
+        const userExists = yield* fs.exists(userConfigPath)
+        if (userExists) {
+          const content = yield* fs.readFileString(userConfigPath)
+          config = yield* Schema.decodeUnknown(UserConfigJson)(content)
+        }
 
-          // Load project config (overrides user)
-          if (fs.existsSync(projectConfigPath)) {
-            const content = fs.readFileSync(projectConfigPath, "utf-8")
-            const parsed = JSON.parse(content) as unknown
-            const projectConfig = Schema.decodeUnknownSync(UserConfig)(parsed)
-            config = new UserConfig({
-              model: projectConfig.model ?? config.model,
-              provider: projectConfig.provider ?? config.provider,
-            })
-          }
+        // Load project config (overrides user)
+        const projectExists = yield* fs.exists(projectConfigPath)
+        if (projectExists) {
+          const content = yield* fs.readFileString(projectConfigPath)
+          const projectConfig = yield* Schema.decodeUnknown(UserConfigJson)(content)
+          config = new UserConfig({
+            model: projectConfig.model ?? config.model,
+            provider: projectConfig.provider ?? config.provider,
+          })
+        }
 
-          return config
-        },
-        catch: () => new ConfigServiceError({ message: "Config load failed" }),
+        return config
       }).pipe(
         Effect.flatMap((config) => Ref.set(configRef, config)),
         Effect.catchAll(() => Effect.void)
@@ -77,15 +79,11 @@ export class ConfigService extends Context.Tag("ConfigService")<
 
       // Save user config to disk
       const saveUserConfig = (config: UserConfig) =>
-        Effect.try({
-          try: () => {
-            const fs = require("node:fs") as typeof import("node:fs")
-            const path = require("node:path") as typeof import("node:path")
-            const configDir = path.dirname(userConfigPath)
-            fs.mkdirSync(configDir, { recursive: true })
-            fs.writeFileSync(userConfigPath, JSON.stringify(config, null, 2))
-          },
-          catch: () => new ConfigServiceError({ message: "Config save failed" }),
+        Effect.gen(function* () {
+          const configDir = path.dirname(userConfigPath)
+          yield* fs.makeDirectory(configDir, { recursive: true })
+          const json = yield* Schema.encode(UserConfigJson)(config)
+          yield* fs.writeFileString(userConfigPath, json)
         }).pipe(Effect.catchAll(() => Effect.void))
 
       // Initial load

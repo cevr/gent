@@ -38,7 +38,7 @@ export class AuthStorage extends Context.Tag("AuthStorage")<
   ): Layer.Layer<AuthStorage> =>
     Layer.effect(
       AuthStorage,
-      Effect.gen(function* () {
+      Effect.sync(() => {
         const exec = (cmd: string) =>
           Effect.tryPromise({
             try: async () => {
@@ -112,7 +112,9 @@ export class AuthStorage extends Context.Tag("AuthStorage")<
 
         yield* fs.makeDirectory(dir, { recursive: true })
 
-        type AuthData = Record<string, string>
+        const AuthData = Schema.Record({ key: Schema.String, value: Schema.String })
+        type AuthData = typeof AuthData.Type
+        const AuthDataJson = Schema.parseJson(AuthData)
 
         const readData = (): Effect.Effect<AuthData, AuthStorageError> =>
           fs.exists(filePath).pipe(
@@ -120,29 +122,31 @@ export class AuthStorage extends Context.Tag("AuthStorage")<
               if (!exists) return Effect.succeed("{}")
               return fs.readFileString(filePath)
             }),
-            Effect.map((content) => JSON.parse(content) as AuthData),
-            Effect.mapError(
-              (e) =>
-                new AuthStorageError({
-                  message: "Failed to read auth file",
-                  cause: e,
-                })
+            Effect.flatMap((content) =>
+              Schema.decodeUnknown(AuthDataJson)(content).pipe(
+                Effect.mapError(
+                  (e) =>
+                    new AuthStorageError({
+                      message: "Failed to parse auth file",
+                      cause: e,
+                    })
+                )
+              )
             ),
             Effect.catchAll(() => Effect.succeed({} as AuthData))
           )
 
         const writeData = (data: AuthData): Effect.Effect<void, AuthStorageError> =>
-          fs
-            .writeFileString(filePath, JSON.stringify(data, null, 2))
-            .pipe(
-              Effect.mapError(
-                (e) =>
-                  new AuthStorageError({
-                    message: "Failed to write auth file",
-                    cause: e,
-                  })
-              )
+          Schema.encode(AuthDataJson)(data).pipe(
+            Effect.flatMap((json) => fs.writeFileString(filePath, json)),
+            Effect.mapError(
+              (e) =>
+                new AuthStorageError({
+                  message: "Failed to write auth file",
+                  cause: e,
+                })
             )
+          )
 
         return {
           get: (provider) =>

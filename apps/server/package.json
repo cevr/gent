@@ -8,7 +8,7 @@
   "dependencies": {
     "@effect/platform": "catalog:",
     "@effect/platform-bun": "catalog:",
-    "@gent/api": "workspace:*",
+    "@gent/core": "workspace:*",
     "@gent/server": "workspace:*",
     "find-my-way-ts": "catalog:",
     "msgpackr": "catalog:",

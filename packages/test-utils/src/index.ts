@@ -2,18 +2,18 @@ import { Context, Effect, Layer, Ref, Stream } from "effect"
 import { Storage } from "@gent/storage"
 import {
   Provider,
-  StreamChunk,
   FinishChunk,
   TextChunk,
   ToolCallChunk,
+  type StreamChunk,
 } from "@gent/providers"
 import {
   ToolRegistry,
   EventBus,
   Permission,
-  AgentEvent,
   CompactionCheckpoint,
   PlanCheckpoint,
+  type AgentEvent,
   type Checkpoint,
   type ToolDefinition,
 } from "@gent/core"
@@ -328,8 +328,8 @@ export const assertSequence = (
   for (const exp of expected) {
     let found = false
     while (actualIdx < actual.length) {
-      const call = actual[actualIdx]!
-      if (call.service === exp.service && call.method === exp.method) {
+      const call = actual[actualIdx]
+      if (call && call.service === exp.service && call.method === exp.method) {
         if (exp.match) {
           const argsObj = call.args as Record<string, unknown> | undefined
           if (argsObj) {

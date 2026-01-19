@@ -19,7 +19,6 @@ import {
   SequenceRecorder,
   createRecordingTestLayer,
   assertSequence,
-  mockTextResponse,
 } from "@gent/test-utils"
 import { Provider } from "@gent/providers"
 

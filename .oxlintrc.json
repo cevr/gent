@@ -1,0 +1,47 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "plugins": ["typescript", "import"],
+  "rules": {
+    // TypeScript - no any
+    "typescript/no-explicit-any": "error",
+
+    // TypeScript - no non-null assertions
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+
+    // TypeScript - consistent type imports
+    "typescript/consistent-type-imports": [
+      "error",
+      { "prefer": "type-imports", "fixStyle": "separate-type-imports" }
+    ],
+
+    // Import rules
+    "import/no-duplicates": "error",
+
+    // Unused vars
+    "no-unused-vars": [
+      "error",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ]
+  },
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/*.d.ts", "**/scripts/**"],
+  "overrides": [
+    {
+      "files": ["**/*.tsx"],
+      "rules": {}
+    },
+    {
+      "files": ["**/tests/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-explicit-any": "off"
+      }
+    }
+  ]
+}

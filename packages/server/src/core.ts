@@ -13,7 +13,8 @@ import {
   type MessagePart,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
-import { Provider, ProviderError } from "@gent/providers"
+import type { ProviderError } from "@gent/providers";
+import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
 
 // Re-export for consumers
@@ -139,19 +140,19 @@ export interface GentCoreService {
 const NAME_GEN_MODEL = "anthropic/claude-3-haiku-20240307"
 
 // Generate session name from first message (fire-and-forget)
-const generateSessionName = (
-  provider: Provider["Type"],
-  firstMessage: string
-): Effect.Effect<string, ProviderError> =>
-  Effect.gen(function* () {
+const generateSessionName = Effect.fn("generateSessionName")(
+  function* (provider: Provider["Type"], firstMessage: string) {
     const prompt = `Generate a 2-4 word title for a chat starting with: "${firstMessage.slice(0, 200)}". Reply with just the title, no quotes or punctuation.`
-    const result = yield* provider.generate({
-      model: NAME_GEN_MODEL,
-      prompt,
-      maxTokens: 20,
-    })
+    const result = yield* provider
+      .generate({
+        model: NAME_GEN_MODEL,
+        prompt,
+        maxTokens: 20,
+      })
+      .pipe(Effect.catchAll(() => Effect.succeed("")))
     return result.trim() || "New Chat"
-  }).pipe(Effect.catchAll(() => Effect.succeed("New Chat")))
+  }
+)
 
 export class GentCore extends Context.Tag("GentCore")<
   GentCore,
@@ -195,10 +196,11 @@ export class GentCore extends Context.Tag("GentCore")<
               yield* storage.createBranch(branch)
 
               // Fork name generation if firstMessage provided (non-blocking)
-              if (input.firstMessage) {
+              const firstMessage = input.firstMessage
+              if (firstMessage) {
                 yield* Effect.forkDaemon(
                   Effect.gen(function* () {
-                    const generatedName = yield* generateSessionName(provider, input.firstMessage!)
+                    const generatedName = yield* generateSessionName(provider, firstMessage)
                     // Update session with generated name
                     const updatedSession = new Session({
                       ...session,

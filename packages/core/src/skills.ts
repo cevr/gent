@@ -159,10 +159,12 @@ function parseSkillFile(
       const nameMatch = frontmatter.match(/^name:\s*(.+)$/m)
       const descMatch = frontmatter.match(/^description:\s*(.+)$/m)
 
-      if (nameMatch && descMatch) {
+      const nameValue = nameMatch?.[1]
+      const descValue = descMatch?.[1]
+      if (nameValue && descValue) {
         return {
-          name: nameMatch[1]!.trim(),
-          description: descMatch[1]!.trim(),
+          name: nameValue.trim(),
+          description: descValue.trim(),
           content: body,
         }
       }

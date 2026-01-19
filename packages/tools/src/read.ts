@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect"
+import { FileSystem, Path } from "@effect/platform"
 import { defineTool } from "@gent/core"
-import * as fs from "node:fs/promises"
-import * as path from "node:path"
 
 // Read Tool Error
 
@@ -46,17 +45,21 @@ export const ReadTool = defineTool({
     "Read file contents. Returns numbered lines. Use offset/limit for large files.",
   params: ReadParams,
   execute: Effect.fn("ReadTool.execute")(function* (params) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+
     const filePath = path.resolve(params.path)
 
-    const content = yield* Effect.tryPromise({
-      try: () => fs.readFile(filePath, "utf-8"),
-      catch: (e) =>
-        new ReadError({
-          message: `Failed to read file: ${e}`,
-          path: filePath,
-          cause: e,
-        }),
-    })
+    const content = yield* fs.readFileString(filePath).pipe(
+      Effect.mapError(
+        (e) =>
+          new ReadError({
+            message: `Failed to read file: ${e.message}`,
+            path: filePath,
+            cause: e,
+          })
+      )
+    )
 
     const lines = content.split("\n")
     const totalLines = lines.length

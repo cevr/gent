@@ -69,7 +69,7 @@ describe("Type chain", () => {
     test("Message stores and retrieves parts", async () => {
       await Effect.runPromise(
         Effect.gen(function* () {
-          const storage = yield* Storage
+          yield* Storage
           const parts: readonly MessagePart[] = [
             new TextPart({ type: "text", text: "Hello" }),
             new ToolCallPart({

@@ -8,7 +8,6 @@
   "dependencies": {
     "@effect/platform": "catalog:",
     "@effect/rpc": "catalog:",
-    "@gent/api": "workspace:*",
     "@gent/core": "workspace:*",
     "@gent/providers": "workspace:*",
     "@gent/runtime": "workspace:*",

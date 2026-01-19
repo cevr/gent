@@ -12,7 +12,7 @@ export default defineConfig({
       "@gent/tools": path.resolve(__dirname, "packages/tools/src"),
       "@gent/providers": path.resolve(__dirname, "packages/providers/src"),
       "@gent/runtime": path.resolve(__dirname, "packages/runtime/src"),
-      "@gent/api": path.resolve(__dirname, "packages/api/src"),
+      "@gent/server": path.resolve(__dirname, "packages/server/src"),
       "@gent/test-utils": path.resolve(__dirname, "packages/test-utils/src"),
     },
   },

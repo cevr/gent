@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import { Storage } from "@gent/storage"
-import { Session, Branch, Message, TextPart } from "@gent/core"
+import { Session, Branch, Message, TextPart, TodoItem } from "@gent/core"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
   Effect.runPromise(Effect.provide(effect, Storage.Test()))
@@ -250,6 +250,86 @@ describe("Storage", () => {
           expect(messages.length).toBe(2)
           expect(messages[0]?.role).toBe("user")
           expect(messages[1]?.role).toBe("assistant")
+        })
+      )
+    })
+  })
+
+  describe("Todos", () => {
+    test("listTodos returns empty for new branch", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const todos = yield* storage.listTodos("nonexistent")
+          expect(todos.length).toBe(0)
+        })
+      )
+    })
+
+    test("replaceTodos stores and retrieves todos", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const now = new Date()
+
+          const todos = [
+            new TodoItem({
+              id: "t1",
+              content: "Task 1",
+              status: "pending",
+              priority: "high",
+              createdAt: now,
+              updatedAt: now,
+            }),
+            new TodoItem({
+              id: "t2",
+              content: "Task 2",
+              status: "in_progress",
+              createdAt: now,
+              updatedAt: now,
+            }),
+          ]
+
+          yield* storage.replaceTodos("test-branch", todos)
+          const retrieved = yield* storage.listTodos("test-branch")
+
+          expect(retrieved.length).toBe(2)
+          expect(retrieved[0]?.content).toBe("Task 1")
+          expect(retrieved[0]?.priority).toBe("high")
+          expect(retrieved[1]?.status).toBe("in_progress")
+        })
+      )
+    })
+
+    test("replaceTodos replaces existing todos", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const now = new Date()
+
+          yield* storage.replaceTodos("branch", [
+            new TodoItem({
+              id: "old",
+              content: "Old",
+              status: "pending",
+              createdAt: now,
+              updatedAt: now,
+            }),
+          ])
+
+          yield* storage.replaceTodos("branch", [
+            new TodoItem({
+              id: "new",
+              content: "New",
+              status: "completed",
+              createdAt: now,
+              updatedAt: now,
+            }),
+          ])
+
+          const todos = yield* storage.listTodos("branch")
+          expect(todos.length).toBe(1)
+          expect(todos[0]?.content).toBe("New")
         })
       )
     })

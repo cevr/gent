@@ -1,8 +1,7 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
+import { FileSystem, Path } from "@effect/platform"
 import { defineTool } from "@gent/core"
 import { Glob } from "bun"
-import * as path from "node:path"
-import * as fs from "node:fs/promises"
 
 // Grep Tool Error
 
@@ -73,7 +72,10 @@ export const GrepTool = defineTool({
   description: "Search file contents with regex. Returns matching lines.",
   params: GrepParams,
   execute: Effect.fn("GrepTool.execute")(function* (params) {
-    const basePath = params.path ? path.resolve(params.path) : process.cwd()
+    const fs = yield* FileSystem.FileSystem
+    const pathService = yield* Path.Path
+
+    const basePath = params.path ? pathService.resolve(params.path) : process.cwd()
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
     const flags = params.caseSensitive === false ? "gi" : "g"
@@ -95,14 +97,19 @@ export const GrepTool = defineTool({
       context?: { before: string[]; after: string[] }
     }> = []
 
-    const searchFile = async (filePath: string) => {
-      try {
-        const content = await fs.readFile(filePath, "utf-8")
+    const searchFile = (
+      filePath: string
+    ): Effect.Effect<void, never, FileSystem.FileSystem> =>
+      Effect.gen(function* () {
+        const contentResult = yield* fs.readFileString(filePath).pipe(Effect.option)
+        if (Option.isNone(contentResult)) return
+
+        const content = contentResult.value
         const lines = content.split("\n")
 
         for (let i = 0; i < lines.length && matches.length < limit; i++) {
-          const line = lines[i]!
-          if (regex.test(line)) {
+          const line = lines[i]
+          if (line !== undefined && regex.test(line)) {
             const match: (typeof matches)[0] = {
               file: filePath,
               line: i + 1,
@@ -121,40 +128,44 @@ export const GrepTool = defineTool({
           // Reset regex lastIndex for next test
           regex.lastIndex = 0
         }
-      } catch {
-        // Skip files we can't read
-      }
+      })
+
+    const baseStat = yield* fs.stat(basePath).pipe(Effect.option)
+    if (Option.isNone(baseStat)) {
+      return yield* new GrepError({
+        message: `Path not found: ${basePath}`,
+        pattern: params.pattern,
+      })
     }
 
-    yield* Effect.tryPromise({
-      try: async () => {
-        const stat = await fs.stat(basePath)
+    if (baseStat.value.type === "File") {
+      yield* searchFile(basePath)
+    } else {
+      const globPattern = params.glob ?? "**/*"
+      const glob = new Glob(globPattern)
 
-        if (stat.isFile()) {
-          await searchFile(basePath)
-        } else {
-          const globPattern = params.glob ?? "**/*"
-          const glob = new Glob(globPattern)
+      // Create stream from async iterable
+      const fileStream = Stream.fromAsyncIterable(
+        glob.scan({ cwd: basePath, absolute: true }),
+        (e) =>
+          new GrepError({
+            message: `Failed to glob: ${e}`,
+            pattern: params.pattern,
+            cause: e,
+          })
+      )
 
-          for await (const file of glob.scan({
-            cwd: basePath,
-            absolute: true,
-          })) {
-            if (matches.length >= limit) break
-            const fileStat = await fs.stat(file).catch(() => null)
-            if (fileStat?.isFile()) {
-              await searchFile(file)
-            }
-          }
+      // Collect files and search each
+      const files = yield* Stream.runCollect(fileStream)
+
+      for (const file of files) {
+        if (matches.length >= limit) break
+        const fileStat = yield* fs.stat(file).pipe(Effect.option)
+        if (Option.isSome(fileStat) && fileStat.value.type === "File") {
+          yield* searchFile(file)
         }
-      },
-      catch: (e) =>
-        new GrepError({
-          message: `Failed to search: ${e}`,
-          pattern: params.pattern,
-          cause: e,
-        }),
-    })
+      }
+    }
 
     return {
       matches,

@@ -70,8 +70,8 @@ TUI (@opentui/solid) ←── HTTP ──→ Server (HttpApi)
 | `@gent/storage` | SQLite persistence via bun:sqlite |
 | `@gent/tools` | Read, Write, Edit, Bash, Glob, Grep, AskUser, RepoExplorer |
 | `@gent/providers` | Vercel AI SDK adapter with streaming |
-| `@gent/runtime` | AgentLoop, Compaction |
-| `@gent/api` | HttpApi definitions |
+| `@gent/runtime` | AgentLoop, Compaction, Telemetry |
+| `@gent/server` | GentCore service, RPC/HTTP API definitions |
 | `@gent/test-utils` | Mock layers, sequence recording |
 
 ## Apps

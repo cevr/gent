@@ -14,7 +14,7 @@ import { useAgentState } from "../agent-state/index.js"
 import { StatusBar } from "../components/status-bar.js"
 
 const FONTS = ["Slant", "Calvin S", "ANSI Shadow", "Thin"] as const
-const FONT = FONTS[Math.floor(Math.random() * FONTS.length)]!
+const FONT = FONTS[Math.floor(Math.random() * FONTS.length)] ?? "Slant"
 const LOGO = figlet.textSync("gent", { font: FONT })
 
 export interface HomeViewProps {

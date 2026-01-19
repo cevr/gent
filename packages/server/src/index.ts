@@ -1,11 +1,10 @@
-import { Context, Effect, Layer, Stream } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Layer } from "effect"
+import type { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
 import {
   EventBus,
   ToolRegistry,
   Permission,
-  type AgentEvent,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
@@ -48,105 +47,86 @@ export {
 // Re-export RPC handlers
 export { RpcHandlersLive } from "./rpc-handlers.js"
 
-// Legacy types for backward compatibility
-export type GentServerError = GentCoreError
+// Operations (shared schemas)
+export {
+  CreateSessionPayload,
+  CreateSessionSuccess,
+  SessionInfo as SessionInfoSchema,
+  SendMessagePayload,
+  ListMessagesPayload,
+  MessageInfo as MessageInfoSchema,
+  SteerPayload,
+  SubscribeEventsPayload,
+  BranchInfo as BranchInfoSchema,
+  ListBranchesPayload,
+  CreateBranchPayload,
+  CreateBranchSuccess,
+} from "./operations.js"
 
-export interface GentServerService {
-  readonly createSession: (
-    input: CreateSessionInput
-  ) => Effect.Effect<CreateSessionOutput, GentServerError>
+// RPC definitions
+export { GentRpcs, type GentRpcsClient } from "./rpcs.js"
 
-  readonly listSessions: () => Effect.Effect<SessionInfo[], GentServerError>
+// HTTP API
+export {
+  GentApi,
+  SessionsApi,
+  MessagesApi,
+  EventsApi,
+  SendMessageRequest,
+  CreateSessionRequest,
+  CreateSessionResponse,
+  SteerRequest,
+} from "./http-api.js"
 
-  readonly getSession: (
-    sessionId: string
-  ) => Effect.Effect<SessionInfo | null, GentServerError>
+// ============================================================================
+// Dependencies Layer
+// ============================================================================
 
-  readonly deleteSession: (
-    sessionId: string
-  ) => Effect.Effect<void, GentServerError>
-
-  readonly sendMessage: (
-    input: SendMessageInput
-  ) => Effect.Effect<void, GentServerError>
-
-  readonly listMessages: (
-    branchId: string
-  ) => Effect.Effect<MessageInfo[], GentServerError>
-
-  readonly steer: (command: SteerCommand) => Effect.Effect<void, GentServerError>
-
-  readonly subscribeEvents: (
-    sessionId: string
-  ) => Stream.Stream<AgentEvent, never, never>
+export interface DependenciesConfig {
+  systemPrompt: string
+  defaultModel: string
+  dbPath?: string
+  compactionModel?: string
 }
 
 /**
- * Legacy GentServer - delegates to GentCore
- * @deprecated Use GentCore + RpcHandlersLive instead
+ * Creates the full dependency layer for GentCore
  */
-export class GentServer extends Context.Tag("GentServer")<
-  GentServer,
-  GentServerService
->() {
-  static Live = (config: {
-    systemPrompt: string
-    defaultModel: string
-    dbPath?: string
-  }): Layer.Layer<GentServer, PlatformError, FileSystem.FileSystem | Path.Path> =>
-    Layer.effect(
-      GentServer,
-      Effect.gen(function* () {
-        // GentServer now just delegates to GentCore
-        const core = yield* GentCore
-        return core
-      })
-    ).pipe(
-      Layer.provide(GentCore.Live),
-      Layer.provide(GentServer.Dependencies(config))
-    )
+export const createDependencies = (config: DependenciesConfig): Layer.Layer<
+  Storage | Provider | ToolRegistry | EventBus | Permission | AgentLoop | CheckpointService,
+  PlatformError,
+  FileSystem.FileSystem | Path.Path
+> => {
+  const StorageLive = Storage.Live(config.dbPath ?? ".gent/data.db")
 
-  static Dependencies = (config: {
-    systemPrompt: string
-    defaultModel: string
-    dbPath?: string
-    compactionModel?: string
-  }): Layer.Layer<
-    Storage | Provider | ToolRegistry | EventBus | Permission | AgentLoop | CheckpointService,
-    PlatformError,
-    FileSystem.FileSystem | Path.Path
-  > => {
-    const StorageLive = Storage.Live(config.dbPath ?? ".gent/data.db")
+  const BaseServicesLive = Layer.mergeAll(
+    StorageLive,
+    Provider.Live,
+    ToolRegistry.Live(AllTools),
+    EventBus.Live,
+    Permission.Live()
+  )
 
-    const BaseServicesLive = Layer.mergeAll(
-      StorageLive,
-      Provider.Live,
-      ToolRegistry.Live(AllTools),
-      EventBus.Live,
-      Permission.Live()
-    )
+  // CheckpointService requires Storage and Provider
+  const CheckpointServiceLive = CheckpointService.Live(
+    config.compactionModel ?? "anthropic/claude-3-haiku-20240307"
+  )
+  const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseServicesLive)
 
-    // CheckpointService requires Storage and Provider
-    const CheckpointServiceLive = CheckpointService.Live(
-      config.compactionModel ?? "anthropic/claude-3-haiku-20240307"
-    )
-    const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseServicesLive)
+  // AgentLoop requires CheckpointService and FileSystem
+  const AgentLoopLive = AgentLoop.Live({
+    systemPrompt: config.systemPrompt,
+    defaultModel: config.defaultModel,
+  })
 
-    // AgentLoop requires CheckpointService and FileSystem
-    const AgentLoopLive = AgentLoop.Live({
-      systemPrompt: config.systemPrompt,
-      defaultModel: config.defaultModel,
-    })
+  // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
+  const AllDeps = Layer.mergeAll(
+    BaseServicesLive,
+    CheckpointLayer
+  )
 
-    // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
-    const AllDeps = Layer.mergeAll(
-      BaseServicesLive,
-      CheckpointLayer
-    )
-
-    return Layer.merge(
-      AllDeps,
-      Layer.provide(AgentLoopLive, AllDeps)
-    )
-  }
+  return Layer.merge(
+    AllDeps,
+    Layer.provide(AgentLoopLive, AllDeps)
+  )
 }

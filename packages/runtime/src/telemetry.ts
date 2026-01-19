@@ -1,4 +1,11 @@
-import { Context, Exit, Layer, Option, Tracer, Cause } from "effect"
+import type { Context, Option } from "effect"
+import { Exit, Layer, Tracer, Cause } from "effect"
+
+// Note: Tracer.Span interface requires synchronous methods (end, event, attribute).
+// We use node:fs sync APIs here because:
+// 1. Bun.write is async (returns Promise)
+// 2. Span callbacks execute outside Effect context
+// 3. Sync writes ensure trace ordering is preserved
 import { appendFileSync, writeFileSync } from "node:fs"
 
 // DevSpan - logs span lifecycle to file
@@ -126,7 +133,7 @@ export const DEFAULT_LOG_FILE = "/tmp/gent-trace.log"
 // Convenience layer with default log file
 export const DevTracer = DevTracerLive(DEFAULT_LOG_FILE)
 
-// Helper to clear the log file
+// Helper to clear the log file (sync, for use before starting trace)
 export function clearLog(logFile: string = DEFAULT_LOG_FILE): void {
   try {
     writeFileSync(logFile, "")

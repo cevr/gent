@@ -1,4 +1,4 @@
-import { Rpc, RpcGroup, type RpcClient } from "@effect/rpc"
+import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "@effect/rpc"
 import { Schema } from "effect"
 import {
   CreateSessionPayload,
@@ -15,7 +15,6 @@ import {
   SubscribeEventsPayload,
   AgentEvent,
 } from "./operations.js"
-import type { RpcGroup as RpcGroupNs } from "@effect/rpc"
 
 // ============================================================================
 // RPC Definitions

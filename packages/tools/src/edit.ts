@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect"
+import { FileSystem, Path } from "@effect/platform"
 import { defineTool } from "@gent/core"
-import * as fs from "node:fs/promises"
-import * as path from "node:path"
 
 // Edit Tool Error
 
@@ -45,17 +44,21 @@ export const EditTool = defineTool({
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
   params: EditParams,
   execute: Effect.fn("EditTool.execute")(function* (params) {
-    const filePath = path.resolve(params.path)
+    const fs = yield* FileSystem.FileSystem
+    const pathService = yield* Path.Path
 
-    const content = yield* Effect.tryPromise({
-      try: () => fs.readFile(filePath, "utf-8"),
-      catch: (e) =>
-        new EditError({
-          message: `Failed to read file: ${e}`,
-          path: filePath,
-          cause: e,
-        }),
-    })
+    const filePath = pathService.resolve(params.path)
+
+    const content = yield* fs.readFileString(filePath).pipe(
+      Effect.mapError(
+        (e) =>
+          new EditError({
+            message: `Failed to read file: ${e.message}`,
+            path: filePath,
+            cause: e,
+          })
+      )
+    )
 
     // Count occurrences
     const occurrences = content.split(params.oldString).length - 1
@@ -78,15 +81,16 @@ export const EditTool = defineTool({
       ? content.split(params.oldString).join(params.newString)
       : content.replace(params.oldString, params.newString)
 
-    yield* Effect.tryPromise({
-      try: () => fs.writeFile(filePath, newContent, "utf-8"),
-      catch: (e) =>
-        new EditError({
-          message: `Failed to write file: ${e}`,
-          path: filePath,
-          cause: e,
-        }),
-    })
+    yield* fs.writeFileString(filePath, newContent).pipe(
+      Effect.mapError(
+        (e) =>
+          new EditError({
+            message: `Failed to write file: ${e.message}`,
+            path: filePath,
+            cause: e,
+          })
+      )
+    )
 
     return {
       path: filePath,

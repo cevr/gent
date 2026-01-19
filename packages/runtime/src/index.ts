@@ -38,3 +38,11 @@ export {
   makeRetrySchedule,
   withRetry,
 } from "./retry.js"
+
+export {
+  makeDevTracer,
+  DevTracerLive,
+  DevTracer,
+  DEFAULT_LOG_FILE,
+  clearLog,
+} from "./telemetry.js"
