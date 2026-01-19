@@ -33,7 +33,7 @@ function AppContent(props: AppProps) {
 
   const [, setInputValue] = createSignal("")
   const [messages, setMessages] = createSignal<Message[]>([])
-  const [agentMode] = createSignal<AgentMode>("auto")
+  const [agentMode] = createSignal<AgentMode>("build")
   const [cost] = createSignal(0)
   const [status, setStatus] = createSignal<"idle" | "streaming" | "error">("idle")
   const [error, setError] = createSignal<string | null>(null)

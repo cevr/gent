@@ -6,7 +6,10 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@gent/core": "workspace:*"
+    "@gent/core": "workspace:*",
+    "@types/turndown": "^5.0.6",
+    "linkedom": "^0.18.12",
+    "turndown": "^7.2.2"
   },
   "peerDependencies": {
     "effect": "catalog:"

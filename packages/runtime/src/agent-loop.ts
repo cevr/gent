@@ -18,6 +18,7 @@ import {
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import { Provider, ProviderError } from "@gent/providers"
+import { withRetry } from "./retry.js"
 
 // Agent Loop Error
 
@@ -192,12 +193,14 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             // Start streaming
             yield* eventBus.publish(new StreamStarted({ sessionId, branchId }))
 
-            const streamEffect = yield* provider.stream({
-              model: state.model,
-              messages: [...messages],
-              tools: [...tools],
-              systemPrompt: config.systemPrompt,
-            }).pipe(Effect.withSpan("AgentLoop.provider.stream"))
+            const streamEffect = yield* withRetry(
+              provider.stream({
+                model: state.model,
+                messages: [...messages],
+                tools: [...tools],
+                systemPrompt: config.systemPrompt,
+              })
+            ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
 
             // Collect response parts
             const textParts: string[] = []

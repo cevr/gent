@@ -5,13 +5,15 @@ import {
   Branch,
   Compaction,
   MessagePart,
+  TodoItem,
 } from "@gent/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
 import { Database } from "bun:sqlite"
 
-// Schema decoder for MessagePart array
+// Schema decoders
 const decodeMessageParts = Schema.decodeUnknownSync(Schema.Array(MessagePart))
+const decodeTodoItem = Schema.decodeUnknownSync(TodoItem)
 
 // Storage Error
 
@@ -73,6 +75,15 @@ export interface StorageService {
   readonly getLatestCompaction: (
     branchId: string
   ) => Effect.Effect<Compaction | undefined, StorageError>
+
+  // Todos
+  readonly listTodos: (
+    branchId: string
+  ) => Effect.Effect<ReadonlyArray<TodoItem>, StorageError>
+  readonly replaceTodos: (
+    branchId: string,
+    todos: ReadonlyArray<TodoItem>
+  ) => Effect.Effect<void, StorageError>
 }
 
 const makeStorage = (db: Database): StorageService => {
@@ -122,9 +133,23 @@ const makeStorage = (db: Database): StorageService => {
     )
   `)
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS todos (
+      id TEXT PRIMARY KEY,
+      branch_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL,
+      priority TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
+    )
+  `)
+
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_compactions_branch ON compactions(branch_id)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
 
   return {
     // Sessions
@@ -504,6 +529,66 @@ const makeStorage = (db: Database): StorageService => {
         catch: (e) =>
           new StorageError({
             message: "Failed to get latest compaction",
+            cause: e,
+          }),
+      }),
+
+    // Todos
+    listTodos: (branchId) =>
+      Effect.try({
+        try: () => {
+          const rows = db
+            .query(
+              `SELECT id, content, status, priority, created_at, updated_at FROM todos WHERE branch_id = ? ORDER BY created_at ASC`
+            )
+            .all(branchId) as Array<{
+            id: string
+            content: string
+            status: string
+            priority: string | null
+            created_at: number
+            updated_at: number
+          }>
+          return rows.map((row) =>
+            decodeTodoItem({
+              id: row.id,
+              content: row.content,
+              status: row.status,
+              priority: row.priority ?? undefined,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+            })
+          )
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to list todos",
+            cause: e,
+          }),
+      }),
+
+    replaceTodos: (branchId, todos) =>
+      Effect.try({
+        try: () => {
+          db.run(`DELETE FROM todos WHERE branch_id = ?`, [branchId])
+          const stmt = db.prepare(
+            `INSERT INTO todos (id, branch_id, content, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+          )
+          for (const todo of todos) {
+            stmt.run(
+              todo.id,
+              branchId,
+              todo.content,
+              todo.status,
+              todo.priority ?? null,
+              todo.createdAt.getTime(),
+              todo.updatedAt.getTime()
+            )
+          }
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to replace todos",
             cause: e,
           }),
       }),

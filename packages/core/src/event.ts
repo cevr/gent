@@ -154,6 +154,46 @@ export class AskUserResponded extends Schema.TaggedClass<AskUserResponded>()(
   }
 ) {}
 
+export class TodoUpdated extends Schema.TaggedClass<TodoUpdated>()(
+  "TodoUpdated",
+  {
+    sessionId: Schema.String,
+    branchId: Schema.String,
+  }
+) {}
+
+const QuestionOptionSchema = Schema.Struct({
+  label: Schema.String,
+  description: Schema.String,
+})
+
+const QuestionSchema = Schema.Struct({
+  question: Schema.String,
+  header: Schema.String,
+  options: Schema.Array(QuestionOptionSchema),
+  multiple: Schema.optional(Schema.Boolean),
+})
+
+export class QuestionsAsked extends Schema.TaggedClass<QuestionsAsked>()(
+  "QuestionsAsked",
+  {
+    sessionId: Schema.String,
+    branchId: Schema.String,
+    requestId: Schema.String,
+    questions: Schema.Array(QuestionSchema),
+  }
+) {}
+
+export class QuestionsAnswered extends Schema.TaggedClass<QuestionsAnswered>()(
+  "QuestionsAnswered",
+  {
+    sessionId: Schema.String,
+    branchId: Schema.String,
+    requestId: Schema.String,
+    answers: Schema.Array(Schema.Array(Schema.String)),
+  }
+) {}
+
 export const AgentEvent = Schema.Union(
   SessionStarted,
   SessionEnded,
@@ -171,7 +211,10 @@ export const AgentEvent = Schema.Union(
   CompactionCompleted,
   ErrorOccurred,
   AskUserRequested,
-  AskUserResponded
+  AskUserResponded,
+  TodoUpdated,
+  QuestionsAsked,
+  QuestionsAnswered
 )
 export type AgentEvent = typeof AgentEvent.Type
 

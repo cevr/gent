@@ -3,7 +3,7 @@ import { PermissionRule } from "./permission.js"
 
 // Agent Mode
 
-export const AgentMode = Schema.Literal("auto", "plan")
+export const AgentMode = Schema.Literal("build", "plan")
 export type AgentMode = typeof AgentMode.Type
 
 // Model Configuration

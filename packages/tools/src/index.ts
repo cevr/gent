@@ -38,6 +38,46 @@ export {
   RepoExplorerError,
 } from "./repo-explorer.js"
 
+// Todo Tools
+export {
+  TodoReadTool,
+  TodoReadParams,
+  TodoReadResult,
+  TodoWriteTool,
+  TodoWriteParams,
+  TodoWriteResult,
+  TodoHandler,
+} from "./todo.js"
+
+// Question Tool
+export {
+  QuestionTool,
+  QuestionParams,
+  QuestionResult,
+  QuestionHandler,
+} from "./question.js"
+
+// WebFetch Tool
+export {
+  WebFetchTool,
+  WebFetchParams,
+  WebFetchResult,
+  WebFetchError,
+} from "./webfetch.js"
+
+// Plan Mode Tools
+export {
+  PlanEnterTool,
+  PlanEnterParams,
+  PlanEnterResult,
+  PlanExitTool,
+  PlanExitParams,
+  PlanExitResult,
+  PlanModeHandler,
+  PLAN_MODE_TOOLS,
+  isToolAllowedInMode,
+} from "./plan-mode.js"
+
 // All Tools
 import { ReadTool } from "./read.js"
 import { WriteTool } from "./write.js"
@@ -47,6 +87,10 @@ import { GlobTool } from "./glob.js"
 import { GrepTool } from "./grep.js"
 import { AskUserTool } from "./ask-user.js"
 import { RepoExplorerTool } from "./repo-explorer.js"
+import { TodoReadTool, TodoWriteTool } from "./todo.js"
+import { QuestionTool } from "./question.js"
+import { WebFetchTool } from "./webfetch.js"
+import { PlanEnterTool, PlanExitTool } from "./plan-mode.js"
 
 export const AllTools = [
   ReadTool,
@@ -57,4 +101,10 @@ export const AllTools = [
   GrepTool,
   AskUserTool,
   RepoExplorerTool,
+  TodoReadTool,
+  TodoWriteTool,
+  QuestionTool,
+  WebFetchTool,
+  PlanEnterTool,
+  PlanExitTool,
 ] as const

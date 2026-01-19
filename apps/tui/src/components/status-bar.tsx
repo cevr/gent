@@ -75,7 +75,7 @@ export function StatusBar(props: StatusBarProps) {
       {/* Row 1: mode · model · status */}
       <box paddingLeft={1} paddingRight={1}>
         <text>
-          <span style={{ fg: props.mode === "auto" ? theme.success : theme.warning }}>
+          <span style={{ fg: props.mode === "build" ? theme.success : theme.warning }}>
             {props.mode}
           </span>
           <span style={{ fg: theme.textMuted }}> · </span>

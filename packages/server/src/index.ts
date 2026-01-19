@@ -24,8 +24,8 @@ import {
   StorageError,
 } from "./core.js"
 
-// Default system prompt
-export const DEFAULT_SYSTEM_PROMPT = "You are a helpful AI assistant."
+// System prompt
+export { DEFAULT_SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt.js"
 
 // Re-export from core
 export { SteerCommand, AgentLoopError, StorageError }
