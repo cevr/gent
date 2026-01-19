@@ -10,6 +10,7 @@ import { useTheme } from "../theme/index.js"
 import { useCommand } from "../command/index.js"
 import { useClient } from "../client/index.js"
 import { useRouter } from "../router/index.js"
+import { useAgentState } from "../agent-state/index.js"
 import { StatusBar } from "../components/status-bar.js"
 
 const FONTS = ["Slant", "Calvin S", "ANSI Shadow", "Thin"] as const
@@ -27,6 +28,7 @@ export function HomeView(props: HomeViewProps) {
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
+  const agentState = useAgentState()
 
   let inputRef: InputRenderable | null = null
 
@@ -104,14 +106,21 @@ export function HomeView(props: HomeViewProps) {
       deleteLineBackward()
       return
     }
+
+    // Shift+Tab: cycle agent mode
+    if (e.shift && e.name === "tab") {
+      const newMode = agentState.mode() === "build" ? "plan" : "build"
+      agentState.setMode(newMode)
+      return
+    }
   })
 
   const handleSubmit = (value: string) => {
     const text = value.trim()
     if (!text) return
 
-    // Send message (will create session if needed)
-    void client.sendMessage(text).then(() => {
+    // Send message with current mode (will create session if needed)
+    void client.sendMessage(text, agentState.mode()).then(() => {
       const session = client.session()
       if (session) {
         router.navigateToSession(session.sessionId, session.branchId)
@@ -130,7 +139,7 @@ export function HomeView(props: HomeViewProps) {
     inputRef?.focus()
 
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
-      void client.sendMessage(props.initialPrompt).then(() => {
+      void client.sendMessage(props.initialPrompt, agentState.mode()).then(() => {
         const session = client.session()
         if (session) {
           router.navigateToSession(session.sessionId, session.branchId)
