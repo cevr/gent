@@ -51,3 +51,13 @@ export { Permission, PermissionRule, PermissionResult } from "./permission.js"
 
 // Config Types
 export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./config.js"
+
+// Model Types
+export {
+  Model,
+  ModelId,
+  Provider,
+  ProviderId,
+  SUPPORTED_PROVIDERS,
+  DEFAULT_MODELS,
+} from "./model.js"

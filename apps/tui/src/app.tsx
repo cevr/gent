@@ -1,14 +1,15 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { InputRenderable } from "@opentui/core"
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
-import type { AgentMode } from "@gent/core"
+import type { AgentMode, ModelId } from "@gent/core"
 import { extractText, type GentClient } from "./client.js"
 import { StatusBar } from "./components/status-bar.js"
 import { MessageList, type Message } from "./components/message-list.js"
 import { CommandPalette } from "./components/command-palette.js"
 import { useGitInfo } from "./hooks/use-git-status.js"
 import { ThemeProvider, useTheme } from "./theme/index.js"
-import { CommandProvider, useCommand, type Command } from "./command/index.js"
+import { CommandProvider, useCommand } from "./command/index.js"
+import { ModelProvider, useModel } from "./model/index.js"
 
 interface AppProps {
   client: GentClient
@@ -17,67 +18,27 @@ interface AppProps {
   initialPrompt: string | undefined
   cwd?: string
   model?: string
+  onModelChange?: (modelId: ModelId) => void
 }
 
 function AppContent(props: AppProps) {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
-  const { theme, mode, setMode, all, set } = useTheme()
+  const { theme } = useTheme()
   const command = useCommand()
+  const model = useModel()
   const cwd = props.cwd ?? process.cwd()
-  const model = props.model ?? "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
 
   let inputRef: InputRenderable | null = null
 
   const [, setInputValue] = createSignal("")
   const [messages, setMessages] = createSignal<Message[]>([])
-  const [agentMode, setAgentMode] = createSignal<AgentMode>("auto")
+  const [agentMode] = createSignal<AgentMode>("auto")
   const [cost] = createSignal(0)
   const [status, setStatus] = createSignal<"idle" | "streaming" | "error">("idle")
   const [error, setError] = createSignal<string | null>(null)
 
   const gitInfo = useGitInfo(cwd)
-
-  // Theme helpers
-  const cycleThemeMode = () => setMode(mode() === "dark" ? "light" : "dark")
-
-  // Register commands
-  onMount(() => {
-    const themeCommands: Command[] = Object.keys(all()).map((name) => ({
-      id: `theme.${name}`,
-      title: `Use ${name} theme`,
-      category: "Theme",
-      onSelect: () => set(name),
-    }))
-
-    const commands: Command[] = [
-      {
-        id: "theme.mode.cycle",
-        title: "Toggle dark/light mode",
-        description: "Switch between dark and light",
-        category: "Theme",
-        onSelect: cycleThemeMode,
-      },
-      ...themeCommands,
-      {
-        id: "mode.cycle",
-        title: "Cycle agent mode",
-        description: "Switch between auto/plan",
-        category: "Agent",
-        keybind: "shift+tab",
-        onSelect: () => setAgentMode((m) => (m === "auto" ? "plan" : "auto")),
-      },
-      {
-        id: "app.quit",
-        title: "Quit",
-        category: "Application",
-        onSelect: exit,
-      },
-    ]
-
-    const unregister = command.register(commands)
-    onCleanup(unregister)
-  })
 
   // Load messages and subscribe to events
   onMount(() => {
@@ -219,6 +180,11 @@ function AppContent(props: AppProps) {
     }
   }
 
+  // Current model display name
+  const currentModelDisplay = () => {
+    const info = model.currentModelInfo()
+    return info?.name ?? model.currentModel()
+  }
 
   return (
     <box flexDirection="column" width="100%" height="100%">
@@ -253,7 +219,7 @@ function AppContent(props: AppProps) {
       {/* Status Bar */}
       <StatusBar
         mode={agentMode()}
-        model={model}
+        model={currentModelDisplay()}
         cwd={cwd}
         gitRoot={gitInfo()?.root ?? null}
         git={gitInfo()?.status ?? null}
@@ -269,10 +235,17 @@ function AppContent(props: AppProps) {
 }
 
 export function App(props: AppProps) {
+  const initialModel = (props.model ?? "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0") as ModelId
+
   return (
     <ThemeProvider mode={undefined}>
       <CommandProvider>
-        <AppContent {...props} />
+        <ModelProvider
+          initialModel={initialModel}
+          onModelChange={props.onModelChange}
+        >
+          <AppContent {...props} />
+        </ModelProvider>
       </CommandProvider>
     </ThemeProvider>
   )

@@ -1,75 +1,174 @@
-import { createSignal, createMemo, For, Show, onMount } from "solid-js"
+import { createSignal, For, Show, onMount } from "solid-js"
+import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
-import type { InputRenderable } from "@opentui/core"
-import { useCommand, formatKeybind, type Command } from "../command/index.js"
+import type { ModelId } from "@gent/core"
+import { useCommand } from "../command/index.js"
 import { useTheme } from "../theme/index.js"
+import { useModel } from "../model/index.js"
+import { useScrollSync } from "../hooks/use-scroll-sync.js"
+
+interface MenuItem {
+  id: string
+  title: string
+  onSelect: () => void
+}
+
+interface MenuLevel {
+  title: string
+  items: MenuItem[]
+}
 
 export function CommandPalette() {
   const command = useCommand()
-  const { theme } = useTheme()
+  const { theme, selected, set, mode, setMode } = useTheme()
+  const model = useModel()
   const dimensions = useTerminalDimensions()
 
-  const [filter, setFilter] = createSignal("")
+  const [levelStack, setLevelStack] = createSignal<MenuLevel[]>([])
   const [selectedIndex, setSelectedIndex] = createSignal(0)
 
-  let inputRef: InputRenderable | null = null
+  let scrollRef!: ScrollBoxRenderable
 
-  const filtered = createMemo(() => {
-    const query = filter().toLowerCase()
-    const cmds = command.commands()
-    if (!query) return cmds
-    return cmds.filter(
-      (cmd) =>
-        cmd.title.toLowerCase().includes(query) ||
-        cmd.description?.toLowerCase().includes(query) ||
-        cmd.category?.toLowerCase().includes(query)
-    )
+  useScrollSync(() => `item-${selectedIndex()}`, { getRef: () => scrollRef })
+
+  // Build root menu
+  const rootMenu = (): MenuLevel => ({
+    title: "Commands",
+    items: [
+      {
+        id: "theme",
+        title: "Theme",
+        onSelect: () => pushLevel(themeMenu()),
+      },
+      {
+        id: "model",
+        title: "Model",
+        onSelect: () => pushLevel(providerMenu()),
+      },
+    ],
   })
 
-  // Group by category
-  const grouped = createMemo(() => {
-    const groups = new Map<string, Command[]>()
-    for (const cmd of filtered()) {
-      const cat = cmd.category ?? "Commands"
-      const arr = groups.get(cat) ?? []
-      arr.push(cmd)
-      groups.set(cat, arr)
+  // Theme submenu
+  const themeMenu = (): MenuLevel => {
+    const isSystem = selected() === "system"
+    const currentMode = mode()
+    return {
+      title: "Theme",
+      items: [
+        {
+          id: "theme.system",
+          title: isSystem ? "System •" : "System",
+          onSelect: () => {
+            set("system")
+            command.closePalette()
+          },
+        },
+        {
+          id: "theme.dark",
+          title: !isSystem && currentMode === "dark" ? "Dark •" : "Dark",
+          onSelect: () => {
+            set("opencode")
+            setMode("dark")
+            command.closePalette()
+          },
+        },
+        {
+          id: "theme.light",
+          title: !isSystem && currentMode === "light" ? "Light •" : "Light",
+          onSelect: () => {
+            set("opencode")
+            setMode("light")
+            command.closePalette()
+          },
+        },
+      ],
     }
-    return Array.from(groups.entries())
+  }
+
+  // Provider submenu - lists all providers
+  const providerMenu = (): MenuLevel => ({
+    title: "Model",
+    items: model.providers().map((provider) => ({
+      id: `provider.${provider.id}`,
+      title: provider.name,
+      onSelect: () => pushLevel(modelMenu(provider.id)),
+    })),
   })
 
-  // Flat list for keyboard navigation
-  const flatList = createMemo(() => filtered())
+  // Model submenu for a specific provider
+  const modelMenu = (providerId: string): MenuLevel => {
+    const currentModelId = model.currentModel()
+    const providerModels = model.modelsByProvider(providerId as Parameters<typeof model.modelsByProvider>[0])
+    const providerInfo = model.providers().find((p) => p.id === providerId)
 
-  // Reset selection when filter changes
-  const handleFilterChange = (value: string) => {
-    setFilter(value)
+    return {
+      title: providerInfo?.name ?? providerId,
+      items: providerModels.map((m) => {
+        const isActive = m.id === currentModelId
+        return {
+          id: `model.${m.id}`,
+          title: isActive ? `${m.name} •` : m.name,
+          onSelect: () => {
+            model.setModel(m.id as ModelId)
+            command.closePalette()
+          },
+        }
+      }),
+    }
+  }
+
+  const currentLevel = () => {
+    const stack = levelStack()
+    return stack.length > 0 ? stack[stack.length - 1]! : rootMenu()
+  }
+
+  const pushLevel = (level: MenuLevel) => {
+    setLevelStack((stack) => [...stack, level])
     setSelectedIndex(0)
   }
 
+  const popLevel = () => {
+    if (levelStack().length > 0) {
+      setLevelStack((stack) => stack.slice(0, -1))
+      setSelectedIndex(0)
+    } else {
+      command.closePalette()
+    }
+  }
+
   const handleSelect = () => {
-    const items = flatList()
+    const items = currentLevel().items
     const item = items[selectedIndex()]
     if (item) {
-      command.closePalette()
       item.onSelect()
     }
+  }
+
+  // Reset when palette opens
+  const resetPalette = () => {
+    setLevelStack([])
+    setSelectedIndex(0)
   }
 
   useKeyboard((e) => {
     if (!command.paletteOpen()) return
 
-    if (e.name === "escape") {
-      command.closePalette()
+    if (e.name === "escape" || e.name === "left") {
+      popLevel()
       return
     }
 
-    if (e.name === "return") {
+    if (e.name === "backspace" && levelStack().length > 0) {
+      popLevel()
+      return
+    }
+
+    if (e.name === "return" || e.name === "right") {
       handleSelect()
       return
     }
 
-    const items = flatList()
+    const items = currentLevel().items
     if (e.name === "up" || (e.ctrl && e.name === "p")) {
       setSelectedIndex((i) => (i > 0 ? i - 1 : items.length - 1))
       return
@@ -82,14 +181,21 @@ export function CommandPalette() {
   })
 
   onMount(() => {
-    inputRef?.focus()
+    // Reset palette state when it opens
+    resetPalette()
   })
 
   // Calculate palette dimensions
-  const paletteWidth = () => Math.min(60, dimensions().width - 4)
-  const paletteHeight = () => Math.min(15, dimensions().height - 6)
+  const paletteWidth = () => Math.min(40, dimensions().width - 4)
+  const paletteHeight = () => Math.min(12, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - paletteWidth()) / 2)
   const top = () => Math.floor((dimensions().height - paletteHeight()) / 2)
+
+  const breadcrumb = () => {
+    const stack = levelStack()
+    if (stack.length === 0) return ""
+    return stack.map((l) => l.title).join(" › ") + " ›"
+  }
 
   return (
     <Show when={command.paletteOpen()}>
@@ -115,19 +221,14 @@ export function CommandPalette() {
         borderColor={theme.borderSubtle}
         flexDirection="column"
       >
-        {/* Search input */}
+        {/* Header */}
         <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>❯ </text>
-          <input
-            ref={(r) => {
-              inputRef = r
-              inputRef?.focus()
-            }}
-            focused
-            onInput={handleFilterChange}
-            backgroundColor="transparent"
-            focusedBackgroundColor="transparent"
-          />
+          <text style={{ fg: theme.text }}>
+            <Show when={breadcrumb()}>
+              <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
+            </Show>
+            {currentLevel().title}
+          </text>
         </box>
 
         {/* Separator */}
@@ -135,48 +236,37 @@ export function CommandPalette() {
           <text style={{ fg: theme.textMuted }}>{"─".repeat(paletteWidth() - 2)}</text>
         </box>
 
-        {/* Command list */}
-        <scrollbox flexGrow={1} paddingLeft={1} paddingRight={1}>
-          <Show when={flatList().length === 0}>
-            <text style={{ fg: theme.textMuted }}>No commands found</text>
-          </Show>
-          <For each={grouped()}>
-            {([category, cmds]) => (
-              <box flexDirection="column">
-                <text style={{ fg: theme.textMuted }}>{category}</text>
-                <For each={cmds}>
-                  {(cmd) => {
-                    const isSelected = () => flatList()[selectedIndex()]?.id === cmd.id
-                    return (
-                      <box
-                        backgroundColor={isSelected() ? theme.primary : "transparent"}
-                        paddingLeft={1}
-                      >
-                        <text
-                          style={{
-                            fg: isSelected() ? theme.selectedListItemText : theme.text,
-                          }}
-                        >
-                          {cmd.title}
-                          <Show when={cmd.keybind}>
-                            <span style={{ fg: isSelected() ? theme.selectedListItemText : theme.textMuted }}>
-                              {" "}
-                              {formatKeybind(cmd.keybind ?? "")}
-                            </span>
-                          </Show>
-                        </text>
-                      </box>
-                    )
-                  }}
-                </For>
-              </box>
-            )}
+        {/* Items */}
+        <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
+          <For each={currentLevel().items}>
+            {(item, index) => {
+              const isSelected = () => selectedIndex() === index()
+              return (
+                <box
+                  id={`item-${index()}`}
+                  backgroundColor={isSelected() ? theme.primary : "transparent"}
+                  paddingLeft={1}
+                >
+                  <text
+                    style={{
+                      fg: isSelected() ? theme.selectedListItemText : theme.text,
+                    }}
+                  >
+                    {item.title}
+                  </text>
+                </box>
+              )
+            }}
           </For>
         </scrollbox>
 
         {/* Footer hint */}
         <box flexShrink={0} paddingLeft={1}>
-          <text style={{ fg: theme.textMuted }}>↑↓ navigate · Enter select · Esc close</text>
+          <text style={{ fg: theme.textMuted }}>
+            <Show when={levelStack().length > 0} fallback="↑↓ · →/Enter · Esc">
+              ↑↓ · →/Enter · ←/Esc
+            </Show>
+          </text>
         </box>
       </box>
     </Show>

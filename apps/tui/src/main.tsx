@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime, Stream } from "effect"
+import { Console, Effect, Layer, ManagedRuntime, Runtime, Stream } from "effect"
 import { GentServer, type GentServerService, type GentServerError } from "@gent/server"
 import { DevTracerLive, clearLog } from "@gent/telemetry"
+import type { ModelId } from "@gent/core"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
@@ -133,6 +134,15 @@ const main = Command.make(
         return
       }
 
+      // Model change handler - steers agent to new model
+      const handleModelChange = (modelId: ModelId) => {
+        Runtime.runPromise(runtime)(
+          server.steer({ _tag: "SwitchModel", model: modelId as string })
+        ).catch(() => {
+          // Ignore steer errors (e.g., if agent not running)
+        })
+      }
+
       // Launch TUI
       yield* Effect.promise(() =>
         render(() => (
@@ -141,6 +151,7 @@ const main = Command.make(
             sessionId={sessionId}
             branchId={branchId}
             initialPrompt={initialPrompt}
+            onModelChange={handleModelChange}
           />
         ))
       )
