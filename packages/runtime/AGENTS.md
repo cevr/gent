@@ -5,6 +5,7 @@
 - `runLoop` is recursive - requires explicit type annotation on variable
 - Tool inputs decoded via `Schema.decodeUnknownSync(tool.params)` before execution
 - All operations traced via `Effect.fn` - no manual debug logging
+- **Turn duration** - Stored on user message (`turnDurationMs`), not separate entity. Updated at turn end via `storage.updateMessageTurnDuration`.
 
 ## Tracing
 
