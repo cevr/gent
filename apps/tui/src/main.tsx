@@ -327,7 +327,7 @@ const sessions = Command.make("sessions", {}, () =>
 // Root command with subcommands
 const command = main.pipe(
   Command.withSubcommands([sessions]),
-  Command.withDescription("Gent - Effect-native agent harness")
+  Command.withDescription("Gent - minimal, opinionated agent harness")
 )
 
 // CLI

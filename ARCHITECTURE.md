@@ -1,12 +1,12 @@
 # Gent Architecture
 
-Minimal, opinionated, Effect-native agent harness.
+Minimal, opinionated agent harness.
 
 ## Philosophy
 
-- **Effect-native**: Services, Layers, Schema, PubSub, Ref, Stream, Scope
 - **Minimal**: Small surface area, entire codebase understandable
 - **Opinionated**: One way to do things, no configuration bloat
+- **Built with Effect**: Services, Layers, Schema, Stream, Ref
 
 ## Overview
 

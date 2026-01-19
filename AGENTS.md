@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Building gent - minimal, opinionated, Effect-native agent harness.
+Building gent - minimal, opinionated agent harness (built with Effect).
 
 ## Quick Start
 

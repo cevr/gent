@@ -1,12 +1,12 @@
 # gent
 
-Minimal, opinionated, Effect-native agent harness.
+Minimal, opinionated agent harness.
 
 ## Philosophy
 
-- **Effect-native**: Services, Layers, Schema, Stream, Ref - no wrapper abstractions
 - **Minimal**: Small surface area, entire codebase understandable in an afternoon
 - **Opinionated**: One way to do things, no configuration bloat
+- **Built with Effect**: Services, Layers, Schema, Stream - no wrapper abstractions
 
 ## Quick Start
 
