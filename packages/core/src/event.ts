@@ -66,6 +66,7 @@ export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()(
     branchId: Schema.String,
     toolCallId: Schema.String,
     toolName: Schema.String,
+    input: Schema.optional(Schema.Unknown),
   }
 ) {}
 
@@ -77,6 +78,7 @@ export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
     toolCallId: Schema.String,
     toolName: Schema.String,
     isError: Schema.Boolean,
+    output: Schema.optional(Schema.String),
   }
 ) {}
 

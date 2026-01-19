@@ -10,6 +10,7 @@
 - **Types from core** - Import `MessagePart`, `TextPart` from `@gent/core`. Never redeclare.
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `use-git-status.ts`.
+- **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
 
 ## Components
 

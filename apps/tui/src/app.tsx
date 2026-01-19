@@ -135,6 +135,8 @@ function AppContent(props: AppProps) {
                     id: event.toolCallId,
                     toolName: event.toolName,
                     status: "running" as const,
+                    input: event.input,
+                    output: undefined,
                   },
                 ],
               },
@@ -143,7 +145,7 @@ function AppContent(props: AppProps) {
           return prev
         })
       } else if (event._tag === "ToolCallCompleted") {
-        // Update tool call status in last assistant message
+        // Update tool call status and output in last assistant message
         setMessages((prev) => {
           const last = prev[prev.length - 1]
           if (last && last.role === "assistant" && last.toolCalls) {
@@ -153,7 +155,11 @@ function AppContent(props: AppProps) {
                 ...last,
                 toolCalls: last.toolCalls.map((tc) =>
                   tc.id === event.toolCallId
-                    ? { ...tc, status: event.isError ? ("error" as const) : ("completed" as const) }
+                    ? {
+                        ...tc,
+                        status: event.isError ? ("error" as const) : ("completed" as const),
+                        output: event.output,
+                      }
                     : tc
                 ),
               },

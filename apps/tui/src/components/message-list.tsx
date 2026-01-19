@@ -14,6 +14,8 @@ export interface ToolCall {
   id: string
   toolName: string
   status: "running" | "completed" | "error"
+  input: unknown | undefined
+  output: string | undefined
 }
 
 interface MessageListProps {
@@ -44,7 +46,7 @@ function AssistantMessage(props: { content: string; toolCalls: ToolCall[] | unde
   return (
     <box marginTop={1} paddingLeft={2} flexDirection="column">
       <Show when={props.toolCalls && props.toolCalls.length > 0}>
-        <box flexDirection="row" gap={2} marginBottom={props.content ? 1 : 0}>
+        <box flexDirection="column" marginBottom={props.content ? 1 : 0}>
           <For each={props.toolCalls}>
             {(tc) => <SingleToolCall toolCall={tc} />}
           </For>
@@ -94,11 +96,33 @@ function useSpinner(toolName: string) {
   return () => frames[frame()]!
 }
 
+// Format tool input for display (e.g., "git status" for bash)
+function formatToolInput(toolName: string, input: unknown): string {
+  if (!input || typeof input !== "object") return ""
+  const obj = input as Record<string, unknown>
+
+  switch (toolName.toLowerCase()) {
+    case "bash":
+      return typeof obj["command"] === "string" ? obj["command"] : ""
+    case "read":
+      return typeof obj["file_path"] === "string" ? obj["file_path"] : ""
+    case "write":
+    case "edit":
+      return typeof obj["file_path"] === "string" ? obj["file_path"] : ""
+    case "glob":
+      return typeof obj["pattern"] === "string" ? obj["pattern"] : ""
+    case "grep":
+      return typeof obj["pattern"] === "string" ? obj["pattern"] : ""
+    default:
+      return ""
+  }
+}
+
 function SingleToolCall(props: { toolCall: ToolCall }) {
   const { theme } = useTheme()
   const spinner = useSpinner(props.toolCall.toolName)
 
-  const color = () =>
+  const statusColor = () =>
     props.toolCall.status === "running"
       ? theme.warning
       : props.toolCall.status === "error"
@@ -112,10 +136,23 @@ function SingleToolCall(props: { toolCall: ToolCall }) {
         ? " x "
         : " + "
 
+  const inputSummary = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
+
   return (
-    <text style={{ fg: color() }}>
-      [{statusIcon()}] {props.toolCall.toolName}
-    </text>
+    <box flexDirection="column">
+      <text>
+        <span style={{ fg: statusColor() }}>[{statusIcon()}]</span>
+        <span style={{ fg: theme.info }}> {props.toolCall.toolName}</span>
+        <Show when={inputSummary()}>
+          <span style={{ fg: theme.textMuted }}>({inputSummary()})</span>
+        </Show>
+      </text>
+      <Show when={props.toolCall.output && props.toolCall.status !== "running"}>
+        <box paddingLeft={6}>
+          <text style={{ fg: theme.textMuted }}>{props.toolCall.output}</text>
+        </box>
+      </Show>
+    </box>
   )
 }
 

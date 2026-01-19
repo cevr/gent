@@ -20,6 +20,20 @@ import { Storage, StorageError } from "@gent/storage"
 import { Provider, ProviderError, FinishChunk } from "@gent/providers"
 import { withRetry } from "./retry.js"
 
+// Summarize tool output for display (first line, truncated)
+function summarizeToolOutput(result: ToolResultPart): string {
+  const value = result.output.value
+  if (typeof value === "string") {
+    const firstLine = value.split("\n")[0] ?? ""
+    return firstLine.length > 100 ? firstLine.slice(0, 100) + "..." : firstLine
+  }
+  if (value && typeof value === "object") {
+    const str = JSON.stringify(value)
+    return str.length > 100 ? str.slice(0, 100) + "..." : str
+  }
+  return String(value)
+}
+
 // Agent Loop Error
 
 export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()(
@@ -279,6 +293,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     branchId,
                     toolCallId: toolCall.toolCallId,
                     toolName: toolCall.toolName,
+                    input: toolCall.input,
                   })
                 )
 
@@ -290,6 +305,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
 
                 toolResults.push(result)
 
+                // Extract output summary for display
+                const outputSummary = summarizeToolOutput(result)
+
                 yield* eventBus.publish(
                   new ToolCallCompleted({
                     sessionId,
@@ -297,6 +315,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     toolCallId: toolCall.toolCallId,
                     toolName: toolCall.toolName,
                     isError: result.output.type === "error-json",
+                    output: outputSummary,
                   })
                 )
               }
