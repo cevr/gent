@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@gent/core"
+import type { AgentEvent, AgentMode } from "@gent/core"
 import type { MessageInfoReadonly, SteerCommand } from "../client.js"
 
 export interface Session {
@@ -39,7 +39,7 @@ export interface ClientContextValue {
   isLoading: () => boolean
 
   // Actions - return void, update state internally
-  sendMessage: (content: string) => Promise<void>
+  sendMessage: (content: string, mode?: AgentMode) => Promise<void>
   createSession: (firstMessage?: string) => Promise<void>
   switchSession: (sessionId: string, branchId: string, name: string) => Promise<void>
   clearSession: () => void

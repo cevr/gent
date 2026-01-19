@@ -122,7 +122,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
         const stateRef = yield* Ref.make<AgentLoopState>({
           running: false,
           model: config.defaultModel,
-          mode: "build",
+          mode: "plan",
           followUpQueue: [],
         })
 

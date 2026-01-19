@@ -41,6 +41,7 @@ export function SessionView(props: SessionViewProps) {
   const [messages, setMessages] = createSignal<Message[]>([])
   const [elapsed, setElapsed] = createSignal(0)
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
+  const [firstMessageSent, setFirstMessageSent] = createSignal(false)
 
   // Track elapsed time while streaming
   let elapsedInterval: ReturnType<typeof setInterval> | null = null
@@ -113,6 +114,10 @@ export function SessionView(props: SessionViewProps) {
 
     void client.listMessages().then((msgs) => {
       setMessages(buildMessages(msgs))
+      // If session has messages, it's not a fresh session
+      if (msgs.length > 0) {
+        setFirstMessageSent(true)
+      }
     })
   })
 
@@ -120,9 +125,10 @@ export function SessionView(props: SessionViewProps) {
   onMount(() => {
     inputRef?.focus()
 
-    // Send initial prompt immediately if provided
+    // Send initial prompt immediately if provided, starting in plan mode
     if (props.initialPrompt) {
-      void client.sendMessage(props.initialPrompt)
+      setFirstMessageSent(true)
+      void client.sendMessage(props.initialPrompt, "plan")
     }
   })
 
@@ -351,7 +357,11 @@ export function SessionView(props: SessionViewProps) {
         },
       ])
 
-      void client.sendMessage(text).catch((err: unknown) => {
+      // First message starts in plan mode by default
+      const isFirst = !firstMessageSent()
+      if (isFirst) setFirstMessageSent(true)
+
+      void client.sendMessage(text, isFirst ? "plan" : undefined).catch((err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err))
         agentState.setStatus("error")
         agentState.setError(error.message)

@@ -29,7 +29,7 @@ interface AgentStateProviderProps {
 }
 
 export function AgentStateProvider(props: AgentStateProviderProps) {
-  const [mode, setMode] = createSignal<AgentMode>("build")
+  const [mode, setMode] = createSignal<AgentMode>("plan")
   const [status, setStatus] = createSignal<AgentStatus>("idle")
   const [cost, setCost] = createSignal(0)
   const [error, setError] = createSignal<string | null>(null)

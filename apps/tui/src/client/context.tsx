@@ -45,7 +45,7 @@ export function ClientProvider(props: ClientProviderProps) {
     isActive,
     isLoading,
 
-    sendMessage: async (content) => {
+    sendMessage: async (content, mode) => {
       // Create session on first message if none exists
       if (state.sessionState.status === "none") {
         setState({ sessionState: { status: "loading", creating: true } })
@@ -65,6 +65,7 @@ export function ClientProvider(props: ClientProviderProps) {
         sessionId: s.sessionId,
         branchId: s.branchId,
         content,
+        ...(mode !== undefined ? { mode } : {}),
       }))
     },
 

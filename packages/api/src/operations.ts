@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { AgentEvent, MessagePart } from "@gent/core"
+import { AgentEvent, AgentMode, MessagePart } from "@gent/core"
 
 // ============================================================================
 // Session Operations
@@ -56,6 +56,7 @@ export const SendMessagePayload = Schema.Struct({
   sessionId: Schema.String,
   branchId: Schema.String,
   content: Schema.String,
+  mode: Schema.optional(AgentMode),
 })
 
 export const MessageInfo = Schema.Struct({

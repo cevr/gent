@@ -9,6 +9,7 @@ import {
   SessionNameUpdated,
   PlanApproved,
   type AgentEvent,
+  type AgentMode,
   type MessagePart,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
@@ -48,6 +49,7 @@ export interface SendMessageInput {
   sessionId: string
   branchId: string
   content: string
+  mode?: AgentMode
 }
 
 export interface SessionInfo {
@@ -283,6 +285,11 @@ export class GentCore extends Context.Tag("GentCore")<
             }),
 
           sendMessage: Effect.fn("GentCore.sendMessage")(function* (input) {
+            // Switch mode if specified (before starting the run)
+            if (input.mode) {
+              yield* agentLoop.steer({ _tag: "SwitchMode", mode: input.mode })
+            }
+
             const message = new Message({
               id: Bun.randomUUIDv7(),
               sessionId: input.sessionId,
