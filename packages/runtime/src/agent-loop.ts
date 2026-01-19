@@ -204,7 +204,11 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             }
 
             const state = yield* Ref.get(stateRef)
-            const messages = yield* storage.listMessages(branchId)
+            const allMessages = yield* storage.listMessages(branchId)
+            // Filter out step-duration-only messages (UI-only, not for LLM context)
+            const messages = allMessages.filter((m) =>
+              !m.parts.every((p) => p.type === "step-duration")
+            )
             const tools = yield* toolRegistry.list()
 
             // Start streaming
