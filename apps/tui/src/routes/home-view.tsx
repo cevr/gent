@@ -5,7 +5,7 @@
 import { createSignal, onMount } from "solid-js"
 import type { InputRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import figlet from "figlet"
+import { getLogos } from "../logo.macro.js" with { type: "macro" }
 import { useTheme } from "../theme/index.js"
 import { useCommand } from "../command/index.js"
 import { useClient } from "../client/index.js"
@@ -13,9 +13,7 @@ import { useRouter } from "../router/index.js"
 import { useAgentState } from "../agent-state/index.js"
 import { StatusBar } from "../components/status-bar.js"
 
-const FONTS = ["Slant", "Calvin S", "ANSI Shadow", "Thin"] as const
-const FONT = FONTS[Math.floor(Math.random() * FONTS.length)] ?? "Slant"
-const LOGO = figlet.textSync("gent", { font: FONT })
+const LOGOS = getLogos()
 
 export interface HomeViewProps {
   initialPrompt?: string
@@ -33,6 +31,7 @@ export function HomeView(props: HomeViewProps) {
   let inputRef: InputRenderable | null = null
 
   const [, setInputValue] = createSignal("")
+  const [logo] = createSignal(LOGOS[Math.floor(Math.random() * LOGOS.length)])
 
   // Track pending ESC for double-tap quit
   let lastEscTime = 0
@@ -152,7 +151,7 @@ export function HomeView(props: HomeViewProps) {
     <box flexDirection="column" flexGrow={1}>
       {/* Logo */}
       <box flexGrow={1} justifyContent="center" alignItems="center">
-        <text style={{ fg: theme.textMuted }}>{LOGO}</text>
+        <text style={{ fg: theme.textMuted }}>{logo()}</text>
       </box>
 
       {/* Separator line */}
