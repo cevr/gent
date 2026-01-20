@@ -19,12 +19,12 @@ export const ReadParams = Schema.Struct({
   offset: Schema.optional(
     Schema.Number.annotations({
       description: "Line number to start reading from (1-indexed)",
-    })
+    }),
   ),
   limit: Schema.optional(
     Schema.Number.annotations({
       description: "Maximum number of lines to read",
-    })
+    }),
   ),
 })
 
@@ -41,8 +41,7 @@ export const ReadResult = Schema.Struct({
 
 export const ReadTool = defineTool({
   name: "read",
-  description:
-    "Read file contents. Returns numbered lines. Use offset/limit for large files.",
+  description: "Read file contents. Returns numbered lines. Use offset/limit for large files.",
   params: ReadParams,
   execute: Effect.fn("ReadTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
@@ -57,8 +56,8 @@ export const ReadTool = defineTool({
             message: `Failed to read file: ${e.message}`,
             path: filePath,
             cause: e,
-          })
-      )
+          }),
+      ),
     )
 
     const lines = content.split("\n")

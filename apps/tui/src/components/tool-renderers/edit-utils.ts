@@ -25,10 +25,7 @@ export function getFiletype(path: string): string | undefined {
 /**
  * Count lines added/removed from old and new strings
  */
-export function countDiffLines(
-  oldStr: string,
-  newStr: string
-): { added: number; removed: number } {
+export function countDiffLines(oldStr: string, newStr: string): { added: number; removed: number } {
   const oldLines = oldStr ? oldStr.split("\n").length : 0
   const newLines = newStr ? newStr.split("\n").length : 0
   if (newLines > oldLines) {
@@ -62,11 +59,7 @@ export function getEditUnifiedDiff(input: unknown): EditDiffResult | null {
   const path = obj["path"]
   const oldStr = obj["oldString"] ?? obj["old_string"]
   const newStr = obj["newString"] ?? obj["new_string"]
-  if (
-    typeof path !== "string" ||
-    typeof oldStr !== "string" ||
-    typeof newStr !== "string"
-  )
+  if (typeof path !== "string" || typeof oldStr !== "string" || typeof newStr !== "string")
     return null
 
   const diff = createPatch(path, oldStr, newStr)

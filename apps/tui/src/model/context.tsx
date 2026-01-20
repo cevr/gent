@@ -48,20 +48,18 @@ export function ModelProvider(props: ModelProviderProps) {
   const value: ModelContextValue = {
     providers: () => store.providers,
     models: () => store.models,
-    currentGenModels: () =>
-      store.models.filter((m) => currentGenSet.has(m.id)),
+    currentGenModels: () => store.models.filter((m) => currentGenSet.has(m.id)),
     modelsByProvider: (providerId: ProviderId) =>
       store.models.filter((m) => m.provider === providerId),
     currentGenByProvider: (providerId: ProviderId) =>
       store.models.filter((m) => m.provider === providerId && currentGenSet.has(m.id)),
     currentModel: () => store.currentModel,
-    currentModelInfo: () =>
-      store.models.find((m) => m.id === store.currentModel),
+    currentModelInfo: () => store.models.find((m) => m.id === store.currentModel),
     setModel: (modelId: ModelId) => {
       setStore(
         produce((draft) => {
           draft.currentModel = modelId
-        })
+        }),
       )
       props.onModelChange?.(modelId)
     },

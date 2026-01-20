@@ -1,14 +1,12 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { defineTool, AgentMode } from "@gent/core"
+import { defineTool, AgentMode, isToolAllowedInPlanMode } from "@gent/core"
 
 // Plan Mode Handler Service
 
 export interface PlanModeHandlerService {
   readonly getMode: () => Effect.Effect<AgentMode>
   readonly setMode: (mode: AgentMode) => Effect.Effect<void>
-  readonly askUserForConfirmation: (
-    question: string
-  ) => Effect.Effect<boolean>
+  readonly askUserForConfirmation: (question: string) => Effect.Effect<boolean>
 }
 
 export class PlanModeHandler extends Context.Tag("PlanModeHandler")<
@@ -17,7 +15,7 @@ export class PlanModeHandler extends Context.Tag("PlanModeHandler")<
 >() {
   static Test = (
     initialMode: AgentMode = "build",
-    confirmations: ReadonlyArray<boolean> = [true]
+    confirmations: ReadonlyArray<boolean> = [true],
   ): Layer.Layer<PlanModeHandler> => {
     let mode = initialMode
     let confirmIndex = 0
@@ -27,8 +25,7 @@ export class PlanModeHandler extends Context.Tag("PlanModeHandler")<
         Effect.sync(() => {
           mode = newMode
         }),
-      askUserForConfirmation: () =>
-        Effect.succeed(confirmations[confirmIndex++] ?? true),
+      askUserForConfirmation: () => Effect.succeed(confirmations[confirmIndex++] ?? true),
     })
   }
 }
@@ -61,7 +58,7 @@ export const PlanEnterTool = defineTool({
     }
 
     const confirmed = yield* handler.askUserForConfirmation(
-      "Switch to plan mode? (Read-only tools only)"
+      "Switch to plan mode? (Read-only tools only)",
     )
 
     if (!confirmed) {
@@ -104,9 +101,7 @@ export const PlanExitTool = defineTool({
       return { mode: "build" as const, message: "Already in build mode" }
     }
 
-    const confirmed = yield* handler.askUserForConfirmation(
-      "Exit plan mode and resume building?"
-    )
+    const confirmed = yield* handler.askUserForConfirmation("Exit plan mode and resume building?")
 
     if (!confirmed) {
       return { mode: "plan" as const, message: "User chose to stay in plan mode" }
@@ -120,27 +115,10 @@ export const PlanExitTool = defineTool({
   }),
 })
 
-// Tools allowed in plan mode (read-only)
-
-export const PLAN_MODE_TOOLS = [
-  "read",
-  "grep",
-  "glob",
-  "webfetch",
-  "question",
-  "ask_user",
-  "todo_read",
-  "plan_exit", // Always allow exiting plan mode
-] as const
-
 // Check if tool is allowed in current mode
+// Uses PLAN_MODE_TOOLS from @gent/core as single source of truth
 
-export const isToolAllowedInMode = (
-  toolName: string,
-  mode: AgentMode
-): boolean => {
+export const isToolAllowedInMode = (toolName: string, mode: AgentMode): boolean => {
   if (mode === "build") return true
-  return PLAN_MODE_TOOLS.includes(
-    toolName.toLowerCase() as (typeof PLAN_MODE_TOOLS)[number]
-  )
+  return isToolAllowedInPlanMode(toolName)
 }

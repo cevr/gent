@@ -68,11 +68,7 @@ function Mode() {
   const { mode } = useAgentState()
   const { theme } = useTheme()
 
-  return (
-    <span style={{ fg: mode() === "build" ? theme.success : theme.warning }}>
-      {mode()}
-    </span>
-  )
+  return <span style={{ fg: mode() === "build" ? theme.success : theme.warning }}>{mode()}</span>
 }
 
 function Model() {
@@ -114,9 +110,7 @@ function Cwd() {
   const workspace = useWorkspace()
 
   return (
-    <span style={{ fg: theme.textMuted }}>
-      {relativePath(workspace.cwd, workspace.gitRoot())}
-    </span>
+    <span style={{ fg: theme.textMuted }}>{relativePath(workspace.cwd, workspace.gitRoot())}</span>
   )
 }
 

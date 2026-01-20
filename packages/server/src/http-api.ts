@@ -23,50 +23,37 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
   .add(
     HttpApiEndpoint.post("create", "/sessions")
       .setPayload(CreateSessionRequest)
-      .addSuccess(CreateSessionResponse)
+      .addSuccess(CreateSessionResponse),
   )
-  .add(
-    HttpApiEndpoint.get("list", "/sessions").addSuccess(
-      Schema.Array(SessionResponse)
-    )
-  )
+  .add(HttpApiEndpoint.get("list", "/sessions").addSuccess(Schema.Array(SessionResponse)))
   .add(
     HttpApiEndpoint.get("get", "/sessions/:sessionId")
       .setPath(Schema.Struct({ sessionId: Schema.String }))
-      .addSuccess(SessionResponse)
+      .addSuccess(SessionResponse),
   )
   .add(
     HttpApiEndpoint.del("delete", "/sessions/:sessionId")
       .setPath(Schema.Struct({ sessionId: Schema.String }))
-      .addSuccess(Schema.Void)
+      .addSuccess(Schema.Void),
   ) {}
 
 export class MessagesApi extends HttpApiGroup.make("messages")
   .add(
     HttpApiEndpoint.post("send", "/messages")
       .setPayload(SendMessageRequest)
-      .addSuccess(Schema.Void)
+      .addSuccess(Schema.Void),
   )
   .add(
-    HttpApiEndpoint.get(
-      "list",
-      "/sessions/:sessionId/branches/:branchId/messages"
-    )
-      .setPath(
-        Schema.Struct({ sessionId: Schema.String, branchId: Schema.String })
-      )
-      .addSuccess(Schema.Array(MessageResponse))
+    HttpApiEndpoint.get("list", "/sessions/:sessionId/branches/:branchId/messages")
+      .setPath(Schema.Struct({ sessionId: Schema.String, branchId: Schema.String }))
+      .addSuccess(Schema.Array(MessageResponse)),
   )
-  .add(
-    HttpApiEndpoint.post("steer", "/steer")
-      .setPayload(SteerRequest)
-      .addSuccess(Schema.Void)
-  ) {}
+  .add(HttpApiEndpoint.post("steer", "/steer").setPayload(SteerRequest).addSuccess(Schema.Void)) {}
 
 export class EventsApi extends HttpApiGroup.make("events").add(
   HttpApiEndpoint.get("subscribe", "/events/:sessionId")
     .setPath(Schema.Struct({ sessionId: Schema.String }))
-    .addSuccess(Schema.String) // SSE stream
+    .addSuccess(Schema.String), // SSE stream
 ) {}
 
 // Full API

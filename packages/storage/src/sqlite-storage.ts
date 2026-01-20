@@ -1,6 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import type {
-  Checkpoint} from "@gent/core";
+import type { Checkpoint } from "@gent/core"
 import {
   Message,
   Session,
@@ -22,87 +21,59 @@ const decodeTodoItem = Schema.decodeUnknownSync(TodoItem)
 
 // Storage Error
 
-export class StorageError extends Schema.TaggedError<StorageError>()(
-  "StorageError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  }
-) {}
+export class StorageError extends Schema.TaggedError<StorageError>()("StorageError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // Storage Service Interface
 
 export interface StorageService {
   // Sessions
-  readonly createSession: (
-    session: Session
-  ) => Effect.Effect<Session, StorageError>
-  readonly getSession: (
-    id: string
-  ) => Effect.Effect<Session | undefined, StorageError>
-  readonly getLastSessionByCwd: (
-    cwd: string
-  ) => Effect.Effect<Session | undefined, StorageError>
-  readonly listSessions: () => Effect.Effect<
-    ReadonlyArray<Session>,
-    StorageError
-  >
-  readonly updateSession: (
-    session: Session
-  ) => Effect.Effect<Session, StorageError>
+  readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
+  readonly getSession: (id: string) => Effect.Effect<Session | undefined, StorageError>
+  readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
+  readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
+  readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
   readonly deleteSession: (id: string) => Effect.Effect<void, StorageError>
 
   // Branches
   readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
-  readonly getBranch: (
-    id: string
-  ) => Effect.Effect<Branch | undefined, StorageError>
-  readonly listBranches: (
-    sessionId: string
-  ) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
+  readonly getBranch: (id: string) => Effect.Effect<Branch | undefined, StorageError>
+  readonly listBranches: (sessionId: string) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
 
   // Messages
-  readonly createMessage: (
-    message: Message
-  ) => Effect.Effect<Message, StorageError>
-  readonly getMessage: (
-    id: string
-  ) => Effect.Effect<Message | undefined, StorageError>
-  readonly listMessages: (
-    branchId: string
-  ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
+  readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
+  readonly getMessage: (id: string) => Effect.Effect<Message | undefined, StorageError>
+  readonly listMessages: (branchId: string) => Effect.Effect<ReadonlyArray<Message>, StorageError>
   readonly deleteMessages: (
     branchId: string,
-    afterMessageId?: string
+    afterMessageId?: string,
   ) => Effect.Effect<void, StorageError>
   readonly updateMessageTurnDuration: (
     messageId: string,
-    durationMs: number
+    durationMs: number,
   ) => Effect.Effect<void, StorageError>
 
   // Checkpoints
-  readonly createCheckpoint: (
-    checkpoint: Checkpoint
-  ) => Effect.Effect<Checkpoint, StorageError>
+  readonly createCheckpoint: (checkpoint: Checkpoint) => Effect.Effect<Checkpoint, StorageError>
   readonly getLatestCheckpoint: (
-    branchId: string
+    branchId: string,
   ) => Effect.Effect<Checkpoint | undefined, StorageError>
   readonly listMessagesAfter: (
     branchId: string,
-    afterMessageId: string
+    afterMessageId: string,
   ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
   readonly listMessagesSince: (
     branchId: string,
-    sinceTimestamp: Date
+    sinceTimestamp: Date,
   ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
 
   // Todos
-  readonly listTodos: (
-    branchId: string
-  ) => Effect.Effect<ReadonlyArray<TodoItem>, StorageError>
+  readonly listTodos: (branchId: string) => Effect.Effect<ReadonlyArray<TodoItem>, StorageError>
   readonly replaceTodos: (
     branchId: string,
-    todos: ReadonlyArray<TodoItem>
+    todos: ReadonlyArray<TodoItem>,
   ) => Effect.Effect<void, StorageError>
 }
 
@@ -196,7 +167,7 @@ const makeStorage = (db: Database): StorageService => {
               session.cwd ?? null,
               session.createdAt.getTime(),
               session.updatedAt.getTime(),
-            ]
+            ],
           )
           return session
         },
@@ -211,18 +182,14 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           const row = db
-            .query(
-              `SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE id = ?`
-            )
-            .get(id) as
-            | {
-                id: string
-                name: string | null
-                cwd: string | null
-                created_at: number
-                updated_at: number
-              }
-            | null
+            .query(`SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE id = ?`)
+            .get(id) as {
+            id: string
+            name: string | null
+            cwd: string | null
+            created_at: number
+            updated_at: number
+          } | null
           if (!row) return undefined
           return new Session({
             id: row.id,
@@ -244,17 +211,15 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`
+              `SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`,
             )
-            .get(cwd) as
-            | {
-                id: string
-                name: string | null
-                cwd: string | null
-                created_at: number
-                updated_at: number
-              }
-            | null
+            .get(cwd) as {
+            id: string
+            name: string | null
+            cwd: string | null
+            created_at: number
+            updated_at: number
+          } | null
           if (!row) return undefined
           return new Session({
             id: row.id,
@@ -276,7 +241,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, name, cwd, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+              `SELECT id, name, cwd, created_at, updated_at FROM sessions ORDER BY updated_at DESC`,
             )
             .all() as Array<{
             id: string
@@ -293,7 +258,7 @@ const makeStorage = (db: Database): StorageService => {
                 cwd: row.cwd ?? undefined,
                 createdAt: new Date(row.created_at),
                 updatedAt: new Date(row.updated_at),
-              })
+              }),
           )
         },
         catch: (e) =>
@@ -306,14 +271,11 @@ const makeStorage = (db: Database): StorageService => {
     updateSession: (session) =>
       Effect.try({
         try: () => {
-          db.run(
-            `UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?`,
-            [
-              session.name ?? null,
-              session.updatedAt.getTime(),
-              session.id,
-            ]
-          )
+          db.run(`UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?`, [
+            session.name ?? null,
+            session.updatedAt.getTime(),
+            session.id,
+          ])
           return session
         },
         catch: (e) =>
@@ -348,7 +310,7 @@ const makeStorage = (db: Database): StorageService => {
               branch.parentMessageId ?? null,
               branch.name ?? null,
               branch.createdAt.getTime(),
-            ]
+            ],
           )
           return branch
         },
@@ -364,18 +326,16 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, session_id, parent_branch_id, parent_message_id, name, created_at FROM branches WHERE id = ?`
+              `SELECT id, session_id, parent_branch_id, parent_message_id, name, created_at FROM branches WHERE id = ?`,
             )
-            .get(id) as
-            | {
-                id: string
-                session_id: string
-                parent_branch_id: string | null
-                parent_message_id: string | null
-                name: string | null
-                created_at: number
-              }
-            | null
+            .get(id) as {
+            id: string
+            session_id: string
+            parent_branch_id: string | null
+            parent_message_id: string | null
+            name: string | null
+            created_at: number
+          } | null
           if (!row) return undefined
           return new Branch({
             id: row.id,
@@ -398,7 +358,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, parent_branch_id, parent_message_id, name, created_at FROM branches WHERE session_id = ? ORDER BY created_at ASC`
+              `SELECT id, session_id, parent_branch_id, parent_message_id, name, created_at FROM branches WHERE session_id = ? ORDER BY created_at ASC`,
             )
             .all(sessionId) as Array<{
             id: string
@@ -417,7 +377,7 @@ const makeStorage = (db: Database): StorageService => {
                 parentMessageId: row.parent_message_id ?? undefined,
                 name: row.name ?? undefined,
                 createdAt: new Date(row.created_at),
-              })
+              }),
           )
         },
         catch: (e) =>
@@ -441,7 +401,7 @@ const makeStorage = (db: Database): StorageService => {
               encodeMessageParts([...message.parts]),
               message.createdAt.getTime(),
               message.turnDurationMs ?? null,
-            ]
+            ],
           )
           return message
         },
@@ -457,19 +417,17 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE id = ?`
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE id = ?`,
             )
-            .get(id) as
-            | {
-                id: string
-                session_id: string
-                branch_id: string
-                role: "user" | "assistant" | "system" | "tool"
-                parts: string
-                created_at: number
-                turn_duration_ms: number | null
-              }
-            | null
+            .get(id) as {
+            id: string
+            session_id: string
+            branch_id: string
+            role: "user" | "assistant" | "system" | "tool"
+            parts: string
+            created_at: number
+            turn_duration_ms: number | null
+          } | null
           if (!row) return undefined
           const parts = decodeMessageParts(row.parts)
           return new Message({
@@ -494,7 +452,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC`
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC`,
             )
             .all(branchId) as Array<{
             id: string
@@ -533,10 +491,10 @@ const makeStorage = (db: Database): StorageService => {
               .query(`SELECT created_at FROM messages WHERE id = ?`)
               .get(afterMessageId) as { created_at: number } | null
             if (msg) {
-              db.run(
-                `DELETE FROM messages WHERE branch_id = ? AND created_at > ?`,
-                [branchId, msg.created_at]
-              )
+              db.run(`DELETE FROM messages WHERE branch_id = ? AND created_at > ?`, [
+                branchId,
+                msg.created_at,
+              ])
             }
           } else {
             db.run(`DELETE FROM messages WHERE branch_id = ?`, [branchId])
@@ -552,10 +510,7 @@ const makeStorage = (db: Database): StorageService => {
     updateMessageTurnDuration: (messageId, durationMs) =>
       Effect.try({
         try: () => {
-          db.run(
-            `UPDATE messages SET turn_duration_ms = ? WHERE id = ?`,
-            [durationMs, messageId]
-          )
+          db.run(`UPDATE messages SET turn_duration_ms = ? WHERE id = ?`, [durationMs, messageId])
         },
         catch: (e) =>
           new StorageError({
@@ -580,7 +535,7 @@ const makeStorage = (db: Database): StorageService => {
                 checkpoint.messageCount,
                 checkpoint.tokenCount,
                 checkpoint.createdAt.getTime(),
-              ]
+              ],
             )
           } else {
             db.run(
@@ -593,7 +548,7 @@ const makeStorage = (db: Database): StorageService => {
                 checkpoint.messageCount,
                 checkpoint.tokenCount,
                 checkpoint.createdAt.getTime(),
-              ]
+              ],
             )
           }
           return checkpoint
@@ -610,21 +565,19 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, branch_id, _tag, summary, plan_path, first_kept_message_id, message_count, token_count, created_at FROM checkpoints WHERE branch_id = ? ORDER BY created_at DESC LIMIT 1`
+              `SELECT id, branch_id, _tag, summary, plan_path, first_kept_message_id, message_count, token_count, created_at FROM checkpoints WHERE branch_id = ? ORDER BY created_at DESC LIMIT 1`,
             )
-            .get(branchId) as
-            | {
-                id: string
-                branch_id: string
-                _tag: string
-                summary: string | null
-                plan_path: string | null
-                first_kept_message_id: string | null
-                message_count: number
-                token_count: number
-                created_at: number
-              }
-            | null
+            .get(branchId) as {
+            id: string
+            branch_id: string
+            _tag: string
+            summary: string | null
+            plan_path: string | null
+            first_kept_message_id: string | null
+            message_count: number
+            token_count: number
+            created_at: number
+          } | null
           if (!row) return undefined
           if (row._tag === "CompactionCheckpoint") {
             if (row.summary === null || row.first_kept_message_id === null) {
@@ -671,7 +624,7 @@ const makeStorage = (db: Database): StorageService => {
 
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`,
             )
             .all(branchId, afterMsg.created_at) as Array<{
             id: string
@@ -707,7 +660,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`,
             )
             .all(branchId, sinceTimestamp.getTime()) as Array<{
             id: string
@@ -744,7 +697,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, content, status, priority, created_at, updated_at FROM todos WHERE branch_id = ? ORDER BY created_at ASC`
+              `SELECT id, content, status, priority, created_at, updated_at FROM todos WHERE branch_id = ? ORDER BY created_at ASC`,
             )
             .all(branchId) as Array<{
             id: string
@@ -762,7 +715,7 @@ const makeStorage = (db: Database): StorageService => {
               priority: row.priority ?? undefined,
               createdAt: row.created_at,
               updatedAt: row.updated_at,
-            })
+            }),
           )
         },
         catch: (e) =>
@@ -777,7 +730,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           db.run(`DELETE FROM todos WHERE branch_id = ?`, [branchId])
           const stmt = db.prepare(
-            `INSERT INTO todos (id, branch_id, content, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO todos (id, branch_id, content, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
           for (const todo of todos) {
             stmt.run(
@@ -787,7 +740,7 @@ const makeStorage = (db: Database): StorageService => {
               todo.status,
               todo.priority ?? null,
               todo.createdAt.getTime(),
-              todo.updatedAt.getTime()
+              todo.updatedAt.getTime(),
             )
           }
         },
@@ -801,7 +754,9 @@ const makeStorage = (db: Database): StorageService => {
 }
 
 export class Storage extends Context.Tag("Storage")<Storage, StorageService>() {
-  static Live = (dbPath: string): Layer.Layer<Storage, PlatformError, FileSystem.FileSystem | Path.Path> =>
+  static Live = (
+    dbPath: string,
+  ): Layer.Layer<Storage, PlatformError, FileSystem.FileSystem | Path.Path> =>
     Layer.scoped(
       Storage,
       Effect.gen(function* () {
@@ -812,7 +767,7 @@ export class Storage extends Context.Tag("Storage")<Storage, StorageService>() {
         const db = new Database(dbPath)
         yield* Effect.addFinalizer(() => Effect.sync(() => db.close()))
         return makeStorage(db)
-      })
+      }),
     )
 
   static Test = (): Layer.Layer<Storage> =>
@@ -822,6 +777,6 @@ export class Storage extends Context.Tag("Storage")<Storage, StorageService>() {
         const db = new Database(":memory:")
         yield* Effect.addFinalizer(() => Effect.sync(() => db.close()))
         return makeStorage(db)
-      })
+      }),
     )
 }

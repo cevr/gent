@@ -11,15 +11,8 @@ import {
   EventBus,
   PlanApproved,
 } from "@gent/core"
-import {
-  CheckpointService,
-  estimateTokens,
-} from "@gent/runtime"
-import {
-  SequenceRecorder,
-  createRecordingTestLayer,
-  assertSequence,
-} from "@gent/test-utils"
+import { CheckpointService, estimateTokens } from "@gent/runtime"
+import { SequenceRecorder, createRecordingTestLayer, assertSequence } from "@gent/test-utils"
 import { Provider } from "@gent/providers"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
@@ -37,14 +30,14 @@ describe("Checkpoints", () => {
               id: "cp-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "cp-branch",
               sessionId: "cp-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           const checkpoint = new CompactionCheckpoint({
@@ -63,12 +56,12 @@ describe("Checkpoints", () => {
           expect(retrieved).toBeDefined()
           expect(retrieved?._tag).toBe("CompactionCheckpoint")
           expect((retrieved as CompactionCheckpoint).summary).toBe(
-            "User discussed authentication. Decision: use JWT."
+            "User discussed authentication. Decision: use JWT.",
           )
           expect((retrieved as CompactionCheckpoint).firstKeptMessageId).toBe("msg-10")
           expect(retrieved?.messageCount).toBe(20)
           expect(retrieved?.tokenCount).toBe(50000)
-        })
+        }),
       )
     })
 
@@ -82,14 +75,14 @@ describe("Checkpoints", () => {
               id: "plan-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "plan-branch",
               sessionId: "plan-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           const checkpoint = new PlanCheckpoint({
@@ -108,7 +101,7 @@ describe("Checkpoints", () => {
           expect(retrieved?._tag).toBe("PlanCheckpoint")
           expect((retrieved as PlanCheckpoint).planPath).toBe("/Users/test/project/plan.md")
           expect(retrieved?.messageCount).toBe(15)
-        })
+        }),
       )
     })
 
@@ -122,14 +115,14 @@ describe("Checkpoints", () => {
               id: "multi-cp-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "multi-cp-branch",
               sessionId: "multi-cp-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           // Create older checkpoint
@@ -142,7 +135,7 @@ describe("Checkpoints", () => {
               messageCount: 10,
               tokenCount: 20000,
               createdAt: new Date(Date.now() - 10000),
-            })
+            }),
           )
 
           // Create newer checkpoint
@@ -154,14 +147,14 @@ describe("Checkpoints", () => {
               messageCount: 25,
               tokenCount: 60000,
               createdAt: new Date(),
-            })
+            }),
           )
 
           const retrieved = yield* storage.getLatestCheckpoint("multi-cp-branch")
 
           expect(retrieved?._tag).toBe("PlanCheckpoint")
           expect(retrieved?.id).toBe("new-cp")
-        })
+        }),
       )
     })
 
@@ -171,7 +164,7 @@ describe("Checkpoints", () => {
           const storage = yield* Storage
           const retrieved = yield* storage.getLatestCheckpoint("nonexistent-branch")
           expect(retrieved).toBeUndefined()
-        })
+        }),
       )
     })
 
@@ -185,14 +178,14 @@ describe("Checkpoints", () => {
               id: "empty-sum-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "empty-sum-branch",
               sessionId: "empty-sum-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           const checkpoint = new CompactionCheckpoint({
@@ -210,7 +203,7 @@ describe("Checkpoints", () => {
 
           expect(retrieved?._tag).toBe("CompactionCheckpoint")
           expect((retrieved as CompactionCheckpoint).summary).toBe("")
-        })
+        }),
       )
     })
   })
@@ -226,14 +219,14 @@ describe("Checkpoints", () => {
               id: "after-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "after-branch",
               sessionId: "after-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           const baseTime = Date.now()
@@ -247,7 +240,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "First" })],
               createdAt: new Date(baseTime),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -257,7 +250,7 @@ describe("Checkpoints", () => {
               role: "assistant",
               parts: [new TextPart({ type: "text", text: "Second" })],
               createdAt: new Date(baseTime + 1000),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -267,7 +260,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Third" })],
               createdAt: new Date(baseTime + 2000),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -277,7 +270,7 @@ describe("Checkpoints", () => {
               role: "assistant",
               parts: [new TextPart({ type: "text", text: "Fourth" })],
               createdAt: new Date(baseTime + 3000),
-            })
+            }),
           )
 
           // Get messages after m2
@@ -286,7 +279,7 @@ describe("Checkpoints", () => {
           expect(messages.length).toBe(2)
           expect(messages[0]?.id).toBe("m3")
           expect(messages[1]?.id).toBe("m4")
-        })
+        }),
       )
     })
 
@@ -296,7 +289,7 @@ describe("Checkpoints", () => {
           const storage = yield* Storage
           const messages = yield* storage.listMessagesAfter("some-branch", "nonexistent")
           expect(messages.length).toBe(0)
-        })
+        }),
       )
     })
   })
@@ -312,14 +305,14 @@ describe("Checkpoints", () => {
               id: "since-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "since-branch",
               sessionId: "since-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           const baseTime = Date.now()
@@ -333,7 +326,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Before" })],
               createdAt: new Date(baseTime),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -343,7 +336,7 @@ describe("Checkpoints", () => {
               role: "assistant",
               parts: [new TextPart({ type: "text", text: "Also before" })],
               createdAt: new Date(baseTime + 1000),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -353,7 +346,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "After" })],
               createdAt: new Date(baseTime + 2000),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -363,7 +356,7 @@ describe("Checkpoints", () => {
               role: "assistant",
               parts: [new TextPart({ type: "text", text: "Also after" })],
               createdAt: new Date(baseTime + 3000),
-            })
+            }),
           )
 
           const messages = yield* storage.listMessagesSince("since-branch", cutoffTime)
@@ -371,7 +364,7 @@ describe("Checkpoints", () => {
           expect(messages.length).toBe(2)
           expect(messages[0]?.id).toBe("s3")
           expect(messages[1]?.id).toBe("s4")
-        })
+        }),
       )
     })
 
@@ -385,14 +378,14 @@ describe("Checkpoints", () => {
               id: "future-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "future-branch",
               sessionId: "future-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           yield* storage.createMessage(
@@ -403,14 +396,14 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Test" })],
               createdAt: new Date(),
-            })
+            }),
           )
 
           const futureDate = new Date(Date.now() + 100000)
           const messages = yield* storage.listMessagesSince("future-branch", futureDate)
 
           expect(messages.length).toBe(0)
-        })
+        }),
       )
     })
   })
@@ -486,7 +479,7 @@ describe("Checkpoints", () => {
           pruneProtect: 100,
           pruneMinimum: 50,
         }),
-        BaseLayer
+        BaseLayer,
       )
       const TestLayer = Layer.merge(BaseLayer, CheckpointLayer)
 
@@ -496,10 +489,10 @@ describe("Checkpoints", () => {
           const service = yield* CheckpointService
 
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
           // Small message - well under 1000 token threshold
           yield* storage.createMessage(
@@ -510,12 +503,12 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Hello" })],
               createdAt: new Date(),
-            })
+            }),
           )
 
           const result = yield* service.shouldCompact("b")
           expect(result).toBe(false)
-        }).pipe(Effect.provide(TestLayer))
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
 
@@ -527,7 +520,7 @@ describe("Checkpoints", () => {
           pruneProtect: 5,
           pruneMinimum: 2,
         }),
-        BaseLayer
+        BaseLayer,
       )
       const TestLayer = Layer.merge(BaseLayer, CheckpointLayer)
 
@@ -537,10 +530,10 @@ describe("Checkpoints", () => {
           const service = yield* CheckpointService
 
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
           // Message with >40 chars = >10 tokens
           yield* storage.createMessage(
@@ -549,23 +542,25 @@ describe("Checkpoints", () => {
               sessionId: "s",
               branchId: "b",
               role: "user",
-              parts: [new TextPart({ type: "text", text: "This is a longer message that exceeds the threshold" })],
+              parts: [
+                new TextPart({
+                  type: "text",
+                  text: "This is a longer message that exceeds the threshold",
+                }),
+              ],
               createdAt: new Date(),
-            })
+            }),
           )
 
           const result = yield* service.shouldCompact("b")
           expect(result).toBe(true)
-        }).pipe(Effect.provide(TestLayer))
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
 
     test("createPlanCheckpoint creates and stores checkpoint", async () => {
       const BaseLayer = Layer.mergeAll(Storage.Test(), Provider.Test([[]]))
-      const CheckpointLayer = Layer.provide(
-        CheckpointService.Live("test/model"),
-        BaseLayer
-      )
+      const CheckpointLayer = Layer.provide(CheckpointService.Live("test/model"), BaseLayer)
       const TestLayer = Layer.merge(BaseLayer, CheckpointLayer)
 
       await Effect.runPromise(
@@ -574,10 +569,10 @@ describe("Checkpoints", () => {
           const service = yield* CheckpointService
 
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
           yield* storage.createMessage(
             new Message({
@@ -587,7 +582,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Test message" })],
               createdAt: new Date(),
-            })
+            }),
           )
 
           const checkpoint = yield* service.createPlanCheckpoint("b", "/path/to/plan.md")
@@ -599,7 +594,7 @@ describe("Checkpoints", () => {
           // Verify stored in storage
           const retrieved = yield* storage.getLatestCheckpoint("b")
           expect(retrieved?._tag).toBe("PlanCheckpoint")
-        }).pipe(Effect.provide(TestLayer))
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
 
@@ -639,19 +634,17 @@ describe("Checkpoints", () => {
           const recorder = yield* SequenceRecorder
 
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
 
           yield* service.createPlanCheckpoint("b", "/plan.md")
 
           const calls = yield* recorder.getCalls()
-          assertSequence(calls, [
-            { service: "CheckpointService", method: "createPlanCheckpoint" },
-          ])
-        }).pipe(Effect.provide(TestLayer))
+          assertSequence(calls, [{ service: "CheckpointService", method: "createPlanCheckpoint" }])
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
 
@@ -681,10 +674,8 @@ describe("Checkpoints", () => {
           expect((checkpoint as CompactionCheckpoint).summary).toBe("Previous context")
 
           const calls = yield* recorder.getCalls()
-          assertSequence(calls, [
-            { service: "CheckpointService", method: "getLatestCheckpoint" },
-          ])
-        }).pipe(Effect.provide(TestLayer))
+          assertSequence(calls, [{ service: "CheckpointService", method: "getLatestCheckpoint" }])
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
   })
@@ -702,10 +693,10 @@ describe("Checkpoints", () => {
 
           // Setup
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
 
           // Simulate approvePlan behavior (what GentCore.approvePlan does)
@@ -715,7 +706,7 @@ describe("Checkpoints", () => {
               sessionId: "s",
               branchId: "b",
               planPath: "/workspace/plan.md",
-            })
+            }),
           )
 
           // Verify checkpoint created
@@ -729,7 +720,7 @@ describe("Checkpoints", () => {
             { service: "CheckpointService", method: "createPlanCheckpoint" },
             { service: "EventBus", method: "publish", match: { _tag: "PlanApproved" } },
           ])
-        }).pipe(Effect.provide(TestLayer))
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
   })
@@ -741,10 +732,10 @@ describe("Checkpoints", () => {
           const storage = yield* Storage
 
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
 
           const baseTime = Date.now()
@@ -756,7 +747,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "First" })],
               createdAt: new Date(baseTime),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -766,7 +757,7 @@ describe("Checkpoints", () => {
               role: "assistant",
               parts: [new TextPart({ type: "text", text: "Second" })],
               createdAt: new Date(baseTime + 1000),
-            })
+            }),
           )
 
           // No checkpoint - should get all messages
@@ -775,7 +766,7 @@ describe("Checkpoints", () => {
 
           const messages = yield* storage.listMessages("b")
           expect(messages.length).toBe(2)
-        })
+        }),
       )
     })
 
@@ -785,10 +776,10 @@ describe("Checkpoints", () => {
           const storage = yield* Storage
 
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
 
           const baseTime = Date.now()
@@ -802,7 +793,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Old message 1" })],
               createdAt: new Date(baseTime),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -812,7 +803,7 @@ describe("Checkpoints", () => {
               role: "assistant",
               parts: [new TextPart({ type: "text", text: "Kept message 1" })],
               createdAt: new Date(baseTime + 1000),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -822,7 +813,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Kept message 2" })],
               createdAt: new Date(baseTime + 2000),
-            })
+            }),
           )
 
           // Create compaction checkpoint pointing to kept-1
@@ -835,7 +826,7 @@ describe("Checkpoints", () => {
               messageCount: 3,
               tokenCount: 100,
               createdAt: new Date(baseTime + 500),
-            })
+            }),
           )
 
           const checkpoint = yield* storage.getLatestCheckpoint("b")
@@ -844,11 +835,11 @@ describe("Checkpoints", () => {
           // Should only get messages AFTER kept-1
           const messages = yield* storage.listMessagesAfter(
             "b",
-            (checkpoint as CompactionCheckpoint).firstKeptMessageId
+            (checkpoint as CompactionCheckpoint).firstKeptMessageId,
           )
           expect(messages.length).toBe(1)
           expect(messages[0]?.id).toBe("kept-2")
-        })
+        }),
       )
     })
 
@@ -858,10 +849,10 @@ describe("Checkpoints", () => {
           const storage = yield* Storage
 
           yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() })
+            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
           )
           yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() })
+            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
           )
 
           const baseTime = Date.now()
@@ -875,7 +866,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Let me think about the plan" })],
               createdAt: new Date(baseTime),
-            })
+            }),
           )
 
           // Plan checkpoint created at baseTime + 1000
@@ -888,7 +879,7 @@ describe("Checkpoints", () => {
               messageCount: 1,
               tokenCount: 50,
               createdAt: checkpointTime,
-            })
+            }),
           )
 
           // Message after plan approval
@@ -900,7 +891,7 @@ describe("Checkpoints", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "Now execute the plan" })],
               createdAt: new Date(baseTime + 2000),
-            })
+            }),
           )
 
           const checkpoint = yield* storage.getLatestCheckpoint("b")
@@ -910,7 +901,7 @@ describe("Checkpoints", () => {
           const messages = yield* storage.listMessagesSince("b", checkpoint!.createdAt)
           expect(messages.length).toBe(1)
           expect(messages[0]?.id).toBe("post-plan")
-        })
+        }),
       )
     })
   })

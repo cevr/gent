@@ -13,7 +13,7 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
 
 export class ConfigServiceError extends Schema.TaggedError<ConfigServiceError>()(
   "ConfigServiceError",
-  { message: Schema.String }
+  { message: Schema.String },
 ) {}
 
 // ConfigService
@@ -74,7 +74,9 @@ export class ConfigService extends Context.Tag("ConfigService")<
         return config
       }).pipe(
         Effect.flatMap((config) => Ref.set(configRef, config)),
-        Effect.catchAll(() => Effect.void)
+        Effect.catchAll((e) =>
+          Effect.logWarning("Config load failed").pipe(Effect.annotateLogs({ error: String(e) })),
+        ),
       )
 
       // Save user config to disk
@@ -84,7 +86,11 @@ export class ConfigService extends Context.Tag("ConfigService")<
           yield* fs.makeDirectory(configDir, { recursive: true })
           const json = yield* Schema.encode(UserConfigJson)(config)
           yield* fs.writeFileString(userConfigPath, json)
-        }).pipe(Effect.catchAll(() => Effect.void))
+        }).pipe(
+          Effect.catchAll((e) =>
+            Effect.logWarning("Config save failed").pipe(Effect.annotateLogs({ error: String(e) })),
+          ),
+        )
 
       // Initial load
       yield* loadConfig
@@ -119,7 +125,7 @@ export class ConfigService extends Context.Tag("ConfigService")<
       }
 
       return service
-    })
+    }),
   )
 
   static Test = (initialConfig: UserConfig = new UserConfig({})): Layer.Layer<ConfigService> => {
@@ -128,19 +134,19 @@ export class ConfigService extends Context.Tag("ConfigService")<
     return Layer.succeed(ConfigService, {
       get: () => Ref.get(configRef),
       set: (partial) =>
-        Ref.update(configRef, (current) =>
-          new UserConfig({
-            model: partial.model ?? current.model,
-            provider: partial.provider ?? current.provider,
-          })
+        Ref.update(
+          configRef,
+          (current) =>
+            new UserConfig({
+              model: partial.model ?? current.model,
+              provider: partial.provider ?? current.provider,
+            }),
         ),
       getModel: () => Ref.get(configRef).pipe(Effect.map((c) => c.model)),
       setModel: (modelId) => {
         const parts = (modelId as string).split("/")
         const providerId = parts[0] as ProviderId | undefined
-        return Ref.update(configRef, () =>
-          new UserConfig({ model: modelId, provider: providerId })
-        )
+        return Ref.update(configRef, () => new UserConfig({ model: modelId, provider: providerId }))
       },
     })
   }

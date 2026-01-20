@@ -69,7 +69,7 @@ test("my test", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       // test code
-    }).pipe(Effect.provide(createTestLayer()))
+    }).pipe(Effect.provide(createTestLayer())),
   )
 })
 
@@ -80,10 +80,8 @@ test("records calls", async () => {
       const recorder = yield* SequenceRecorder
       // do work
       const calls = yield* recorder.getCalls()
-      assertSequence(calls, [
-        { service: "Provider", method: "stream" },
-      ])
-    }).pipe(Effect.provide(createRecordingTestLayer()))
+      assertSequence(calls, [{ service: "Provider", method: "stream" }])
+    }).pipe(Effect.provide(createRecordingTestLayer())),
   )
 })
 ```

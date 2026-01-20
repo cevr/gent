@@ -6,11 +6,16 @@ import {
   TextPart,
   ToolResultPart,
   type MessagePart,
-  type ToolCallPart,
   type Checkpoint,
 } from "@gent/core"
 import { Storage, type StorageError } from "@gent/storage"
 import { Provider, type ProviderError } from "@gent/providers"
+
+// Checkpoint Error
+
+export class CheckpointError extends Schema.TaggedError<CheckpointError>()("CheckpointError", {
+  message: Schema.String,
+}) {}
 
 // Compaction Config
 
@@ -45,12 +50,16 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
   let chars = 0
   for (const msg of messages) {
     for (const part of msg.parts) {
-      if (part.type === "text") {
-        chars += (part as TextPart).text.length
-      } else if (part.type === "tool-call") {
-        chars += JSON.stringify((part as ToolCallPart).input).length
-      } else if (part.type === "tool-result") {
-        chars += JSON.stringify((part as ToolResultPart).output).length
+      switch (part.type) {
+        case "text":
+          chars += part.text.length
+          break
+        case "tool-call":
+          chars += JSON.stringify(part.input).length
+          break
+        case "tool-result":
+          chars += JSON.stringify(part.output).length
+          break
       }
     }
   }
@@ -60,21 +69,23 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
 // Estimate tokens for a single part
 
 const estimatePartTokens = (part: MessagePart): number => {
-  if (part.type === "text") {
-    return Math.ceil((part as TextPart).text.length / 4)
-  } else if (part.type === "tool-call") {
-    return Math.ceil(JSON.stringify((part as ToolCallPart).input).length / 4)
-  } else if (part.type === "tool-result") {
-    return Math.ceil(JSON.stringify((part as ToolResultPart).output).length / 4)
+  switch (part.type) {
+    case "text":
+      return Math.ceil(part.text.length / 4)
+    case "tool-call":
+      return Math.ceil(JSON.stringify(part.input).length / 4)
+    case "tool-result":
+      return Math.ceil(JSON.stringify(part.output).length / 4)
+    default:
+      return 0
   }
-  return 0
 }
 
 // Prune old tool outputs while preserving recent ones
 
 export const pruneToolOutputs = (
   messages: ReadonlyArray<Message>,
-  config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
+  config: CompactionConfig = DEFAULT_COMPACTION_CONFIG,
 ): Message[] => {
   // Calculate current tool output tokens
   let toolOutputTokens = 0
@@ -111,13 +122,13 @@ export const pruneToolOutputs = (
           newParts.push(
             new ToolResultPart({
               type: "tool-result",
-              toolCallId: (part as ToolResultPart).toolCallId,
-              toolName: (part as ToolResultPart).toolName,
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
               output: {
                 type: "json",
                 value: { _pruned: true, message: "Output pruned for context management" },
               },
-            })
+            }),
           )
           modified = true
         }
@@ -131,7 +142,7 @@ export const pruneToolOutputs = (
         new Message({
           ...msg,
           parts: newParts,
-        })
+        }),
       )
     } else {
       result.unshift(msg)
@@ -144,25 +155,19 @@ export const pruneToolOutputs = (
 // Checkpoint Service
 
 export interface CheckpointServiceApi {
-  readonly shouldCompact: (
-    branchId: string
-  ) => Effect.Effect<boolean, StorageError>
+  readonly shouldCompact: (branchId: string) => Effect.Effect<boolean, StorageError>
   readonly createCompactionCheckpoint: (
-    branchId: string
-  ) => Effect.Effect<CompactionCheckpoint, StorageError | ProviderError>
+    branchId: string,
+  ) => Effect.Effect<CompactionCheckpoint, StorageError | ProviderError | CheckpointError>
   readonly createPlanCheckpoint: (
     branchId: string,
-    planPath: string
+    planPath: string,
   ) => Effect.Effect<PlanCheckpoint, StorageError>
   readonly getLatestCheckpoint: (
-    branchId: string
+    branchId: string,
   ) => Effect.Effect<Checkpoint | undefined, StorageError>
-  readonly prune: (
-    messages: ReadonlyArray<Message>
-  ) => Effect.Effect<Message[]>
-  readonly estimateTokens: (
-    messages: ReadonlyArray<Message>
-  ) => Effect.Effect<number>
+  readonly prune: (messages: ReadonlyArray<Message>) => Effect.Effect<Message[]>
+  readonly estimateTokens: (messages: ReadonlyArray<Message>) => Effect.Effect<number>
 }
 
 export class CheckpointService extends Context.Tag("CheckpointService")<
@@ -171,7 +176,7 @@ export class CheckpointService extends Context.Tag("CheckpointService")<
 >() {
   static Live = (
     model: string,
-    config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
+    config: CompactionConfig = DEFAULT_COMPACTION_CONFIG,
   ): Layer.Layer<CheckpointService, never, Storage | Provider> =>
     Layer.effect(
       CheckpointService,
@@ -180,109 +185,116 @@ export class CheckpointService extends Context.Tag("CheckpointService")<
         const provider = yield* Provider
 
         const service: CheckpointServiceApi = {
-          shouldCompact: Effect.fn("CheckpointService.shouldCompact")(
-            function* (branchId: string) {
-              const messages = yield* storage.listMessages(branchId)
-              const tokens = estimateTokens(messages)
-              return tokens >= config.threshold
-            }
-          ),
-
-          createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(function* (
-            branchId: string
-          ) {
+          shouldCompact: Effect.fn("CheckpointService.shouldCompact")(function* (branchId: string) {
             const messages = yield* storage.listMessages(branchId)
             const tokens = estimateTokens(messages)
+            return tokens >= config.threshold
+          }),
 
-            // Find the first message to keep (last 20% of messages or last 10 messages, whichever is more)
-            const keepCount = Math.max(Math.ceil(messages.length * 0.2), 10)
-            const firstKeptIndex = Math.max(0, messages.length - keepCount)
-            const firstKeptMessage = messages[firstKeptIndex]
-            if (!firstKeptMessage) {
-              // No messages to compact
-              return new CompactionCheckpoint({
-                id: Bun.randomUUIDv7(),
-                branchId,
-                summary: "",
-                firstKeptMessageId: "",
-                messageCount: 0,
-                tokenCount: 0,
-                createdAt: new Date(),
-              })
-            }
+          createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(
+            function* (branchId: string) {
+              const messages = yield* storage.listMessages(branchId)
 
-            // Summarize messages before the kept ones
-            const messagesToSummarize = messages.slice(0, firstKeptIndex)
-            if (messagesToSummarize.length === 0) {
-              return new CompactionCheckpoint({
-                id: Bun.randomUUIDv7(),
-                branchId,
-                summary: "",
-                firstKeptMessageId: firstKeptMessage.id,
-                messageCount: messages.length,
-                tokenCount: tokens,
-                createdAt: new Date(),
-              })
-            }
+              // No messages = nothing to compact
+              if (messages.length === 0) {
+                return yield* new CheckpointError({
+                  message: "Cannot create compaction checkpoint: no messages to compact",
+                })
+              }
 
-            // Build conversation summary request
-            const summaryPrompt = `Summarize this conversation concisely, preserving key context, decisions, and outcomes. Focus on information needed to continue the conversation effectively.
+              const tokens = estimateTokens(messages)
+              const firstMessage = messages[0]
+              if (!firstMessage) {
+                return yield* new CheckpointError({
+                  message: "Cannot create compaction checkpoint: failed to access first message",
+                })
+              }
+              const sessionId = firstMessage.sessionId
+
+              // Find the first message to keep (last 20% of messages or last 10 messages, whichever is more)
+              const keepCount = Math.max(Math.ceil(messages.length * 0.2), 10)
+              const firstKeptIndex = Math.max(0, messages.length - keepCount)
+              const firstKeptMessage = messages[firstKeptIndex]
+              if (!firstKeptMessage) {
+                return yield* new CheckpointError({
+                  message:
+                    "Cannot create compaction checkpoint: failed to determine first kept message",
+                })
+              }
+
+              // Summarize messages before the kept ones
+              const messagesToSummarize = messages.slice(0, firstKeptIndex)
+              if (messagesToSummarize.length === 0) {
+                return new CompactionCheckpoint({
+                  id: Bun.randomUUIDv7(),
+                  branchId,
+                  summary: "",
+                  firstKeptMessageId: firstKeptMessage.id,
+                  messageCount: messages.length,
+                  tokenCount: tokens,
+                  createdAt: new Date(),
+                })
+              }
+
+              // Build conversation summary request
+              const summaryPrompt = `Summarize this conversation concisely, preserving key context, decisions, and outcomes. Focus on information needed to continue the conversation effectively.
 
 Conversation:
 ${messagesToSummarize
   .map((m) => {
     const text = m.parts
-      .filter((p) => p.type === "text")
-      .map((p) => (p as TextPart).text)
+      .filter((p): p is TextPart => p.type === "text")
+      .map((p) => p.text)
       .join("\n")
     return `${m.role}: ${text}`
   })
   .join("\n\n")}`
 
-            const summaryMessage = new Message({
-              id: Bun.randomUUIDv7(),
-              sessionId: messages[0]?.sessionId ?? "",
-              branchId,
-              role: "user",
-              parts: [new TextPart({ type: "text", text: summaryPrompt })],
-              createdAt: new Date(),
-            })
-
-            const streamEffect = yield* provider.stream({
-              model,
-              messages: [summaryMessage],
-              maxTokens: 2000,
-            })
-
-            const summaryParts: string[] = []
-            yield* Stream.runForEach(streamEffect, (chunk) =>
-              Effect.sync(() => {
-                if (chunk._tag === "TextChunk") {
-                  summaryParts.push(chunk.text)
-                }
+              const summaryMessage = new Message({
+                id: Bun.randomUUIDv7(),
+                sessionId,
+                branchId,
+                role: "user",
+                parts: [new TextPart({ type: "text", text: summaryPrompt })],
+                createdAt: new Date(),
               })
-            )
 
-            const summary = summaryParts.join("")
+              const streamEffect = yield* provider.stream({
+                model,
+                messages: [summaryMessage],
+                maxTokens: 2000,
+              })
 
-            const checkpoint = new CompactionCheckpoint({
-              id: Bun.randomUUIDv7(),
-              branchId,
-              summary,
-              firstKeptMessageId: firstKeptMessage.id,
-              messageCount: messages.length,
-              tokenCount: tokens,
-              createdAt: new Date(),
-            })
+              const summaryParts: string[] = []
+              yield* Stream.runForEach(streamEffect, (chunk) =>
+                Effect.sync(() => {
+                  if (chunk._tag === "TextChunk") {
+                    summaryParts.push(chunk.text)
+                  }
+                }),
+              )
 
-            yield* storage.createCheckpoint(checkpoint)
+              const summary = summaryParts.join("")
 
-            return checkpoint
-          }),
+              const checkpoint = new CompactionCheckpoint({
+                id: Bun.randomUUIDv7(),
+                branchId,
+                summary,
+                firstKeptMessageId: firstKeptMessage.id,
+                messageCount: messages.length,
+                tokenCount: tokens,
+                createdAt: new Date(),
+              })
+
+              yield* storage.createCheckpoint(checkpoint)
+
+              return checkpoint
+            },
+          ),
 
           createPlanCheckpoint: Effect.fn("CheckpointService.createPlanCheckpoint")(function* (
             branchId: string,
-            planPath: string
+            planPath: string,
           ) {
             const messages = yield* storage.listMessages(branchId)
             const tokens = estimateTokens(messages)
@@ -309,7 +321,7 @@ ${messagesToSummarize
         }
 
         return service
-      })
+      }),
     )
 
   static Test = (): Layer.Layer<CheckpointService> =>
@@ -325,7 +337,7 @@ ${messagesToSummarize
             messageCount: 0,
             tokenCount: 0,
             createdAt: new Date(),
-          })
+          }),
         ),
       createPlanCheckpoint: (branchId, planPath) =>
         Effect.succeed(
@@ -336,11 +348,10 @@ ${messagesToSummarize
             messageCount: 0,
             tokenCount: 0,
             createdAt: new Date(),
-          })
+          }),
         ),
       getLatestCheckpoint: () => Effect.succeed(undefined),
       prune: (messages) => Effect.succeed([...messages]),
       estimateTokens: (messages) => Effect.succeed(estimateTokens(messages)),
     })
 }
-

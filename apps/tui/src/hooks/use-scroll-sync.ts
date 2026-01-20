@@ -20,10 +20,7 @@ interface ScrollSyncOptions {
 /**
  * ID-based scroll sync - finds element by ID and scrolls to keep it visible
  */
-export function useScrollSync(
-  selectedId: Accessor<string>,
-  options: ScrollSyncOptions,
-) {
+export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions) {
   const { getRef, retries = 15, retryDelay = 30 } = options
 
   const syncScroll = (id: string): boolean => {
@@ -46,16 +43,10 @@ export function useScrollSync(
     return true
   }
 
-  const syncScrollWithRetry = (
-    id: string,
-    remainingRetries: number = retries,
-  ) => {
+  const syncScrollWithRetry = (id: string, remainingRetries: number = retries) => {
     if (syncScroll(id)) return
     if (remainingRetries > 0) {
-      setTimeout(
-        () => syncScrollWithRetry(id, remainingRetries - 1),
-        retryDelay,
-      )
+      setTimeout(() => syncScrollWithRetry(id, remainingRetries - 1), retryDelay)
     }
   }
 

@@ -61,19 +61,21 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       if (!s) throw new Error("No active session")
 
-      await run(props.rpcClient.sendMessage({
-        sessionId: s.sessionId,
-        branchId: s.branchId,
-        content,
-        ...(mode !== undefined ? { mode } : {}),
-      }))
+      await run(
+        props.rpcClient.sendMessage({
+          sessionId: s.sessionId,
+          branchId: s.branchId,
+          content,
+          ...(mode !== undefined ? { mode } : {}),
+        }),
+      )
     },
 
     createSession: async (firstMessage) => {
       setState({ sessionState: { status: "loading", creating: true } })
-      const result = await run(props.rpcClient.createSession(
-        firstMessage !== undefined ? { firstMessage } : {}
-      ))
+      const result = await run(
+        props.rpcClient.createSession(firstMessage !== undefined ? { firstMessage } : {}),
+      )
       setState({
         sessionState: {
           status: "active",
@@ -109,7 +111,9 @@ export function ClientProvider(props: ClientProviderProps) {
     listMessages: async () => {
       const s = session()
       if (!s) return []
-      return run(props.rpcClient.listMessages({ branchId: s.branchId })) as Promise<readonly MessageInfoReadonly[]>
+      return run(props.rpcClient.listMessages({ branchId: s.branchId })) as Promise<
+        readonly MessageInfoReadonly[]
+      >
     },
 
     listSessions: async () => {
@@ -127,10 +131,12 @@ export function ClientProvider(props: ClientProviderProps) {
     createBranch: async (name) => {
       const s = session()
       if (!s) throw new Error("No active session")
-      const result = await run(props.rpcClient.createBranch({
-        sessionId: s.sessionId,
-        ...(name !== undefined ? { name } : {}),
-      }))
+      const result = await run(
+        props.rpcClient.createBranch({
+          sessionId: s.sessionId,
+          ...(name !== undefined ? { name } : {}),
+        }),
+      )
       return result.branchId
     },
 
@@ -140,33 +146,33 @@ export function ClientProvider(props: ClientProviderProps) {
       if (!s) return () => {}
 
       const events = props.rpcClient.subscribeEvents({ sessionId: s.sessionId })
-      void run(Stream.runForEach(events, (e: AgentEvent) =>
-        Effect.sync(() => {
-          if (cancelled) return
+      void run(
+        Stream.runForEach(events, (e: AgentEvent) =>
+          Effect.sync(() => {
+            if (cancelled) return
 
-          // Handle session name update internally
-          if (e._tag === "SessionNameUpdated" && e.sessionId === s.sessionId) {
-            setState(
-              produce((draft) => {
-                if (draft.sessionState.status === "active") {
-                  draft.sessionState.session.name = e.name
-                }
-              })
-            )
-          }
+            // Handle session name update internally
+            if (e._tag === "SessionNameUpdated" && e.sessionId === s.sessionId) {
+              setState(
+                produce((draft) => {
+                  if (draft.sessionState.status === "active") {
+                    draft.sessionState.session.name = e.name
+                  }
+                }),
+              )
+            }
 
-          onEvent(e)
-        })
-      ))
-      return () => { cancelled = true }
+            onEvent(e)
+          }),
+        ),
+      )
+      return () => {
+        cancelled = true
+      }
     },
 
     steer: (command) => run(props.rpcClient.steer({ command })),
   }
 
-  return (
-    <ClientContext.Provider value={value}>
-      {props.children}
-    </ClientContext.Provider>
-  )
+  return <ClientContext.Provider value={value}>{props.children}</ClientContext.Provider>
 }

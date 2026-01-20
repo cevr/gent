@@ -6,7 +6,7 @@
     ".": "./src/index.ts"
   },
   "peerDependencies": {
-    "effect": "catalog:",
-    "@effect/platform": "catalog:"
+    "@effect/platform": "catalog:",
+    "effect": "catalog:"
   }
 }

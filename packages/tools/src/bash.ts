@@ -19,12 +19,12 @@ export const BashParams = Schema.Struct({
   timeout: Schema.optional(
     Schema.Number.annotations({
       description: "Timeout in milliseconds (default: 120000, max: 600000)",
-    })
+    }),
   ),
   cwd: Schema.optional(
     Schema.String.annotations({
       description: "Working directory for command execution",
-    })
+    }),
   ),
 })
 

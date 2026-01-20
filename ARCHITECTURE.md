@@ -69,6 +69,7 @@ AgentLoop {
 ```
 
 **Plan flow:**
+
 1. Agent analyzes task complexity OR user asks for plan
 2. If planning needed → read-only tools, uses AskUser to clarify
 3. Writes plan to `.gent/plans/{timestamp}-{slug}.md`
@@ -83,7 +84,7 @@ AgentLoop {
 defineTool({
   name: "read",
   params: Schema,
-  execute: (params, ctx) => Effect<Result, Error, Deps>
+  execute: (params, ctx) => Effect<Result, Error, Deps>,
 })
 ```
 
@@ -134,6 +135,7 @@ Fork at any message. Tree navigation. Independent compaction per branch.
 ```
 
 **Baked in (not configurable):**
+
 - SQLite storage
 - All core tools enabled
 - Compaction at 100k tokens

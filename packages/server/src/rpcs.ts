@@ -66,7 +66,7 @@ export class GentRpcs extends RpcGroup.make(
     payload: SubscribeEventsPayload.fields,
     success: AgentEvent,
     stream: true,
-  })
+  }),
 ) {}
 
 // Type for the RPC client

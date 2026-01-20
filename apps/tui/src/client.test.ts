@@ -79,7 +79,7 @@ describe("extractToolCalls", () => {
 describe("buildToolResultMap", () => {
   const makeMsg = (
     role: "user" | "assistant" | "tool",
-    parts: MessagePart[]
+    parts: MessagePart[],
   ): MessageInfoReadonly => ({
     id: Bun.randomUUIDv7(),
     sessionId: "s1",
@@ -91,11 +91,7 @@ describe("buildToolResultMap", () => {
   })
 
   // Helper to create tool result parts with all required fields
-  const toolResult = (
-    toolCallId: string,
-    value: unknown,
-    isError = false
-  ): MessagePart => ({
+  const toolResult = (toolCallId: string, value: unknown, isError = false): MessagePart => ({
     type: "tool-result",
     toolCallId,
     toolName: "test-tool",
@@ -104,9 +100,7 @@ describe("buildToolResultMap", () => {
 
   test("builds map from tool messages", () => {
     const messages: MessageInfoReadonly[] = [
-      makeMsg("assistant", [
-        { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
-      ]),
+      makeMsg("assistant", [{ type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} }]),
       makeMsg("tool", [toolResult("tc1", "file contents here")]),
     ]
 
@@ -134,9 +128,7 @@ describe("buildToolResultMap", () => {
 
   test("truncates long output in summary", () => {
     const longText = "x".repeat(150)
-    const messages: MessageInfoReadonly[] = [
-      makeMsg("tool", [toolResult("tc1", longText)]),
-    ]
+    const messages: MessageInfoReadonly[] = [makeMsg("tool", [toolResult("tc1", longText)])]
 
     const map = buildToolResultMap(messages)
     const result = map.get("tc1")!
@@ -147,9 +139,7 @@ describe("buildToolResultMap", () => {
 
   test("summary uses first line only", () => {
     const multiline = "First line\nSecond line\nThird line"
-    const messages: MessageInfoReadonly[] = [
-      makeMsg("tool", [toolResult("tc1", multiline)]),
-    ]
+    const messages: MessageInfoReadonly[] = [makeMsg("tool", [toolResult("tc1", multiline)])]
 
     const map = buildToolResultMap(messages)
     expect(map.get("tc1")?.summary).toBe("First line")

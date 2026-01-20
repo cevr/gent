@@ -5,21 +5,16 @@ import { parseHTML } from "linkedom"
 
 // WebFetch Error
 
-export class WebFetchError extends Schema.TaggedError<WebFetchError>()(
-  "WebFetchError",
-  {
-    message: Schema.String,
-    url: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  }
-) {}
+export class WebFetchError extends Schema.TaggedError<WebFetchError>()("WebFetchError", {
+  message: Schema.String,
+  url: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // WebFetch Params
 
 export const WebFetchParams = Schema.Struct({
-  url: Schema.String.pipe(
-    Schema.pattern(/^https?:\/\//)
-  ).annotations({
+  url: Schema.String.pipe(Schema.pattern(/^https?:\/\//)).annotations({
     description: "URL to fetch (must start with http:// or https://)",
   }),
   selector: Schema.optional(Schema.String).annotations({

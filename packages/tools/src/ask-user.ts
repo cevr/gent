@@ -10,7 +10,7 @@ export const AskUserParams = Schema.Struct({
   options: Schema.optional(
     Schema.Array(Schema.String).annotations({
       description: "Optional list of choices",
-    })
+    }),
   ),
 })
 
@@ -23,19 +23,14 @@ export const AskUserResult = Schema.Struct({
 // AskUser Handler Service
 
 export interface AskUserHandlerService {
-  readonly ask: (
-    question: string,
-    options?: ReadonlyArray<string>
-  ) => Effect.Effect<string>
+  readonly ask: (question: string, options?: ReadonlyArray<string>) => Effect.Effect<string>
 }
 
 export class AskUserHandler extends Context.Tag("AskUserHandler")<
   AskUserHandler,
   AskUserHandlerService
 >() {
-  static Test = (
-    responses: ReadonlyArray<string>
-  ): Layer.Layer<AskUserHandler> => {
+  static Test = (responses: ReadonlyArray<string>): Layer.Layer<AskUserHandler> => {
     let index = 0
     return Layer.succeed(AskUserHandler, {
       ask: () => Effect.succeed(responses[index++] ?? ""),

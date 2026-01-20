@@ -22,7 +22,7 @@ describe("Plan Mode", () => {
     const layer = PlanModeHandler.Test("build", [true])
 
     const result = await Effect.runPromise(
-      PlanEnterTool.execute({}, ctx).pipe(Effect.provide(layer))
+      PlanEnterTool.execute({}, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.mode).toBe("plan")
@@ -33,7 +33,7 @@ describe("Plan Mode", () => {
     const layer = PlanModeHandler.Test("build", [false])
 
     const result = await Effect.runPromise(
-      PlanEnterTool.execute({}, ctx).pipe(Effect.provide(layer))
+      PlanEnterTool.execute({}, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.mode).toBe("build")
@@ -44,7 +44,7 @@ describe("Plan Mode", () => {
     const layer = PlanModeHandler.Test("plan", [true])
 
     const result = await Effect.runPromise(
-      PlanExitTool.execute({}, ctx).pipe(Effect.provide(layer))
+      PlanExitTool.execute({}, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.mode).toBe("build")
@@ -70,11 +70,11 @@ describe("Plan Mode", () => {
   })
 
   test("PLAN_MODE_TOOLS contains expected tools", () => {
-    expect(PLAN_MODE_TOOLS).toContain("read")
-    expect(PLAN_MODE_TOOLS).toContain("grep")
-    expect(PLAN_MODE_TOOLS).toContain("glob")
-    expect(PLAN_MODE_TOOLS).toContain("webfetch")
-    expect(PLAN_MODE_TOOLS).toContain("plan_exit")
+    expect(PLAN_MODE_TOOLS.has("read")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("grep")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("glob")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("webfetch")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("plan_exit")).toBe(true)
   })
 })
 
@@ -92,7 +92,7 @@ describe("Session Mode Initialization", () => {
     const layer = PlanModeHandler.Test("plan", [true])
 
     const result = await Effect.runPromise(
-      PlanExitTool.execute({}, ctx).pipe(Effect.provide(layer))
+      PlanExitTool.execute({}, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.mode).toBe("build")
@@ -103,7 +103,7 @@ describe("Session Mode Initialization", () => {
     const layer = PlanModeHandler.Test("build", [true])
 
     const result = await Effect.runPromise(
-      PlanEnterTool.execute({}, ctx).pipe(Effect.provide(layer))
+      PlanEnterTool.execute({}, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.mode).toBe("plan")
@@ -111,14 +111,14 @@ describe("Session Mode Initialization", () => {
   })
 
   test("PLAN_MODE_TOOLS contains all read-only tools", () => {
-    expect(PLAN_MODE_TOOLS).toContain("read")
-    expect(PLAN_MODE_TOOLS).toContain("grep")
-    expect(PLAN_MODE_TOOLS).toContain("glob")
-    expect(PLAN_MODE_TOOLS).toContain("webfetch")
-    expect(PLAN_MODE_TOOLS).toContain("question")
-    expect(PLAN_MODE_TOOLS).toContain("todo_read")
-    expect(PLAN_MODE_TOOLS).toContain("ask_user")
-    expect(PLAN_MODE_TOOLS).toContain("plan_exit")
+    expect(PLAN_MODE_TOOLS.has("read")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("grep")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("glob")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("webfetch")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("question")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("todo_read")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("ask_user")).toBe(true)
+    expect(PLAN_MODE_TOOLS.has("plan_exit")).toBe(true)
   })
 
   test("write tools are excluded from plan mode", () => {

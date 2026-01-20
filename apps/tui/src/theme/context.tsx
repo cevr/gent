@@ -63,7 +63,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
               produce((draft) => {
                 draft.active = "opencode"
                 draft.ready = true
-              })
+              }),
             )
           }
           return
@@ -74,7 +74,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
             if (store.active === "system") {
               draft.ready = true
             }
-          })
+          }),
         )
       })
       .catch(() => {
@@ -84,7 +84,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
             produce((draft) => {
               draft.active = "opencode"
               draft.ready = true
-            })
+            }),
           )
         }
       })

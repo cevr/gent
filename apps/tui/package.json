@@ -1,10 +1,10 @@
 {
   "name": "@gent/tui",
   "version": "0.0.0",
-  "type": "module",
   "bin": {
     "gent": "bin/gent"
   },
+  "type": "module",
   "scripts": {
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "bun scripts/build.ts"
@@ -22,10 +22,10 @@
     "figlet": "^1.9.4",
     "solid-js": "^1.9.10"
   },
-  "peerDependencies": {
-    "effect": "catalog:"
-  },
   "devDependencies": {
     "@types/figlet": "^1.7.0"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

@@ -160,7 +160,7 @@ const runHeadless = (
   core: GentCoreService,
   sessionId: string,
   branchId: string,
-  promptText: string
+  promptText: string,
 ): Effect.Effect<void, GentCoreError, never> =>
   Effect.gen(function* () {
     // Subscribe to events before sending message
@@ -181,7 +181,9 @@ const runHeadless = (
               process.stdout.write(`\n[tool: ${event.toolName}]\n`)
               break
             case "ToolCallCompleted":
-              process.stdout.write(`[tool done: ${event.toolName}${event.isError ? " (error)" : ""}]\n`)
+              process.stdout.write(
+                `[tool done: ${event.toolName}${event.isError ? " (error)" : ""}]\n`,
+              )
               break
             case "StreamEnded":
               process.stdout.write("\n")
@@ -190,10 +192,10 @@ const runHeadless = (
               process.stderr.write(`\nError: ${event.error}\n`)
               break
           }
-        })
+        }),
       ),
       Stream.takeUntil((e) => e._tag === "StreamEnded" || e._tag === "ErrorOccurred"),
-      Stream.runDrain
+      Stream.runDrain,
     )
   })
 
@@ -204,26 +206,26 @@ const main = Command.make(
     session: Options.text("session").pipe(
       Options.withAlias("s"),
       Options.withDescription("Session ID to continue"),
-      Options.optional
+      Options.optional,
     ),
     continue_: Options.boolean("continue").pipe(
       Options.withAlias("c"),
       Options.withDescription("Continue last session from current directory"),
-      Options.withDefault(false)
+      Options.withDefault(false),
     ),
     headless: Options.boolean("headless").pipe(
       Options.withAlias("H"),
       Options.withDescription("Run in headless mode (no TUI, streams to stdout)"),
-      Options.withDefault(false)
+      Options.withDefault(false),
     ),
     prompt: Options.text("prompt").pipe(
       Options.withAlias("p"),
       Options.withDescription("Initial prompt (TUI mode)"),
-      Options.optional
+      Options.optional,
     ),
     promptArg: Args.text({ name: "prompt" }).pipe(
       Args.withDescription("Prompt for headless mode"),
-      Args.optional
+      Args.optional,
     ),
   },
   ({ session, continue_, headless, prompt, promptArg }) =>
@@ -262,7 +264,7 @@ const main = Command.make(
       // Model change handler - steers agent to new model
       const handleModelChange = (modelId: ModelId) => {
         Runtime.runPromise(runtime)(
-          core.steer({ _tag: "SwitchModel", model: modelId as string })
+          core.steer({ _tag: "SwitchModel", model: modelId as string }),
         ).catch(() => {
           // Ignore steer errors (e.g., if agent not running)
         })
@@ -287,22 +289,18 @@ const main = Command.make(
       yield* Effect.promise(() =>
         render(() => (
           <WorkspaceProvider cwd={cwd}>
-            <ClientProvider
-              rpcClient={rpcClient}
-              runtime={runtime}
-              initialSession={initialSession}
-            >
+            <ClientProvider rpcClient={rpcClient} runtime={runtime} initialSession={initialSession}>
               <RouterProvider initialRoute={initialRoute}>
                 <App initialPrompt={initialPrompt} onModelChange={handleModelChange} />
               </RouterProvider>
             </ClientProvider>
           </WorkspaceProvider>
-        ))
+        )),
       )
 
       // Keep process alive until TUI exits
       return yield* Effect.never
-    }).pipe(Effect.scoped)
+    }).pipe(Effect.scoped),
 )
 
 // Sessions subcommand
@@ -321,13 +319,13 @@ const sessions = Command.make("sessions", {}, () =>
       const date = new Date(s.updatedAt).toISOString()
       yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
     }
-  })
+  }),
 )
 
 // Root command with subcommands
 const command = main.pipe(
   Command.withSubcommands([sessions]),
-  Command.withDescription("Gent - minimal, opinionated agent harness")
+  Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 
 // CLI
@@ -340,7 +338,4 @@ const cli = Command.run(command, {
 const CliLayer = Layer.mergeAll(FullLayer, BunContext.layer, TracerLayer)
 
 // Run with all layers
-cli(process.argv).pipe(
-  Effect.provide(CliLayer),
-  BunRuntime.runMain
-)
+cli(process.argv).pipe(Effect.provide(CliLayer), BunRuntime.runMain)

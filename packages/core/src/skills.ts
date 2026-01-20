@@ -36,9 +36,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
 
         let skills: Skill[] = []
 
-        const loadSkillsFromDir = (
-          dir: string
-        ): Effect.Effect<Skill[], PlatformError> =>
+        const loadSkillsFromDir = (dir: string): Effect.Effect<Skill[], PlatformError> =>
           Effect.gen(function* () {
             const exists = yield* fs.exists(dir)
             if (!exists) return []
@@ -58,7 +56,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
                     new Skill({
                       ...parsed,
                       filePath,
-                    })
+                    }),
                   )
                 }
               } else if (stat.type === "Directory") {
@@ -73,7 +71,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
                       new Skill({
                         ...parsed,
                         filePath: skillPath,
-                      })
+                      }),
                     )
                   }
                 }
@@ -84,10 +82,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
           })
 
         const loadAllSkills = Effect.gen(function* () {
-          const dirs = [
-            path.join(options.cwd, ".gent", "skills"),
-            options.globalDir,
-          ]
+          const dirs = [path.join(options.cwd, ".gent", "skills"), options.globalDir]
 
           // Add Claude Code skills dir if provided
           if (options.claudeSkillsDir) {
@@ -122,17 +117,15 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
               Effect.tap((loaded) =>
                 Effect.sync(() => {
                   skills = loaded
-                })
+                }),
               ),
-              Effect.asVoid
+              Effect.asVoid,
             ),
         }
-      })
+      }),
     )
 
-  static Test = (
-    testSkills: ReadonlyArray<Skill> = []
-  ): Layer.Layer<Skills> =>
+  static Test = (testSkills: ReadonlyArray<Skill> = []): Layer.Layer<Skills> =>
     Layer.succeed(Skills, {
       list: () => Effect.succeed(testSkills),
       get: (name) => Effect.succeed(testSkills.find((s) => s.name === name)),
@@ -144,7 +137,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
 
 function parseSkillFile(
   content: string,
-  filename: string
+  filename: string,
 ): { name: string; description: string; content: string } | null {
   const lines = content.split("\n")
 
@@ -153,7 +146,10 @@ function parseSkillFile(
     const endIndex = lines.findIndex((l, i) => i > 0 && l.trim() === "---")
     if (endIndex > 0) {
       const frontmatter = lines.slice(1, endIndex).join("\n")
-      const body = lines.slice(endIndex + 1).join("\n").trim()
+      const body = lines
+        .slice(endIndex + 1)
+        .join("\n")
+        .trim()
 
       // Simple YAML parsing for name and description
       const nameMatch = frontmatter.match(/^name:\s*(.+)$/m)
@@ -175,7 +171,10 @@ function parseSkillFile(
   const name = filename.replace(/\.md$/, "").replace(/^SKILL$/, filename.replace(/\.md$/, ""))
 
   // Try to extract description from first paragraph
-  const firstPara = content.split("\n\n")[0]?.replace(/^#.*\n/, "").trim()
+  const firstPara = content
+    .split("\n\n")[0]
+    ?.replace(/^#.*\n/, "")
+    .trim()
 
   return {
     name,
@@ -189,9 +188,7 @@ function parseSkillFile(
 export const formatSkillsForPrompt = (skills: ReadonlyArray<Skill>): string => {
   if (skills.length === 0) return ""
 
-  const skillsList = skills
-    .map((s) => `- **${s.name}**: ${s.description}`)
-    .join("\n")
+  const skillsList = skills.map((s) => `- **${s.name}**: ${s.description}`).join("\n")
 
   return `<available_skills>
 ${skillsList}

@@ -35,9 +35,7 @@ describe("Tools", () => {
 
       try {
         const result = await Effect.runPromise(
-          ReadTool.execute({ path: testFile }, ctx).pipe(
-            Effect.provide(PlatformLayer)
-          )
+          ReadTool.execute({ path: testFile }, ctx).pipe(Effect.provide(PlatformLayer)),
         )
         expect(result.content).toBe("1\tHello, World!")
       } finally {
@@ -47,9 +45,9 @@ describe("Tools", () => {
 
     test("returns error for non-existent file", async () => {
       const result = await Effect.runPromise(
-        Effect.either(
-          ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx)
-        ).pipe(Effect.provide(PlatformLayer))
+        Effect.either(ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx)).pipe(
+          Effect.provide(PlatformLayer),
+        ),
       )
       expect(result._tag).toBe("Left")
     })
@@ -65,8 +63,8 @@ describe("Tools", () => {
       try {
         const result = await Effect.runPromise(
           GlobTool.execute({ pattern: "*.ts", path: tmpDir }, ctx).pipe(
-            Effect.provide(PlatformLayer)
-          )
+            Effect.provide(PlatformLayer),
+          ),
         )
         expect(result.files.length).toBe(2)
         expect(result.files.every((f) => f.endsWith(".ts"))).toBe(true)
@@ -86,8 +84,8 @@ describe("Tools", () => {
       try {
         const result = await Effect.runPromise(
           GrepTool.execute({ pattern: "foo", path: tmpDir }, ctx).pipe(
-            Effect.provide(PlatformLayer)
-          )
+            Effect.provide(PlatformLayer),
+          ),
         )
         expect(result.matches.length).toBe(2)
       } finally {
@@ -108,12 +106,12 @@ describe("Todo Tools", () => {
         updatedAt: new Date(),
       }),
     ]),
-    PlatformLayer
+    PlatformLayer,
   )
 
   test("TodoReadTool reads existing todos", async () => {
     const result = await Effect.runPromise(
-      TodoReadTool.execute({}, ctx).pipe(Effect.provide(todoLayer))
+      TodoReadTool.execute({}, ctx).pipe(Effect.provide(todoLayer)),
     )
     expect(result.todos.length).toBe(1)
     expect(result.todos[0]?.content).toBe("First task")
@@ -131,13 +129,13 @@ describe("Todo Tools", () => {
             { content: "Another task", status: "pending", priority: "high" },
           ],
         },
-        ctx
-      ).pipe(Effect.provide(layer))
+        ctx,
+      ).pipe(Effect.provide(layer)),
     )
     expect(writeResult.count).toBe(2)
 
     const readResult = await Effect.runPromise(
-      TodoReadTool.execute({}, ctx).pipe(Effect.provide(layer))
+      TodoReadTool.execute({}, ctx).pipe(Effect.provide(layer)),
     )
     expect(readResult.todos.length).toBe(2)
     expect(readResult.todos[0]?.status).toBe("in_progress")
@@ -149,7 +147,7 @@ describe("Question Tool", () => {
   test("QuestionTool asks questions and returns answers", async () => {
     const layer = Layer.merge(
       QuestionHandler.Test([["Option A"], ["Option B", "Option C"]]),
-      PlatformLayer
+      PlatformLayer,
     )
 
     const result = await Effect.runPromise(
@@ -175,8 +173,8 @@ describe("Question Tool", () => {
             },
           ],
         },
-        ctx
-      ).pipe(Effect.provide(layer))
+        ctx,
+      ).pipe(Effect.provide(layer)),
     )
 
     expect(result.answers.length).toBe(2)

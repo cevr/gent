@@ -25,7 +25,7 @@ export const EditParams = Schema.Struct({
   replaceAll: Schema.optional(
     Schema.Boolean.annotations({
       description: "Replace all occurrences (default: false)",
-    })
+    }),
   ),
 })
 
@@ -56,8 +56,8 @@ export const EditTool = defineTool({
             message: `Failed to read file: ${e.message}`,
             path: filePath,
             cause: e,
-          })
-      )
+          }),
+      ),
     )
 
     // Count occurrences
@@ -88,8 +88,8 @@ export const EditTool = defineTool({
             message: `Failed to write file: ${e.message}`,
             path: filePath,
             cause: e,
-          })
-      )
+          }),
+      ),
     )
 
     return {

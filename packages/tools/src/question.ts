@@ -21,10 +21,7 @@ const QuestionInput = Schema.Struct({
   header: Schema.String.pipe(Schema.maxLength(30)).annotations({
     description: "Short label for the question (max 30 chars)",
   }),
-  options: Schema.Array(QuestionOption).pipe(
-    Schema.minItems(2),
-    Schema.maxItems(4)
-  ).annotations({
+  options: Schema.Array(QuestionOption).pipe(Schema.minItems(2), Schema.maxItems(4)).annotations({
     description: "2-4 choices for the user",
   }),
   multiple: Schema.optional(Schema.Boolean).annotations({
@@ -41,7 +38,7 @@ export interface QuestionHandlerService {
       readonly header: string
       readonly options: ReadonlyArray<{ readonly label: string; readonly description: string }>
       readonly multiple?: boolean | undefined
-    }>
+    }>,
   ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>>
 }
 
@@ -49,17 +46,13 @@ export class QuestionHandler extends Context.Tag("QuestionHandler")<
   QuestionHandler,
   QuestionHandlerService
 >() {
-  static Test = (
-    responses: ReadonlyArray<ReadonlyArray<string>>
-  ): Layer.Layer<QuestionHandler> => {
+  static Test = (responses: ReadonlyArray<ReadonlyArray<string>>): Layer.Layer<QuestionHandler> => {
     let callIndex = 0
     return Layer.succeed(QuestionHandler, {
       ask: (questions) =>
         Effect.succeed(
-          questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""])
-        ).pipe(
-          Effect.tap(() => Effect.sync(() => callIndex++))
-        ),
+          questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
+        ).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
     })
   }
 }
@@ -67,10 +60,7 @@ export class QuestionHandler extends Context.Tag("QuestionHandler")<
 // Question Params & Result
 
 export const QuestionParams = Schema.Struct({
-  questions: Schema.Array(QuestionInput).pipe(
-    Schema.minItems(1),
-    Schema.maxItems(5)
-  ).annotations({
+  questions: Schema.Array(QuestionInput).pipe(Schema.minItems(1), Schema.maxItems(5)).annotations({
     description: "1-5 questions to ask the user",
   }),
 })

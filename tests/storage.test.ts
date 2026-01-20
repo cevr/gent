@@ -25,7 +25,7 @@ describe("Storage", () => {
           expect(retrieved).toBeDefined()
           expect(retrieved?.id).toBe("test-session")
           expect(retrieved?.name).toBe("Test Session")
-        })
+        }),
       )
     })
 
@@ -40,7 +40,7 @@ describe("Storage", () => {
               name: "Session 1",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createSession(
             new Session({
@@ -48,12 +48,12 @@ describe("Storage", () => {
               name: "Session 2",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
 
           const sessions = yield* storage.listSessions()
           expect(sessions.length).toBe(2)
-        })
+        }),
       )
     })
 
@@ -69,13 +69,11 @@ describe("Storage", () => {
           })
 
           yield* storage.createSession(session)
-          yield* storage.updateSession(
-            new Session({ ...session, name: "Updated" })
-          )
+          yield* storage.updateSession(new Session({ ...session, name: "Updated" }))
 
           const retrieved = yield* storage.getSession("update-test")
           expect(retrieved?.name).toBe("Updated")
-        })
+        }),
       )
     })
 
@@ -88,14 +86,14 @@ describe("Storage", () => {
               id: "delete-test",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
 
           yield* storage.deleteSession("delete-test")
           const retrieved = yield* storage.getSession("delete-test")
 
           expect(retrieved).toBeUndefined()
-        })
+        }),
       )
     })
   })
@@ -111,7 +109,7 @@ describe("Storage", () => {
               id: "branch-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
 
           const branch = new Branch({
@@ -125,7 +123,7 @@ describe("Storage", () => {
 
           expect(retrieved).toBeDefined()
           expect(retrieved?.sessionId).toBe("branch-session")
-        })
+        }),
       )
     })
 
@@ -139,7 +137,7 @@ describe("Storage", () => {
               id: "multi-branch",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
 
           yield* storage.createBranch(
@@ -147,7 +145,7 @@ describe("Storage", () => {
               id: "b1",
               sessionId: "multi-branch",
               createdAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
@@ -155,12 +153,12 @@ describe("Storage", () => {
               sessionId: "multi-branch",
               parentBranchId: "b1",
               createdAt: new Date(),
-            })
+            }),
           )
 
           const branches = yield* storage.listBranches("multi-branch")
           expect(branches.length).toBe(2)
-        })
+        }),
       )
     })
   })
@@ -176,14 +174,14 @@ describe("Storage", () => {
               id: "msg-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "msg-branch",
               sessionId: "msg-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           const message = new Message({
@@ -201,7 +199,7 @@ describe("Storage", () => {
           expect(retrieved).toBeDefined()
           expect(retrieved?.role).toBe("user")
           expect(retrieved?.parts[0]?.type).toBe("text")
-        })
+        }),
       )
     })
 
@@ -215,14 +213,14 @@ describe("Storage", () => {
               id: "list-msg-session",
               createdAt: new Date(),
               updatedAt: new Date(),
-            })
+            }),
           )
           yield* storage.createBranch(
             new Branch({
               id: "list-msg-branch",
               sessionId: "list-msg-session",
               createdAt: new Date(),
-            })
+            }),
           )
 
           yield* storage.createMessage(
@@ -233,7 +231,7 @@ describe("Storage", () => {
               role: "user",
               parts: [new TextPart({ type: "text", text: "First" })],
               createdAt: new Date(),
-            })
+            }),
           )
           yield* storage.createMessage(
             new Message({
@@ -243,14 +241,14 @@ describe("Storage", () => {
               role: "assistant",
               parts: [new TextPart({ type: "text", text: "Response" })],
               createdAt: new Date(),
-            })
+            }),
           )
 
           const messages = yield* storage.listMessages("list-msg-branch")
           expect(messages.length).toBe(2)
           expect(messages[0]?.role).toBe("user")
           expect(messages[1]?.role).toBe("assistant")
-        })
+        }),
       )
     })
   })
@@ -262,7 +260,7 @@ describe("Storage", () => {
           const storage = yield* Storage
           const todos = yield* storage.listTodos("nonexistent")
           expect(todos.length).toBe(0)
-        })
+        }),
       )
     })
 
@@ -297,7 +295,7 @@ describe("Storage", () => {
           expect(retrieved[0]?.content).toBe("Task 1")
           expect(retrieved[0]?.priority).toBe("high")
           expect(retrieved[1]?.status).toBe("in_progress")
-        })
+        }),
       )
     })
 
@@ -330,7 +328,7 @@ describe("Storage", () => {
           const todos = yield* storage.listTodos("branch")
           expect(todos.length).toBe(1)
           expect(todos[0]?.content).toBe("New")
-        })
+        }),
       )
     })
   })

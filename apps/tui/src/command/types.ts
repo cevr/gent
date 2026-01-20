@@ -50,7 +50,7 @@ export function parseKeybind(config: string): Keybind | null {
 
 export function matchKeybind(
   keybind: Keybind,
-  event: { name: string; ctrl?: boolean; shift?: boolean; meta?: boolean }
+  event: { name: string; ctrl?: boolean; shift?: boolean; meta?: boolean },
 ): boolean {
   return (
     keybind.key === event.name.toLowerCase() &&

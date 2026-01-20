@@ -26,7 +26,7 @@ describe("Sequence Recording", () => {
           expect(calls.length).toBe(1)
           expect(calls[0]?.service).toBe("TestService")
           expect(calls[0]?.method).toBe("testMethod")
-        }).pipe(Effect.provide(SequenceRecorder.Live))
+        }).pipe(Effect.provide(SequenceRecorder.Live)),
       )
     })
 
@@ -39,7 +39,7 @@ describe("Sequence Recording", () => {
 
           const calls = yield* recorder.getCalls()
           expect(calls.length).toBe(0)
-        }).pipe(Effect.provide(SequenceRecorder.Live))
+        }).pipe(Effect.provide(SequenceRecorder.Live)),
       )
     })
   })
@@ -66,7 +66,7 @@ describe("Sequence Recording", () => {
           const providerCalls = calls.filter((c) => c.service === "Provider")
           expect(providerCalls.length).toBe(1)
           expect(providerCalls[0]?.method).toBe("stream")
-        }).pipe(Effect.provide(TestLayer))
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
 
@@ -76,15 +76,13 @@ describe("Sequence Recording", () => {
           const eventBus = yield* EventBus
           const recorder = yield* SequenceRecorder
 
-          yield* eventBus.publish(
-            new StreamStarted({ sessionId: "s1", branchId: "b1" })
-          )
+          yield* eventBus.publish(new StreamStarted({ sessionId: "s1", branchId: "b1" }))
 
           const calls = yield* recorder.getCalls()
           const eventCalls = calls.filter((c) => c.service === "EventBus")
           expect(eventCalls.length).toBe(1)
           expect((eventCalls[0]?.args as any)?._tag).toBe("StreamStarted")
-        }).pipe(Effect.provide(TestLayer))
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
 
@@ -103,7 +101,7 @@ describe("Sequence Recording", () => {
           const calls = yield* recorder.getCalls()
           const askCalls = calls.filter((c) => c.service === "AskUserHandler")
           expect(askCalls.length).toBe(2)
-        }).pipe(Effect.provide(TestLayer))
+        }).pipe(Effect.provide(TestLayer)),
       )
     })
   })
@@ -120,16 +118,16 @@ describe("Sequence Recording", () => {
         assertSequence(calls, [
           { service: "A", method: "x" },
           { service: "C", method: "z" },
-        ])
+        ]),
       ).not.toThrow()
     })
 
     test("throws on missing call", () => {
       const calls = [{ service: "A", method: "x", timestamp: 1 }]
 
-      expect(() =>
-        assertSequence(calls, [{ service: "B", method: "y" }])
-      ).toThrow(/Expected call not found/)
+      expect(() => assertSequence(calls, [{ service: "B", method: "y" }])).toThrow(
+        /Expected call not found/,
+      )
     })
 
     test("matches with args filter", () => {
@@ -141,7 +139,7 @@ describe("Sequence Recording", () => {
       expect(() =>
         assertSequence(calls, [
           { service: "Provider", method: "stream", match: { model: "claude" } },
-        ])
+        ]),
       ).not.toThrow()
     })
   })

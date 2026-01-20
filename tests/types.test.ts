@@ -1,13 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import { Storage } from "@gent/storage"
-import {
-  Message,
-  TextPart,
-  ToolCallPart,
-  ToolResultPart,
-  type MessagePart,
-} from "@gent/core"
+import { Message, TextPart, ToolCallPart, ToolResultPart, type MessagePart } from "@gent/core"
 
 // Type chain test - ensure MessagePart flows correctly through all layers
 // core → storage → server
@@ -44,9 +38,7 @@ describe("Type chain", () => {
     })
 
     test("extractText works with MessagePart array", () => {
-      const parts: readonly MessagePart[] = [
-        new TextPart({ type: "text", text: "hello world" }),
-      ]
+      const parts: readonly MessagePart[] = [new TextPart({ type: "text", text: "hello world" })]
       const text = extractText(parts)
       expect(text).toBe("hello world")
     })
@@ -100,7 +92,7 @@ describe("Type chain", () => {
 
           const toolPart = message.parts.find((p): p is ToolCallPart => p.type === "tool-call")
           expect(toolPart?.toolName).toBe("test_tool")
-        }).pipe(Effect.provide(Storage.Test()))
+        }).pipe(Effect.provide(Storage.Test())),
       )
     })
   })

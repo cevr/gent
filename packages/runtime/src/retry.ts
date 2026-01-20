@@ -44,7 +44,13 @@ export const isRetryable = (error: unknown): boolean => {
   if (message.includes("overloaded") || message.includes("529")) return true
 
   // Server errors (5xx)
-  if (message.includes("500") || message.includes("502") || message.includes("503") || message.includes("504")) return true
+  if (
+    message.includes("500") ||
+    message.includes("502") ||
+    message.includes("503") ||
+    message.includes("504")
+  )
+    return true
   if (message.includes("internal server error")) return true
   if (message.includes("bad gateway")) return true
   if (message.includes("service unavailable")) return true
@@ -93,7 +99,7 @@ export const getRetryAfter = (error: unknown): number | undefined => {
 export const getRetryDelay = (
   attempt: number,
   error: unknown,
-  config: RetryConfig = DEFAULT_RETRY_CONFIG
+  config: RetryConfig = DEFAULT_RETRY_CONFIG,
 ): number => {
   // Check retry-after header first
   const retryAfter = getRetryAfter(error)
@@ -108,21 +114,16 @@ export const getRetryDelay = (
 
 // Create retry schedule for Effect
 
-export const makeRetrySchedule = (
-  config: RetryConfig = DEFAULT_RETRY_CONFIG
-) =>
+export const makeRetrySchedule = (config: RetryConfig = DEFAULT_RETRY_CONFIG) =>
   Schedule.exponential(Duration.millis(config.initialDelay), config.backoffFactor).pipe(
     Schedule.whileInput<ProviderError>(isRetryable),
-    Schedule.intersect(Schedule.recurs(config.maxAttempts - 1))
+    Schedule.intersect(Schedule.recurs(config.maxAttempts - 1)),
   )
 
 // Retry wrapper for provider calls
 
 export const withRetry = <A, R>(
   effect: Effect.Effect<A, ProviderError, R>,
-  config: RetryConfig = DEFAULT_RETRY_CONFIG
+  config: RetryConfig = DEFAULT_RETRY_CONFIG,
 ): Effect.Effect<A, ProviderError, R> =>
-  effect.pipe(
-    Effect.retry(makeRetrySchedule(config)),
-    Effect.withSpan("withRetry")
-  )
+  effect.pipe(Effect.retry(makeRetrySchedule(config)), Effect.withSpan("withRetry"))

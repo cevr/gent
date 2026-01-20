@@ -12,7 +12,7 @@ export class RepoExplorerError extends Schema.TaggedError<RepoExplorerError>()(
     message: Schema.String,
     spec: Schema.String,
     cause: Schema.optional(Schema.Unknown),
-  }
+  },
 ) {}
 
 // RepoExplorer Tool Params
@@ -23,17 +23,18 @@ export const RepoExplorerParams = Schema.Struct({
       "Repository spec: owner/repo, owner/repo@tag, npm:package, pypi:package, crates:crate",
   }),
   action: Schema.Literal("fetch", "path", "search", "info").annotations({
-    description: "Action: fetch (clone/download), path (get local path), search (grep), info (metadata)",
+    description:
+      "Action: fetch (clone/download), path (get local path), search (grep), info (metadata)",
   }),
   query: Schema.optional(
     Schema.String.annotations({
       description: "Search query (for search action)",
-    })
+    }),
   ),
   update: Schema.optional(
     Schema.Boolean.annotations({
       description: "Update existing repo (for fetch action)",
-    })
+    }),
   ),
 })
 
@@ -47,11 +48,7 @@ export const RepoExplorerResult = Schema.Struct({
 })
 
 // Cache directory
-const CACHE_DIR = path.join(
-  process.env["HOME"] ?? "~",
-  ".cache",
-  "repo"
-)
+const CACHE_DIR = path.join(process.env["HOME"] ?? "~", ".cache", "repo")
 
 // Parse spec into type and parts
 interface ParsedSpec {
@@ -167,7 +164,11 @@ export const RepoExplorerTool = defineTool({
 
       case "path": {
         const exists = yield* Effect.tryPromise({
-          try: () => fs.access(cachePath).then(() => true).catch(() => false),
+          try: () =>
+            fs
+              .access(cachePath)
+              .then(() => true)
+              .catch(() => false),
           catch: () =>
             new RepoExplorerError({
               message: "Failed to check path",
@@ -191,7 +192,11 @@ export const RepoExplorerTool = defineTool({
           })
         }
         const exists = yield* Effect.tryPromise({
-          try: () => fs.access(cachePath).then(() => true).catch(() => false),
+          try: () =>
+            fs
+              .access(cachePath)
+              .then(() => true)
+              .catch(() => false),
           catch: () =>
             new RepoExplorerError({
               message: "Failed to check path",
@@ -219,9 +224,7 @@ export const RepoExplorerTool = defineTool({
         if (parsed.type === "github") {
           const info = yield* Effect.tryPromise({
             try: async () => {
-              const res = await fetch(
-                `https://api.github.com/repos/${parsed.name}`
-              )
+              const res = await fetch(`https://api.github.com/repos/${parsed.name}`)
               return res.json() as Promise<Record<string, unknown>>
             },
             catch: (e) =>

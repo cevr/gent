@@ -21,7 +21,7 @@
 Stream.async((emit) => {
   // eslint-disable-next-line @typescript-eslint/no-floating-promises
   ;(async () => {
-    await emit.single(chunk)  // Must await
+    await emit.single(chunk) // Must await
     await emit.end()
   })()
 })

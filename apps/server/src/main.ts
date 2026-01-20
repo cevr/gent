@@ -22,21 +22,19 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
     const core = yield* GentCore
     return handlers
       .handle("create", ({ payload }) =>
-        core.createSession({ name: payload.name ?? "New Session" }).pipe(Effect.orDie)
+        core.createSession({ name: payload.name ?? "New Session" }).pipe(Effect.orDie),
       )
       .handle("list", () => core.listSessions().pipe(Effect.orDie))
       .handle("get", ({ path }) =>
         core.getSession(path.sessionId).pipe(
           Effect.flatMap((s) =>
-            s ? Effect.succeed(s) : Effect.die(new Error("Session not found"))
+            s ? Effect.succeed(s) : Effect.die(new Error("Session not found")),
           ),
-          Effect.orDie
-        )
+          Effect.orDie,
+        ),
       )
-      .handle("delete", ({ path }) =>
-        core.deleteSession(path.sessionId).pipe(Effect.orDie)
-      )
-  })
+      .handle("delete", ({ path }) => core.deleteSession(path.sessionId).pipe(Effect.orDie))
+  }),
 )
 
 // Messages API Handlers
@@ -51,18 +49,16 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
             branchId: payload.branchId,
             content: payload.content,
           })
-          .pipe(Effect.orDie)
+          .pipe(Effect.orDie),
       )
-      .handle("list", ({ path }) =>
-        core.listMessages(path.branchId).pipe(Effect.orDie)
-      )
+      .handle("list", ({ path }) => core.listMessages(path.branchId).pipe(Effect.orDie))
       .handle("steer", ({ payload }) =>
         Effect.gen(function* () {
           const command = yield* Schema.decode(SteerCommand)(payload)
           yield* core.steer(command)
-        }).pipe(Effect.orDie)
+        }).pipe(Effect.orDie),
       )
-  })
+  }),
 )
 
 // Events API Handlers (SSE)
@@ -74,19 +70,17 @@ const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
         const events = core.subscribeEvents(path.sessionId)
 
         // Format as SSE
-        const sseStream = events.pipe(
-          Stream.map((e) => `data: ${JSON.stringify(e)}\n\n`)
-        )
+        const sseStream = events.pipe(Stream.map((e) => `data: ${JSON.stringify(e)}\n\n`))
 
         // Return SSE stream as string (simplified)
         const chunks: string[] = []
         yield* Stream.runForEach(Stream.take(sseStream, 100), (chunk) =>
-          Effect.sync(() => chunks.push(chunk))
+          Effect.sync(() => chunks.push(chunk)),
         )
         return chunks.join("")
-      }).pipe(Effect.orDie)
+      }).pipe(Effect.orDie),
     )
-  })
+  }),
 )
 
 // Platform layer for Storage
@@ -105,13 +99,11 @@ const GentCoreLive = GentCore.Live.pipe(Layer.provide(DepsLive))
 // API Groups Layer
 const HttpGroupsLive = Layer.provideMerge(
   Layer.provideMerge(SessionsApiLive, MessagesApiLive),
-  EventsApiLive
+  EventsApiLive,
 ).pipe(Layer.provide(GentCoreLive))
 
 // API Routes
-const HttpApiRoutes = HttpLayerRouter.addHttpApi(GentApi).pipe(
-  Layer.provide(HttpGroupsLive)
-)
+const HttpApiRoutes = HttpLayerRouter.addHttpApi(GentApi).pipe(Layer.provide(HttpGroupsLive))
 
 // Swagger docs at /docs
 const DocsRoute = HttpApiScalar.layerHttpLayerRouter({
@@ -123,18 +115,18 @@ const DocsRoute = HttpApiScalar.layerHttpLayerRouter({
 const OpenApiJsonRoute = HttpLayerRouter.add(
   "GET",
   "/docs/openapi.json",
-  HttpServerResponse.json(OpenApi.fromApi(GentApi))
+  HttpServerResponse.json(OpenApi.fromApi(GentApi)),
 ).pipe(Layer.provide(HttpLayerRouter.layer))
 
 // Merge all routes
 const AllRoutes = Layer.mergeAll(HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
-  Layer.provide(HttpLayerRouter.cors())
+  Layer.provide(HttpLayerRouter.cors()),
 )
 
 // Server
 const HttpServerLive = HttpLayerRouter.serve(AllRoutes).pipe(
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
-  Layer.provide(GentCoreLive)
+  Layer.provide(GentCoreLive),
 )
 
 // Main

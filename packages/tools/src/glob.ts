@@ -20,12 +20,12 @@ export const GlobParams = Schema.Struct({
   path: Schema.optional(
     Schema.String.annotations({
       description: "Directory to search in (default: cwd)",
-    })
+    }),
   ),
   limit: Schema.optional(
     Schema.Number.annotations({
       description: "Maximum number of results (default: 100)",
-    })
+    }),
   ),
 })
 
@@ -40,8 +40,7 @@ export const GlobResult = Schema.Struct({
 
 export const GlobTool = defineTool({
   name: "glob",
-  description:
-    "Find files matching glob pattern. Returns paths sorted by mtime.",
+  description: "Find files matching glob pattern. Returns paths sorted by mtime.",
   params: GlobParams,
   execute: Effect.fn("GlobTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
@@ -60,7 +59,7 @@ export const GlobTool = defineTool({
           message: `Failed to glob: ${e}`,
           pattern: params.pattern,
           cause: e,
-        })
+        }),
     )
 
     // Collect all files, stat each for mtime

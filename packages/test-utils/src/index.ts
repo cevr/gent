@@ -1,12 +1,6 @@
 import { Context, Effect, Layer, Ref, Stream } from "effect"
 import { Storage } from "@gent/storage"
-import {
-  Provider,
-  FinishChunk,
-  TextChunk,
-  ToolCallChunk,
-  type StreamChunk,
-} from "@gent/providers"
+import { Provider, FinishChunk, TextChunk, ToolCallChunk, type StreamChunk } from "@gent/providers"
 import {
   ToolRegistry,
   EventBus,
@@ -15,7 +9,7 @@ import {
   PlanCheckpoint,
   type AgentEvent,
   type Checkpoint,
-  type ToolDefinition,
+  type AnyToolDefinition,
 } from "@gent/core"
 import { AskUserHandler, AllTools } from "@gent/tools"
 import { AgentLoop, CheckpointService } from "@gent/runtime"
@@ -51,21 +45,18 @@ export class SequenceRecorder extends Context.Tag("SequenceRecorder")<
       const ref = yield* Ref.make<CallRecord[]>([])
       return {
         record: (call) =>
-          Ref.update(ref, (calls) => [
-            ...calls,
-            { ...call, timestamp: Date.now() },
-          ]),
+          Ref.update(ref, (calls) => [...calls, { ...call, timestamp: Date.now() }]),
         getCalls: () => Ref.get(ref),
         clear: () => Ref.set(ref, []),
       }
-    })
+    }),
   )
 }
 
 // Recording Provider
 
 export const RecordingProvider = (
-  responses: ReadonlyArray<ReadonlyArray<StreamChunk>>
+  responses: ReadonlyArray<ReadonlyArray<StreamChunk>>,
 ): Layer.Layer<Provider, never, SequenceRecorder> =>
   Layer.effect(
     Provider,
@@ -81,8 +72,7 @@ export const RecordingProvider = (
             method: "stream",
             args: { model: request.model, messageCount: request.messages.length },
           })
-          const chunks =
-            responses[idx] ?? [new FinishChunk({ finishReason: "stop" })]
+          const chunks = responses[idx] ?? [new FinishChunk({ finishReason: "stop" })]
           return Stream.fromIterable(chunks)
         }),
         generate: Effect.fn("RecordingProvider.generate")(function* (request) {
@@ -94,16 +84,12 @@ export const RecordingProvider = (
           return "test response"
         }),
       }
-    })
+    }),
   )
 
 // Recording EventBus
 
-export const RecordingEventBus: Layer.Layer<
-  EventBus,
-  never,
-  SequenceRecorder
-> = Layer.effect(
+export const RecordingEventBus: Layer.Layer<EventBus, never, SequenceRecorder> = Layer.effect(
   EventBus,
   Effect.gen(function* () {
     const recorder = yield* SequenceRecorder
@@ -120,13 +106,13 @@ export const RecordingEventBus: Layer.Layer<
       }),
       subscribe: () => Stream.fromIterable(events),
     }
-  })
+  }),
 )
 
 // Recording AskUserHandler
 
 export const RecordingAskUserHandler = (
-  responses: ReadonlyArray<string>
+  responses: ReadonlyArray<string>,
 ): Layer.Layer<AskUserHandler, never, SequenceRecorder> =>
   Layer.effect(
     AskUserHandler,
@@ -135,10 +121,7 @@ export const RecordingAskUserHandler = (
       const indexRef = yield* Ref.make(0)
 
       return {
-        ask: Effect.fn("RecordingAskUserHandler.ask")(function* (
-          question,
-          options
-        ) {
+        ask: Effect.fn("RecordingAskUserHandler.ask")(function* (question, options) {
           const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
           yield* recorder.record({
             service: "AskUserHandler",
@@ -148,7 +131,7 @@ export const RecordingAskUserHandler = (
           return responses[idx] ?? ""
         }),
       }
-    })
+    }),
   )
 
 // Recording CheckpointService
@@ -159,7 +142,7 @@ export interface CheckpointServiceTestConfig {
 }
 
 export const RecordingCheckpointService = (
-  config: CheckpointServiceTestConfig = {}
+  config: CheckpointServiceTestConfig = {},
 ): Layer.Layer<CheckpointService, never, SequenceRecorder | Storage> =>
   Layer.effect(
     CheckpointService,
@@ -178,32 +161,32 @@ export const RecordingCheckpointService = (
           return config.shouldCompact ?? false
         }),
 
-        createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(function* (
-          branchId: string
-        ) {
-          const checkpoint = new CompactionCheckpoint({
-            id: Bun.randomUUIDv7(),
-            branchId,
-            summary: "Test compaction summary",
-            firstKeptMessageId: "test-kept-msg",
-            messageCount: 10,
-            tokenCount: 5000,
-            createdAt: new Date(),
-          })
-          yield* recorder.record({
-            service: "CheckpointService",
-            method: "createCompactionCheckpoint",
-            args: { branchId },
-            result: checkpoint,
-          })
-          yield* storage.createCheckpoint(checkpoint)
-          yield* Ref.set(checkpointRef, checkpoint)
-          return checkpoint
-        }),
+        createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(
+          function* (branchId: string) {
+            const checkpoint = new CompactionCheckpoint({
+              id: Bun.randomUUIDv7(),
+              branchId,
+              summary: "Test compaction summary",
+              firstKeptMessageId: "test-kept-msg",
+              messageCount: 10,
+              tokenCount: 5000,
+              createdAt: new Date(),
+            })
+            yield* recorder.record({
+              service: "CheckpointService",
+              method: "createCompactionCheckpoint",
+              args: { branchId },
+              result: checkpoint,
+            })
+            yield* storage.createCheckpoint(checkpoint)
+            yield* Ref.set(checkpointRef, checkpoint)
+            return checkpoint
+          },
+        ),
 
         createPlanCheckpoint: Effect.fn("CheckpointService.createPlanCheckpoint")(function* (
           branchId: string,
-          planPath: string
+          planPath: string,
         ) {
           const checkpoint = new PlanCheckpoint({
             id: Bun.randomUUIDv7(),
@@ -225,7 +208,7 @@ export const RecordingCheckpointService = (
         }),
 
         getLatestCheckpoint: Effect.fn("CheckpointService.getLatestCheckpoint")(function* (
-          branchId: string
+          branchId: string,
         ) {
           yield* recorder.record({
             service: "CheckpointService",
@@ -249,7 +232,7 @@ export const RecordingCheckpointService = (
           return Effect.succeed(Math.ceil(chars / 4))
         },
       }
-    })
+    }),
   )
 
 // Test Layer Config
@@ -257,7 +240,7 @@ export const RecordingCheckpointService = (
 export interface TestLayerConfig {
   providerResponses?: ReadonlyArray<ReadonlyArray<StreamChunk>>
   askUserResponses?: ReadonlyArray<string>
-  tools?: ReadonlyArray<ToolDefinition>
+  tools?: ReadonlyArray<AnyToolDefinition>
   recording?: boolean
   checkpoint?: CheckpointServiceTestConfig
 }
@@ -269,7 +252,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? ["yes"]
-  const tools = config.tools ?? (AllTools as unknown as ToolDefinition[])
+  const tools = config.tools ?? AllTools
 
   return Layer.mergeAll(
     Storage.Test(),
@@ -279,20 +262,18 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     Permission.Test(),
     AskUserHandler.Test(askUserResponses),
     AgentLoop.Test(),
-    CheckpointService.Test()
+    CheckpointService.Test(),
   )
 }
 
 // Create Recording Test Layer
 
-export const createRecordingTestLayer = (
-  config: Omit<TestLayerConfig, "recording"> = {}
-) => {
+export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recording"> = {}) => {
   const providerResponses = config.providerResponses ?? [
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? ["yes"]
-  const tools = config.tools ?? (AllTools as unknown as ToolDefinition[])
+  const tools = config.tools ?? AllTools
   const checkpointConfig = config.checkpoint ?? {}
 
   const StorageLayer = Storage.Test()
@@ -301,15 +282,13 @@ export const createRecordingTestLayer = (
     StorageLayer,
     Permission.Test(),
     ToolRegistry.Live(tools),
-    AgentLoop.Test()
+    AgentLoop.Test(),
   ).pipe(
     Layer.provideMerge(RecordingProvider(providerResponses)),
     Layer.provideMerge(RecordingEventBus),
     Layer.provideMerge(RecordingAskUserHandler(askUserResponses)),
-    Layer.provideMerge(
-      Layer.provide(RecordingCheckpointService(checkpointConfig), StorageLayer)
-    ),
-    Layer.provideMerge(SequenceRecorder.Live)
+    Layer.provideMerge(Layer.provide(RecordingCheckpointService(checkpointConfig), StorageLayer)),
+    Layer.provideMerge(SequenceRecorder.Live),
   )
 }
 
@@ -321,7 +300,7 @@ export const assertSequence = (
     service: string
     method: string
     match?: Record<string, unknown>
-  }>
+  }>,
 ) => {
   let actualIdx = 0
 
@@ -333,9 +312,7 @@ export const assertSequence = (
         if (exp.match) {
           const argsObj = call.args as Record<string, unknown> | undefined
           if (argsObj) {
-            const matches = Object.entries(exp.match).every(
-              ([k, v]) => argsObj[k] === v
-            )
+            const matches = Object.entries(exp.match).every(([k, v]) => argsObj[k] === v)
             if (matches) {
               found = true
               actualIdx++
@@ -355,7 +332,7 @@ export const assertSequence = (
       throw new Error(
         `Expected call not found: ${exp.service}.${exp.method}${
           exp.match ? ` with ${JSON.stringify(exp.match)}` : ""
-        }`
+        }`,
       )
     }
   }
@@ -371,7 +348,7 @@ export const mockTextResponse = (text: string): StreamChunk[] => [
 export const mockToolCallResponse = (
   toolCallId: string,
   toolName: string,
-  input: unknown
+  input: unknown,
 ): StreamChunk[] => [
   new ToolCallChunk({ toolCallId, toolName, input }),
   new FinishChunk({ finishReason: "tool_calls" }),
@@ -379,19 +356,12 @@ export const mockToolCallResponse = (
 
 // Test Effect Runner
 
-export const runTest = <A, E>(
-  effect: Effect.Effect<A, E, never>,
-  config: TestLayerConfig = {}
-) =>
-  effect.pipe(
-    Effect.provide(createTestLayer(config)),
-    Effect.runPromise
-  )
+export const runTest = <A, E>(effect: Effect.Effect<A, E, never>, config: TestLayerConfig = {}) =>
+  effect.pipe(Effect.provide(createTestLayer(config)), Effect.runPromise)
 
 // Run with recording
 
 export const runTestWithRecording = <A, E>(
   effect: Effect.Effect<A, E, SequenceRecorder>,
-  config: Omit<TestLayerConfig, "recording"> = {}
-) =>
-  Effect.runPromise(Effect.provide(effect, createRecordingTestLayer(config)))
+  config: Omit<TestLayerConfig, "recording"> = {},
+) => Effect.runPromise(Effect.provide(effect, createRecordingTestLayer(config)))

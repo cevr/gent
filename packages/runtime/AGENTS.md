@@ -10,6 +10,7 @@
 ## Tracing
 
 Spans created automatically by `Effect.fn`:
+
 - `AgentLoop.run`, `AgentLoop.runLoop`, `AgentLoop.executeToolCall`
 - `Provider.stream`
 - All tool executes

@@ -52,6 +52,7 @@ Read `ARCHITECTURE.md` before implementing. Update when diverging.
 ## Effect Patterns
 
 Use `effect` skill. Key patterns:
+
 - Services: `Context.Tag` + `Layer.effect`/`Layer.succeed`
 - Errors: `Schema.TaggedError`
 - Data: `Schema.Class` with branded IDs
@@ -89,20 +90,20 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `packages/storage/src/sqlite-storage.ts` | `decodeMessageParts` for JSON→Schema roundtrip |
-| `packages/test-utils/src/index.ts` | `SequenceRecorder`, recording layers, assertions |
-| `apps/tui/tsconfig.json` | `jsxImportSource: "@opentui/solid"` required |
+| File                                     | Purpose                                          |
+| ---------------------------------------- | ------------------------------------------------ |
+| `packages/storage/src/sqlite-storage.ts` | `decodeMessageParts` for JSON→Schema roundtrip   |
+| `packages/test-utils/src/index.ts`       | `SequenceRecorder`, recording layers, assertions |
+| `apps/tui/tsconfig.json`                 | `jsxImportSource: "@opentui/solid"` required     |
 
 ## Documentation
 
-| Path | Focus |
-|------|-------|
-| `packages/server/AGENTS.md` | GentCore, RPC/HTTP API, layer composition |
-| `packages/core/AGENTS.md` | Type exports, schema patterns |
-| `packages/runtime/AGENTS.md` | AgentLoop, tracing, telemetry |
-| `packages/providers/AGENTS.md` | Provider setup, Stream.async |
-| `packages/storage/AGENTS.md` | SQLite, JSON roundtrip |
-| `packages/test-utils/AGENTS.md` | Test layers, mocking |
-| `apps/tui/AGENTS.md` | OpenTUI, Solid patterns |
+| Path                            | Focus                                     |
+| ------------------------------- | ----------------------------------------- |
+| `packages/server/AGENTS.md`     | GentCore, RPC/HTTP API, layer composition |
+| `packages/core/AGENTS.md`       | Type exports, schema patterns             |
+| `packages/runtime/AGENTS.md`    | AgentLoop, tracing, telemetry             |
+| `packages/providers/AGENTS.md`  | Provider setup, Stream.async              |
+| `packages/storage/AGENTS.md`    | SQLite, JSON roundtrip                    |
+| `packages/test-utils/AGENTS.md` | Test layers, mocking                      |
+| `apps/tui/AGENTS.md`            | OpenTUI, Solid patterns                   |

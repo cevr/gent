@@ -1,4 +1,11 @@
-import { createContext, useContext, createSignal, type JSX, type Accessor, type Setter } from "solid-js"
+import {
+  createContext,
+  useContext,
+  createSignal,
+  type JSX,
+  type Accessor,
+  type Setter,
+} from "solid-js"
 import type { AgentMode } from "@gent/core"
 
 export type AgentStatus = "idle" | "streaming" | "error"
@@ -47,9 +54,5 @@ export function AgentStateProvider(props: AgentStateProviderProps) {
     setError,
   }
 
-  return (
-    <AgentStateContext.Provider value={value}>
-      {props.children}
-    </AgentStateContext.Provider>
-  )
+  return <AgentStateContext.Provider value={value}>{props.children}</AgentStateContext.Provider>
 }

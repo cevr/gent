@@ -19,11 +19,11 @@ RpcHandlersLive (RPC layer)
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `core.ts` | `GentCore` service - session/message management, event streaming |
-| `rpc-handlers.ts` | `RpcHandlersLive` - `GentRpcs.toLayer()` implementation |
-| `index.ts` | Exports, `GentServer.Dependencies()` for layer composition |
+| File              | Purpose                                                          |
+| ----------------- | ---------------------------------------------------------------- |
+| `core.ts`         | `GentCore` service - session/message management, event streaming |
+| `rpc-handlers.ts` | `RpcHandlersLive` - `GentRpcs.toLayer()` implementation          |
+| `index.ts`        | Exports, `GentServer.Dependencies()` for layer composition       |
 
 ## Patterns
 

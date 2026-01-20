@@ -30,7 +30,7 @@ class DevSpan implements Tracer.Span {
     links: Iterable<Tracer.SpanLink>,
     readonly startTime: bigint,
     readonly kind: Tracer.SpanKind,
-    logFile: string
+    logFile: string,
   ) {
     this.logFile = logFile
     this.status = { _tag: "Started", startTime }
@@ -86,7 +86,7 @@ class DevSpan implements Tracer.Span {
       const cause = exit.cause
       const message = Cause.isInterruptedOnly(cause)
         ? "interrupted"
-        : Cause.pretty(cause).split("\n")[0] ?? "unknown error"
+        : (Cause.pretty(cause).split("\n")[0] ?? "unknown error")
       this.log("ERROR", `${this.name}`, `(${durationStr}) - ${message}`)
     }
   }

@@ -140,7 +140,8 @@ export function CommandPalette() {
   // Provider submenu - lists providers with current gen models
   const providerMenu = (): MenuLevel => ({
     title: "Model",
-    items: model.providers()
+    items: model
+      .providers()
       .filter((provider) => model.currentGenByProvider(provider.id).length > 0)
       .map((provider) => ({
         id: `provider.${provider.id}`,
@@ -152,7 +153,9 @@ export function CommandPalette() {
   // Model submenu for a specific provider (current gen only)
   const modelMenu = (providerId: string): MenuLevel => {
     const currentModelId = model.currentModel()
-    const providerModels = model.currentGenByProvider(providerId as Parameters<typeof model.currentGenByProvider>[0])
+    const providerModels = model.currentGenByProvider(
+      providerId as Parameters<typeof model.currentGenByProvider>[0],
+    )
     const providerInfo = model.providers().find((p) => p.id === providerId)
 
     return {
@@ -173,7 +176,7 @@ export function CommandPalette() {
 
   const currentLevel = () => {
     const stack = levelStack()
-    return stack.length > 0 ? stack[stack.length - 1] ?? rootMenu() : rootMenu()
+    return stack.length > 0 ? (stack[stack.length - 1] ?? rootMenu()) : rootMenu()
   }
 
   const pushLevel = (level: MenuLevel) => {

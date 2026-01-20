@@ -24,11 +24,11 @@ const SUPPORTED_PROVIDERS = ["anthropic", "amazon-bedrock", "openai", "google", 
 
 // Map models.dev provider IDs to our IDs
 const PROVIDER_MAP: Record<string, string> = {
-  "anthropic": "anthropic",
+  anthropic: "anthropic",
   "amazon-bedrock": "bedrock",
-  "openai": "openai",
-  "google": "google",
-  "mistral": "mistral",
+  openai: "openai",
+  google: "google",
+  mistral: "mistral",
 }
 
 interface ModelsDevModel {
@@ -72,10 +72,15 @@ async function main() {
   if (!response.ok) {
     throw new Error(`API error: ${response.status}`)
   }
-  const api = await response.json() as ModelsDevApi
+  const api = (await response.json()) as ModelsDevApi
 
   // Extract models from supported providers
-  const modelList: Array<{ id: string; name: string; provider: string; release_date: string | undefined }> = []
+  const modelList: Array<{
+    id: string
+    name: string
+    provider: string
+    release_date: string | undefined
+  }> = []
 
   for (const providerId of SUPPORTED_PROVIDERS) {
     const providerData = api[providerId]
@@ -143,10 +148,7 @@ ${currentGenIds.map((id) => `  "${id}" as ModelId,`).join("\n")}
 ]
 `
 
-  const outPath = path.resolve(
-    import.meta.dir,
-    "../../core/src/current-gen.ts"
-  )
+  const outPath = path.resolve(import.meta.dir, "../../core/src/current-gen.ts")
   fs.writeFileSync(outPath, output)
   console.log("Wrote", outPath)
 

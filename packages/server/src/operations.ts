@@ -81,7 +81,7 @@ export const SteerPayload = Schema.Union(
   Schema.TaggedStruct("Cancel", {}),
   Schema.TaggedStruct("Interrupt", { message: Schema.String }),
   Schema.TaggedStruct("SwitchModel", { model: Schema.String }),
-  Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") })
+  Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") }),
 )
 export type SteerPayload = typeof SteerPayload.Type
 

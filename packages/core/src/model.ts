@@ -7,13 +7,7 @@ export type ModelId = typeof ModelId.Type
 
 // Provider - supported AI provider
 
-export const ProviderId = Schema.Literal(
-  "anthropic",
-  "bedrock",
-  "openai",
-  "google",
-  "mistral"
-)
+export const ProviderId = Schema.Literal("anthropic", "bedrock", "openai", "google", "mistral")
 export type ProviderId = typeof ProviderId.Type
 
 export class Provider extends Schema.Class<Provider>("Provider")({
@@ -43,7 +37,7 @@ export class Model extends Schema.Class<Model>("Model")({
 
 export const calculateCost = (
   usage: { inputTokens: number; outputTokens: number },
-  pricing: ModelPricing | undefined
+  pricing: ModelPricing | undefined,
 ): number => {
   if (!pricing) return 0
   const inputCost = (usage.inputTokens / 1_000_000) * pricing.input

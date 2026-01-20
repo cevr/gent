@@ -14,21 +14,10 @@ export { BashTool, BashParams, BashResult, BashError } from "./bash.js"
 export { GlobTool, GlobParams, GlobResult, GlobError } from "./glob.js"
 
 // Grep Tool
-export {
-  GrepTool,
-  GrepParams,
-  GrepResult,
-  GrepMatch,
-  GrepError,
-} from "./grep.js"
+export { GrepTool, GrepParams, GrepResult, GrepMatch, GrepError } from "./grep.js"
 
 // AskUser Tool
-export {
-  AskUserTool,
-  AskUserParams,
-  AskUserResult,
-  AskUserHandler,
-} from "./ask-user.js"
+export { AskUserTool, AskUserParams, AskUserResult, AskUserHandler } from "./ask-user.js"
 
 // RepoExplorer Tool
 export {
@@ -50,20 +39,10 @@ export {
 } from "./todo.js"
 
 // Question Tool
-export {
-  QuestionTool,
-  QuestionParams,
-  QuestionResult,
-  QuestionHandler,
-} from "./question.js"
+export { QuestionTool, QuestionParams, QuestionResult, QuestionHandler } from "./question.js"
 
 // WebFetch Tool
-export {
-  WebFetchTool,
-  WebFetchParams,
-  WebFetchResult,
-  WebFetchError,
-} from "./webfetch.js"
+export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch.js"
 
 // Plan Mode Tools
 export {
@@ -74,11 +53,16 @@ export {
   PlanExitParams,
   PlanExitResult,
   PlanModeHandler,
-  PLAN_MODE_TOOLS,
-  isToolAllowedInMode,
 } from "./plan-mode.js"
 
+// Re-export from core for backwards compat
+export { PLAN_MODE_TOOLS, isToolAllowedInPlanMode } from "@gent/core"
+
+// Re-export isToolAllowedInMode for backwards compat with tests
+export { isToolAllowedInMode } from "./plan-mode.js"
+
 // All Tools
+import type { AnyToolDefinition } from "@gent/core"
 import { ReadTool } from "./read.js"
 import { WriteTool } from "./write.js"
 import { EditTool } from "./edit.js"
@@ -92,7 +76,7 @@ import { QuestionTool } from "./question.js"
 import { WebFetchTool } from "./webfetch.js"
 import { PlanEnterTool, PlanExitTool } from "./plan-mode.js"
 
-export const AllTools = [
+export const AllTools: AnyToolDefinition[] = [
   ReadTool,
   WriteTool,
   EditTool,
@@ -107,4 +91,4 @@ export const AllTools = [
   WebFetchTool,
   PlanEnterTool,
   PlanExitTool,
-] as const
+]

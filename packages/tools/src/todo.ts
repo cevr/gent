@@ -8,13 +8,8 @@ export interface TodoHandlerService {
   readonly replace: (todos: ReadonlyArray<TodoItem>) => Effect.Effect<void>
 }
 
-export class TodoHandler extends Context.Tag("TodoHandler")<
-  TodoHandler,
-  TodoHandlerService
->() {
-  static Test = (
-    initialTodos: ReadonlyArray<TodoItem> = []
-  ): Layer.Layer<TodoHandler> => {
+export class TodoHandler extends Context.Tag("TodoHandler")<TodoHandler, TodoHandlerService>() {
+  static Test = (initialTodos: ReadonlyArray<TodoItem> = []): Layer.Layer<TodoHandler> => {
     let todos = [...initialTodos]
     return Layer.succeed(TodoHandler, {
       list: () => Effect.succeed(todos),
@@ -40,7 +35,7 @@ export const TodoReadResult = Schema.Struct({
       content: Schema.String,
       status: TodoStatus,
       priority: Schema.optional(TodoPriority),
-    })
+    }),
   ),
 })
 
@@ -76,7 +71,7 @@ const TodoInputSchema = Schema.Struct({
   priority: Schema.optional(
     TodoPriority.annotations({
       description: "Optional priority: high, medium, or low",
-    })
+    }),
   ),
 })
 
@@ -109,7 +104,7 @@ export const TodoWriteTool = defineTool({
           priority: t.priority,
           createdAt: now,
           updatedAt: now,
-        })
+        }),
     )
     yield* handler.replace(todos)
     return { count: todos.length }

@@ -41,7 +41,7 @@ export const MessagePart = Schema.Union(
   ImagePart,
   ToolCallPart,
   ToolResultPart,
-  ReasoningPart
+  ReasoningPart,
 )
 export type MessagePart = typeof MessagePart.Type
 
@@ -100,17 +100,14 @@ export class CompactionCheckpoint extends Schema.TaggedClass<CompactionCheckpoin
     ...CheckpointBase,
     summary: Schema.String,
     firstKeptMessageId: Schema.String,
-  }
+  },
 ) {}
 
 // Plan checkpoint: hard reset, only plan file as context
-export class PlanCheckpoint extends Schema.TaggedClass<PlanCheckpoint>()(
-  "PlanCheckpoint",
-  {
-    ...CheckpointBase,
-    planPath: Schema.String,
-  }
-) {}
+export class PlanCheckpoint extends Schema.TaggedClass<PlanCheckpoint>()("PlanCheckpoint", {
+  ...CheckpointBase,
+  planPath: Schema.String,
+}) {}
 
 export const Checkpoint = Schema.Union(CompactionCheckpoint, PlanCheckpoint)
 export type Checkpoint = typeof Checkpoint.Type

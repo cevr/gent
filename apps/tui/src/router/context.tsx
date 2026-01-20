@@ -35,7 +35,7 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
   onCleanup(
     router.subscribe((state) => {
       setRoute(state.current)
-    })
+    }),
   )
 
   const value: RouterContextValue = {

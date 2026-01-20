@@ -56,7 +56,7 @@ export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCa
 
 // Build tool result map from all messages for joining
 export function buildToolResultMap(
-  messages: readonly MessageInfoReadonly[]
+  messages: readonly MessageInfoReadonly[],
 ): Map<string, { summary: string; output: string; isError: boolean }> {
   const resultMap = new Map<string, { summary: string; output: string; isError: boolean }>()
 
@@ -81,7 +81,7 @@ export function buildToolResultMap(
 // Extract tool calls with results joined from result map
 export function extractToolCallsWithResults(
   parts: readonly MessagePart[],
-  resultMap: Map<string, { summary: string; output: string; isError: boolean }>
+  resultMap: Map<string, { summary: string; output: string; isError: boolean }>,
 ): ExtractedToolCall[] {
   return parts
     .filter((p): p is ToolCallPart => p.type === "tool-call")
@@ -90,7 +90,7 @@ export function extractToolCallsWithResults(
       return {
         id: tc.toolCallId,
         toolName: tc.toolName,
-        status: result?.isError ? "error" as const : "completed" as const,
+        status: result?.isError ? ("error" as const) : ("completed" as const),
         input: tc.input,
         summary: result?.summary,
         output: result?.output,
@@ -121,18 +121,11 @@ export type SteerCommand =
 
 // GentClient interface - adapts RPC client to callback-based subscriptions
 export interface GentClient {
-  sendMessage: (input: {
-    sessionId: string
-    branchId: string
-    content: string
-  }) => Promise<void>
+  sendMessage: (input: { sessionId: string; branchId: string; content: string }) => Promise<void>
 
   listMessages: (branchId: string) => Promise<readonly MessageInfoReadonly[]>
 
-  subscribeEvents: (
-    sessionId: string,
-    onEvent: (event: AgentEvent) => void
-  ) => () => void
+  subscribeEvents: (sessionId: string, onEvent: (event: AgentEvent) => void) => () => void
 
   steer: (command: SteerCommand) => Promise<void>
 }
@@ -145,7 +138,7 @@ export interface GentClient {
 export function createClient(
   rpcClient: GentRpcClient,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Runtime context unused by RPC calls
-  runtime: Runtime.Runtime<any>
+  runtime: Runtime.Runtime<any>,
 ): GentClient {
   return {
     sendMessage: (input) =>
@@ -155,10 +148,11 @@ export function createClient(
       }),
 
     listMessages: (branchId) =>
-      Runtime.runPromise(runtime)(rpcClient.listMessages({ branchId })) as Promise<readonly MessageInfoReadonly[]>,
+      Runtime.runPromise(runtime)(rpcClient.listMessages({ branchId })) as Promise<
+        readonly MessageInfoReadonly[]
+      >,
 
-    steer: (command) =>
-      Runtime.runPromise(runtime)(rpcClient.steer({ command })),
+    steer: (command) => Runtime.runPromise(runtime)(rpcClient.steer({ command })),
 
     subscribeEvents: (sessionId, onEvent) => {
       let cancelled = false
@@ -172,7 +166,7 @@ export function createClient(
           if (!cancelled) {
             onEvent(event)
           }
-        })
+        }),
       )
 
       void Runtime.runPromise(runtime)(streamEffect).catch(() => {

@@ -30,6 +30,7 @@
 ## Theme System
 
 Ported from opencode. Key patterns:
+
 - `renderer.getPalette({ size: 16 })` queries terminal's ANSI palette via OSC
 - System theme generated from terminal colors; fallback to "opencode" theme
 - JSON themes in `src/theme/themes/*.json` with `defs` + dark/light variants
@@ -55,22 +56,24 @@ Ported from opencode. Key patterns:
 ## Architecture
 
 Providers wrap app in `main.tsx`:
+
 ```
 ThemeProvider → CommandProvider → ModelProvider → AgentStateProvider → RouterProvider → ClientProvider
 ```
 
-| Provider | Purpose |
-|----------|---------|
-| `WorkspaceProvider` | cwd, gitRoot, gitStatus - static workspace info |
+| Provider             | Purpose                                          |
+| -------------------- | ------------------------------------------------ |
+| `WorkspaceProvider`  | cwd, gitRoot, gitStatus - static workspace info  |
 | `AgentStateProvider` | mode, status, cost, error - reactive agent state |
-| `RouterProvider` | route, navigate - discriminated union routes |
-| `ClientProvider` | RPC client, event subscriptions |
+| `RouterProvider`     | route, navigate - discriminated union routes     |
+| `ClientProvider`     | RPC client, event subscriptions                  |
 
 Routes: `home-view.tsx` (logo, first message) → `session-view.tsx` (messages, streaming)
 
 ## Compound Components
 
 StatusBar uses compound pattern - compose what you need:
+
 ```tsx
 <StatusBar.Root>
   <StatusBar.Row>
@@ -85,11 +88,11 @@ Components derive state from providers, not props. Add/remove rows per view.
 
 ## CLI Flags
 
-| Flag | Purpose |
-|------|---------|
-| `-c, --continue` | Resume last session for cwd |
-| `-p, --prompt` | Initial message (goes straight to session view) |
-| `-s, --session` | Resume specific session ID |
-| `-H, --headless` | Headless mode + prompt arg |
+| Flag             | Purpose                                         |
+| ---------------- | ----------------------------------------------- |
+| `-c, --continue` | Resume last session for cwd                     |
+| `-p, --prompt`   | Initial message (goes straight to session view) |
+| `-s, --session`  | Resume specific session ID                      |
+| `-H, --headless` | Headless mode + prompt arg                      |
 
 Priority: headless → session → continue → prompt → home

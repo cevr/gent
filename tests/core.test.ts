@@ -1,12 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
-import {
-  Skills,
-  Skill,
-  formatSkillsForPrompt,
-  AuthStorage,
-  calculateCost,
-} from "@gent/core"
+import { Skills, Skill, formatSkillsForPrompt, AuthStorage, calculateCost } from "@gent/core"
 
 describe("Skills System", () => {
   test("Skills.Test provides test skills", async () => {
@@ -23,7 +17,7 @@ describe("Skills System", () => {
       Effect.gen(function* () {
         const skills = yield* Skills
         return yield* skills.list()
-      }).pipe(Effect.provide(Skills.Test(testSkills)))
+      }).pipe(Effect.provide(Skills.Test(testSkills))),
     )
 
     expect(result.length).toBe(1)
@@ -64,7 +58,7 @@ describe("Auth Storage", () => {
         const auth = yield* AuthStorage
         yield* auth.set("anthropic", "test-key-123")
         return yield* auth.get("anthropic")
-      }).pipe(Effect.provide(AuthStorage.Test()))
+      }).pipe(Effect.provide(AuthStorage.Test())),
     )
 
     expect(result).toBe("test-key-123")
@@ -77,7 +71,7 @@ describe("Auth Storage", () => {
         yield* auth.set("openai", "key")
         yield* auth.delete("openai")
         return yield* auth.get("openai")
-      }).pipe(Effect.provide(AuthStorage.Test()))
+      }).pipe(Effect.provide(AuthStorage.Test())),
     )
 
     expect(result).toBeUndefined()
@@ -90,7 +84,7 @@ describe("Auth Storage", () => {
         yield* auth.set("anthropic", "k1")
         yield* auth.set("openai", "k2")
         return yield* auth.list()
-      }).pipe(Effect.provide(AuthStorage.Test()))
+      }).pipe(Effect.provide(AuthStorage.Test())),
     )
 
     expect(result).toContain("anthropic")

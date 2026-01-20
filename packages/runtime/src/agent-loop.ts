@@ -1,6 +1,5 @@
 import { Context, DateTime, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
-import type {
-  ToolContext} from "@gent/core";
+import type { ToolContext } from "@gent/core"
 import {
   Message,
   TextPart,
@@ -18,10 +17,12 @@ import {
   ErrorOccurred,
   PlanModeEntered,
   PlanModeExited,
+  isToolAllowedInPlanMode,
+  DEFAULTS,
 } from "@gent/core"
-import type { StorageError } from "@gent/storage";
+import type { StorageError } from "@gent/storage"
 import { Storage } from "@gent/storage"
-import type { ProviderError, FinishChunk } from "@gent/providers";
+import type { ProviderError, FinishChunk } from "@gent/providers"
 import { Provider } from "@gent/providers"
 import { withRetry } from "./retry.js"
 import { CheckpointService } from "./checkpoint.js"
@@ -49,13 +50,10 @@ function summarizeToolOutput(result: ToolResultPart): string {
 
 // Agent Loop Error
 
-export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()(
-  "AgentLoopError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  }
-) {}
+export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // Steer Command
 
@@ -63,24 +61,13 @@ export const SteerCommand = Schema.Union(
   Schema.TaggedStruct("Cancel", {}),
   Schema.TaggedStruct("Interrupt", { message: Schema.String }),
   Schema.TaggedStruct("SwitchModel", { model: Schema.String }),
-  Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") })
+  Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") }),
 )
 export type SteerCommand = typeof SteerCommand.Type
 
 // Agent Loop State
 
 type AgentMode = "build" | "plan"
-
-// Tools allowed in plan mode (read-only operations)
-const PLAN_MODE_TOOLS = new Set([
-  "read",
-  "glob",
-  "grep",
-  "webfetch",
-  "todo_read",
-  "todo_write",
-  "question",
-])
 
 interface AgentLoopState {
   running: boolean
@@ -94,21 +81,24 @@ interface AgentLoopState {
 export interface AgentLoopService {
   readonly run: (message: Message) => Effect.Effect<void, AgentLoopError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void>
-  readonly followUp: (message: Message) => Effect.Effect<void>
+  readonly followUp: (message: Message) => Effect.Effect<void, AgentLoopError>
   readonly isRunning: () => Effect.Effect<boolean>
 }
 
-export class AgentLoop extends Context.Tag("AgentLoop")<
-  AgentLoop,
-  AgentLoopService
->() {
+export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopService>() {
   static Live = (config: {
     systemPrompt: string
     defaultModel: string
   }): Layer.Layer<
     AgentLoop,
     never,
-    Storage | Provider | ToolRegistry | EventBus | Permission | CheckpointService | FileSystem.FileSystem
+    | Storage
+    | Provider
+    | ToolRegistry
+    | EventBus
+    | Permission
+    | CheckpointService
+    | FileSystem.FileSystem
   > =>
     Layer.scoped(
       AgentLoop,
@@ -131,77 +121,75 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
 
         const steerQueue = yield* Queue.unbounded<SteerCommand>()
 
-        const executeToolCall = Effect.fn("AgentLoop.executeToolCall")(
-          function* (toolCall: ToolCallPart, ctx: ToolContext) {
-            const tool = yield* toolRegistry.get(toolCall.toolName)
+        const executeToolCall = Effect.fn("AgentLoop.executeToolCall")(function* (
+          toolCall: ToolCallPart,
+          ctx: ToolContext,
+        ) {
+          const tool = yield* toolRegistry.get(toolCall.toolName)
 
-            if (!tool) {
-              return new ToolResultPart({
-                type: "tool-result",
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                output: { type: "error-json", value: { error: `Unknown tool: ${toolCall.toolName}` } },
-              })
-            }
-
-            // Check permission
-            const permResult = yield* permission.check(
-              toolCall.toolName,
-              toolCall.input
-            )
-
-            if (permResult === "denied") {
-              return new ToolResultPart({
-                type: "tool-result",
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                output: { type: "error-json", value: { error: "Permission denied" } },
-              })
-            }
-
-            // Decode input using tool's params schema
-            const decodedInput = yield* Effect.try({
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- tool.params is AnyToolDefinition with any schema type
-              try: () => Schema.decodeUnknownSync(tool.params)(toolCall.input),
-              catch: (e) => new AgentLoopError({
-                message: `Invalid tool input: ${e instanceof Error ? e.message : String(e)}`,
-                cause: e,
-              }),
-            })
-
-            // Execute tool using runtime
-            const result = yield* Effect.tryPromise({
-              try: () => {
-                const effect = tool.execute(decodedInput, ctx)
-                return Runtime.runPromise(runtime)(
-                  effect as Effect.Effect<unknown>
-                )
-              },
-              catch: (e) =>
-                new AgentLoopError({
-                  message: `Tool execution failed: ${e}`,
-                  cause: e,
-                }),
-            })
-
+          if (!tool) {
             return new ToolResultPart({
               type: "tool-result",
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
-              output: { type: "json", value: result },
+              output: {
+                type: "error-json",
+                value: { error: `Unknown tool: ${toolCall.toolName}` },
+              },
             })
           }
-        )
+
+          // Check permission
+          const permResult = yield* permission.check(toolCall.toolName, toolCall.input)
+
+          if (permResult === "denied") {
+            return new ToolResultPart({
+              type: "tool-result",
+              toolCallId: toolCall.toolCallId,
+              toolName: toolCall.toolName,
+              output: { type: "error-json", value: { error: "Permission denied" } },
+            })
+          }
+
+          // Decode input using tool's params schema
+          const decodedInput = yield* Effect.try({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- tool.params is AnyToolDefinition with any schema type
+            try: () => Schema.decodeUnknownSync(tool.params)(toolCall.input),
+            catch: (e) =>
+              new AgentLoopError({
+                message: `Invalid tool input: ${e instanceof Error ? e.message : String(e)}`,
+                cause: e,
+              }),
+          })
+
+          // Execute tool using runtime
+          const result = yield* Effect.tryPromise({
+            try: () => {
+              const effect = tool.execute(decodedInput, ctx)
+              return Runtime.runPromise(runtime)(effect as Effect.Effect<unknown>)
+            },
+            catch: (e) =>
+              new AgentLoopError({
+                message: `Tool execution failed: ${e}`,
+                cause: e,
+              }),
+          })
+
+          return new ToolResultPart({
+            type: "tool-result",
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            output: { type: "json", value: result },
+          })
+        })
 
         const runLoop: (
           sessionId: string,
           branchId: string,
-          initialMessage: Message
-        ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError> = Effect.fn("AgentLoop.runLoop")(function* (
-          sessionId: string,
-          branchId: string,
-          initialMessage: Message
-        ) {
+          initialMessage: Message,
+        ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError> = Effect.fn(
+          "AgentLoop.runLoop",
+        )(function* (sessionId: string, branchId: string, initialMessage: Message) {
           // Save user message
           yield* storage.createMessage(initialMessage)
           yield* eventBus.publish(
@@ -210,7 +198,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
               branchId,
               messageId: initialMessage.id,
               role: "user",
-            })
+            }),
           )
 
           // Track turn start time
@@ -230,7 +218,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     sessionId,
                     branchId,
                     interrupted: true,
-                  })
+                  }),
                 )
                 break
               } else if (cmd._tag === "SwitchModel") {
@@ -265,9 +253,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 }
               }
               if (checkpoint._tag === "PlanCheckpoint") {
-                const planContent = yield* fs.readFileString(checkpoint.planPath).pipe(
-                  Effect.catchAll(() => Effect.succeed(""))
-                )
+                const planContent = yield* fs
+                  .readFileString(checkpoint.planPath)
+                  .pipe(Effect.catchAll(() => Effect.succeed("")))
                 return {
                   messages: yield* storage.listMessagesSince(branchId, checkpoint.createdAt),
                   contextPrefix: planContent ? `Plan to execute:\n${planContent}\n\n` : "",
@@ -276,15 +264,18 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
               // CompactionCheckpoint
               return {
                 messages: yield* storage.listMessagesAfter(branchId, checkpoint.firstKeptMessageId),
-                contextPrefix: checkpoint.summary ? `Previous context:\n${checkpoint.summary}\n\n` : "",
+                contextPrefix: checkpoint.summary
+                  ? `Previous context:\n${checkpoint.summary}\n\n`
+                  : "",
               }
             })
 
             const allTools = yield* toolRegistry.list()
             // Filter tools based on mode
-            const tools = state.mode === "plan"
-              ? allTools.filter((t) => PLAN_MODE_TOOLS.has(t.name.toLowerCase()))
-              : allTools
+            const tools =
+              state.mode === "plan"
+                ? allTools.filter((t) => isToolAllowedInPlanMode(t.name))
+                : allTools
 
             // Build system prompt with context prefix
             const systemPrompt = contextPrefix
@@ -300,7 +291,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 messages: [...messages],
                 tools: [...tools],
                 systemPrompt,
-              })
+              }),
             ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
 
             // Collect response parts
@@ -317,7 +308,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                       sessionId,
                       branchId,
                       chunk: chunk.text,
-                    })
+                    }),
                   )
                 } else if (chunk._tag === "ToolCallChunk") {
                   toolCalls.push(
@@ -326,12 +317,12 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                       toolCallId: chunk.toolCallId,
                       toolName: chunk.toolName,
                       input: chunk.input,
-                    })
+                    }),
                   )
                 } else if (chunk._tag === "FinishChunk") {
                   lastFinishChunk = chunk
                 }
-              })
+              }),
             )
 
             yield* eventBus.publish(
@@ -339,7 +330,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 sessionId,
                 branchId,
                 usage: lastFinishChunk?.usage,
-              })
+              }),
             )
 
             // Build assistant message
@@ -366,7 +357,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                 branchId,
                 messageId: assistantMessage.id,
                 role: "assistant",
-              })
+              }),
             )
 
             // Execute tool calls if any
@@ -381,7 +372,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     toolCallId: toolCall.toolCallId,
                     toolName: toolCall.toolName,
                     input: toolCall.input,
-                  })
+                  }),
                 )
 
                 const result = yield* executeToolCall(toolCall, {
@@ -404,7 +395,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     isError: result.output.type === "error-json",
                     summary: outputSummary,
                     output: stringifyOutput(result.output.value),
-                  })
+                  }),
                 )
               }
 
@@ -430,7 +421,8 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
 
           // Update user message with turn duration
           const turnEndTime = yield* DateTime.now
-          const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - DateTime.toEpochMillis(turnStartTime)
+          const turnDurationMs =
+            DateTime.toEpochMillis(turnEndTime) - DateTime.toEpochMillis(turnStartTime)
           yield* storage.updateMessageTurnDuration(initialMessage.id, turnDurationMs)
 
           // Process follow-up queue
@@ -447,9 +439,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
 
         const service: AgentLoopService = {
           run: Effect.fn("AgentLoop.run")(function* (message: Message) {
-            const isRunning = yield* Ref.get(stateRef).pipe(
-              Effect.map((s) => s.running)
-            )
+            const isRunning = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.running))
 
             if (isRunning) {
               // Queue as follow-up
@@ -463,11 +453,10 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
             yield* Ref.update(stateRef, (s) => ({ ...s, running: true }))
 
             yield* (
-              runLoop(
-                message.sessionId,
-                message.branchId,
-                message
-              ) as Effect.Effect<void, AgentLoopError | StorageError | ProviderError>
+              runLoop(message.sessionId, message.branchId, message) as Effect.Effect<
+                void,
+                AgentLoopError | StorageError | ProviderError
+              >
             ).pipe(
               Effect.withSpan("AgentLoop.run"),
               Effect.catchAll((e) =>
@@ -476,28 +465,34 @@ export class AgentLoop extends Context.Tag("AgentLoop")<
                     sessionId: message.sessionId,
                     branchId: message.branchId,
                     error: "message" in e ? e.message : String(e),
-                  })
-                )
+                  }),
+                ),
               ),
-              Effect.ensuring(
-                Ref.update(stateRef, (s) => ({ ...s, running: false }))
-              )
+              Effect.ensuring(Ref.update(stateRef, (s) => ({ ...s, running: false }))),
             )
           }),
 
           steer: (command) => Queue.offer(steerQueue, command),
 
           followUp: (message) =>
-            Ref.update(stateRef, (s) => ({
-              ...s,
-              followUpQueue: [...s.followUpQueue, message],
-            })),
+            Effect.gen(function* () {
+              const state = yield* Ref.get(stateRef)
+              if (state.followUpQueue.length >= DEFAULTS.followUpQueueMax) {
+                return yield* new AgentLoopError({
+                  message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+                })
+              }
+              yield* Ref.update(stateRef, (s) => ({
+                ...s,
+                followUpQueue: [...s.followUpQueue, message],
+              }))
+            }),
 
           isRunning: () => Ref.get(stateRef).pipe(Effect.map((s) => s.running)),
         }
 
         return service
-      })
+      }),
     )
 
   static Test = (): Layer.Layer<AgentLoop> =>

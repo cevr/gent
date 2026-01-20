@@ -2,9 +2,9 @@
 
 ## Two Layer Types
 
-| Layer | Use Case |
-|-------|----------|
-| `createTestLayer()` | Simple mocks, no call tracking |
+| Layer                        | Use Case                                  |
+| ---------------------------- | ----------------------------------------- |
+| `createTestLayer()`          | Simple mocks, no call tracking            |
 | `createRecordingTestLayer()` | Mocks + `SequenceRecorder` for assertions |
 
 ## Recording Pattern

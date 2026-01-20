@@ -28,8 +28,8 @@ export function GenericToolRenderer(props: ToolRendererProps) {
               <text style={{ fg: theme.textMuted }}>{props.toolCall.summary}</text>
               <Show when={isTruncated()}>
                 <text style={{ fg: theme.textMuted }}>
-                  ... ({remainingLines()} more lines,{" "}
-                  <span style={{ fg: theme.info }}>ctrl+o</span> to expand)
+                  ... ({remainingLines()} more lines, <span style={{ fg: theme.info }}>ctrl+o</span>{" "}
+                  to expand)
                 </text>
               </Show>
             </>

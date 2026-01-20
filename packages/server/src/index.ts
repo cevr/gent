@@ -1,11 +1,7 @@
 import { Layer } from "effect"
 import type { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
-import {
-  EventBus,
-  ToolRegistry,
-  Permission,
-} from "@gent/core"
+import { EventBus, ToolRegistry, Permission } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
@@ -92,7 +88,9 @@ export interface DependenciesConfig {
 /**
  * Creates the full dependency layer for GentCore
  */
-export const createDependencies = (config: DependenciesConfig): Layer.Layer<
+export const createDependencies = (
+  config: DependenciesConfig,
+): Layer.Layer<
   Storage | Provider | ToolRegistry | EventBus | Permission | AgentLoop | CheckpointService,
   PlatformError,
   FileSystem.FileSystem | Path.Path
@@ -104,12 +102,12 @@ export const createDependencies = (config: DependenciesConfig): Layer.Layer<
     Provider.Live,
     ToolRegistry.Live(AllTools),
     EventBus.Live,
-    Permission.Live()
+    Permission.Live(),
   )
 
   // CheckpointService requires Storage and Provider
   const CheckpointServiceLive = CheckpointService.Live(
-    config.compactionModel ?? "anthropic/claude-3-haiku-20240307"
+    config.compactionModel ?? "anthropic/claude-haiku-4-5-20251001",
   )
   const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseServicesLive)
 
@@ -120,13 +118,7 @@ export const createDependencies = (config: DependenciesConfig): Layer.Layer<
   })
 
   // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
-  const AllDeps = Layer.mergeAll(
-    BaseServicesLive,
-    CheckpointLayer
-  )
+  const AllDeps = Layer.mergeAll(BaseServicesLive, CheckpointLayer)
 
-  return Layer.merge(
-    AllDeps,
-    Layer.provide(AgentLoopLive, AllDeps)
-  )
+  return Layer.merge(AllDeps, Layer.provide(AgentLoopLive, AllDeps))
 }

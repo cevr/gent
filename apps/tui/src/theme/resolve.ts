@@ -30,8 +30,11 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
 
   const resolved = Object.fromEntries(
     Object.entries(theme.theme)
-      .filter(([key]) => key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity")
-      .map(([key, value]) => [key, resolveColor(value as ColorValue)])
+      .filter(
+        ([key]) =>
+          key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity",
+      )
+      .map(([key, value]) => [key, resolveColor(value as ColorValue)]),
   ) as Partial<ThemeColors>
 
   // Handle selectedListItemText separately since it's optional
@@ -67,10 +70,22 @@ function ansiToRgba(code: number): RGBA {
   // Standard ANSI colors (0-15)
   if (code < 16) {
     const ansiColors = [
-      "#000000", "#800000", "#008000", "#808000",
-      "#000080", "#800080", "#008080", "#c0c0c0",
-      "#808080", "#ff0000", "#00ff00", "#ffff00",
-      "#0000ff", "#ff00ff", "#00ffff", "#ffffff",
+      "#000000",
+      "#800000",
+      "#008000",
+      "#808000",
+      "#000080",
+      "#800080",
+      "#008080",
+      "#c0c0c0",
+      "#808080",
+      "#ff0000",
+      "#00ff00",
+      "#ffff00",
+      "#0000ff",
+      "#ff00ff",
+      "#00ffff",
+      "#ffffff",
     ]
     return RGBA.fromHex(ansiColors[code] ?? "#000000")
   }

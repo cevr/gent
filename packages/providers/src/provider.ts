@@ -1,6 +1,15 @@
 import { Context, Effect, Layer, Schema, Stream, JSONSchema } from "effect"
-import type { Message, AnyToolDefinition, TextPart, ToolCallPart, ToolResultPart, ImagePart } from "@gent/core"
-import { streamText, generateText, tool, jsonSchema, type ToolSet, type ModelMessage, type ToolModelMessage, type ToolResultPart as AIToolResultPart } from "ai"
+import type { Message, AnyToolDefinition, TextPart, ToolResultPart } from "@gent/core"
+import {
+  streamText,
+  generateText,
+  tool,
+  jsonSchema,
+  type ToolSet,
+  type ModelMessage,
+  type ToolModelMessage,
+  type ToolResultPart as AIToolResultPart,
+} from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
@@ -8,14 +17,11 @@ import { fromIni } from "@aws-sdk/credential-providers"
 
 // Provider Error
 
-export class ProviderError extends Schema.TaggedError<ProviderError>()(
-  "ProviderError",
-  {
-    message: Schema.String,
-    model: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  }
-) {}
+export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
+  message: Schema.String,
+  model: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // Stream Chunk Types
 
@@ -23,41 +29,27 @@ export class TextChunk extends Schema.TaggedClass<TextChunk>()("TextChunk", {
   text: Schema.String,
 }) {}
 
-export class ToolCallChunk extends Schema.TaggedClass<ToolCallChunk>()(
-  "ToolCallChunk",
-  {
-    toolCallId: Schema.String,
-    toolName: Schema.String,
-    input: Schema.Unknown,
-  }
-) {}
+export class ToolCallChunk extends Schema.TaggedClass<ToolCallChunk>()("ToolCallChunk", {
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+  input: Schema.Unknown,
+}) {}
 
-export class ReasoningChunk extends Schema.TaggedClass<ReasoningChunk>()(
-  "ReasoningChunk",
-  {
-    text: Schema.String,
-  }
-) {}
+export class ReasoningChunk extends Schema.TaggedClass<ReasoningChunk>()("ReasoningChunk", {
+  text: Schema.String,
+}) {}
 
-export class FinishChunk extends Schema.TaggedClass<FinishChunk>()(
-  "FinishChunk",
-  {
-    finishReason: Schema.String,
-    usage: Schema.optional(
-      Schema.Struct({
-        inputTokens: Schema.Number,
-        outputTokens: Schema.Number,
-      })
-    ),
-  }
-) {}
+export class FinishChunk extends Schema.TaggedClass<FinishChunk>()("FinishChunk", {
+  finishReason: Schema.String,
+  usage: Schema.optional(
+    Schema.Struct({
+      inputTokens: Schema.Number,
+      outputTokens: Schema.Number,
+    }),
+  ),
+}) {}
 
-export const StreamChunk = Schema.Union(
-  TextChunk,
-  ToolCallChunk,
-  ReasoningChunk,
-  FinishChunk
-)
+export const StreamChunk = Schema.Union(TextChunk, ToolCallChunk, ReasoningChunk, FinishChunk)
 export type StreamChunk = typeof StreamChunk.Type
 
 // Provider Request
@@ -84,18 +76,13 @@ export interface GenerateRequest {
 
 export interface ProviderService {
   readonly stream: (
-    request: ProviderRequest
+    request: ProviderRequest,
   ) => Effect.Effect<Stream.Stream<StreamChunk, ProviderError>, ProviderError>
 
-  readonly generate: (
-    request: GenerateRequest
-  ) => Effect.Effect<string, ProviderError>
+  readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
 
-export class Provider extends Context.Tag("Provider")<
-  Provider,
-  ProviderService
->() {
+export class Provider extends Context.Tag("Provider")<Provider, ProviderService>() {
   static Live: Layer.Layer<Provider> = Layer.succeed(Provider, {
     stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
       const [providerName, modelName] = parseModelId(request.model)
@@ -137,7 +124,7 @@ export class Provider extends Context.Tag("Provider")<
                       toolCallId: part.toolCallId,
                       toolName: part.toolName,
                       input: part.input,
-                    })
+                    }),
                   )
                   break
                 case "reasoning-delta":
@@ -153,7 +140,7 @@ export class Provider extends Context.Tag("Provider")<
                             outputTokens: part.totalUsage.outputTokens ?? 0,
                           }
                         : undefined,
-                    })
+                    }),
                   )
                   break
                 case "error":
@@ -163,7 +150,7 @@ export class Provider extends Context.Tag("Provider")<
                       message: `API error: ${err?.message ?? String(part.error)}`,
                       model: request.model,
                       cause: part.error,
-                    })
+                    }),
                   )
                   return
               }
@@ -175,7 +162,7 @@ export class Provider extends Context.Tag("Provider")<
                 message: `Stream failed: ${e}`,
                 model: request.model,
                 cause: e,
-              })
+              }),
             )
           }
         })()
@@ -214,16 +201,12 @@ export class Provider extends Context.Tag("Provider")<
     }),
   })
 
-  static Test = (
-    responses: ReadonlyArray<ReadonlyArray<StreamChunk>>
-  ): Layer.Layer<Provider> => {
+  static Test = (responses: ReadonlyArray<ReadonlyArray<StreamChunk>>): Layer.Layer<Provider> => {
     let index = 0
     return Layer.succeed(Provider, {
       stream: () =>
         Effect.succeed(
-          Stream.fromIterable(
-            responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]
-          )
+          Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
         ),
       generate: () => Effect.succeed("test response"),
     })
@@ -287,15 +270,20 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
       if (toolResults.length > 0) {
         const toolMessage: ToolModelMessage = {
           role: "tool",
-          content: toolResults.map((p): AIToolResultPart => ({
-            type: "tool-result",
-            toolCallId: p.toolCallId,
-            toolName: p.toolName,
-            // AI SDK v6 ToolResultOutput - cast to match expected type
-            output: (p.output.type === "json"
-              ? { type: "json" as const, value: p.output.value }
-              : { type: "error-json" as const, value: p.output.value }) as AIToolResultPart["output"],
-          })),
+          content: toolResults.map(
+            (p): AIToolResultPart => ({
+              type: "tool-result",
+              toolCallId: p.toolCallId,
+              toolName: p.toolName,
+              // AI SDK v6 ToolResultOutput - cast to match expected type
+              output: (p.output.type === "json"
+                ? { type: "json" as const, value: p.output.value }
+                : {
+                    type: "error-json" as const,
+                    value: p.output.value,
+                  }) as AIToolResultPart["output"],
+            }),
+          ),
         }
         result.push(toolMessage)
       }
@@ -307,9 +295,9 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
 
       for (const part of parts) {
         if (part.type === "text") {
-          content.push({ type: "text", text: (part as TextPart).text })
+          content.push({ type: "text", text: part.text })
         } else if (part.type === "image") {
-          content.push({ type: "image", image: (part as ImagePart).image })
+          content.push({ type: "image", image: part.image })
         }
       }
 
@@ -327,14 +315,13 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
 
       for (const part of parts) {
         if (part.type === "text") {
-          content.push({ type: "text", text: (part as TextPart).text })
+          content.push({ type: "text", text: part.text })
         } else if (part.type === "tool-call") {
-          const tc = part as ToolCallPart
           content.push({
             type: "tool-call",
-            toolCallId: tc.toolCallId,
-            toolName: tc.toolName,
-            input: tc.input,
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
           })
         }
       }

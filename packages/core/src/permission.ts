@@ -1,12 +1,31 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, ParseResult } from "effect"
+
+// Valid Regex Pattern - validates regex at decode time using ParseResult.try
+const ValidRegexPattern = Schema.transformOrFail(Schema.String, Schema.String, {
+  strict: true,
+  decode: (s, _, ast) =>
+    ParseResult.try({
+      try: () => {
+        // Validate regex syntax by attempting construction
+        // eslint-disable-next-line no-new -- validation requires construction
+        new RegExp(s)
+        return s
+      },
+      catch: (e) =>
+        new ParseResult.Type(
+          ast,
+          s,
+          `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+    }),
+  encode: ParseResult.succeed,
+})
 
 // Permission Rule
 
-export class PermissionRule extends Schema.Class<PermissionRule>(
-  "PermissionRule"
-)({
+export class PermissionRule extends Schema.Class<PermissionRule>("PermissionRule")({
   tool: Schema.String,
-  pattern: Schema.optional(Schema.String),
+  pattern: Schema.optional(ValidRegexPattern),
   action: Schema.Literal("allow", "deny", "ask"),
 }) {}
 
@@ -18,21 +37,13 @@ export type PermissionResult = typeof PermissionResult.Type
 // Permission Service
 
 export interface PermissionService {
-  readonly check: (
-    tool: string,
-    args: unknown
-  ) => Effect.Effect<PermissionResult>
+  readonly check: (tool: string, args: unknown) => Effect.Effect<PermissionResult>
   readonly addRule: (rule: PermissionRule) => Effect.Effect<void>
   readonly getRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 }
 
-export class Permission extends Context.Tag("Permission")<
-  Permission,
-  PermissionService
->() {
-  static Live = (
-    initialRules: ReadonlyArray<PermissionRule> = []
-  ): Layer.Layer<Permission> =>
+export class Permission extends Context.Tag("Permission")<Permission, PermissionService>() {
+  static Live = (initialRules: ReadonlyArray<PermissionRule> = []): Layer.Layer<Permission> =>
     Layer.sync(Permission, () => {
       let rules = [...initialRules]
       return {

@@ -1,29 +1,11 @@
 {
   "name": "gent",
   "private": true,
-  "type": "module",
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
-  "catalog": {
-    "effect": "^3.19.14",
-    "@effect/platform": "^0.94.1",
-    "@effect/platform-bun": "^0.87.0",
-    "@effect/sql": "^0.49.0",
-    "@effect/experimental": "^0.58.0",
-    "@effect/rpc": "^0.73.0",
-    "@effect/cluster": "^0.56.0",
-    "@effect/cli": "^0.73.0",
-    "@effect/vitest": "^0.21.0",
-    "find-my-way-ts": "^0.1.6",
-    "msgpackr": "^1.11.4",
-    "multipasta": "^0.2.7",
-    "ai": "^6.0.39",
-    "@ai-sdk/anthropic": "^2.0.0",
-    "@ai-sdk/openai": "^2.0.0",
-    "vitest": "^3.1.3"
-  },
+  "type": "module",
   "scripts": {
     "typecheck": "tsc -b",
     "lint": "oxlint",
@@ -33,7 +15,7 @@
     "test": "bun test",
     "clean": "rm -rf packages/*/dist apps/*/dist .tsbuildinfo */.tsbuildinfo */*/.tsbuildinfo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
-    "prepare": "husky"
+    "prepare": "lefthook install"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.19",
@@ -53,10 +35,28 @@
     "@effect/vitest": "catalog:",
     "@types/bun": "^1.3.6",
     "effect": "catalog:",
-    "husky": "^9.1.7",
+    "lefthook": "^2.0.15",
     "oxfmt": "^0.26.0",
     "oxlint": "^1.41.0",
     "typescript": "^5.9.3",
     "vitest": "catalog:"
+  },
+  "catalog": {
+    "effect": "^3.19.14",
+    "@effect/platform": "^0.94.1",
+    "@effect/platform-bun": "^0.87.0",
+    "@effect/sql": "^0.49.0",
+    "@effect/experimental": "^0.58.0",
+    "@effect/rpc": "^0.73.0",
+    "@effect/cluster": "^0.56.0",
+    "@effect/cli": "^0.73.0",
+    "@effect/vitest": "^0.21.0",
+    "find-my-way-ts": "^0.1.6",
+    "msgpackr": "^1.11.4",
+    "multipasta": "^0.2.7",
+    "ai": "^6.0.39",
+    "@ai-sdk/anthropic": "^2.0.0",
+    "@ai-sdk/openai": "^2.0.0",
+    "vitest": "^3.1.3"
   }
 }

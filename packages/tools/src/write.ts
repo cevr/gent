@@ -49,8 +49,8 @@ export const WriteTool = defineTool({
             message: `Failed to create directory: ${e.message}`,
             path: dir,
             cause: e,
-          })
-      )
+          }),
+      ),
     )
 
     yield* fs.writeFileString(filePath, params.content).pipe(
@@ -60,8 +60,8 @@ export const WriteTool = defineTool({
             message: `Failed to write file: ${e.message}`,
             path: filePath,
             cause: e,
-          })
-      )
+          }),
+      ),
     )
 
     return {

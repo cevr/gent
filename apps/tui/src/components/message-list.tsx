@@ -1,15 +1,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
 import { useTheme } from "../theme/index.js"
-import {
-  TOOL_RENDERERS,
-  GenericToolRenderer,
-  type ToolCall,
-} from "./tool-renderers/index.js"
-import {
-  formatThinkTime,
-  getSpinnerFrames,
-  formatToolInput,
-} from "./message-list-utils.js"
+import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index.js"
+import { formatThinkTime, getSpinnerFrames, formatToolInput } from "./message-list-utils.js"
 
 export type { ToolCall }
 
@@ -26,12 +18,7 @@ export interface Message {
 function UserMessage(props: { content: string }) {
   const { theme } = useTheme()
   return (
-    <box
-      marginTop={1}
-      backgroundColor={theme.backgroundElement}
-      paddingLeft={2}
-      paddingRight={2}
-    >
+    <box marginTop={1} backgroundColor={theme.backgroundElement} paddingLeft={2} paddingRight={2}>
       <text style={{ fg: theme.text }}>{props.content}</text>
     </box>
   )
@@ -59,13 +46,18 @@ function AssistantMessage(props: {
       <Show when={props.content}>
         <text style={{ fg: theme.text }}>{props.content}</text>
       </Show>
-      <Show when={props.interrupted} fallback={
-        <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
-          <box marginTop={1}>
-            <text style={{ fg: theme.textMuted }}>Thought for {formatThinkTime(props.thinkTime ?? 0)}</text>
-          </box>
-        </Show>
-      }>
+      <Show
+        when={props.interrupted}
+        fallback={
+          <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
+            <box marginTop={1}>
+              <text style={{ fg: theme.textMuted }}>
+                Thought for {formatThinkTime(props.thinkTime ?? 0)}
+              </text>
+            </box>
+          </Show>
+        }
+      >
         <box marginTop={1}>
           <text style={{ fg: theme.warning }}>Interrupted</text>
         </box>
@@ -107,11 +99,9 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
         ? " x "
         : " + "
 
-  const inputSummary = () =>
-    formatToolInput(props.toolCall.toolName, props.toolCall.input)
+  const inputSummary = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
 
-  const Renderer = () =>
-    TOOL_RENDERERS[toolName()] ?? GenericToolRenderer
+  const Renderer = () => TOOL_RENDERERS[toolName()] ?? GenericToolRenderer
 
   return (
     <box flexDirection="column">

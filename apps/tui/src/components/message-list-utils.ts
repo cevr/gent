@@ -60,7 +60,7 @@ export function getSpinnerFrames(toolName: string): readonly string[] {
 export function formatToolInput(
   toolName: string,
   input: unknown,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
 ): string {
   if (!input || typeof input !== "object") return ""
   const obj = input as Record<string, unknown>
@@ -76,17 +76,13 @@ export function formatToolInput(
     case "glob": {
       const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
       const searchPath =
-        typeof obj["path"] === "string"
-          ? truncatePath(obj["path"], 30)
-          : truncatePath(cwd, 30)
+        typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(cwd, 30)
       return pattern ? `${pattern} in ${searchPath}` : ""
     }
     case "grep": {
       const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
       const searchPath =
-        typeof obj["path"] === "string"
-          ? truncatePath(obj["path"], 30)
-          : truncatePath(cwd, 30)
+        typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(cwd, 30)
       return pattern ? `${pattern} in ${searchPath}` : ""
     }
     default:

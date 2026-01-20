@@ -35,7 +35,7 @@ const PROVIDER_MAP: Record<string, ProviderId | undefined> = {
 
 export class ModelRegistryError extends Schema.TaggedError<ModelRegistryError>()(
   "ModelRegistryError",
-  { message: Schema.String }
+  { message: Schema.String },
 ) {}
 
 // ModelRegistry Service
@@ -83,10 +83,8 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
         }
         return undefined
       }).pipe(
-        Effect.flatMap((models) =>
-          models ? Ref.set(modelsRef, models) : Effect.void
-        ),
-        Effect.catchAll(() => Effect.void)
+        Effect.flatMap((models) => (models ? Ref.set(modelsRef, models) : Effect.void)),
+        Effect.catchAll(() => Effect.void),
       )
 
       // Save cache to disk
@@ -94,7 +92,10 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
         Effect.gen(function* () {
           const cacheDir = path.dirname(cachePath)
           yield* fs.makeDirectory(cacheDir, { recursive: true })
-          const json = yield* Schema.encode(CacheFileJson)({ models: [...models], updatedAt: Date.now() })
+          const json = yield* Schema.encode(CacheFileJson)({
+            models: [...models],
+            updatedAt: Date.now(),
+          })
           yield* fs.writeFileString(cachePath, json)
         }).pipe(Effect.catchAll(() => Effect.void))
 
@@ -115,7 +116,7 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
         })
 
         const apiModels = yield* Schema.decodeUnknown(ModelsDevResponse)(json).pipe(
-          Effect.mapError(() => new ModelRegistryError({ message: "Invalid API response" }))
+          Effect.mapError(() => new ModelRegistryError({ message: "Invalid API response" })),
         )
 
         const models: Model[] = []
@@ -129,7 +130,7 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
               name: m.name,
               provider: providerId,
               contextLength: m.context_length,
-            })
+            }),
           )
         }
 
@@ -139,7 +140,7 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
       // Refresh models from API
       const refresh = Effect.gen(function* () {
         const models = yield* fetchModels.pipe(
-          Effect.catchAll(() => Effect.succeed(DEFAULT_MODELS as readonly Model[]))
+          Effect.catchAll(() => Effect.succeed(DEFAULT_MODELS as readonly Model[])),
         )
         yield* Ref.set(modelsRef, models)
         yield* saveCache(models)
@@ -148,9 +149,7 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
       // Initial load: try cache, then background refresh
       yield* loadCache
       yield* Effect.forkDaemon(
-        refresh.pipe(
-          Effect.repeat(Schedule.spaced(ModelRegistry.REFRESH_INTERVAL))
-        )
+        refresh.pipe(Effect.repeat(Schedule.spaced(ModelRegistry.REFRESH_INTERVAL))),
       )
 
       const service: ModelRegistryService = {
@@ -158,12 +157,12 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
 
         getModels: (providerId) =>
           Ref.get(modelsRef).pipe(
-            Effect.map((models) => models.filter((m) => m.provider === providerId))
+            Effect.map((models) => models.filter((m) => m.provider === providerId)),
           ),
 
         getModel: (modelId) =>
           Ref.get(modelsRef).pipe(
-            Effect.map((models) => Option.fromNullable(models.find((m) => m.id === modelId)))
+            Effect.map((models) => Option.fromNullable(models.find((m) => m.id === modelId))),
           ),
 
         getAllModels: () => Ref.get(modelsRef),
@@ -172,14 +171,13 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
       }
 
       return service
-    })
+    }),
   )
 
   static Test = (models: readonly Model[] = DEFAULT_MODELS): Layer.Layer<ModelRegistry> =>
     Layer.succeed(ModelRegistry, {
       getProviders: () => Effect.succeed(SUPPORTED_PROVIDERS),
-      getModels: (providerId) =>
-        Effect.succeed(models.filter((m) => m.provider === providerId)),
+      getModels: (providerId) => Effect.succeed(models.filter((m) => m.provider === providerId)),
       getModel: (modelId) =>
         Effect.succeed(Option.fromNullable(models.find((m) => m.id === modelId))),
       getAllModels: () => Effect.succeed(models),

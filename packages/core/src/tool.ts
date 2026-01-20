@@ -15,7 +15,7 @@ export interface ToolDefinition<
   readonly params: Params
   readonly execute: (
     params: Schema.Schema.Type<Params>,
-    ctx: ToolContext
+    ctx: ToolContext,
   ) => Effect.Effect<Result, Error, Deps>
 }
 
@@ -34,7 +34,7 @@ export const defineTool = <
   Error,
   Deps,
 >(
-  definition: ToolDefinition<Name, Params, Result, Error, Deps>
+  definition: ToolDefinition<Name, Params, Result, Error, Deps>,
 ): ToolDefinition<Name, Params, Result, Error, Deps> => definition
 
 // Tool Registry Service
@@ -49,13 +49,8 @@ export interface ToolRegistryService {
   readonly register: (tool: AnyToolDefinition) => Effect.Effect<void>
 }
 
-export class ToolRegistry extends Context.Tag("ToolRegistry")<
-  ToolRegistry,
-  ToolRegistryService
->() {
-  static Live = (
-    tools: ReadonlyArray<AnyToolDefinition>
-  ): Layer.Layer<ToolRegistry> =>
+export class ToolRegistry extends Context.Tag("ToolRegistry")<ToolRegistry, ToolRegistryService>() {
+  static Live = (tools: ReadonlyArray<AnyToolDefinition>): Layer.Layer<ToolRegistry> =>
     Layer.succeed(ToolRegistry, {
       get: (name) => Effect.succeed(tools.find((t) => t.name === name)),
       list: () => Effect.succeed(tools),
@@ -72,14 +67,11 @@ export class ToolRegistry extends Context.Tag("ToolRegistry")<
 
 // Tool Execution Result
 
-export class ToolSuccess extends Schema.TaggedClass<ToolSuccess>()(
-  "ToolSuccess",
-  {
-    toolCallId: Schema.String,
-    toolName: Schema.String,
-    result: Schema.Unknown,
-  }
-) {}
+export class ToolSuccess extends Schema.TaggedClass<ToolSuccess>()("ToolSuccess", {
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+  result: Schema.Unknown,
+}) {}
 
 export class ToolError extends Schema.TaggedClass<ToolError>()("ToolError", {
   toolCallId: Schema.String,

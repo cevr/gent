@@ -20,27 +20,27 @@ export const GrepParams = Schema.Struct({
   path: Schema.optional(
     Schema.String.annotations({
       description: "File or directory to search (default: cwd)",
-    })
+    }),
   ),
   glob: Schema.optional(
     Schema.String.annotations({
       description: "Glob pattern to filter files (e.g., *.ts)",
-    })
+    }),
   ),
   caseSensitive: Schema.optional(
     Schema.Boolean.annotations({
       description: "Case sensitive search (default: true)",
-    })
+    }),
   ),
   context: Schema.optional(
     Schema.Number.annotations({
       description: "Lines of context around matches",
-    })
+    }),
   ),
   limit: Schema.optional(
     Schema.Number.annotations({
       description: "Maximum number of matches (default: 100)",
-    })
+    }),
   ),
 })
 
@@ -54,7 +54,7 @@ export const GrepMatch = Schema.Struct({
     Schema.Struct({
       before: Schema.Array(Schema.String),
       after: Schema.Array(Schema.String),
-    })
+    }),
   ),
 })
 
@@ -97,9 +97,7 @@ export const GrepTool = defineTool({
       context?: { before: string[]; after: string[] }
     }> = []
 
-    const searchFile = (
-      filePath: string
-    ): Effect.Effect<void, never, FileSystem.FileSystem> =>
+    const searchFile = (filePath: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
       Effect.gen(function* () {
         const contentResult = yield* fs.readFileString(filePath).pipe(Effect.option)
         if (Option.isNone(contentResult)) return
@@ -152,7 +150,7 @@ export const GrepTool = defineTool({
             message: `Failed to glob: ${e}`,
             pattern: params.pattern,
             cause: e,
-          })
+          }),
       )
 
       // Collect files and search each

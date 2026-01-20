@@ -112,13 +112,18 @@ export function SessionView(props: SessionViewProps) {
   createEffect(() => {
     if (!client.isActive()) return
 
-    void client.listMessages().then((msgs) => {
-      setMessages(buildMessages(msgs))
-      // If session has messages, it's not a fresh session
-      if (msgs.length > 0) {
-        setFirstMessageSent(true)
-      }
-    })
+    void client
+      .listMessages()
+      .then((msgs) => {
+        setMessages(buildMessages(msgs))
+        // If session has messages, it's not a fresh session
+        if (msgs.length > 0) {
+          setFirstMessageSent(true)
+        }
+      })
+      .catch((e: unknown) => {
+        agentState.setError(e instanceof Error ? e.message : String(e))
+      })
   })
 
   // Focus input on mount, send initial prompt if provided
@@ -128,7 +133,10 @@ export function SessionView(props: SessionViewProps) {
     // Send initial prompt immediately if provided, starting in plan mode
     if (props.initialPrompt) {
       setFirstMessageSent(true)
-      void client.sendMessage(props.initialPrompt, "plan")
+      void client.sendMessage(props.initialPrompt, "plan").catch((e: unknown) => {
+        agentState.setStatus("error")
+        agentState.setError(e instanceof Error ? e.message : String(e))
+      })
     }
   })
 
@@ -138,9 +146,14 @@ export function SessionView(props: SessionViewProps) {
 
     const unsubscribe = client.subscribeEvents((event) => {
       if (event._tag === "MessageReceived") {
-        void client.listMessages().then((msgs) => {
-          setMessages(buildMessages(msgs))
-        })
+        void client
+          .listMessages()
+          .then((msgs) => {
+            setMessages(buildMessages(msgs))
+          })
+          .catch((e: unknown) => {
+            agentState.setError(e instanceof Error ? e.message : String(e))
+          })
       } else if (event._tag === "StreamStarted") {
         agentState.setStatus("streaming")
         agentState.setError(null)
@@ -229,7 +242,7 @@ export function SessionView(props: SessionViewProps) {
                         summary: event.summary,
                         output: event.output,
                       }
-                    : tc
+                    : tc,
                 ),
               },
             ]
@@ -248,7 +261,6 @@ export function SessionView(props: SessionViewProps) {
 
   const exit = () => {
     renderer.destroy()
-    process.exit(0)
   }
 
   // Delete word backward
@@ -293,7 +305,9 @@ export function SessionView(props: SessionViewProps) {
       }
 
       if (agentState.status() === "streaming") {
-        void client.steer({ _tag: "Cancel" })
+        void client.steer({ _tag: "Cancel" }).catch(() => {
+          // Steer errors are non-critical
+        })
         agentState.setStatus("idle")
         return
       }
@@ -329,7 +343,9 @@ export function SessionView(props: SessionViewProps) {
     if (e.shift && e.name === "tab") {
       const newMode = agentState.mode() === "build" ? "plan" : "build"
       agentState.setMode(newMode)
-      void client.steer({ _tag: "SwitchMode", mode: newMode })
+      void client.steer({ _tag: "SwitchMode", mode: newMode }).catch(() => {
+        // Mode switch errors are non-critical
+      })
       return
     }
 

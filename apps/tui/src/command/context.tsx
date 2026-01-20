@@ -6,7 +6,12 @@ interface CommandContextValue {
   commands: Accessor<Command[]>
   register: (commands: Command[]) => () => void
   trigger: (id: string) => void
-  handleKeybind: (event: { name: string; ctrl?: boolean; shift?: boolean; meta?: boolean }) => boolean
+  handleKeybind: (event: {
+    name: string
+    ctrl?: boolean
+    shift?: boolean
+    meta?: boolean
+  }) => boolean
   paletteOpen: Accessor<boolean>
   openPalette: () => void
   closePalette: () => void
@@ -53,7 +58,12 @@ export function CommandProvider(props: CommandProviderProps) {
     cmd?.onSelect()
   }
 
-  const handleKeybind = (event: { name: string; ctrl?: boolean; shift?: boolean; meta?: boolean }): boolean => {
+  const handleKeybind = (event: {
+    name: string
+    ctrl?: boolean
+    shift?: boolean
+    meta?: boolean
+  }): boolean => {
     // Check for palette keybind (Ctrl+P)
     if (event.ctrl && event.name === "p" && !event.shift && !event.meta) {
       setPaletteOpen(true)
