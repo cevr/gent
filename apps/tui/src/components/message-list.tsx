@@ -122,8 +122,7 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
   )
 }
 
-const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"]
-const DOTS_FRAMES = ["   ", ".  ", ".. ", "..."]
+const DOTS_FRAMES = ["", ".", "..", "..."]
 
 export interface ThinkingIndicatorProps {
   elapsed: number
@@ -137,33 +136,19 @@ export function ThinkingIndicator(props: ThinkingIndicatorProps) {
   onMount(() => {
     const interval = setInterval(() => {
       if (props.visible) {
-        setFrame((f) => (f + 1) % SPINNER_FRAMES.length)
+        setFrame((f) => (f + 1) % DOTS_FRAMES.length)
       }
-    }, 150)
+    }, 500)
     onCleanup(() => clearInterval(interval))
   })
 
-  const formatTime = () => {
-    const secs = props.elapsed
-    if (secs < 60) return `${secs}s`
-    const mins = Math.floor(secs / 60)
-    const remainingSecs = secs % 60
-    return `${mins}m ${remainingSecs}s`
-  }
-
-  const spinner = () => SPINNER_FRAMES[frame()]
   const dots = () => DOTS_FRAMES[frame()]
 
   return (
     <Show when={props.visible}>
       <box flexShrink={0} paddingLeft={1}>
         <text>
-          <span style={{ fg: theme.warning }}>{spinner()} </span>
-          <span style={{ fg: theme.text }}>Thinking{dots()}</span>
-          <span style={{ fg: theme.textMuted }}> {formatTime()} </span>
-          <span style={{ fg: theme.textMuted }}>(</span>
-          <span style={{ fg: theme.info, bold: true }}>esc</span>
-          <span style={{ fg: theme.textMuted }}> to interrupt)</span>
+          <span style={{ fg: theme.textMuted, italic: true }}>thinking{dots()}</span>
         </text>
       </box>
     </Show>
