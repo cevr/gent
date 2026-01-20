@@ -1,7 +1,7 @@
 import { Show } from "solid-js"
-import { useTheme } from "../../theme/index.js"
-import type { ToolRendererProps } from "./types.js"
-import { getEditUnifiedDiff } from "./edit-utils.js"
+import { useTheme } from "../../theme/index"
+import type { ToolRendererProps } from "./types"
+import { getEditUnifiedDiff } from "./edit-utils"
 
 export function EditToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()

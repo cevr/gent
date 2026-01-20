@@ -2,10 +2,10 @@ import { createContext, useContext, createMemo, onMount } from "solid-js"
 import type { JSX } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useRenderer } from "@opentui/solid"
-import type { Theme, ThemeJson, ThemeMode } from "./types.js"
-import { resolveTheme, generateSystemTheme } from "./resolve.js"
-import { DEFAULT_THEMES } from "./default-themes.js"
-import { detectColorScheme } from "./detect.js"
+import type { Theme, ThemeJson, ThemeMode } from "./types"
+import { resolveTheme, generateSystemTheme } from "./resolve"
+import { DEFAULT_THEMES } from "./default-themes"
+import { detectColorScheme } from "./detect"
 
 interface ThemeContextValue {
   theme: Theme

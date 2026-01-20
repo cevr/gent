@@ -2,7 +2,7 @@
  * Pure router logic - reducer + state machine
  */
 
-import type { AppRoute, AppRouterState } from "./types.js"
+import type { AppRoute, AppRouterState } from "./types"
 
 export type RouterAction =
   | { readonly type: "navigate"; readonly route: AppRoute }

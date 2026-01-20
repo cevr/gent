@@ -7,7 +7,10 @@
   "type": "module",
   "scripts": {
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
-    "build": "bun scripts/build.ts"
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
+    "test": "bun test tests"
   },
   "dependencies": {
     "@effect/cli": "catalog:",

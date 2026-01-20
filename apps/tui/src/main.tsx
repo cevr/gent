@@ -18,11 +18,11 @@ import { DEFAULT_MODEL_ID, type ModelId } from "@gent/core"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
-import { App } from "./app.js"
-import { ClientProvider, type Session } from "./client/index.js"
-import { RouterProvider, Route } from "./router/index.js"
-import { WorkspaceProvider } from "./workspace/index.js"
-import type { GentRpcClient } from "./client.js"
+import { App } from "./app"
+import { ClientProvider, type Session } from "./client/index"
+import { RouterProvider, Route } from "./router/index"
+import { WorkspaceProvider } from "./workspace/index"
+import type { GentRpcClient } from "./client"
 
 // ============================================================================
 // Initial State - discriminated union for clarity

@@ -3,8 +3,8 @@
  */
 
 import { createContext, createSignal, onCleanup, useContext, type ParentProps } from "solid-js"
-import { type AppRoute, Route } from "./types.js"
-import { createAppRouter, type AppRouter } from "./router.js"
+import { type AppRoute, Route } from "./types"
+import { createAppRouter, type AppRouter } from "./router"
 
 export interface RouterContextValue {
   route: () => AppRoute

@@ -1,6 +1,6 @@
 import { Effect } from "effect"
-import { GentRpcs } from "./rpcs.js"
-import { GentCore } from "./core.js"
+import { GentRpcs } from "./rpcs"
+import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 
 // ============================================================================

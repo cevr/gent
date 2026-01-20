@@ -2,8 +2,8 @@ import { createContext, useContext, type ParentProps } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Effect, Stream, Runtime } from "effect"
 import type { AgentEvent } from "@gent/core"
-import type { GentRpcClient, MessageInfoReadonly } from "../client.js"
-import type { SessionState, Session, SessionInfo, BranchInfo, ClientContextValue } from "./types.js"
+import type { GentRpcClient, MessageInfoReadonly } from "../client"
+import type { SessionState, Session, SessionInfo, BranchInfo, ClientContextValue } from "./types"
 
 const ClientContext = createContext<ClientContextValue>()
 

@@ -1,1 +1,1 @@
-export { ModelProvider, useModel } from "./context.js"
+export { ModelProvider, useModel } from "./context"

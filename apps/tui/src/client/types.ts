@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentMode } from "@gent/core"
-import type { MessageInfoReadonly, SteerCommand } from "../client.js"
+import type { MessageInfoReadonly, SteerCommand } from "../client"
 
 export interface Session {
   sessionId: string

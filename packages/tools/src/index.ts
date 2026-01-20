@@ -1,23 +1,23 @@
 // Read Tool
-export { ReadTool, ReadParams, ReadResult, ReadError } from "./read.js"
+export { ReadTool, ReadParams, ReadResult, ReadError } from "./read"
 
 // Write Tool
-export { WriteTool, WriteParams, WriteResult, WriteError } from "./write.js"
+export { WriteTool, WriteParams, WriteResult, WriteError } from "./write"
 
 // Edit Tool
-export { EditTool, EditParams, EditResult, EditError } from "./edit.js"
+export { EditTool, EditParams, EditResult, EditError } from "./edit"
 
 // Bash Tool
-export { BashTool, BashParams, BashResult, BashError } from "./bash.js"
+export { BashTool, BashParams, BashResult, BashError } from "./bash"
 
 // Glob Tool
-export { GlobTool, GlobParams, GlobResult, GlobError } from "./glob.js"
+export { GlobTool, GlobParams, GlobResult, GlobError } from "./glob"
 
 // Grep Tool
-export { GrepTool, GrepParams, GrepResult, GrepMatch, GrepError } from "./grep.js"
+export { GrepTool, GrepParams, GrepResult, GrepMatch, GrepError } from "./grep"
 
 // AskUser Tool
-export { AskUserTool, AskUserParams, AskUserResult, AskUserHandler } from "./ask-user.js"
+export { AskUserTool, AskUserParams, AskUserResult, AskUserHandler } from "./ask-user"
 
 // RepoExplorer Tool
 export {
@@ -39,10 +39,10 @@ export {
 } from "./todo.js"
 
 // Question Tool
-export { QuestionTool, QuestionParams, QuestionResult, QuestionHandler } from "./question.js"
+export { QuestionTool, QuestionParams, QuestionResult, QuestionHandler } from "./question"
 
 // WebFetch Tool
-export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch.js"
+export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch"
 
 // Plan Mode Tools
 export {
@@ -59,22 +59,22 @@ export {
 export { PLAN_MODE_TOOLS, isToolAllowedInPlanMode } from "@gent/core"
 
 // Re-export isToolAllowedInMode for backwards compat with tests
-export { isToolAllowedInMode } from "./plan-mode.js"
+export { isToolAllowedInMode } from "./plan-mode"
 
 // All Tools
 import type { AnyToolDefinition } from "@gent/core"
-import { ReadTool } from "./read.js"
-import { WriteTool } from "./write.js"
-import { EditTool } from "./edit.js"
-import { BashTool } from "./bash.js"
-import { GlobTool } from "./glob.js"
-import { GrepTool } from "./grep.js"
-import { AskUserTool } from "./ask-user.js"
-import { RepoExplorerTool } from "./repo-explorer.js"
-import { TodoReadTool, TodoWriteTool } from "./todo.js"
-import { QuestionTool } from "./question.js"
-import { WebFetchTool } from "./webfetch.js"
-import { PlanEnterTool, PlanExitTool } from "./plan-mode.js"
+import { ReadTool } from "./read"
+import { WriteTool } from "./write"
+import { EditTool } from "./edit"
+import { BashTool } from "./bash"
+import { GlobTool } from "./glob"
+import { GrepTool } from "./grep"
+import { AskUserTool } from "./ask-user"
+import { RepoExplorerTool } from "./repo-explorer"
+import { TodoReadTool, TodoWriteTool } from "./todo"
+import { QuestionTool } from "./question"
+import { WebFetchTool } from "./webfetch"
+import { PlanEnterTool, PlanExitTool } from "./plan-mode"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,

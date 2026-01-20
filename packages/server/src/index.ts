@@ -22,7 +22,7 @@ import {
 } from "./core.js"
 
 // System prompt
-export { DEFAULT_SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt.js"
+export { DEFAULT_SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt"
 
 // Re-export from core
 export { SteerCommand, AgentLoopError, StorageError }
@@ -41,7 +41,7 @@ export {
 }
 
 // Re-export RPC handlers
-export { RpcHandlersLive } from "./rpc-handlers.js"
+export { RpcHandlersLive } from "./rpc-handlers"
 
 // Operations (shared schemas)
 export {
@@ -60,7 +60,7 @@ export {
 } from "./operations.js"
 
 // RPC definitions
-export { GentRpcs, type GentRpcsClient } from "./rpcs.js"
+export { GentRpcs, type GentRpcsClient } from "./rpcs"
 
 // HTTP API
 export {

@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
-import { useTheme } from "../theme/index.js"
-import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index.js"
-import { formatThinkTime, getSpinnerFrames, formatToolInput } from "./message-list-utils.js"
+import { useTheme } from "../theme/index"
+import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
+import { formatThinkTime, getSpinnerFrames, formatToolInput } from "./message-list-utils"
 
 export type { ToolCall }
 

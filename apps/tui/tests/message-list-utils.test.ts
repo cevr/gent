@@ -5,7 +5,7 @@ import {
   getSpinnerFrames,
   formatToolInput,
   TOOL_SPINNERS,
-} from "./message-list-utils.js"
+} from "../src/components/message-list-utils.js"
 
 describe("formatThinkTime", () => {
   test("formats seconds under 60", () => {

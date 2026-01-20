@@ -11,6 +11,9 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
+- **Exit pattern** - Use `renderer.destroy()` then `process.exit(0)` for clean exit.
+- **Solid underscores** - Multi-word components use underscores: `scroll_box`, `tab_select`.
+- **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 
 ## Components
 
@@ -51,7 +54,6 @@ Ported from opencode. Key patterns:
 ## Debugging
 
 - Use `console.log()` for debug output - it appears in terminal after TUI exits
-- `process.exit()` cleanly exits TUI without cleanup warnings
 
 ## Architecture
 
@@ -96,3 +98,47 @@ Components derive state from providers, not props. Add/remove rows per view.
 | `-H, --headless` | Headless mode + prompt arg                      |
 
 Priority: headless → session → continue → prompt → home
+
+## Input Prefixes
+
+Special prefixes at input start trigger different modes:
+
+| Prefix | Behavior                                        |
+| ------ | ----------------------------------------------- |
+| `!`    | Shell mode - prompt changes to `$`, ESC exits   |
+| `$`    | Skills popup (scans ~/.claude/skills, etc.)     |
+| `@`    | File finder popup, supports `@file.ts#10-20`    |
+| `/`    | Command popup (/model, /clear, /sessions, etc.) |
+
+### Shell Mode
+
+- Type `!` at cursor position 0 → enters shell mode (prompt: `$`)
+- Submit executes command, output shown in chat
+- ESC or backspace at empty input exits shell mode
+- Large output (>2000 lines or 50KB) truncated, full saved to `~/tool-output/`
+
+### File References
+
+`@path/to/file.ts#10-20` expands to code block with lines 10-20 on submit.
+
+### Slash Commands
+
+| Command     | Action                  |
+| ----------- | ----------------------- |
+| `/model`    | Open model picker       |
+| `/clear`    | Clear messages          |
+| `/sessions` | Open sessions picker    |
+| `/compact`  | Compact history (TODO)  |
+| `/branch`   | Create new branch       |
+
+## Key Files (Input System)
+
+| File                                         | Purpose                           |
+| -------------------------------------------- | --------------------------------- |
+| `src/routes/session-view.tsx`                | Input mode state, prefix handling |
+| `src/components/autocomplete-popup.tsx`      | Popup component for $, @, /       |
+| `src/hooks/use-skills.ts`                    | Skill dir scanning + caching      |
+| `src/hooks/use-file-search.ts`               | Glob + fuzzy file search          |
+| `src/utils/shell.ts`                         | Shell execution + truncation      |
+| `src/utils/file-refs.ts`                     | @file#line expansion              |
+| `src/commands/slash-commands.ts`             | Slash command handlers            |

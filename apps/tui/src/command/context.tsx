@@ -1,6 +1,6 @@
 import { createContext, useContext, createSignal, type Accessor, type JSX } from "solid-js"
-import type { Command } from "./types.js"
-import { parseKeybind, matchKeybind } from "./types.js"
+import type { Command } from "./types"
+import { parseKeybind, matchKeybind } from "./types"
 
 interface CommandContextValue {
   commands: Accessor<Command[]>

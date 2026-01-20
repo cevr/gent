@@ -1,1 +1,1 @@
-export { AgentStateProvider, useAgentState, type AgentStatus } from "./context.js"
+export { AgentStateProvider, useAgentState, type AgentStatus } from "./context"

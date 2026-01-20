@@ -8,6 +8,7 @@
     "resolveJsonModule": true
   },
   "include": ["src", "src/theme/themes/*.json"],
+  "exclude": ["tests"],
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/server" },

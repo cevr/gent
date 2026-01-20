@@ -1,4 +1,4 @@
-import type { ThemeJson } from "./types.js"
+import type { ThemeJson } from "./types"
 
 import opencode from "./themes/opencode.json" with { type: "json" }
 import catppuccin from "./themes/catppuccin.json" with { type: "json" }

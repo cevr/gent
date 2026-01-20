@@ -12,7 +12,7 @@
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "test": "bun test",
+    "test": "bun --filter '*' test",
     "clean": "rm -rf packages/*/dist apps/*/dist .tsbuildinfo */.tsbuildinfo */*/.tsbuildinfo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
     "prepare": "lefthook install"

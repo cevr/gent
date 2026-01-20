@@ -1,4 +1,4 @@
-export { AgentLoop, AgentLoopError, SteerCommand } from "./agent-loop.js"
+export { AgentLoop, AgentLoopError, SteerCommand } from "./agent-loop"
 
 export {
   CheckpointService,
@@ -13,7 +13,7 @@ export {
   pruneToolOutputs,
 } from "./checkpoint.js"
 
-export { ModelRegistry, ModelRegistryError, type ModelRegistryService } from "./model-registry.js"
+export { ModelRegistry, ModelRegistryError, type ModelRegistryService } from "./model-registry"
 
 export {
   ConfigService,
@@ -32,4 +32,4 @@ export {
   withRetry,
 } from "./retry.js"
 
-export { makeDevTracer, DevTracerLive, DevTracer, DEFAULT_LOG_FILE, clearLog } from "./telemetry.js"
+export { makeDevTracer, DevTracerLive, DevTracer, DEFAULT_LOG_FILE, clearLog } from "./telemetry"

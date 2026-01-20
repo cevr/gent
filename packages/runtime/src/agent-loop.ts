@@ -24,8 +24,8 @@ import type { StorageError } from "@gent/storage"
 import { Storage } from "@gent/storage"
 import type { ProviderError, FinishChunk } from "@gent/providers"
 import { Provider } from "@gent/providers"
-import { withRetry } from "./retry.js"
-import { CheckpointService } from "./checkpoint.js"
+import { withRetry } from "./retry"
+import { CheckpointService } from "./checkpoint"
 import { FileSystem } from "@effect/platform"
 
 // Stringify tool output to string

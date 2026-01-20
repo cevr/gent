@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import { routerReducer, createAppRouter, type RouterAction } from "./router.js"
-import { Route, type AppRoute, type AppRouterState } from "./types.js"
+import { routerReducer, createAppRouter, type RouterAction } from "../src/router/router"
+import { Route, type AppRoute, type AppRouterState } from "../src/router/types"
 
 describe("routerReducer", () => {
   const initialState: AppRouterState = {
@@ -161,19 +161,19 @@ describe("Route constructors", () => {
 
 describe("isRoute type guards", () => {
   test("isRoute.home identifies home routes", async () => {
-    const { isRoute } = await import("./types.js")
+    const { isRoute } = await import("../src/router/types.js")
     expect(isRoute.home(Route.home())).toBe(true)
     expect(isRoute.home(Route.session("s", "b"))).toBe(false)
   })
 
   test("isRoute.session identifies session routes", async () => {
-    const { isRoute } = await import("./types.js")
+    const { isRoute } = await import("../src/router/types.js")
     expect(isRoute.session(Route.session("s", "b"))).toBe(true)
     expect(isRoute.session(Route.home())).toBe(false)
   })
 
   test("type guards narrow types correctly", async () => {
-    const { isRoute } = await import("./types.js")
+    const { isRoute } = await import("../src/router/types.js")
     const route: AppRoute = Route.session("s1", "b1")
 
     if (isRoute.session(route)) {

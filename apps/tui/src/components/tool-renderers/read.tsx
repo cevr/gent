@@ -1,6 +1,6 @@
 import { Show } from "solid-js"
-import { useTheme } from "../../theme/index.js"
-import type { ToolRendererProps } from "./types.js"
+import { useTheme } from "../../theme/index"
+import type { ToolRendererProps } from "./types"
 
 export function ReadToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()

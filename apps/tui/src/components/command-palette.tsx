@@ -2,12 +2,12 @@ import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import type { ModelId } from "@gent/core"
-import { useCommand } from "../command/index.js"
-import { useTheme } from "../theme/index.js"
-import { useModel } from "../model/index.js"
-import { useClient, type SessionInfo } from "../client/index.js"
-import { useRouter } from "../router/index.js"
-import { useScrollSync } from "../hooks/use-scroll-sync.js"
+import { useCommand } from "../command/index"
+import { useTheme } from "../theme/index"
+import { useModel } from "../model/index"
+import { useClient, type SessionInfo } from "../client/index"
+import { useRouter } from "../router/index"
+import { useScrollSync } from "../hooks/use-scroll-sync"
 
 interface MenuItem {
   id: string

@@ -5,7 +5,7 @@ import {
   buildToolResultMap,
   extractToolCallsWithResults,
   type MessageInfoReadonly,
-} from "./client.js"
+} from "../src/client.js"
 import type { MessagePart } from "@gent/core"
 
 describe("extractText", () => {

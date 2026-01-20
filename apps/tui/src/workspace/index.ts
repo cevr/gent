@@ -1,1 +1,1 @@
-export { WorkspaceProvider, useWorkspace, type GitStatus } from "./context.js"
+export { WorkspaceProvider, useWorkspace, type GitStatus } from "./context"

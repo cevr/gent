@@ -1,8 +1,8 @@
 import { Show, type JSX } from "solid-js"
-import { useTheme } from "../theme/index.js"
-import { useModel } from "../model/index.js"
-import { useWorkspace } from "../workspace/index.js"
-import { useAgentState } from "../agent-state/index.js"
+import { useTheme } from "../theme/index"
+import { useModel } from "../model/index"
+import { useWorkspace } from "../workspace/index"
+import { useAgentState } from "../agent-state/index"
 
 // ============================================================================
 // Helper functions

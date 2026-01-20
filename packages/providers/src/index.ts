@@ -1,4 +1,4 @@
-export type { ProviderRequest, GenerateRequest, ProviderService } from "./provider.js"
+export type { ProviderRequest, GenerateRequest, ProviderService } from "./provider"
 export {
   Provider,
   ProviderError,

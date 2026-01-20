@@ -1,9 +1,8 @@
 /**
- * Session view - message list, input, streaming
+ * Session route - message list, input, streaming
  */
 
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
-import type { InputRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { calculateCost } from "@gent/core"
 import {
@@ -12,21 +11,23 @@ import {
   extractToolCallsWithResults,
   type MessageInfoReadonly,
 } from "../client.js"
-import { StatusBar } from "../components/status-bar.js"
-import { MessageList, ThinkingIndicator, type Message } from "../components/message-list.js"
-import { useTheme } from "../theme/index.js"
-import { useCommand } from "../command/index.js"
-import { useModel } from "../model/index.js"
-import { useClient } from "../client/index.js"
-import { useAgentState } from "../agent-state/index.js"
+import { StatusBar } from "../components/status-bar"
+import { MessageList, ThinkingIndicator, type Message } from "../components/message-list"
+import { Input } from "../components/input"
+import { useTheme } from "../theme/index"
+import { useCommand } from "../command/index"
+import { useModel } from "../model/index"
+import { useClient } from "../client/index"
+import { useAgentState } from "../agent-state/index"
+import { executeSlashCommand } from "../commands/slash-commands"
 
-export interface SessionViewProps {
+export interface SessionProps {
   sessionId: string
   branchId: string
   initialPrompt?: string
 }
 
-export function SessionView(props: SessionViewProps) {
+export function Session(props: SessionProps) {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
@@ -35,9 +36,6 @@ export function SessionView(props: SessionViewProps) {
   const client = useClient()
   const agentState = useAgentState()
 
-  let inputRef: InputRenderable | null = null
-
-  const [, setInputValue] = createSignal("")
   const [messages, setMessages] = createSignal<Message[]>([])
   const [elapsed, setElapsed] = createSignal(0)
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
@@ -116,7 +114,6 @@ export function SessionView(props: SessionViewProps) {
       .listMessages()
       .then((msgs) => {
         setMessages(buildMessages(msgs))
-        // If session has messages, it's not a fresh session
         if (msgs.length > 0) {
           setFirstMessageSent(true)
         }
@@ -128,9 +125,6 @@ export function SessionView(props: SessionViewProps) {
 
   // Focus input on mount, send initial prompt if provided
   onMount(() => {
-    inputRef?.focus()
-
-    // Send initial prompt immediately if provided, starting in plan mode
     if (props.initialPrompt) {
       setFirstMessageSent(true)
       void client.sendMessage(props.initialPrompt, "plan").catch((e: unknown) => {
@@ -263,30 +257,9 @@ export function SessionView(props: SessionViewProps) {
     renderer.destroy()
   }
 
-  // Delete word backward
-  const deleteWordBackward = () => {
-    if (!inputRef) return
-    const value = inputRef.value
-    const cursor = inputRef.cursorPosition
-    if (cursor === 0) return
-
-    let pos = cursor - 1
-    while (pos > 0 && value[pos - 1] === " ") pos--
-    while (pos > 0 && value[pos - 1] !== " ") pos--
-
-    inputRef.value = value.slice(0, pos) + value.slice(cursor)
-    inputRef.cursorPosition = pos
-  }
-
-  // Delete line backward
-  const deleteLineBackward = () => {
-    if (!inputRef) return
-    const value = inputRef.value
-    const cursor = inputRef.cursorPosition
-    if (cursor === 0) return
-
-    inputRef.value = value.slice(cursor)
-    inputRef.cursorPosition = 0
+  // Clear messages handler for /clear command
+  const clearMessages = () => {
+    setMessages([])
   }
 
   // Track pending ESC for double-tap quit
@@ -305,9 +278,7 @@ export function SessionView(props: SessionViewProps) {
       }
 
       if (agentState.status() === "streaming") {
-        void client.steer({ _tag: "Cancel" }).catch(() => {
-          // Steer errors are non-critical
-        })
+        void client.steer({ _tag: "Cancel" }).catch(() => {})
         agentState.setStatus("idle")
         return
       }
@@ -327,25 +298,11 @@ export function SessionView(props: SessionViewProps) {
       return
     }
 
-    // Option+Backspace / Ctrl+W: delete word backward
-    if ((e.meta && e.name === "backspace") || (e.ctrl && e.name === "w")) {
-      deleteWordBackward()
-      return
-    }
-
-    // Cmd+Backspace / Ctrl+U: delete line backward
-    if ((e.super && e.name === "backspace") || (e.ctrl && e.name === "u")) {
-      deleteLineBackward()
-      return
-    }
-
     // Shift+Tab: cycle agent mode
     if (e.shift && e.name === "tab") {
       const newMode = agentState.mode() === "build" ? "plan" : "build"
       agentState.setMode(newMode)
-      void client.steer({ _tag: "SwitchMode", mode: newMode }).catch(() => {
-        // Mode switch errors are non-critical
-      })
+      void client.steer({ _tag: "SwitchMode", mode: newMode }).catch(() => {})
       return
     }
 
@@ -356,37 +313,46 @@ export function SessionView(props: SessionViewProps) {
     }
   })
 
-  const handleSubmit = (value: string) => {
-    const text = value.trim()
-    if (text) {
-      agentState.setStatus("streaming")
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "user",
-          content: text,
-          createdAt: Date.now(),
-          toolCalls: undefined,
-          thinkTime: undefined,
-          interrupted: undefined,
-        },
-      ])
+  const handleSubmit = (content: string) => {
+    agentState.setStatus("streaming")
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+        createdAt: Date.now(),
+        toolCalls: undefined,
+        thinkTime: undefined,
+        interrupted: undefined,
+      },
+    ])
 
-      // First message starts in plan mode by default
-      const isFirst = !firstMessageSent()
-      if (isFirst) setFirstMessageSent(true)
+    const isFirst = !firstMessageSent()
+    if (isFirst) setFirstMessageSent(true)
 
-      void client.sendMessage(text, isFirst ? "plan" : undefined).catch((err: unknown) => {
-        const error = err instanceof Error ? err : new Error(String(err))
-        agentState.setStatus("error")
-        agentState.setError(error.message)
-      })
+    void client.sendMessage(content, isFirst ? "plan" : undefined).catch((err: unknown) => {
+      const error = err instanceof Error ? err : new Error(String(err))
+      agentState.setStatus("error")
+      agentState.setError(error.message)
+    })
+  }
 
-      if (inputRef) {
-        inputRef.value = ""
-      }
-      setInputValue("")
+  const handleSlashCommand = async (cmd: string, args: string) => {
+    const result = await executeSlashCommand(cmd, args, {
+      openPalette: () => command.openPalette(),
+      clearMessages,
+      navigateToSessions: () => command.openPalette(),
+      compactHistory: async () => {
+        agentState.setError("Compact not implemented yet")
+      },
+      createBranch: async () => {
+        await client.createBranch()
+      },
+    })
+
+    if (result.error) {
+      agentState.setError(result.error)
     }
   }
 
@@ -398,25 +364,18 @@ export function SessionView(props: SessionViewProps) {
       {/* Thinking indicator */}
       <ThinkingIndicator elapsed={elapsed()} visible={agentState.status() === "streaming"} />
 
-      {/* Separator line */}
-      <box flexShrink={0}>
-        <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
-      </box>
-
-      {/* Input */}
-      <box flexShrink={0} flexDirection="row" paddingLeft={1}>
-        <text style={{ fg: theme.primary }}>❯ </text>
-        <box flexGrow={1}>
-          <input
-            ref={(r) => (inputRef = r)}
-            focused={!command.paletteOpen()}
-            onInput={setInputValue}
-            onSubmit={handleSubmit}
-            backgroundColor="transparent"
-            focusedBackgroundColor="transparent"
-          />
+      {/* Input with autocomplete above separator */}
+      <Input
+        onSubmit={handleSubmit}
+        onSlashCommand={handleSlashCommand}
+        clearMessages={clearMessages}
+      >
+        <Input.Autocomplete />
+        {/* Separator line */}
+        <box flexShrink={0}>
+          <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
         </box>
-      </box>
+      </Input>
 
       {/* Separator line */}
       <box flexShrink={0}>

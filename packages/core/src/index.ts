@@ -16,8 +16,8 @@ export {
 } from "./message.js"
 
 // Tool Types
-export type { ToolDefinition, ToolContext, AnyToolDefinition } from "./tool.js"
-export { defineTool, ToolRegistry, ToolSuccess, ToolError, ToolExecutionResult } from "./tool.js"
+export type { ToolDefinition, ToolContext, AnyToolDefinition } from "./tool"
+export { defineTool, ToolRegistry, ToolSuccess, ToolError, ToolExecutionResult } from "./tool"
 
 // Event Types
 export {
@@ -49,13 +49,13 @@ export {
 } from "./event.js"
 
 // Permission Types
-export { Permission, PermissionRule, PermissionResult } from "./permission.js"
+export { Permission, PermissionRule, PermissionResult } from "./permission"
 
 // Config Types
-export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./config.js"
+export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./config"
 
 // Plan Mode
-export { PLAN_MODE_TOOLS, isToolAllowedInPlanMode } from "./plan-mode.js"
+export { PLAN_MODE_TOOLS, isToolAllowedInPlanMode } from "./plan-mode"
 
 // Model Types
 export {
@@ -71,16 +71,16 @@ export {
 } from "./model.js"
 
 // Current Gen (auto-generated)
-export { CURRENT_GEN_MODEL_IDS } from "./current-gen.js"
+export { CURRENT_GEN_MODEL_IDS } from "./current-gen"
 
 // Todo Types
-export { TodoItem, TodoStatus, TodoPriority } from "./todo.js"
+export { TodoItem, TodoStatus, TodoPriority } from "./todo"
 
 // Skills
-export { Skill, Skills, formatSkillsForPrompt } from "./skills.js"
+export { Skill, Skills, formatSkillsForPrompt } from "./skills"
 
 // Auth Storage
-export { AuthStorage, AuthStorageError } from "./auth-storage.js"
+export { AuthStorage, AuthStorageError } from "./auth-storage"
 
 // Defaults
-export { DEFAULTS, type Defaults } from "./defaults.js"
+export { DEFAULTS, type Defaults } from "./defaults"

@@ -1,5 +1,5 @@
 import { RGBA, type TerminalColors } from "@opentui/core"
-import type { Theme, ThemeColors, ThemeJson, ColorValue } from "./types.js"
+import type { Theme, ThemeColors, ThemeJson, ColorValue } from "./types"
 
 /**
  * Resolve a theme JSON to concrete RGBA values for a given mode
