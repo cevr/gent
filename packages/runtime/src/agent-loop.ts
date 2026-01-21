@@ -14,9 +14,10 @@ import {
   MessageReceived,
   ToolRegistry,
   Permission,
+  PermissionHandler,
   ErrorOccurred,
   PlanModeEntered,
-  PlanModeExited,
+  PlanHandler,
   isToolAllowedInPlanMode,
   DEFAULTS,
 } from "@gent/core"
@@ -98,7 +99,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
     | ToolRegistry
     | EventBus
     | Permission
+    | PermissionHandler
     | CheckpointService
+    | PlanHandler
     | FileSystem.FileSystem
   > =>
     Layer.scoped(
@@ -109,7 +112,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
         const toolRegistry = yield* ToolRegistry
         const eventBus = yield* EventBus
         const permission = yield* Permission
+        const permissionHandler = yield* PermissionHandler
         const checkpointService = yield* CheckpointService
+        const planHandler = yield* PlanHandler
         const fs = yield* FileSystem.FileSystem
         const runtime = yield* Effect.runtime<never>()
 
@@ -150,6 +155,25 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               toolName: toolCall.toolName,
               output: { type: "error-json", value: { error: "Permission denied" } },
             })
+          }
+
+          if (permResult === "ask") {
+            const decision = yield* permissionHandler.request(
+              {
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                input: toolCall.input,
+              },
+              ctx,
+            )
+            if (decision === "deny") {
+              return new ToolResultPart({
+                type: "tool-result",
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                output: { type: "error-json", value: { error: "Permission denied by user" } },
+              })
+            }
           }
 
           // Decode input using tool's params schema
@@ -256,15 +280,27 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                 }))
               } else if (cmd._tag === "SwitchMode") {
                 const newMode = cmd.mode
-                yield* Ref.update(stateRef, (s) => ({
-                  ...s,
-                  mode: newMode,
-                }))
-                // Emit mode change event
-                if (newMode === "plan") {
-                  yield* eventBus.publish(new PlanModeEntered({ sessionId, branchId }))
+                const currentMode = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.mode))
+                if (currentMode === "plan" && newMode === "build") {
+                  const decision = yield* planHandler.present({
+                    sessionId,
+                    branchId,
+                    prompt: "Exit plan mode and resume building?",
+                  })
+                  if (decision === "confirm") {
+                    yield* Ref.update(stateRef, (s) => ({
+                      ...s,
+                      mode: "build",
+                    }))
+                  }
                 } else {
-                  yield* eventBus.publish(new PlanModeExited({ sessionId, branchId, planPath: "" }))
+                  yield* Ref.update(stateRef, (s) => ({
+                    ...s,
+                    mode: newMode,
+                  }))
+                  if (newMode === "plan") {
+                    yield* eventBus.publish(new PlanModeEntered({ sessionId, branchId }))
+                  }
                 }
               }
             }

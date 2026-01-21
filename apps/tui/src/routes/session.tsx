@@ -20,7 +20,7 @@ import { useClient } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useRuntime } from "../hooks/use-runtime"
 import { InputState, transition, type InputEvent, type InputEffect } from "../components/input-state"
-import type { QuestionsAsked } from "@gent/core"
+import type { QuestionsAsked, PermissionRequested, PlanPresented } from "@gent/core"
 
 export interface SessionProps {
   sessionId: string
@@ -239,6 +239,13 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "QuestionsAsked") {
         // Handle agent asking questions - transition to prompt state
         handleInputEvent({ _tag: "QuestionsAsked", event: event as typeof QuestionsAsked.Type })
+      } else if (event._tag === "PermissionRequested") {
+        handleInputEvent({
+          _tag: "PermissionRequested",
+          event: event as typeof PermissionRequested.Type,
+        })
+      } else if (event._tag === "PlanPresented") {
+        handleInputEvent({ _tag: "PlanPresented", event: event as typeof PlanPresented.Type })
       }
       // Note: agent state (mode, status, cost, error) is updated by ClientProvider
     })
@@ -341,16 +348,39 @@ export function Session(props: SessionProps) {
         // Input component handles this internally
         break
       case "RespondPrompt":
-        // Send response to server
-        cast(
-          client.client.respondQuestions(effect.requestId, effect.answers).pipe(
-            Effect.tapError((err) =>
-              Effect.sync(() => {
-                client.setError(String(err))
-              }),
+        if (effect.kind === "questions") {
+          cast(
+            client.client.respondQuestions(effect.requestId, effect.answers).pipe(
+              Effect.tapError((err) =>
+                Effect.sync(() => {
+                  client.setError(String(err))
+                }),
+              ),
             ),
-          ),
-        )
+          )
+        } else if (effect.kind === "permission") {
+          const decision = pickPermissionDecision(effect.answers)
+          cast(
+            client.client.respondPermission(effect.requestId, decision).pipe(
+              Effect.tapError((err) =>
+                Effect.sync(() => {
+                  client.setError(String(err))
+                }),
+              ),
+            ),
+          )
+        } else {
+          const { decision, reason } = pickPlanDecision(effect.answers)
+          cast(
+            client.client.respondPlan(effect.requestId, decision, reason).pipe(
+              Effect.tapError((err) =>
+                Effect.sync(() => {
+                  client.setError(String(err))
+                }),
+              ),
+            ),
+          )
+        }
         break
     }
   }
@@ -422,4 +452,24 @@ export function Session(props: SessionProps) {
       </StatusBar.Root>
     </box>
   )
+}
+
+const pickPermissionDecision = (
+  answers: readonly (readonly string[])[],
+): "allow" | "deny" => {
+  const selections = answers.flat().map((value) => value.trim().toLowerCase())
+  if (selections.includes("allow")) return "allow"
+  if (selections.includes("deny")) return "deny"
+  return "deny"
+}
+
+const pickPlanDecision = (
+  answers: readonly (readonly string[])[],
+): { decision: "confirm" | "reject"; reason?: string } => {
+  const selections = answers.flat().map((value) => value.trim())
+  const normalized = selections.map((value) => value.toLowerCase())
+  if (normalized.includes("confirm")) return { decision: "confirm" }
+  if (normalized.includes("reject")) return { decision: "reject" }
+  const reason = selections[0]
+  return { decision: "reject", reason: reason && reason.length > 0 ? reason : undefined }
 }

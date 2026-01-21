@@ -68,24 +68,43 @@ export class PlanModeEntered extends Schema.TaggedClass<PlanModeEntered>()("Plan
   branchId: Schema.String,
 }) {}
 
-export class PlanModeExited extends Schema.TaggedClass<PlanModeExited>()("PlanModeExited", {
+export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>()(
+  "PermissionRequested",
+  {
+    sessionId: Schema.String,
+    branchId: Schema.String,
+    requestId: Schema.String,
+    toolCallId: Schema.String,
+    toolName: Schema.String,
+    input: Schema.optional(Schema.Unknown),
+  },
+) {}
+
+export class PlanPresented extends Schema.TaggedClass<PlanPresented>()("PlanPresented", {
   sessionId: Schema.String,
   branchId: Schema.String,
-  planPath: Schema.String,
+  requestId: Schema.String,
+  planPath: Schema.optional(Schema.String),
+  prompt: Schema.optional(Schema.String),
 }) {}
 
-export class PlanApproved extends Schema.TaggedClass<PlanApproved>()("PlanApproved", {
+export class PlanConfirmed extends Schema.TaggedClass<PlanConfirmed>()("PlanConfirmed", {
   sessionId: Schema.String,
   branchId: Schema.String,
-  planPath: Schema.String,
+  requestId: Schema.String,
+  planPath: Schema.optional(Schema.String),
 }) {}
 
 export class PlanRejected extends Schema.TaggedClass<PlanRejected>()("PlanRejected", {
   sessionId: Schema.String,
   branchId: Schema.String,
-  planPath: Schema.String,
+  requestId: Schema.String,
+  planPath: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
 }) {}
+
+export const PlanDecision = Schema.Literal("confirm", "reject")
+export type PlanDecision = typeof PlanDecision.Type
 
 export class CompactionStarted extends Schema.TaggedClass<CompactionStarted>()(
   "CompactionStarted",
@@ -170,8 +189,9 @@ export const AgentEvent = Schema.Union(
   ToolCallStarted,
   ToolCallCompleted,
   PlanModeEntered,
-  PlanModeExited,
-  PlanApproved,
+  PermissionRequested,
+  PlanPresented,
+  PlanConfirmed,
   PlanRejected,
   CompactionStarted,
   CompactionCompleted,
@@ -196,10 +216,12 @@ export class EventBus extends Context.Tag("EventBus")<EventBus, EventBusService>
     EventBus,
     Effect.gen(function* () {
       const pubsub = yield* PubSub.unbounded<AgentEvent>()
-      const queue = yield* PubSub.subscribe(pubsub)
       return {
         publish: (event) => PubSub.publish(pubsub, event),
-        subscribe: () => Stream.fromQueue(queue),
+        subscribe: () =>
+          Stream.unwrapScoped(
+            PubSub.subscribe(pubsub).pipe(Effect.map((queue) => Stream.fromQueue(queue))),
+          ),
       }
     }),
   )

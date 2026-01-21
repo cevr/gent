@@ -233,8 +233,12 @@ export function ClientProvider(props: ClientProviderProps) {
               setAgentStore({ mode: "plan" })
               break
 
-            case "PlanModeExited":
+            case "PlanConfirmed":
               setAgentStore({ mode: "build" })
+              break
+
+            case "PlanRejected":
+              setAgentStore({ mode: "plan" })
               break
 
             case "ModelChanged":

@@ -5,11 +5,15 @@ import {
   ToolRegistry,
   EventBus,
   Permission,
+  PermissionHandler,
+  PlanHandler,
   CompactionCheckpoint,
   PlanCheckpoint,
   type AgentEvent,
   type Checkpoint,
   type AnyToolDefinition,
+  type PermissionDecision,
+  type PlanDecision,
 } from "@gent/core"
 import { AskUserHandler, AllTools } from "@gent/tools"
 import { AgentLoop, CheckpointService } from "@gent/runtime"
@@ -260,6 +264,8 @@ export interface TestLayerConfig {
   tools?: ReadonlyArray<AnyToolDefinition>
   recording?: boolean
   checkpoint?: CheckpointServiceTestConfig
+  permissionDecisions?: ReadonlyArray<PermissionDecision>
+  planDecisions?: ReadonlyArray<PlanDecision>
 }
 
 // Create Test Layer (no recording)
@@ -269,6 +275,8 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? ["yes"]
+  const permissionDecisions = config.permissionDecisions ?? ["allow"]
+  const planDecisions = config.planDecisions ?? ["confirm"]
   const tools = config.tools ?? AllTools
 
   return Layer.mergeAll(
@@ -277,7 +285,9 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     ToolRegistry.Live(tools),
     EventBus.Test(),
     Permission.Test(),
+    PermissionHandler.Test(permissionDecisions),
     AskUserHandler.Test(askUserResponses),
+    PlanHandler.Test(planDecisions),
     AgentLoop.Test(),
     CheckpointService.Test(),
   )
@@ -290,6 +300,8 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? ["yes"]
+  const permissionDecisions = config.permissionDecisions ?? ["allow"]
+  const planDecisions = config.planDecisions ?? ["confirm"]
   const tools = config.tools ?? AllTools
   const checkpointConfig = config.checkpoint ?? {}
 
@@ -298,7 +310,9 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   return Layer.mergeAll(
     StorageLayer,
     Permission.Test(),
+    PermissionHandler.Test(permissionDecisions),
     ToolRegistry.Live(tools),
+    PlanHandler.Test(planDecisions),
     AgentLoop.Test(),
   ).pipe(
     Layer.provideMerge(RecordingProvider(providerResponses)),

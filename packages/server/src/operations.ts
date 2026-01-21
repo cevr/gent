@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { AgentEvent, AgentMode, MessagePart } from "@gent/core"
+import { AgentEvent, AgentMode, MessagePart, PermissionDecision, PlanDecision } from "@gent/core"
 
 // ============================================================================
 // Session Operations
@@ -8,6 +8,7 @@ import { AgentEvent, AgentMode, MessagePart } from "@gent/core"
 export const CreateSessionPayload = Schema.Struct({
   name: Schema.optional(Schema.String),
   firstMessage: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
 })
 
 export const CreateSessionSuccess = Schema.Struct({
@@ -19,6 +20,7 @@ export const CreateSessionSuccess = Schema.Struct({
 export const SessionInfo = Schema.Struct({
   id: Schema.String,
   name: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
   branchId: Schema.optional(Schema.String),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
@@ -103,6 +105,17 @@ export const SubscribeEventsPayload = Schema.Struct({
 export const RespondQuestionsPayload = Schema.Struct({
   requestId: Schema.String,
   answers: Schema.Array(Schema.Array(Schema.String)),
+})
+
+export const RespondPermissionPayload = Schema.Struct({
+  requestId: Schema.String,
+  decision: PermissionDecision,
+})
+
+export const RespondPlanPayload = Schema.Struct({
+  requestId: Schema.String,
+  decision: PlanDecision,
+  reason: Schema.optional(Schema.String),
 })
 
 export { AgentEvent }

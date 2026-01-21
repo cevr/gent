@@ -9,7 +9,7 @@ import {
   CompactionCheckpoint,
   PlanCheckpoint,
   EventBus,
-  PlanApproved,
+  PlanConfirmed,
 } from "@gent/core"
 import { CheckpointService, estimateTokens } from "@gent/runtime"
 import { SequenceRecorder, createRecordingTestLayer, assertSequence } from "@gent/test-utils"
@@ -702,9 +702,10 @@ describe("Checkpoints", () => {
           // Simulate approvePlan behavior (what GentCore.approvePlan does)
           yield* service.createPlanCheckpoint("b", "/workspace/plan.md")
           yield* eventBus.publish(
-            new PlanApproved({
+            new PlanConfirmed({
               sessionId: "s",
               branchId: "b",
+              requestId: "plan-req-1",
               planPath: "/workspace/plan.md",
             }),
           )
@@ -718,7 +719,7 @@ describe("Checkpoints", () => {
           const calls = yield* recorder.getCalls()
           assertSequence(calls, [
             { service: "CheckpointService", method: "createPlanCheckpoint" },
-            { service: "EventBus", method: "publish", match: { _tag: "PlanApproved" } },
+            { service: "EventBus", method: "publish", match: { _tag: "PlanConfirmed" } },
           ])
         }).pipe(Effect.provide(TestLayer)),
       )

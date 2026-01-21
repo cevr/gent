@@ -15,6 +15,8 @@ import {
   SubscribeEventsPayload,
   AgentEvent,
   RespondQuestionsPayload,
+  RespondPermissionPayload,
+  RespondPlanPayload,
 } from "./operations.js"
 
 // ============================================================================
@@ -72,6 +74,16 @@ export class GentRpcs extends RpcGroup.make(
   // Respond to questions
   Rpc.make("respondQuestions", {
     payload: RespondQuestionsPayload.fields,
+  }),
+
+  // Respond to permission request
+  Rpc.make("respondPermission", {
+    payload: RespondPermissionPayload.fields,
+  }),
+
+  // Respond to plan prompt
+  Rpc.make("respondPlan", {
+    payload: RespondPlanPayload.fields,
   }),
 ) {}
 

@@ -1,7 +1,7 @@
 import { Layer } from "effect"
 import type { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
-import { EventBus, ToolRegistry, Permission } from "@gent/core"
+import { EventBus, ToolRegistry, Permission, PermissionHandler, PlanHandler } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
@@ -57,6 +57,8 @@ export {
   ListBranchesPayload,
   CreateBranchPayload,
   CreateBranchSuccess,
+  RespondPermissionPayload,
+  RespondPlanPayload,
 } from "./operations.js"
 
 // RPC definitions
@@ -96,9 +98,11 @@ export const createDependencies = (
   | ToolRegistry
   | EventBus
   | Permission
+  | PermissionHandler
   | AgentLoop
   | CheckpointService
-  | AskUserHandler,
+  | AskUserHandler
+  | PlanHandler,
   PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
@@ -115,6 +119,12 @@ export const createDependencies = (
   // AskUserHandler requires EventBus
   const AskUserHandlerLive = Layer.provide(AskUserHandler.Live, BaseServicesLive)
 
+  // PermissionHandler requires EventBus
+  const PermissionHandlerLive = Layer.provide(PermissionHandler.Live, BaseServicesLive)
+
+  // PlanHandler requires EventBus
+  const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseServicesLive)
+
   // CheckpointService requires Storage and Provider
   const CheckpointServiceLive = CheckpointService.Live(
     config.compactionModel ?? "anthropic/claude-haiku-4-5-20251001",
@@ -128,7 +138,13 @@ export const createDependencies = (
   })
 
   // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
-  const AllDeps = Layer.mergeAll(BaseServicesLive, CheckpointLayer, AskUserHandlerLive)
+  const AllDeps = Layer.mergeAll(
+    BaseServicesLive,
+    CheckpointLayer,
+    AskUserHandlerLive,
+    PermissionHandlerLive,
+    PlanHandlerLive,
+  )
 
   return Layer.merge(AllDeps, Layer.provide(AgentLoopLive, AllDeps))
 }

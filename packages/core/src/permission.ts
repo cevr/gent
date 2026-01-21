@@ -34,6 +34,11 @@ export class PermissionRule extends Schema.Class<PermissionRule>("PermissionRule
 export const PermissionResult = Schema.Literal("allowed", "denied", "ask")
 export type PermissionResult = typeof PermissionResult.Type
 
+// Permission Decision (user response)
+
+export const PermissionDecision = Schema.Literal("allow", "deny")
+export type PermissionDecision = typeof PermissionDecision.Type
+
 // Permission Service
 
 export interface PermissionService {

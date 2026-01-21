@@ -34,9 +34,11 @@ export {
   ToolCallStarted,
   ToolCallCompleted,
   PlanModeEntered,
-  PlanModeExited,
-  PlanApproved,
+  PermissionRequested,
+  PlanPresented,
+  PlanConfirmed,
   PlanRejected,
+  PlanDecision,
   CompactionStarted,
   CompactionCompleted,
   ErrorOccurred,
@@ -52,7 +54,18 @@ export {
 } from "./event.js"
 
 // Permission Types
-export { Permission, PermissionRule, PermissionResult } from "./permission"
+export {
+  Permission,
+  PermissionRule,
+  PermissionResult,
+  PermissionDecision,
+} from "./permission"
+
+// Permission Handler
+export { PermissionHandler } from "./permission-handler"
+
+// Plan Handler
+export { PlanHandler } from "./plan-handler"
 
 // Config Types
 export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./config"

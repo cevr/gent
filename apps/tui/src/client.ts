@@ -2,7 +2,16 @@ import { Effect } from "effect"
 import type { Stream, Runtime } from "effect"
 import type { RpcClient, RpcGroup } from "@effect/rpc"
 import type { GentRpcs } from "@gent/server"
-import type { AgentEvent, AgentMode, MessagePart, TextPart, ToolCallPart, ToolResultPart } from "@gent/core"
+import type {
+  AgentEvent,
+  AgentMode,
+  MessagePart,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+  PermissionDecision,
+  PlanDecision,
+} from "@gent/core"
 
 export type { MessagePart, TextPart, ToolCallPart, ToolResultPart }
 
@@ -125,6 +134,7 @@ export type SteerCommand =
 export interface SessionInfo {
   id: string
   name: string | undefined
+  cwd: string | undefined
   branchId: string | undefined
   createdAt: number
   updatedAt: number
@@ -185,6 +195,16 @@ export interface GentClient {
     answers: ReadonlyArray<ReadonlyArray<string>>,
   ) => Effect.Effect<void>
 
+  /** Respond to permission request */
+  respondPermission: (requestId: string, decision: PermissionDecision) => Effect.Effect<void>
+
+  /** Respond to plan prompt */
+  respondPlan: (
+    requestId: string,
+    decision: PlanDecision,
+    reason?: string,
+  ) => Effect.Effect<void>
+
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<never>
 }
@@ -229,6 +249,16 @@ export function createClient(
 
     respondQuestions: (requestId, answers) =>
       rpcClient.respondQuestions({ requestId, answers: [...answers.map((a) => [...a])] }),
+
+    respondPermission: (requestId, decision) =>
+      rpcClient.respondPermission({ requestId, decision }),
+
+    respondPlan: (requestId, decision, reason) =>
+      rpcClient.respondPlan({
+        requestId,
+        decision,
+        ...(reason !== undefined ? { reason } : {}),
+      }),
 
     runtime: runtime as Runtime.Runtime<never>,
   }

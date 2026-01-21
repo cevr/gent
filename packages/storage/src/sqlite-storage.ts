@@ -159,6 +159,7 @@ const makeStorage = (db: Database): StorageService => {
   `)
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch_created ON messages(branch_id, created_at, id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
@@ -429,6 +430,10 @@ const makeStorage = (db: Database): StorageService => {
               message.turnDurationMs ?? null,
             ],
           )
+          db.run(`UPDATE sessions SET updated_at = ? WHERE id = ?`, [
+            message.createdAt.getTime(),
+            message.sessionId,
+          ])
           return message
         },
         catch: (e) =>
@@ -478,7 +483,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC`,
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC, id ASC`,
             )
             .all(branchId) as Array<{
             id: string
@@ -514,13 +519,13 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           if (afterMessageId) {
             const msg = db
-              .query(`SELECT created_at FROM messages WHERE id = ?`)
-              .get(afterMessageId) as { created_at: number } | null
+              .query(`SELECT id, created_at FROM messages WHERE id = ?`)
+              .get(afterMessageId) as { id: string; created_at: number } | null
             if (msg) {
-              db.run(`DELETE FROM messages WHERE branch_id = ? AND created_at > ?`, [
-                branchId,
-                msg.created_at,
-              ])
+              db.run(
+                `DELETE FROM messages WHERE branch_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))`,
+                [branchId, msg.created_at, msg.created_at, msg.id],
+              )
             }
           } else {
             db.run(`DELETE FROM messages WHERE branch_id = ?`, [branchId])
@@ -644,15 +649,15 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           // First get the created_at of the afterMessageId
           const afterMsg = db
-            .query(`SELECT created_at FROM messages WHERE id = ?`)
-            .get(afterMessageId) as { created_at: number } | null
+            .query(`SELECT id, created_at FROM messages WHERE id = ?`)
+            .get(afterMessageId) as { id: string; created_at: number } | null
           if (!afterMsg) return []
 
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`,
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND (created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC`,
             )
-            .all(branchId, afterMsg.created_at) as Array<{
+            .all(branchId, afterMsg.created_at, afterMsg.created_at, afterMsg.id) as Array<{
             id: string
             session_id: string
             branch_id: string
@@ -686,7 +691,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC`,
+              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC, id ASC`,
             )
             .all(branchId, sinceTimestamp.getTime()) as Array<{
             id: string
@@ -754,20 +759,31 @@ const makeStorage = (db: Database): StorageService => {
     replaceTodos: (branchId, todos) =>
       Effect.try({
         try: () => {
-          db.run(`DELETE FROM todos WHERE branch_id = ?`, [branchId])
-          const stmt = db.prepare(
-            `INSERT INTO todos (id, branch_id, content, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          )
-          for (const todo of todos) {
-            stmt.run(
-              todo.id,
-              branchId,
-              todo.content,
-              todo.status,
-              todo.priority ?? null,
-              todo.createdAt.getTime(),
-              todo.updatedAt.getTime(),
+          db.run("BEGIN")
+          try {
+            db.run(`DELETE FROM todos WHERE branch_id = ?`, [branchId])
+            const stmt = db.prepare(
+              `INSERT INTO todos (id, branch_id, content, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             )
+            for (const todo of todos) {
+              stmt.run(
+                todo.id,
+                branchId,
+                todo.content,
+                todo.status,
+                todo.priority ?? null,
+                todo.createdAt.getTime(),
+                todo.updatedAt.getTime(),
+              )
+            }
+            db.run("COMMIT")
+          } catch (e) {
+            try {
+              db.run("ROLLBACK")
+            } catch {
+              // ignore rollback failure
+            }
+            throw e
           }
         },
         catch: (e) =>

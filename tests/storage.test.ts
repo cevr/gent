@@ -251,6 +251,94 @@ describe("Storage", () => {
         }),
       )
     })
+
+    test("updates session updatedAt when creating message", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const start = new Date(0)
+          const messageTime = new Date(1000)
+
+          yield* storage.createSession(
+            new Session({
+              id: "session-updated-at",
+              createdAt: start,
+              updatedAt: start,
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: "branch-updated-at",
+              sessionId: "session-updated-at",
+              createdAt: start,
+            }),
+          )
+
+          yield* storage.createMessage(
+            new Message({
+              id: "msg-updated-at",
+              sessionId: "session-updated-at",
+              branchId: "branch-updated-at",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "Ping" })],
+              createdAt: messageTime,
+            }),
+          )
+
+          const session = yield* storage.getSession("session-updated-at")
+          expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
+        }),
+      )
+    })
+
+    test("orders messages by createdAt then id", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const timestamp = new Date()
+
+          yield* storage.createSession(
+            new Session({
+              id: "order-session",
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: "order-branch",
+              sessionId: "order-session",
+              createdAt: timestamp,
+            }),
+          )
+
+          yield* storage.createMessage(
+            new Message({
+              id: "b",
+              sessionId: "order-session",
+              branchId: "order-branch",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "Second" })],
+              createdAt: timestamp,
+            }),
+          )
+          yield* storage.createMessage(
+            new Message({
+              id: "a",
+              sessionId: "order-session",
+              branchId: "order-branch",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "First" })],
+              createdAt: timestamp,
+            }),
+          )
+
+          const messages = yield* storage.listMessages("order-branch")
+          expect(messages[0]?.id).toBe("a")
+          expect(messages[1]?.id).toBe("b")
+        }),
+      )
+    })
   })
 
   describe("Todos", () => {

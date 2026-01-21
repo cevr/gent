@@ -2,7 +2,7 @@
  * Input state machine for unified input handling
  */
 
-import type { QuestionsAsked } from "@gent/core"
+import type { QuestionsAsked, PermissionRequested, PlanPresented, Question } from "@gent/core"
 
 // ============================================================================
 // Autocomplete Overlay
@@ -20,10 +20,13 @@ export interface AutocompleteOverlay {
 
 export interface PromptState {
   readonly requestId: string
-  readonly questions: typeof QuestionsAsked.Type["questions"]
+  readonly kind: PromptKind
+  readonly questions: readonly Question[]
   readonly currentIndex: number
   readonly answers: readonly (readonly string[])[]
 }
+
+export type PromptKind = "questions" | "permission" | "plan"
 
 // ============================================================================
 // Input State Union
@@ -48,7 +51,28 @@ export const InputState = {
     _tag: "prompt",
     prompt: {
       requestId: event.requestId,
+      kind: "questions",
       questions: event.questions,
+      currentIndex: 0,
+      answers: [],
+    },
+  }),
+  fromPermission: (event: typeof PermissionRequested.Type): InputState => ({
+    _tag: "prompt",
+    prompt: {
+      requestId: event.requestId,
+      kind: "permission",
+      questions: [permissionQuestion(event)],
+      currentIndex: 0,
+      answers: [],
+    },
+  }),
+  fromPlan: (event: typeof PlanPresented.Type): InputState => ({
+    _tag: "prompt",
+    prompt: {
+      requestId: event.requestId,
+      kind: "plan",
+      questions: [planQuestion(event)],
       currentIndex: 0,
       answers: [],
     },
@@ -71,6 +95,8 @@ export type InputEvent =
     }
   | { readonly _tag: "CloseAutocomplete" }
   | { readonly _tag: "QuestionsAsked"; readonly event: typeof QuestionsAsked.Type }
+  | { readonly _tag: "PermissionRequested"; readonly event: typeof PermissionRequested.Type }
+  | { readonly _tag: "PlanPresented"; readonly event: typeof PlanPresented.Type }
   | { readonly _tag: "SubmitAnswer"; readonly selections: readonly string[] }
 
 // ============================================================================
@@ -81,6 +107,7 @@ export type InputEffect =
   | { readonly _tag: "ClearInput" }
   | {
       readonly _tag: "RespondPrompt"
+      readonly kind: PromptKind
       readonly requestId: string
       readonly answers: readonly (readonly string[])[]
     }
@@ -117,6 +144,10 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
           return { state: InputState.normal(null) }
         case "QuestionsAsked":
           return { state: InputState.fromQuestions(event.event) }
+        case "PermissionRequested":
+          return { state: InputState.fromPermission(event.event) }
+        case "PlanPresented":
+          return { state: InputState.fromPlan(event.event) }
         default:
           return { state }
       }
@@ -130,6 +161,10 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
           return { state: InputState.normal() }
         case "QuestionsAsked":
           return { state: InputState.fromQuestions(event.event) }
+        case "PermissionRequested":
+          return { state: InputState.fromPermission(event.event) }
+        case "PlanPresented":
+          return { state: InputState.fromPlan(event.event) }
         default:
           return { state }
       }
@@ -151,6 +186,7 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
               state: InputState.normal(),
               effect: {
                 _tag: "RespondPrompt",
+                kind: prompt.kind,
                 requestId: prompt.requestId,
                 answers: newAnswers,
               },
@@ -173,5 +209,35 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
           return { state }
       }
     }
+  }
+}
+
+const summarizeInput = (input: unknown): string => {
+  if (input === null || input === undefined) return ""
+  const raw = typeof input === "string" ? input : JSON.stringify(input)
+  return raw.length > 120 ? raw.slice(0, 120) + "..." : raw
+}
+
+const permissionQuestion = (event: typeof PermissionRequested.Type): Question => {
+  const summary = summarizeInput(event.input)
+  const question = summary
+    ? `Allow ${event.toolName} (${summary})?`
+    : `Allow ${event.toolName}?`
+  return {
+    question,
+    header: "Permission",
+    options: [{ label: "Allow" }, { label: "Deny" }],
+    multiple: false,
+  }
+}
+
+const planQuestion = (event: typeof PlanPresented.Type): Question => {
+  const base = event.prompt ?? (event.planPath ? `Plan ready: ${event.planPath}` : "Plan ready")
+  const question = event.prompt ? base : `${base} Confirm?`
+  return {
+    question,
+    header: "Plan",
+    options: [{ label: "Confirm" }, { label: "Reject" }],
+    multiple: false,
   }
 }

@@ -7,7 +7,7 @@ import {
   TextPart,
   EventBus,
   SessionNameUpdated,
-  PlanApproved,
+  PlanConfirmed,
   ModelChanged,
   type AgentEvent,
   type AgentMode,
@@ -67,6 +67,7 @@ export interface SessionInfo {
 export interface BranchInfo {
   id: string
   sessionId: string
+  name: string | undefined
   model: string | undefined
   createdAt: number
 }
@@ -91,6 +92,7 @@ export interface ApprovePlanInput {
   sessionId: string
   branchId: string
   planPath: string
+  requestId?: string
 }
 
 export interface GentCoreService {
@@ -347,6 +349,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             return branches.map((b) => ({
               id: b.id,
               sessionId: b.sessionId,
+              name: b.name,
               model: b.model,
               createdAt: b.createdAt.getTime(),
             }))
@@ -359,11 +362,12 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             // Create plan checkpoint - hard reset context
             yield* checkpointService.createPlanCheckpoint(input.branchId, input.planPath)
 
-            // Emit plan approved event
+            // Emit plan confirmed event
             yield* eventBus.publish(
-              new PlanApproved({
+              new PlanConfirmed({
                 sessionId: input.sessionId,
                 branchId: input.branchId,
+                requestId: input.requestId ?? Bun.randomUUIDv7(),
                 planPath: input.planPath,
               }),
             )

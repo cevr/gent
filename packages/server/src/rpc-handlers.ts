@@ -3,6 +3,7 @@ import { GentRpcs } from "./rpcs"
 import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
+import { PermissionHandler, PlanHandler } from "@gent/core"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -12,6 +13,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
   Effect.gen(function* () {
     const core = yield* GentCore
     const askUserHandler = yield* AskUserHandler
+    const permissionHandler = yield* PermissionHandler
+    const planHandler = yield* PlanHandler
 
     return {
       createSession: (input) =>
@@ -19,6 +22,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           .createSession({
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
+            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
           })
           .pipe(Effect.orDie),
 
@@ -59,6 +63,12 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       respondQuestions: ({ requestId, answers }) =>
         askUserHandler.respond(requestId, answers).pipe(Effect.orDie),
+
+      respondPermission: ({ requestId, decision }) =>
+        permissionHandler.respond(requestId, decision).pipe(Effect.orDie),
+
+      respondPlan: ({ requestId, decision, reason }) =>
+        planHandler.respond(requestId, decision, reason).pipe(Effect.orDie),
     }
   }),
 )
