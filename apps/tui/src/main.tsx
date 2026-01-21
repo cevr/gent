@@ -144,8 +144,11 @@ const ServerDepsLayer = createDependencies({
 // GentCore layer on top of dependencies
 const GentCoreLive = GentCore.Live.pipe(Layer.provide(ServerDepsLayer))
 
-// RPC handlers layer (requires GentCore)
-const RpcLayer = RpcHandlersLive.pipe(Layer.provide(GentCoreLive))
+// Combined layer with GentCore + AskUserHandler for RPC handlers
+const CoreWithDeps = Layer.merge(GentCoreLive, ServerDepsLayer)
+
+// RPC handlers layer (requires GentCore + AskUserHandler)
+const RpcLayer = RpcHandlersLive.pipe(Layer.provide(CoreWithDeps))
 
 // Full layer stack for RPC client
 const FullLayer = Layer.mergeAll(RpcLayer, GentCoreLive)

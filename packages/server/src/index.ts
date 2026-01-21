@@ -5,7 +5,7 @@ import { EventBus, ToolRegistry, Permission } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
-import { AllTools } from "@gent/tools"
+import { AllTools, AskUserHandler } from "@gent/tools"
 import {
   GentCore,
   type GentCoreService,
@@ -91,7 +91,14 @@ export interface DependenciesConfig {
 export const createDependencies = (
   config: DependenciesConfig,
 ): Layer.Layer<
-  Storage | Provider | ToolRegistry | EventBus | Permission | AgentLoop | CheckpointService,
+  | Storage
+  | Provider
+  | ToolRegistry
+  | EventBus
+  | Permission
+  | AgentLoop
+  | CheckpointService
+  | AskUserHandler,
   PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
@@ -104,6 +111,9 @@ export const createDependencies = (
     EventBus.Live,
     Permission.Live(),
   )
+
+  // AskUserHandler requires EventBus
+  const AskUserHandlerLive = Layer.provide(AskUserHandler.Live, BaseServicesLive)
 
   // CheckpointService requires Storage and Provider
   const CheckpointServiceLive = CheckpointService.Live(
@@ -118,7 +128,10 @@ export const createDependencies = (
   })
 
   // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
-  const AllDeps = Layer.mergeAll(BaseServicesLive, CheckpointLayer)
+  const AllDeps = Layer.mergeAll(BaseServicesLive, CheckpointLayer, AskUserHandlerLive)
 
   return Layer.merge(AllDeps, Layer.provide(AgentLoopLive, AllDeps))
 }
+
+// Re-export AskUserHandler for RPC handlers
+export { AskUserHandler }

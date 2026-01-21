@@ -19,6 +19,8 @@ import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useRuntime } from "../hooks/use-runtime"
+import { InputState, transition, type InputEvent, type InputEffect } from "../components/input-state"
+import type { QuestionsAsked } from "@gent/core"
 
 export interface SessionProps {
   sessionId: string
@@ -37,6 +39,7 @@ export function Session(props: SessionProps) {
   const [messages, setMessages] = createSignal<Message[]>([])
   const [elapsed, setElapsed] = createSignal(0)
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
+  const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
 
   // Derived - no separate signal needed
   const hasMessages = () => messages().length > 0
@@ -233,6 +236,9 @@ export function Session(props: SessionProps) {
           }
           return prev
         })
+      } else if (event._tag === "QuestionsAsked") {
+        // Handle agent asking questions - transition to prompt state
+        handleInputEvent({ _tag: "QuestionsAsked", event: event as typeof QuestionsAsked.Type })
       }
       // Note: agent state (mode, status, cost, error) is updated by ClientProvider
     })
@@ -319,6 +325,36 @@ export function Session(props: SessionProps) {
     client.sendMessage(content, !hasMessages() ? "plan" : undefined)
   }
 
+  // Handle input state transitions
+  const handleInputEvent = (event: InputEvent) => {
+    const result = transition(inputState(), event)
+    setInputState(result.state)
+    if (result.effect) {
+      handleInputEffect(result.effect)
+    }
+  }
+
+  // Handle input effects (side effects from state transitions)
+  const handleInputEffect = (effect: InputEffect) => {
+    switch (effect._tag) {
+      case "ClearInput":
+        // Input component handles this internally
+        break
+      case "RespondPrompt":
+        // Send response to server
+        cast(
+          client.client.respondQuestions(effect.requestId, effect.answers).pipe(
+            Effect.tapError((err) =>
+              Effect.sync(() => {
+                client.setError(String(err))
+              }),
+            ),
+          ),
+        )
+        break
+    }
+  }
+
   const handleSlashCommand = async (cmd: string, args: string) => {
     const result = await executeSlashCommand(cmd, args, {
       openPalette: () => command.openPalette(),
@@ -350,6 +386,9 @@ export function Session(props: SessionProps) {
         onSubmit={handleSubmit}
         onSlashCommand={handleSlashCommand}
         clearMessages={clearMessages}
+        inputState={inputState()}
+        onInputEvent={handleInputEvent}
+        onInputEffect={handleInputEffect}
       >
         <Input.Autocomplete />
         {/* Separator line */}

@@ -110,37 +110,24 @@ export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOcc
   error: Schema.String,
 }) {}
 
-export class AskUserRequested extends Schema.TaggedClass<AskUserRequested>()("AskUserRequested", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
-  requestId: Schema.String,
-  question: Schema.String,
-  options: Schema.optional(Schema.Array(Schema.String)),
-}) {}
-
-export class AskUserResponded extends Schema.TaggedClass<AskUserResponded>()("AskUserResponded", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
-  requestId: Schema.String,
-  response: Schema.String,
-}) {}
-
 export class TodoUpdated extends Schema.TaggedClass<TodoUpdated>()("TodoUpdated", {
   sessionId: Schema.String,
   branchId: Schema.String,
 }) {}
 
-const QuestionOptionSchema = Schema.Struct({
+export const QuestionOptionSchema = Schema.Struct({
   label: Schema.String,
-  description: Schema.String,
+  description: Schema.optional(Schema.String),
 })
+export type QuestionOption = typeof QuestionOptionSchema.Type
 
-const QuestionSchema = Schema.Struct({
+export const QuestionSchema = Schema.Struct({
   question: Schema.String,
-  header: Schema.String,
-  options: Schema.Array(QuestionOptionSchema),
+  header: Schema.optional(Schema.String),
+  options: Schema.optional(Schema.Array(QuestionOptionSchema)),
   multiple: Schema.optional(Schema.Boolean),
 })
+export type Question = typeof QuestionSchema.Type
 
 export class QuestionsAsked extends Schema.TaggedClass<QuestionsAsked>()("QuestionsAsked", {
   sessionId: Schema.String,
@@ -189,8 +176,6 @@ export const AgentEvent = Schema.Union(
   CompactionStarted,
   CompactionCompleted,
   ErrorOccurred,
-  AskUserRequested,
-  AskUserResponded,
   TodoUpdated,
   QuestionsAsked,
   QuestionsAnswered,

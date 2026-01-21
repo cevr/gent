@@ -14,6 +14,7 @@ import {
   SteerPayload,
   SubscribeEventsPayload,
   AgentEvent,
+  RespondQuestionsPayload,
 } from "./operations.js"
 
 // ============================================================================
@@ -66,6 +67,11 @@ export class GentRpcs extends RpcGroup.make(
     payload: SubscribeEventsPayload.fields,
     success: AgentEvent,
     stream: true,
+  }),
+
+  // Respond to questions
+  Rpc.make("respondQuestions", {
+    payload: RespondQuestionsPayload.fields,
   }),
 ) {}
 

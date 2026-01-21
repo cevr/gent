@@ -2,6 +2,7 @@ import { Effect } from "effect"
 import { GentRpcs } from "./rpcs"
 import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
+import { AskUserHandler } from "@gent/tools"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -10,6 +11,7 @@ import type { SteerCommand } from "@gent/runtime"
 export const RpcHandlersLive = GentRpcs.toLayer(
   Effect.gen(function* () {
     const core = yield* GentCore
+    const askUserHandler = yield* AskUserHandler
 
     return {
       createSession: (input) =>
@@ -54,6 +56,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       subscribeEvents: ({ sessionId }) =>
         // Return the stream directly for streaming RPC
         core.subscribeEvents(sessionId),
+
+      respondQuestions: ({ requestId, answers }) =>
+        askUserHandler.respond(requestId, answers).pipe(Effect.orDie),
     }
   }),
 )

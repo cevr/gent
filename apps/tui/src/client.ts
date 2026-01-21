@@ -116,7 +116,8 @@ export interface MessageInfoReadonly {
 // Steer command types
 export type SteerCommand =
   | { _tag: "Cancel" }
-  | { _tag: "Interrupt"; message: string }
+  | { _tag: "Interrupt" }
+  | { _tag: "Interject"; message: string }
   | { _tag: "SwitchModel"; model: string }
   | { _tag: "SwitchMode"; mode: "build" | "plan" }
 
@@ -178,6 +179,12 @@ export interface GentClient {
   /** Send steering command */
   steer: (command: SteerCommand) => Effect.Effect<void>
 
+  /** Respond to questions from agent */
+  respondQuestions: (
+    requestId: string,
+    answers: ReadonlyArray<ReadonlyArray<string>>,
+  ) => Effect.Effect<void>
+
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<never>
 }
@@ -219,6 +226,9 @@ export function createClient(
     subscribeEvents: (sessionId) => rpcClient.subscribeEvents({ sessionId }),
 
     steer: (command) => rpcClient.steer({ command }),
+
+    respondQuestions: (requestId, answers) =>
+      rpcClient.respondQuestions({ requestId, answers: [...answers.map((a) => [...a])] }),
 
     runtime: runtime as Runtime.Runtime<never>,
   }

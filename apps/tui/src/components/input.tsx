@@ -2,8 +2,18 @@
  * Unified input component with autocomplete support
  */
 
-import { createSignal, createContext, useContext, onMount, Show, type JSX, type Accessor } from "solid-js"
+import {
+  createSignal,
+  createContext,
+  useContext,
+  onMount,
+  Show,
+  For,
+  type JSX,
+  type Accessor,
+} from "solid-js"
 import type { InputRenderable } from "@opentui/core"
+import type { Question } from "@gent/core"
 import { useKeyboard } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"
@@ -17,8 +27,7 @@ import {
 import { executeShell } from "../utils/shell"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeSlashCommand, parseSlashCommand } from "../commands/slash-commands"
-
-export type InputMode = "normal" | "shell"
+import type { InputState, InputEvent, InputEffect } from "./input-state"
 
 interface InputContextValue {
   autocomplete: Accessor<AutocompleteState | null>
@@ -33,6 +42,12 @@ export interface InputProps {
   onSlashCommand?: (cmd: string, args: string) => Promise<void>
   clearMessages?: () => void
   children?: JSX.Element
+  /** Input state from parent (optional - for state machine mode) */
+  inputState?: InputState
+  /** Callback for state changes */
+  onInputEvent?: (event: InputEvent) => void
+  /** Callback for effects */
+  onInputEffect?: (effect: InputEffect) => void
 }
 
 export function Input(props: InputProps) {
@@ -43,8 +58,17 @@ export function Input(props: InputProps) {
 
   let inputRef: InputRenderable | null = null
 
-  const [inputMode, setInputMode] = createSignal<InputMode>("normal")
+  // Internal state for uncontrolled mode (when inputState prop not provided)
+  const [internalMode, setInternalMode] = createSignal<"normal" | "shell">("normal")
   const [autocomplete, setAutocomplete] = createSignal<AutocompleteState | null>(null)
+
+  // Effective mode from props or internal state
+  const effectiveMode = (): "normal" | "shell" | "prompt" => {
+    if (props.inputState) {
+      return props.inputState._tag
+    }
+    return internalMode()
+  }
 
   // Delete word backward
   const deleteWordBackward = () => {
@@ -107,7 +131,7 @@ export function Input(props: InputProps) {
   // Handle input changes for autocomplete detection
   const handleInputChange = (value: string) => {
     // No autocomplete in shell mode
-    if (inputMode() === "shell") {
+    if (effectiveMode() === "shell") {
       setAutocomplete(null)
       return
     }
@@ -154,23 +178,23 @@ export function Input(props: InputProps) {
     if (
       e.name === "!" &&
       inputRef?.cursorPosition === 0 &&
-      inputMode() === "normal" &&
+      effectiveMode() === "normal" &&
       !autocomplete()
     ) {
-      setInputMode("shell")
+      setInternalMode("shell")
       return
     }
 
     // Exit shell mode on ESC or backspace at position 0
-    if (inputMode() === "shell") {
+    if (effectiveMode() === "shell") {
       if (e.name === "escape") {
-        setInputMode("normal")
+        setInternalMode("normal")
         if (inputRef) inputRef.value = ""
         return
       }
       // Backspace at position 0 or 1 exits shell mode (like deleting the implicit !)
       if (e.name === "backspace" && (inputRef?.cursorPosition ?? 0) <= 1) {
-        setInputMode("normal")
+        setInternalMode("normal")
         return
       }
     }
@@ -179,7 +203,7 @@ export function Input(props: InputProps) {
     if (
       e.name === "/" &&
       inputRef?.cursorPosition === 0 &&
-      inputMode() === "normal" &&
+      effectiveMode() === "normal" &&
       !autocomplete()
     ) {
       setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
@@ -207,14 +231,14 @@ export function Input(props: InputProps) {
     setAutocomplete(null)
 
     // 1. Shell mode: execute entire input as bash
-    if (inputMode() === "shell") {
+    if (effectiveMode() === "shell") {
       const { output, truncated, savedPath } = await executeShell(text, workspace.cwd)
       let userMessage = `$ ${text}\n\n${output}`
       if (truncated) {
         userMessage += `\n\n[truncated - full output saved to ${savedPath}]`
       }
 
-      setInputMode("normal")
+      setInternalMode("normal")
       clearInput()
       props.onSubmit(userMessage)
       return
@@ -265,10 +289,10 @@ export function Input(props: InputProps) {
   })
 
   // Prompt symbol based on input mode
-  const promptSymbol = () => (inputMode() === "shell" ? "$ " : "❯ ")
+  const promptSymbol = () => (effectiveMode() === "shell" ? "$ " : "❯ ")
 
-  // Input stays focused unless command palette is open
-  const inputFocused = () => !command.paletteOpen()
+  // Input stays focused unless command palette is open or in prompt mode
+  const inputFocused = () => !command.paletteOpen() && effectiveMode() !== "prompt"
 
   const contextValue: InputContextValue = {
     autocomplete,
@@ -276,29 +300,56 @@ export function Input(props: InputProps) {
     handleAutocompleteClose,
   }
 
+  // Get current prompt state if in prompt mode
+  const currentPrompt = () => {
+    if (props.inputState?._tag === "prompt") {
+      return props.inputState.prompt
+    }
+    return null
+  }
+
+  // Get current question
+  const currentQuestion = () => {
+    const prompt = currentPrompt()
+    if (!prompt) return null
+    return prompt.questions[prompt.currentIndex] ?? null
+  }
+
   return (
     <InputContext.Provider value={contextValue}>
       {/* Children (for Autocomplete placement) */}
       {props.children}
 
-      {/* Input row */}
-      <box flexShrink={0} flexDirection="row" paddingLeft={1}>
-        <text style={{ fg: inputMode() === "shell" ? theme.warning : theme.primary }}>
-          {promptSymbol()}
-        </text>
-        <box flexGrow={1}>
-          <input
-            ref={(r) => (inputRef = r)}
-            focused={inputFocused()}
-            onInput={handleInputChange}
-            onSubmit={(v) => void handleSubmit(v)}
-            backgroundColor="transparent"
-            focusedBackgroundColor="transparent"
-          />
+      {/* Prompt UI when in prompt mode */}
+      <Show when={currentQuestion()}>
+        {(question) => <PromptUI question={question()} onSubmit={handlePromptSubmit} />}
+      </Show>
+
+      {/* Normal input row (hidden when in prompt mode) */}
+      <Show when={effectiveMode() !== "prompt"}>
+        <box flexShrink={0} flexDirection="row" paddingLeft={1}>
+          <text style={{ fg: effectiveMode() === "shell" ? theme.warning : theme.primary }}>
+            {promptSymbol()}
+          </text>
+          <box flexGrow={1}>
+            <input
+              ref={(r) => (inputRef = r)}
+              focused={inputFocused()}
+              onInput={handleInputChange}
+              onSubmit={(v) => void handleSubmit(v)}
+              backgroundColor="transparent"
+              focusedBackgroundColor="transparent"
+            />
+          </box>
         </box>
-      </box>
+      </Show>
     </InputContext.Provider>
   )
+
+  // Handle prompt submission
+  function handlePromptSubmit(selections: readonly string[]) {
+    props.onInputEvent?.({ _tag: "SubmitAnswer", selections })
+  }
 }
 
 /** Autocomplete popup - place where you want it to render */
@@ -316,5 +367,141 @@ Input.Autocomplete = function InputAutocomplete() {
         />
       )}
     </Show>
+  )
+}
+
+// ============================================================================
+// Prompt UI Component
+// ============================================================================
+
+interface PromptUIProps {
+  question: Question
+  onSubmit: (selections: readonly string[]) => void
+}
+
+function PromptUI(props: PromptUIProps) {
+  const { theme } = useTheme()
+
+  const [selected, setSelected] = createSignal<Set<string>>(new Set())
+  const [freeformText, setFreeformText] = createSignal("")
+  const [focusIndex, setFocusIndex] = createSignal(0)
+
+  const options = () => props.question.options ?? []
+  const hasOptions = () => options().length > 0
+  const isMultiple = () => props.question.multiple === true
+
+  // Focus count = options + freeform input
+  const focusableCount = () => options().length + 1
+
+  useKeyboard((e) => {
+    // Navigation
+    if (e.name === "up" || (e.ctrl && e.name === "p")) {
+      setFocusIndex((i) => (i - 1 + focusableCount()) % focusableCount())
+      return
+    }
+    if (e.name === "down" || (e.ctrl && e.name === "n")) {
+      setFocusIndex((i) => (i + 1) % focusableCount())
+      return
+    }
+
+    // Selection with space (when focused on option)
+    if (e.name === "space" && focusIndex() < options().length) {
+      const opt = options()[focusIndex()]
+      if (!opt) return
+      const label = opt.label
+
+      if (isMultiple()) {
+        // Toggle selection
+        setSelected((prev) => {
+          const next = new Set(prev)
+          if (next.has(label)) {
+            next.delete(label)
+          } else {
+            next.add(label)
+          }
+          return next
+        })
+      } else {
+        // Single select - replace
+        setSelected(new Set([label]))
+      }
+      return
+    }
+
+    // Submit with Enter
+    if (e.name === "return") {
+      submitAnswer()
+      return
+    }
+  })
+
+  const submitAnswer = () => {
+    const selections: string[] = [...selected()]
+    const freeform = freeformText().trim()
+    if (freeform) {
+      selections.push(freeform)
+    }
+    // If no selections and no freeform, use "Other" as default
+    if (selections.length === 0) {
+      selections.push("Other")
+    }
+    props.onSubmit(selections)
+  }
+
+  const isSelected = (label: string) => selected().has(label)
+  const isFocused = (index: number) => focusIndex() === index
+  const isFreeformFocused = () => focusIndex() === options().length
+
+  return (
+    <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
+      {/* Header if present */}
+      <Show when={props.question.header}>
+        <text style={{ fg: theme.textMuted }}><b>{props.question.header}</b></text>
+      </Show>
+
+      {/* Question */}
+      <text style={{ fg: theme.text }}>{props.question.question}</text>
+
+      {/* Options */}
+      <Show when={hasOptions()}>
+        <box flexDirection="column" marginTop={1}>
+          <For each={options()}>
+            {(opt, idx) => (
+              <box flexDirection="row">
+                <text style={{ fg: isFocused(idx()) ? theme.primary : theme.text }}>
+                  {isFocused(idx()) ? "❯ " : "  "}
+                  {isMultiple() ? (isSelected(opt.label) ? "[x] " : "[ ] ") : isSelected(opt.label) ? "(•) " : "( ) "}
+                  {opt.label}
+                </text>
+                <Show when={opt.description}>
+                  <text style={{ fg: theme.textMuted }}> - {opt.description}</text>
+                </Show>
+              </box>
+            )}
+          </For>
+        </box>
+      </Show>
+
+      {/* Freeform input */}
+      <box flexDirection="row" marginTop={1}>
+        <text style={{ fg: isFreeformFocused() ? theme.primary : theme.textMuted }}>
+          {isFreeformFocused() ? "❯ " : "  "}Other:{" "}
+        </text>
+        <box flexGrow={1}>
+          <input
+            focused={isFreeformFocused()}
+            onInput={setFreeformText}
+            onSubmit={submitAnswer}
+            backgroundColor="transparent"
+            focusedBackgroundColor="transparent"
+          />
+        </box>
+      </box>
+
+      {/* Hint */}
+      <text style={{ fg: theme.textMuted, marginTop: 1 }}>
+        {isMultiple() ? "↑↓ navigate • space select • enter submit" : "↑↓ navigate • space/enter select"}
+      </text>
+    </box>
   )
 }

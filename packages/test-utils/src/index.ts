@@ -121,14 +121,31 @@ export const RecordingAskUserHandler = (
       const indexRef = yield* Ref.make(0)
 
       return {
-        ask: Effect.fn("RecordingAskUserHandler.ask")(function* (question, options) {
+        ask: Effect.fn("RecordingAskUserHandler.ask")(function* (question, ctx) {
           const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
           yield* recorder.record({
             service: "AskUserHandler",
             method: "ask",
-            args: { question, options },
+            args: { question, ctx },
           })
           return responses[idx] ?? ""
+        }),
+        askMany: Effect.fn("RecordingAskUserHandler.askMany")(function* (questions, ctx) {
+          yield* recorder.record({
+            service: "AskUserHandler",
+            method: "askMany",
+            args: { questions, ctx },
+          })
+          const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
+          const response = responses[idx] ?? ""
+          return [[response]]
+        }),
+        respond: Effect.fn("RecordingAskUserHandler.respond")(function* (requestId, answers) {
+          yield* recorder.record({
+            service: "AskUserHandler",
+            method: "respond",
+            args: { requestId, answers },
+          })
         }),
       }
     }),

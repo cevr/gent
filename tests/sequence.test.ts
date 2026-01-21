@@ -87,13 +87,15 @@ describe("Sequence Recording", () => {
     })
 
     test("records AskUserHandler.ask calls", async () => {
+      const testCtx = { sessionId: "test-session", branchId: "test-branch", toolCallId: "test-tool" }
+
       await Effect.runPromise(
         Effect.gen(function* () {
           const handler = yield* AskUserHandler
           const recorder = yield* SequenceRecorder
 
-          const response1 = yield* handler.ask("Continue?")
-          const response2 = yield* handler.ask("Sure?")
+          const response1 = yield* handler.ask({ question: "Continue?" }, testCtx)
+          const response2 = yield* handler.ask({ question: "Sure?" }, testCtx)
 
           expect(response1).toBe("yes")
           expect(response2).toBe("no")

@@ -59,7 +59,8 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
 
 export const SteerCommand = Schema.Union(
   Schema.TaggedStruct("Cancel", {}),
-  Schema.TaggedStruct("Interrupt", { message: Schema.String }),
+  Schema.TaggedStruct("Interrupt", {}),
+  Schema.TaggedStruct("Interject", { message: Schema.String }),
   Schema.TaggedStruct("SwitchModel", { model: Schema.String }),
   Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") }),
 )
@@ -220,6 +221,33 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                     interrupted: true,
                   }),
                 )
+                break
+              } else if (cmd._tag === "Interrupt") {
+                // Hard stop - emit StreamEnded with interrupted flag
+                continueLoop = false
+                yield* eventBus.publish(
+                  new StreamEnded({
+                    sessionId,
+                    branchId,
+                    interrupted: true,
+                  }),
+                )
+                break
+              } else if (cmd._tag === "Interject") {
+                // Seamless pivot - queue message for immediate processing
+                const interjectMsg = new Message({
+                  id: Bun.randomUUIDv7(),
+                  sessionId,
+                  branchId,
+                  role: "user",
+                  parts: [new TextPart({ type: "text", text: cmd.message })],
+                  createdAt: new Date(),
+                })
+                yield* Ref.update(stateRef, (s) => ({
+                  ...s,
+                  followUpQueue: [interjectMsg, ...s.followUpQueue],
+                }))
+                continueLoop = false
                 break
               } else if (cmd._tag === "SwitchModel") {
                 yield* Ref.update(stateRef, (s) => ({
