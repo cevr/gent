@@ -4,7 +4,7 @@
  */
 import { Effect, Runtime, Exit, Fiber } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
-import { type Result, initial, success, failure } from "@gent/core"
+import { type Result, initial, success, failure } from "@gent/atom-solid"
 
 export interface UseRuntimeReturn<R> {
   /** Run Effect, track result in signal. Returns [result accessor, cancel fn] */

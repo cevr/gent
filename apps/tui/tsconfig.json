@@ -10,6 +10,7 @@
   "include": ["src", "src/theme/themes/*.json"],
   "exclude": ["tests"],
   "references": [
+    { "path": "../../packages/atom-solid" },
     { "path": "../../packages/core" },
     { "path": "../../packages/server" },
     { "path": "../../packages/runtime" }

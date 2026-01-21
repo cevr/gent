@@ -1,8 +1,7 @@
 import { Context, Deferred, Effect, Layer } from "effect"
-import { PermissionRequested } from "./event"
+import { EventBus, PermissionRequested } from "./event"
 import type { ToolContext } from "./tool"
 import type { PermissionDecision } from "./permission"
-import { EventBus } from "./event"
 
 export interface PermissionHandlerService {
   readonly request: (

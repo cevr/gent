@@ -3,6 +3,7 @@ import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
 import { Console, Effect, Layer, ManagedRuntime, Option, Stream } from "effect"
 import { RpcTest } from "@effect/rpc"
+import { RegistryProvider } from "@gent/atom-solid"
 import {
   createDependencies,
   GentCore,
@@ -127,6 +128,7 @@ const resolveInitialState = (input: {
 const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
 const DB_PATH = path.join(DATA_DIR, "data.db")
 const TRACE_LOG = "/tmp/gent-trace.log"
+const ATOM_CACHE_MAX = 256
 
 // Platform layer
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
@@ -287,15 +289,17 @@ const main = Command.make(
       // Launch TUI with providers
       yield* Effect.promise(() =>
         render(() => (
-          <WorkspaceProvider cwd={cwd}>
-            <ClientProvider rpcClient={rpcClient} runtime={runtime} initialSession={initialSession}>
-              <RouterProvider initialRoute={initialRoute}>
-                <App
-                  initialPrompt={initialPrompt}
-                  initialModel={DEFAULT_MODEL_ID}
-                />
-              </RouterProvider>
-            </ClientProvider>
+          <WorkspaceProvider cwd={cwd} runtime={runtime}>
+            <RegistryProvider runtime={runtime} maxEntries={ATOM_CACHE_MAX}>
+              <ClientProvider rpcClient={rpcClient} runtime={runtime} initialSession={initialSession}>
+                <RouterProvider initialRoute={initialRoute}>
+                  <App
+                    initialPrompt={initialPrompt}
+                    initialModel={DEFAULT_MODEL_ID}
+                  />
+                </RouterProvider>
+              </ClientProvider>
+            </RegistryProvider>
           </WorkspaceProvider>
         )),
       )

@@ -2,8 +2,9 @@
  * Shell execution utility with truncation and output saving
  */
 
-import { spawn } from "bun"
-import { mkdir, writeFile } from "fs/promises"
+import { Command, FileSystem } from "@effect/platform"
+import type { PlatformError } from "@effect/platform/Error"
+import { Effect, Stream } from "effect"
 import { homedir } from "os"
 import { join } from "path"
 
@@ -20,60 +21,70 @@ export interface ShellResult {
  * Execute shell command with truncation
  * If output exceeds limits, saves full output to ~/tool-output/
  */
-export async function executeShell(command: string, cwd: string): Promise<ShellResult> {
-  const proc = spawn(["bash", "-c", command], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+export const executeShell = (command: string, cwd: string) =>
+  Effect.gen(function* () {
+    const { stdout, stderr } = yield* runCommand(command, cwd)
+    const fullOutput = stderr ? `${stdout}\n${stderr}` : stdout
+
+    const lines = fullOutput.split("\n")
+    const needsTruncation = lines.length > MAX_LINES || fullOutput.length > MAX_BYTES
+
+    if (!needsTruncation) {
+      return { output: fullOutput.trim(), truncated: false }
+    }
+
+    const savedPath = yield* saveFullOutput(fullOutput, command)
+
+    let truncated = fullOutput
+    if (lines.length > MAX_LINES) {
+      truncated = lines.slice(0, MAX_LINES).join("\n")
+    }
+    if (truncated.length > MAX_BYTES) {
+      truncated = truncated.slice(0, MAX_BYTES)
+    }
+
+    return {
+      output: truncated.trim(),
+      truncated: true,
+      savedPath,
+    }
   })
 
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ])
+const runCommand = (command: string, cwd: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cmd = Command.make("bash", "-c", command).pipe(Command.workingDirectory(cwd))
+      const process = yield* Command.start(cmd)
+      const [stdout, stderr] = yield* Effect.all(
+        [
+          readStream(process.stdout),
+          readStream(process.stderr),
+        ],
+        { concurrency: "unbounded" },
+      )
+      yield* process.exitCode
+      return { stdout, stderr }
+    }),
+  )
 
-  await proc.exited
+const readStream = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
+  stream.pipe(
+    Stream.decodeText(),
+    Stream.runFold("", (acc, chunk) => acc + chunk),
+  )
 
-  // Combine stdout and stderr
-  const fullOutput = stderr ? `${stdout}\n${stderr}` : stdout
+const saveFullOutput = (output: string, command: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const toolOutputDir = join(homedir(), "tool-output")
+    yield* fs.makeDirectory(toolOutputDir, { recursive: true })
 
-  // Check if truncation needed
-  const lines = fullOutput.split("\n")
-  const needsTruncation = lines.length > MAX_LINES || fullOutput.length > MAX_BYTES
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+    const filename = `shell_${timestamp}.txt`
+    const filepath = join(toolOutputDir, filename)
 
-  if (!needsTruncation) {
-    return { output: fullOutput.trim(), truncated: false }
-  }
+    const header = `# Command: ${command}\n# Timestamp: ${new Date().toISOString()}\n\n`
+    yield* fs.writeFileString(filepath, header + output)
 
-  // Save full output
-  const savedPath = await saveFullOutput(fullOutput, command)
-
-  // Truncate
-  let truncated = fullOutput
-  if (lines.length > MAX_LINES) {
-    truncated = lines.slice(0, MAX_LINES).join("\n")
-  }
-  if (truncated.length > MAX_BYTES) {
-    truncated = truncated.slice(0, MAX_BYTES)
-  }
-
-  return {
-    output: truncated.trim(),
-    truncated: true,
-    savedPath,
-  }
-}
-
-async function saveFullOutput(output: string, command: string): Promise<string> {
-  const toolOutputDir = join(homedir(), "tool-output")
-  await mkdir(toolOutputDir, { recursive: true })
-
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
-  const filename = `shell_${timestamp}.txt`
-  const filepath = join(toolOutputDir, filename)
-
-  const header = `# Command: ${command}\n# Timestamp: ${new Date().toISOString()}\n\n`
-  await writeFile(filepath, header + output, "utf-8")
-
-  return filepath
-}
+    return filepath
+  })

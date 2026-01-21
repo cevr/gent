@@ -39,6 +39,7 @@ export {
   type BranchInfo,
   type MessageInfo,
 }
+export { GentRpcError } from "./errors.js"
 
 // Re-export RPC handlers
 export { RpcHandlersLive } from "./rpc-handlers"

@@ -2,8 +2,9 @@ import { createContext, useContext, createEffect, onCleanup, type ParentProps, D
 import { createStore, produce, DEV as STORE_DEV } from "solid-js/store"
 import { Effect, Stream, Runtime } from "effect"
 import { calculateCost, type AgentEvent, type AgentMode } from "@gent/core"
-import type { GentCoreError } from "@gent/server"
+import type { GentRpcError } from "@gent/server"
 import { log, logEvent, logError, clearLog } from "../utils/log"
+import { formatError } from "../utils/format-error"
 
 // Setup Solid dev hooks for tracing
 if (DEV) {
@@ -15,21 +16,6 @@ if (STORE_DEV) {
     log(`store: ${String(prop)} = ${JSON.stringify(value)}`)
 }
 
-// Format GentCoreError for display
-const formatError = (err: GentCoreError): string => {
-  switch (err._tag) {
-    case "StorageError":
-      return `Storage: ${err.message}`
-    case "AgentLoopError":
-      return `Agent: ${err.message}`
-    case "ProviderError":
-      return `${err.model}: ${err.message}`
-    case "BadArgument":
-      return `${err.module}.${err.method}: ${err.description ?? "bad argument"}`
-    case "SystemError":
-      return `${err.module}.${err.method}: ${err.reason}${err.pathOrDescriptor ? ` (${err.pathOrDescriptor})` : ""}`
-  }
-}
 import {
   type GentClient,
   type GentRpcClient,
@@ -116,10 +102,10 @@ export interface ClientContextValue {
   clearSession: () => void
 
   // Sync data fetching helpers (return Effects for caller to run)
-  listMessages: () => Effect.Effect<readonly MessageInfoReadonly[]>
-  listSessions: () => Effect.Effect<readonly SessionInfo[]>
-  listBranches: () => Effect.Effect<readonly BranchInfo[]>
-  createBranch: (name?: string) => Effect.Effect<string>
+  listMessages: () => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
+  listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
+  listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
+  createBranch: (name?: string) => Effect.Effect<string, GentRpcError>
 
   // Event subscription (for message updates - agent state handled internally)
   subscribeEvents: (onEvent: (event: AgentEvent) => void) => () => void
@@ -142,8 +128,7 @@ export function useClient(): ClientContextValue {
 
 interface ClientProviderProps extends ParentProps {
   rpcClient: GentRpcClient
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Runtime context unused by RPC calls
-  runtime: Runtime.Runtime<any>
+  runtime: Runtime.Runtime<unknown>
   initialSession: Session | undefined
 }
 

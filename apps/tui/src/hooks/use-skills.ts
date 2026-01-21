@@ -5,10 +5,12 @@
  * Skill dirs: ~/.claude/skills, ~/.cursor/skills, ~/.config/opencode/skills
  */
 
-import { createSignal, onMount, onCleanup, type Accessor } from "solid-js"
+import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import { readdir, readFile, mkdir, writeFile } from "fs/promises"
 import { homedir } from "os"
 import { join, basename } from "path"
+import { Effect, Fiber, Runtime } from "effect"
+import { atom, useAtomValue, useRegistry } from "@gent/atom-solid"
 
 export interface Skill {
   id: string
@@ -29,108 +31,134 @@ const SKILL_DIRS: Array<{ path: string; source: Skill["source"] }> = [
 ]
 
 const CACHE_PATH = join(homedir(), ".cache", "gent", "skills.json")
-const REFRESH_INTERVAL = 30_000 // 30 seconds
+const REFRESH_INTERVAL = 30_000
 
-async function loadCache(): Promise<Skill[] | null> {
-  try {
-    const content = await readFile(CACHE_PATH, "utf-8")
-    const cache: SkillCache = JSON.parse(content) as SkillCache
-    return cache.skills
-  } catch {
-    return null
-  }
-}
-
-async function saveCache(skills: Skill[]): Promise<void> {
-  try {
-    const cacheDir = join(homedir(), ".cache", "gent")
-    await mkdir(cacheDir, { recursive: true })
-    const cache: SkillCache = { skills, timestamp: Date.now() }
-    await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8")
-  } catch {
-    // Cache write failure is non-critical
-  }
-}
-
-async function scanSkillDir(
-  dir: string,
-  source: Skill["source"],
-): Promise<Skill[]> {
-  try {
-    const entries = await readdir(dir, { withFileTypes: true })
-    const skills: Skill[] = []
-
-    for (const entry of entries) {
-      // Only .md files are skills
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue
-
-      const name = basename(entry.name, ".md")
-      const path = join(dir, entry.name)
-
-      skills.push({
-        id: `${source}:${name}`,
-        name,
-        path,
-        source,
-      })
-    }
-
-    return skills
-  } catch {
-    // Directory doesn't exist or isn't readable
-    return []
-  }
-}
-
-async function scanAllSkillDirs(): Promise<Skill[]> {
-  const results = await Promise.all(
-    SKILL_DIRS.map(({ path, source }) => scanSkillDir(path, source)),
+const loadCache = (): Effect.Effect<Skill[] | null> =>
+  Effect.tryPromise(() => readFile(CACHE_PATH, "utf-8")).pipe(
+    Effect.map((content) => {
+      if (!content) return null
+      try {
+        const cache = JSON.parse(content) as SkillCache
+        return cache.skills
+      } catch {
+        return null
+      }
+    }),
+    Effect.catchAll(() => Effect.succeed(null)),
   )
-  return results.flat()
-}
+
+const saveCache = (skills: Skill[]): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const cacheDir = join(homedir(), ".cache", "gent")
+    yield* Effect.tryPromise({
+      try: () => mkdir(cacheDir, { recursive: true }),
+      catch: () => undefined,
+    })
+    const cache: SkillCache = { skills, timestamp: Date.now() }
+    yield* Effect.tryPromise({
+      try: () => writeFile(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8"),
+      catch: () => undefined,
+    })
+  }).pipe(Effect.catchAll(() => Effect.void))
+
+const scanSkillDir = (dir: string, source: Skill["source"]): Effect.Effect<Skill[]> =>
+  Effect.tryPromise(() => readdir(dir, { withFileTypes: true })).pipe(
+    Effect.map((entries) => {
+      const skills: Skill[] = []
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".md")) continue
+        const name = basename(entry.name, ".md")
+        const path = join(dir, entry.name)
+        skills.push({
+          id: `${source}:${name}`,
+          name,
+          path,
+          source,
+        })
+      }
+      return skills
+    }),
+    Effect.catchAll(() => Effect.succeed([])),
+  )
+
+const scanAllSkillDirs = (): Effect.Effect<Skill[]> =>
+  Effect.all(SKILL_DIRS.map(({ path, source }) => scanSkillDir(path, source))).pipe(
+    Effect.map((results) => results.flat()),
+  )
 
 export interface UseSkillsReturn {
   skills: Accessor<Skill[]>
   isRefreshing: Accessor<boolean>
-  refresh: () => Promise<void>
+  refresh: () => void
 }
 
 export function useSkills(): UseSkillsReturn {
-  const [skills, setSkills] = createSignal<Skill[]>([])
-  const [isRefreshing, setIsRefreshing] = createSignal(false)
+  const registry = useRegistry()
 
-  let refreshInterval: ReturnType<typeof setInterval> | null = null
+  const skillsAtom = atom((registry) => {
+    const [state, setState] = createSignal({ skills: [] as Skill[], isRefreshing: false })
+    const [version, setVersion] = createSignal(0)
+    let cancelRefresh: (() => void) | undefined
 
-  const refresh = async () => {
-    if (isRefreshing()) return
-    setIsRefreshing(true)
+    const runRefresh = () => {
+      const effect = Effect.gen(function* () {
+        yield* Effect.sync(() => {
+          setState((prev) => ({ ...prev, isRefreshing: true }))
+        })
 
-    try {
-      const fresh = await scanAllSkillDirs()
-      setSkills(fresh)
-      await saveCache(fresh)
-    } finally {
-      setIsRefreshing(false)
+        const cached = yield* loadCache()
+        if (cached) {
+          yield* Effect.sync(() => {
+            setState({ skills: cached, isRefreshing: true })
+          })
+        }
+
+        const fresh = yield* scanAllSkillDirs()
+        yield* Effect.sync(() => {
+          setState({ skills: fresh, isRefreshing: false })
+        })
+        yield* saveCache(fresh)
+      })
+
+      const runtime = registry.runtime
+      const fiber = Runtime.runFork(runtime)(effect)
+      return () => {
+        Runtime.runFork(runtime)(Fiber.interruptFork(fiber))
+      }
     }
-  }
 
-  onMount(() => {
-    // Load from cache first (stale-while-revalidate)
-    void loadCache().then((cached) => {
-      if (cached) setSkills(cached)
-      // Background refresh
-      void refresh()
+    const cleanupRefresh = () => {
+      if (!cancelRefresh) return
+      cancelRefresh()
+      cancelRefresh = undefined
+    }
+
+    createEffect(() => {
+      version()
+      cleanupRefresh()
+      cancelRefresh = runRefresh()
+      onCleanup(cleanupRefresh)
     })
 
-    // Periodic refresh
-    refreshInterval = setInterval(() => {
-      void refresh()
-    }, REFRESH_INTERVAL)
+    const interval = setInterval(() => setVersion((v) => v + 1), REFRESH_INTERVAL)
+    const dispose = () => {
+      cleanupRefresh()
+      clearInterval(interval)
+    }
+    onCleanup(dispose)
+
+    return {
+      get: () => state(),
+      refresh: () => setVersion((v) => v + 1),
+      dispose,
+    }
   })
 
-  onCleanup(() => {
-    if (refreshInterval) clearInterval(refreshInterval)
-  })
+  const state = useAtomValue(skillsAtom)
+
+  const skills = () => state().skills
+  const isRefreshing = () => state().isRefreshing
+  const refresh = () => registry.refresh(skillsAtom)
 
   return { skills, isRefreshing, refresh }
 }

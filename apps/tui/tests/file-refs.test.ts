@@ -1,5 +1,8 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { parseFileRefs, expandFileRefs } from "../src/utils/file-refs"
+import { Effect } from "effect"
+import { BunFileSystem } from "@effect/platform-bun"
+import type { FileSystem } from "@effect/platform"
 import { mkdtemp, rm, writeFile, mkdir } from "fs/promises"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -70,6 +73,8 @@ describe("parseFileRefs", () => {
 
 describe("expandFileRefs", () => {
   let testDir: string
+  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
+    Effect.runPromise(effect.pipe(Effect.provide(BunFileSystem.layer)))
 
   beforeAll(async () => {
     testDir = await mkdtemp(join(tmpdir(), "file-refs-test-"))
@@ -86,7 +91,7 @@ describe("expandFileRefs", () => {
   })
 
   test("expands simple file reference", async () => {
-    const result = await expandFileRefs("check @src/bar.ts", testDir)
+    const result = await run(expandFileRefs("check @src/bar.ts", testDir))
     expect(result).toContain("```src/bar.ts")
     expect(result).toContain("export const bar = 1")
     expect(result).toContain("```")
@@ -94,7 +99,7 @@ describe("expandFileRefs", () => {
   })
 
   test("expands reference with line range", async () => {
-    const result = await expandFileRefs("see @src/foo.ts#2-4", testDir)
+    const result = await run(expandFileRefs("see @src/foo.ts#2-4", testDir))
     expect(result).toContain("```src/foo.ts:2-4")
     expect(result).toContain("line2")
     expect(result).toContain("line3")
@@ -104,13 +109,13 @@ describe("expandFileRefs", () => {
   })
 
   test("expands reference with single line", async () => {
-    const result = await expandFileRefs("@src/foo.ts#3 is important", testDir)
+    const result = await run(expandFileRefs("@src/foo.ts#3 is important", testDir))
     expect(result).toContain("```src/foo.ts:3")
     expect(result).toContain("line3")
   })
 
   test("expands multiple references", async () => {
-    const result = await expandFileRefs("compare @src/foo.ts#1 and @src/bar.ts", testDir)
+    const result = await run(expandFileRefs("compare @src/foo.ts#1 and @src/bar.ts", testDir))
     expect(result).toContain("```src/foo.ts:1")
     expect(result).toContain("```src/bar.ts")
     expect(result).toContain("line1")
@@ -119,31 +124,31 @@ describe("expandFileRefs", () => {
 
   test("returns original text when no references", async () => {
     const text = "no file references here"
-    const result = await expandFileRefs(text, testDir)
+    const result = await run(expandFileRefs(text, testDir))
     expect(result).toBe(text)
   })
 
   test("preserves non-reference text around expansions", async () => {
-    const result = await expandFileRefs("Before @src/bar.ts after", testDir)
+    const result = await run(expandFileRefs("Before @src/bar.ts after", testDir))
     expect(result.startsWith("Before ")).toBe(true)
     expect(result.endsWith(" after")).toBe(true)
   })
 
   test("leaves reference as-is when file not found", async () => {
     const text = "check @nonexistent/file.ts"
-    const result = await expandFileRefs(text, testDir)
+    const result = await run(expandFileRefs(text, testDir))
     expect(result).toBe(text)
   })
 
   test("handles out-of-range line numbers gracefully", async () => {
     // File has 5 lines, requesting lines 10-20
-    const result = await expandFileRefs("@src/foo.ts#10-20", testDir)
+    const result = await run(expandFileRefs("@src/foo.ts#10-20", testDir))
     // Should expand but content will be empty or partial
     expect(result).toContain("```src/foo.ts:10-20")
   })
 
   test("handles root-level files", async () => {
-    const result = await expandFileRefs("see @README.md for docs", testDir)
+    const result = await run(expandFileRefs("see @README.md for docs", testDir))
     expect(result).toContain("```README.md")
     expect(result).toContain("# Title")
   })

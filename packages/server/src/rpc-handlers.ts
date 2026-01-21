@@ -23,24 +23,22 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
             ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-          })
-          .pipe(Effect.orDie),
+          }),
 
-      listSessions: () => core.listSessions().pipe(Effect.orDie),
+      listSessions: () => core.listSessions(),
 
-      getSession: ({ sessionId }) => core.getSession(sessionId).pipe(Effect.orDie),
+      getSession: ({ sessionId }) => core.getSession(sessionId),
 
-      deleteSession: ({ sessionId }) => core.deleteSession(sessionId).pipe(Effect.orDie),
+      deleteSession: ({ sessionId }) => core.deleteSession(sessionId),
 
-      listBranches: ({ sessionId }) => core.listBranches(sessionId).pipe(Effect.orDie),
+      listBranches: ({ sessionId }) => core.listBranches(sessionId),
 
       createBranch: ({ sessionId, name }) =>
         core
           .createBranch({
             sessionId,
             ...(name !== undefined ? { name } : {}),
-          })
-          .pipe(Effect.orDie),
+          }),
 
       sendMessage: ({ sessionId, branchId, content, mode, model }) =>
         core
@@ -50,25 +48,24 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             content,
             ...(mode !== undefined ? { mode } : {}),
             ...(model !== undefined ? { model } : {}),
-          })
-          .pipe(Effect.orDie),
+          }),
 
-      listMessages: ({ branchId }) => core.listMessages(branchId).pipe(Effect.orDie),
+      listMessages: ({ branchId }) => core.listMessages(branchId),
 
-      steer: ({ command }) => core.steer(command as SteerCommand).pipe(Effect.orDie),
+      steer: ({ command }) => core.steer(command as SteerCommand),
 
       subscribeEvents: ({ sessionId }) =>
         // Return the stream directly for streaming RPC
         core.subscribeEvents(sessionId),
 
       respondQuestions: ({ requestId, answers }) =>
-        askUserHandler.respond(requestId, answers).pipe(Effect.orDie),
+        askUserHandler.respond(requestId, answers),
 
       respondPermission: ({ requestId, decision }) =>
-        permissionHandler.respond(requestId, decision).pipe(Effect.orDie),
+        permissionHandler.respond(requestId, decision),
 
       respondPlan: ({ requestId, decision, reason }) =>
-        planHandler.respond(requestId, decision, reason).pipe(Effect.orDie),
+        planHandler.respond(requestId, decision, reason),
     }
   }),
 )

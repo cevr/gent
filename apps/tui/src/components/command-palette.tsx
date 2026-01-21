@@ -1,15 +1,17 @@
 import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
-import { Runtime } from "effect"
+import { Effect } from "effect"
 import type { ModelId } from "@gent/core"
 import { useCommand } from "../command/index"
 import { useTheme } from "../theme/index"
 import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
+import { useRuntime } from "../hooks/use-runtime"
 import type { SessionInfo } from "../client"
 import * as State from "../state"
+import { formatError } from "../utils/format-error"
 
 interface MenuItem {
   id: string
@@ -26,6 +28,7 @@ export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
   const client = useClient()
+  const { cast } = useRuntime(client.client.runtime)
   const router = useRouter()
   const dimensions = useTerminalDimensions()
 
@@ -45,10 +48,21 @@ export function CommandPalette() {
         id: "sessions",
         title: "Sessions",
         onSelect: () => {
-          Runtime.runPromise(client.client.runtime)(client.listSessions()).then((list) => {
-            setSessions([...list])
-            pushLevel(sessionsMenu())
-          })
+          cast(
+            client.listSessions().pipe(
+              Effect.tap((list) =>
+                Effect.sync(() => {
+                  setSessions([...list])
+                  pushLevel(sessionsMenu())
+                }),
+              ),
+              Effect.catchAll((error) =>
+                Effect.sync(() => {
+                  client.setError(formatError(error))
+                }),
+              ),
+            ),
+          )
         },
       },
       {

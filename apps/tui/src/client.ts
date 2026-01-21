@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import type { Stream, Runtime } from "effect"
 import type { RpcClient, RpcGroup } from "@effect/rpc"
-import type { GentRpcs } from "@gent/server"
+import type { GentRpcs, GentRpcError } from "@gent/server"
 import type {
   AgentEvent,
   AgentMode,
@@ -119,7 +119,7 @@ export interface MessageInfoReadonly {
   readonly role: "user" | "assistant" | "system" | "tool"
   readonly parts: readonly MessagePart[]
   readonly createdAt: number
-  readonly turnDurationMs: number | undefined
+  readonly turnDurationMs?: number
 }
 
 // Steer command types
@@ -133,9 +133,9 @@ export type SteerCommand =
 // Session info (minimal for client)
 export interface SessionInfo {
   id: string
-  name: string | undefined
-  cwd: string | undefined
-  branchId: string | undefined
+  name?: string
+  cwd?: string
+  branchId?: string
   createdAt: number
   updatedAt: number
 }
@@ -143,8 +143,8 @@ export interface SessionInfo {
 export interface BranchInfo {
   id: string
   sessionId: string
-  name: string | undefined
-  model: string | undefined
+  name?: string
+  model?: string
   createdAt: number
 }
 
@@ -166,47 +166,53 @@ export interface GentClient {
     content: string
     mode?: AgentMode
     model?: string
-  }) => Effect.Effect<void>
+  }) => Effect.Effect<void, GentRpcError>
 
   /** Create a new session */
-  createSession: (input?: { firstMessage?: string; cwd?: string }) => Effect.Effect<CreateSessionResult>
+  createSession: (input?: {
+    firstMessage?: string
+    cwd?: string
+  }) => Effect.Effect<CreateSessionResult, GentRpcError>
 
   /** List messages for a branch */
-  listMessages: (branchId: string) => Effect.Effect<readonly MessageInfoReadonly[]>
+  listMessages: (branchId: string) => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
 
   /** List all sessions */
-  listSessions: () => Effect.Effect<readonly SessionInfo[]>
+  listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
 
   /** List branches for a session */
-  listBranches: (sessionId: string) => Effect.Effect<readonly BranchInfo[]>
+  listBranches: (sessionId: string) => Effect.Effect<readonly BranchInfo[], GentRpcError>
 
   /** Create a new branch */
-  createBranch: (sessionId: string, name?: string) => Effect.Effect<string>
+  createBranch: (sessionId: string, name?: string) => Effect.Effect<string, GentRpcError>
 
   /** Subscribe to events - returns Stream */
-  subscribeEvents: (sessionId: string) => Stream.Stream<AgentEvent>
+  subscribeEvents: (sessionId: string) => Stream.Stream<AgentEvent, GentRpcError>
 
   /** Send steering command */
-  steer: (command: SteerCommand) => Effect.Effect<void>
+  steer: (command: SteerCommand) => Effect.Effect<void, GentRpcError>
 
   /** Respond to questions from agent */
   respondQuestions: (
     requestId: string,
     answers: ReadonlyArray<ReadonlyArray<string>>,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, GentRpcError>
 
   /** Respond to permission request */
-  respondPermission: (requestId: string, decision: PermissionDecision) => Effect.Effect<void>
+  respondPermission: (
+    requestId: string,
+    decision: PermissionDecision,
+  ) => Effect.Effect<void, GentRpcError>
 
   /** Respond to plan prompt */
   respondPlan: (
     requestId: string,
     decision: PlanDecision,
     reason?: string,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, GentRpcError>
 
   /** Get the runtime for this client */
-  runtime: Runtime.Runtime<never>
+  runtime: Runtime.Runtime<unknown>
 }
 
 /**
@@ -215,8 +221,7 @@ export interface GentClient {
  */
 export function createClient(
   rpcClient: GentRpcClient,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Runtime context unused by RPC calls
-  runtime: Runtime.Runtime<any>,
+  runtime: Runtime.Runtime<unknown>,
 ): GentClient {
   return {
     sendMessage: (input) => rpcClient.sendMessage(input),
@@ -230,13 +235,11 @@ export function createClient(
         })),
       ),
 
-    listMessages: (branchId) =>
-      rpcClient.listMessages({ branchId }) as Effect.Effect<readonly MessageInfoReadonly[]>,
+    listMessages: (branchId) => rpcClient.listMessages({ branchId }),
 
-    listSessions: () => rpcClient.listSessions() as Effect.Effect<readonly SessionInfo[]>,
+    listSessions: () => rpcClient.listSessions(),
 
-    listBranches: (sessionId) =>
-      rpcClient.listBranches({ sessionId }) as Effect.Effect<readonly BranchInfo[]>,
+    listBranches: (sessionId) => rpcClient.listBranches({ sessionId }),
 
     createBranch: (sessionId, name) =>
       rpcClient.createBranch({ sessionId, ...(name !== undefined ? { name } : {}) }).pipe(
@@ -260,6 +263,6 @@ export function createClient(
         ...(reason !== undefined ? { reason } : {}),
       }),
 
-    runtime: runtime as Runtime.Runtime<never>,
+    runtime,
   }
 }

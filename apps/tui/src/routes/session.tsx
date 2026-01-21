@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { Effect, Runtime } from "effect"
+import { Effect } from "effect"
 import {
   extractText,
   buildToolResultMap,
@@ -20,6 +20,7 @@ import { useClient } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useRuntime } from "../hooks/use-runtime"
 import { InputState, transition, type InputEvent, type InputEffect } from "../components/input-state"
+import { ClientError, formatError, type UiError } from "../utils/format-error"
 import type { QuestionsAsked, PermissionRequested, PlanPresented } from "@gent/core"
 
 export interface SessionProps {
@@ -113,12 +114,21 @@ export function Session(props: SessionProps) {
   createEffect(() => {
     if (!client.isActive()) return
 
-    // Run listMessages and handle result
-    Runtime.runPromise(client.client.runtime)(client.listMessages()).then((msgs) => {
-      setMessages(buildMessages(msgs))
-    }).catch((err) => {
-      client.setError(err instanceof Error ? err.message : String(err))
-    })
+    cast(
+      client.listMessages().pipe(
+        Effect.map((msgs) => buildMessages(msgs)),
+        Effect.tap((msgs) =>
+          Effect.sync(() => {
+            setMessages(msgs)
+          }),
+        ),
+          Effect.catchAll((err) =>
+            Effect.sync(() => {
+              client.setError(formatError(err))
+            }),
+          ),
+        ),
+    )
   })
 
   // Focus input on mount, send initial prompt if provided
@@ -133,7 +143,7 @@ export function Session(props: SessionProps) {
         }).pipe(
           Effect.tapError((err) =>
             Effect.sync(() => {
-              client.setError(String(err))
+              client.setError(formatError(err))
             }),
           ),
         ),
@@ -147,11 +157,21 @@ export function Session(props: SessionProps) {
 
     const unsubscribe = client.subscribeEvents((event) => {
       if (event._tag === "MessageReceived") {
-        Runtime.runPromise(client.client.runtime)(client.listMessages()).then((msgs) => {
-          setMessages(buildMessages(msgs))
-        }).catch((err) => {
-          client.setError(err instanceof Error ? err.message : String(err))
-        })
+        cast(
+          client.listMessages().pipe(
+            Effect.map((msgs) => buildMessages(msgs)),
+            Effect.tap((msgs) =>
+              Effect.sync(() => {
+                setMessages(msgs)
+              }),
+            ),
+            Effect.catchAll((err) =>
+              Effect.sync(() => {
+                client.setError(formatError(err))
+              }),
+            ),
+          ),
+        )
       } else if (event._tag === "StreamStarted") {
         setMessages((prev) => [
           ...prev,
@@ -353,7 +373,7 @@ export function Session(props: SessionProps) {
             client.client.respondQuestions(effect.requestId, effect.answers).pipe(
               Effect.tapError((err) =>
                 Effect.sync(() => {
-                  client.setError(String(err))
+                  client.setError(formatError(err))
                 }),
               ),
             ),
@@ -364,7 +384,7 @@ export function Session(props: SessionProps) {
             client.client.respondPermission(effect.requestId, decision).pipe(
               Effect.tapError((err) =>
                 Effect.sync(() => {
-                  client.setError(String(err))
+                  client.setError(formatError(err))
                 }),
               ),
             ),
@@ -375,7 +395,7 @@ export function Session(props: SessionProps) {
             client.client.respondPlan(effect.requestId, decision, reason).pipe(
               Effect.tapError((err) =>
                 Effect.sync(() => {
-                  client.setError(String(err))
+                  client.setError(formatError(err))
                 }),
               ),
             ),
@@ -385,23 +405,23 @@ export function Session(props: SessionProps) {
     }
   }
 
-  const handleSlashCommand = async (cmd: string, args: string) => {
-    const result = await executeSlashCommand(cmd, args, {
+  const handleSlashCommand = (cmd: string, args: string): Effect.Effect<void, UiError> =>
+    executeSlashCommand(cmd, args, {
       openPalette: () => command.openPalette(),
       clearMessages,
       navigateToSessions: () => command.openPalette(),
-      compactHistory: async () => {
-        client.setError("Compact not implemented yet")
-      },
-      createBranch: async () => {
-        cast(client.createBranch())
-      },
-    })
-
-    if (result.error) {
-      client.setError(result.error)
-    }
-  }
+      compactHistory: Effect.fail(ClientError("Compact not implemented yet")),
+      createBranch: client.createBranch().pipe(Effect.asVoid),
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          if (result.error) {
+            client.setError(result.error)
+          }
+        }),
+      ),
+      Effect.asVoid,
+    )
 
   return (
     <box flexDirection="column" flexGrow={1}>

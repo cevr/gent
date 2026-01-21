@@ -12,6 +12,7 @@ import {
   type JSX,
   type Accessor,
 } from "solid-js"
+import { Effect } from "effect"
 import type { InputRenderable } from "@opentui/core"
 import type { Question } from "@gent/core"
 import { useKeyboard } from "@opentui/solid"
@@ -19,6 +20,7 @@ import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"
 import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
+import { useRuntime } from "../hooks/use-runtime"
 import {
   AutocompletePopup,
   type AutocompleteState,
@@ -27,6 +29,7 @@ import {
 import { executeShell } from "../utils/shell"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeSlashCommand, parseSlashCommand } from "../commands/slash-commands"
+import { ClientError, formatError, type UiError } from "../utils/format-error"
 import type { InputState, InputEvent, InputEffect } from "./input-state"
 
 interface InputContextValue {
@@ -39,7 +42,7 @@ const InputContext = createContext<InputContextValue>()
 
 export interface InputProps {
   onSubmit: (content: string) => void
-  onSlashCommand?: (cmd: string, args: string) => Promise<void>
+  onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
   clearMessages?: () => void
   children?: JSX.Element
   /** Input state from parent (optional - for state machine mode) */
@@ -55,6 +58,7 @@ export function Input(props: InputProps) {
   const workspace = useWorkspace()
   const command = useCommand()
   const client = useClient()
+  const { cast } = useRuntime(client.client.runtime)
 
   let inputRef: InputRenderable | null = null
 
@@ -223,7 +227,7 @@ export function Input(props: InputProps) {
     }
   })
 
-  const handleSubmit = async (value: string) => {
+  const handleSubmit = (value: string) => {
     const text = value.trim()
     if (!text) return
 
@@ -232,15 +236,29 @@ export function Input(props: InputProps) {
 
     // 1. Shell mode: execute entire input as bash
     if (effectiveMode() === "shell") {
-      const { output, truncated, savedPath } = await executeShell(text, workspace.cwd)
-      let userMessage = `$ ${text}\n\n${output}`
-      if (truncated) {
-        userMessage += `\n\n[truncated - full output saved to ${savedPath}]`
-      }
-
-      setInternalMode("normal")
-      clearInput()
-      props.onSubmit(userMessage)
+      cast(
+        executeShell(text, workspace.cwd).pipe(
+          Effect.map(({ output, truncated, savedPath }) => {
+            let userMessage = `$ ${text}\n\n${output}`
+            if (truncated) {
+              userMessage += `\n\n[truncated - full output saved to ${savedPath}]`
+            }
+            return userMessage
+          }),
+          Effect.tap((userMessage) =>
+            Effect.sync(() => {
+              setInternalMode("normal")
+              clearInput()
+              props.onSubmit(userMessage)
+            }),
+          ),
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              client.setError(formatError(error))
+            }),
+          ),
+        ),
+      )
       return
     }
 
@@ -250,33 +268,48 @@ export function Input(props: InputProps) {
       const [cmd, args] = parsed
       clearInput()
 
-      if (props.onSlashCommand) {
-        await props.onSlashCommand(cmd, args)
-      } else {
-        // Default slash command handling
-        const result = await executeSlashCommand(cmd, args, {
-          openPalette: () => command.openPalette(),
-          clearMessages: props.clearMessages ?? (() => {}),
-          navigateToSessions: () => command.openPalette(),
-          compactHistory: async () => {
-            client.setError("Compact not implemented yet")
-          },
-          createBranch: async () => {
-            // No-op in home view
-          },
-        })
+      const commandEffect = props.onSlashCommand
+        ? props.onSlashCommand(cmd, args)
+        : executeSlashCommand(cmd, args, {
+            openPalette: () => command.openPalette(),
+            clearMessages: props.clearMessages ?? (() => {}),
+            navigateToSessions: () => command.openPalette(),
+            compactHistory: Effect.fail(ClientError("Compact not implemented yet")),
+            createBranch: Effect.void,
+          }).pipe(
+            Effect.tap((result) =>
+              Effect.sync(() => {
+                if (result.error) {
+                  client.setError(result.error)
+                }
+              }),
+            ),
+            Effect.asVoid,
+          )
 
-        if (result.error) {
-          client.setError(result.error)
-        }
-      }
+      cast(
+        commandEffect.pipe(
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              client.setError(formatError(error))
+            }),
+          ),
+        ),
+      )
       return
     }
 
     // 3. Normal message (may contain @file refs)
-    const expanded = await expandFileRefs(text, workspace.cwd)
-    clearInput()
-    props.onSubmit(expanded)
+    cast(
+      expandFileRefs(text, workspace.cwd).pipe(
+        Effect.tap((expanded) =>
+          Effect.sync(() => {
+            clearInput()
+            props.onSubmit(expanded)
+          }),
+        ),
+      ),
+    )
   }
 
   const clearInput = () => {
@@ -336,7 +369,7 @@ export function Input(props: InputProps) {
               ref={(r) => (inputRef = r)}
               focused={inputFocused()}
               onInput={handleInputChange}
-              onSubmit={(v) => void handleSubmit(v)}
+              onSubmit={handleSubmit}
               backgroundColor="transparent"
               focusedBackgroundColor="transparent"
             />

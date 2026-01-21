@@ -1,5 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { executeSlashCommand, parseSlashCommand, type SlashCommandContext } from "../src/commands/slash-commands"
+import { Effect } from "effect"
+import { ClientError } from "../src/utils/format-error"
 
 describe("parseSlashCommand", () => {
   test("parses simple command", () => {
@@ -59,12 +61,12 @@ describe("executeSlashCommand", () => {
       navigateToSessions: () => {
         calls.navigateToSessions++
       },
-      compactHistory: async () => {
+      compactHistory: Effect.sync(() => {
         calls.compactHistory++
-      },
-      createBranch: async () => {
+      }),
+      createBranch: Effect.sync(() => {
         calls.createBranch++
-      },
+      }),
     }
 
     return { ctx, calls }
@@ -72,7 +74,7 @@ describe("executeSlashCommand", () => {
 
   test("/model opens palette", async () => {
     const { ctx, calls } = createMockContext()
-    const result = await executeSlashCommand("model", "", ctx)
+    const result = await Effect.runPromise(executeSlashCommand("model", "", ctx))
 
     expect(result.handled).toBe(true)
     expect(result.error).toBeUndefined()
@@ -81,7 +83,7 @@ describe("executeSlashCommand", () => {
 
   test("/clear clears messages", async () => {
     const { ctx, calls } = createMockContext()
-    const result = await executeSlashCommand("clear", "", ctx)
+    const result = await Effect.runPromise(executeSlashCommand("clear", "", ctx))
 
     expect(result.handled).toBe(true)
     expect(result.error).toBeUndefined()
@@ -90,7 +92,7 @@ describe("executeSlashCommand", () => {
 
   test("/sessions navigates to sessions", async () => {
     const { ctx, calls } = createMockContext()
-    const result = await executeSlashCommand("sessions", "", ctx)
+    const result = await Effect.runPromise(executeSlashCommand("sessions", "", ctx))
 
     expect(result.handled).toBe(true)
     expect(result.error).toBeUndefined()
@@ -99,7 +101,7 @@ describe("executeSlashCommand", () => {
 
   test("/compact calls compactHistory", async () => {
     const { ctx, calls } = createMockContext()
-    const result = await executeSlashCommand("compact", "", ctx)
+    const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))
 
     expect(result.handled).toBe(true)
     expect(calls.compactHistory).toBe(1)
@@ -107,7 +109,7 @@ describe("executeSlashCommand", () => {
 
   test("/branch calls createBranch", async () => {
     const { ctx, calls } = createMockContext()
-    const result = await executeSlashCommand("branch", "", ctx)
+    const result = await Effect.runPromise(executeSlashCommand("branch", "", ctx))
 
     expect(result.handled).toBe(true)
     expect(calls.createBranch).toBe(1)
@@ -115,7 +117,7 @@ describe("executeSlashCommand", () => {
 
   test("unknown command returns error", async () => {
     const { ctx } = createMockContext()
-    const result = await executeSlashCommand("unknown", "", ctx)
+    const result = await Effect.runPromise(executeSlashCommand("unknown", "", ctx))
 
     expect(result.handled).toBe(false)
     expect(result.error).toBe("Unknown command: /unknown")
@@ -123,11 +125,11 @@ describe("executeSlashCommand", () => {
 
   test("case insensitive commands", async () => {
     const { ctx: ctx1, calls: calls1 } = createMockContext()
-    await executeSlashCommand("MODEL", "", ctx1)
+    await Effect.runPromise(executeSlashCommand("MODEL", "", ctx1))
     expect(calls1.openPalette).toBe(1)
 
     const { ctx: ctx2, calls: calls2 } = createMockContext()
-    await executeSlashCommand("Clear", "", ctx2)
+    await Effect.runPromise(executeSlashCommand("Clear", "", ctx2))
     expect(calls2.clearMessages).toBe(1)
   })
 
@@ -136,13 +138,11 @@ describe("executeSlashCommand", () => {
       openPalette: () => {},
       clearMessages: () => {},
       navigateToSessions: () => {},
-      compactHistory: async () => {
-        throw new Error("Compact failed")
-      },
-      createBranch: async () => {},
+      compactHistory: Effect.fail(ClientError("Compact failed")),
+      createBranch: Effect.void,
     }
 
-    const result = await executeSlashCommand("compact", "", ctx)
+    const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))
     expect(result.handled).toBe(true)
     expect(result.error).toBe("Compact failed")
   })

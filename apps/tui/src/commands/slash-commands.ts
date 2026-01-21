@@ -4,14 +4,17 @@
  * Commands: /model, /clear, /sessions, /compact, /branch
  */
 
+import { Effect } from "effect"
+import { formatError, type UiError } from "../utils/format-error"
+
 export type SlashCommandId = "model" | "clear" | "sessions" | "compact" | "branch"
 
 export interface SlashCommandContext {
   openPalette: () => void
   clearMessages: () => void
   navigateToSessions: () => void
-  compactHistory: () => Promise<void>
-  createBranch: () => Promise<void>
+  compactHistory: Effect.Effect<void, UiError>
+  createBranch: Effect.Effect<void, UiError>
 }
 
 export interface SlashCommandResult {
@@ -19,46 +22,55 @@ export interface SlashCommandResult {
   error?: string
 }
 
+const runCommandEffect = (
+  effect: Effect.Effect<void, UiError>,
+): Effect.Effect<SlashCommandResult, UiError> =>
+  effect.pipe(
+    Effect.as({ handled: true } satisfies SlashCommandResult),
+    Effect.catchAll((error) =>
+      Effect.succeed({
+        handled: true,
+        error: formatError(error),
+      }),
+    ),
+  )
+
 /**
  * Execute a slash command
  */
-export async function executeSlashCommand(
+export const executeSlashCommand = (
   cmd: string,
   _args: string,
   ctx: SlashCommandContext,
-): Promise<SlashCommandResult> {
+): Effect.Effect<SlashCommandResult, UiError> => {
   switch (cmd.toLowerCase()) {
     case "model":
       // Open command palette at model submenu
-      ctx.openPalette()
-      return { handled: true }
+      return Effect.sync(() => {
+        ctx.openPalette()
+        return { handled: true }
+      })
 
     case "clear":
-      ctx.clearMessages()
-      return { handled: true }
+      return Effect.sync(() => {
+        ctx.clearMessages()
+        return { handled: true }
+      })
 
     case "sessions":
-      ctx.navigateToSessions()
-      return { handled: true }
+      return Effect.sync(() => {
+        ctx.navigateToSessions()
+        return { handled: true }
+      })
 
     case "compact":
-      try {
-        await ctx.compactHistory()
-        return { handled: true }
-      } catch (e) {
-        return { handled: true, error: e instanceof Error ? e.message : String(e) }
-      }
+      return runCommandEffect(ctx.compactHistory)
 
     case "branch":
-      try {
-        await ctx.createBranch()
-        return { handled: true }
-      } catch (e) {
-        return { handled: true, error: e instanceof Error ? e.message : String(e) }
-      }
+      return runCommandEffect(ctx.createBranch)
 
     default:
-      return { handled: false, error: `Unknown command: /${cmd}` }
+      return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })
   }
 }
 

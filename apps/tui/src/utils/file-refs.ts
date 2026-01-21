@@ -3,7 +3,8 @@
  * Supports @path/to/file.ts#10-20 syntax
  */
 
-import { readFile } from "fs/promises"
+import { FileSystem } from "@effect/platform"
+import { Effect } from "effect"
 import { resolve, relative } from "path"
 
 export interface FileRef {
@@ -45,35 +46,32 @@ export function parseFileRefs(text: string): FileRef[] {
 /**
  * Read file content, optionally extracting line range
  */
-async function readFileContent(
+const readFileContent = (
   absolutePath: string,
   startLine?: number,
   endLine?: number,
-): Promise<string> {
-  const content = await readFile(absolutePath, "utf-8")
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const content = yield* fs.readFileString(absolutePath, "utf-8")
 
-  if (startLine === undefined) {
-    return content
-  }
+    if (startLine === undefined) {
+      return content
+    }
 
-  const lines = content.split("\n")
-  const start = Math.max(0, startLine - 1) // Convert 1-indexed to 0-indexed
-  const end = endLine !== undefined ? Math.min(lines.length, endLine) : start + 1
+    const lines = content.split("\n")
+    const start = Math.max(0, startLine - 1) // Convert 1-indexed to 0-indexed
+    const end = endLine !== undefined ? Math.min(lines.length, endLine) : start + 1
 
-  return lines.slice(start, end).join("\n")
-}
+    return lines.slice(start, end).join("\n")
+  })
 
-interface ExpandedRef {
-  matchStr: string
-  codeBlock: string
-}
-
-async function expandSingleRef(ref: FileRef, cwd: string): Promise<ExpandedRef | null> {
+const expandSingleRef = (ref: FileRef, cwd: string) => {
   const absolutePath = resolve(cwd, ref.path)
   const relativePath = relative(cwd, absolutePath)
 
-  try {
-    const content = await readFileContent(absolutePath, ref.startLine, ref.endLine)
+  return Effect.gen(function* () {
+    const content = yield* readFileContent(absolutePath, ref.startLine, ref.endLine)
 
     // Build the original match string
     let matchStr = `@${ref.path}`
@@ -96,29 +94,33 @@ async function expandSingleRef(ref: FileRef, cwd: string): Promise<ExpandedRef |
     // Build code block
     const codeBlock = `\`\`\`${rangeLabel}\n${content}\n\`\`\``
     return { matchStr, codeBlock }
-  } catch {
-    // Leave reference as-is if file can't be read
-    return null
-  }
+  }).pipe(
+    Effect.catchAll(() => Effect.succeed(null)),
+  )
 }
 
 /**
  * Expand file references in text by reading file contents
  * @example "@src/foo.ts#10-20" → "```src/foo.ts:10-20\n<content>\n```"
  */
-export async function expandFileRefs(text: string, cwd: string): Promise<string> {
+export const expandFileRefs = (text: string, cwd: string) => {
   const refs = parseFileRefs(text)
-  if (refs.length === 0) return text
+  if (refs.length === 0) return Effect.succeed(text)
 
-  // Expand all refs in parallel
-  const expanded = await Promise.all(refs.map((ref) => expandSingleRef(ref, cwd)))
+  return Effect.gen(function* () {
+    const expanded = yield* Effect.forEach(
+      refs,
+      (ref) => expandSingleRef(ref, cwd),
+      { concurrency: "unbounded" },
+    )
 
-  let result = text
-  for (const exp of expanded) {
-    if (exp) {
-      result = result.replace(exp.matchStr, exp.codeBlock)
+    let result = text
+    for (const exp of expanded) {
+      if (exp) {
+        result = result.replace(exp.matchStr, exp.codeBlock)
+      }
     }
-  }
 
-  return result
+    return result
+  })
 }

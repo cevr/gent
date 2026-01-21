@@ -1,6 +1,7 @@
 import { Context, DateTime, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
-import type { ToolContext } from "@gent/core"
+import type { AgentMode as AgentModeType, ToolContext } from "@gent/core"
 import {
+  AgentMode as AgentModeSchema,
   Message,
   TextPart,
   ToolCallPart,
@@ -63,13 +64,13 @@ export const SteerCommand = Schema.Union(
   Schema.TaggedStruct("Interrupt", {}),
   Schema.TaggedStruct("Interject", { message: Schema.String }),
   Schema.TaggedStruct("SwitchModel", { model: Schema.String }),
-  Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") }),
+  Schema.TaggedStruct("SwitchMode", { mode: AgentModeSchema }),
 )
 export type SteerCommand = typeof SteerCommand.Type
 
 // Agent Loop State
 
-type AgentMode = "build" | "plan"
+type AgentMode = AgentModeType
 
 interface AgentLoopState {
   running: boolean
@@ -279,7 +280,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                   model: cmd.model,
                 }))
               } else if (cmd._tag === "SwitchMode") {
-                const newMode = cmd.mode
+                const newMode = cmd.mode as AgentMode
                 const currentMode = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.mode))
                 if (currentMode === "plan" && newMode === "build") {
                   const decision = yield* planHandler.present({
@@ -290,7 +291,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                   if (decision === "confirm") {
                     yield* Ref.update(stateRef, (s) => ({
                       ...s,
-                      mode: "build",
+                      mode: "build" as AgentMode,
                     }))
                   }
                 } else {

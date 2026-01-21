@@ -1,6 +1,7 @@
 import { createContext, useContext, onMount, onCleanup, createSignal } from "solid-js"
 import type { JSX } from "solid-js"
-import { spawn } from "bun"
+import { Command } from "@effect/platform"
+import { Effect, Fiber, Runtime } from "effect"
 
 export interface GitStatus {
   branch: string
@@ -28,6 +29,7 @@ export function useWorkspace(): WorkspaceContextValue {
 interface WorkspaceProviderProps {
   cwd: string
   children: JSX.Element
+  runtime?: Runtime.Runtime<unknown>
 }
 
 interface GitInfo {
@@ -35,40 +37,28 @@ interface GitInfo {
   status: GitStatus
 }
 
-async function getGitInfo(cwd: string): Promise<GitInfo | null> {
-  try {
-    // Get repo root
-    const rootProc = spawn(["git", "rev-parse", "--show-toplevel"], {
-      cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const rootText = await new Response(rootProc.stdout).text()
-    await rootProc.exited
-    if (rootProc.exitCode !== 0) return null
+const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
+  Command.make("git", ...args).pipe(
+    Command.workingDirectory(cwd),
+    Command.string,
+    Effect.map((text) => text.trim()),
+  )
 
-    const root = rootText.trim()
+const getGitInfo = (cwd: string) =>
+  Effect.gen(function* () {
+    const root = yield* gitCommand(cwd, ["rev-parse", "--show-toplevel"]).pipe(
+      Effect.catchAll(() => Effect.succeed("")),
+    )
+    if (!root) return null
 
-    // Get branch name
-    const branchProc = spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
-      cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const branchText = await new Response(branchProc.stdout).text()
-    await branchProc.exited
-    if (branchProc.exitCode !== 0) return null
+    const branch = yield* gitCommand(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
+      Effect.catchAll(() => Effect.succeed("")),
+    )
+    if (!branch) return null
 
-    const branch = branchText.trim()
-
-    // Get diff stats (staged + unstaged)
-    const diffProc = spawn(["git", "diff", "--stat", "HEAD"], {
-      cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const diffText = await new Response(diffProc.stdout).text()
-    await diffProc.exited
+    const diffText = yield* gitCommand(cwd, ["diff", "--stat", "HEAD"]).pipe(
+      Effect.catchAll(() => Effect.succeed("")),
+    )
 
     let files = 0
     let additions = 0
@@ -87,10 +77,7 @@ async function getGitInfo(cwd: string): Promise<GitInfo | null> {
     if (delMatch?.[1]) deletions = parseInt(delMatch[1], 10)
 
     return { root, status: { branch, files, additions, deletions } }
-  } catch {
-    return null
-  }
-}
+  })
 
 function deriveProjectName(cwd: string, gitRoot: string | null): string {
   // Prefer git repo name
@@ -105,17 +92,39 @@ function deriveProjectName(cwd: string, gitRoot: string | null): string {
 
 export function WorkspaceProvider(props: WorkspaceProviderProps) {
   const [gitInfo, setGitInfo] = createSignal<GitInfo | null>(null)
+  const runtime = props.runtime ?? (Runtime.defaultRuntime as Runtime.Runtime<unknown>)
+  let currentFiber: Fiber.RuntimeFiber<GitInfo | null, never> | null = null
+
+  const refreshGitInfo = () => {
+    if (currentFiber) {
+      Runtime.runFork(runtime)(Fiber.interruptFork(currentFiber))
+    }
+    currentFiber = Runtime.runFork(runtime)(
+      getGitInfo(props.cwd).pipe(
+        Effect.tap((info) =>
+          Effect.sync(() => {
+            setGitInfo(info)
+          }),
+        ),
+      ),
+    )
+  }
 
   onMount(() => {
     // Initial fetch
-    void getGitInfo(props.cwd).then(setGitInfo)
+    refreshGitInfo()
 
     // Poll every 2 seconds
     const interval = setInterval(() => {
-      void getGitInfo(props.cwd).then(setGitInfo)
+      refreshGitInfo()
     }, 2000)
 
-    onCleanup(() => clearInterval(interval))
+    onCleanup(() => {
+      if (currentFiber) {
+        Runtime.runFork(runtime)(Fiber.interruptFork(currentFiber))
+      }
+      clearInterval(interval)
+    })
   })
 
   const value: WorkspaceContextValue = {
