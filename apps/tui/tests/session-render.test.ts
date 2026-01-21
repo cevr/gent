@@ -2,9 +2,8 @@
  * Tests for Session component message rendering
  */
 
-import { describe, test, expect, mock } from "bun:test"
-import { Effect, Stream, Runtime } from "effect"
-import type { AgentEvent, MessagePart } from "@gent/core"
+import { describe, test, expect } from "bun:test"
+import type { MessagePart } from "@gent/core"
 import type { MessageInfoReadonly } from "../src/client"
 
 // Test message data
@@ -31,9 +30,7 @@ const testMessages: MessageInfoReadonly[] = [
 
 describe("Session message handling", () => {
   test("buildMessages extracts text from parts", async () => {
-    const { extractText, buildToolResultMap, extractToolCallsWithResults } = await import(
-      "../src/client"
-    )
+    const { extractText } = await import("../src/client")
 
     // Test extractText
     const text = extractText(testMessages[0]!.parts)

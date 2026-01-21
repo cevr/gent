@@ -2,7 +2,7 @@
  * Home route - displays logo, handles first message
  */
 
-import { onMount } from "solid-js"
+import { createEffect, createSignal, onMount } from "solid-js"
 import { useRenderer, useTerminalDimensions, useKeyboard } from "@opentui/solid"
 import { getLogos } from "../logo.macro.js" with { type: "macro" }
 import { useTheme } from "../theme/index"
@@ -32,10 +32,23 @@ export function Home(props: HomeProps) {
   let lastEscTime = 0
   const ESC_DOUBLE_TAP_MS = 500
 
+  // Track if we're waiting for session creation to navigate
+  const [pendingNavigation, setPendingNavigation] = createSignal(false)
+
   const exit = () => {
     renderer.destroy()
     process.exit(0)
   }
+
+  // Navigate when session becomes active after pending navigation
+  createEffect(() => {
+    if (!pendingNavigation()) return
+    const session = client.session()
+    if (session) {
+      setPendingNavigation(false)
+      router.navigateToSession(session.sessionId, session.branchId)
+    }
+  })
 
   useKeyboard((e) => {
     // Let command system handle keybinds first
@@ -72,30 +85,18 @@ export function Home(props: HomeProps) {
   })
 
   const handleSubmit = (content: string) => {
-    // sendMessage handles session creation and navigation
+    // sendMessage handles session creation
     client.sendMessage(content, client.mode())
-
-    // Navigate after a tick to allow session creation
-    setTimeout(() => {
-      const session = client.session()
-      if (session) {
-        router.navigateToSession(session.sessionId, session.branchId)
-      }
-    }, 100)
+    // Set flag so effect navigates when session is ready
+    setPendingNavigation(true)
   }
 
   // Handle initial prompt on mount
   onMount(() => {
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
       client.sendMessage(props.initialPrompt, client.mode())
-
-      // Navigate after a tick to allow session creation
-      setTimeout(() => {
-        const session = client.session()
-        if (session) {
-          router.navigateToSession(session.sessionId, session.branchId)
-        }
-      }, 100)
+      // Set flag so effect navigates when session is ready
+      setPendingNavigation(true)
     }
   })
 

@@ -91,12 +91,13 @@ function Status() {
   const client = useClient()
 
   const indicator = () => {
-    switch (client.agentStatus()) {
+    const status = client.agentStatus()
+    switch (status._tag) {
       case "streaming":
         return { text: "thinking...", color: theme.info }
       case "error":
         return { text: "error", color: theme.error }
-      default:
+      case "idle":
         return { text: "", color: theme.textMuted }
     }
   }

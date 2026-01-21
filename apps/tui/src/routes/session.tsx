@@ -37,13 +37,15 @@ export function Session(props: SessionProps) {
   const [messages, setMessages] = createSignal<Message[]>([])
   const [elapsed, setElapsed] = createSignal(0)
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
-  const [firstMessageSent, setFirstMessageSent] = createSignal(false)
+
+  // Derived - no separate signal needed
+  const hasMessages = () => messages().length > 0
 
   // Track elapsed time while streaming
   let elapsedInterval: ReturnType<typeof setInterval> | null = null
 
   createEffect(() => {
-    if (client.agentStatus() === "streaming") {
+    if (client.isStreaming()) {
       setElapsed(0)
       elapsedInterval = setInterval(() => {
         setElapsed((e) => e + 1)
@@ -111,9 +113,6 @@ export function Session(props: SessionProps) {
     // Run listMessages and handle result
     Runtime.runPromise(client.client.runtime)(client.listMessages()).then((msgs) => {
       setMessages(buildMessages(msgs))
-      if (msgs.length > 0) {
-        setFirstMessageSent(true)
-      }
     }).catch((err) => {
       client.setError(err instanceof Error ? err.message : String(err))
     })
@@ -122,7 +121,6 @@ export function Session(props: SessionProps) {
   // Focus input on mount, send initial prompt if provided
   onMount(() => {
     if (props.initialPrompt) {
-      setFirstMessageSent(true)
       cast(
         client.client.sendMessage({
           sessionId: props.sessionId,
@@ -244,6 +242,7 @@ export function Session(props: SessionProps) {
 
   const exit = () => {
     renderer.destroy()
+    process.exit(0)
   }
 
   // Clear messages handler for /clear command
@@ -266,7 +265,7 @@ export function Session(props: SessionProps) {
         return
       }
 
-      if (client.agentStatus() === "streaming") {
+      if (client.isStreaming()) {
         client.steer({ _tag: "Cancel" })
         // Status will be set to "idle" when StreamEnded event arrives
         return
@@ -316,10 +315,8 @@ export function Session(props: SessionProps) {
       },
     ])
 
-    const isFirst = !firstMessageSent()
-    if (isFirst) setFirstMessageSent(true)
-
-    client.sendMessage(content, isFirst ? "plan" : undefined)
+    // First message in session starts in plan mode
+    client.sendMessage(content, !hasMessages() ? "plan" : undefined)
   }
 
   const handleSlashCommand = async (cmd: string, args: string) => {
@@ -346,7 +343,7 @@ export function Session(props: SessionProps) {
       <MessageList messages={messages()} toolsExpanded={toolsExpanded()} />
 
       {/* Thinking indicator */}
-      <ThinkingIndicator elapsed={elapsed()} visible={client.agentStatus() === "streaming"} />
+      <ThinkingIndicator elapsed={elapsed()} visible={client.isStreaming()} />
 
       {/* Input with autocomplete above separator */}
       <Input

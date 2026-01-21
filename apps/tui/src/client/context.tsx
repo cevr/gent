@@ -1,7 +1,35 @@
-import { createContext, useContext, createEffect, onCleanup, type ParentProps } from "solid-js"
-import { createStore, produce } from "solid-js/store"
+import { createContext, useContext, createEffect, onCleanup, type ParentProps, DEV } from "solid-js"
+import { createStore, produce, DEV as STORE_DEV } from "solid-js/store"
 import { Effect, Stream, Runtime } from "effect"
 import { calculateCost, type AgentEvent, type AgentMode } from "@gent/core"
+import type { GentCoreError } from "@gent/server"
+import { log, logEvent, logError, clearLog } from "../utils/log"
+
+// Setup Solid dev hooks for tracing
+if (DEV) {
+  DEV.hooks.afterUpdate = () => log("solid: afterUpdate")
+  DEV.hooks.afterCreateOwner = (owner) => log(`solid: createOwner ${owner.name ?? "anonymous"}`)
+}
+if (STORE_DEV) {
+  STORE_DEV.hooks.onStoreNodeUpdate = (_state, prop, value) =>
+    log(`store: ${String(prop)} = ${JSON.stringify(value)}`)
+}
+
+// Format GentCoreError for display
+const formatError = (err: GentCoreError): string => {
+  switch (err._tag) {
+    case "StorageError":
+      return `Storage: ${err.message}`
+    case "AgentLoopError":
+      return `Agent: ${err.message}`
+    case "ProviderError":
+      return `${err.model}: ${err.message}`
+    case "BadArgument":
+      return `${err.module}.${err.method}: ${err.description ?? "bad argument"}`
+    case "SystemError":
+      return `${err.module}.${err.method}: ${err.reason}${err.pathOrDescriptor ? ` (${err.pathOrDescriptor})` : ""}`
+  }
+}
 import {
   type GentClient,
   type GentRpcClient,
@@ -11,6 +39,9 @@ import {
   createClient,
 } from "../client"
 import * as State from "../state"
+
+// Event listener type
+type EventListener = (event: AgentEvent) => void
 
 // =============================================================================
 // Session State
@@ -30,16 +61,24 @@ export type SessionState =
   | { status: "switching"; fromSession: Session; toSessionId: string }
 
 // =============================================================================
-// Agent State (derived from events)
+// Agent State (derived from events) - discriminated union
 // =============================================================================
 
-export type AgentStatus = "idle" | "streaming" | "error"
+export type AgentStatus =
+  | { readonly _tag: "idle" }
+  | { readonly _tag: "streaming" }
+  | { readonly _tag: "error"; readonly error: string }
+
+export const AgentStatus = {
+  idle: (): AgentStatus => ({ _tag: "idle" }),
+  streaming: (): AgentStatus => ({ _tag: "streaming" }),
+  error: (error: string): AgentStatus => ({ _tag: "error", error }),
+} as const
 
 export interface AgentState {
   mode: AgentMode
   status: AgentStatus
   cost: number
-  error: string | null
   model: string | undefined
 }
 
@@ -61,9 +100,11 @@ export interface ClientContextValue {
   mode: () => AgentMode
   agentStatus: () => AgentStatus
   cost: () => number
-  error: () => string | null
   model: () => string | undefined
+  // Derived accessors
   isStreaming: () => boolean
+  isError: () => boolean
+  error: () => string | null
 
   // Agent state setters (for local errors only)
   setError: (error: string | null) => void
@@ -107,6 +148,9 @@ interface ClientProviderProps extends ParentProps {
 }
 
 export function ClientProvider(props: ClientProviderProps) {
+  clearLog()
+  log("ClientProvider init")
+
   const client = createClient(props.rpcClient, props.runtime)
 
   // Helper to run effects fire-and-forget
@@ -124,9 +168,8 @@ export function ClientProvider(props: ClientProviderProps) {
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
     mode: "plan",
-    status: "idle",
+    status: AgentStatus.idle(),
     cost: 0,
-    error: null,
     model: props.initialSession?.model,
   })
 
@@ -139,11 +182,18 @@ export function ClientProvider(props: ClientProviderProps) {
   const isActive = () => sessionStore.sessionState.status === "active"
   const isLoading = () => sessionStore.sessionState.status === "loading"
 
-  // Subscribe to events when session becomes active
+  // External event listeners (for components like session.tsx)
+  const eventListeners = new Set<EventListener>()
+
+  // Subscribe to events when session becomes active - SINGLE shared subscription
   createEffect(() => {
     const s = session()
-    if (!s) return
+    if (!s) {
+      log("event subscription: no session")
+      return
+    }
 
+    log(`event subscription: ${s.sessionId}`)
     let cancelled = false
     const events = client.subscribeEvents(s.sessionId)
 
@@ -152,19 +202,21 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.sync(() => {
           if (cancelled) return
 
+          logEvent(`event: ${event._tag}`)
+
           // Update agent state based on events
           switch (event._tag) {
             case "StreamStarted":
-              setAgentStore({ status: "streaming", error: null })
+              setAgentStore({ status: AgentStatus.streaming() })
               break
 
             case "StreamEnded":
-              setAgentStore({ status: "idle" })
+              setAgentStore({ status: AgentStatus.idle() })
               if (event.usage) {
-                // Get pricing for current model
+                // Get pricing from UI-selected model (State) or session model
                 const modelInfo = agentStore.model
                   ? State.models().find((m) => m.id === agentStore.model)
-                  : undefined
+                  : State.currentModelInfo()
                 const turnCost = calculateCost(event.usage, modelInfo?.pricing)
                 setAgentStore(produce((draft) => {
                   draft.cost += turnCost
@@ -173,7 +225,8 @@ export function ClientProvider(props: ClientProviderProps) {
               break
 
             case "ErrorOccurred":
-              setAgentStore({ status: "error", error: event.error })
+              logError("ErrorOccurred", event.error)
+              setAgentStore({ status: AgentStatus.error(event.error) })
               break
 
             case "PlanModeEntered":
@@ -207,11 +260,27 @@ export function ClientProvider(props: ClientProviderProps) {
               }
               break
           }
+
+          // Notify external listeners
+          for (const listener of eventListeners) {
+            listener(event)
+          }
         }),
+      ).pipe(
+        // Catch stream errors and surface them to UI
+        Effect.catchAll((err) =>
+          Effect.sync(() => {
+            if (!cancelled) {
+              logError("stream error", formatError(err))
+              setAgentStore({ status: AgentStatus.error(formatError(err)) })
+            }
+          }),
+        ),
       ),
     )
 
     onCleanup(() => {
+      log("event subscription cleanup")
       cancelled = true
     })
   })
@@ -229,24 +298,30 @@ export function ClientProvider(props: ClientProviderProps) {
     mode: () => agentStore.mode,
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
-    error: () => agentStore.error,
     model: () => agentStore.model,
-    isStreaming: () => agentStore.status === "streaming",
+    // Derived accessors
+    isStreaming: () => agentStore.status._tag === "streaming",
+    isError: () => agentStore.status._tag === "error",
+    error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
 
     // Agent state setters (for local errors only)
-    setError: (error) => setAgentStore({ error }),
+    setError: (error) =>
+      setAgentStore({ status: error ? AgentStatus.error(error) : AgentStatus.idle() }),
 
     // Fire-and-forget actions using cast
     sendMessage: (content, mode, model) => {
+      log(`sendMessage: ${content.slice(0, 50)}...`)
       const s = session()
 
-      // If no session, create one first
+      // If no session, create one first (server sends firstMessage automatically)
       if (sessionStore.sessionState.status === "none") {
+        log("sendMessage: creating session with firstMessage")
         setSessionStore({ sessionState: { status: "loading", creating: true } })
         cast(
           client.createSession({ firstMessage: content }).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
+                log(`sendMessage: session created ${result.sessionId}`)
                 setSessionStore({
                   sessionState: {
                     status: "active",
@@ -258,6 +333,13 @@ export function ClientProvider(props: ClientProviderProps) {
                     },
                   },
                 })
+              }),
+            ),
+            Effect.catchAll((err) =>
+              Effect.sync(() => {
+                logError("sendMessage", formatError(err))
+                setSessionStore({ sessionState: { status: "none" } })
+                setAgentStore({ status: AgentStatus.error(formatError(err)) })
               }),
             ),
           ),
@@ -297,6 +379,12 @@ export function ClientProvider(props: ClientProviderProps) {
               })
             }),
           ),
+          Effect.catchAll((err) =>
+            Effect.sync(() => {
+              setSessionStore({ sessionState: { status: "none" } })
+              setAgentStore({ status: AgentStatus.error(formatError(err)) })
+            }),
+          ),
         ),
       )
     },
@@ -312,7 +400,7 @@ export function ClientProvider(props: ClientProviderProps) {
       }
 
       // Switch to new session - reset agent state with new model
-      setAgentStore({ mode: "plan", status: "idle", cost: 0, error: null, model })
+      setAgentStore({ mode: "plan", status: AgentStatus.idle(), cost: 0, model })
       setSessionStore({
         sessionState: { status: "active", session: { sessionId, branchId, name, model } },
       })
@@ -320,7 +408,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       setSessionStore({ sessionState: { status: "none" } })
-      setAgentStore({ mode: "plan", status: "idle", cost: 0, error: null, model: undefined })
+      setAgentStore({ mode: "plan", status: AgentStatus.idle(), cost: 0, model: undefined })
     },
 
     // Return Effects for caller to run
@@ -344,23 +432,11 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.createBranch(s.sessionId, name)
     },
 
-    // Event subscription for message updates (agent state handled internally)
+    // Event subscription for message updates (shared with internal agent state subscription)
     subscribeEvents: (onEvent) => {
-      let cancelled = false
-      const s = session()
-      if (!s) return () => {}
-
-      const events = client.subscribeEvents(s.sessionId)
-      cast(
-        Stream.runForEach(events, (e: AgentEvent) =>
-          Effect.sync(() => {
-            if (cancelled) return
-            onEvent(e)
-          }),
-        ),
-      )
+      eventListeners.add(onEvent)
       return () => {
-        cancelled = true
+        eventListeners.delete(onEvent)
       }
     },
 

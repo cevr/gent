@@ -183,9 +183,9 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             yield* storage.createSession(session)
             yield* storage.createBranch(branch)
 
-            // Fork name generation if firstMessage provided (non-blocking)
             const firstMessage = input.firstMessage
             if (firstMessage) {
+              // Fork name generation (non-blocking)
               yield* Effect.forkDaemon(
                 Effect.gen(function* () {
                   const generatedName = yield* generateSessionName(provider, firstMessage)
@@ -201,6 +201,22 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
                     new SessionNameUpdated({ sessionId, name: generatedName }),
                   )
                 }).pipe(Effect.catchAll(() => Effect.void)),
+              )
+
+              // Fork sending the first message (non-blocking, starts agent loop)
+              const message = new Message({
+                id: Bun.randomUUIDv7(),
+                sessionId,
+                branchId,
+                role: "user",
+                parts: [new TextPart({ type: "text", text: firstMessage })],
+                createdAt: now,
+              })
+              yield* Effect.forkDaemon(
+                agentLoop.run(message).pipe(
+                  Effect.withSpan("AgentLoop.firstMessage"),
+                  Effect.catchAllCause(() => Effect.void),
+                ),
               )
             }
 
