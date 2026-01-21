@@ -8,7 +8,7 @@ import { useKeyboard } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"
 import { useCommand } from "../command/index"
-import { useAgentState } from "../agent-state/index"
+import { useClient } from "../client/index"
 import {
   AutocompletePopup,
   type AutocompleteState,
@@ -39,7 +39,7 @@ export function Input(props: InputProps) {
   const { theme } = useTheme()
   const workspace = useWorkspace()
   const command = useCommand()
-  const agentState = useAgentState()
+  const client = useClient()
 
   let inputRef: InputRenderable | null = null
 
@@ -235,7 +235,7 @@ export function Input(props: InputProps) {
           clearMessages: props.clearMessages ?? (() => {}),
           navigateToSessions: () => command.openPalette(),
           compactHistory: async () => {
-            agentState.setError("Compact not implemented yet")
+            client.setError("Compact not implemented yet")
           },
           createBranch: async () => {
             // No-op in home view
@@ -243,7 +243,7 @@ export function Input(props: InputProps) {
         })
 
         if (result.error) {
-          agentState.setError(result.error)
+          client.setError(result.error)
         }
       }
       return

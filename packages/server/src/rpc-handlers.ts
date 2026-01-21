@@ -36,8 +36,16 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           })
           .pipe(Effect.orDie),
 
-      sendMessage: ({ sessionId, branchId, content }) =>
-        core.sendMessage({ sessionId, branchId, content }).pipe(Effect.orDie),
+      sendMessage: ({ sessionId, branchId, content, mode, model }) =>
+        core
+          .sendMessage({
+            sessionId,
+            branchId,
+            content,
+            ...(mode !== undefined ? { mode } : {}),
+            ...(model !== undefined ? { model } : {}),
+          })
+          .pipe(Effect.orDie),
 
       listMessages: ({ branchId }) => core.listMessages(branchId).pipe(Effect.orDie),
 

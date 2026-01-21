@@ -1,13 +1,15 @@
 import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { Runtime } from "effect"
 import type { ModelId } from "@gent/core"
 import { useCommand } from "../command/index"
 import { useTheme } from "../theme/index"
-import { useModel } from "../model/index"
-import { useClient, type SessionInfo } from "../client/index"
+import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
+import type { SessionInfo } from "../client"
+import * as State from "../state"
 
 interface MenuItem {
   id: string
@@ -23,7 +25,6 @@ interface MenuLevel {
 export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
-  const model = useModel()
   const client = useClient()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
@@ -44,7 +45,7 @@ export function CommandPalette() {
         id: "sessions",
         title: "Sessions",
         onSelect: () => {
-          void client.listSessions().then((list) => {
+          Runtime.runPromise(client.client.runtime)(client.listSessions()).then((list) => {
             setSessions([...list])
             pushLevel(sessionsMenu())
           })
@@ -85,7 +86,7 @@ export function CommandPalette() {
           title: isActive ? `${s.name ?? "Unnamed"} •` : (s.name ?? "Unnamed"),
           onSelect: () => {
             if (s.branchId) {
-              void client.switchSession(s.id, s.branchId, s.name ?? "Unnamed")
+              client.switchSession(s.id, s.branchId, s.name ?? "Unnamed")
               router.navigateToSession(s.id, s.branchId)
             }
             command.closePalette()
@@ -140,9 +141,8 @@ export function CommandPalette() {
   // Provider submenu - lists providers with current gen models
   const providerMenu = (): MenuLevel => ({
     title: "Model",
-    items: model
-      .providers()
-      .filter((provider) => model.currentGenByProvider(provider.id).length > 0)
+    items: State.providers()
+      .filter((provider) => State.currentGenByProvider(provider.id).length > 0)
       .map((provider) => ({
         id: `provider.${provider.id}`,
         title: provider.name,
@@ -152,11 +152,11 @@ export function CommandPalette() {
 
   // Model submenu for a specific provider (current gen only)
   const modelMenu = (providerId: string): MenuLevel => {
-    const currentModelId = model.currentModel()
-    const providerModels = model.currentGenByProvider(
-      providerId as Parameters<typeof model.currentGenByProvider>[0],
+    const currentModelId = State.currentModel()
+    const providerModels = State.currentGenByProvider(
+      providerId as Parameters<typeof State.currentGenByProvider>[0],
     )
-    const providerInfo = model.providers().find((p) => p.id === providerId)
+    const providerInfo = State.providers().find((p) => p.id === providerId)
 
     return {
       title: providerInfo?.name ?? providerId,
@@ -166,7 +166,7 @@ export function CommandPalette() {
           id: `model.${m.id}`,
           title: isActive ? `${m.name} •` : m.name,
           onSelect: () => {
-            model.setModel(m.id as ModelId)
+            State.setModel(m.id as ModelId)
             command.closePalette()
           },
         }

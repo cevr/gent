@@ -41,6 +41,7 @@ export interface StorageService {
   readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
   readonly getBranch: (id: string) => Effect.Effect<Branch | undefined, StorageError>
   readonly listBranches: (sessionId: string) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
+  readonly updateBranchModel: (branchId: string, model: string) => Effect.Effect<void, StorageError>
 
   // Messages
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
@@ -103,10 +104,18 @@ const makeStorage = (db: Database): StorageService => {
       parent_branch_id TEXT,
       parent_message_id TEXT,
       name TEXT,
+      model TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
   `)
+
+  // Migration: add model column to existing branches table
+  try {
+    db.run(`ALTER TABLE branches ADD COLUMN model TEXT`)
+  } catch {
+    // Column already exists - ignore
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -302,13 +311,14 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO branches (id, session_id, parent_branch_id, parent_message_id, name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO branches (id, session_id, parent_branch_id, parent_message_id, name, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
               branch.id,
               branch.sessionId,
               branch.parentBranchId ?? null,
               branch.parentMessageId ?? null,
               branch.name ?? null,
+              branch.model ?? null,
               branch.createdAt.getTime(),
             ],
           )
@@ -326,7 +336,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, session_id, parent_branch_id, parent_message_id, name, created_at FROM branches WHERE id = ?`,
+              `SELECT id, session_id, parent_branch_id, parent_message_id, name, model, created_at FROM branches WHERE id = ?`,
             )
             .get(id) as {
             id: string
@@ -334,6 +344,7 @@ const makeStorage = (db: Database): StorageService => {
             parent_branch_id: string | null
             parent_message_id: string | null
             name: string | null
+            model: string | null
             created_at: number
           } | null
           if (!row) return undefined
@@ -343,6 +354,7 @@ const makeStorage = (db: Database): StorageService => {
             parentBranchId: row.parent_branch_id ?? undefined,
             parentMessageId: row.parent_message_id ?? undefined,
             name: row.name ?? undefined,
+            model: row.model ?? undefined,
             createdAt: new Date(row.created_at),
           })
         },
@@ -358,7 +370,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, parent_branch_id, parent_message_id, name, created_at FROM branches WHERE session_id = ? ORDER BY created_at ASC`,
+              `SELECT id, session_id, parent_branch_id, parent_message_id, name, model, created_at FROM branches WHERE session_id = ? ORDER BY created_at ASC`,
             )
             .all(sessionId) as Array<{
             id: string
@@ -366,6 +378,7 @@ const makeStorage = (db: Database): StorageService => {
             parent_branch_id: string | null
             parent_message_id: string | null
             name: string | null
+            model: string | null
             created_at: number
           }>
           return rows.map(
@@ -376,6 +389,7 @@ const makeStorage = (db: Database): StorageService => {
                 parentBranchId: row.parent_branch_id ?? undefined,
                 parentMessageId: row.parent_message_id ?? undefined,
                 name: row.name ?? undefined,
+                model: row.model ?? undefined,
                 createdAt: new Date(row.created_at),
               }),
           )
@@ -383,6 +397,18 @@ const makeStorage = (db: Database): StorageService => {
         catch: (e) =>
           new StorageError({
             message: "Failed to list branches",
+            cause: e,
+          }),
+      }),
+
+    updateBranchModel: (branchId, model) =>
+      Effect.try({
+        try: () => {
+          db.run(`UPDATE branches SET model = ? WHERE id = ?`, [model, branchId])
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to update branch model",
             cause: e,
           }),
       }),

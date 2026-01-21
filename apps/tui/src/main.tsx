@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime, Option, Runtime, Stream } from "effect"
+import { Console, Effect, Layer, ManagedRuntime, Option, Stream } from "effect"
 import { RpcTest } from "@effect/rpc"
 import {
   createDependencies,
@@ -14,7 +14,7 @@ import {
   type SessionInfo,
 } from "@gent/server"
 import { DevTracerLive, clearLog } from "@gent/runtime"
-import { DEFAULT_MODEL_ID, type ModelId } from "@gent/core"
+import { DEFAULT_MODEL_ID } from "@gent/core"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
@@ -23,6 +23,7 @@ import { ClientProvider, type Session } from "./client/index"
 import { RouterProvider, Route } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import type { GentRpcClient } from "./client"
+import * as State from "./state"
 
 // ============================================================================
 // Initial State - discriminated union for clarity
@@ -261,14 +262,8 @@ const main = Command.make(
       // Get runtime for client
       const runtime = yield* serverRuntime.runtimeEffect
 
-      // Model change handler - steers agent to new model
-      const handleModelChange = (modelId: ModelId) => {
-        Runtime.runPromise(runtime)(
-          core.steer({ _tag: "SwitchModel", model: modelId as string }),
-        ).catch(() => {
-          // Ignore steer errors (e.g., if agent not running)
-        })
-      }
+      // Initialize global model state (UI selection - sent with messages)
+      State.initModelState(DEFAULT_MODEL_ID)
 
       // Derive initial session and route from state
       let initialSession: Session | undefined
@@ -280,6 +275,7 @@ const main = Command.make(
           sessionId: state.session.id,
           branchId: state.session.branchId,
           name: state.session.name ?? "Unnamed",
+          model: undefined, // Model loaded from branch on first message
         }
         initialRoute = Route.session(state.session.id, state.session.branchId)
         initialPrompt = state.prompt
@@ -291,7 +287,10 @@ const main = Command.make(
           <WorkspaceProvider cwd={cwd}>
             <ClientProvider rpcClient={rpcClient} runtime={runtime} initialSession={initialSession}>
               <RouterProvider initialRoute={initialRoute}>
-                <App initialPrompt={initialPrompt} onModelChange={handleModelChange} />
+                <App
+                  initialPrompt={initialPrompt}
+                  initialModel={DEFAULT_MODEL_ID}
+                />
               </RouterProvider>
             </ClientProvider>
           </WorkspaceProvider>

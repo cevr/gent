@@ -32,6 +32,7 @@ export const BranchInfo = Schema.Struct({
   id: Schema.String,
   sessionId: Schema.String,
   name: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
   createdAt: Schema.Number,
 })
 
@@ -57,6 +58,7 @@ export const SendMessagePayload = Schema.Struct({
   branchId: Schema.String,
   content: Schema.String,
   mode: Schema.optional(AgentMode),
+  model: Schema.optional(Schema.String),
 })
 
 export const MessageInfo = Schema.Struct({

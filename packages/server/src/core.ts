@@ -8,6 +8,7 @@ import {
   EventBus,
   SessionNameUpdated,
   PlanApproved,
+  ModelChanged,
   type AgentEvent,
   type AgentMode,
   type MessagePart,
@@ -51,6 +52,7 @@ export interface SendMessageInput {
   branchId: string
   content: string
   mode?: AgentMode
+  model?: string
 }
 
 export interface SessionInfo {
@@ -65,6 +67,7 @@ export interface SessionInfo {
 export interface BranchInfo {
   id: string
   sessionId: string
+  model: string | undefined
   createdAt: number
 }
 
@@ -277,6 +280,19 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             yield* agentLoop.steer({ _tag: "SwitchMode", mode: input.mode })
           }
 
+          // Update branch model if specified
+          if (input.model) {
+            yield* storage.updateBranchModel(input.branchId, input.model)
+            yield* agentLoop.steer({ _tag: "SwitchModel", model: input.model })
+            yield* eventBus.publish(
+              new ModelChanged({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                model: input.model,
+              }),
+            )
+          }
+
           const message = new Message({
             id: Bun.randomUUIDv7(),
             sessionId: input.sessionId,
@@ -315,6 +331,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             return branches.map((b) => ({
               id: b.id,
               sessionId: b.sessionId,
+              model: b.model,
               createdAt: b.createdAt.getTime(),
             }))
           }),

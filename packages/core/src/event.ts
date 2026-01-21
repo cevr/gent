@@ -167,6 +167,12 @@ export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()
   },
 ) {}
 
+export class ModelChanged extends Schema.TaggedClass<ModelChanged>()("ModelChanged", {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+  model: Schema.String,
+}) {}
+
 export const AgentEvent = Schema.Union(
   SessionStarted,
   SessionEnded,
@@ -189,6 +195,7 @@ export const AgentEvent = Schema.Union(
   QuestionsAsked,
   QuestionsAnswered,
   SessionNameUpdated,
+  ModelChanged,
 )
 export type AgentEvent = typeof AgentEvent.Type
 

@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { calculateCost } from "@gent/core"
+import { Effect, Runtime } from "effect"
 import {
   extractText,
   buildToolResultMap,
@@ -16,10 +16,9 @@ import { MessageList, ThinkingIndicator, type Message } from "../components/mess
 import { Input } from "../components/input"
 import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
-import { useModel } from "../model/index"
 import { useClient } from "../client/index"
-import { useAgentState } from "../agent-state/index"
 import { executeSlashCommand } from "../commands/slash-commands"
+import { useRuntime } from "../hooks/use-runtime"
 
 export interface SessionProps {
   sessionId: string
@@ -32,9 +31,8 @@ export function Session(props: SessionProps) {
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const command = useCommand()
-  const model = useModel()
   const client = useClient()
-  const agentState = useAgentState()
+  const { cast } = useRuntime(client.client.runtime)
 
   const [messages, setMessages] = createSignal<Message[]>([])
   const [elapsed, setElapsed] = createSignal(0)
@@ -45,7 +43,7 @@ export function Session(props: SessionProps) {
   let elapsedInterval: ReturnType<typeof setInterval> | null = null
 
   createEffect(() => {
-    if (agentState.status() === "streaming") {
+    if (client.agentStatus() === "streaming") {
       setElapsed(0)
       elapsedInterval = setInterval(() => {
         setElapsed((e) => e + 1)
@@ -110,47 +108,50 @@ export function Session(props: SessionProps) {
   createEffect(() => {
     if (!client.isActive()) return
 
-    void client
-      .listMessages()
-      .then((msgs) => {
-        setMessages(buildMessages(msgs))
-        if (msgs.length > 0) {
-          setFirstMessageSent(true)
-        }
-      })
-      .catch((e: unknown) => {
-        agentState.setError(e instanceof Error ? e.message : String(e))
-      })
+    // Run listMessages and handle result
+    Runtime.runPromise(client.client.runtime)(client.listMessages()).then((msgs) => {
+      setMessages(buildMessages(msgs))
+      if (msgs.length > 0) {
+        setFirstMessageSent(true)
+      }
+    }).catch((err) => {
+      client.setError(err instanceof Error ? err.message : String(err))
+    })
   })
 
   // Focus input on mount, send initial prompt if provided
   onMount(() => {
     if (props.initialPrompt) {
       setFirstMessageSent(true)
-      void client.sendMessage(props.initialPrompt, "plan").catch((e: unknown) => {
-        agentState.setStatus("error")
-        agentState.setError(e instanceof Error ? e.message : String(e))
-      })
+      cast(
+        client.client.sendMessage({
+          sessionId: props.sessionId,
+          branchId: props.branchId,
+          content: props.initialPrompt,
+          mode: "plan",
+        }).pipe(
+          Effect.tapError((err) =>
+            Effect.sync(() => {
+              client.setError(String(err))
+            }),
+          ),
+        ),
+      )
     }
   })
 
-  // Subscribe to agent events
+  // Subscribe to agent events for message updates
   createEffect(() => {
     if (!client.isActive()) return
 
     const unsubscribe = client.subscribeEvents((event) => {
       if (event._tag === "MessageReceived") {
-        void client
-          .listMessages()
-          .then((msgs) => {
-            setMessages(buildMessages(msgs))
-          })
-          .catch((e: unknown) => {
-            agentState.setError(e instanceof Error ? e.message : String(e))
-          })
+        Runtime.runPromise(client.client.runtime)(client.listMessages()).then((msgs) => {
+          setMessages(buildMessages(msgs))
+        }).catch((err) => {
+          client.setError(err instanceof Error ? err.message : String(err))
+        })
       } else if (event._tag === "StreamStarted") {
-        agentState.setStatus("streaming")
-        agentState.setError(null)
         setMessages((prev) => [
           ...prev,
           {
@@ -186,15 +187,6 @@ export function Session(props: SessionProps) {
             return prev
           })
         }
-        agentState.setStatus("idle")
-        if (event.usage) {
-          const pricing = model.currentModelInfo()?.pricing
-          const turnCost = calculateCost(event.usage, pricing)
-          agentState.addCost(turnCost)
-        }
-      } else if (event._tag === "ErrorOccurred") {
-        agentState.setStatus("error")
-        agentState.setError(event.error)
       } else if (event._tag === "ToolCallStarted") {
         setMessages((prev) => {
           const last = prev[prev.length - 1]
@@ -243,11 +235,8 @@ export function Session(props: SessionProps) {
           }
           return prev
         })
-      } else if (event._tag === "PlanModeEntered") {
-        agentState.setMode("plan")
-      } else if (event._tag === "PlanModeExited") {
-        agentState.setMode("build")
       }
+      // Note: agent state (mode, status, cost, error) is updated by ClientProvider
     })
 
     onCleanup(unsubscribe)
@@ -277,9 +266,9 @@ export function Session(props: SessionProps) {
         return
       }
 
-      if (agentState.status() === "streaming") {
-        void client.steer({ _tag: "Cancel" }).catch(() => {})
-        agentState.setStatus("idle")
+      if (client.agentStatus() === "streaming") {
+        client.steer({ _tag: "Cancel" })
+        // Status will be set to "idle" when StreamEnded event arrives
         return
       }
 
@@ -300,9 +289,8 @@ export function Session(props: SessionProps) {
 
     // Shift+Tab: cycle agent mode
     if (e.shift && e.name === "tab") {
-      const newMode = agentState.mode() === "build" ? "plan" : "build"
-      agentState.setMode(newMode)
-      void client.steer({ _tag: "SwitchMode", mode: newMode }).catch(() => {})
+      const newMode = client.mode() === "build" ? "plan" : "build"
+      client.steer({ _tag: "SwitchMode", mode: newMode })
       return
     }
 
@@ -314,7 +302,7 @@ export function Session(props: SessionProps) {
   })
 
   const handleSubmit = (content: string) => {
-    agentState.setStatus("streaming")
+    // Status will be set to "streaming" when StreamStarted event arrives
     setMessages((prev) => [
       ...prev,
       {
@@ -331,11 +319,7 @@ export function Session(props: SessionProps) {
     const isFirst = !firstMessageSent()
     if (isFirst) setFirstMessageSent(true)
 
-    void client.sendMessage(content, isFirst ? "plan" : undefined).catch((err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err))
-      agentState.setStatus("error")
-      agentState.setError(error.message)
-    })
+    client.sendMessage(content, isFirst ? "plan" : undefined)
   }
 
   const handleSlashCommand = async (cmd: string, args: string) => {
@@ -344,15 +328,15 @@ export function Session(props: SessionProps) {
       clearMessages,
       navigateToSessions: () => command.openPalette(),
       compactHistory: async () => {
-        agentState.setError("Compact not implemented yet")
+        client.setError("Compact not implemented yet")
       },
       createBranch: async () => {
-        await client.createBranch()
+        cast(client.createBranch())
       },
     })
 
     if (result.error) {
-      agentState.setError(result.error)
+      client.setError(result.error)
     }
   }
 
@@ -362,7 +346,7 @@ export function Session(props: SessionProps) {
       <MessageList messages={messages()} toolsExpanded={toolsExpanded()} />
 
       {/* Thinking indicator */}
-      <ThinkingIndicator elapsed={elapsed()} visible={agentState.status() === "streaming"} />
+      <ThinkingIndicator elapsed={elapsed()} visible={client.agentStatus() === "streaming"} />
 
       {/* Input with autocomplete above separator */}
       <Input

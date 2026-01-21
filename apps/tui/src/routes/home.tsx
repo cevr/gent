@@ -9,7 +9,6 @@ import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
-import { useAgentState } from "../agent-state/index"
 import { StatusBar } from "../components/status-bar"
 import { Input } from "../components/input"
 
@@ -26,7 +25,6 @@ export function Home(props: HomeProps) {
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
-  const agentState = useAgentState()
 
   const logo = LOGOS[Math.floor(Math.random() * LOGOS.length)]
 
@@ -67,30 +65,37 @@ export function Home(props: HomeProps) {
 
     // Shift+Tab: cycle agent mode
     if (e.shift && e.name === "tab") {
-      const newMode = agentState.mode() === "build" ? "plan" : "build"
-      agentState.setMode(newMode)
+      const newMode = client.mode() === "build" ? "plan" : "build"
+      client.steer({ _tag: "SwitchMode", mode: newMode })
       return
     }
   })
 
   const handleSubmit = (content: string) => {
-    void client.sendMessage(content, agentState.mode()).then(() => {
+    // sendMessage handles session creation and navigation
+    client.sendMessage(content, client.mode())
+
+    // Navigate after a tick to allow session creation
+    setTimeout(() => {
       const session = client.session()
       if (session) {
         router.navigateToSession(session.sessionId, session.branchId)
       }
-    })
+    }, 100)
   }
 
   // Handle initial prompt on mount
   onMount(() => {
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
-      void client.sendMessage(props.initialPrompt, agentState.mode()).then(() => {
+      client.sendMessage(props.initialPrompt, client.mode())
+
+      // Navigate after a tick to allow session creation
+      setTimeout(() => {
         const session = client.session()
         if (session) {
           router.navigateToSession(session.sessionId, session.branchId)
         }
-      })
+      }, 100)
     }
   })
 

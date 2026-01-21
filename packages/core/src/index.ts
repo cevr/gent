@@ -46,6 +46,7 @@ export {
   QuestionsAsked,
   QuestionsAnswered,
   SessionNameUpdated,
+  ModelChanged,
 } from "./event.js"
 
 // Permission Types
@@ -84,3 +85,17 @@ export { AuthStorage, AuthStorageError } from "./auth-storage"
 
 // Defaults
 export { DEFAULTS, type Defaults } from "./defaults"
+
+// Result Type (for async state tracking)
+export {
+  type Result,
+  initial,
+  success,
+  failure,
+  match,
+  isInitial,
+  isSuccess,
+  isFailure,
+  getOrUndefined,
+  getOrElse,
+} from "./result"

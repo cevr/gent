@@ -1,8 +1,8 @@
 import { Show, type JSX } from "solid-js"
 import { useTheme } from "../theme/index"
-import { useModel } from "../model/index"
 import { useWorkspace } from "../workspace/index"
-import { useAgentState } from "../agent-state/index"
+import { useClient } from "../client/index"
+import * as State from "../state"
 
 // ============================================================================
 // Helper functions
@@ -52,43 +52,46 @@ function Root(props: RootProps) {
 }
 
 function ErrorRow() {
-  const { error } = useAgentState()
   const { theme } = useTheme()
+  const client = useClient()
 
   return (
-    <Show when={error()}>
+    <Show when={client.error()}>
       <box paddingLeft={1} paddingRight={1}>
-        <text style={{ fg: theme.error }}>{error()}</text>
+        <text style={{ fg: theme.error }}>{client.error()}</text>
       </box>
     </Show>
   )
 }
 
 function Mode() {
-  const { mode } = useAgentState()
   const { theme } = useTheme()
+  const client = useClient()
 
-  return <span style={{ fg: mode() === "build" ? theme.success : theme.warning }}>{mode()}</span>
+  return (
+    <span style={{ fg: client.mode() === "build" ? theme.success : theme.warning }}>
+      {client.mode()}
+    </span>
+  )
 }
 
 function Model() {
   const { theme } = useTheme()
-  const model = useModel()
 
   const display = () => {
-    const info = model.currentModelInfo()
-    return shortenModel(info?.name ?? model.currentModel())
+    const info = State.currentModelInfo()
+    return shortenModel(info?.name ?? State.currentModel())
   }
 
   return <span style={{ fg: theme.textMuted }}>{display()}</span>
 }
 
 function Status() {
-  const { status } = useAgentState()
   const { theme } = useTheme()
+  const client = useClient()
 
   const indicator = () => {
-    switch (status()) {
+    switch (client.agentStatus()) {
       case "streaming":
         return { text: "thinking...", color: theme.info }
       case "error":
@@ -139,10 +142,10 @@ function Git() {
 }
 
 function Cost() {
-  const { cost } = useAgentState()
   const { theme } = useTheme()
+  const client = useClient()
 
-  return <span style={{ fg: theme.textMuted }}>{formatCost(cost())}</span>
+  return <span style={{ fg: theme.textMuted }}>{formatCost(client.cost())}</span>
 }
 
 function Separator() {

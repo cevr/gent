@@ -1,22 +1,27 @@
-import { Switch, Match } from "solid-js"
-import { DEFAULT_MODEL_ID, type ModelId } from "@gent/core"
+import { Switch, Match, onMount } from "solid-js"
+import type { ModelId } from "@gent/core"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/index"
-import { ModelProvider } from "./model/index"
-import { AgentStateProvider } from "./agent-state/index"
 import { useRouter, isRoute } from "./router/index"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import * as State from "./state"
 
 export interface AppProps {
   initialPrompt?: string
-  model?: string
-  onModelChange?: (modelId: ModelId) => void
+  initialModel?: ModelId
 }
 
 function AppContent(props: AppProps) {
   const router = useRouter()
+
+  // Initialize model state on mount
+  onMount(() => {
+    if (props.initialModel) {
+      State.initModelState(props.initialModel)
+    }
+  })
 
   return (
     <box flexDirection="column" width="100%" height="100%">
@@ -45,16 +50,10 @@ function AppContent(props: AppProps) {
 }
 
 export function App(props: AppProps) {
-  const initialModel = (props.model ?? DEFAULT_MODEL_ID) as ModelId
-
   return (
     <ThemeProvider mode={undefined}>
       <CommandProvider>
-        <ModelProvider initialModel={initialModel} onModelChange={props.onModelChange}>
-          <AgentStateProvider>
-            <AppContent {...props} />
-          </AgentStateProvider>
-        </ModelProvider>
+        <AppContent {...props} />
       </CommandProvider>
     </ThemeProvider>
   )

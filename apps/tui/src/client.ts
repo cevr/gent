@@ -1,7 +1,8 @@
-import { Effect, Stream, Runtime } from "effect"
+import { Effect } from "effect"
+import type { Stream, Runtime } from "effect"
 import type { RpcClient, RpcGroup } from "@effect/rpc"
 import type { GentRpcs } from "@gent/server"
-import type { AgentEvent, MessagePart, TextPart, ToolCallPart, ToolResultPart } from "@gent/core"
+import type { AgentEvent, AgentMode, MessagePart, TextPart, ToolCallPart, ToolResultPart } from "@gent/core"
 
 export type { MessagePart, TextPart, ToolCallPart, ToolResultPart }
 
@@ -119,21 +120,71 @@ export type SteerCommand =
   | { _tag: "SwitchModel"; model: string }
   | { _tag: "SwitchMode"; mode: "build" | "plan" }
 
-// GentClient interface - adapts RPC client to callback-based subscriptions
+// Session info (minimal for client)
+export interface SessionInfo {
+  id: string
+  name: string | undefined
+  branchId: string | undefined
+  createdAt: number
+  updatedAt: number
+}
+
+export interface BranchInfo {
+  id: string
+  sessionId: string
+  name: string | undefined
+  model: string | undefined
+  createdAt: number
+}
+
+export interface CreateSessionResult {
+  sessionId: string
+  branchId: string
+  name: string
+}
+
+// =============================================================================
+// GentClient - Returns Effects for all operations
+// =============================================================================
+
 export interface GentClient {
-  sendMessage: (input: { sessionId: string; branchId: string; content: string }) => Promise<void>
+  /** Send a message to active session */
+  sendMessage: (input: {
+    sessionId: string
+    branchId: string
+    content: string
+    mode?: AgentMode
+    model?: string
+  }) => Effect.Effect<void>
 
-  listMessages: (branchId: string) => Promise<readonly MessageInfoReadonly[]>
+  /** Create a new session */
+  createSession: (input?: { firstMessage?: string; cwd?: string }) => Effect.Effect<CreateSessionResult>
 
-  subscribeEvents: (sessionId: string, onEvent: (event: AgentEvent) => void) => () => void
+  /** List messages for a branch */
+  listMessages: (branchId: string) => Effect.Effect<readonly MessageInfoReadonly[]>
 
-  steer: (command: SteerCommand) => Promise<void>
+  /** List all sessions */
+  listSessions: () => Effect.Effect<readonly SessionInfo[]>
+
+  /** List branches for a session */
+  listBranches: (sessionId: string) => Effect.Effect<readonly BranchInfo[]>
+
+  /** Create a new branch */
+  createBranch: (sessionId: string, name?: string) => Effect.Effect<string>
+
+  /** Subscribe to events - returns Stream */
+  subscribeEvents: (sessionId: string) => Stream.Stream<AgentEvent>
+
+  /** Send steering command */
+  steer: (command: SteerCommand) => Effect.Effect<void>
+
+  /** Get the runtime for this client */
+  runtime: Runtime.Runtime<never>
 }
 
 /**
  * Creates a GentClient from an RPC client.
- * Uses provided runtime for all Effect execution.
- * RPC methods return Effect<T, E, never> so runtime context is unused.
+ * Returns Effects for all operations - caller decides how to run.
  */
 export function createClient(
   rpcClient: GentRpcClient,
@@ -141,41 +192,34 @@ export function createClient(
   runtime: Runtime.Runtime<any>,
 ): GentClient {
   return {
-    sendMessage: (input) =>
-      Runtime.runPromise(runtime)(rpcClient.sendMessage(input)).catch((err) => {
-        console.error("sendMessage error:", err)
-        throw err
-      }),
+    sendMessage: (input) => rpcClient.sendMessage(input),
+
+    createSession: (input) =>
+      rpcClient.createSession(input ?? {}).pipe(
+        Effect.map((result) => ({
+          sessionId: result.sessionId,
+          branchId: result.branchId,
+          name: result.name,
+        })),
+      ),
 
     listMessages: (branchId) =>
-      Runtime.runPromise(runtime)(rpcClient.listMessages({ branchId })) as Promise<
-        readonly MessageInfoReadonly[]
-      >,
+      rpcClient.listMessages({ branchId }) as Effect.Effect<readonly MessageInfoReadonly[]>,
 
-    steer: (command) => Runtime.runPromise(runtime)(rpcClient.steer({ command })),
+    listSessions: () => rpcClient.listSessions() as Effect.Effect<readonly SessionInfo[]>,
 
-    subscribeEvents: (sessionId, onEvent) => {
-      let cancelled = false
+    listBranches: (sessionId) =>
+      rpcClient.listBranches({ sessionId }) as Effect.Effect<readonly BranchInfo[]>,
 
-      // subscribeEvents returns a Stream directly (not Effect<Stream>)
-      const events = rpcClient.subscribeEvents({ sessionId })
+    createBranch: (sessionId, name) =>
+      rpcClient.createBranch({ sessionId, ...(name !== undefined ? { name } : {}) }).pipe(
+        Effect.map((result) => result.branchId),
+      ),
 
-      // Run the stream
-      const streamEffect = Stream.runForEach(events, (event: AgentEvent) =>
-        Effect.sync(() => {
-          if (!cancelled) {
-            onEvent(event)
-          }
-        }),
-      )
+    subscribeEvents: (sessionId) => rpcClient.subscribeEvents({ sessionId }),
 
-      void Runtime.runPromise(runtime)(streamEffect).catch(() => {
-        // Stream ended or cancelled
-      })
+    steer: (command) => rpcClient.steer({ command }),
 
-      return () => {
-        cancelled = true
-      }
-    },
+    runtime: runtime as Runtime.Runtime<never>,
   }
 }
