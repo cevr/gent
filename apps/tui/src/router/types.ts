@@ -4,7 +4,12 @@
 
 export type AppRoute =
   | { readonly _tag: "home" }
-  | { readonly _tag: "session"; readonly sessionId: string; readonly branchId: string }
+  | {
+      readonly _tag: "session"
+      readonly sessionId: string
+      readonly branchId: string
+      readonly prompt?: string
+    }
 
 export interface AppRouterState {
   readonly current: AppRoute
@@ -14,10 +19,11 @@ export interface AppRouterState {
 // Constructors
 export const Route = {
   home: (): AppRoute => ({ _tag: "home" }),
-  session: (sessionId: string, branchId: string): AppRoute => ({
+  session: (sessionId: string, branchId: string, prompt?: string): AppRoute => ({
     _tag: "session",
     sessionId,
     branchId,
+    ...(prompt !== undefined ? { prompt } : {}),
   }),
 }
 

@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { defineTool } from "@gent/core"
+import { defineTool, type Question, type ToolContext } from "@gent/core"
+import { AskUserHandler } from "./ask-user"
 
 // Option schema for structured choices
 
@@ -33,12 +34,8 @@ const QuestionInput = Schema.Struct({
 
 export interface QuestionHandlerService {
   readonly ask: (
-    questions: ReadonlyArray<{
-      readonly question: string
-      readonly header: string
-      readonly options: ReadonlyArray<{ readonly label: string; readonly description: string }>
-      readonly multiple?: boolean | undefined
-    }>,
+    questions: ReadonlyArray<Question>,
+    ctx: ToolContext,
   ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>>
 }
 
@@ -46,10 +43,20 @@ export class QuestionHandler extends Context.Tag("QuestionHandler")<
   QuestionHandler,
   QuestionHandlerService
 >() {
+  static Live: Layer.Layer<QuestionHandler, never, AskUserHandler> = Layer.effect(
+    QuestionHandler,
+    Effect.gen(function* () {
+      const askUserHandler = yield* AskUserHandler
+      return {
+        ask: (questions, ctx) => askUserHandler.askMany(questions, ctx),
+      }
+    }),
+  )
+
   static Test = (responses: ReadonlyArray<ReadonlyArray<string>>): Layer.Layer<QuestionHandler> => {
     let callIndex = 0
     return Layer.succeed(QuestionHandler, {
-      ask: (questions) =>
+      ask: (questions, _ctx) =>
         Effect.succeed(
           questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
         ).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
@@ -78,9 +85,9 @@ export const QuestionTool = defineTool({
   description:
     "Ask user structured questions with predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or making implementation choices.",
   params: QuestionParams,
-  execute: Effect.fn("QuestionTool.execute")(function* (params) {
+  execute: Effect.fn("QuestionTool.execute")(function* (params, ctx) {
     const handler = yield* QuestionHandler
-    const answers = yield* handler.ask(params.questions)
+    const answers = yield* handler.ask(params.questions, ctx)
     return { answers }
   }),
 })

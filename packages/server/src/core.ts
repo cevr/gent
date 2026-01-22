@@ -6,6 +6,7 @@ import {
   Message,
   TextPart,
   EventBus,
+  MessageReceived,
   SessionNameUpdated,
   PlanConfirmed,
   ModelChanged,
@@ -311,6 +312,23 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             )
           }
 
+          yield* Effect.forkDaemon(
+            Effect.gen(function* () {
+              const session = yield* storage.getSession(input.sessionId)
+              if (!session || session.name !== "New Chat") return
+              const generatedName = yield* generateSessionName(provider, input.content)
+              const updatedSession = new Session({
+                ...session,
+                name: generatedName,
+                updatedAt: new Date(),
+              })
+              yield* storage.updateSession(updatedSession)
+              yield* eventBus.publish(
+                new SessionNameUpdated({ sessionId: input.sessionId, name: generatedName }),
+              )
+            }).pipe(Effect.catchAll(() => Effect.void)),
+          )
+
           const message = new Message({
             id: Bun.randomUUIDv7(),
             sessionId: input.sessionId,
@@ -374,7 +392,40 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
           }),
 
         subscribeEvents: (sessionId) =>
-          eventBus.subscribe().pipe(Stream.filter((e) => e.sessionId === sessionId)),
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const branches = yield* storage.listBranches(sessionId)
+              let latest:
+                | { message: Message; branchId: string }
+                | null = null
+
+              for (const branch of branches) {
+                const messages = yield* storage.listMessages(branch.id)
+                for (const message of messages) {
+                  if (!latest || message.createdAt > latest.message.createdAt) {
+                    latest = { message, branchId: branch.id }
+                  }
+                }
+              }
+
+              const initial = latest
+                ? Stream.make(
+                    new MessageReceived({
+                      sessionId,
+                      branchId: latest.branchId,
+                      messageId: latest.message.id,
+                      role: latest.message.role,
+                    }),
+                  )
+                : Stream.empty
+
+              const events = eventBus
+                .subscribe()
+                .pipe(Stream.filter((e) => e.sessionId === sessionId))
+
+              return Stream.concat(initial, events)
+            }).pipe(Effect.catchAll(() => Effect.succeed(Stream.empty))),
+          ),
       }
 
       return service

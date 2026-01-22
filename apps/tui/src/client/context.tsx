@@ -237,6 +237,14 @@ export function ClientProvider(props: ClientProviderProps) {
               )
               break
 
+            case "MessageReceived":
+              if (event.role === "user") {
+                setAgentStore({ status: AgentStatus.streaming() })
+              } else if (event.role === "assistant") {
+                setAgentStore({ status: AgentStatus.idle() })
+              }
+              break
+
             case "SessionNameUpdated":
               if (event.sessionId === s.sessionId) {
                 setSessionStore(
@@ -302,40 +310,7 @@ export function ClientProvider(props: ClientProviderProps) {
       log(`sendMessage: ${content.slice(0, 50)}...`)
       const s = session()
 
-      // If no session, create one first (server sends firstMessage automatically)
-      if (sessionStore.sessionState.status === "none") {
-        log("sendMessage: creating session with firstMessage")
-        setSessionStore({ sessionState: { status: "loading", creating: true } })
-        cast(
-          client.createSession({ firstMessage: content }).pipe(
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                log(`sendMessage: session created ${result.sessionId}`)
-                setSessionStore({
-                  sessionState: {
-                    status: "active",
-                    session: {
-                      sessionId: result.sessionId,
-                      branchId: result.branchId,
-                      name: result.name,
-                      model: undefined,
-                    },
-                  },
-                })
-              }),
-            ),
-            Effect.catchAll((err) =>
-              Effect.sync(() => {
-                logError("sendMessage", formatError(err))
-                setSessionStore({ sessionState: { status: "none" } })
-                setAgentStore({ status: AgentStatus.error(formatError(err)) })
-              }),
-            ),
-          ),
-        )
-        return
-      }
-
+      // Session required for sending messages
       if (!s) return
 
       cast(

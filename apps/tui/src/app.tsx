@@ -31,12 +31,13 @@ function AppContent(props: AppProps) {
         </Match>
         <Match when={isRoute.session(router.route()) ? router.route() : false}>
           {(r) => {
-            const route = r() as { sessionId: string; branchId: string }
+            const route = r() as { sessionId: string; branchId: string; prompt?: string }
+            const prompt = route.prompt ?? props.initialPrompt
             return (
               <Session
                 sessionId={route.sessionId}
                 branchId={route.branchId}
-                initialPrompt={props.initialPrompt}
+                initialPrompt={prompt}
               />
             )
           }}

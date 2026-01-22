@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime, Option, Stream } from "effect"
+import { Console, Effect, Layer, ManagedRuntime, Option, Stream, Runtime } from "effect"
 import { RpcTest } from "@effect/rpc"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
@@ -266,6 +266,7 @@ const main = Command.make(
 
       // Get runtime for client
       const runtime = yield* serverRuntime.runtimeEffect
+      const uiRuntime = runtime as Runtime.Runtime<unknown>
 
       // Initialize global model state (UI selection - sent with messages)
       State.initModelState(DEFAULT_MODEL_ID)
@@ -289,9 +290,9 @@ const main = Command.make(
       // Launch TUI with providers
       yield* Effect.promise(() =>
         render(() => (
-          <WorkspaceProvider cwd={cwd} runtime={runtime}>
-            <RegistryProvider runtime={runtime} maxEntries={ATOM_CACHE_MAX}>
-              <ClientProvider rpcClient={rpcClient} runtime={runtime} initialSession={initialSession}>
+          <WorkspaceProvider cwd={cwd} runtime={uiRuntime}>
+            <RegistryProvider runtime={uiRuntime} maxEntries={ATOM_CACHE_MAX}>
+              <ClientProvider rpcClient={rpcClient} runtime={uiRuntime} initialSession={initialSession}>
                 <RouterProvider initialRoute={initialRoute}>
                   <App
                     initialPrompt={initialPrompt}

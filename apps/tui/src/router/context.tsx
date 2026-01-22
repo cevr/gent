@@ -10,7 +10,7 @@ export interface RouterContextValue {
   route: () => AppRoute
   navigate: (route: AppRoute) => void
   navigateToHome: () => void
-  navigateToSession: (sessionId: string, branchId: string) => void
+  navigateToSession: (sessionId: string, branchId: string, prompt?: string) => void
   back: () => boolean
   canGoBack: () => boolean
 }
@@ -42,8 +42,8 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
     route,
     navigate: router.navigate,
     navigateToHome: () => router.navigate(Route.home()),
-    navigateToSession: (sessionId: string, branchId: string) =>
-      router.navigate(Route.session(sessionId, branchId)),
+    navigateToSession: (sessionId: string, branchId: string, prompt?: string) =>
+      router.navigate(Route.session(sessionId, branchId, prompt)),
     back: router.back,
     canGoBack: router.canGoBack,
   }

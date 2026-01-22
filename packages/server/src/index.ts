@@ -5,7 +5,7 @@ import { EventBus, ToolRegistry, Permission, PermissionHandler, PlanHandler } fr
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
-import { AllTools, AskUserHandler } from "@gent/tools"
+import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
 import {
   GentCore,
   type GentCoreService,
@@ -103,6 +103,7 @@ export const createDependencies = (
   | AgentLoop
   | CheckpointService
   | AskUserHandler
+  | QuestionHandler
   | PlanHandler,
   PlatformError,
   FileSystem.FileSystem | Path.Path
@@ -119,6 +120,7 @@ export const createDependencies = (
 
   // AskUserHandler requires EventBus
   const AskUserHandlerLive = Layer.provide(AskUserHandler.Live, BaseServicesLive)
+  const QuestionHandlerLive = Layer.provide(QuestionHandler.Live, AskUserHandlerLive)
 
   // PermissionHandler requires EventBus
   const PermissionHandlerLive = Layer.provide(PermissionHandler.Live, BaseServicesLive)
@@ -143,6 +145,7 @@ export const createDependencies = (
     BaseServicesLive,
     CheckpointLayer,
     AskUserHandlerLive,
+    QuestionHandlerLive,
     PermissionHandlerLive,
     PlanHandlerLive,
   )

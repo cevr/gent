@@ -2,7 +2,7 @@
  * Session route - message list, input, streaming
  */
 
-import { createSignal, createEffect, onMount, onCleanup } from "solid-js"
+import { createSignal, createEffect, onCleanup } from "solid-js"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import {
@@ -41,6 +41,7 @@ export function Session(props: SessionProps) {
   const [elapsed, setElapsed] = createSignal(0)
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
+  let initialPromptSent = false
 
   // Derived - no separate signal needed
   const hasMessages = () => messages().length > 0
@@ -131,25 +132,24 @@ export function Session(props: SessionProps) {
     )
   })
 
-  // Focus input on mount, send initial prompt if provided
-  onMount(() => {
-    if (props.initialPrompt) {
-      cast(
-        client.client.sendMessage({
-          sessionId: props.sessionId,
-          branchId: props.branchId,
-          content: props.initialPrompt,
-          mode: "plan",
-        }).pipe(
-          Effect.tapError((err) =>
-            Effect.sync(() => {
-              client.setError(formatError(err))
-            }),
-          ),
+  const sendInitialPrompt = () => {
+    if (!props.initialPrompt || initialPromptSent) return
+    initialPromptSent = true
+    cast(
+      client.client.sendMessage({
+        sessionId: props.sessionId,
+        branchId: props.branchId,
+        content: props.initialPrompt,
+        mode: "plan",
+      }).pipe(
+        Effect.tapError((err) =>
+          Effect.sync(() => {
+            client.setError(formatError(err))
+          }),
         ),
-      )
-    }
-  })
+      ),
+    )
+  }
 
   // Subscribe to agent events for message updates
   createEffect(() => {
@@ -191,7 +191,18 @@ export function Session(props: SessionProps) {
           if (last && last.role === "assistant") {
             return [...prev.slice(0, -1), { ...last, content: last.content + event.chunk }]
           }
-          return prev
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: event.chunk,
+              createdAt: Date.now(),
+              toolCalls: undefined,
+              thinkTime: undefined,
+              interrupted: undefined,
+            },
+          ]
         })
       } else if (event._tag === "StreamEnded") {
         const thinkTime = elapsed()
@@ -270,6 +281,8 @@ export function Session(props: SessionProps) {
       // Note: agent state (mode, status, cost, error) is updated by ClientProvider
     })
 
+    sendInitialPrompt()
+
     onCleanup(unsubscribe)
   })
 
@@ -334,20 +347,6 @@ export function Session(props: SessionProps) {
   })
 
   const handleSubmit = (content: string) => {
-    // Status will be set to "streaming" when StreamStarted event arrives
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        role: "user",
-        content,
-        createdAt: Date.now(),
-        toolCalls: undefined,
-        thinkTime: undefined,
-        interrupted: undefined,
-      },
-    ])
-
     // First message in session starts in plan mode
     client.sendMessage(content, !hasMessages() ? "plan" : undefined)
   }

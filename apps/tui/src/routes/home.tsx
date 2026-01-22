@@ -32,21 +32,22 @@ export function Home(props: HomeProps) {
   let lastEscTime = 0
   const ESC_DOUBLE_TAP_MS = 500
 
-  // Track if we're waiting for session creation to navigate
-  const [pendingNavigation, setPendingNavigation] = createSignal(false)
+  // Track pending prompt while session is created
+  const [pendingPrompt, setPendingPrompt] = createSignal<string | null>(null)
 
   const exit = () => {
     renderer.destroy()
     process.exit(0)
   }
 
-  // Navigate when session becomes active after pending navigation
+  // Navigate when session becomes active after pending prompt
   createEffect(() => {
-    if (!pendingNavigation()) return
+    const prompt = pendingPrompt()
+    if (!prompt) return
     const session = client.session()
     if (session) {
-      setPendingNavigation(false)
-      router.navigateToSession(session.sessionId, session.branchId)
+      setPendingPrompt(null)
+      router.navigateToSession(session.sessionId, session.branchId, prompt)
     }
   })
 
@@ -85,18 +86,16 @@ export function Home(props: HomeProps) {
   })
 
   const handleSubmit = (content: string) => {
-    // sendMessage handles session creation
-    client.sendMessage(content, client.mode())
-    // Set flag so effect navigates when session is ready
-    setPendingNavigation(true)
+    // Create session, navigate with pending prompt for session route to send
+    setPendingPrompt(content)
+    client.createSession()
   }
 
   // Handle initial prompt on mount
   onMount(() => {
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
-      client.sendMessage(props.initialPrompt, client.mode())
-      // Set flag so effect navigates when session is ready
-      setPendingNavigation(true)
+      setPendingPrompt(props.initialPrompt)
+      client.createSession()
     }
   })
 
