@@ -22,7 +22,10 @@ export { defineTool, ToolRegistry, ToolSuccess, ToolError, ToolExecutionResult }
 // Event Types
 export {
   AgentEvent,
-  EventBus,
+  EventEnvelope,
+  EventId,
+  EventStore,
+  EventStoreError,
   SessionStarted,
   SessionEnded,
   MessageReceived,

@@ -94,7 +94,7 @@ function Status() {
     const status = client.agentStatus()
     switch (status._tag) {
       case "streaming":
-        return { text: "thinking...", color: theme.info }
+        return { text: "", color: theme.textMuted }
       case "error":
         return { text: "error", color: theme.error }
       case "idle":

@@ -50,7 +50,7 @@ TUI (@opentui/solid) ←── HTTP ──→ Server (HttpApi)
                               ┌───────▼───────┐
                               │    Runtime    │
                               │  AgentLoop    │
-                              │  EventBus     │
+                              │  EventStore   │
                               └───────┬───────┘
                                       │
               ┌───────────────────────┼───────────────────────┐
@@ -66,7 +66,7 @@ TUI (@opentui/solid) ←── HTTP ──→ Server (HttpApi)
 
 | Package            | Purpose                                                    |
 | ------------------ | ---------------------------------------------------------- |
-| `@gent/core`       | Message schemas, Tool abstraction, EventBus, Permission    |
+| `@gent/core`       | Message schemas, Tool abstraction, EventStore, Permission  |
 | `@gent/storage`    | SQLite persistence via bun:sqlite                          |
 | `@gent/tools`      | Read, Write, Edit, Bash, Glob, Grep, AskUser, RepoExplorer |
 | `@gent/providers`  | Vercel AI SDK adapter with streaming                       |

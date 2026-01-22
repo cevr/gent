@@ -1,16 +1,17 @@
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Effect, Layer } from "effect"
+import type { Stream } from "effect"
 import type { PlatformError } from "@effect/platform/Error"
 import {
   Session,
   Branch,
   Message,
   TextPart,
-  EventBus,
-  MessageReceived,
+  type EventEnvelope,
+  EventStore,
+  type EventStoreError,
   SessionNameUpdated,
   PlanConfirmed,
   ModelChanged,
-  type AgentEvent,
   type AgentMode,
   type MessagePart,
 } from "@gent/core"
@@ -56,6 +57,27 @@ export interface SendMessageInput {
   model?: string
 }
 
+export interface SubscribeEventsInput {
+  sessionId: string
+  branchId?: string
+  after?: number
+}
+
+export interface GetSessionStateInput {
+  sessionId: string
+  branchId: string
+}
+
+export interface SessionState {
+  sessionId: string
+  branchId: string
+  messages: MessageInfo[]
+  lastEventId: number | null
+  isStreaming: boolean
+  mode: AgentMode
+  model: string | undefined
+}
+
 export interface SessionInfo {
   id: string
   name: string | undefined
@@ -83,7 +105,12 @@ export interface MessageInfo {
   turnDurationMs: number | undefined
 }
 
-export type GentCoreError = StorageError | AgentLoopError | PlatformError | ProviderError
+export type GentCoreError =
+  | StorageError
+  | AgentLoopError
+  | PlatformError
+  | ProviderError
+  | EventStoreError
 
 // ============================================================================
 // GentCore Service
@@ -123,7 +150,9 @@ export interface GentCoreService {
 
   readonly approvePlan: (input: ApprovePlanInput) => Effect.Effect<void, GentCoreError>
 
-  readonly subscribeEvents: (sessionId: string) => Stream.Stream<AgentEvent, never, never>
+  readonly getSessionState: (input: GetSessionStateInput) => Effect.Effect<SessionState, GentCoreError>
+
+  readonly subscribeEvents: (input: SubscribeEventsInput) => Stream.Stream<EventEnvelope, EventStoreError>
 }
 
 // Name generation model - using haiku for speed/cost
@@ -149,13 +178,13 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
   static Live: Layer.Layer<
     GentCore,
     never,
-    Storage | AgentLoop | EventBus | Provider | CheckpointService
+    Storage | AgentLoop | EventStore | Provider | CheckpointService
   > = Layer.effect(
     GentCore,
     Effect.gen(function* () {
       const storage = yield* Storage
       const agentLoop = yield* AgentLoop
-      const eventBus = yield* EventBus
+      const eventStore = yield* EventStore
       const provider = yield* Provider
       const checkpointService = yield* CheckpointService
 
@@ -200,7 +229,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
                   })
                   yield* storage.updateSession(updatedSession)
                   // Publish event for clients
-                  yield* eventBus.publish(
+                  yield* eventStore.publish(
                     new SessionNameUpdated({ sessionId, name: generatedName }),
                   )
                 }).pipe(Effect.catchAll(() => Effect.void)),
@@ -303,7 +332,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
           if (input.model) {
             yield* storage.updateBranchModel(input.branchId, input.model)
             yield* agentLoop.steer({ _tag: "SwitchModel", model: input.model })
-            yield* eventBus.publish(
+            yield* eventStore.publish(
               new ModelChanged({
                 sessionId: input.sessionId,
                 branchId: input.branchId,
@@ -323,7 +352,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
                 updatedAt: new Date(),
               })
               yield* storage.updateSession(updatedSession)
-              yield* eventBus.publish(
+              yield* eventStore.publish(
                 new SessionNameUpdated({ sessionId: input.sessionId, name: generatedName }),
               )
             }).pipe(Effect.catchAll(() => Effect.void)),
@@ -381,7 +410,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             yield* checkpointService.createPlanCheckpoint(input.branchId, input.planPath)
 
             // Emit plan confirmed event
-            yield* eventBus.publish(
+            yield* eventStore.publish(
               new PlanConfirmed({
                 sessionId: input.sessionId,
                 branchId: input.branchId,
@@ -391,41 +420,64 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             )
           }),
 
-        subscribeEvents: (sessionId) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const branches = yield* storage.listBranches(sessionId)
-              let latest:
-                | { message: Message; branchId: string }
-                | null = null
+        getSessionState: (input) =>
+          Effect.gen(function* () {
+            const session = yield* storage.getSession(input.sessionId)
+            if (!session) {
+              return yield* new StorageError({ message: "Session not found" })
+            }
+            const branch = yield* storage.getBranch(input.branchId)
+            if (!branch || branch.sessionId !== input.sessionId) {
+              return yield* new StorageError({ message: "Branch not found" })
+            }
 
-              for (const branch of branches) {
-                const messages = yield* storage.listMessages(branch.id)
-                for (const message of messages) {
-                  if (!latest || message.createdAt > latest.message.createdAt) {
-                    latest = { message, branchId: branch.id }
-                  }
-                }
-              }
+            const messages = yield* storage.listMessages(input.branchId)
+            const messageInfos = messages.map((m) => ({
+              id: m.id,
+              sessionId: m.sessionId,
+              branchId: m.branchId,
+              role: m.role,
+              parts: m.parts,
+              createdAt: m.createdAt.getTime(),
+              turnDurationMs: m.turnDurationMs,
+            }))
 
-              const initial = latest
-                ? Stream.make(
-                    new MessageReceived({
-                      sessionId,
-                      branchId: latest.branchId,
-                      messageId: latest.message.id,
-                      role: latest.message.role,
-                    }),
-                  )
-                : Stream.empty
+            const lastEventId = yield* storage.getLatestEventId({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+            })
 
-              const events = eventBus
-                .subscribe()
-                .pipe(Stream.filter((e) => e.sessionId === sessionId))
+            const streamTag = yield* storage.getLatestEventTag({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              tags: ["StreamStarted", "StreamEnded"],
+            })
 
-              return Stream.concat(initial, events)
-            }).pipe(Effect.catchAll(() => Effect.succeed(Stream.empty))),
-          ),
+            const modeTag = yield* storage.getLatestEventTag({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              tags: ["PlanModeEntered", "PlanConfirmed", "PlanRejected"],
+            })
+
+            return {
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              messages: messageInfos,
+              lastEventId: lastEventId ?? null,
+              isStreaming: streamTag === "StreamStarted",
+              mode: modeTag === "PlanConfirmed" ? "build" : "plan",
+              model: branch.model,
+            }
+          }),
+
+        subscribeEvents: (input) =>
+          eventStore.subscribe({
+            sessionId: input.sessionId,
+            ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
+            ...(input.after !== undefined
+              ? { after: input.after as EventEnvelope["id"] }
+              : {}),
+          }),
       }
 
       return service

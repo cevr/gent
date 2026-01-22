@@ -12,7 +12,7 @@ tests/            # Integration tests (bun test)
 
 | Package      | Purpose                       | Key Export                                          |
 | ------------ | ----------------------------- | --------------------------------------------------- |
-| `core`       | Schemas, service interfaces   | `Message`, `EventBus`, `ToolRegistry`, `Permission` |
+| `core`       | Schemas, service interfaces   | `Message`, `EventStore`, `ToolRegistry`, `Permission` |
 | `storage`    | SQLite via bun:sqlite         | `Storage.Live(path)`, `Storage.Test()`              |
 | `tools`      | File/process tools            | `AllTools`, `defineTool`                            |
 | `providers`  | ai-sdk wrapper                | `Provider.Live`, `StreamChunk` variants             |
@@ -38,7 +38,7 @@ TUI → RpcTest.makeClient(GentRpcs) → RpcHandlersLive → GentCore
                                                          ↓
                                           Provider.stream() → ai-sdk → LLM
                                                          ↓
-                                          EventBus.publish() → Stream to client
+                                          EventStore.publish() → Stream to client
 ```
 
 ## Layer Composition
@@ -50,8 +50,8 @@ CliLayer (TUI entry point)
 │   │   └── GentCore (business logic)
 │   │       ├── Storage
 │   │       ├── AgentLoop
-│   │       │   ├── Storage, Provider, ToolRegistry, EventBus, Permission
-│   │       └── EventBus
+│   │       │   ├── Storage, Provider, ToolRegistry, EventStore, Permission
+│   │       └── EventStore
 │   └── GentCoreLive (for direct access)
 ├── BunContext.layer
 └── TracerLayer

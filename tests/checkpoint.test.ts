@@ -8,7 +8,7 @@ import {
   TextPart,
   CompactionCheckpoint,
   PlanCheckpoint,
-  EventBus,
+  EventStore,
   PlanConfirmed,
 } from "@gent/core"
 import { CheckpointService, estimateTokens } from "@gent/runtime"
@@ -688,7 +688,7 @@ describe("Checkpoints", () => {
         Effect.gen(function* () {
           const storage = yield* Storage
           const service = yield* CheckpointService
-          const eventBus = yield* EventBus
+          const eventStore = yield* EventStore
           const recorder = yield* SequenceRecorder
 
           // Setup
@@ -701,7 +701,7 @@ describe("Checkpoints", () => {
 
           // Simulate approvePlan behavior (what GentCore.approvePlan does)
           yield* service.createPlanCheckpoint("b", "/workspace/plan.md")
-          yield* eventBus.publish(
+          yield* eventStore.publish(
             new PlanConfirmed({
               sessionId: "s",
               branchId: "b",
@@ -719,7 +719,7 @@ describe("Checkpoints", () => {
           const calls = yield* recorder.getCalls()
           assertSequence(calls, [
             { service: "CheckpointService", method: "createPlanCheckpoint" },
-            { service: "EventBus", method: "publish", match: { _tag: "PlanConfirmed" } },
+            { service: "EventStore", method: "publish", match: { _tag: "PlanConfirmed" } },
           ])
         }).pipe(Effect.provide(TestLayer)),
       )

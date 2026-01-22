@@ -1,7 +1,8 @@
 import { Context, Deferred, Effect, Layer, Schema } from "effect"
 import {
   defineTool,
-  EventBus,
+  EventStore,
+  type EventStoreError,
   QuestionsAsked,
   type Question,
   type ToolContext,
@@ -47,12 +48,12 @@ export const AskUserResult = Schema.Struct({
 
 export interface AskUserHandlerService {
   /** Single question - uses ToolContext for sessionId/branchId */
-  readonly ask: (params: Question, ctx: ToolContext) => Effect.Effect<string>
+  readonly ask: (params: Question, ctx: ToolContext) => Effect.Effect<string, EventStoreError>
   /** Multiple questions - uses ToolContext */
   readonly askMany: (
     questions: ReadonlyArray<Question>,
     ctx: ToolContext,
-  ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>>
+  ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>, EventStoreError>
   /** Respond to pending request */
   readonly respond: (
     requestId: string,
@@ -64,10 +65,10 @@ export class AskUserHandler extends Context.Tag("AskUserHandler")<
   AskUserHandler,
   AskUserHandlerService
 >() {
-  static Live: Layer.Layer<AskUserHandler, never, EventBus> = Layer.effect(
+  static Live: Layer.Layer<AskUserHandler, never, EventStore> = Layer.effect(
     AskUserHandler,
     Effect.gen(function* () {
-      const eventBus = yield* EventBus
+      const eventStore = yield* EventStore
       // Global pending map keyed by requestId
       const pending = new Map<
         string,
@@ -81,7 +82,7 @@ export class AskUserHandler extends Context.Tag("AskUserHandler")<
         const requestId = Bun.randomUUIDv7()
         const deferred = yield* Deferred.make<ReadonlyArray<ReadonlyArray<string>>>()
         pending.set(requestId, deferred)
-        yield* eventBus.publish(
+        yield* eventStore.publish(
           new QuestionsAsked({
             sessionId: ctx.sessionId,
             branchId: ctx.branchId,

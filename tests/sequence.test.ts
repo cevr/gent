@@ -7,7 +7,7 @@ import {
   mockTextResponse,
 } from "@gent/test-utils"
 import { Provider } from "@gent/providers"
-import { EventBus, StreamStarted } from "@gent/core"
+import { EventStore, StreamStarted } from "@gent/core"
 import { AskUserHandler } from "@gent/tools"
 
 describe("Sequence Recording", () => {
@@ -70,16 +70,16 @@ describe("Sequence Recording", () => {
       )
     })
 
-    test("records EventBus.publish calls", async () => {
+    test("records EventStore.publish calls", async () => {
       await Effect.runPromise(
         Effect.gen(function* () {
-          const eventBus = yield* EventBus
+          const eventStore = yield* EventStore
           const recorder = yield* SequenceRecorder
 
-          yield* eventBus.publish(new StreamStarted({ sessionId: "s1", branchId: "b1" }))
+          yield* eventStore.publish(new StreamStarted({ sessionId: "s1", branchId: "b1" }))
 
           const calls = yield* recorder.getCalls()
-          const eventCalls = calls.filter((c) => c.service === "EventBus")
+          const eventCalls = calls.filter((c) => c.service === "EventStore")
           expect(eventCalls.length).toBe(1)
           expect((eventCalls[0]?.args as any)?._tag).toBe("StreamStarted")
         }).pipe(Effect.provide(TestLayer)),

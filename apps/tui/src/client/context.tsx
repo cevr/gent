@@ -1,7 +1,14 @@
-import { createContext, useContext, createEffect, onCleanup, type ParentProps, DEV } from "solid-js"
+import {
+  createContext,
+  useContext,
+  createEffect,
+  onCleanup,
+  type ParentProps,
+  DEV,
+} from "solid-js"
 import { createStore, produce, DEV as STORE_DEV } from "solid-js/store"
 import { Effect, Stream, Runtime } from "effect"
-import { calculateCost, type AgentEvent, type AgentMode } from "@gent/core"
+import { calculateCost, type AgentEvent, type AgentMode, type EventEnvelope } from "@gent/core"
 import type { GentRpcError } from "@gent/server"
 import { log, logEvent, logError, clearLog } from "../utils/log"
 import { formatError } from "../utils/format-error"
@@ -169,101 +176,148 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // External event listeners (for components like session.tsx)
   const eventListeners = new Set<EventListener>()
+  const eventBuffer: EventEnvelope[] = []
+  const EVENT_BUFFER_LIMIT = 1000
 
   // Subscribe to events when session becomes active - SINGLE shared subscription
   createEffect(() => {
     const s = session()
     if (!s) {
       log("event subscription: no session")
+      eventBuffer.length = 0
       return
     }
 
     log(`event subscription: ${s.sessionId}`)
     let cancelled = false
-    const events = client.subscribeEvents(s.sessionId)
+    eventBuffer.length = 0
 
     cast(
-      Stream.runForEach(events, (event: AgentEvent) =>
-        Effect.sync(() => {
-          if (cancelled) return
+      Effect.gen(function* () {
+        const snapshot = yield* client.getSessionState({
+          sessionId: s.sessionId,
+          branchId: s.branchId,
+        })
 
-          logEvent(`event: ${event._tag}`)
-
-          // Update agent state based on events
-          switch (event._tag) {
-            case "StreamStarted":
-              setAgentStore({ status: AgentStatus.streaming() })
-              break
-
-            case "StreamEnded":
-              setAgentStore({ status: AgentStatus.idle() })
-              if (event.usage) {
-                // Get pricing from UI-selected model (State) or session model
-                const modelInfo = agentStore.model
-                  ? State.models().find((m) => m.id === agentStore.model)
-                  : State.currentModelInfo()
-                const turnCost = calculateCost(event.usage, modelInfo?.pricing)
-                setAgentStore(produce((draft) => {
-                  draft.cost += turnCost
-                }))
+        yield* Effect.sync(() => {
+          setAgentStore(
+            produce((draft) => {
+              draft.mode = snapshot.mode
+              draft.status = snapshot.isStreaming
+                ? AgentStatus.streaming()
+                : AgentStatus.idle()
+              if (snapshot.model !== undefined) {
+                draft.model = snapshot.model
               }
-              break
+            }),
+          )
+          if (snapshot.model !== undefined) {
+            setSessionStore(
+              produce((draft) => {
+                if (draft.sessionState.status === "active") {
+                  draft.sessionState.session.model = snapshot.model
+                }
+              }),
+            )
+          }
+        })
 
-            case "ErrorOccurred":
-              logError("ErrorOccurred", event.error)
-              setAgentStore({ status: AgentStatus.error(event.error) })
-              break
+        const events = client.subscribeEvents({
+          sessionId: s.sessionId,
+          branchId: s.branchId,
+          ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+        })
 
-            case "PlanModeEntered":
-              setAgentStore({ mode: "plan" })
-              break
+        yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
+          Effect.sync(() => {
+            if (cancelled) return
 
-            case "PlanConfirmed":
-              setAgentStore({ mode: "build" })
-              break
+            eventBuffer.push(envelope)
+            if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
+              eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
+            }
 
-            case "PlanRejected":
-              setAgentStore({ mode: "plan" })
-              break
+            const event = envelope.event
+            logEvent(`event: ${event._tag}`)
 
-            case "ModelChanged":
-              setAgentStore({ model: event.model })
-              setSessionStore(
-                produce((draft) => {
-                  if (draft.sessionState.status === "active") {
-                    draft.sessionState.session.model = event.model
-                  }
-                }),
-              )
-              break
-
-            case "MessageReceived":
-              if (event.role === "user") {
+            // Update agent state based on events
+            switch (event._tag) {
+              case "StreamStarted":
                 setAgentStore({ status: AgentStatus.streaming() })
-              } else if (event.role === "assistant") {
-                setAgentStore({ status: AgentStatus.idle() })
-              }
-              break
+                break
 
-            case "SessionNameUpdated":
-              if (event.sessionId === s.sessionId) {
+              case "StreamEnded":
+                setAgentStore({ status: AgentStatus.idle() })
+                if (event.usage) {
+                  // Get pricing from UI-selected model (State) or session model
+                  const modelInfo = agentStore.model
+                    ? State.models().find((m) => m.id === agentStore.model)
+                    : State.currentModelInfo()
+                  const turnCost = calculateCost(event.usage, modelInfo?.pricing)
+                  setAgentStore(
+                    produce((draft) => {
+                      draft.cost += turnCost
+                    }),
+                  )
+                }
+                break
+
+              case "ErrorOccurred":
+                logError("ErrorOccurred", event.error)
+                setAgentStore({ status: AgentStatus.error(event.error) })
+                break
+
+              case "PlanModeEntered":
+                setAgentStore({ mode: "plan" })
+                break
+
+              case "PlanConfirmed":
+                setAgentStore({ mode: "build" })
+                break
+
+              case "PlanRejected":
+                setAgentStore({ mode: "plan" })
+                break
+
+              case "ModelChanged":
+                setAgentStore({ model: event.model })
                 setSessionStore(
                   produce((draft) => {
                     if (draft.sessionState.status === "active") {
-                      draft.sessionState.session.name = event.name
+                      draft.sessionState.session.model = event.model
                     }
                   }),
                 )
-              }
-              break
-          }
+                break
 
-          // Notify external listeners
-          for (const listener of eventListeners) {
-            listener(event)
-          }
-        }),
-      ).pipe(
+              case "MessageReceived":
+                if (event.role === "user") {
+                  setAgentStore({ status: AgentStatus.streaming() })
+                } else if (event.role === "assistant") {
+                  setAgentStore({ status: AgentStatus.idle() })
+                }
+                break
+
+              case "SessionNameUpdated":
+                if (event.sessionId === s.sessionId) {
+                  setSessionStore(
+                    produce((draft) => {
+                      if (draft.sessionState.status === "active") {
+                        draft.sessionState.session.name = event.name
+                      }
+                    }),
+                  )
+                }
+                break
+            }
+
+            // Notify external listeners
+            for (const listener of eventListeners) {
+              listener(event)
+            }
+          }),
+        )
+      }).pipe(
         // Catch stream errors and surface them to UI
         Effect.catchAll((err) =>
           Effect.sync(() => {
@@ -398,7 +452,15 @@ export function ClientProvider(props: ClientProviderProps) {
 
     // Event subscription for message updates (shared with internal agent state subscription)
     subscribeEvents: (onEvent) => {
+      const lastId = eventBuffer[eventBuffer.length - 1]?.id
       eventListeners.add(onEvent)
+      if (lastId !== undefined) {
+        for (const env of eventBuffer) {
+          if (env.id <= lastId) {
+            onEvent(env.event)
+          }
+        }
+      }
       return () => {
         eventListeners.delete(onEvent)
       }

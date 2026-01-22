@@ -8,6 +8,8 @@ import {
   PlanCheckpoint,
   MessagePart,
   TodoItem,
+  AgentEvent,
+  EventEnvelope,
 } from "@gent/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
@@ -18,6 +20,9 @@ const MessagePartsJson = Schema.parseJson(Schema.Array(MessagePart))
 const decodeMessageParts = Schema.decodeUnknownSync(MessagePartsJson)
 const encodeMessageParts = Schema.encodeSync(MessagePartsJson)
 const decodeTodoItem = Schema.decodeUnknownSync(TodoItem)
+const EventJson = Schema.parseJson(AgentEvent)
+const decodeEvent = Schema.decodeUnknownSync(EventJson)
+const encodeEvent = Schema.encodeSync(EventJson)
 
 // Storage Error
 
@@ -55,6 +60,23 @@ export interface StorageService {
     messageId: string,
     durationMs: number,
   ) => Effect.Effect<void, StorageError>
+
+  // Events
+  readonly appendEvent: (event: AgentEvent) => Effect.Effect<EventEnvelope, StorageError>
+  readonly listEvents: (params: {
+    sessionId: string
+    branchId?: string
+    afterId?: number
+  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, StorageError>
+  readonly getLatestEventId: (params: {
+    sessionId: string
+    branchId?: string
+  }) => Effect.Effect<number | undefined, StorageError>
+  readonly getLatestEventTag: (params: {
+    sessionId: string
+    branchId: string
+    tags: ReadonlyArray<string>
+  }) => Effect.Effect<string | undefined, StorageError>
 
   // Checkpoints
   readonly createCheckpoint: (checkpoint: Checkpoint) => Effect.Effect<Checkpoint, StorageError>
@@ -131,6 +153,18 @@ const makeStorage = (db: Database): StorageService => {
   `)
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      branch_id TEXT,
+      event_tag TEXT NOT NULL,
+      event_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `)
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS checkpoints (
       id TEXT PRIMARY KEY,
       branch_id TEXT NOT NULL,
@@ -160,6 +194,9 @@ const makeStorage = (db: Database): StorageService => {
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch_created ON messages(branch_id, created_at, id)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, id)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_events_session_branch ON events(session_id, branch_id, id)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_events_session_tag ON events(session_id, event_tag, id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
@@ -546,6 +583,113 @@ const makeStorage = (db: Database): StorageService => {
         catch: (e) =>
           new StorageError({
             message: "Failed to update message turn duration",
+            cause: e,
+          }),
+      }),
+
+    // Events
+    appendEvent: (event) =>
+      Effect.try({
+        try: () => {
+          const branchId =
+            "branchId" in event ? (event.branchId as string | undefined) : undefined
+          const createdAt = Date.now()
+          const eventJson = encodeEvent(event)
+          db.run(
+            `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+            [event.sessionId, branchId ?? null, event._tag, eventJson, createdAt],
+          )
+          const row = db.query(`SELECT last_insert_rowid() as id`).get() as { id: number }
+          return new EventEnvelope({
+            id: row.id as EventEnvelope["id"],
+            event,
+            createdAt,
+          })
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to append event",
+            cause: e,
+          }),
+      }),
+
+    listEvents: ({ sessionId, branchId, afterId }) =>
+      Effect.try({
+        try: () => {
+          const sinceId = afterId ?? 0
+          const rows = branchId
+            ? (db
+                .query(
+                  `SELECT id, event_json, created_at FROM events WHERE session_id = ? AND (branch_id = ? OR branch_id IS NULL) AND id > ? ORDER BY id ASC`,
+                )
+                .all(sessionId, branchId, sinceId) as Array<{
+                id: number
+                event_json: string
+                created_at: number
+              }>)
+            : (db
+                .query(
+                  `SELECT id, event_json, created_at FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC`,
+                )
+                .all(sessionId, sinceId) as Array<{
+                id: number
+                event_json: string
+                created_at: number
+              }>)
+          return rows.map((row) => {
+            const event = decodeEvent(row.event_json)
+            return new EventEnvelope({
+              id: row.id as EventEnvelope["id"],
+              event,
+              createdAt: row.created_at,
+            })
+          })
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to list events",
+            cause: e,
+          }),
+      }),
+
+    getLatestEventId: ({ sessionId, branchId }) =>
+      Effect.try({
+        try: () => {
+          const row = branchId
+            ? (db
+                .query(
+                  `SELECT id FROM events WHERE session_id = ? AND (branch_id = ? OR branch_id IS NULL) ORDER BY id DESC LIMIT 1`,
+                )
+                .get(sessionId, branchId) as { id: number } | null)
+            : (db
+                .query(
+                  `SELECT id FROM events WHERE session_id = ? ORDER BY id DESC LIMIT 1`,
+                )
+                .get(sessionId) as { id: number } | null)
+          return row?.id
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to get latest event id",
+            cause: e,
+          }),
+      }),
+
+    getLatestEventTag: ({ sessionId, branchId, tags }) =>
+      Effect.try({
+        try: () => {
+          if (tags.length === 0) return undefined
+          const placeholders = tags.map(() => "?").join(", ")
+          const row = db
+            .query(
+              `SELECT event_tag FROM events WHERE session_id = ? AND branch_id = ? AND event_tag IN (${placeholders}) ORDER BY id DESC LIMIT 1`,
+            )
+            .get(sessionId, branchId, ...tags) as { event_tag: string } | null
+          return row?.event_tag
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to get latest event tag",
             cause: e,
           }),
       }),

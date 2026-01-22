@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, PubSub, Schema, Stream } from "effect"
+import { Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
 // Event Types
 
@@ -204,31 +204,91 @@ export const AgentEvent = Schema.Union(
 )
 export type AgentEvent = typeof AgentEvent.Type
 
-// EventBus Service
+export const EventId = Schema.Number.pipe(Schema.brand("EventId"))
+export type EventId = typeof EventId.Type
 
-export interface EventBusService {
-  readonly publish: (event: AgentEvent) => Effect.Effect<void>
-  readonly subscribe: () => Stream.Stream<AgentEvent>
+export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
+  id: EventId,
+  event: AgentEvent,
+  createdAt: Schema.Number,
+}) {}
+
+export class EventStoreError extends Schema.TaggedError<EventStoreError>()("EventStoreError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect),
+}) {}
+
+export interface EventStoreService {
+  readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
+  readonly subscribe: (params: {
+    sessionId: string
+    branchId?: string
+    after?: EventId
+  }) => Stream.Stream<EventEnvelope, EventStoreError>
 }
 
-export class EventBus extends Context.Tag("EventBus")<EventBus, EventBusService>() {
-  static Live: Layer.Layer<EventBus> = Layer.scoped(
-    EventBus,
+const matchesEventFilter = (
+  env: EventEnvelope,
+  sessionId: string,
+  branchId?: string,
+): boolean => {
+  if (env.event.sessionId !== sessionId) return false
+  if (!branchId) return true
+  const eventBranchId =
+    "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
+  return eventBranchId === branchId || eventBranchId === undefined
+}
+
+// EventStore Service
+
+export class EventStore extends Context.Tag("EventStore")<EventStore, EventStoreService>() {
+  static Live: Layer.Layer<EventStore> = Layer.scoped(
+    EventStore,
     Effect.gen(function* () {
-      const pubsub = yield* PubSub.unbounded<AgentEvent>()
+      const pubsub = yield* PubSub.unbounded<EventEnvelope>()
+      const eventsRef = yield* Ref.make<EventEnvelope[]>([])
+      const idRef = yield* Ref.make(0)
+
       return {
-        publish: (event) => PubSub.publish(pubsub, event),
-        subscribe: () =>
+        publish: Effect.fn("EventStore.publish")(function* (event) {
+          const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
+          const envelope = new EventEnvelope({
+            id: id as EventId,
+            event,
+            createdAt: Date.now(),
+          })
+          yield* Ref.update(eventsRef, (events) => [...events, envelope])
+          yield* PubSub.publish(pubsub, envelope)
+        }),
+
+        subscribe: ({ sessionId, branchId, after }) =>
           Stream.unwrapScoped(
-            PubSub.subscribe(pubsub).pipe(Effect.map((queue) => Stream.fromQueue(queue))),
+            Effect.gen(function* () {
+              const queue = yield* PubSub.subscribe(pubsub)
+              const afterId = after ?? (0 as EventId)
+              const latestId = yield* Ref.get(idRef)
+              const buffered = (yield* Ref.get(eventsRef)).filter(
+                (env) =>
+                  env.id > afterId &&
+                  env.id <= latestId &&
+                  matchesEventFilter(env, sessionId, branchId),
+              )
+              const live = Stream.fromQueue(queue).pipe(
+                Stream.filter(
+                  (env) =>
+                    env.id > latestId && matchesEventFilter(env, sessionId, branchId),
+                ),
+              )
+              return Stream.concat(Stream.fromIterable(buffered), live)
+            }),
           ),
       }
     }),
   )
 
-  static Test = (): Layer.Layer<EventBus> =>
-    Layer.succeed(EventBus, {
+  static Test = (): Layer.Layer<EventStore> =>
+    Layer.succeed(EventStore, {
       publish: () => Effect.void,
-      subscribe: () => Stream.empty,
+      subscribe: (_params) => Stream.empty,
     })
 }

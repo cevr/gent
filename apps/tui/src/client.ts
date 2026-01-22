@@ -3,8 +3,8 @@ import type { Stream, Runtime } from "effect"
 import type { RpcClient, RpcGroup } from "@effect/rpc"
 import type { GentRpcs, GentRpcError } from "@gent/server"
 import type {
-  AgentEvent,
   AgentMode,
+  EventEnvelope,
   MessagePart,
   TextPart,
   ToolCallPart,
@@ -148,6 +148,16 @@ export interface BranchInfo {
   createdAt: number
 }
 
+export interface SessionState {
+  sessionId: string
+  branchId: string
+  messages: readonly MessageInfoReadonly[]
+  lastEventId: number | null
+  isStreaming: boolean
+  mode: AgentMode
+  model?: string
+}
+
 export interface CreateSessionResult {
   sessionId: string
   branchId: string
@@ -177,6 +187,12 @@ export interface GentClient {
   /** List messages for a branch */
   listMessages: (branchId: string) => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
 
+  /** Get session state snapshot */
+  getSessionState: (input: {
+    sessionId: string
+    branchId: string
+  }) => Effect.Effect<SessionState, GentRpcError>
+
   /** List all sessions */
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
 
@@ -187,7 +203,11 @@ export interface GentClient {
   createBranch: (sessionId: string, name?: string) => Effect.Effect<string, GentRpcError>
 
   /** Subscribe to events - returns Stream */
-  subscribeEvents: (sessionId: string) => Stream.Stream<AgentEvent, GentRpcError>
+  subscribeEvents: (input: {
+    sessionId: string
+    branchId?: string
+    after?: number
+  }) => Stream.Stream<EventEnvelope, GentRpcError>
 
   /** Send steering command */
   steer: (command: SteerCommand) => Effect.Effect<void, GentRpcError>
@@ -237,6 +257,9 @@ export function createClient(
 
     listMessages: (branchId) => rpcClient.listMessages({ branchId }),
 
+    getSessionState: (input) =>
+      rpcClient.getSessionState({ sessionId: input.sessionId, branchId: input.branchId }),
+
     listSessions: () => rpcClient.listSessions(),
 
     listBranches: (sessionId) => rpcClient.listBranches({ sessionId }),
@@ -246,7 +269,12 @@ export function createClient(
         Effect.map((result) => result.branchId),
       ),
 
-    subscribeEvents: (sessionId) => rpcClient.subscribeEvents({ sessionId }),
+    subscribeEvents: ({ sessionId, branchId, after }) =>
+      rpcClient.subscribeEvents({
+        sessionId,
+        ...(branchId !== undefined ? { branchId } : {}),
+        ...(after !== undefined ? { after } : {}),
+      }),
 
     steer: (command) => rpcClient.steer({ command }),
 

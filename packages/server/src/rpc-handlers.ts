@@ -52,11 +52,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       listMessages: ({ branchId }) => core.listMessages(branchId),
 
+      getSessionState: ({ sessionId, branchId }) =>
+        core.getSessionState({ sessionId, branchId }),
+
       steer: ({ command }) => core.steer(command as SteerCommand),
 
-      subscribeEvents: ({ sessionId }) =>
+      subscribeEvents: ({ sessionId, branchId, after }) =>
         // Return the stream directly for streaming RPC
-        core.subscribeEvents(sessionId),
+        core.subscribeEvents({
+          sessionId,
+          ...(branchId !== undefined ? { branchId } : {}),
+          ...(after !== undefined ? { after } : {}),
+        }),
 
       respondQuestions: ({ requestId, answers }) =>
         askUserHandler.respond(requestId, answers),

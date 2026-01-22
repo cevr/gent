@@ -16,7 +16,7 @@ TUI (@opentui/solid) ←── SSE ──→ Server (HttpApi)
                               ┌───────▼───────┐
                               │    Runtime    │
                               │  AgentLoop    │
-                              │  EventBus     │
+                              │  EventStore   │
                               └───────┬───────┘
                                       │
               ┌───────────────────────┼───────────────────────┐
@@ -36,7 +36,7 @@ packages/
 ├── storage/        # SQLite (bun:sqlite) - baked in
 ├── tools/          # Effect services
 ├── providers/      # Vercel AI SDK adapters
-├── runtime/        # AgentLoop, EventBus, Hooks
+├── runtime/        # AgentLoop, EventStore, Hooks
 ├── api/            # HttpApi definitions
 └── test-utils/     # Mock layers, sequence recording
 
@@ -114,7 +114,7 @@ Allow-by-default + rules:
 
 ### Events + Hooks
 
-15+ typed events via PubSub. Full lifecycle hooks.
+15+ typed events via EventStore (SQLite log + PubSub). Full lifecycle hooks.
 
 ### Session Branching
 

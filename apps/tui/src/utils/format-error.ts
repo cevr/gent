@@ -22,6 +22,8 @@ export const formatError = (error: UiError): string => {
       return `Agent: ${error.message}`
     case "ProviderError":
       return `${error.model}: ${error.message}`
+    case "EventStoreError":
+      return `Events: ${error.message}`
     case "BadArgument":
       return `${error.module}.${error.method}: ${error.description ?? "bad argument"}`
     case "SystemError":

@@ -1,5 +1,12 @@
 import { Context, Deferred, Effect, Layer } from "effect"
-import { EventBus, PlanConfirmed, PlanPresented, PlanRejected, type PlanDecision } from "./event"
+import {
+  EventStore,
+  type EventStoreError,
+  PlanConfirmed,
+  PlanPresented,
+  PlanRejected,
+  type PlanDecision,
+} from "./event"
 
 export interface PlanHandlerService {
   readonly present: (params: {
@@ -7,19 +14,19 @@ export interface PlanHandlerService {
     branchId: string
     planPath?: string
     prompt?: string
-  }) => Effect.Effect<PlanDecision>
+  }) => Effect.Effect<PlanDecision, EventStoreError>
   readonly respond: (
     requestId: string,
     decision: PlanDecision,
     reason?: string,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, EventStoreError>
 }
 
 export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHandlerService>() {
-  static Live: Layer.Layer<PlanHandler, never, EventBus> = Layer.effect(
+  static Live: Layer.Layer<PlanHandler, never, EventStore> = Layer.effect(
     PlanHandler,
     Effect.gen(function* () {
-      const eventBus = yield* EventBus
+      const eventStore = yield* EventStore
       const pending = new Map<
         string,
         {
@@ -43,7 +50,7 @@ export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHan
             prompt: params.prompt,
           })
 
-          yield* eventBus.publish(
+          yield* eventStore.publish(
             new PlanPresented({
               sessionId: params.sessionId,
               branchId: params.branchId,
@@ -63,7 +70,7 @@ export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHan
           if (!entry) return
 
           if (decision === "confirm") {
-            yield* eventBus.publish(
+            yield* eventStore.publish(
               new PlanConfirmed({
                 sessionId: entry.sessionId,
                 branchId: entry.branchId,
@@ -72,7 +79,7 @@ export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHan
               }),
             )
           } else {
-            yield* eventBus.publish(
+            yield* eventStore.publish(
               new PlanRejected({
                 sessionId: entry.sessionId,
                 branchId: entry.branchId,

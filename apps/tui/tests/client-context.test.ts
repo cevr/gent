@@ -4,8 +4,9 @@
 
 import { describe, test, expect, mock } from "bun:test"
 import { Effect, Stream, Runtime } from "effect"
-import type { AgentEvent } from "@gent/core"
+import type { AgentEvent, EventEnvelope } from "@gent/core"
 import {
+  EventEnvelope as EventEnvelopeClass,
   StreamStarted,
   StreamEnded,
   StreamChunk,
@@ -16,24 +17,45 @@ import {
 // Mock client for testing
 function createMockClient() {
   const events: AgentEvent[] = []
-  let eventCallback: ((event: AgentEvent) => void) | null = null
+  let eventCallback: ((event: EventEnvelope) => void) | null = null
+  let nextId = 0
 
   return {
     events,
     pushEvent: (event: AgentEvent) => {
       events.push(event)
-      if (eventCallback) eventCallback(event)
+      if (eventCallback) {
+        nextId += 1
+        eventCallback(
+          new EventEnvelopeClass({
+            id: nextId as EventEnvelope["id"],
+            event,
+            createdAt: Date.now(),
+          }),
+        )
+      }
     },
-    subscribeEvents: (_sessionId: string) => {
-      return Stream.async<AgentEvent>((emit) => {
-        eventCallback = (event) => {
-          emit.single(event)
+    subscribeEvents: (_input: { sessionId: string }) => {
+      return Stream.async<EventEnvelope>((emit) => {
+        eventCallback = (envelope) => {
+          emit.single(envelope)
         }
         return Effect.void
       })
     },
     sendMessage: mock(() => Effect.void),
     listMessages: mock(() => Effect.succeed([])),
+    getSessionState: mock(() =>
+      Effect.succeed({
+        sessionId: "s1",
+        branchId: "b1",
+        messages: [],
+        lastEventId: null,
+        isStreaming: false,
+        mode: "plan" as const,
+        model: undefined,
+      }),
+    ),
     listSessions: mock(() => Effect.succeed([])),
     listBranches: mock(() => Effect.succeed([])),
     createSession: mock(() =>

@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { defineTool, type Question, type ToolContext } from "@gent/core"
+import { defineTool, type EventStoreError, type Question, type ToolContext } from "@gent/core"
 import { AskUserHandler } from "./ask-user"
 
 // Option schema for structured choices
@@ -36,7 +36,7 @@ export interface QuestionHandlerService {
   readonly ask: (
     questions: ReadonlyArray<Question>,
     ctx: ToolContext,
-  ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>>
+  ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>, EventStoreError>
 }
 
 export class QuestionHandler extends Context.Tag("QuestionHandler")<

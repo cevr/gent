@@ -21,7 +21,7 @@ Effect.gen(function* () {
   const calls = yield* recorder.getCalls()
   assertSequence(calls, [
     { service: "Provider", method: "stream" },
-    { service: "EventBus", method: "publish", match: { _tag: "StreamStarted" } },
+    { service: "EventStore", method: "publish", match: { _tag: "StreamStarted" } },
   ])
 }).pipe(Effect.provide(layer))
 ```

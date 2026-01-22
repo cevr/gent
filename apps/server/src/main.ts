@@ -67,7 +67,7 @@ const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
     const core = yield* GentCore
     return handlers.handle("subscribe", ({ path }) =>
       Effect.gen(function* () {
-        const events = core.subscribeEvents(path.sessionId)
+        const events = core.subscribeEvents({ sessionId: path.sessionId })
 
         // Format as SSE
         const sseStream = events.pipe(Stream.map((e) => `data: ${JSON.stringify(e)}\n\n`))

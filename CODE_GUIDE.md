@@ -30,7 +30,7 @@ This is ground zero. Everything flows from these types:
 Every state change becomes an event. This is how TUI stays in sync with server.
 
 - `AgentEvent` — union of 18 event types
-- `EventBus` — pub/sub service (publish, subscribe as Stream)
+- `EventStore` — event log + stream (publish, subscribe with replay)
 
 **Hint:** Events carry `sessionId` + `branchId`. The TUI filters: `Stream.filter(e => e.sessionId === mySession)`.
 
@@ -244,7 +244,7 @@ Maps RPC definitions to `GentCore` methods. Most are thin wrappers with `Effect.
 `createDependencies(config)` builds the full layer stack:
 
 ```
-Storage → Provider → ToolRegistry → EventBus → Permission
+Storage → Provider → ToolRegistry → EventStore → Permission
                                             ↓
                             CheckpointService → AskUserHandler
                                             ↓
@@ -355,7 +355,7 @@ Two patterns:
 const calls = yield* recorder.getCalls()
 assertSequence(calls, [
   { service: "Provider", method: "stream" },
-  { service: "EventBus", method: "publish", match: { _tag: "StreamStarted" } },
+  { service: "EventStore", method: "publish", match: { _tag: "StreamStarted" } },
 ])
 ```
 
@@ -379,7 +379,7 @@ Shows how to:
 | Context.Tag + Layer | All services | Dependency injection, testability |
 | Effect.fn | All service methods | Automatic tracing/spans |
 | Deferred | AskUserHandler | Async request/response across boundaries |
-| Stream + EventBus | Server→TUI | Reactive updates, decoupled components |
+| Stream + EventStore | Server→TUI | Reactive updates, decoupled components |
 
 ---
 

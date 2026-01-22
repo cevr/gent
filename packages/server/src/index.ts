@@ -1,11 +1,18 @@
 import { Layer } from "effect"
 import type { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
-import { EventBus, ToolRegistry, Permission, PermissionHandler, PlanHandler } from "@gent/core"
+import {
+  ToolRegistry,
+  Permission,
+  PermissionHandler,
+  PlanHandler,
+  type EventStore,
+} from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
+import { EventStoreLive } from "./event-store.js"
 import {
   GentCore,
   type GentCoreService,
@@ -15,6 +22,9 @@ import {
   type CreateBranchInput,
   type CreateBranchOutput,
   type SendMessageInput,
+  type SubscribeEventsInput,
+  type GetSessionStateInput,
+  type SessionState,
   type SessionInfo,
   type BranchInfo,
   type MessageInfo,
@@ -35,6 +45,9 @@ export {
   type CreateBranchInput,
   type CreateBranchOutput,
   type SendMessageInput,
+  type SubscribeEventsInput,
+  type GetSessionStateInput,
+  type SessionState,
   type SessionInfo,
   type BranchInfo,
   type MessageInfo,
@@ -52,6 +65,8 @@ export {
   SendMessagePayload,
   ListMessagesPayload,
   MessageInfo as MessageInfoSchema,
+  GetSessionStatePayload,
+  SessionState as SessionStateSchema,
   SteerPayload,
   SubscribeEventsPayload,
   BranchInfo as BranchInfoSchema,
@@ -97,7 +112,7 @@ export const createDependencies = (
   | Storage
   | Provider
   | ToolRegistry
-  | EventBus
+  | EventStore
   | Permission
   | PermissionHandler
   | AgentLoop
@@ -110,22 +125,24 @@ export const createDependencies = (
 > => {
   const StorageLive = Storage.Live(config.dbPath ?? ".gent/data.db")
 
+  const EventStoreLayer = Layer.provide(EventStoreLive, StorageLive)
+
   const BaseServicesLive = Layer.mergeAll(
     StorageLive,
     Provider.Live,
     ToolRegistry.Live(AllTools),
-    EventBus.Live,
+    EventStoreLayer,
     Permission.Live(),
   )
 
-  // AskUserHandler requires EventBus
+  // AskUserHandler requires EventStore
   const AskUserHandlerLive = Layer.provide(AskUserHandler.Live, BaseServicesLive)
   const QuestionHandlerLive = Layer.provide(QuestionHandler.Live, AskUserHandlerLive)
 
-  // PermissionHandler requires EventBus
+  // PermissionHandler requires EventStore
   const PermissionHandlerLive = Layer.provide(PermissionHandler.Live, BaseServicesLive)
 
-  // PlanHandler requires EventBus
+  // PlanHandler requires EventStore
   const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseServicesLive)
 
   // CheckpointService requires Storage and Provider

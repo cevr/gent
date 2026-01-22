@@ -10,7 +10,7 @@ Business logic layer. `GentCore` is the primary service; `GentServer` is depreca
 GentCore (business logic)
 ├── Storage
 ├── AgentLoop
-├── EventBus
+├── EventStore
 └── Dependencies from GentServer.Dependencies()
 
 RpcHandlersLive (RPC layer)
@@ -27,7 +27,7 @@ RpcHandlersLive (RPC layer)
 
 ## Patterns
 
-- **GentCore.Live** - requires `Storage | AgentLoop | EventBus`
+- **GentCore.Live** - requires `Storage | AgentLoop | EventStore`
 - **RpcHandlersLive** - requires `GentCore`, provides RPC handlers
 - **GentServer.Dependencies(config)** - builds full dependency layer from config
 

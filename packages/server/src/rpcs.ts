@@ -11,9 +11,11 @@ import {
   SendMessagePayload,
   ListMessagesPayload,
   MessageInfo,
+  GetSessionStatePayload,
+  SessionState,
   SteerPayload,
   SubscribeEventsPayload,
-  AgentEvent,
+  EventEnvelope,
   RespondQuestionsPayload,
   RespondPermissionPayload,
   RespondPlanPayload,
@@ -67,6 +69,11 @@ export class GentRpcs extends RpcGroup.make(
     success: Schema.Array(MessageInfo),
     error: GentRpcError,
   }),
+  Rpc.make("getSessionState", {
+    payload: GetSessionStatePayload.fields,
+    success: SessionState,
+    error: GentRpcError,
+  }),
 
   // Steer RPC
   Rpc.make("steer", {
@@ -77,7 +84,7 @@ export class GentRpcs extends RpcGroup.make(
   // Event subscription (streaming)
   Rpc.make("subscribeEvents", {
     payload: SubscribeEventsPayload.fields,
-    success: AgentEvent,
+    success: EventEnvelope,
     stream: true,
     error: GentRpcError,
   }),

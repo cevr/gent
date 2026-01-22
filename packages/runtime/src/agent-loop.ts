@@ -1,12 +1,17 @@
 import { Context, DateTime, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
-import type { AgentMode as AgentModeType, ToolContext } from "@gent/core"
+import type {
+  AgentEvent,
+  AgentMode as AgentModeType,
+  EventStoreError,
+  ToolContext,
+} from "@gent/core"
 import {
   AgentMode as AgentModeSchema,
   Message,
   TextPart,
   ToolCallPart,
   ToolResultPart,
-  EventBus,
+  EventStore,
   StreamStarted,
   StreamChunk as EventStreamChunk,
   StreamEnded,
@@ -98,7 +103,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
     | Storage
     | Provider
     | ToolRegistry
-    | EventBus
+    | EventStore
     | Permission
     | PermissionHandler
     | CheckpointService
@@ -111,7 +116,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
         const storage = yield* Storage
         const provider = yield* Provider
         const toolRegistry = yield* ToolRegistry
-        const eventBus = yield* EventBus
+        const eventStore = yield* EventStore
         const permission = yield* Permission
         const permissionHandler = yield* PermissionHandler
         const checkpointService = yield* CheckpointService
@@ -127,6 +132,16 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
         })
 
         const steerQueue = yield* Queue.unbounded<SteerCommand>()
+        const publishEvent = (event: AgentEvent) =>
+          eventStore.publish(event).pipe(
+            Effect.mapError(
+              (error) =>
+                new AgentLoopError({
+                  message: `Failed to publish ${event._tag}`,
+                  cause: error,
+                }),
+            ),
+          )
 
         const executeToolCall = Effect.fn("AgentLoop.executeToolCall")(function* (
           toolCall: ToolCallPart,
@@ -213,12 +228,12 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
           sessionId: string,
           branchId: string,
           initialMessage: Message,
-        ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError> = Effect.fn(
+        ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError | EventStoreError> = Effect.fn(
           "AgentLoop.runLoop",
         )(function* (sessionId: string, branchId: string, initialMessage: Message) {
           // Save user message
           yield* storage.createMessage(initialMessage)
-          yield* eventBus.publish(
+          yield* publishEvent(
             new MessageReceived({
               sessionId,
               branchId,
@@ -239,7 +254,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               const cmd = steerCmd.value
               if (cmd._tag === "Cancel") {
                 continueLoop = false
-                yield* eventBus.publish(
+                yield* publishEvent(
                   new StreamEnded({
                     sessionId,
                     branchId,
@@ -250,7 +265,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               } else if (cmd._tag === "Interrupt") {
                 // Hard stop - emit StreamEnded with interrupted flag
                 continueLoop = false
-                yield* eventBus.publish(
+                yield* publishEvent(
                   new StreamEnded({
                     sessionId,
                     branchId,
@@ -300,7 +315,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                     mode: newMode,
                   }))
                   if (newMode === "plan") {
-                    yield* eventBus.publish(new PlanModeEntered({ sessionId, branchId }))
+                    yield* publishEvent(new PlanModeEntered({ sessionId, branchId }))
                   }
                 }
               }
@@ -348,7 +363,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               : config.systemPrompt
 
             // Start streaming
-            yield* eventBus.publish(new StreamStarted({ sessionId, branchId }))
+            yield* publishEvent(new StreamStarted({ sessionId, branchId }))
 
             const streamEffect = yield* withRetry(
               provider.stream({
@@ -368,7 +383,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               Effect.gen(function* () {
                 if (chunk._tag === "TextChunk") {
                   textParts.push(chunk.text)
-                  yield* eventBus.publish(
+                  yield* publishEvent(
                     new EventStreamChunk({
                       sessionId,
                       branchId,
@@ -390,7 +405,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               }),
             )
 
-            yield* eventBus.publish(
+            yield* publishEvent(
               new StreamEnded({
                 sessionId,
                 branchId,
@@ -416,7 +431,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
             })
 
             yield* storage.createMessage(assistantMessage)
-            yield* eventBus.publish(
+            yield* publishEvent(
               new MessageReceived({
                 sessionId,
                 branchId,
@@ -430,7 +445,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               const toolResults: ToolResultPart[] = []
 
               for (const toolCall of toolCalls) {
-                yield* eventBus.publish(
+                yield* publishEvent(
                   new ToolCallStarted({
                     sessionId,
                     branchId,
@@ -451,7 +466,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                 // Extract output summary for display
                 const outputSummary = summarizeToolOutput(result)
 
-                yield* eventBus.publish(
+                yield* publishEvent(
                   new ToolCallCompleted({
                     sessionId,
                     branchId,
@@ -520,12 +535,12 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
             yield* (
               runLoop(message.sessionId, message.branchId, message) as Effect.Effect<
                 void,
-                AgentLoopError | StorageError | ProviderError
+                AgentLoopError | StorageError | ProviderError | EventStoreError
               >
             ).pipe(
               Effect.withSpan("AgentLoop.run"),
               Effect.catchAll((e) =>
-                eventBus.publish(
+                publishEvent(
                   new ErrorOccurred({
                     sessionId: message.sessionId,
                     branchId: message.branchId,

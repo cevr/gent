@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime, Option, Stream, Runtime } from "effect"
+import { Console, Effect, Layer, ManagedRuntime, Option, Stream } from "effect"
+import type { Runtime } from "effect"
 import { RpcTest } from "@effect/rpc"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
@@ -170,15 +171,16 @@ const runHeadless = (
 ): Effect.Effect<void, GentCoreError, never> =>
   Effect.gen(function* () {
     // Subscribe to events before sending message
-    const events = core.subscribeEvents(sessionId)
+    const events = core.subscribeEvents({ sessionId, branchId })
 
     // Send the message
     yield* core.sendMessage({ sessionId, branchId, content: promptText })
 
     // Stream events until complete
     yield* events.pipe(
-      Stream.tap((event) =>
+      Stream.tap((envelope) =>
         Effect.sync(() => {
+          const event = envelope.event
           switch (event._tag) {
             case "StreamChunk":
               process.stdout.write(event.chunk)
@@ -200,7 +202,10 @@ const runHeadless = (
           }
         }),
       ),
-      Stream.takeUntil((e) => e._tag === "StreamEnded" || e._tag === "ErrorOccurred"),
+      Stream.takeUntil(
+        (envelope) =>
+          envelope.event._tag === "StreamEnded" || envelope.event._tag === "ErrorOccurred",
+      ),
       Stream.runDrain,
     )
   })

@@ -3,13 +3,13 @@ import { Storage } from "@gent/storage"
 import { Provider, FinishChunk, TextChunk, ToolCallChunk, type StreamChunk } from "@gent/providers"
 import {
   ToolRegistry,
-  EventBus,
+  EventStore,
+  EventEnvelope,
   Permission,
   PermissionHandler,
   PlanHandler,
   CompactionCheckpoint,
   PlanCheckpoint,
-  type AgentEvent,
   type Checkpoint,
   type AnyToolDefinition,
   type PermissionDecision,
@@ -91,24 +91,50 @@ export const RecordingProvider = (
     }),
   )
 
-// Recording EventBus
+// Recording EventStore
 
-export const RecordingEventBus: Layer.Layer<EventBus, never, SequenceRecorder> = Layer.effect(
-  EventBus,
+export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.effect(
+  EventStore,
   Effect.gen(function* () {
     const recorder = yield* SequenceRecorder
-    const events: AgentEvent[] = []
+    const events: EventEnvelope[] = []
+    let nextId = 0
+
+    const matchesFilter = (
+      env: EventEnvelope,
+      sessionId: string,
+      branchId?: string,
+    ): boolean => {
+      if (env.event.sessionId !== sessionId) return false
+      if (!branchId) return true
+      const eventBranchId =
+        "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
+      return eventBranchId === branchId || eventBranchId === undefined
+    }
 
     return {
-      publish: Effect.fn("RecordingEventBus.publish")(function* (event) {
-        events.push(event)
+      publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
+        nextId += 1
+        events.push(
+          new EventEnvelope({
+            id: nextId as EventEnvelope["id"],
+            event,
+            createdAt: Date.now(),
+          }),
+        )
         yield* recorder.record({
-          service: "EventBus",
+          service: "EventStore",
           method: "publish",
           args: { _tag: event._tag },
         })
       }),
-      subscribe: () => Stream.fromIterable(events),
+      subscribe: ({ sessionId, branchId, after }) =>
+        Stream.fromIterable(
+          events.filter(
+            (env) =>
+              matchesFilter(env, sessionId, branchId) && env.id > (after ?? 0),
+          ),
+        ),
     }
   }),
 )
@@ -283,7 +309,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     Storage.Test(),
     Provider.Test(providerResponses),
     ToolRegistry.Live(tools),
-    EventBus.Test(),
+    EventStore.Test(),
     Permission.Test(),
     PermissionHandler.Test(permissionDecisions),
     AskUserHandler.Test(askUserResponses),
@@ -316,7 +342,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     AgentLoop.Test(),
   ).pipe(
     Layer.provideMerge(RecordingProvider(providerResponses)),
-    Layer.provideMerge(RecordingEventBus),
+    Layer.provideMerge(RecordingEventStore),
     Layer.provideMerge(RecordingAskUserHandler(askUserResponses)),
     Layer.provideMerge(Layer.provide(RecordingCheckpointService(checkpointConfig), StorageLayer)),
     Layer.provideMerge(SequenceRecorder.Live),
