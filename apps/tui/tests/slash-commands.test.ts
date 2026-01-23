@@ -44,6 +44,7 @@ describe("executeSlashCommand", () => {
     openFork: number
     toggleBypass: number
     openPermissions: number
+    openAuth: number
   }
 
   const createMockContext = (): { ctx: SlashCommandContext; calls: MockCalls } => {
@@ -57,6 +58,7 @@ describe("executeSlashCommand", () => {
       openFork: 0,
       toggleBypass: 0,
       openPermissions: 0,
+      openAuth: 0,
     }
 
     const ctx: SlashCommandContext = {
@@ -86,6 +88,9 @@ describe("executeSlashCommand", () => {
       }),
       openPermissions: () => {
         calls.openPermissions++
+      },
+      openAuth: () => {
+        calls.openAuth++
       },
     }
 
@@ -188,6 +193,7 @@ describe("executeSlashCommand", () => {
       openFork: () => {},
       toggleBypass: Effect.void,
       openPermissions: () => {},
+      openAuth: () => {},
     }
 
     const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))

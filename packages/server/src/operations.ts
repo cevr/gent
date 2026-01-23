@@ -219,4 +219,24 @@ export const DeletePermissionRulePayload = Schema.Struct({
   pattern: Schema.optional(Schema.String),
 })
 
+// ============================================================================
+// Auth Operations
+// ============================================================================
+
+export const AuthProviderInfo = Schema.Struct({
+  provider: Schema.String,
+  hasKey: Schema.Boolean,
+  source: Schema.optional(Schema.Literal("env", "stored")),
+})
+export type AuthProviderInfo = typeof AuthProviderInfo.Type
+
+export const SetAuthKeyPayload = Schema.Struct({
+  provider: Schema.String,
+  key: Schema.String,
+})
+
+export const DeleteAuthKeyPayload = Schema.Struct({
+  provider: Schema.String,
+})
+
 export { EventEnvelope }

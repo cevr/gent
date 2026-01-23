@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema, Stream, JSONSchema } from "effect"
-import type { Message, AnyToolDefinition, TextPart, ToolResultPart } from "@gent/core"
+import type { Message, AnyToolDefinition, TextPart, ToolResultPart, AuthStorageService } from "@gent/core"
+import { AuthStorage } from "@gent/core"
 import {
   streamText,
   generateText,
@@ -83,123 +84,132 @@ export interface ProviderService {
 }
 
 export class Provider extends Context.Tag("Provider")<Provider, ProviderService>() {
-  static Live: Layer.Layer<Provider> = Layer.succeed(Provider, {
-    stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
-      const [providerName, modelName] = parseModelId(request.model)
-      const provider = getProvider(providerName)
+  static Live: Layer.Layer<Provider, never, AuthStorage> = Layer.effect(
+    Provider,
+    Effect.gen(function* () {
+      const authStorage = yield* AuthStorage
 
-      if (!provider) {
-        return yield* new ProviderError({
-          message: `Unknown provider: ${providerName}`,
-          model: request.model,
-        })
-      }
+      return {
+        stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
+          const [providerName, modelName] = parseModelId(request.model)
+          const apiKey = yield* resolveApiKey(providerName, authStorage)
+          const provider = getProvider(providerName, apiKey)
 
-      const messages = convertMessages(request.messages)
-      const tools = request.tools ? convertTools(request.tools) : undefined
+          if (!provider) {
+            return yield* new ProviderError({
+              message: `Unknown provider: ${providerName}`,
+              model: request.model,
+            })
+          }
 
-      return Stream.async<StreamChunk, ProviderError>((emit) => {
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises -- intentional fire-and-forget async IIFE for Stream.async
-        ;(async () => {
-          try {
-            const opts: Parameters<typeof streamText>[0] = {
-              model: provider(modelName),
-              messages,
-            }
-            if (tools) opts.tools = tools
-            if (request.systemPrompt) opts.system = request.systemPrompt
-            if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
-            if (request.temperature) opts.temperature = request.temperature
+          const messages = convertMessages(request.messages)
+          const tools = request.tools ? convertTools(request.tools) : undefined
 
-            const result = streamText(opts)
+          return Stream.async<StreamChunk, ProviderError>((emit) => {
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- intentional fire-and-forget async IIFE for Stream.async
+            ;(async () => {
+              try {
+                const opts: Parameters<typeof streamText>[0] = {
+                  model: provider(modelName),
+                  messages,
+                }
+                if (tools) opts.tools = tools
+                if (request.systemPrompt) opts.system = request.systemPrompt
+                if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
+                if (request.temperature) opts.temperature = request.temperature
 
-            for await (const part of result.fullStream) {
-              switch (part.type) {
-                case "text-delta":
-                  await emit.single(new TextChunk({ text: part.text }))
-                  break
-                case "tool-call":
-                  await emit.single(
-                    new ToolCallChunk({
-                      toolCallId: part.toolCallId,
-                      toolName: part.toolName,
-                      input: part.input,
-                    }),
-                  )
-                  break
-                case "reasoning-delta":
-                  await emit.single(new ReasoningChunk({ text: part.text }))
-                  break
-                case "finish":
-                  await emit.single(
-                    new FinishChunk({
-                      finishReason: part.finishReason ?? "stop",
-                      usage: part.totalUsage
-                        ? {
-                            inputTokens: part.totalUsage.inputTokens ?? 0,
-                            outputTokens: part.totalUsage.outputTokens ?? 0,
-                          }
-                        : undefined,
-                    }),
-                  )
-                  break
-                case "error":
-                  const err = part.error as Error
-                  await emit.fail(
-                    new ProviderError({
-                      message: `API error: ${err?.message ?? String(part.error)}`,
-                      model: request.model,
-                      cause: part.error,
-                    }),
-                  )
-                  return
+                const result = streamText(opts)
+
+                for await (const part of result.fullStream) {
+                  switch (part.type) {
+                    case "text-delta":
+                      await emit.single(new TextChunk({ text: part.text }))
+                      break
+                    case "tool-call":
+                      await emit.single(
+                        new ToolCallChunk({
+                          toolCallId: part.toolCallId,
+                          toolName: part.toolName,
+                          input: part.input,
+                        }),
+                      )
+                      break
+                    case "reasoning-delta":
+                      await emit.single(new ReasoningChunk({ text: part.text }))
+                      break
+                    case "finish":
+                      await emit.single(
+                        new FinishChunk({
+                          finishReason: part.finishReason ?? "stop",
+                          usage: part.totalUsage
+                            ? {
+                                inputTokens: part.totalUsage.inputTokens ?? 0,
+                                outputTokens: part.totalUsage.outputTokens ?? 0,
+                              }
+                            : undefined,
+                        }),
+                      )
+                      break
+                    case "error":
+                      const err = part.error as Error
+                      await emit.fail(
+                        new ProviderError({
+                          message: `API error: ${err?.message ?? String(part.error)}`,
+                          model: request.model,
+                          cause: part.error,
+                        }),
+                      )
+                      return
+                  }
+                }
+                await emit.end()
+              } catch (e) {
+                await emit.fail(
+                  new ProviderError({
+                    message: `Stream failed: ${e}`,
+                    model: request.model,
+                    cause: e,
+                  }),
+                )
               }
-            }
-            await emit.end()
-          } catch (e) {
-            await emit.fail(
+            })()
+          })
+        }),
+
+        generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
+          const [providerName, modelName] = parseModelId(request.model)
+          const apiKey = yield* resolveApiKey(providerName, authStorage)
+          const provider = getProvider(providerName, apiKey)
+
+          if (!provider) {
+            return yield* new ProviderError({
+              message: `Unknown provider: ${providerName}`,
+              model: request.model,
+            })
+          }
+
+          const opts: Parameters<typeof generateText>[0] = {
+            model: provider(modelName),
+            prompt: request.prompt,
+          }
+          if (request.systemPrompt) opts.system = request.systemPrompt
+          if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
+
+          const result = yield* Effect.tryPromise({
+            try: () => generateText(opts),
+            catch: (e) =>
               new ProviderError({
-                message: `Stream failed: ${e}`,
+                message: `Generate failed: ${e}`,
                 model: request.model,
                 cause: e,
               }),
-            )
-          }
-        })()
-      })
-    }),
+          })
 
-    generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
-      const [providerName, modelName] = parseModelId(request.model)
-      const provider = getProvider(providerName)
-
-      if (!provider) {
-        return yield* new ProviderError({
-          message: `Unknown provider: ${providerName}`,
-          model: request.model,
-        })
+          return result.text
+        }),
       }
-
-      const opts: Parameters<typeof generateText>[0] = {
-        model: provider(modelName),
-        prompt: request.prompt,
-      }
-      if (request.systemPrompt) opts.system = request.systemPrompt
-      if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
-
-      const result = yield* Effect.tryPromise({
-        try: () => generateText(opts),
-        catch: (e) =>
-          new ProviderError({
-            message: `Generate failed: ${e}`,
-            model: request.model,
-            cause: e,
-          }),
-      })
-
-      return result.text
     }),
-  })
+  )
 
   static Test = (responses: ReadonlyArray<ReadonlyArray<StreamChunk>>): Layer.Layer<Provider> => {
     let index = 0
@@ -223,13 +233,38 @@ function parseModelId(modelId: string): [string, string] {
   return [modelId.slice(0, slash), modelId.slice(slash + 1)]
 }
 
-function getProvider(name: string) {
+// Maps provider name to env var name
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+}
+
+// Resolve API key: env var → AuthStorage → undefined
+const resolveApiKey = (
+  providerName: string,
+  auth: AuthStorageService,
+): Effect.Effect<string | undefined> => {
+  // Check env var first
+  const envVar = PROVIDER_ENV_VARS[providerName]
+  if (envVar) {
+    const envKey = process.env[envVar]
+    if (envKey) return Effect.succeed(envKey)
+  }
+
+  // Fall back to AuthStorage
+  return auth.get(providerName).pipe(
+    Effect.catchAll(() => Effect.succeed(undefined as string | undefined)),
+  )
+}
+
+function getProvider(name: string, apiKey: string | undefined) {
   switch (name) {
     case "anthropic":
-      return createAnthropic()
+      return createAnthropic(apiKey ? { apiKey } : undefined)
     case "openai":
-      return createOpenAI()
+      return createOpenAI(apiKey ? { apiKey } : undefined)
     case "bedrock":
+      // Bedrock uses AWS credentials, not API keys
       return createAmazonBedrock({
         region: process.env["AWS_REGION"] ?? "us-east-1",
         credentialProvider: async () => {

@@ -17,6 +17,7 @@ export type SlashCommandId =
   | "fork"
   | "bypass"
   | "permissions"
+  | "auth"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -28,6 +29,7 @@ export interface SlashCommandContext {
   openFork: () => void
   toggleBypass: Effect.Effect<void, UiError>
   openPermissions: () => void
+  openAuth: () => void
 }
 
 export interface SlashCommandResult {
@@ -100,6 +102,12 @@ export const executeSlashCommand = (
     case "permissions":
       return Effect.sync(() => {
         ctx.openPermissions()
+        return { handled: true }
+      })
+
+    case "auth":
+      return Effect.sync(() => {
+        ctx.openAuth()
         return { handled: true }
       })
 

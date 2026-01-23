@@ -3,8 +3,16 @@ import { GentRpcs } from "./rpcs"
 import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
-import { Permission, PermissionHandler, PermissionRule, PlanHandler } from "@gent/core"
+import { Permission, PermissionHandler, PermissionRule, PlanHandler, AuthStorage } from "@gent/core"
 import { ConfigService } from "@gent/runtime"
+import type { AuthProviderInfo } from "./operations"
+
+// Known providers for auth listing
+const KNOWN_PROVIDERS = ["anthropic", "openai", "bedrock"] as const
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+}
 
 // ============================================================================
 // RPC Handlers Layer
@@ -18,6 +26,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const planHandler = yield* PlanHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
+    const authStorage = yield* AuthStorage
 
     return {
       createSession: (input) =>
@@ -119,6 +128,40 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           yield* configService.removePermissionRule(tool, pattern)
           yield* permission.removeRule(tool, pattern)
         }),
+
+      listAuthProviders: () =>
+        Effect.gen(function* () {
+          const storedKeys = yield* authStorage.list().pipe(
+            Effect.catchAll(() => Effect.succeed([] as readonly string[])),
+          )
+          const storedSet = new Set(storedKeys)
+
+          const providers: AuthProviderInfo[] = KNOWN_PROVIDERS.map((provider) => {
+            const envVar = PROVIDER_ENV_VARS[provider]
+            const hasEnv = envVar ? !!process.env[envVar] : false
+            const hasStored = storedSet.has(provider)
+
+            if (hasEnv) {
+              return { provider, hasKey: true, source: "env" as const }
+            }
+            if (hasStored) {
+              return { provider, hasKey: true, source: "stored" as const }
+            }
+            return { provider, hasKey: false }
+          })
+
+          return providers
+        }),
+
+      setAuthKey: ({ provider, key }) =>
+        authStorage.set(provider, key).pipe(
+          Effect.catchAll(() => Effect.void),
+        ),
+
+      deleteAuthKey: ({ provider }) =>
+        authStorage.delete(provider).pipe(
+          Effect.catchAll(() => Effect.void),
+        ),
     }
   }),
 )

@@ -20,6 +20,7 @@ export type AppRoute =
       readonly prompt?: string
     }
   | { readonly _tag: "permissions" }
+  | { readonly _tag: "auth" }
 
 export interface AppRouterState {
   readonly current: AppRoute
@@ -48,6 +49,7 @@ export const Route = {
     ...(prompt !== undefined ? { prompt } : {}),
   }),
   permissions: (): AppRoute => ({ _tag: "permissions" }),
+  auth: (): AppRoute => ({ _tag: "auth" }),
 }
 
 // Type guards
@@ -58,4 +60,5 @@ export const isRoute = {
     r._tag === "branchPicker",
   permissions: (r: AppRoute): r is Extract<AppRoute, { _tag: "permissions" }> =>
     r._tag === "permissions",
+  auth: (r: AppRoute): r is Extract<AppRoute, { _tag: "auth" }> => r._tag === "auth",
 }

@@ -16,6 +16,13 @@ import type {
 
 export type { MessagePart, TextPart, ToolCallPart, ToolResultPart, PermissionRule }
 
+// Auth provider info
+export interface AuthProviderInfo {
+  provider: string
+  hasKey: boolean
+  source?: "env" | "stored"
+}
+
 export function extractText(parts: readonly MessagePart[]): string {
   const textPart = parts.find((p): p is TextPart => p.type === "text")
   return textPart?.text ?? ""
@@ -288,6 +295,15 @@ export interface GentClient {
   /** Delete permission rule */
   deletePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void, GentRpcError>
 
+  /** List auth providers with their key status */
+  listAuthProviders: () => Effect.Effect<readonly AuthProviderInfo[], GentRpcError>
+
+  /** Set auth key for a provider */
+  setAuthKey: (provider: string, key: string) => Effect.Effect<void, GentRpcError>
+
+  /** Delete auth key for a provider */
+  deleteAuthKey: (provider: string) => Effect.Effect<void, GentRpcError>
+
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<unknown>
 }
@@ -387,6 +403,12 @@ export function createClient(
         tool,
         ...(pattern !== undefined ? { pattern } : {}),
       }),
+
+    listAuthProviders: () => rpcClient.listAuthProviders(),
+
+    setAuthKey: (provider, key) => rpcClient.setAuthKey({ provider, key }),
+
+    deleteAuthKey: (provider) => rpcClient.deleteAuthKey({ provider }),
 
     runtime,
   }

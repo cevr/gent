@@ -28,6 +28,9 @@ import {
   UpdateSessionBypassPayload,
   UpdateSessionBypassSuccess,
   DeletePermissionRulePayload,
+  AuthProviderInfo,
+  SetAuthKeyPayload,
+  DeleteAuthKeyPayload,
 } from "./operations.js"
 import { PermissionRule } from "@gent/core"
 import { GentRpcError } from "./errors.js"
@@ -153,6 +156,20 @@ export class GentRpcs extends RpcGroup.make(
   }),
   Rpc.make("deletePermissionRule", {
     payload: DeletePermissionRulePayload.fields,
+    error: GentRpcError,
+  }),
+
+  // Auth RPCs
+  Rpc.make("listAuthProviders", {
+    success: Schema.Array(AuthProviderInfo),
+    error: GentRpcError,
+  }),
+  Rpc.make("setAuthKey", {
+    payload: SetAuthKeyPayload.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("deleteAuthKey", {
+    payload: DeleteAuthKeyPayload.fields,
     error: GentRpcError,
   }),
 ) {}

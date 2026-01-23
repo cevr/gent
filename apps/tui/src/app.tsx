@@ -9,6 +9,7 @@ import { Home } from "./routes/home"
 import { Session } from "./routes/session"
 import { BranchPicker } from "./routes/branch-picker"
 import { Permissions } from "./routes/permissions"
+import { Auth } from "./routes/auth"
 import * as State from "./state"
 import type { BranchInfo } from "./client"
 
@@ -67,6 +68,9 @@ function AppContent(props: AppProps) {
         </Match>
         <Match when={isRoute.permissions(router.route())}>
           <Permissions client={client.client} />
+        </Match>
+        <Match when={isRoute.auth(router.route())}>
+          <Auth client={client.client} />
         </Match>
       </Switch>
 

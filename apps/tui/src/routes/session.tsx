@@ -534,6 +534,7 @@ export function Session(props: SessionProps) {
         yield* client.updateSessionBypass(!current)
       }),
       openPermissions: () => router.navigateToPermissions(),
+      openAuth: () => router.navigateToAuth(),
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {

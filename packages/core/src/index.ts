@@ -102,7 +102,7 @@ export { TodoItem, TodoStatus, TodoPriority } from "./todo"
 export { Skill, Skills, formatSkillsForPrompt } from "./skills"
 
 // Auth Storage
-export { AuthStorage, AuthStorageError } from "./auth-storage"
+export { AuthStorage, AuthStorageError, type AuthStorageService } from "./auth-storage"
 
 // Defaults
 export { DEFAULTS, type Defaults } from "./defaults"

@@ -7,6 +7,7 @@ import {
   PermissionHandler,
   PlanHandler,
   Skills,
+  AuthStorage,
   type EventStore,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
@@ -93,6 +94,9 @@ export {
   CompactBranchPayload,
   UpdateSessionBypassPayload,
   UpdateSessionBypassSuccess,
+  AuthProviderInfo,
+  SetAuthKeyPayload,
+  DeleteAuthKeyPayload,
 } from "./operations.js"
 
 // RPC definitions
@@ -141,7 +145,8 @@ export const createDependencies = (
   | CheckpointService
   | AskUserHandler
   | QuestionHandler
-  | PlanHandler,
+  | PlanHandler
+  | AuthStorage,
   PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
@@ -171,9 +176,14 @@ export const createDependencies = (
     }),
   )
 
+  const AuthStorageLive = AuthStorage.LiveKeychain("gent")
+
+  const ProviderLive = Layer.provide(Provider.Live, AuthStorageLive)
+
   const BaseServicesLive = Layer.mergeAll(
     StorageLive,
-    Provider.Live,
+    ProviderLive,
+    AuthStorageLive,
     ToolRegistry.Live(AllTools),
     EventStoreLayer,
     ConfigServiceLive,

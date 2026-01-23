@@ -19,6 +19,7 @@ export interface RouterContextValue {
     prompt?: string,
   ) => void
   navigateToPermissions: () => void
+  navigateToAuth: () => void
   back: () => boolean
   canGoBack: () => boolean
 }
@@ -55,6 +56,7 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
     navigateToBranchPicker: (sessionId, sessionName, branches, prompt) =>
       router.navigate(Route.branchPicker(sessionId, sessionName, branches, prompt)),
     navigateToPermissions: () => router.navigate(Route.permissions()),
+    navigateToAuth: () => router.navigate(Route.auth()),
     back: router.back,
     canGoBack: router.canGoBack,
   }
