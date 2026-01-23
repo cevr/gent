@@ -5,13 +5,16 @@ import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
 import { Permission, PermissionHandler, PermissionRule, PlanHandler, AuthStorage } from "@gent/core"
 import { ConfigService } from "@gent/runtime"
+import { ProviderFactory } from "@gent/providers"
 import type { AuthProviderInfo } from "./operations"
 
 // Known providers for auth listing
-const KNOWN_PROVIDERS = ["anthropic", "openai", "bedrock"] as const
+const KNOWN_PROVIDERS = ["anthropic", "openai", "bedrock", "google", "mistral"] as const
 const PROVIDER_ENV_VARS: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
+  google: "GOOGLE_GENERATIVE_AI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
 }
 
 // ============================================================================
@@ -27,16 +30,16 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const permission = yield* Permission
     const configService = yield* ConfigService
     const authStorage = yield* AuthStorage
+    const providerFactory = yield* ProviderFactory
 
     return {
       createSession: (input) =>
-        core
-          .createSession({
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
-            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-            ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
-          }),
+        core.createSession({
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
+          ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+          ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
+        }),
 
       listSessions: () => core.listSessions(),
 
@@ -47,11 +50,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       listBranches: ({ sessionId }) => core.listBranches(sessionId),
 
       createBranch: ({ sessionId, name }) =>
-        core
-          .createBranch({
-            sessionId,
-            ...(name !== undefined ? { name } : {}),
-          }),
+        core.createBranch({
+          sessionId,
+          ...(name !== undefined ? { name } : {}),
+        }),
 
       getBranchTree: ({ sessionId }) => core.getBranchTree(sessionId),
 
@@ -72,19 +74,17 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       sendMessage: ({ sessionId, branchId, content, mode, model }) =>
-        core
-          .sendMessage({
-            sessionId,
-            branchId,
-            content,
-            ...(mode !== undefined ? { mode } : {}),
-            ...(model !== undefined ? { model } : {}),
-          }),
+        core.sendMessage({
+          sessionId,
+          branchId,
+          content,
+          ...(mode !== undefined ? { mode } : {}),
+          ...(model !== undefined ? { model } : {}),
+        }),
 
       listMessages: ({ branchId }) => core.listMessages(branchId),
 
-      getSessionState: ({ sessionId, branchId }) =>
-        core.getSessionState({ sessionId, branchId }),
+      getSessionState: ({ sessionId, branchId }) => core.getSessionState({ sessionId, branchId }),
 
       steer: ({ command }) => core.steer(command as SteerCommand),
 
@@ -96,8 +96,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(after !== undefined ? { after } : {}),
         }),
 
-      respondQuestions: ({ requestId, answers }) =>
-        askUserHandler.respond(requestId, answers),
+      respondQuestions: ({ requestId, answers }) => askUserHandler.respond(requestId, answers),
 
       respondPermission: ({ requestId, decision, persist }) =>
         Effect.gen(function* () {
@@ -115,8 +114,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       respondPlan: ({ requestId, decision, reason }) =>
         planHandler.respond(requestId, decision, reason),
 
-      compactBranch: ({ sessionId, branchId }) =>
-        core.compactBranch({ sessionId, branchId }),
+      compactBranch: ({ sessionId, branchId }) => core.compactBranch({ sessionId, branchId }),
 
       updateSessionBypass: ({ sessionId, bypass }) =>
         core.updateSessionBypass({ sessionId, bypass }),
@@ -131,9 +129,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       listAuthProviders: () =>
         Effect.gen(function* () {
-          const storedKeys = yield* authStorage.list().pipe(
-            Effect.catchAll(() => Effect.succeed([] as readonly string[])),
-          )
+          const storedKeys = yield* authStorage
+            .list()
+            .pipe(Effect.catchAll(() => Effect.succeed([] as readonly string[])))
           const storedSet = new Set(storedKeys)
 
           const providers: AuthProviderInfo[] = KNOWN_PROVIDERS.map((provider) => {
@@ -154,14 +152,12 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       setAuthKey: ({ provider, key }) =>
-        authStorage.set(provider, key).pipe(
-          Effect.catchAll(() => Effect.void),
-        ),
+        authStorage.set(provider, key).pipe(Effect.catchAll(() => Effect.void)),
 
       deleteAuthKey: ({ provider }) =>
-        authStorage.delete(provider).pipe(
-          Effect.catchAll(() => Effect.void),
-        ),
+        authStorage.delete(provider).pipe(Effect.catchAll(() => Effect.void)),
+
+      listModels: () => providerFactory.listModels(),
     }
   }),
 )

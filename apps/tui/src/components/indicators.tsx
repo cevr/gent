@@ -8,6 +8,7 @@ export type Indicator =
   | { _tag: "thinking" }
   | { _tag: "compacting" }
   | { _tag: "error"; message: string }
+  | { _tag: "toast"; message: string }
 
 export interface IndicatorsProps {
   indicator: Indicator | null
@@ -21,6 +22,8 @@ const indicatorLabel = (indicator: Indicator): string => {
       return "compacting"
     case "error":
       return "error"
+    case "toast":
+      return ""
   }
 }
 
@@ -50,13 +53,21 @@ export function Indicators(props: IndicatorsProps) {
     if (indicator._tag === "error") {
       return truncate(oneLine(indicator.message), maxWidth)
     }
+    if (indicator._tag === "toast") {
+      return truncate(oneLine(indicator.message), maxWidth)
+    }
     return truncate(`${indicatorLabel(indicator)}${dots()}`, maxWidth)
   }
 
-  const renderStyle = (indicator: Indicator) =>
-    indicator._tag === "error"
-      ? { fg: theme.error }
-      : { fg: theme.textMuted, italic: true }
+  const renderStyle = (indicator: Indicator) => {
+    if (indicator._tag === "error") {
+      return { fg: theme.error }
+    }
+    if (indicator._tag === "toast") {
+      return { fg: theme.primary }
+    }
+    return { fg: theme.textMuted, italic: true }
+  }
 
   return (
     <Show when={props.indicator}>

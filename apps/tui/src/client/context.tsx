@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   createEffect,
+  onMount,
   onCleanup,
   type ParentProps,
   DEV,
@@ -219,9 +220,7 @@ export function ClientProvider(props: ClientProviderProps) {
           setAgentStore(
             produce((draft) => {
               draft.mode = snapshot.mode
-              draft.status = snapshot.isStreaming
-                ? AgentStatus.streaming()
-                : AgentStatus.idle()
+              draft.status = snapshot.isStreaming ? AgentStatus.streaming() : AgentStatus.idle()
               if (snapshot.model !== undefined) {
                 draft.model = snapshot.model
               }
@@ -584,6 +583,25 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
   }
+
+  // Fetch models on mount and update registry
+  onMount(() => {
+    cast(
+      client.listModels().pipe(
+        Effect.tap((models) =>
+          Effect.sync(() => {
+            State.initModelRegistry(models)
+          }),
+        ),
+        Effect.catchAll((err) =>
+          Effect.sync(() => {
+            // Non-fatal - will use default models
+            log(`listModels failed: ${formatError(err)}`)
+          }),
+        ),
+      ),
+    )
+  })
 
   return <ClientContext.Provider value={value}>{props.children}</ClientContext.Provider>
 }

@@ -13,6 +13,41 @@ export class ModelConfig extends Schema.Class<ModelConfig>("ModelConfig")({
   plan: Schema.optional(Schema.String),
 }) {}
 
+// Custom Provider Configuration
+
+/** Custom model definition for user-defined providers */
+export class CustomModel extends Schema.Class<CustomModel>("CustomModel")({
+  id: Schema.String,
+  name: Schema.String,
+  contextLength: Schema.optional(Schema.Number),
+}) {}
+
+/** Supported provider API types */
+export const ProviderApi = Schema.Literal(
+  "anthropic",
+  "openai",
+  "openai-compatible",
+  "azure-openai",
+  "bedrock",
+  "google",
+  "mistral",
+)
+export type ProviderApi = typeof ProviderApi.Type
+
+/** Custom provider configuration */
+export class CustomProviderConfig extends Schema.Class<CustomProviderConfig>(
+  "CustomProviderConfig",
+)({
+  /** API type - determines which SDK/client to use */
+  api: ProviderApi,
+  /** Base URL for OpenAI-compatible APIs */
+  baseUrl: Schema.optional(Schema.String),
+  /** Environment variable name for API key */
+  apiKeyEnv: Schema.optional(Schema.String),
+  /** Custom models available from this provider */
+  models: Schema.optional(Schema.Array(CustomModel)),
+}) {}
+
 // Gent Configuration
 
 export class GentConfig extends Schema.Class<GentConfig>("GentConfig")({

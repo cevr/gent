@@ -32,7 +32,7 @@ import {
   SetAuthKeyPayload,
   DeleteAuthKeyPayload,
 } from "./operations.js"
-import { PermissionRule } from "@gent/core"
+import { PermissionRule, Model } from "@gent/core"
 import { GentRpcError } from "./errors.js"
 
 // ============================================================================
@@ -170,6 +170,12 @@ export class GentRpcs extends RpcGroup.make(
   }),
   Rpc.make("deleteAuthKey", {
     payload: DeleteAuthKeyPayload.fields,
+    error: GentRpcError,
+  }),
+
+  // Model RPCs
+  Rpc.make("listModels", {
+    success: Schema.Array(Model),
     error: GentRpcError,
   }),
 ) {}

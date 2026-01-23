@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
-import { ModelId, ProviderId, PermissionRule } from "@gent/core"
+import { ModelId, ProviderId, PermissionRule, CustomProviderConfig } from "@gent/core"
 
 // User config schema - stored at ~/.gent/config.json
 
@@ -8,6 +8,8 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   model: Schema.optional(ModelId),
   provider: Schema.optional(ProviderId),
   permissions: Schema.optional(Schema.Array(PermissionRule)),
+  /** Custom provider configurations keyed by provider name */
+  providers: Schema.optional(Schema.Record({ key: Schema.String, value: CustomProviderConfig })),
 }) {}
 
 // ConfigService Error
@@ -27,6 +29,9 @@ export interface ConfigServiceService {
   readonly getPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
   readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
   readonly removePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void>
+  readonly getCustomProviders: () => Effect.Effect<
+    Readonly<Record<string, CustomProviderConfig>> | undefined
+  >
 }
 
 export class ConfigService extends Context.Tag("ConfigService")<
@@ -59,10 +64,16 @@ export class ConfigService extends Context.Tag("ConfigService")<
         const userRules = user.permissions ?? []
         const permissions = [...projectRules, ...userRules]
 
+        // Merge providers: project overrides user for same key
+        const userProviders = user.providers ?? {}
+        const projectProviders = project.providers ?? {}
+        const mergedProviders = { ...userProviders, ...projectProviders }
+
         return new UserConfig({
           model: project.model ?? user.model,
           provider: project.provider ?? user.provider,
           permissions: permissions.length > 0 ? permissions : undefined,
+          providers: Object.keys(mergedProviders).length > 0 ? mergedProviders : undefined,
         })
       }
 
@@ -70,7 +81,9 @@ export class ConfigService extends Context.Tag("ConfigService")<
       const loadConfig = Effect.gen(function* () {
         const readConfig = (filePath: string) =>
           fs.exists(filePath).pipe(
-            Effect.flatMap((exists) => (exists ? fs.readFileString(filePath) : Effect.succeed("{}"))),
+            Effect.flatMap((exists) =>
+              exists ? fs.readFileString(filePath) : Effect.succeed("{}"),
+            ),
             Effect.flatMap((content) => Schema.decodeUnknown(UserConfigJson)(content)),
             Effect.catchAll(() => Effect.succeed(new UserConfig({}))),
           )
@@ -115,6 +128,7 @@ export class ConfigService extends Context.Tag("ConfigService")<
               model: partial.model ?? current.model,
               provider: partial.provider ?? current.provider,
               permissions: partial.permissions ?? current.permissions,
+              providers: partial.providers ?? current.providers,
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
@@ -149,6 +163,7 @@ export class ConfigService extends Context.Tag("ConfigService")<
               model: current.model,
               provider: current.provider,
               permissions,
+              providers: current.providers,
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
@@ -164,9 +179,18 @@ export class ConfigService extends Context.Tag("ConfigService")<
               model: current.model,
               provider: current.provider,
               permissions: permissions.length > 0 ? permissions : undefined,
+              providers: current.providers,
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
+          }),
+
+        getCustomProviders: () =>
+          Effect.gen(function* () {
+            const user = yield* Ref.get(userConfigRef)
+            const project = yield* Ref.get(projectConfigRef)
+            const merged = mergeConfigs(user, project)
+            return merged.providers
           }),
       }
 
@@ -180,10 +204,14 @@ export class ConfigService extends Context.Tag("ConfigService")<
 
     const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
       const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
+      const userProviders = user.providers ?? {}
+      const projectProviders = project.providers ?? {}
+      const mergedProviders = { ...userProviders, ...projectProviders }
       return new UserConfig({
         model: project.model ?? user.model,
         provider: project.provider ?? user.provider,
         permissions: permissions.length > 0 ? permissions : undefined,
+        providers: Object.keys(mergedProviders).length > 0 ? mergedProviders : undefined,
       })
     }
 
@@ -195,12 +223,15 @@ export class ConfigService extends Context.Tag("ConfigService")<
           return mergeConfigs(user, project)
         }),
       set: (partial) =>
-        Ref.update(userConfigRef, (current) =>
-          new UserConfig({
-            model: partial.model ?? current.model,
-            provider: partial.provider ?? current.provider,
-            permissions: partial.permissions ?? current.permissions,
-          }),
+        Ref.update(
+          userConfigRef,
+          (current) =>
+            new UserConfig({
+              model: partial.model ?? current.model,
+              provider: partial.provider ?? current.provider,
+              permissions: partial.permissions ?? current.permissions,
+              providers: partial.providers ?? current.providers,
+            }),
         ),
       getModel: () =>
         Effect.gen(function* () {
@@ -229,6 +260,7 @@ export class ConfigService extends Context.Tag("ConfigService")<
             model: current.model,
             provider: current.provider,
             permissions,
+            providers: current.providers,
           })
         }).pipe(Effect.asVoid),
       removePermissionRule: (tool, pattern) =>
@@ -240,8 +272,15 @@ export class ConfigService extends Context.Tag("ConfigService")<
             model: current.model,
             provider: current.provider,
             permissions: permissions.length > 0 ? permissions : undefined,
+            providers: current.providers,
           })
         }).pipe(Effect.asVoid),
+      getCustomProviders: () =>
+        Effect.gen(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return mergeConfigs(user, project).providers
+        }),
     })
   }
 }

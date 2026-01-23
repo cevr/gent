@@ -22,12 +22,18 @@ import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useRuntime } from "../hooks/use-runtime"
-import { InputState, transition, type InputEvent, type InputEffect } from "../components/input-state"
+import {
+  InputState,
+  transition,
+  type InputEvent,
+  type InputEffect,
+} from "../components/input-state"
 import { formatError, type UiError } from "../utils/format-error"
 import { BranchTree } from "../components/branch-tree"
 import { MessagePicker } from "../components/message-picker"
 import type { SessionEvent } from "../components/session-event-indicator"
-import type { QuestionsAsked, PermissionRequested, PlanPresented } from "@gent/core"
+import type { QuestionsAsked, PermissionRequested, PlanPresented, ModelId } from "@gent/core"
+import * as State from "../state"
 
 export interface SessionProps {
   sessionId: string
@@ -53,7 +59,9 @@ export function Session(props: SessionProps) {
   const [treeNodes, setTreeNodes] = createSignal<BranchTreeNode[]>([])
   const [forkOpen, setForkOpen] = createSignal(false)
   const [compacting, setCompacting] = createSignal(false)
+  const [modelToast, setModelToast] = createSignal<string | null>(null)
   let initialPromptSent = false
+  let modelToastTimer: ReturnType<typeof setTimeout> | null = null
   let eventSeq = 0
 
   const COMPACTION_MIN_MS = 600
@@ -128,13 +136,39 @@ export function Session(props: SessionProps) {
   onCleanup(() => {
     if (elapsedInterval) clearInterval(elapsedInterval)
     if (compactionTimer) clearTimeout(compactionTimer)
+    if (modelToastTimer) clearTimeout(modelToastTimer)
   })
+
+  // Cycle through current-gen models with Ctrl+P
+  const cycleModel = () => {
+    const currentGenModels = State.currentGenModels()
+    if (currentGenModels.length === 0) return
+
+    const currentId = State.currentModel()
+    const currentIdx = currentGenModels.findIndex((m) => m.id === currentId)
+    const nextIdx = (currentIdx + 1) % currentGenModels.length
+    const nextModel = currentGenModels[nextIdx]
+
+    if (nextModel) {
+      State.setModel(nextModel.id as ModelId)
+
+      // Show toast notification
+      if (modelToastTimer) clearTimeout(modelToastTimer)
+      setModelToast(`${nextModel.name}`)
+      modelToastTimer = setTimeout(() => {
+        setModelToast(null)
+        modelToastTimer = null
+      }, 2000)
+    }
+  }
 
   const indicator = (): Indicator | null => {
     const error = client.error()
     if (error) return { _tag: "error", message: error }
     if (compacting()) return { _tag: "compacting" }
     if (client.isStreaming()) return { _tag: "thinking" }
+    const toast = modelToast()
+    if (toast) return { _tag: "toast", message: `Model: ${toast}` }
     return null
   }
 
@@ -170,12 +204,12 @@ export function Session(props: SessionProps) {
             setMessages(msgs)
           }),
         ),
-          Effect.catchAll((err) =>
-            Effect.sync(() => {
-              client.setError(formatError(err))
-            }),
-          ),
+        Effect.catchAll((err) =>
+          Effect.sync(() => {
+            client.setError(formatError(err))
+          }),
         ),
+      ),
     )
   })
 
@@ -183,18 +217,20 @@ export function Session(props: SessionProps) {
     if (!props.initialPrompt || initialPromptSent) return
     initialPromptSent = true
     cast(
-      client.client.sendMessage({
-        sessionId: props.sessionId,
-        branchId: props.branchId,
-        content: props.initialPrompt,
-        mode: "plan",
-      }).pipe(
-        Effect.tapError((err) =>
-          Effect.sync(() => {
-            client.setError(formatError(err))
-          }),
+      client.client
+        .sendMessage({
+          sessionId: props.sessionId,
+          branchId: props.branchId,
+          content: props.initialPrompt,
+          mode: "plan",
+        })
+        .pipe(
+          Effect.tapError((err) =>
+            Effect.sync(() => {
+              client.setError(formatError(err))
+            }),
+          ),
         ),
-      ),
     )
   }
 
@@ -442,6 +478,12 @@ export function Session(props: SessionProps) {
     // Ctrl+O: toggle tool output expansion
     if (e.ctrl && e.name === "o") {
       setToolsExpanded((prev) => !prev)
+      return
+    }
+
+    // Ctrl+P: cycle through current-gen models (when not in command palette)
+    if (e.ctrl && e.name === "p" && !command.paletteOpen()) {
+      cycleModel()
       return
     }
   })

@@ -21,7 +21,8 @@ interface MenuItem {
 
 interface MenuLevel {
   title: string
-  items: MenuItem[]
+  items: MenuItem[] | (() => MenuItem[])
+  searchable?: boolean
 }
 
 export function CommandPalette() {
@@ -35,6 +36,8 @@ export function CommandPalette() {
   const [levelStack, setLevelStack] = createSignal<MenuLevel[]>([])
   const [selectedIndex, setSelectedIndex] = createSignal(0)
   const [sessions, setSessions] = createSignal<SessionInfo[]>([])
+  const [searchQuery, setSearchQuery] = createSignal("")
+  const [showAllModels, setShowAllModels] = createSignal(false)
 
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
@@ -152,39 +155,103 @@ export function CommandPalette() {
     }
   }
 
-  // Provider submenu - lists providers with current gen models
+  // Provider submenu - lists providers with models, or direct model list when searching
   const providerMenu = (): MenuLevel => ({
     title: "Model",
-    items: State.providers()
-      .filter((provider) => State.currentGenByProvider(provider.id).length > 0)
-      .map((provider) => ({
-        id: `provider.${provider.id}`,
-        title: provider.name,
-        onSelect: () => pushLevel(modelMenu(provider.id)),
-      })),
+    items: () => {
+      const query = searchQuery().toLowerCase().trim()
+
+      // If searching, show flat model list filtered by query
+      if (query) {
+        const allModels = showAllModels() ? State.models() : State.currentGenModels()
+        const filtered = allModels.filter(
+          (m) =>
+            m.name.toLowerCase().includes(query) ||
+            m.id.toLowerCase().includes(query) ||
+            m.provider.toLowerCase().includes(query),
+        )
+        const currentModelId = State.currentModel()
+
+        const items: MenuItem[] = filtered.map((m) => {
+          const isActive = m.id === currentModelId
+          const providerInfo = State.providers().find((p) => p.id === m.provider)
+          return {
+            id: `model.${m.id}`,
+            title: isActive
+              ? `${providerInfo?.name ?? m.provider}/${m.name} •`
+              : `${providerInfo?.name ?? m.provider}/${m.name}`,
+            onSelect: () => {
+              State.setModel(m.id as ModelId)
+              command.closePalette()
+            },
+          }
+        })
+
+        // Add "Show all models" toggle if not already showing all
+        if (!showAllModels() && items.length < 10) {
+          items.push({
+            id: "model.show-all",
+            title: "Show all models...",
+            onSelect: () => {
+              setShowAllModels(true)
+              setSelectedIndex(0)
+            },
+          })
+        }
+
+        return items
+      }
+
+      // No search - show provider list
+      return State.providers()
+        .filter((provider) => State.currentGenByProvider(provider.id).length > 0)
+        .map((provider) => ({
+          id: `provider.${provider.id}`,
+          title: provider.name,
+          onSelect: () => pushLevel(modelMenu(provider.id)),
+        }))
+    },
+    searchable: true,
   })
 
-  // Model submenu for a specific provider (current gen only)
+  // Model submenu for a specific provider (current gen only, unless showAll)
   const modelMenu = (providerId: string): MenuLevel => {
     const currentModelId = State.currentModel()
-    const providerModels = State.currentGenByProvider(
-      providerId as Parameters<typeof State.currentGenByProvider>[0],
-    )
     const providerInfo = State.providers().find((p) => p.id === providerId)
-
     return {
       title: providerInfo?.name ?? providerId,
-      items: providerModels.map((m) => {
-        const isActive = m.id === currentModelId
-        return {
-          id: `model.${m.id}`,
-          title: isActive ? `${m.name} •` : m.name,
-          onSelect: () => {
-            State.setModel(m.id as ModelId)
-            command.closePalette()
-          },
+      items: () => {
+        const providerModels = showAllModels()
+          ? State.modelsByProvider(providerId)
+          : State.currentGenByProvider(providerId)
+
+        const items: MenuItem[] = providerModels.map((m) => {
+          const isActive = m.id === currentModelId
+          return {
+            id: `model.${m.id}`,
+            title: isActive ? `${m.name} •` : m.name,
+            onSelect: () => {
+              State.setModel(m.id as ModelId)
+              command.closePalette()
+            },
+          }
+        })
+
+        // Add "Show all models" toggle if not already showing all
+        if (!showAllModels()) {
+          items.push({
+            id: "model.show-all",
+            title: "Show all models...",
+            onSelect: () => {
+              setShowAllModels(true)
+              setSelectedIndex(0)
+            },
+          })
         }
-      }),
+
+        return items
+      },
+      searchable: true,
     }
   }
 
@@ -193,12 +260,20 @@ export function CommandPalette() {
     return stack.length > 0 ? (stack[stack.length - 1] ?? rootMenu()) : rootMenu()
   }
 
+  const levelItems = (level: MenuLevel) =>
+    typeof level.items === "function" ? level.items() : level.items
+
+  const currentItems = () => levelItems(currentLevel())
+
   const pushLevel = (level: MenuLevel) => {
     setLevelStack((stack) => [...stack, level])
     setSelectedIndex(0)
+    setSearchQuery("")
   }
 
   const popLevel = () => {
+    setSearchQuery("")
+    setShowAllModels(false)
     if (levelStack().length > 0) {
       setLevelStack((stack) => stack.slice(0, -1))
       setSelectedIndex(0)
@@ -208,7 +283,7 @@ export function CommandPalette() {
   }
 
   const handleSelect = () => {
-    const items = currentLevel().items
+    const items = currentItems()
     const item = items[selectedIndex()]
     if (item) {
       item.onSelect()
@@ -219,18 +294,42 @@ export function CommandPalette() {
   const resetPalette = () => {
     setLevelStack([])
     setSelectedIndex(0)
+    setSearchQuery("")
+    setShowAllModels(false)
   }
 
   useKeyboard((e) => {
     if (!command.paletteOpen()) return
 
-    if (e.name === "escape" || e.name === "left") {
+    const level = currentLevel()
+
+    if (e.name === "escape") {
+      // Clear search first, then pop level
+      if (searchQuery()) {
+        setSearchQuery("")
+        setSelectedIndex(0)
+        return
+      }
       popLevel()
       return
     }
 
-    if (e.name === "backspace" && levelStack().length > 0) {
+    if (e.name === "left") {
       popLevel()
+      return
+    }
+
+    if (e.name === "backspace") {
+      // Handle search query backspace
+      if (level.searchable && searchQuery()) {
+        setSearchQuery((q) => q.slice(0, -1))
+        setSelectedIndex(0)
+        return
+      }
+      if (levelStack().length > 0) {
+        popLevel()
+        return
+      }
       return
     }
 
@@ -239,7 +338,7 @@ export function CommandPalette() {
       return
     }
 
-    const items = currentLevel().items
+    const items = levelItems(level)
     if (e.name === "up" || (e.ctrl && e.name === "p")) {
       setSelectedIndex((i) => (i > 0 ? i - 1 : items.length - 1))
       return
@@ -248,6 +347,17 @@ export function CommandPalette() {
     if (e.name === "down" || (e.ctrl && e.name === "n")) {
       setSelectedIndex((i) => (i < items.length - 1 ? i + 1 : 0))
       return
+    }
+
+    // Handle search input for searchable levels
+    if (level.searchable && e.sequence && e.sequence.length === 1) {
+      const char = e.sequence
+      // Only accept printable characters
+      if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
+        setSearchQuery((q) => q + char)
+        setSelectedIndex(0)
+        return
+      }
     }
   })
 
@@ -294,13 +404,17 @@ export function CommandPalette() {
         borderColor={theme.borderSubtle}
         flexDirection="column"
       >
-        {/* Header */}
+        {/* Header with search */}
         <box paddingLeft={1} paddingRight={1} flexShrink={0}>
           <text style={{ fg: theme.text }}>
             <Show when={breadcrumb()}>
               <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
             </Show>
-            {currentLevel().title}
+            <Show when={currentLevel().searchable && searchQuery()} fallback={currentLevel().title}>
+              <span style={{ fg: theme.textMuted }}>Search: </span>
+              {searchQuery()}
+              <span style={{ fg: theme.primary }}>│</span>
+            </Show>
           </text>
         </box>
 
@@ -311,7 +425,7 @@ export function CommandPalette() {
 
         {/* Items */}
         <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
-          <For each={currentLevel().items}>
+          <For each={currentItems()}>
             {(item, index) => {
               const isSelected = () => selectedIndex() === index()
               return (

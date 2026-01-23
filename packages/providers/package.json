@@ -7,6 +7,8 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "catalog:",
+    "@ai-sdk/google": "catalog:",
+    "@ai-sdk/mistral": "catalog:",
     "@ai-sdk/openai": "catalog:",
     "@gent/core": "workspace:*",
     "ai": "catalog:"

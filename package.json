@@ -28,6 +28,8 @@
     "multipasta": "^0.2.7"
   },
   "devDependencies": {
+    "@ai-sdk/google": "^3.0.13",
+    "@ai-sdk/mistral": "^3.0.12",
     "@effect/language-service": "^0.72.0",
     "@effect/platform": "^0.94.2",
     "@effect/platform-bun": "^0.87.1",
@@ -55,6 +57,8 @@
     "ai": "^6.0.39",
     "@ai-sdk/anthropic": "^2.0.0",
     "@ai-sdk/openai": "^2.0.0",
+    "@ai-sdk/google": "^3.0.13",
+    "@ai-sdk/mistral": "^3.0.12",
     "vitest": "^3.1.3"
   }
 }

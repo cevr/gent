@@ -12,6 +12,7 @@ import type {
   PermissionDecision,
   PlanDecision,
   PermissionRule,
+  Model,
 } from "@gent/core"
 
 export type { MessagePart, TextPart, ToolCallPart, ToolResultPart, PermissionRule }
@@ -304,6 +305,9 @@ export interface GentClient {
   /** Delete auth key for a provider */
   deleteAuthKey: (provider: string) => Effect.Effect<void, GentRpcError>
 
+  /** List all available models (built-in + custom) */
+  listModels: () => Effect.Effect<readonly Model[], GentRpcError>
+
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<unknown>
 }
@@ -341,9 +345,9 @@ export function createClient(
     getBranchTree: (sessionId) => rpcClient.getBranchTree({ sessionId }),
 
     createBranch: (sessionId, name) =>
-      rpcClient.createBranch({ sessionId, ...(name !== undefined ? { name } : {}) }).pipe(
-        Effect.map((result) => result.branchId),
-      ),
+      rpcClient
+        .createBranch({ sessionId, ...(name !== undefined ? { name } : {}) })
+        .pipe(Effect.map((result) => result.branchId)),
 
     switchBranch: (input) =>
       rpcClient.switchBranch({
@@ -409,6 +413,8 @@ export function createClient(
     setAuthKey: (provider, key) => rpcClient.setAuthKey({ provider, key }),
 
     deleteAuthKey: (provider) => rpcClient.deleteAuthKey({ provider }),
+
+    listModels: () => rpcClient.listModels(),
 
     runtime,
   }

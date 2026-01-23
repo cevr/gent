@@ -1,6 +1,5 @@
 import { Context, Effect, Layer, Schema, Stream, JSONSchema } from "effect"
-import type { Message, AnyToolDefinition, TextPart, ToolResultPart, AuthStorageService } from "@gent/core"
-import { AuthStorage } from "@gent/core"
+import type { Message, AnyToolDefinition, TextPart, ToolResultPart } from "@gent/core"
 import {
   streamText,
   generateText,
@@ -11,10 +10,7 @@ import {
   type ToolModelMessage,
   type ToolResultPart as AIToolResultPart,
 } from "ai"
-import { createAnthropic } from "@ai-sdk/anthropic"
-import { createOpenAI } from "@ai-sdk/openai"
-import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
-import { fromIni } from "@aws-sdk/credential-providers"
+import { ProviderFactory } from "./provider-factory"
 
 // Provider Error
 
@@ -84,23 +80,14 @@ export interface ProviderService {
 }
 
 export class Provider extends Context.Tag("Provider")<Provider, ProviderService>() {
-  static Live: Layer.Layer<Provider, never, AuthStorage> = Layer.effect(
+  static Live: Layer.Layer<Provider, never, ProviderFactory> = Layer.effect(
     Provider,
     Effect.gen(function* () {
-      const authStorage = yield* AuthStorage
+      const factory = yield* ProviderFactory
 
       return {
         stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
-          const [providerName, modelName] = parseModelId(request.model)
-          const apiKey = yield* resolveApiKey(providerName, authStorage)
-          const provider = getProvider(providerName, apiKey)
-
-          if (!provider) {
-            return yield* new ProviderError({
-              message: `Unknown provider: ${providerName}`,
-              model: request.model,
-            })
-          }
+          const model = yield* factory.getModel(request.model)
 
           const messages = convertMessages(request.messages)
           const tools = request.tools ? convertTools(request.tools) : undefined
@@ -110,7 +97,7 @@ export class Provider extends Context.Tag("Provider")<Provider, ProviderService>
             ;(async () => {
               try {
                 const opts: Parameters<typeof streamText>[0] = {
-                  model: provider(modelName),
+                  model,
                   messages,
                 }
                 if (tools) opts.tools = tools
@@ -177,19 +164,10 @@ export class Provider extends Context.Tag("Provider")<Provider, ProviderService>
         }),
 
         generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
-          const [providerName, modelName] = parseModelId(request.model)
-          const apiKey = yield* resolveApiKey(providerName, authStorage)
-          const provider = getProvider(providerName, apiKey)
-
-          if (!provider) {
-            return yield* new ProviderError({
-              message: `Unknown provider: ${providerName}`,
-              model: request.model,
-            })
-          }
+          const model = yield* factory.getModel(request.model)
 
           const opts: Parameters<typeof generateText>[0] = {
-            model: provider(modelName),
+            model,
             prompt: request.prompt,
           }
           if (request.systemPrompt) opts.system = request.systemPrompt
@@ -220,64 +198,6 @@ export class Provider extends Context.Tag("Provider")<Provider, ProviderService>
         ),
       generate: () => Effect.succeed("test response"),
     })
-  }
-}
-
-// Helpers
-
-function parseModelId(modelId: string): [string, string] {
-  const slash = modelId.indexOf("/")
-  if (slash === -1) {
-    return ["anthropic", modelId]
-  }
-  return [modelId.slice(0, slash), modelId.slice(slash + 1)]
-}
-
-// Maps provider name to env var name
-const PROVIDER_ENV_VARS: Record<string, string> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-}
-
-// Resolve API key: env var → AuthStorage → undefined
-const resolveApiKey = (
-  providerName: string,
-  auth: AuthStorageService,
-): Effect.Effect<string | undefined> => {
-  // Check env var first
-  const envVar = PROVIDER_ENV_VARS[providerName]
-  if (envVar) {
-    const envKey = process.env[envVar]
-    if (envKey) return Effect.succeed(envKey)
-  }
-
-  // Fall back to AuthStorage
-  return auth.get(providerName).pipe(
-    Effect.catchAll(() => Effect.succeed(undefined as string | undefined)),
-  )
-}
-
-function getProvider(name: string, apiKey: string | undefined) {
-  switch (name) {
-    case "anthropic":
-      return createAnthropic(apiKey ? { apiKey } : undefined)
-    case "openai":
-      return createOpenAI(apiKey ? { apiKey } : undefined)
-    case "bedrock":
-      // Bedrock uses AWS credentials, not API keys
-      return createAmazonBedrock({
-        region: process.env["AWS_REGION"] ?? "us-east-1",
-        credentialProvider: async () => {
-          const creds = await fromIni()()
-          return {
-            accessKeyId: creds.accessKeyId,
-            secretAccessKey: creds.secretAccessKey,
-            ...(creds.sessionToken && { sessionToken: creds.sessionToken }),
-          }
-        },
-      })
-    default:
-      return undefined
   }
 }
 

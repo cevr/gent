@@ -60,12 +60,7 @@ export {
 } from "./event.js"
 
 // Permission Types
-export {
-  Permission,
-  PermissionRule,
-  PermissionResult,
-  PermissionDecision,
-} from "./permission"
+export { Permission, PermissionRule, PermissionResult, PermissionDecision } from "./permission"
 
 // Permission Handler
 export { PermissionHandler } from "./permission-handler"
@@ -74,7 +69,15 @@ export { PermissionHandler } from "./permission-handler"
 export { PlanHandler } from "./plan-handler"
 
 // Config Types
-export { AgentMode, GentConfig, ModelConfig, defaultConfig } from "./config"
+export {
+  AgentMode,
+  GentConfig,
+  ModelConfig,
+  defaultConfig,
+  CustomModel,
+  CustomProviderConfig,
+  ProviderApi,
+} from "./config"
 
 // Plan Mode
 export { PLAN_MODE_TOOLS, isToolAllowedInPlanMode } from "./plan-mode"

@@ -11,7 +11,7 @@ import {
   type EventStore,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
-import { Provider } from "@gent/providers"
+import { Provider, ProviderFactory, CustomProvidersConfig } from "@gent/providers"
 import {
   AgentLoop,
   SteerCommand,
@@ -134,6 +134,7 @@ export const createDependencies = (
 ): Layer.Layer<
   | Storage
   | Provider
+  | ProviderFactory
   | ToolRegistry
   | EventStore
   | Permission
@@ -178,17 +179,37 @@ export const createDependencies = (
 
   const AuthStorageLive = AuthStorage.LiveKeychain("gent")
 
-  const ProviderLive = Layer.provide(Provider.Live, AuthStorageLive)
-
-  const BaseServicesLive = Layer.mergeAll(
+  // Base services that don't depend on ConfigService
+  const CoreServicesLive = Layer.mergeAll(
     StorageLive,
-    ProviderLive,
     AuthStorageLive,
     ToolRegistry.Live(AllTools),
     EventStoreLayer,
     ConfigServiceLive,
     InstructionsLoaderLive,
     SkillsLive,
+  )
+
+  // ProviderFactory needs custom providers from config - must be after ConfigService
+  const ProviderFactoryLive = Layer.unwrapEffect(
+    Effect.gen(function* () {
+      const configService = yield* ConfigService
+      const customProviders = yield* configService.getCustomProviders()
+      const customProvidersLayer = CustomProvidersConfig.fromConfig(customProviders)
+      return Layer.merge(
+        customProvidersLayer,
+        Layer.provide(ProviderFactory.Live, Layer.merge(AuthStorageLive, customProvidersLayer)),
+      )
+    }),
+  )
+
+  // Provider depends on ProviderFactory
+  const ProviderLive = Layer.provide(Provider.Live, ProviderFactoryLive)
+
+  // Build base services with provider layers on top
+  const BaseServicesLive = Layer.merge(
+    CoreServicesLive,
+    Layer.provideMerge(Layer.merge(ProviderLive, ProviderFactoryLive), CoreServicesLive),
   )
 
   const PermissionLayer = Layer.provide(PermissionLive, BaseServicesLive)
