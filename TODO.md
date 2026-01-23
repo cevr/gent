@@ -9,7 +9,7 @@ Priority: P0 critical, P1 high, P2 medium, P3 low.
   - Touch: `packages/server/src/system-prompt.ts`, `packages/server/src/index.ts`, `packages/runtime/src/config-service.ts`, `packages/core/src/skills.ts`, `packages/core/src/permission.ts`, `packages/core/src/auth-storage.ts`, maybe new `packages/runtime/src/prompt-loader.ts`
   - Plan needs: config precedence rules; AGENTS/CLAUDE/SYSTEM/APPEND behavior; where to persist permission rules; UX for permission decisions; tests in `tests/` + `apps/tui/tests/`
 
-- [ ] P1 - Session lifecycle UX (compact, tree nav, branch summaries, resume)
+- [x] P1 - Session lifecycle UX (compact, tree nav, branch summaries, resume)
   - Rationale: long-session viability; parity with pi/opencode
   - Research: `packages/runtime/src/checkpoint.ts` (compaction), `packages/runtime/src/agent-loop.ts` (checkpoint use), `packages/storage/src/sqlite-storage.ts` (checkpoints/branches), `packages/core/src/event.ts` (Compaction*, Plan*, Todo*), `apps/tui/src/routes/session.tsx` (slash cmds + stream), `apps/tui/src/commands/slash-commands.ts` (compact stub)
   - External refs: `~/.cache/repo/badlogic/pi-mono/packages/coding-agent/docs/compaction.md`, `~/.cache/repo/badlogic/pi-mono/packages/coding-agent/docs/tree.md`, `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/sessions.mdx` (if added), `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/share.mdx`
