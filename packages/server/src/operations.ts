@@ -15,18 +15,21 @@ export const CreateSessionPayload = Schema.Struct({
   name: Schema.optional(Schema.String),
   firstMessage: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
+  bypass: Schema.optional(Schema.Boolean),
 })
 
 export const CreateSessionSuccess = Schema.Struct({
   sessionId: Schema.String,
   branchId: Schema.String,
   name: Schema.String,
+  bypass: Schema.Boolean,
 })
 
 export const SessionInfo = Schema.Struct({
   id: Schema.String,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
+  bypass: Schema.optional(Schema.Boolean),
   branchId: Schema.optional(Schema.String),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
@@ -142,6 +145,7 @@ export const SessionState = Schema.Struct({
   isStreaming: Schema.Boolean,
   mode: AgentMode,
   model: Schema.optional(Schema.String),
+  bypass: Schema.optional(Schema.Boolean),
 })
 
 // ============================================================================
@@ -179,6 +183,16 @@ export const RespondQuestionsPayload = Schema.Struct({
 export const RespondPermissionPayload = Schema.Struct({
   requestId: Schema.String,
   decision: PermissionDecision,
+  persist: Schema.optional(Schema.Boolean),
+})
+
+export const UpdateSessionBypassPayload = Schema.Struct({
+  sessionId: Schema.String,
+  bypass: Schema.Boolean,
+})
+
+export const UpdateSessionBypassSuccess = Schema.Struct({
+  bypass: Schema.Boolean,
 })
 
 export const RespondPlanPayload = Schema.Struct({

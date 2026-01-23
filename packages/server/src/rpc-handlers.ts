@@ -3,7 +3,8 @@ import { GentRpcs } from "./rpcs"
 import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
-import { PermissionHandler, PlanHandler } from "@gent/core"
+import { Permission, PermissionHandler, PermissionRule, PlanHandler } from "@gent/core"
+import { ConfigService } from "@gent/runtime"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -15,6 +16,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const askUserHandler = yield* AskUserHandler
     const permissionHandler = yield* PermissionHandler
     const planHandler = yield* PlanHandler
+    const permission = yield* Permission
+    const configService = yield* ConfigService
 
     return {
       createSession: (input) =>
@@ -23,6 +26,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
             ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
           }),
 
       listSessions: () => core.listSessions(),
@@ -86,14 +90,27 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       respondQuestions: ({ requestId, answers }) =>
         askUserHandler.respond(requestId, answers),
 
-      respondPermission: ({ requestId, decision }) =>
-        permissionHandler.respond(requestId, decision),
+      respondPermission: ({ requestId, decision, persist }) =>
+        Effect.gen(function* () {
+          const request = yield* permissionHandler.respond(requestId, decision)
+          if (persist && decision === "allow" && request) {
+            const rule = new PermissionRule({
+              tool: request.toolName,
+              action: "allow",
+            })
+            yield* configService.addPermissionRule(rule)
+            yield* permission.addRule(rule)
+          }
+        }),
 
       respondPlan: ({ requestId, decision, reason }) =>
         planHandler.respond(requestId, decision, reason),
 
       compactBranch: ({ sessionId, branchId }) =>
         core.compactBranch({ sessionId, branchId }),
+
+      updateSessionBypass: ({ sessionId, bypass }) =>
+        core.updateSessionBypass({ sessionId, bypass }),
     }
   }),
 )

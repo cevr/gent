@@ -87,7 +87,10 @@ interface AgentLoopState {
 // Agent Loop Service
 
 export interface AgentLoopService {
-  readonly run: (message: Message) => Effect.Effect<void, AgentLoopError>
+  readonly run: (
+    message: Message,
+    options?: { bypass?: boolean },
+  ) => Effect.Effect<void, AgentLoopError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void>
   readonly followUp: (message: Message) => Effect.Effect<void, AgentLoopError>
   readonly isRunning: () => Effect.Effect<boolean>
@@ -199,6 +202,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
         const executeToolCall = Effect.fn("AgentLoop.executeToolCall")(function* (
           toolCall: ToolCallPart,
           ctx: ToolContext,
+          options?: { bypass?: boolean },
         ) {
           const tool = yield* toolRegistry.get(toolCall.toolName)
 
@@ -215,7 +219,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
           }
 
           // Check permission
-          const permResult = yield* permission.check(toolCall.toolName, toolCall.input)
+          const permResult = options?.bypass
+            ? "allowed"
+            : yield* permission.check(toolCall.toolName, toolCall.input)
 
           if (permResult === "denied") {
             return new ToolResultPart({
@@ -281,9 +287,15 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
           sessionId: string,
           branchId: string,
           initialMessage: Message,
+          bypass: boolean,
         ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError | EventStoreError> = Effect.fn(
           "AgentLoop.runLoop",
-        )(function* (sessionId: string, branchId: string, initialMessage: Message) {
+        )(function* (
+          sessionId: string,
+          branchId: string,
+          initialMessage: Message,
+          bypass: boolean,
+        ) {
           const enqueueInterject = Effect.fn("AgentLoop.enqueueInterject")(function* (
             content: string,
             createdAt?: Date,
@@ -553,11 +565,15 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                   }),
                 )
 
-                const result = yield* executeToolCall(toolCall, {
-                  sessionId,
-                  branchId,
-                  toolCallId: toolCall.toolCallId,
-                })
+                const result = yield* executeToolCall(
+                  toolCall,
+                  {
+                    sessionId,
+                    branchId,
+                    toolCallId: toolCall.toolCallId,
+                  },
+                  { bypass },
+                )
 
                 toolResults.push(result)
 
@@ -611,13 +627,17 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               ...s,
               followUpQueue: s.followUpQueue.slice(1),
             }))
-            yield* runLoop(sessionId, branchId, nextMessage)
+            yield* runLoop(sessionId, branchId, nextMessage, bypass)
           }
         })
 
         const service: AgentLoopService = {
-          run: Effect.fn("AgentLoop.run")(function* (message: Message) {
+          run: Effect.fn("AgentLoop.run")(function* (
+            message: Message,
+            options?: { bypass?: boolean },
+          ) {
             const isRunning = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.running))
+            const bypass = options?.bypass ?? true
 
             if (isRunning) {
               // Queue as follow-up
@@ -631,7 +651,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
             yield* Ref.update(stateRef, (s) => ({ ...s, running: true }))
 
             yield* (
-              runLoop(message.sessionId, message.branchId, message) as Effect.Effect<
+              runLoop(message.sessionId, message.branchId, message, bypass) as Effect.Effect<
                 void,
                 AgentLoopError | StorageError | ProviderError | EventStoreError
               >

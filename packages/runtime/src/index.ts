@@ -22,6 +22,8 @@ export {
   type ConfigServiceService,
 } from "./config-service.js"
 
+export { InstructionsLoader, type InstructionsLoaderService } from "./instructions-loader.js"
+
 export {
   RetryConfig,
   DEFAULT_RETRY_CONFIG,

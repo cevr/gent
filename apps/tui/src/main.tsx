@@ -9,7 +9,6 @@ import {
   createDependencies,
   GentCore,
   RpcHandlersLive,
-  DEFAULT_SYSTEM_PROMPT,
   GentRpcs,
   type GentCoreService,
   type GentCoreError,
@@ -52,9 +51,10 @@ const resolveInitialState = (input: {
   headless: boolean
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
+  bypass: boolean
 }): Effect.Effect<InitialState, GentCoreError> =>
   Effect.gen(function* () {
-    const { core, cwd, session, continue_, headless, prompt, promptArg } = input
+    const { core, cwd, session, continue_, headless, prompt, promptArg, bypass } = input
 
     // 1. Headless mode
     if (headless) {
@@ -72,11 +72,12 @@ const resolveInitialState = (input: {
           return process.exit(1)
         }
       } else {
-        const result = yield* core.createSession({ name: "headless session", cwd })
+        const result = yield* core.createSession({ name: "headless session", cwd, bypass })
         sess = {
           id: result.sessionId,
           name: result.name,
           cwd,
+          bypass: result.bypass,
           branchId: result.branchId,
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -109,11 +110,12 @@ const resolveInitialState = (input: {
     if (continue_) {
       let sess = yield* core.getLastSessionByCwd(cwd)
       if (!sess) {
-        const result = yield* core.createSession({ cwd })
+        const result = yield* core.createSession({ cwd, bypass })
         sess = {
           id: result.sessionId,
           name: result.name,
           cwd,
+          bypass: result.bypass,
           branchId: result.branchId,
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -134,11 +136,12 @@ const resolveInitialState = (input: {
 
     // 4. Prompt without session - create new
     if (Option.isSome(prompt)) {
-      const result = yield* core.createSession({ cwd })
+      const result = yield* core.createSession({ cwd, bypass })
       const sess: SessionInfo = {
         id: result.sessionId,
         name: result.name,
         cwd,
+        bypass: result.bypass,
         branchId: result.branchId,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -164,7 +167,7 @@ const TracerLayer = DevTracerLive(TRACE_LOG)
 
 // Dependencies layer with tracing
 const ServerDepsLayer = createDependencies({
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  cwd: process.cwd(),
   defaultModel: DEFAULT_MODEL_ID,
   dbPath: DB_PATH,
 }).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
@@ -263,8 +266,14 @@ const main = Command.make(
       Args.withDescription("Prompt for headless mode"),
       Args.optional,
     ),
+    bypass: Options.boolean("bypass").pipe(
+      Options.withDescription(
+        "Auto-allow all tool calls (default: true, use --no-bypass to disable)",
+      ),
+      Options.withDefault(true),
+    ),
   },
-  ({ session, continue_, headless, prompt, promptArg }) =>
+  ({ session, continue_, headless, prompt, promptArg, bypass }) =>
     Effect.gen(function* () {
       // Get core service for direct access (headless, session management)
       const core = yield* GentCore
@@ -279,6 +288,7 @@ const main = Command.make(
         headless,
         prompt,
         promptArg,
+        bypass,
       })
 
       // Handle headless mode
@@ -312,6 +322,7 @@ const main = Command.make(
           branchId: state.session.branchId,
           name: state.session.name ?? "Unnamed",
           model: undefined, // Model loaded from branch on first message
+          bypass: state.session.bypass ?? true,
         }
         initialRoute = Route.session(state.session.id, state.session.branchId)
         initialPrompt = state.prompt

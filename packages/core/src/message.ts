@@ -69,6 +69,7 @@ export class Session extends Schema.Class<Session>("Session")({
   id: Schema.String,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
+  bypass: Schema.optional(Schema.Boolean),
   createdAt: Schema.DateFromNumber,
   updatedAt: Schema.DateFromNumber,
 }) {}

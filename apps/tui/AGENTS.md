@@ -128,8 +128,11 @@ Special prefixes at input start trigger different modes:
 | `/model`    | Open model picker       |
 | `/clear`    | Clear messages          |
 | `/sessions` | Open sessions picker    |
-| `/compact`  | Compact history (TODO)  |
+| `/compact`  | Compact history         |
 | `/branch`   | Create new branch       |
+| `/tree`     | Browse branch tree      |
+| `/fork`     | Fork from a message     |
+| `/bypass`   | Toggle permission bypass |
 
 ## Key Files (Input System)
 

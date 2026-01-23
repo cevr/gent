@@ -1,18 +1,28 @@
-import { Layer } from "effect"
-import type { FileSystem, Path } from "@effect/platform"
+import { Effect, Layer } from "effect"
+import { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
 import {
   ToolRegistry,
   Permission,
   PermissionHandler,
   PlanHandler,
+  Skills,
   type EventStore,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
-import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
+import {
+  AgentLoop,
+  SteerCommand,
+  AgentLoopError,
+  CheckpointService,
+  ConfigService,
+  InstructionsLoader,
+} from "@gent/runtime"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
 import { EventStoreLive } from "./event-store.js"
+import { buildSystemPrompt } from "./system-prompt.js"
+import * as nodePath from "node:path"
 import {
   GentCore,
   type GentCoreService,
@@ -81,6 +91,8 @@ export {
   RespondPermissionPayload,
   RespondPlanPayload,
   CompactBranchPayload,
+  UpdateSessionBypassPayload,
+  UpdateSessionBypassSuccess,
 } from "./operations.js"
 
 // RPC definitions
@@ -103,10 +115,11 @@ export {
 // ============================================================================
 
 export interface DependenciesConfig {
-  systemPrompt: string
+  cwd: string
   defaultModel: string
   dbPath?: string
   compactionModel?: string
+  skillsDirs?: ReadonlyArray<string>
 }
 
 /**
@@ -120,6 +133,9 @@ export const createDependencies = (
   | ToolRegistry
   | EventStore
   | Permission
+  | Skills
+  | ConfigService
+  | InstructionsLoader
   | PermissionHandler
   | AgentLoop
   | CheckpointService
@@ -133,39 +149,87 @@ export const createDependencies = (
 
   const EventStoreLayer = Layer.provide(EventStoreLive, StorageLive)
 
+  const ConfigServiceLive = ConfigService.Live
+  const InstructionsLoaderLive = InstructionsLoader.Live
+
+  const home = process.env["HOME"] ?? "~"
+  const globalSkillsDir = nodePath.join(home, ".gent", "skills")
+  const claudeSkillsDir = nodePath.join(home, ".claude", "skills")
+
+  const SkillsLive = Skills.Live({
+    cwd: config.cwd,
+    globalDir: globalSkillsDir,
+    claudeSkillsDir,
+    extraDirs: config.skillsDirs,
+  })
+
+  const PermissionLive = Layer.unwrapEffect(
+    Effect.gen(function* () {
+      const configService = yield* ConfigService
+      const rules = yield* configService.getPermissionRules()
+      return Permission.Live(rules, "ask")
+    }),
+  )
+
   const BaseServicesLive = Layer.mergeAll(
     StorageLive,
     Provider.Live,
     ToolRegistry.Live(AllTools),
     EventStoreLayer,
-    Permission.Live(),
+    ConfigServiceLive,
+    InstructionsLoaderLive,
+    SkillsLive,
   )
 
+  const PermissionLayer = Layer.provide(PermissionLive, BaseServicesLive)
+  const BaseWithPermission = Layer.merge(BaseServicesLive, PermissionLayer)
+
   // AskUserHandler requires EventStore
-  const AskUserHandlerLive = Layer.provide(AskUserHandler.Live, BaseServicesLive)
+  const AskUserHandlerLive = Layer.provide(AskUserHandler.Live, BaseWithPermission)
   const QuestionHandlerLive = Layer.provide(QuestionHandler.Live, AskUserHandlerLive)
 
   // PermissionHandler requires EventStore
-  const PermissionHandlerLive = Layer.provide(PermissionHandler.Live, BaseServicesLive)
+  const PermissionHandlerLive = Layer.provide(PermissionHandler.Live, BaseWithPermission)
 
   // PlanHandler requires EventStore
-  const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseServicesLive)
+  const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseWithPermission)
 
   // CheckpointService requires Storage and Provider
   const CheckpointServiceLive = CheckpointService.Live(
     config.compactionModel ?? "anthropic/claude-haiku-4-5-20251001",
   )
-  const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseServicesLive)
+  const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseWithPermission)
 
   // AgentLoop requires CheckpointService and FileSystem
-  const AgentLoopLive = AgentLoop.Live({
-    systemPrompt: config.systemPrompt,
-    defaultModel: config.defaultModel,
-  })
+  const AgentLoopLive = Layer.unwrapEffect(
+    Effect.gen(function* () {
+      const instructions = yield* InstructionsLoader
+      const skills = yield* Skills
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+
+      const customInstructions = yield* instructions.load(config.cwd)
+      const skillsList = yield* skills.list()
+      const isGitRepo = yield* fs.exists(path.join(config.cwd, ".git"))
+
+      const systemPrompt = buildSystemPrompt({
+        cwd: config.cwd,
+        platform: process.platform,
+        isGitRepo,
+        customInstructions,
+        skills: skillsList,
+      })
+
+      return AgentLoop.Live({
+        systemPrompt,
+        defaultModel: config.defaultModel,
+      })
+    }),
+  )
 
   // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
   const AllDeps = Layer.mergeAll(
-    BaseServicesLive,
+    BaseWithPermission,
     CheckpointLayer,
     AskUserHandlerLive,
     QuestionHandlerLive,

@@ -2,6 +2,9 @@
  * System prompt construction
  */
 
+import type { Skill } from "@gent/core"
+import { formatSkillsForPrompt } from "@gent/core"
+
 export const DEFAULT_SYSTEM_PROMPT = `You are Gent, a coding assistant.
 
 # Character
@@ -51,8 +54,9 @@ export function buildSystemPrompt(options: {
   platform: string
   isGitRepo: boolean
   customInstructions?: string
+  skills?: ReadonlyArray<Skill>
 }): string {
-  const { cwd, platform, isGitRepo, customInstructions } = options
+  const { cwd, platform, isGitRepo, customInstructions, skills } = options
 
   const date = new Date().toISOString().split("T")[0]
 
@@ -73,6 +77,13 @@ Date: ${date}`
 # Project Instructions
 
 ${customInstructions}`
+  }
+
+  const skillsBlock = skills ? formatSkillsForPrompt(skills) : ""
+  if (skillsBlock) {
+    prompt += `
+
+${skillsBlock}`
   }
 
   return prompt

@@ -10,7 +10,6 @@
     "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/server": "workspace:*",
-    "find-my-way-ts": "catalog:",
     "msgpackr": "catalog:",
     "multipasta": "catalog:"
   },

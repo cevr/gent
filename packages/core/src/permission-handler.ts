@@ -8,7 +8,19 @@ export interface PermissionHandlerService {
     params: { toolCallId: string; toolName: string; input: unknown },
     ctx: ToolContext,
   ) => Effect.Effect<PermissionDecision, EventStoreError>
-  readonly respond: (requestId: string, decision: PermissionDecision) => Effect.Effect<void>
+  readonly respond: (
+    requestId: string,
+    decision: PermissionDecision,
+  ) => Effect.Effect<
+    | {
+        sessionId: string
+        branchId: string
+        toolCallId: string
+        toolName: string
+        input: unknown
+      }
+    | undefined
+  >
 }
 
 export class PermissionHandler extends Context.Tag("PermissionHandler")<
@@ -62,9 +74,16 @@ export class PermissionHandler extends Context.Tag("PermissionHandler")<
 
         respond: Effect.fn("PermissionHandler.respond")(function* (requestId, decision) {
           const entry = pending.get(requestId)
-          if (!entry) return
+          if (!entry) return undefined
           yield* Deferred.succeed(entry.deferred, decision)
           pending.delete(requestId)
+          return {
+            sessionId: entry.sessionId,
+            branchId: entry.branchId,
+            toolCallId: entry.toolCallId,
+            toolName: entry.toolName,
+            input: entry.input,
+          }
         }),
       }
     }),
@@ -76,7 +95,7 @@ export class PermissionHandler extends Context.Tag("PermissionHandler")<
     let index = 0
     return Layer.succeed(PermissionHandler, {
       request: () => Effect.succeed(decisions[index++] ?? "allow"),
-      respond: () => Effect.void,
+      respond: () => Effect.succeed(undefined),
     })
   }
 }

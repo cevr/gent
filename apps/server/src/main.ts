@@ -12,7 +12,6 @@ import {
   GentCore,
   createDependencies,
   SteerCommand,
-  DEFAULT_SYSTEM_PROMPT,
 } from "@gent/server"
 import { DEFAULT_MODEL_ID } from "@gent/core"
 
@@ -22,7 +21,13 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
     const core = yield* GentCore
     return handlers
       .handle("create", ({ payload }) =>
-        core.createSession({ name: payload.name ?? "New Session" }).pipe(Effect.orDie),
+        core
+          .createSession({
+            name: payload.name ?? "New Session",
+            ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
+            ...(payload.bypass !== undefined ? { bypass: payload.bypass } : {}),
+          })
+          .pipe(Effect.orDie),
       )
       .handle("list", () => core.listSessions().pipe(Effect.orDie))
       .handle("get", ({ path }) =>
@@ -88,7 +93,7 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 
 // Dependencies layer
 const DepsLive = createDependencies({
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  cwd: process.cwd(),
   defaultModel: DEFAULT_MODEL_ID,
   dbPath: ".gent/data.db",
 }).pipe(Layer.provide(PlatformLayer))

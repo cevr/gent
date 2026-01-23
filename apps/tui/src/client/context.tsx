@@ -47,6 +47,7 @@ export interface Session {
   branchId: string
   name: string
   model: string | undefined
+  bypass: boolean
 }
 
 export type SessionState =
@@ -107,8 +108,15 @@ export interface ClientContextValue {
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string, mode?: "plan" | "build", model?: string) => void
   createSession: (firstMessage?: string) => void
-  switchSession: (sessionId: string, branchId: string, name: string, model?: string) => void
+  switchSession: (
+    sessionId: string,
+    branchId: string,
+    name: string,
+    model?: string,
+    bypass?: boolean,
+  ) => void
   clearSession: () => void
+  updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: () => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
@@ -224,6 +232,15 @@ export function ClientProvider(props: ClientProviderProps) {
               produce((draft) => {
                 if (draft.sessionState.status === "active") {
                   draft.sessionState.session.model = snapshot.model
+                }
+              }),
+            )
+          }
+          if (snapshot.bypass !== undefined) {
+            setSessionStore(
+              produce((draft) => {
+                if (draft.sessionState.status === "active") {
+                  draft.sessionState.session.bypass = snapshot.bypass ?? true
                 }
               }),
             )
@@ -400,6 +417,7 @@ export function ClientProvider(props: ClientProviderProps) {
                     branchId: result.branchId,
                     name: result.name,
                     model: undefined,
+                    bypass: result.bypass,
                   },
                 },
               })
@@ -415,7 +433,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    switchSession: (sessionId, branchId, name, model) => {
+    switchSession: (sessionId, branchId, name, model, bypass) => {
       const current = session()
       if (current) {
         setSessionStore({
@@ -428,7 +446,16 @@ export function ClientProvider(props: ClientProviderProps) {
       // Switch to new session - reset agent state with new model
       setAgentStore({ mode: "plan", status: AgentStatus.idle(), cost: 0, model })
       setSessionStore({
-        sessionState: { status: "active", session: { sessionId, branchId, name, model } },
+        sessionState: {
+          status: "active",
+          session: {
+            sessionId,
+            branchId,
+            name,
+            model,
+            bypass: bypass ?? true,
+          },
+        },
       })
     },
 
@@ -450,6 +477,25 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       if (!s) return Effect.succeed([] as readonly BranchInfo[])
       return client.listBranches(s.sessionId)
+    },
+
+    updateSessionBypass: (bypass) => {
+      const s = session()
+      if (!s) return Effect.succeed(undefined)
+      return client.updateSessionBypass(s.sessionId, bypass).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            setSessionStore(
+              produce((draft) => {
+                if (draft.sessionState.status === "active") {
+                  draft.sessionState.session.bypass = result.bypass
+                }
+              }),
+            )
+          }),
+        ),
+        Effect.asVoid,
+      )
     },
 
     createBranch: (name) => {

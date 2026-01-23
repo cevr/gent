@@ -42,6 +42,7 @@ describe("executeSlashCommand", () => {
     createBranch: number
     openTree: number
     openFork: number
+    toggleBypass: number
   }
 
   const createMockContext = (): { ctx: SlashCommandContext; calls: MockCalls } => {
@@ -53,6 +54,7 @@ describe("executeSlashCommand", () => {
       createBranch: 0,
       openTree: 0,
       openFork: 0,
+      toggleBypass: 0,
     }
 
     const ctx: SlashCommandContext = {
@@ -77,6 +79,9 @@ describe("executeSlashCommand", () => {
       openFork: () => {
         calls.openFork++
       },
+      toggleBypass: Effect.sync(() => {
+        calls.toggleBypass++
+      }),
     }
 
     return { ctx, calls }
@@ -141,6 +146,14 @@ describe("executeSlashCommand", () => {
     expect(calls.openFork).toBe(1)
   })
 
+  test("/bypass toggles bypass", async () => {
+    const { ctx, calls } = createMockContext()
+    const result = await Effect.runPromise(executeSlashCommand("bypass", "", ctx))
+
+    expect(result.handled).toBe(true)
+    expect(calls.toggleBypass).toBe(1)
+  })
+
   test("unknown command returns error", async () => {
     const { ctx } = createMockContext()
     const result = await Effect.runPromise(executeSlashCommand("unknown", "", ctx))
@@ -168,6 +181,7 @@ describe("executeSlashCommand", () => {
       createBranch: Effect.void,
       openTree: () => {},
       openFork: () => {},
+      toggleBypass: Effect.void,
     }
 
     const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))

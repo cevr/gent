@@ -25,6 +25,8 @@ import {
   RespondPermissionPayload,
   RespondPlanPayload,
   CompactBranchPayload,
+  UpdateSessionBypassPayload,
+  UpdateSessionBypassSuccess,
 } from "./operations.js"
 import { GentRpcError } from "./errors.js"
 
@@ -120,6 +122,13 @@ export class GentRpcs extends RpcGroup.make(
   // Respond to permission request
   Rpc.make("respondPermission", {
     payload: RespondPermissionPayload.fields,
+    error: GentRpcError,
+  }),
+
+  // Update session bypass
+  Rpc.make("updateSessionBypass", {
+    payload: UpdateSessionBypassPayload.fields,
+    success: UpdateSessionBypassSuccess,
     error: GentRpcError,
   }),
 

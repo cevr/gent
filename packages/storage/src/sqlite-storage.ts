@@ -112,6 +112,7 @@ const makeStorage = (db: Database): StorageService => {
       id TEXT PRIMARY KEY,
       name TEXT,
       cwd TEXT,
+      bypass INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
@@ -120,6 +121,12 @@ const makeStorage = (db: Database): StorageService => {
   // Migration: add cwd column to existing sessions table
   try {
     db.run(`ALTER TABLE sessions ADD COLUMN cwd TEXT`)
+  } catch {
+    // Column already exists - ignore
+  }
+  // Migration: add bypass column to existing sessions table
+  try {
+    db.run(`ALTER TABLE sessions ADD COLUMN bypass INTEGER`)
   } catch {
     // Column already exists - ignore
   }
@@ -227,11 +234,12 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO sessions (id, name, cwd, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+            `INSERT INTO sessions (id, name, cwd, bypass, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
             [
               session.id,
               session.name ?? null,
               session.cwd ?? null,
+              session.bypass === undefined ? null : session.bypass ? 1 : 0,
               session.createdAt.getTime(),
               session.updatedAt.getTime(),
             ],
@@ -249,11 +257,12 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           const row = db
-            .query(`SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE id = ?`)
+            .query(`SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions WHERE id = ?`)
             .get(id) as {
             id: string
             name: string | null
             cwd: string | null
+            bypass?: number | null
             created_at: number
             updated_at: number
           } | null
@@ -262,6 +271,8 @@ const makeStorage = (db: Database): StorageService => {
             id: row.id,
             name: row.name ?? undefined,
             cwd: row.cwd ?? undefined,
+            bypass:
+              typeof row.bypass === "number" ? row.bypass === 1 : undefined,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
           })
@@ -278,12 +289,13 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, name, cwd, created_at, updated_at FROM sessions WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`,
+              `SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`,
             )
             .get(cwd) as {
             id: string
             name: string | null
             cwd: string | null
+            bypass?: number | null
             created_at: number
             updated_at: number
           } | null
@@ -292,6 +304,8 @@ const makeStorage = (db: Database): StorageService => {
             id: row.id,
             name: row.name ?? undefined,
             cwd: row.cwd ?? undefined,
+            bypass:
+              typeof row.bypass === "number" ? row.bypass === 1 : undefined,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
           })
@@ -308,12 +322,13 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, name, cwd, created_at, updated_at FROM sessions ORDER BY updated_at DESC`,
+              `SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions ORDER BY updated_at DESC`,
             )
             .all() as Array<{
             id: string
             name: string | null
             cwd: string | null
+            bypass?: number | null
             created_at: number
             updated_at: number
           }>
@@ -323,6 +338,8 @@ const makeStorage = (db: Database): StorageService => {
                 id: row.id,
                 name: row.name ?? undefined,
                 cwd: row.cwd ?? undefined,
+                bypass:
+                  typeof row.bypass === "number" ? row.bypass === 1 : undefined,
                 createdAt: new Date(row.created_at),
                 updatedAt: new Date(row.updated_at),
               }),
@@ -338,8 +355,9 @@ const makeStorage = (db: Database): StorageService => {
     updateSession: (session) =>
       Effect.try({
         try: () => {
-          db.run(`UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?`, [
+          db.run(`UPDATE sessions SET name = ?, bypass = ?, updated_at = ? WHERE id = ?`, [
             session.name ?? null,
+            session.bypass === undefined ? null : session.bypass ? 1 : 0,
             session.updatedAt.getTime(),
             session.id,
           ])

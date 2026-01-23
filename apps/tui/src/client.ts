@@ -136,6 +136,7 @@ export interface SessionInfo {
   id: string
   name?: string
   cwd?: string
+  bypass?: boolean
   branchId?: string
   createdAt: number
   updatedAt: number
@@ -170,12 +171,14 @@ export interface SessionState {
   isStreaming: boolean
   mode: AgentMode
   model?: string
+  bypass?: boolean
 }
 
 export interface CreateSessionResult {
   sessionId: string
   branchId: string
   name: string
+  bypass: boolean
 }
 
 // =============================================================================
@@ -196,6 +199,7 @@ export interface GentClient {
   createSession: (input?: {
     firstMessage?: string
     cwd?: string
+    bypass?: boolean
   }) => Effect.Effect<CreateSessionResult, GentRpcError>
 
   /** List messages for a branch */
@@ -261,6 +265,7 @@ export interface GentClient {
   respondPermission: (
     requestId: string,
     decision: PermissionDecision,
+    persist?: boolean,
   ) => Effect.Effect<void, GentRpcError>
 
   /** Respond to plan prompt */
@@ -269,6 +274,12 @@ export interface GentClient {
     decision: PlanDecision,
     reason?: string,
   ) => Effect.Effect<void, GentRpcError>
+
+  /** Update session bypass */
+  updateSessionBypass: (
+    sessionId: string,
+    bypass: boolean,
+  ) => Effect.Effect<{ bypass: boolean }, GentRpcError>
 
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<unknown>
@@ -291,6 +302,7 @@ export function createClient(
           sessionId: result.sessionId,
           branchId: result.branchId,
           name: result.name,
+          bypass: result.bypass,
         })),
       ),
 
@@ -344,8 +356,12 @@ export function createClient(
     respondQuestions: (requestId, answers) =>
       rpcClient.respondQuestions({ requestId, answers: [...answers.map((a) => [...a])] }),
 
-    respondPermission: (requestId, decision) =>
-      rpcClient.respondPermission({ requestId, decision }),
+    respondPermission: (requestId, decision, persist) =>
+      rpcClient.respondPermission({
+        requestId,
+        decision,
+        ...(persist !== undefined ? { persist } : {}),
+      }),
 
     respondPlan: (requestId, decision, reason) =>
       rpcClient.respondPlan({
@@ -353,6 +369,9 @@ export function createClient(
         decision,
         ...(reason !== undefined ? { reason } : {}),
       }),
+
+    updateSessionBypass: (sessionId, bypass) =>
+      rpcClient.updateSessionBypass({ sessionId, bypass }),
 
     runtime,
   }

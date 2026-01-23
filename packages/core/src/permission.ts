@@ -48,9 +48,18 @@ export interface PermissionService {
 }
 
 export class Permission extends Context.Tag("Permission")<Permission, PermissionService>() {
-  static Live = (initialRules: ReadonlyArray<PermissionRule> = []): Layer.Layer<Permission> =>
+  static Live = (
+    initialRules: ReadonlyArray<PermissionRule> = [],
+    defaultAction: PermissionRule["action"] = "allow",
+  ): Layer.Layer<Permission> =>
     Layer.sync(Permission, () => {
       let rules = [...initialRules]
+      const defaultResult =
+        defaultAction === "allow"
+          ? ("allowed" as const)
+          : defaultAction === "deny"
+            ? ("denied" as const)
+            : ("ask" as const)
       return {
         check: (tool, args) =>
           Effect.sync(() => {
@@ -66,7 +75,7 @@ export class Permission extends Context.Tag("Permission")<Permission, Permission
               if (rule.action === "deny") return "denied" as const
               return "ask" as const
             }
-            return "allowed" as const
+            return defaultResult
           }),
         addRule: (rule) =>
           Effect.sync(() => {

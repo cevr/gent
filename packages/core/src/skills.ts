@@ -26,6 +26,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
     cwd: string
     globalDir: string
     claudeSkillsDir?: string
+    extraDirs?: ReadonlyArray<string>
     ignored?: ReadonlyArray<string>
   }): Layer.Layer<Skills, PlatformError, FileSystem.FileSystem | Path.Path> =>
     Layer.scoped(
@@ -82,7 +83,11 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
           })
 
         const loadAllSkills = Effect.gen(function* () {
-          const dirs = [path.join(options.cwd, ".gent", "skills"), options.globalDir]
+          const dirs = [
+            path.join(options.cwd, ".gent", "skills"),
+            options.globalDir,
+            ...(options.extraDirs ?? []),
+          ]
 
           // Add Claude Code skills dir if provided
           if (options.claudeSkillsDir) {

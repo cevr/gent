@@ -37,12 +37,14 @@ export interface CreateSessionInput {
   name?: string
   cwd?: string
   firstMessage?: string
+  bypass?: boolean
 }
 
 export interface CreateSessionOutput {
   sessionId: string
   branchId: string
   name: string
+  bypass: boolean
 }
 
 export interface CreateBranchInput {
@@ -81,12 +83,14 @@ export interface SessionState {
   isStreaming: boolean
   mode: AgentMode
   model: string | undefined
+  bypass: boolean | undefined
 }
 
 export interface SessionInfo {
   id: string
   name: string | undefined
   cwd: string | undefined
+  bypass: boolean | undefined
   branchId: string | undefined
   createdAt: number
   updatedAt: number
@@ -198,6 +202,11 @@ export interface GentCoreService {
   readonly getSessionState: (input: GetSessionStateInput) => Effect.Effect<SessionState, GentCoreError>
 
   readonly subscribeEvents: (input: SubscribeEventsInput) => Stream.Stream<EventEnvelope, EventStoreError>
+
+  readonly updateSessionBypass: (input: {
+    sessionId: string
+    bypass: boolean
+  }) => Effect.Effect<{ bypass: boolean }, GentCoreError>
 }
 
 // Name generation model - using haiku for speed/cost
@@ -294,11 +303,13 @@ ${conversation}`
 
             // Start with placeholder name
             const placeholderName = input.name ?? "New Chat"
+            const bypass = input.bypass ?? true
 
             const session = new Session({
               id: sessionId,
               name: placeholderName,
               cwd: input.cwd,
+              bypass,
               createdAt: now,
               updatedAt: now,
             })
@@ -342,14 +353,14 @@ ${conversation}`
                 createdAt: now,
               })
               yield* Effect.forkDaemon(
-                agentLoop.run(message).pipe(
+                agentLoop.run(message, { bypass }).pipe(
                   Effect.withSpan("AgentLoop.firstMessage"),
                   Effect.catchAllCause(() => Effect.void),
                 ),
               )
             }
 
-            return { sessionId, branchId, name: placeholderName }
+            return { sessionId, branchId, name: placeholderName, bypass }
           }),
 
         listSessions: () =>
@@ -364,6 +375,7 @@ ${conversation}`
                     id: s.id,
                     name: s.name,
                     cwd: s.cwd,
+                    bypass: s.bypass,
                     branchId: branches[0]?.id,
                     createdAt: s.createdAt.getTime(),
                     updatedAt: s.updatedAt.getTime(),
@@ -383,6 +395,7 @@ ${conversation}`
               id: session.id,
               name: session.name,
               cwd: session.cwd,
+              bypass: session.bypass,
               branchId: branches[0]?.id,
               createdAt: session.createdAt.getTime(),
               updatedAt: session.updatedAt.getTime(),
@@ -398,6 +411,7 @@ ${conversation}`
               id: session.id,
               name: session.name,
               cwd: session.cwd,
+              bypass: session.bypass,
               branchId: branches[0]?.id,
               createdAt: session.createdAt.getTime(),
               updatedAt: session.updatedAt.getTime(),
@@ -568,6 +582,9 @@ ${conversation}`
           }),
 
         sendMessage: Effect.fn("GentCore.sendMessage")(function* (input) {
+          const session = yield* storage.getSession(input.sessionId)
+          const bypass = session?.bypass ?? true
+
           // Switch mode if specified (before starting the run)
           if (input.mode) {
             yield* agentLoop.steer({ _tag: "SwitchMode", mode: input.mode })
@@ -588,7 +605,6 @@ ${conversation}`
 
           yield* Effect.forkDaemon(
             Effect.gen(function* () {
-              const session = yield* storage.getSession(input.sessionId)
               if (!session || session.name !== "New Chat") return
               const generatedName = yield* generateSessionName(provider, input.content)
               const updatedSession = new Session({
@@ -615,7 +631,7 @@ ${conversation}`
 
           // Run agent loop in background - don't wait for completion
           yield* Effect.forkDaemon(
-            agentLoop.run(message).pipe(
+            agentLoop.run(message, { bypass }).pipe(
               Effect.withSpan("AgentLoop.background"),
               Effect.catchAllCause(() => Effect.void),
             ),
@@ -738,7 +754,23 @@ ${conversation}`
               isStreaming: streamTag === "StreamStarted",
               mode: modeTag === "PlanConfirmed" ? "build" : "plan",
               model: branch.model,
+              bypass: session.bypass,
             }
+          }),
+
+        updateSessionBypass: (input) =>
+          Effect.gen(function* () {
+            const session = yield* storage.getSession(input.sessionId)
+            if (!session) {
+              return yield* new StorageError({ message: "Session not found" })
+            }
+            const updated = new Session({
+              ...session,
+              bypass: input.bypass,
+              updatedAt: new Date(),
+            })
+            yield* storage.updateSession(updated)
+            return { bypass: input.bypass }
           }),
 
         subscribeEvents: (input) =>

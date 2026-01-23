@@ -1,13 +1,21 @@
 /**
  * Slash command handlers
  *
- * Commands: /model, /clear, /sessions, /compact, /branch
+ * Commands: /model, /clear, /sessions, /compact, /branch, /tree, /fork, /bypass
  */
 
 import { Effect } from "effect"
 import { formatError, type UiError } from "../utils/format-error"
 
-export type SlashCommandId = "model" | "clear" | "sessions" | "compact" | "branch" | "tree" | "fork"
+export type SlashCommandId =
+  | "model"
+  | "clear"
+  | "sessions"
+  | "compact"
+  | "branch"
+  | "tree"
+  | "fork"
+  | "bypass"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -17,6 +25,7 @@ export interface SlashCommandContext {
   createBranch: Effect.Effect<void, UiError>
   openTree: () => void
   openFork: () => void
+  toggleBypass: Effect.Effect<void, UiError>
 }
 
 export interface SlashCommandResult {
@@ -82,6 +91,9 @@ export const executeSlashCommand = (
         ctx.openFork()
         return { handled: true }
       })
+
+    case "bypass":
+      return runCommandEffect(ctx.toggleBypass)
 
     default:
       return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })

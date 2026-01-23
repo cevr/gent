@@ -483,9 +483,9 @@ export function Session(props: SessionProps) {
             ),
           )
         } else if (effect.kind === "permission") {
-          const decision = pickPermissionDecision(effect.answers)
+          const { decision, persist } = pickPermissionDecision(effect.answers)
           cast(
-            client.client.respondPermission(effect.requestId, decision).pipe(
+            client.client.respondPermission(effect.requestId, decision, persist).pipe(
               Effect.tapError((err) =>
                 Effect.sync(() => {
                   client.setError(formatError(err))
@@ -529,6 +529,10 @@ export function Session(props: SessionProps) {
       createBranch: client.createBranch().pipe(Effect.asVoid),
       openTree: openBranchTree,
       openFork: openForkPicker,
+      toggleBypass: Effect.gen(function* () {
+        const current = client.session()?.bypass ?? true
+        yield* client.updateSessionBypass(!current)
+      }),
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
@@ -639,11 +643,14 @@ export function Session(props: SessionProps) {
 
 const pickPermissionDecision = (
   answers: readonly (readonly string[])[],
-): "allow" | "deny" => {
+): { decision: "allow" | "deny"; persist: boolean } => {
   const selections = answers.flat().map((value) => value.trim().toLowerCase())
-  if (selections.includes("allow")) return "allow"
-  if (selections.includes("deny")) return "deny"
-  return "deny"
+  if (selections.includes("always allow")) {
+    return { decision: "allow", persist: true }
+  }
+  if (selections.includes("allow")) return { decision: "allow", persist: false }
+  if (selections.includes("deny")) return { decision: "deny", persist: false }
+  return { decision: "deny", persist: false }
 }
 
 const pickPlanDecision = (

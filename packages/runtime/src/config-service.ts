@@ -1,12 +1,13 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
-import { ModelId, ProviderId } from "@gent/core"
+import { ModelId, ProviderId, PermissionRule } from "@gent/core"
 
 // User config schema - stored at ~/.gent/config.json
 
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   model: Schema.optional(ModelId),
   provider: Schema.optional(ProviderId),
+  permissions: Schema.optional(Schema.Array(PermissionRule)),
 }) {}
 
 // ConfigService Error
@@ -23,6 +24,8 @@ export interface ConfigServiceService {
   readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
   readonly getModel: () => Effect.Effect<ModelId | undefined>
   readonly setModel: (modelId: ModelId) => Effect.Effect<void>
+  readonly getPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
+  readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
 }
 
 export class ConfigService extends Context.Tag("ConfigService")<
@@ -46,38 +49,39 @@ export class ConfigService extends Context.Tag("ConfigService")<
 
       const UserConfigJson = Schema.parseJson(UserConfig)
 
-      // State: current config
-      const configRef = yield* Ref.make<UserConfig>(new UserConfig({}))
+      // State: user + project configs
+      const userConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
+      const projectConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
+
+      const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
+        const projectRules = project.permissions ?? []
+        const userRules = user.permissions ?? []
+        const permissions = [...projectRules, ...userRules]
+
+        return new UserConfig({
+          model: project.model ?? user.model,
+          provider: project.provider ?? user.provider,
+          permissions: permissions.length > 0 ? permissions : undefined,
+        })
+      }
 
       // Load config from disk (merges project over user)
       const loadConfig = Effect.gen(function* () {
-        let config = new UserConfig({})
+        const readConfig = (filePath: string) =>
+          fs.exists(filePath).pipe(
+            Effect.flatMap((exists) => (exists ? fs.readFileString(filePath) : Effect.succeed("{}"))),
+            Effect.flatMap((content) => Schema.decodeUnknown(UserConfigJson)(content)),
+            Effect.catchAll(() => Effect.succeed(new UserConfig({}))),
+          )
 
-        // Load user config
-        const userExists = yield* fs.exists(userConfigPath)
-        if (userExists) {
-          const content = yield* fs.readFileString(userConfigPath)
-          config = yield* Schema.decodeUnknown(UserConfigJson)(content)
-        }
+        const userConfig = yield* readConfig(userConfigPath)
+        const projectConfig = yield* readConfig(projectConfigPath)
 
-        // Load project config (overrides user)
-        const projectExists = yield* fs.exists(projectConfigPath)
-        if (projectExists) {
-          const content = yield* fs.readFileString(projectConfigPath)
-          const projectConfig = yield* Schema.decodeUnknown(UserConfigJson)(content)
-          config = new UserConfig({
-            model: projectConfig.model ?? config.model,
-            provider: projectConfig.provider ?? config.provider,
-          })
-        }
+        yield* Ref.set(userConfigRef, userConfig)
+        yield* Ref.set(projectConfigRef, projectConfig)
 
-        return config
-      }).pipe(
-        Effect.flatMap((config) => Ref.set(configRef, config)),
-        Effect.catchAll((e) =>
-          Effect.logWarning("Config load failed").pipe(Effect.annotateLogs({ error: String(e) })),
-        ),
-      )
+        return mergeConfigs(userConfig, projectConfig)
+      }).pipe(Effect.asVoid)
 
       // Save user config to disk
       const saveUserConfig = (config: UserConfig) =>
@@ -96,20 +100,26 @@ export class ConfigService extends Context.Tag("ConfigService")<
       yield* loadConfig
 
       const service: ConfigServiceService = {
-        get: () => Ref.get(configRef),
+        get: () =>
+          Effect.gen(function* () {
+            const user = yield* Ref.get(userConfigRef)
+            const project = yield* Ref.get(projectConfigRef)
+            return mergeConfigs(user, project)
+          }),
 
         set: (partial) =>
           Effect.gen(function* () {
-            const current = yield* Ref.get(configRef)
+            const current = yield* Ref.get(userConfigRef)
             const updated = new UserConfig({
               model: partial.model ?? current.model,
               provider: partial.provider ?? current.provider,
+              permissions: partial.permissions ?? current.permissions,
             })
-            yield* Ref.set(configRef, updated)
+            yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
           }),
 
-        getModel: () => Ref.get(configRef).pipe(Effect.map((c) => c.model)),
+        getModel: () => service.get().pipe(Effect.map((c) => c.model)),
 
         setModel: (modelId) =>
           Effect.gen(function* () {
@@ -122,6 +132,26 @@ export class ConfigService extends Context.Tag("ConfigService")<
               provider: providerId,
             })
           }),
+
+        getPermissionRules: () =>
+          Effect.gen(function* () {
+            const user = yield* Ref.get(userConfigRef)
+            const project = yield* Ref.get(projectConfigRef)
+            return [...(project.permissions ?? []), ...(user.permissions ?? [])]
+          }),
+
+        addPermissionRule: (rule) =>
+          Effect.gen(function* () {
+            const current = yield* Ref.get(userConfigRef)
+            const permissions = [...(current.permissions ?? []), rule]
+            const updated = new UserConfig({
+              model: current.model,
+              provider: current.provider,
+              permissions,
+            })
+            yield* Ref.set(userConfigRef, updated)
+            yield* saveUserConfig(updated)
+          }),
       }
 
       return service
@@ -129,25 +159,62 @@ export class ConfigService extends Context.Tag("ConfigService")<
   )
 
   static Test = (initialConfig: UserConfig = new UserConfig({})): Layer.Layer<ConfigService> => {
-    const configRef = Ref.unsafeMake(initialConfig)
+    const userConfigRef = Ref.unsafeMake(initialConfig)
+    const projectConfigRef = Ref.unsafeMake(new UserConfig({}))
+
+    const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
+      const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
+      return new UserConfig({
+        model: project.model ?? user.model,
+        provider: project.provider ?? user.provider,
+        permissions: permissions.length > 0 ? permissions : undefined,
+      })
+    }
 
     return Layer.succeed(ConfigService, {
-      get: () => Ref.get(configRef),
+      get: () =>
+        Effect.gen(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return mergeConfigs(user, project)
+        }),
       set: (partial) =>
-        Ref.update(
-          configRef,
-          (current) =>
-            new UserConfig({
-              model: partial.model ?? current.model,
-              provider: partial.provider ?? current.provider,
-            }),
+        Ref.update(userConfigRef, (current) =>
+          new UserConfig({
+            model: partial.model ?? current.model,
+            provider: partial.provider ?? current.provider,
+            permissions: partial.permissions ?? current.permissions,
+          }),
         ),
-      getModel: () => Ref.get(configRef).pipe(Effect.map((c) => c.model)),
+      getModel: () =>
+        Effect.gen(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return mergeConfigs(user, project).model
+        }),
       setModel: (modelId) => {
         const parts = (modelId as string).split("/")
         const providerId = parts[0] as ProviderId | undefined
-        return Ref.update(configRef, () => new UserConfig({ model: modelId, provider: providerId }))
+        return Ref.update(
+          userConfigRef,
+          () => new UserConfig({ model: modelId, provider: providerId }),
+        )
       },
+      getPermissionRules: () =>
+        Effect.gen(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return [...(project.permissions ?? []), ...(user.permissions ?? [])]
+        }),
+      addPermissionRule: (rule) =>
+        Ref.update(userConfigRef, (current) => {
+          const permissions = [...(current.permissions ?? []), rule]
+          return new UserConfig({
+            model: current.model,
+            provider: current.provider,
+            permissions,
+          })
+        }).pipe(Effect.asVoid),
     })
   }
 }
