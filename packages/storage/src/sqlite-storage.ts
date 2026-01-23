@@ -220,9 +220,13 @@ const makeStorage = (db: Database): StorageService => {
   `)
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
-  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_branch_created ON messages(branch_id, created_at, id)`)
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_messages_branch_created ON messages(branch_id, created_at, id)`,
+  )
   db.run(`CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, id)`)
-  db.run(`CREATE INDEX IF NOT EXISTS idx_events_session_branch ON events(session_id, branch_id, id)`)
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_events_session_branch ON events(session_id, branch_id, id)`,
+  )
   db.run(`CREATE INDEX IF NOT EXISTS idx_events_session_tag ON events(session_id, event_tag, id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id)`)
@@ -257,7 +261,9 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           const row = db
-            .query(`SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions WHERE id = ?`)
+            .query(
+              `SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions WHERE id = ?`,
+            )
             .get(id) as {
             id: string
             name: string | null
@@ -271,8 +277,7 @@ const makeStorage = (db: Database): StorageService => {
             id: row.id,
             name: row.name ?? undefined,
             cwd: row.cwd ?? undefined,
-            bypass:
-              typeof row.bypass === "number" ? row.bypass === 1 : undefined,
+            bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
           })
@@ -304,8 +309,7 @@ const makeStorage = (db: Database): StorageService => {
             id: row.id,
             name: row.name ?? undefined,
             cwd: row.cwd ?? undefined,
-            bypass:
-              typeof row.bypass === "number" ? row.bypass === 1 : undefined,
+            bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
           })
@@ -338,8 +342,7 @@ const makeStorage = (db: Database): StorageService => {
                 id: row.id,
                 name: row.name ?? undefined,
                 cwd: row.cwd ?? undefined,
-                bypass:
-                  typeof row.bypass === "number" ? row.bypass === 1 : undefined,
+                bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
                 createdAt: new Date(row.created_at),
                 updatedAt: new Date(row.updated_at),
               }),
@@ -666,8 +669,7 @@ const makeStorage = (db: Database): StorageService => {
     appendEvent: (event) =>
       Effect.try({
         try: () => {
-          const branchId =
-            "branchId" in event ? (event.branchId as string | undefined) : undefined
+          const branchId = "branchId" in event ? (event.branchId as string | undefined) : undefined
           const createdAt = Date.now()
           const eventJson = encodeEvent(event)
           db.run(
@@ -737,9 +739,7 @@ const makeStorage = (db: Database): StorageService => {
                 )
                 .get(sessionId, branchId) as { id: number } | null)
             : (db
-                .query(
-                  `SELECT id FROM events WHERE session_id = ? ORDER BY id DESC LIMIT 1`,
-                )
+                .query(`SELECT id FROM events WHERE session_id = ? ORDER BY id DESC LIMIT 1`)
                 .get(sessionId) as { id: number } | null)
           return row?.id
         },

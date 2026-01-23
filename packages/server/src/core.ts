@@ -199,9 +199,13 @@ export interface GentCoreService {
 
   readonly approvePlan: (input: ApprovePlanInput) => Effect.Effect<void, GentCoreError>
 
-  readonly getSessionState: (input: GetSessionStateInput) => Effect.Effect<SessionState, GentCoreError>
+  readonly getSessionState: (
+    input: GetSessionStateInput,
+  ) => Effect.Effect<SessionState, GentCoreError>
 
-  readonly subscribeEvents: (input: SubscribeEventsInput) => Stream.Stream<EventEnvelope, EventStoreError>
+  readonly subscribeEvents: (
+    input: SubscribeEventsInput,
+  ) => Stream.Stream<EventEnvelope, EventStoreError>
 
   readonly updateSessionBypass: (input: {
     sessionId: string
@@ -777,9 +781,7 @@ ${conversation}`
           eventStore.subscribe({
             sessionId: input.sessionId,
             ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
-            ...(input.after !== undefined
-              ? { after: input.after as EventEnvelope["id"] }
-              : {}),
+            ...(input.after !== undefined ? { after: input.after as EventEnvelope["id"] } : {}),
           }),
       }
 

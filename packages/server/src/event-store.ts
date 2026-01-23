@@ -9,11 +9,7 @@ const toEventStoreError =
   (error: StorageError): EventStoreError =>
     new EventStoreError({ message, cause: error })
 
-const matchesEventFilter = (
-  env: EventEnvelope,
-  sessionId: string,
-  branchId?: string,
-): boolean => {
+const matchesEventFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
   if (env.event.sessionId !== sessionId) return false
   if (!branchId) return true
   const eventBranchId =
@@ -50,8 +46,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.sco
             const initial = buffered.filter((env) => env.id <= maxId)
             const live = Stream.fromQueue(queue).pipe(
               Stream.filter(
-                (env) =>
-                  env.id > maxId && matchesEventFilter(env, sessionId, branchId),
+                (env) => env.id > maxId && matchesEventFilter(env, sessionId, branchId),
               ),
             )
             return Stream.concat(Stream.fromIterable(initial), live)

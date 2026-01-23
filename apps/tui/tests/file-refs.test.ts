@@ -48,7 +48,9 @@ describe("parseFileRefs", () => {
 
   test("handles deeply nested paths", () => {
     const refs = parseFileRefs("@packages/core/src/utils/helpers.ts#100-200")
-    expect(refs).toEqual([{ path: "packages/core/src/utils/helpers.ts", startLine: 100, endLine: 200 }])
+    expect(refs).toEqual([
+      { path: "packages/core/src/utils/helpers.ts", startLine: 100, endLine: 200 },
+    ])
   })
 
   test("returns empty array for no references", () => {

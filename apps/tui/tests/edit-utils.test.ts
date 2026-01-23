@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test"
-import { getFiletype, countDiffLines, getEditUnifiedDiff } from "../src/components/tool-renderers/edit-utils"
+import {
+  getFiletype,
+  countDiffLines,
+  getEditUnifiedDiff,
+} from "../src/components/tool-renderers/edit-utils"
 
 describe("getFiletype", () => {
   test("maps common extensions", () => {

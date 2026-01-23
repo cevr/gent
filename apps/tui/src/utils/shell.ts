@@ -56,10 +56,7 @@ const runCommand = (command: string, cwd: string) =>
       const cmd = Command.make("bash", "-c", command).pipe(Command.workingDirectory(cwd))
       const process = yield* Command.start(cmd)
       const [stdout, stderr] = yield* Effect.all(
-        [
-          readStream(process.stdout),
-          readStream(process.stderr),
-        ],
+        [readStream(process.stdout), readStream(process.stderr)],
         { concurrency: "unbounded" },
       )
       yield* process.exitCode

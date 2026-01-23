@@ -87,7 +87,11 @@ describe("Sequence Recording", () => {
     })
 
     test("records AskUserHandler.ask calls", async () => {
-      const testCtx = { sessionId: "test-session", branchId: "test-branch", toolCallId: "test-tool" }
+      const testCtx = {
+        sessionId: "test-session",
+        branchId: "test-branch",
+        toolCallId: "test-tool",
+      }
 
       await Effect.runPromise(
         Effect.gen(function* () {

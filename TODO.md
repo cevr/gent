@@ -11,7 +11,7 @@ Priority: P0 critical, P1 high, P2 medium, P3 low.
 
 - [x] P1 - Session lifecycle UX (compact, tree nav, branch summaries, resume)
   - Rationale: long-session viability; parity with pi/opencode
-  - Research: `packages/runtime/src/checkpoint.ts` (compaction), `packages/runtime/src/agent-loop.ts` (checkpoint use), `packages/storage/src/sqlite-storage.ts` (checkpoints/branches), `packages/core/src/event.ts` (Compaction*, Plan*, Todo*), `apps/tui/src/routes/session.tsx` (slash cmds + stream), `apps/tui/src/commands/slash-commands.ts` (compact stub)
+  - Research: `packages/runtime/src/checkpoint.ts` (compaction), `packages/runtime/src/agent-loop.ts` (checkpoint use), `packages/storage/src/sqlite-storage.ts` (checkpoints/branches), `packages/core/src/event.ts` (Compaction*, Plan*, Todo\*), `apps/tui/src/routes/session.tsx` (slash cmds + stream), `apps/tui/src/commands/slash-commands.ts` (compact stub)
   - External refs: `~/.cache/repo/badlogic/pi-mono/packages/coding-agent/docs/compaction.md`, `~/.cache/repo/badlogic/pi-mono/packages/coding-agent/docs/tree.md`, `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/sessions.mdx` (if added), `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/share.mdx`
   - Touch: `apps/tui/src/routes/session.tsx`, `apps/tui/src/commands/slash-commands.ts`, `packages/server/src/core.ts` (compact/branch ops), `packages/server/src/operations.ts` + `packages/server/src/rpcs.ts` (new RPCs), `packages/storage/src/sqlite-storage.ts` (if new queries)
   - Plan needs: UX flow for `/compact`, `/tree`, `/fork`; summary prompt; branch selection UI; event shapes; migration plan if new tables/fields

@@ -1,4 +1,11 @@
-import { createComponent, createContext, createEffect, createMemo, onCleanup, useContext } from "solid-js"
+import {
+  createComponent,
+  createContext,
+  createEffect,
+  createMemo,
+  onCleanup,
+  useContext,
+} from "solid-js"
 import type { Accessor, ParentProps } from "solid-js"
 import { globalValue } from "effect/GlobalValue"
 import * as Runtime from "effect/Runtime"

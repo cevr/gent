@@ -86,10 +86,9 @@ describe("executeShell", () => {
 
   test("truncates output over byte limit", async () => {
     // Generate output over 50KB (each 'x' repeated 100 times per line, 600 lines = 60KB)
-    const result = await run(executeShell(
-      "for i in $(seq 1 600); do printf '%0.s█' {1..100}; echo; done",
-      testDir,
-    ))
+    const result = await run(
+      executeShell("for i in $(seq 1 600); do printf '%0.s█' {1..100}; echo; done", testDir),
+    )
 
     expect(result.truncated).toBe(true)
     expect(result.savedPath).toBeDefined()

@@ -79,6 +79,7 @@ This is because `JSON.parse` returns plain objects, not Schema.Class instances.
 Service pattern: `Storage` is a `Context.Tag`, `Storage.Live(dbPath)` returns a Layer.
 
 **Key operations:**
+
 - `createMessage` / `listMessages`
 - `createCheckpoint` / `getLatestCheckpoint`
 - `updateMessageTurnDuration`
@@ -139,6 +140,7 @@ This is the heart. Study it carefully.
 7. Save assistant message, update turn duration
 
 **Steer commands** (line ~60):
+
 - `Cancel` / `Interrupt` — hard stop, emit `StreamEnded(interrupted: true)`
 - `Interject` — queue message for immediate processing (no StreamEnded)
 - `SwitchModel` — change model mid-run
@@ -153,6 +155,7 @@ This is the heart. Study it carefully.
 **Read:** `packages/runtime/src/checkpoint.ts`
 
 Two types:
+
 - `CompactionCheckpoint` — summarizes old messages, keeps recent
 - `PlanCheckpoint` — hard reset, only plan file as context
 
@@ -169,6 +172,7 @@ The agent's capabilities.
 **Read:** `packages/tools/src/read.ts`
 
 Canonical example:
+
 - `ReadParams` — Schema with annotations (for LLM description)
 - `ReadResult` — Schema for output
 - `ReadError` — Schema.TaggedError for typed failures
@@ -209,6 +213,7 @@ Business logic layer.
 **Read:** `packages/server/src/core.ts`
 
 The main service. Methods:
+
 - `createSession` — creates session + branch, optionally sends first message
 - `sendMessage` — creates user message, runs agent loop (forked)
 - `listMessages` / `listSessions`
@@ -224,6 +229,7 @@ The main service. Methods:
 **Read:** `packages/server/src/rpcs.ts`
 
 13 RPCs defined with `@effect/rpc`:
+
 - CRUD: createSession, listSessions, getSession, deleteSession
 - Messaging: sendMessage, listMessages
 - Control: steer, respondQuestions
@@ -266,6 +272,7 @@ The user interface.
 CLI parsing, state resolution, layer composition, render.
 
 **Key flow:**
+
 1. Parse args: `-H` (headless), `-c` (continue), `-s` (session), `-p` (prompt)
 2. `resolveInitialState()` — returns discriminated union (headless/session/home)
 3. For headless: `runHeadless()` sends message, streams to stdout
@@ -278,9 +285,15 @@ CLI parsing, state resolution, layer composition, render.
 **Read:** `apps/tui/src/main.tsx` (App component, ~line 200)
 
 ```tsx
-<WorkspaceProvider>     // cwd, gitRoot, gitStatus
-  <ClientProvider>      // RPC client, event subscriptions
-    <RouterProvider>    // route state
+<WorkspaceProvider>
+  {" "}
+  // cwd, gitRoot, gitStatus
+  <ClientProvider>
+    {" "}
+    // RPC client, event subscriptions
+    <RouterProvider>
+      {" "}
+      // route state
       <Routes />
     </RouterProvider>
   </ClientProvider>
@@ -292,6 +305,7 @@ CLI parsing, state resolution, layer composition, render.
 **Read:** `apps/tui/src/client/context.tsx`
 
 Wraps RPC client with:
+
 - Reactive signals (mode, status, cost, error)
 - Event subscription that updates signals
 - Convenience methods (sendMessage, steer, etc.)
@@ -303,6 +317,7 @@ Wraps RPC client with:
 **Read:** `apps/tui/src/routes/session.tsx`
 
 Main view. Contains:
+
 - `messages` signal — built from `MessageInfo[]`
 - Event handlers — update messages on `StreamChunk`, `ToolCallStarted`, etc.
 - `handleSubmit` — sends message via client
@@ -315,6 +330,7 @@ Main view. Contains:
 **Read:** `apps/tui/src/components/input.tsx`
 
 Handles multiple modes:
+
 - Normal — regular text input
 - Shell (`!`) — execute bash, show output
 - Autocomplete (`$`, `@`, `/`) — popups for skills/files/commands
@@ -322,6 +338,7 @@ Handles multiple modes:
 **Read:** `apps/tui/src/components/input-state.ts`
 
 State machine for input:
+
 - `InputState` — discriminated union (normal, shell, prompt)
 - `InputEvent` — what can happen
 - `InputEffect` — side effects to execute
@@ -334,6 +351,7 @@ State machine for input:
 **Read:** `apps/tui/src/components/message-list.tsx`
 
 Renders messages with:
+
 - Text content (markdown-ish)
 - Tool calls (collapsible, shows status)
 - Thinking indicator while streaming
@@ -347,12 +365,14 @@ Renders messages with:
 **Read:** `packages/test-utils/src/index.ts`
 
 Two patterns:
+
 - `createTestLayer()` — simple mocks
 - `createRecordingTestLayer()` — mocks + call recording
 
 **Sequence assertion:**
+
 ```typescript
-const calls = yield* recorder.getCalls()
+const calls = yield * recorder.getCalls()
 assertSequence(calls, [
   { service: "Provider", method: "stream" },
   { service: "EventStore", method: "publish", match: { _tag: "StreamStarted" } },
@@ -364,6 +384,7 @@ assertSequence(calls, [
 **Read:** `tests/agent-loop.test.ts`
 
 Shows how to:
+
 - Mock provider responses
 - Verify tool execution
 - Assert event sequences
@@ -372,50 +393,58 @@ Shows how to:
 
 ## Key Patterns Summary
 
-| Pattern | Where | Why |
-|---------|-------|-----|
-| Discriminated unions | MessagePart, AgentEvent, InputState | Exhaustive matching, no invalid states |
-| Schema.TaggedClass | All data types | Type-safe serialization, runtime validation |
-| Context.Tag + Layer | All services | Dependency injection, testability |
-| Effect.fn | All service methods | Automatic tracing/spans |
-| Deferred | AskUserHandler | Async request/response across boundaries |
-| Stream + EventStore | Server→TUI | Reactive updates, decoupled components |
+| Pattern              | Where                               | Why                                         |
+| -------------------- | ----------------------------------- | ------------------------------------------- |
+| Discriminated unions | MessagePart, AgentEvent, InputState | Exhaustive matching, no invalid states      |
+| Schema.TaggedClass   | All data types                      | Type-safe serialization, runtime validation |
+| Context.Tag + Layer  | All services                        | Dependency injection, testability           |
+| Effect.fn            | All service methods                 | Automatic tracing/spans                     |
+| Deferred             | AskUserHandler                      | Async request/response across boundaries    |
+| Stream + EventStore  | Server→TUI                          | Reactive updates, decoupled components      |
 
 ---
 
 ## Reading Order Checklist
 
 Core concepts:
+
 - [ ] `packages/core/src/message.ts`
 - [ ] `packages/core/src/event.ts`
 - [ ] `packages/core/src/tool.ts`
 
 Data layer:
+
 - [ ] `packages/storage/src/sqlite-storage.ts`
 
 Provider layer:
+
 - [ ] `packages/providers/src/provider.ts`
 
 Runtime:
+
 - [ ] `packages/runtime/src/agent-loop.ts`
 - [ ] `packages/runtime/src/checkpoint.ts`
 
 Tools:
+
 - [ ] `packages/tools/src/read.ts`
 - [ ] `packages/tools/src/ask-user.ts`
 
 Server:
+
 - [ ] `packages/server/src/core.ts`
 - [ ] `packages/server/src/rpcs.ts`
 - [ ] `packages/server/src/index.ts`
 
 TUI:
+
 - [ ] `apps/tui/src/main.tsx`
 - [ ] `apps/tui/src/client/context.tsx`
 - [ ] `apps/tui/src/routes/session.tsx`
 - [ ] `apps/tui/src/components/input-state.ts`
 
 Testing:
+
 - [ ] `packages/test-utils/src/index.ts`
 
 ---

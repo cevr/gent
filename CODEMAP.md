@@ -10,16 +10,16 @@ tests/            # Integration tests (bun test)
 
 ## Packages
 
-| Package      | Purpose                       | Key Export                                          |
-| ------------ | ----------------------------- | --------------------------------------------------- |
+| Package      | Purpose                       | Key Export                                            |
+| ------------ | ----------------------------- | ----------------------------------------------------- |
 | `core`       | Schemas, service interfaces   | `Message`, `EventStore`, `ToolRegistry`, `Permission` |
-| `storage`    | SQLite via bun:sqlite         | `Storage.Live(path)`, `Storage.Test()`              |
-| `tools`      | File/process tools            | `AllTools`, `defineTool`                            |
-| `providers`  | ai-sdk wrapper                | `Provider.Live`, `StreamChunk` variants             |
-| `runtime`    | Agent orchestration           | `AgentLoop.Live(config)`                            |
-| `server`     | Business logic + RPC handlers | `GentCore`, `RpcHandlersLive`                       |
-| `api`        | RPC/HTTP API definitions      | `GentRpcs`, `GentApi`                               |
-| `test-utils` | Mock layers                   | `createTestLayer`, `createRecordingTestLayer`       |
+| `storage`    | SQLite via bun:sqlite         | `Storage.Live(path)`, `Storage.Test()`                |
+| `tools`      | File/process tools            | `AllTools`, `defineTool`                              |
+| `providers`  | ai-sdk wrapper                | `Provider.Live`, `StreamChunk` variants               |
+| `runtime`    | Agent orchestration           | `AgentLoop.Live(config)`                              |
+| `server`     | Business logic + RPC handlers | `GentCore`, `RpcHandlersLive`                         |
+| `api`        | RPC/HTTP API definitions      | `GentRpcs`, `GentApi`                                 |
+| `test-utils` | Mock layers                   | `createTestLayer`, `createRecordingTestLayer`         |
 
 ## Apps
 

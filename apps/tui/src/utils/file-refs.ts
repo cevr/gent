@@ -46,11 +46,7 @@ export function parseFileRefs(text: string): FileRef[] {
 /**
  * Read file content, optionally extracting line range
  */
-const readFileContent = (
-  absolutePath: string,
-  startLine?: number,
-  endLine?: number,
-) =>
+const readFileContent = (absolutePath: string, startLine?: number, endLine?: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const content = yield* fs.readFileString(absolutePath, "utf-8")
@@ -94,9 +90,7 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     // Build code block
     const codeBlock = `\`\`\`${rangeLabel}\n${content}\n\`\`\``
     return { matchStr, codeBlock }
-  }).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
-  )
+  }).pipe(Effect.catchAll(() => Effect.succeed(null)))
 }
 
 /**
@@ -108,11 +102,9 @@ export const expandFileRefs = (text: string, cwd: string) => {
   if (refs.length === 0) return Effect.succeed(text)
 
   return Effect.gen(function* () {
-    const expanded = yield* Effect.forEach(
-      refs,
-      (ref) => expandSingleRef(ref, cwd),
-      { concurrency: "unbounded" },
-    )
+    const expanded = yield* Effect.forEach(refs, (ref) => expandSingleRef(ref, cwd), {
+      concurrency: "unbounded",
+    })
 
     let result = text
     for (const exp of expanded) {

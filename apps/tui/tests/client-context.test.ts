@@ -58,9 +58,7 @@ function createMockClient() {
     ),
     listSessions: mock(() => Effect.succeed([])),
     listBranches: mock(() => Effect.succeed([])),
-    createSession: mock(() =>
-      Effect.succeed({ sessionId: "s1", branchId: "b1", name: "Test" })
-    ),
+    createSession: mock(() => Effect.succeed({ sessionId: "s1", branchId: "b1", name: "Test" })),
     createBranch: mock(() => Effect.succeed("new-branch")),
     steer: mock(() => Effect.void),
     runtime: Runtime.defaultRuntime,

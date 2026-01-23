@@ -21,9 +21,7 @@ const exists = (path: string): Effect.Effect<boolean> =>
   )
 
 const readFileIfExists = (path: string): Effect.Effect<string | null> =>
-  Effect.tryPromise(() => readFile(path, "utf-8")).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
-  )
+  Effect.tryPromise(() => readFile(path, "utf-8")).pipe(Effect.catchAll(() => Effect.succeed(null)))
 
 const loadGitignorePatterns = (cwd: string): Effect.Effect<Set<string>> =>
   Effect.gen(function* () {

@@ -12,9 +12,7 @@ import {
 
 const QuestionOptionParamsSchema = Schema.Struct({
   label: Schema.String.annotations({ description: "Option label shown to user" }),
-  description: Schema.optional(
-    Schema.String.annotations({ description: "Optional description" }),
-  ),
+  description: Schema.optional(Schema.String.annotations({ description: "Optional description" })),
 })
 
 export const AskUserParams = Schema.Struct({
@@ -70,10 +68,7 @@ export class AskUserHandler extends Context.Tag("AskUserHandler")<
     Effect.gen(function* () {
       const eventStore = yield* EventStore
       // Global pending map keyed by requestId
-      const pending = new Map<
-        string,
-        Deferred.Deferred<ReadonlyArray<ReadonlyArray<string>>>
-      >()
+      const pending = new Map<string, Deferred.Deferred<ReadonlyArray<ReadonlyArray<string>>>>()
 
       const askMany = Effect.fn("AskUserHandler.askMany")(function* (
         questions: ReadonlyArray<Question>,

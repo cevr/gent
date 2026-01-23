@@ -100,11 +100,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
     const events: EventEnvelope[] = []
     let nextId = 0
 
-    const matchesFilter = (
-      env: EventEnvelope,
-      sessionId: string,
-      branchId?: string,
-    ): boolean => {
+    const matchesFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
       if (env.event.sessionId !== sessionId) return false
       if (!branchId) return true
       const eventBranchId =
@@ -130,10 +126,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
       }),
       subscribe: ({ sessionId, branchId, after }) =>
         Stream.fromIterable(
-          events.filter(
-            (env) =>
-              matchesFilter(env, sessionId, branchId) && env.id > (after ?? 0),
-          ),
+          events.filter((env) => matchesFilter(env, sessionId, branchId) && env.id > (after ?? 0)),
         ),
     }
   }),

@@ -45,9 +45,7 @@ export const state = <A>(initialValue: A): Writable<A> =>
     return { get: value, set }
   })
 
-export const readable = <A>(
-  read: (get: <T>(atom: Atom<T>) => T) => A,
-): Atom<A> =>
+export const readable = <A>(read: (get: <T>(atom: Atom<T>) => T) => A): Atom<A> =>
   atom((registry) => {
     const get = <T>(atom: Atom<T>) => registry.read(atom)()
     const memo = createMemo(() => read(get))
@@ -62,9 +60,10 @@ export const effect = <A, E, R>(
   options?: { readonly initialValue?: A },
 ): Atom<AtomResult<A, E>> =>
   atom((registry) => {
-    const initialResult = options?.initialValue !== undefined
-      ? Result.success<A, E>(options.initialValue)
-      : Result.initial<A, E>(true)
+    const initialResult =
+      options?.initialValue !== undefined
+        ? Result.success<A, E>(options.initialValue)
+        : Result.initial<A, E>(true)
     const [result, setResult] = createSignal<AtomResult<A, E>>(initialResult)
     const [version, setVersion] = createSignal(0)
     const get = <T>(atom: Atom<T>) => registry.read(atom)()

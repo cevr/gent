@@ -88,13 +88,13 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
       case "/": {
         // Slash commands
-        return SLASH_COMMANDS.filter(
-          (c) => c.id.includes(filter) || c.label.includes(filter),
-        ).map((c) => ({
-          id: c.id,
-          label: c.label,
-          description: c.description,
-        }))
+        return SLASH_COMMANDS.filter((c) => c.id.includes(filter) || c.label.includes(filter)).map(
+          (c) => ({
+            id: c.id,
+            label: c.label,
+            description: c.description,
+          }),
+        )
       }
     }
   }

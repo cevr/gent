@@ -508,7 +508,9 @@ function PromptUI(props: PromptUIProps) {
     <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
       {/* Header if present */}
       <Show when={props.question.header}>
-        <text style={{ fg: theme.textMuted }}><b>{props.question.header}</b></text>
+        <text style={{ fg: theme.textMuted }}>
+          <b>{props.question.header}</b>
+        </text>
       </Show>
 
       {/* Question */}
@@ -522,7 +524,13 @@ function PromptUI(props: PromptUIProps) {
               <box flexDirection="row">
                 <text style={{ fg: isFocused(idx()) ? theme.primary : theme.text }}>
                   {isFocused(idx()) ? "❯ " : "  "}
-                  {isMultiple() ? (isSelected(opt.label) ? "[x] " : "[ ] ") : isSelected(opt.label) ? "(•) " : "( ) "}
+                  {isMultiple()
+                    ? isSelected(opt.label)
+                      ? "[x] "
+                      : "[ ] "
+                    : isSelected(opt.label)
+                      ? "(•) "
+                      : "( ) "}
                   {opt.label}
                 </text>
                 <Show when={opt.description}>
@@ -552,7 +560,9 @@ function PromptUI(props: PromptUIProps) {
 
       {/* Hint */}
       <text style={{ fg: theme.textMuted, marginTop: 1 }}>
-        {isMultiple() ? "↑↓ navigate • space select • enter submit" : "↑↓ navigate • space/enter select"}
+        {isMultiple()
+          ? "↑↓ navigate • space select • enter submit"
+          : "↑↓ navigate • space/enter select"}
       </text>
     </box>
   )

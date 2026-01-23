@@ -7,12 +7,7 @@ import {
   OpenApi,
 } from "@effect/platform"
 import { Effect, Layer, Stream, Schema } from "effect"
-import {
-  GentApi,
-  GentCore,
-  createDependencies,
-  SteerCommand,
-} from "@gent/server"
+import { GentApi, GentCore, createDependencies, SteerCommand } from "@gent/server"
 import { DEFAULT_MODEL_ID } from "@gent/core"
 
 // Sessions API Handlers

@@ -220,13 +220,16 @@ const summarizeInput = (input: unknown): string => {
 
 const permissionQuestion = (event: typeof PermissionRequested.Type): Question => {
   const summary = summarizeInput(event.input)
-  const question = summary
-    ? `Allow ${event.toolName} (${summary})?`
-    : `Allow ${event.toolName}?`
+  const question = summary ? `Allow ${event.toolName} (${summary})?` : `Allow ${event.toolName}?`
   return {
     question,
     header: "Permission",
-    options: [{ label: "Allow" }, { label: "Always Allow" }, { label: "Deny" }, { label: "Always Deny" }],
+    options: [
+      { label: "Allow" },
+      { label: "Always Allow" },
+      { label: "Deny" },
+      { label: "Always Deny" },
+    ],
     multiple: false,
   }
 }

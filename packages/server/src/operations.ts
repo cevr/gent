@@ -1,11 +1,5 @@
 import { Schema } from "effect"
-import {
-  AgentMode,
-  EventEnvelope,
-  MessagePart,
-  PermissionDecision,
-  PlanDecision,
-} from "@gent/core"
+import { AgentMode, EventEnvelope, MessagePart, PermissionDecision, PlanDecision } from "@gent/core"
 
 // ============================================================================
 // Session Operations

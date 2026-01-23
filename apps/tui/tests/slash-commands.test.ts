@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test"
-import { executeSlashCommand, parseSlashCommand, type SlashCommandContext } from "../src/commands/slash-commands"
+import {
+  executeSlashCommand,
+  parseSlashCommand,
+  type SlashCommandContext,
+} from "../src/commands/slash-commands"
 import { Effect } from "effect"
 import { ClientError } from "../src/utils/format-error"
 

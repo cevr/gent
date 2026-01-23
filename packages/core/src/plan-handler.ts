@@ -97,7 +97,9 @@ export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHan
     }),
   )
 
-  static Test = (decisions: ReadonlyArray<PlanDecision> = ["confirm"]): Layer.Layer<PlanHandler> => {
+  static Test = (
+    decisions: ReadonlyArray<PlanDecision> = ["confirm"],
+  ): Layer.Layer<PlanHandler> => {
     let index = 0
     return Layer.succeed(PlanHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "confirm"),

@@ -249,11 +249,7 @@ export interface EventStoreService {
   }) => Stream.Stream<EventEnvelope, EventStoreError>
 }
 
-const matchesEventFilter = (
-  env: EventEnvelope,
-  sessionId: string,
-  branchId?: string,
-): boolean => {
+const matchesEventFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
   if (env.event.sessionId !== sessionId) return false
   if (!branchId) return true
   const eventBranchId =
@@ -297,8 +293,7 @@ export class EventStore extends Context.Tag("EventStore")<EventStore, EventStore
               )
               const live = Stream.fromQueue(queue).pipe(
                 Stream.filter(
-                  (env) =>
-                    env.id > latestId && matchesEventFilter(env, sessionId, branchId),
+                  (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
                 ),
               )
               return Stream.concat(Stream.fromIterable(buffered), live)

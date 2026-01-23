@@ -18,20 +18,26 @@ export const success = <A, E = never>(value: A, waiting = false): Result<A, E> =
   waiting,
 })
 
-export const failure = <A = never, E = never>(cause: Cause.Cause<E>, waiting = false): Result<A, E> => ({
+export const failure = <A = never, E = never>(
+  cause: Cause.Cause<E>,
+  waiting = false,
+): Result<A, E> => ({
   _tag: "Failure",
   cause,
   waiting,
 })
 
-export const isInitial = <A, E>(result: Result<A, E>): result is Result<A, E> & { _tag: "Initial" } =>
-  result._tag === "Initial"
+export const isInitial = <A, E>(
+  result: Result<A, E>,
+): result is Result<A, E> & { _tag: "Initial" } => result._tag === "Initial"
 
-export const isSuccess = <A, E>(result: Result<A, E>): result is Result<A, E> & { _tag: "Success" } =>
-  result._tag === "Success"
+export const isSuccess = <A, E>(
+  result: Result<A, E>,
+): result is Result<A, E> & { _tag: "Success" } => result._tag === "Success"
 
-export const isFailure = <A, E>(result: Result<A, E>): result is Result<A, E> & { _tag: "Failure" } =>
-  result._tag === "Failure"
+export const isFailure = <A, E>(
+  result: Result<A, E>,
+): result is Result<A, E> & { _tag: "Failure" } => result._tag === "Failure"
 
 export const fromExit = <A, E>(exit: Exit.Exit<A, E>): Result<A, E> =>
   Exit.isSuccess(exit) ? success(exit.value) : failure(exit.cause)

@@ -123,25 +123,25 @@ Special prefixes at input start trigger different modes:
 
 ### Slash Commands
 
-| Command     | Action                  |
-| ----------- | ----------------------- |
-| `/model`    | Open model picker       |
-| `/clear`    | Clear messages          |
-| `/sessions` | Open sessions picker    |
-| `/compact`  | Compact history         |
-| `/branch`   | Create new branch       |
-| `/tree`     | Browse branch tree      |
-| `/fork`     | Fork from a message     |
+| Command     | Action                   |
+| ----------- | ------------------------ |
+| `/model`    | Open model picker        |
+| `/clear`    | Clear messages           |
+| `/sessions` | Open sessions picker     |
+| `/compact`  | Compact history          |
+| `/branch`   | Create new branch        |
+| `/tree`     | Browse branch tree       |
+| `/fork`     | Fork from a message      |
 | `/bypass`   | Toggle permission bypass |
 
 ## Key Files (Input System)
 
-| File                                         | Purpose                           |
-| -------------------------------------------- | --------------------------------- |
-| `src/routes/session-view.tsx`                | Input mode state, prefix handling |
-| `src/components/autocomplete-popup.tsx`      | Popup component for $, @, /       |
-| `src/hooks/use-skills.ts`                    | Skill dir scanning + caching      |
-| `src/hooks/use-file-search.ts`               | Glob + fuzzy file search          |
-| `src/utils/shell.ts`                         | Shell execution + truncation      |
-| `src/utils/file-refs.ts`                     | @file#line expansion              |
-| `src/commands/slash-commands.ts`             | Slash command handlers            |
+| File                                    | Purpose                           |
+| --------------------------------------- | --------------------------------- |
+| `src/routes/session-view.tsx`           | Input mode state, prefix handling |
+| `src/components/autocomplete-popup.tsx` | Popup component for $, @, /       |
+| `src/hooks/use-skills.ts`               | Skill dir scanning + caching      |
+| `src/hooks/use-file-search.ts`          | Glob + fuzzy file search          |
+| `src/utils/shell.ts`                    | Shell execution + truncation      |
+| `src/utils/file-refs.ts`                | @file#line expansion              |
+| `src/commands/slash-commands.ts`        | Slash command handlers            |

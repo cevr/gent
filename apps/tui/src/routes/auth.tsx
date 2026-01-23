@@ -246,9 +246,7 @@ export function Auth(props: AuthProps) {
                       </text>
                       <text
                         style={{
-                          fg: isSelected()
-                            ? theme.selectedListItemText
-                            : getStatusColor(provider),
+                          fg: isSelected() ? theme.selectedListItemText : getStatusColor(provider),
                         }}
                       >
                         {" "}

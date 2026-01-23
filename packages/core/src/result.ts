@@ -50,16 +50,19 @@ export const match = <A, E, R>(
 }
 
 /** Check if result is Initial */
-export const isInitial = <A, E>(result: Result<A, E>): result is Result<A, E> & { _tag: "Initial" } =>
-  result._tag === "Initial"
+export const isInitial = <A, E>(
+  result: Result<A, E>,
+): result is Result<A, E> & { _tag: "Initial" } => result._tag === "Initial"
 
 /** Check if result is Success */
-export const isSuccess = <A, E>(result: Result<A, E>): result is Result<A, E> & { _tag: "Success" } =>
-  result._tag === "Success"
+export const isSuccess = <A, E>(
+  result: Result<A, E>,
+): result is Result<A, E> & { _tag: "Success" } => result._tag === "Success"
 
 /** Check if result is Failure */
-export const isFailure = <A, E>(result: Result<A, E>): result is Result<A, E> & { _tag: "Failure" } =>
-  result._tag === "Failure"
+export const isFailure = <A, E>(
+  result: Result<A, E>,
+): result is Result<A, E> & { _tag: "Failure" } => result._tag === "Failure"
 
 /** Get value from Success, or undefined */
 export const getOrUndefined = <A, E>(result: Result<A, E>): A | undefined =>

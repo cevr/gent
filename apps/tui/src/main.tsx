@@ -342,12 +342,13 @@ const main = Command.make(
         render(() => (
           <WorkspaceProvider cwd={cwd} runtime={uiRuntime}>
             <RegistryProvider runtime={uiRuntime} maxEntries={ATOM_CACHE_MAX}>
-              <ClientProvider rpcClient={rpcClient} runtime={uiRuntime} initialSession={initialSession}>
+              <ClientProvider
+                rpcClient={rpcClient}
+                runtime={uiRuntime}
+                initialSession={initialSession}
+              >
                 <RouterProvider initialRoute={initialRoute}>
-                  <App
-                    initialPrompt={initialPrompt}
-                    initialModel={DEFAULT_MODEL_ID}
-                  />
+                  <App initialPrompt={initialPrompt} initialModel={DEFAULT_MODEL_ID} />
                 </RouterProvider>
               </ClientProvider>
             </RegistryProvider>
