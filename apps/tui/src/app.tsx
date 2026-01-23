@@ -4,9 +4,11 @@ import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/index"
 import { useRouter, isRoute } from "./router/index"
+import { useClient } from "./client/index"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
 import { BranchPicker } from "./routes/branch-picker"
+import { Permissions } from "./routes/permissions"
 import * as State from "./state"
 import type { BranchInfo } from "./client"
 
@@ -17,6 +19,7 @@ export interface AppProps {
 
 function AppContent(props: AppProps) {
   const router = useRouter()
+  const client = useClient()
 
   // Initialize model state on mount
   onMount(() => {
@@ -61,6 +64,9 @@ function AppContent(props: AppProps) {
               />
             )
           }}
+        </Match>
+        <Match when={isRoute.permissions(router.route())}>
+          <Permissions client={client.client} />
         </Match>
       </Switch>
 

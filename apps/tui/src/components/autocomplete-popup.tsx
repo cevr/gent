@@ -40,6 +40,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: "tree", label: "/tree", description: "Browse branch tree" },
   { id: "fork", label: "/fork", description: "Fork from a message" },
   { id: "bypass", label: "/bypass", description: "Toggle permission bypass" },
+  { id: "permissions", label: "/permissions", description: "View/edit permission rules" },
 ]
 
 export interface AutocompletePopupProps {

@@ -226,7 +226,7 @@ const permissionQuestion = (event: typeof PermissionRequested.Type): Question =>
   return {
     question,
     header: "Permission",
-    options: [{ label: "Allow" }, { label: "Always Allow" }, { label: "Deny" }],
+    options: [{ label: "Allow" }, { label: "Always Allow" }, { label: "Deny" }, { label: "Always Deny" }],
     multiple: false,
   }
 }

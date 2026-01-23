@@ -210,4 +210,13 @@ export const CompactBranchPayload = Schema.Struct({
   branchId: Schema.String,
 })
 
+// ============================================================================
+// Permission Operations
+// ============================================================================
+
+export const DeletePermissionRulePayload = Schema.Struct({
+  tool: Schema.String,
+  pattern: Schema.optional(Schema.String),
+})
+
 export { EventEnvelope }

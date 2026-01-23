@@ -43,6 +43,7 @@ describe("executeSlashCommand", () => {
     openTree: number
     openFork: number
     toggleBypass: number
+    openPermissions: number
   }
 
   const createMockContext = (): { ctx: SlashCommandContext; calls: MockCalls } => {
@@ -55,6 +56,7 @@ describe("executeSlashCommand", () => {
       openTree: 0,
       openFork: 0,
       toggleBypass: 0,
+      openPermissions: 0,
     }
 
     const ctx: SlashCommandContext = {
@@ -82,6 +84,9 @@ describe("executeSlashCommand", () => {
       toggleBypass: Effect.sync(() => {
         calls.toggleBypass++
       }),
+      openPermissions: () => {
+        calls.openPermissions++
+      },
     }
 
     return { ctx, calls }
@@ -182,6 +187,7 @@ describe("executeSlashCommand", () => {
       openTree: () => {},
       openFork: () => {},
       toggleBypass: Effect.void,
+      openPermissions: () => {},
     }
 
     const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))

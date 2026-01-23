@@ -533,6 +533,7 @@ export function Session(props: SessionProps) {
         const current = client.session()?.bypass ?? true
         yield* client.updateSessionBypass(!current)
       }),
+      openPermissions: () => router.navigateToPermissions(),
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
@@ -647,6 +648,9 @@ const pickPermissionDecision = (
   const selections = answers.flat().map((value) => value.trim().toLowerCase())
   if (selections.includes("always allow")) {
     return { decision: "allow", persist: true }
+  }
+  if (selections.includes("always deny")) {
+    return { decision: "deny", persist: true }
   }
   if (selections.includes("allow")) return { decision: "allow", persist: false }
   if (selections.includes("deny")) return { decision: "deny", persist: false }

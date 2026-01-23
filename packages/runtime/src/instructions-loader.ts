@@ -24,18 +24,32 @@ export class InstructionsLoader extends Context.Tag("InstructionsLoader")<
             Effect.catchAll(() => Effect.succeed("")),
           )
 
+        // Try primary, then fallback for a location
+        const readWithFallback = (primary: string, fallback: string): Effect.Effect<string> =>
+          readIfExists(primary).pipe(
+            Effect.flatMap((content) => (content.length > 0 ? Effect.succeed(content) : readIfExists(fallback))),
+          )
+
         return {
           load: (cwd) =>
             Effect.gen(function* () {
-              const candidates = [
-                path.join(home, ".gent", "AGENTS.md"),
-                path.join(cwd, "AGENTS.md"),
-                path.join(cwd, ".gent", "AGENTS.md"),
+              // Locations with AGENTS.md primary, CLAUDE.md fallback
+              const locations = [
+                { primary: path.join(home, ".gent", "AGENTS.md"), fallback: path.join(home, ".gent", "CLAUDE.md") },
+                { primary: path.join(cwd, "AGENTS.md"), fallback: path.join(cwd, "CLAUDE.md") },
+                { primary: path.join(cwd, ".gent", "AGENTS.md"), fallback: path.join(cwd, ".gent", "CLAUDE.md") },
               ]
 
               const contents: string[] = []
-              for (const filePath of candidates) {
-                const content = yield* readIfExists(filePath)
+              for (const loc of locations) {
+                const content = yield* readWithFallback(loc.primary, loc.fallback)
+                if (content.length > 0) contents.push(content)
+              }
+
+              // Global fallback: ~/.claude/CLAUDE.md only if nothing else found
+              if (contents.length === 0) {
+                const globalFallback = path.join(home, ".claude", "CLAUDE.md")
+                const content = yield* readIfExists(globalFallback)
                 if (content.length > 0) contents.push(content)
               }
 

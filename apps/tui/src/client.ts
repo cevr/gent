@@ -11,9 +11,10 @@ import type {
   ToolResultPart,
   PermissionDecision,
   PlanDecision,
+  PermissionRule,
 } from "@gent/core"
 
-export type { MessagePart, TextPart, ToolCallPart, ToolResultPart }
+export type { MessagePart, TextPart, ToolCallPart, ToolResultPart, PermissionRule }
 
 export function extractText(parts: readonly MessagePart[]): string {
   const textPart = parts.find((p): p is TextPart => p.type === "text")
@@ -281,6 +282,12 @@ export interface GentClient {
     bypass: boolean,
   ) => Effect.Effect<{ bypass: boolean }, GentRpcError>
 
+  /** Get permission rules */
+  getPermissionRules: () => Effect.Effect<readonly PermissionRule[], GentRpcError>
+
+  /** Delete permission rule */
+  deletePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void, GentRpcError>
+
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<unknown>
 }
@@ -372,6 +379,14 @@ export function createClient(
 
     updateSessionBypass: (sessionId, bypass) =>
       rpcClient.updateSessionBypass({ sessionId, bypass }),
+
+    getPermissionRules: () => rpcClient.getPermissionRules(),
+
+    deletePermissionRule: (tool, pattern) =>
+      rpcClient.deletePermissionRule({
+        tool,
+        ...(pattern !== undefined ? { pattern } : {}),
+      }),
 
     runtime,
   }

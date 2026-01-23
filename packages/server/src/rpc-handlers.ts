@@ -93,10 +93,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       respondPermission: ({ requestId, decision, persist }) =>
         Effect.gen(function* () {
           const request = yield* permissionHandler.respond(requestId, decision)
-          if (persist && decision === "allow" && request) {
+          if (persist && request) {
             const rule = new PermissionRule({
               tool: request.toolName,
-              action: "allow",
+              action: decision,
             })
             yield* configService.addPermissionRule(rule)
             yield* permission.addRule(rule)
@@ -111,6 +111,14 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       updateSessionBypass: ({ sessionId, bypass }) =>
         core.updateSessionBypass({ sessionId, bypass }),
+
+      getPermissionRules: () => configService.getPermissionRules(),
+
+      deletePermissionRule: ({ tool, pattern }) =>
+        Effect.gen(function* () {
+          yield* configService.removePermissionRule(tool, pattern)
+          yield* permission.removeRule(tool, pattern)
+        }),
     }
   }),
 )

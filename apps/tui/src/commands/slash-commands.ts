@@ -16,6 +16,7 @@ export type SlashCommandId =
   | "tree"
   | "fork"
   | "bypass"
+  | "permissions"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -26,6 +27,7 @@ export interface SlashCommandContext {
   openTree: () => void
   openFork: () => void
   toggleBypass: Effect.Effect<void, UiError>
+  openPermissions: () => void
 }
 
 export interface SlashCommandResult {
@@ -94,6 +96,12 @@ export const executeSlashCommand = (
 
     case "bypass":
       return runCommandEffect(ctx.toggleBypass)
+
+    case "permissions":
+      return Effect.sync(() => {
+        ctx.openPermissions()
+        return { handled: true }
+      })
 
     default:
       return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })

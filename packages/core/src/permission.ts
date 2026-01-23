@@ -44,6 +44,7 @@ export type PermissionDecision = typeof PermissionDecision.Type
 export interface PermissionService {
   readonly check: (tool: string, args: unknown) => Effect.Effect<PermissionResult>
   readonly addRule: (rule: PermissionRule) => Effect.Effect<void>
+  readonly removeRule: (tool: string, pattern?: string) => Effect.Effect<void>
   readonly getRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 }
 
@@ -81,6 +82,11 @@ export class Permission extends Context.Tag("Permission")<Permission, Permission
           Effect.sync(() => {
             rules.push(rule)
           }),
+        removeRule: (tool, pattern) =>
+          Effect.sync(() => {
+            const idx = rules.findIndex((r) => r.tool === tool && r.pattern === pattern)
+            if (idx !== -1) rules.splice(idx, 1)
+          }),
         getRules: () => Effect.succeed(rules),
       }
     })
@@ -89,6 +95,7 @@ export class Permission extends Context.Tag("Permission")<Permission, Permission
     Layer.succeed(Permission, {
       check: () => Effect.succeed("allowed" as const),
       addRule: () => Effect.void,
+      removeRule: () => Effect.void,
       getRules: () => Effect.succeed([]),
     })
 }

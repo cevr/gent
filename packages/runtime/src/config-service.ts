@@ -26,6 +26,7 @@ export interface ConfigServiceService {
   readonly setModel: (modelId: ModelId) => Effect.Effect<void>
   readonly getPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
   readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
+  readonly removePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void>
 }
 
 export class ConfigService extends Context.Tag("ConfigService")<
@@ -152,6 +153,21 @@ export class ConfigService extends Context.Tag("ConfigService")<
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
           }),
+
+        removePermissionRule: (tool, pattern) =>
+          Effect.gen(function* () {
+            const current = yield* Ref.get(userConfigRef)
+            const permissions = (current.permissions ?? []).filter(
+              (r) => !(r.tool === tool && r.pattern === pattern),
+            )
+            const updated = new UserConfig({
+              model: current.model,
+              provider: current.provider,
+              permissions: permissions.length > 0 ? permissions : undefined,
+            })
+            yield* Ref.set(userConfigRef, updated)
+            yield* saveUserConfig(updated)
+          }),
       }
 
       return service
@@ -213,6 +229,17 @@ export class ConfigService extends Context.Tag("ConfigService")<
             model: current.model,
             provider: current.provider,
             permissions,
+          })
+        }).pipe(Effect.asVoid),
+      removePermissionRule: (tool, pattern) =>
+        Ref.update(userConfigRef, (current) => {
+          const permissions = (current.permissions ?? []).filter(
+            (r) => !(r.tool === tool && r.pattern === pattern),
+          )
+          return new UserConfig({
+            model: current.model,
+            provider: current.provider,
+            permissions: permissions.length > 0 ? permissions : undefined,
           })
         }).pipe(Effect.asVoid),
     })

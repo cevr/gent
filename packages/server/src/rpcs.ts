@@ -27,7 +27,9 @@ import {
   CompactBranchPayload,
   UpdateSessionBypassPayload,
   UpdateSessionBypassSuccess,
+  DeletePermissionRulePayload,
 } from "./operations.js"
+import { PermissionRule } from "@gent/core"
 import { GentRpcError } from "./errors.js"
 
 // ============================================================================
@@ -141,6 +143,16 @@ export class GentRpcs extends RpcGroup.make(
   // Compaction
   Rpc.make("compactBranch", {
     payload: CompactBranchPayload.fields,
+    error: GentRpcError,
+  }),
+
+  // Permission rules
+  Rpc.make("getPermissionRules", {
+    success: Schema.Array(PermissionRule),
+    error: GentRpcError,
+  }),
+  Rpc.make("deletePermissionRule", {
+    payload: DeletePermissionRulePayload.fields,
     error: GentRpcError,
   }),
 ) {}

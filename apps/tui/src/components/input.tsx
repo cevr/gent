@@ -289,6 +289,7 @@ export function Input(props: InputProps) {
             openTree: () => {},
             openFork: () => {},
             toggleBypass: Effect.fail(ClientError("Bypass not implemented yet")),
+            openPermissions: () => {},
           }).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
