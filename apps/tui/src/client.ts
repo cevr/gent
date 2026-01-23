@@ -116,6 +116,7 @@ export interface MessageInfoReadonly {
   readonly id: string
   readonly sessionId: string
   readonly branchId: string
+  readonly kind?: "regular" | "interjection"
   readonly role: "user" | "assistant" | "system" | "tool"
   readonly parts: readonly MessagePart[]
   readonly createdAt: number
@@ -143,9 +144,22 @@ export interface SessionInfo {
 export interface BranchInfo {
   id: string
   sessionId: string
+  parentBranchId?: string
+  parentMessageId?: string
   name?: string
   model?: string
+  summary?: string
   createdAt: number
+}
+
+export interface BranchTreeNode {
+  id: string
+  name?: string
+  summary?: string
+  parentMessageId?: string
+  messageCount: number
+  createdAt: number
+  children: readonly BranchTreeNode[]
 }
 
 export interface SessionState {
@@ -199,8 +213,33 @@ export interface GentClient {
   /** List branches for a session */
   listBranches: (sessionId: string) => Effect.Effect<readonly BranchInfo[], GentRpcError>
 
+  /** Get branch tree for a session */
+  getBranchTree: (sessionId: string) => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
+
   /** Create a new branch */
   createBranch: (sessionId: string, name?: string) => Effect.Effect<string, GentRpcError>
+
+  /** Switch branches within a session */
+  switchBranch: (input: {
+    sessionId: string
+    fromBranchId: string
+    toBranchId: string
+    summarize?: boolean
+  }) => Effect.Effect<void, GentRpcError>
+
+  /** Fork a new branch from a message */
+  forkBranch: (input: {
+    sessionId: string
+    fromBranchId: string
+    atMessageId: string
+    name?: string
+  }) => Effect.Effect<{ branchId: string }, GentRpcError>
+
+  /** Compact a branch */
+  compactBranch: (input: {
+    sessionId: string
+    branchId: string
+  }) => Effect.Effect<void, GentRpcError>
 
   /** Subscribe to events - returns Stream */
   subscribeEvents: (input: {
@@ -264,10 +303,34 @@ export function createClient(
 
     listBranches: (sessionId) => rpcClient.listBranches({ sessionId }),
 
+    getBranchTree: (sessionId) => rpcClient.getBranchTree({ sessionId }),
+
     createBranch: (sessionId, name) =>
       rpcClient.createBranch({ sessionId, ...(name !== undefined ? { name } : {}) }).pipe(
         Effect.map((result) => result.branchId),
       ),
+
+    switchBranch: (input) =>
+      rpcClient.switchBranch({
+        sessionId: input.sessionId,
+        fromBranchId: input.fromBranchId,
+        toBranchId: input.toBranchId,
+        ...(input.summarize !== undefined ? { summarize: input.summarize } : {}),
+      }),
+
+    forkBranch: (input) =>
+      rpcClient.forkBranch({
+        sessionId: input.sessionId,
+        fromBranchId: input.fromBranchId,
+        atMessageId: input.atMessageId,
+        ...(input.name !== undefined ? { name: input.name } : {}),
+      }),
+
+    compactBranch: (input) =>
+      rpcClient.compactBranch({
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+      }),
 
     subscribeEvents: ({ sessionId, branchId, after }) =>
       rpcClient.subscribeEvents({

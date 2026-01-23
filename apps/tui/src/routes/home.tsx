@@ -85,7 +85,7 @@ export function Home(props: HomeProps) {
     }
   })
 
-  const handleSubmit = (content: string) => {
+  const handleSubmit = (content: string, _mode?: "queue" | "interject") => {
     // Create session, navigate with pending prompt for session route to send
     setPendingPrompt(content)
     client.createSession()

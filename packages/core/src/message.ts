@@ -56,6 +56,7 @@ export class Message extends Schema.Class<Message>("Message")({
   id: Schema.String,
   sessionId: Schema.String,
   branchId: Schema.String,
+  kind: Schema.optional(Schema.Literal("regular", "interjection")),
   role: MessageRole,
   parts: Schema.Array(MessagePart),
   createdAt: Schema.DateFromNumber,
@@ -81,6 +82,7 @@ export class Branch extends Schema.Class<Branch>("Branch")({
   parentMessageId: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   model: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
   createdAt: Schema.DateFromNumber,
 }) {}
 

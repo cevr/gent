@@ -73,8 +73,14 @@ export {
   ListBranchesPayload,
   CreateBranchPayload,
   CreateBranchSuccess,
+  BranchTreeNodeSchema,
+  GetBranchTreePayload,
+  SwitchBranchPayload,
+  ForkBranchPayload,
+  ForkBranchSuccess,
   RespondPermissionPayload,
   RespondPlanPayload,
+  CompactBranchPayload,
 } from "./operations.js"
 
 // RPC definitions

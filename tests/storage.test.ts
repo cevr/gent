@@ -161,6 +161,35 @@ describe("Storage", () => {
         }),
       )
     })
+
+    test("updates branch summary", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+
+          yield* storage.createSession(
+            new Session({
+              id: "summary-session",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }),
+          )
+
+          yield* storage.createBranch(
+            new Branch({
+              id: "summary-branch",
+              sessionId: "summary-session",
+              createdAt: new Date(),
+            }),
+          )
+
+          yield* storage.updateBranchSummary("summary-branch", "Short summary")
+
+          const retrieved = yield* storage.getBranch("summary-branch")
+          expect(retrieved?.summary).toBe("Short summary")
+        }),
+      )
+    })
   })
 
   describe("Messages", () => {
@@ -199,6 +228,53 @@ describe("Storage", () => {
           expect(retrieved).toBeDefined()
           expect(retrieved?.role).toBe("user")
           expect(retrieved?.parts[0]?.type).toBe("text")
+        }),
+      )
+    })
+
+    test("counts messages in a branch", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+
+          yield* storage.createSession(
+            new Session({
+              id: "count-session",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: "count-branch",
+              sessionId: "count-session",
+              createdAt: new Date(),
+            }),
+          )
+
+          yield* storage.createMessage(
+            new Message({
+              id: "count-msg-1",
+              sessionId: "count-session",
+              branchId: "count-branch",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "one" })],
+              createdAt: new Date(),
+            }),
+          )
+          yield* storage.createMessage(
+            new Message({
+              id: "count-msg-2",
+              sessionId: "count-session",
+              branchId: "count-branch",
+              role: "assistant",
+              parts: [new TextPart({ type: "text", text: "two" })],
+              createdAt: new Date(),
+            }),
+          )
+
+          const count = yield* storage.countMessages("count-branch")
+          expect(count).toBe(2)
         }),
       )
     })

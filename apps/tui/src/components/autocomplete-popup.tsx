@@ -37,6 +37,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },
   { id: "compact", label: "/compact", description: "Compact history" },
   { id: "branch", label: "/branch", description: "Create new branch" },
+  { id: "tree", label: "/tree", description: "Browse branch tree" },
+  { id: "fork", label: "/fork", description: "Fork from a message" },
 ]
 
 export interface AutocompletePopupProps {

@@ -173,6 +173,25 @@ export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()
   },
 ) {}
 
+export class BranchCreated extends Schema.TaggedClass<BranchCreated>()("BranchCreated", {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+  parentBranchId: Schema.optional(Schema.String),
+  parentMessageId: Schema.optional(Schema.String),
+}) {}
+
+export class BranchSwitched extends Schema.TaggedClass<BranchSwitched>()("BranchSwitched", {
+  sessionId: Schema.String,
+  fromBranchId: Schema.String,
+  toBranchId: Schema.String,
+}) {}
+
+export class BranchSummarized extends Schema.TaggedClass<BranchSummarized>()("BranchSummarized", {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+  summary: Schema.String,
+}) {}
+
 export class ModelChanged extends Schema.TaggedClass<ModelChanged>()("ModelChanged", {
   sessionId: Schema.String,
   branchId: Schema.String,
@@ -200,6 +219,9 @@ export const AgentEvent = Schema.Union(
   QuestionsAsked,
   QuestionsAnswered,
   SessionNameUpdated,
+  BranchCreated,
+  BranchSwitched,
+  BranchSummarized,
   ModelChanged,
 )
 export type AgentEvent = typeof AgentEvent.Type

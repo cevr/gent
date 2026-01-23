@@ -7,7 +7,7 @@
 import { Effect } from "effect"
 import { formatError, type UiError } from "../utils/format-error"
 
-export type SlashCommandId = "model" | "clear" | "sessions" | "compact" | "branch"
+export type SlashCommandId = "model" | "clear" | "sessions" | "compact" | "branch" | "tree" | "fork"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -15,6 +15,8 @@ export interface SlashCommandContext {
   navigateToSessions: () => void
   compactHistory: Effect.Effect<void, UiError>
   createBranch: Effect.Effect<void, UiError>
+  openTree: () => void
+  openFork: () => void
 }
 
 export interface SlashCommandResult {
@@ -68,6 +70,18 @@ export const executeSlashCommand = (
 
     case "branch":
       return runCommandEffect(ctx.createBranch)
+
+    case "tree":
+      return Effect.sync(() => {
+        ctx.openTree()
+        return { handled: true }
+      })
+
+    case "fork":
+      return Effect.sync(() => {
+        ctx.openFork()
+        return { handled: true }
+      })
 
     default:
       return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })

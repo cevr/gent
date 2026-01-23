@@ -53,6 +53,9 @@ export {
   type Question,
   type QuestionOption,
   SessionNameUpdated,
+  BranchCreated,
+  BranchSwitched,
+  BranchSummarized,
   ModelChanged,
 } from "./event.js"
 

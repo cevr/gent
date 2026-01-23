@@ -41,7 +41,7 @@ interface InputContextValue {
 const InputContext = createContext<InputContextValue>()
 
 export interface InputProps {
-  onSubmit: (content: string) => void
+  onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
   clearMessages?: () => void
   children?: JSX.Element
@@ -65,6 +65,7 @@ export function Input(props: InputProps) {
   // Internal state for uncontrolled mode (when inputState prop not provided)
   const [internalMode, setInternalMode] = createSignal<"normal" | "shell">("normal")
   const [autocomplete, setAutocomplete] = createSignal<AutocompleteState | null>(null)
+  let submitMode: "queue" | "interject" = "queue"
 
   // Effective mode from props or internal state
   const effectiveMode = (): "normal" | "shell" | "prompt" => {
@@ -163,6 +164,14 @@ export function Input(props: InputProps) {
   }
 
   useKeyboard((e) => {
+    if (
+      e.name === "return" &&
+      effectiveMode() !== "prompt" &&
+      effectiveMode() !== "shell" &&
+      !autocomplete()
+    ) {
+      submitMode = e.super || e.meta ? "interject" : "queue"
+    }
     // Handle autocomplete keyboard first
     if (autocomplete()) {
       if (e.name === "escape") {
@@ -259,6 +268,7 @@ export function Input(props: InputProps) {
           ),
         ),
       )
+      submitMode = "queue"
       return
     }
 
@@ -276,6 +286,8 @@ export function Input(props: InputProps) {
             navigateToSessions: () => command.openPalette(),
             compactHistory: Effect.fail(ClientError("Compact not implemented yet")),
             createBranch: Effect.void,
+            openTree: () => {},
+            openFork: () => {},
           }).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
@@ -296,16 +308,20 @@ export function Input(props: InputProps) {
           ),
         ),
       )
+      submitMode = "queue"
       return
     }
 
     // 3. Normal message (may contain @file refs)
+    const mode = submitMode
+    submitMode = "queue"
+
     cast(
       expandFileRefs(text, workspace.cwd).pipe(
         Effect.tap((expanded) =>
           Effect.sync(() => {
             clearInput()
-            props.onSubmit(expanded)
+            props.onSubmit(expanded, mode)
           }),
         ),
       ),

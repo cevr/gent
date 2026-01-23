@@ -14,6 +14,7 @@ import {
   type GentCoreService,
   type GentCoreError,
   type SessionInfo,
+  type BranchInfo,
 } from "@gent/server"
 import { DevTracerLive, clearLog } from "@gent/runtime"
 import { DEFAULT_MODEL_ID } from "@gent/core"
@@ -34,6 +35,12 @@ import * as State from "./state"
 type InitialState =
   | { _tag: "home" }
   | { _tag: "session"; session: SessionInfo; prompt?: string }
+  | {
+      _tag: "branchPicker"
+      session: SessionInfo
+      branches: readonly BranchInfo[]
+      prompt?: string
+    }
   | { _tag: "headless"; session: SessionInfo; prompt: string }
 
 // Pure function for state resolution
@@ -86,6 +93,15 @@ const resolveInitialState = (input: {
         return process.exit(1)
       }
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
+      const branches = yield* core.listBranches(sess.id)
+      if (branches.length > 1) {
+        return {
+          _tag: "branchPicker" as const,
+          session: sess,
+          branches,
+          prompt: promptText,
+        }
+      }
       return { _tag: "session" as const, session: sess, prompt: promptText }
     }
 
@@ -104,6 +120,15 @@ const resolveInitialState = (input: {
         }
       }
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
+      const branches = yield* core.listBranches(sess.id)
+      if (branches.length > 1) {
+        return {
+          _tag: "branchPicker" as const,
+          session: sess,
+          branches,
+          prompt: promptText,
+        }
+      }
       return { _tag: "session" as const, session: sess, prompt: promptText }
     }
 
@@ -290,6 +315,15 @@ const main = Command.make(
         }
         initialRoute = Route.session(state.session.id, state.session.branchId)
         initialPrompt = state.prompt
+      }
+
+      if (state._tag === "branchPicker") {
+        initialRoute = Route.branchPicker(
+          state.session.id,
+          state.session.name ?? "Unnamed",
+          state.branches,
+          state.prompt,
+        )
       }
 
       // Launch TUI with providers

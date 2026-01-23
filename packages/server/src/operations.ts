@@ -39,8 +39,11 @@ export const SessionInfo = Schema.Struct({
 export const BranchInfo = Schema.Struct({
   id: Schema.String,
   sessionId: Schema.String,
+  parentBranchId: Schema.optional(Schema.String),
+  parentMessageId: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   model: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
   createdAt: Schema.Number,
 })
 
@@ -54,6 +57,48 @@ export const CreateBranchPayload = Schema.Struct({
 })
 
 export const CreateBranchSuccess = Schema.Struct({
+  branchId: Schema.String,
+})
+
+export interface BranchTreeNode {
+  id: string
+  name?: string
+  summary?: string
+  parentMessageId?: string
+  messageCount: number
+  createdAt: number
+  children: readonly BranchTreeNode[]
+}
+
+export const BranchTreeNodeSchema: Schema.Schema<BranchTreeNode> = Schema.Struct({
+  id: Schema.String,
+  name: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
+  parentMessageId: Schema.optional(Schema.String),
+  messageCount: Schema.Number,
+  createdAt: Schema.Number,
+  children: Schema.Array(Schema.suspend(() => BranchTreeNodeSchema)),
+})
+
+export const GetBranchTreePayload = Schema.Struct({
+  sessionId: Schema.String,
+})
+
+export const SwitchBranchPayload = Schema.Struct({
+  sessionId: Schema.String,
+  fromBranchId: Schema.String,
+  toBranchId: Schema.String,
+  summarize: Schema.optional(Schema.Boolean),
+})
+
+export const ForkBranchPayload = Schema.Struct({
+  sessionId: Schema.String,
+  fromBranchId: Schema.String,
+  atMessageId: Schema.String,
+  name: Schema.optional(Schema.String),
+})
+
+export const ForkBranchSuccess = Schema.Struct({
   branchId: Schema.String,
 })
 
@@ -73,6 +118,7 @@ export const MessageInfo = Schema.Struct({
   id: Schema.String,
   sessionId: Schema.String,
   branchId: Schema.String,
+  kind: Schema.optional(Schema.Literal("regular", "interjection")),
   role: Schema.Literal("user", "assistant", "system", "tool"),
   parts: Schema.Array(MessagePart),
   createdAt: Schema.Number,
@@ -139,6 +185,15 @@ export const RespondPlanPayload = Schema.Struct({
   requestId: Schema.String,
   decision: PlanDecision,
   reason: Schema.optional(Schema.String),
+})
+
+// ============================================================================
+// Compaction Operations
+// ============================================================================
+
+export const CompactBranchPayload = Schema.Struct({
+  sessionId: Schema.String,
+  branchId: Schema.String,
 })
 
 export { EventEnvelope }

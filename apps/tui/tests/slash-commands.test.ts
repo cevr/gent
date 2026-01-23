@@ -40,6 +40,8 @@ describe("executeSlashCommand", () => {
     navigateToSessions: number
     compactHistory: number
     createBranch: number
+    openTree: number
+    openFork: number
   }
 
   const createMockContext = (): { ctx: SlashCommandContext; calls: MockCalls } => {
@@ -49,6 +51,8 @@ describe("executeSlashCommand", () => {
       navigateToSessions: 0,
       compactHistory: 0,
       createBranch: 0,
+      openTree: 0,
+      openFork: 0,
     }
 
     const ctx: SlashCommandContext = {
@@ -67,6 +71,12 @@ describe("executeSlashCommand", () => {
       createBranch: Effect.sync(() => {
         calls.createBranch++
       }),
+      openTree: () => {
+        calls.openTree++
+      },
+      openFork: () => {
+        calls.openFork++
+      },
     }
 
     return { ctx, calls }
@@ -115,6 +125,22 @@ describe("executeSlashCommand", () => {
     expect(calls.createBranch).toBe(1)
   })
 
+  test("/tree opens branch tree", async () => {
+    const { ctx, calls } = createMockContext()
+    const result = await Effect.runPromise(executeSlashCommand("tree", "", ctx))
+
+    expect(result.handled).toBe(true)
+    expect(calls.openTree).toBe(1)
+  })
+
+  test("/fork opens fork picker", async () => {
+    const { ctx, calls } = createMockContext()
+    const result = await Effect.runPromise(executeSlashCommand("fork", "", ctx))
+
+    expect(result.handled).toBe(true)
+    expect(calls.openFork).toBe(1)
+  })
+
   test("unknown command returns error", async () => {
     const { ctx } = createMockContext()
     const result = await Effect.runPromise(executeSlashCommand("unknown", "", ctx))
@@ -140,6 +166,8 @@ describe("executeSlashCommand", () => {
       navigateToSessions: () => {},
       compactHistory: Effect.fail(ClientError("Compact failed")),
       createBranch: Effect.void,
+      openTree: () => {},
+      openFork: () => {},
     }
 
     const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))

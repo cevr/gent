@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import { PlatformError as PlatformErrorSchema, type PlatformError } from "@effect/platform/Error"
 import { EventStoreError } from "@gent/core"
 import { ProviderError } from "@gent/providers"
-import { AgentLoopError } from "@gent/runtime"
+import { AgentLoopError, CheckpointError } from "@gent/runtime"
 import { StorageError } from "@gent/storage"
 
 export type GentRpcError =
@@ -11,6 +11,7 @@ export type GentRpcError =
   | ProviderError
   | PlatformError
   | EventStoreError
+  | CheckpointError
 
 export const GentRpcError = Schema.Union(
   StorageError,
@@ -18,4 +19,5 @@ export const GentRpcError = Schema.Union(
   ProviderError,
   PlatformErrorSchema,
   EventStoreError,
+  CheckpointError,
 )

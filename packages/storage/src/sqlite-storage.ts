@@ -47,6 +47,11 @@ export interface StorageService {
   readonly getBranch: (id: string) => Effect.Effect<Branch | undefined, StorageError>
   readonly listBranches: (sessionId: string) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
   readonly updateBranchModel: (branchId: string, model: string) => Effect.Effect<void, StorageError>
+  readonly updateBranchSummary: (
+    branchId: string,
+    summary: string,
+  ) => Effect.Effect<void, StorageError>
+  readonly countMessages: (branchId: string) => Effect.Effect<number, StorageError>
 
   // Messages
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
@@ -127,6 +132,7 @@ const makeStorage = (db: Database): StorageService => {
       parent_message_id TEXT,
       name TEXT,
       model TEXT,
+      summary TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
@@ -138,12 +144,19 @@ const makeStorage = (db: Database): StorageService => {
   } catch {
     // Column already exists - ignore
   }
+  // Migration: add summary column to existing branches table
+  try {
+    db.run(`ALTER TABLE branches ADD COLUMN summary TEXT`)
+  } catch {
+    // Column already exists - ignore
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
       branch_id TEXT NOT NULL,
+      kind TEXT,
       role TEXT NOT NULL,
       parts TEXT NOT NULL,
       created_at INTEGER NOT NULL,
@@ -151,6 +164,13 @@ const makeStorage = (db: Database): StorageService => {
       FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
     )
   `)
+
+  // Migration: add kind column to existing messages table
+  try {
+    db.run(`ALTER TABLE messages ADD COLUMN kind TEXT`)
+  } catch {
+    // Column already exists - ignore
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS events (
@@ -349,7 +369,7 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO branches (id, session_id, parent_branch_id, parent_message_id, name, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO branches (id, session_id, parent_branch_id, parent_message_id, name, model, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               branch.id,
               branch.sessionId,
@@ -357,6 +377,7 @@ const makeStorage = (db: Database): StorageService => {
               branch.parentMessageId ?? null,
               branch.name ?? null,
               branch.model ?? null,
+              branch.summary ?? null,
               branch.createdAt.getTime(),
             ],
           )
@@ -374,7 +395,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, session_id, parent_branch_id, parent_message_id, name, model, created_at FROM branches WHERE id = ?`,
+              `SELECT id, session_id, parent_branch_id, parent_message_id, name, model, summary, created_at FROM branches WHERE id = ?`,
             )
             .get(id) as {
             id: string
@@ -383,6 +404,7 @@ const makeStorage = (db: Database): StorageService => {
             parent_message_id: string | null
             name: string | null
             model: string | null
+            summary: string | null
             created_at: number
           } | null
           if (!row) return undefined
@@ -393,6 +415,7 @@ const makeStorage = (db: Database): StorageService => {
             parentMessageId: row.parent_message_id ?? undefined,
             name: row.name ?? undefined,
             model: row.model ?? undefined,
+            summary: row.summary ?? undefined,
             createdAt: new Date(row.created_at),
           })
         },
@@ -408,7 +431,7 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, parent_branch_id, parent_message_id, name, model, created_at FROM branches WHERE session_id = ? ORDER BY created_at ASC`,
+              `SELECT id, session_id, parent_branch_id, parent_message_id, name, model, summary, created_at FROM branches WHERE session_id = ? ORDER BY created_at ASC`,
             )
             .all(sessionId) as Array<{
             id: string
@@ -417,6 +440,7 @@ const makeStorage = (db: Database): StorageService => {
             parent_message_id: string | null
             name: string | null
             model: string | null
+            summary: string | null
             created_at: number
           }>
           return rows.map(
@@ -428,6 +452,7 @@ const makeStorage = (db: Database): StorageService => {
                 parentMessageId: row.parent_message_id ?? undefined,
                 name: row.name ?? undefined,
                 model: row.model ?? undefined,
+                summary: row.summary ?? undefined,
                 createdAt: new Date(row.created_at),
               }),
           )
@@ -451,16 +476,44 @@ const makeStorage = (db: Database): StorageService => {
           }),
       }),
 
+    updateBranchSummary: (branchId, summary) =>
+      Effect.try({
+        try: () => {
+          db.run(`UPDATE branches SET summary = ? WHERE id = ?`, [summary, branchId])
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to update branch summary",
+            cause: e,
+          }),
+      }),
+
+    countMessages: (branchId) =>
+      Effect.try({
+        try: () => {
+          const row = db
+            .query(`SELECT COUNT(*) as count FROM messages WHERE branch_id = ?`)
+            .get(branchId) as { count: number } | null
+          return row?.count ?? 0
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to count messages",
+            cause: e,
+          }),
+      }),
+
     // Messages
     createMessage: (message) =>
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               message.id,
               message.sessionId,
               message.branchId,
+              message.kind ?? null,
               message.role,
               encodeMessageParts([...message.parts]),
               message.createdAt.getTime(),
@@ -485,12 +538,13 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE id = ?`,
+              `SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE id = ?`,
             )
             .get(id) as {
             id: string
             session_id: string
             branch_id: string
+            kind: "regular" | "interjection" | null
             role: "user" | "assistant" | "system" | "tool"
             parts: string
             created_at: number
@@ -502,6 +556,7 @@ const makeStorage = (db: Database): StorageService => {
             id: row.id,
             sessionId: row.session_id,
             branchId: row.branch_id,
+            kind: row.kind ?? undefined,
             role: row.role,
             parts,
             createdAt: new Date(row.created_at),
@@ -520,12 +575,13 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC, id ASC`,
+              `SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? ORDER BY created_at ASC, id ASC`,
             )
             .all(branchId) as Array<{
             id: string
             session_id: string
             branch_id: string
+            kind: "regular" | "interjection" | null
             role: "user" | "assistant" | "system" | "tool"
             parts: string
             created_at: number
@@ -537,6 +593,7 @@ const makeStorage = (db: Database): StorageService => {
               id: row.id,
               sessionId: row.session_id,
               branchId: row.branch_id,
+              kind: row.kind ?? undefined,
               role: row.role,
               parts,
               createdAt: new Date(row.created_at),
@@ -799,12 +856,13 @@ const makeStorage = (db: Database): StorageService => {
 
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND (created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC`,
+              `SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND (created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC`,
             )
             .all(branchId, afterMsg.created_at, afterMsg.created_at, afterMsg.id) as Array<{
             id: string
             session_id: string
             branch_id: string
+            kind: "regular" | "interjection" | null
             role: "user" | "assistant" | "system" | "tool"
             parts: string
             created_at: number
@@ -816,6 +874,7 @@ const makeStorage = (db: Database): StorageService => {
               id: row.id,
               sessionId: row.session_id,
               branchId: row.branch_id,
+              kind: row.kind ?? undefined,
               role: row.role,
               parts,
               createdAt: new Date(row.created_at),
@@ -835,12 +894,13 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, session_id, branch_id, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC, id ASC`,
+              `SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ? AND created_at > ? ORDER BY created_at ASC, id ASC`,
             )
             .all(branchId, sinceTimestamp.getTime()) as Array<{
             id: string
             session_id: string
             branch_id: string
+            kind: "regular" | "interjection" | null
             role: "user" | "assistant" | "system" | "tool"
             parts: string
             created_at: number
@@ -852,6 +912,7 @@ const makeStorage = (db: Database): StorageService => {
               id: row.id,
               sessionId: row.session_id,
               branchId: row.branch_id,
+              kind: row.kind ?? undefined,
               role: row.role,
               parts,
               createdAt: new Date(row.created_at),

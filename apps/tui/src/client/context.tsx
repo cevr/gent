@@ -29,6 +29,8 @@ import {
   type MessageInfoReadonly,
   type SessionInfo,
   type BranchInfo,
+  type BranchTreeNode,
+  type SteerCommand,
   createClient,
 } from "../client"
 import * as State from "../state"
@@ -113,12 +115,18 @@ export interface ClientContextValue {
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
   listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
   createBranch: (name?: string) => Effect.Effect<string, GentRpcError>
+  getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
+  forkBranch: (messageId: string, name?: string) => Effect.Effect<string, GentRpcError>
+  compactBranch: () => Effect.Effect<void, GentRpcError>
+
+  // Branch navigation (fire-and-forget)
+  switchBranch: (branchId: string, summarize?: boolean) => void
 
   // Event subscription (for message updates - agent state handled internally)
   subscribeEvents: (onEvent: (event: AgentEvent) => void) => () => void
 
   // Steering (fire-and-forget)
-  steer: (command: { _tag: "Cancel" } | { _tag: "Interrupt"; message: string } | { _tag: "SwitchModel"; model: string } | { _tag: "SwitchMode"; mode: "build" | "plan" }) => void
+  steer: (command: SteerCommand) => void
 }
 
 const ClientContext = createContext<ClientContextValue>()
@@ -450,6 +458,31 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.createBranch(s.sessionId, name)
     },
 
+    getBranchTree: () => {
+      const s = session()
+      if (!s) return Effect.succeed([] as readonly BranchTreeNode[])
+      return client.getBranchTree(s.sessionId)
+    },
+
+    forkBranch: (messageId, name) => {
+      const s = session()
+      if (!s) return Effect.succeed("" as string)
+      return client
+        .forkBranch({
+          sessionId: s.sessionId,
+          fromBranchId: s.branchId,
+          atMessageId: messageId,
+          ...(name !== undefined ? { name } : {}),
+        })
+        .pipe(Effect.map((result) => result.branchId))
+    },
+
+    compactBranch: () => {
+      const s = session()
+      if (!s) return Effect.void
+      return client.compactBranch({ sessionId: s.sessionId, branchId: s.branchId })
+    },
+
     // Event subscription for message updates (shared with internal agent state subscription)
     subscribeEvents: (onEvent) => {
       const lastId = eventBuffer[eventBuffer.length - 1]?.id
@@ -473,6 +506,36 @@ export function ClientProvider(props: ClientProviderProps) {
         setAgentStore({ mode: command.mode })
       }
       cast(client.steer(command))
+    },
+
+    switchBranch: (branchId, summarize) => {
+      const s = session()
+      if (!s) return
+
+      cast(
+        client
+          .switchBranch({
+            sessionId: s.sessionId,
+            fromBranchId: s.branchId,
+            toBranchId: branchId,
+            ...(summarize !== undefined ? { summarize } : {}),
+          })
+          .pipe(
+            Effect.tapError((err) =>
+              Effect.sync(() => {
+                setAgentStore({ status: AgentStatus.error(formatError(err)) })
+              }),
+            ),
+          ),
+      )
+
+      setSessionStore(
+        produce((draft) => {
+          if (draft.sessionState.status === "active") {
+            draft.sessionState.session.branchId = branchId
+          }
+        }),
+      )
     },
   }
 

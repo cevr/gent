@@ -10,17 +10,23 @@ import {
   buildToolResultMap,
   extractToolCallsWithResults,
   type MessageInfoReadonly,
+  type BranchTreeNode,
 } from "../client.js"
 import { StatusBar } from "../components/status-bar"
-import { MessageList, ThinkingIndicator, type Message } from "../components/message-list"
+import { MessageList, type Message, type SessionItem } from "../components/message-list"
+import { Indicators, type Indicator } from "../components/indicators"
 import { Input } from "../components/input"
 import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
+import { useRouter } from "../router/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useRuntime } from "../hooks/use-runtime"
 import { InputState, transition, type InputEvent, type InputEffect } from "../components/input-state"
-import { ClientError, formatError, type UiError } from "../utils/format-error"
+import { formatError, type UiError } from "../utils/format-error"
+import { BranchTree } from "../components/branch-tree"
+import { MessagePicker } from "../components/message-picker"
+import type { SessionEvent } from "../components/session-event-indicator"
 import type { QuestionsAsked, PermissionRequested, PlanPresented } from "@gent/core"
 
 export interface SessionProps {
@@ -35,16 +41,72 @@ export function Session(props: SessionProps) {
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
+  const router = useRouter()
   const { cast } = useRuntime(client.client.runtime)
 
   const [messages, setMessages] = createSignal<Message[]>([])
+  const [events, setEvents] = createSignal<SessionEvent[]>([])
   const [elapsed, setElapsed] = createSignal(0)
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
+  const [treeOpen, setTreeOpen] = createSignal(false)
+  const [treeNodes, setTreeNodes] = createSignal<BranchTreeNode[]>([])
+  const [forkOpen, setForkOpen] = createSignal(false)
+  const [compacting, setCompacting] = createSignal(false)
   let initialPromptSent = false
+  let eventSeq = 0
+
+  const COMPACTION_MIN_MS = 600
+  let compactionStartedAt: number | null = null
+  let compactionTimer: ReturnType<typeof setTimeout> | null = null
+
+  const startCompaction = () => {
+    compactionStartedAt = Date.now()
+    if (compactionTimer) {
+      clearTimeout(compactionTimer)
+      compactionTimer = null
+    }
+    setCompacting(true)
+  }
+
+  const stopCompaction = () => {
+    if (!compacting()) {
+      compactionStartedAt = null
+      return
+    }
+
+    const startedAt = compactionStartedAt ?? Date.now()
+    const elapsedMs = Date.now() - startedAt
+    const remainingMs = COMPACTION_MIN_MS - elapsedMs
+
+    if (remainingMs <= 0) {
+      setCompacting(false)
+      compactionStartedAt = null
+      return
+    }
+
+    if (compactionTimer) {
+      clearTimeout(compactionTimer)
+    }
+    compactionTimer = setTimeout(() => {
+      setCompacting(false)
+      compactionStartedAt = null
+      compactionTimer = null
+    }, remainingMs)
+  }
 
   // Derived - no separate signal needed
   const hasMessages = () => messages().length > 0
+
+  const items = (): SessionItem[] => {
+    const combined: SessionItem[] = [...messages(), ...events()]
+    return combined.sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
+      if (a._tag === "event" && b._tag === "event") return a.seq - b.seq
+      if (a._tag === b._tag) return 0
+      return a._tag === "message" ? -1 : 1
+    })
+  }
 
   // Track elapsed time while streaming
   let elapsedInterval: ReturnType<typeof setInterval> | null = null
@@ -65,48 +127,33 @@ export function Session(props: SessionProps) {
 
   onCleanup(() => {
     if (elapsedInterval) clearInterval(elapsedInterval)
+    if (compactionTimer) clearTimeout(compactionTimer)
   })
+
+  const indicator = (): Indicator | null => {
+    const error = client.error()
+    if (error) return { _tag: "error", message: error }
+    if (compacting()) return { _tag: "compacting" }
+    if (client.isStreaming()) return { _tag: "thinking" }
+    return null
+  }
 
   // Build messages from raw messages
   const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
     const resultMap = buildToolResultMap(msgs)
     const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
-    const userMsgDurations = new Map<number, number>()
-    filteredMsgs.forEach((m, i) => {
-      if (m.role === "user" && m.turnDurationMs !== undefined) {
-        userMsgDurations.set(i, m.turnDurationMs)
-      }
-    })
-
-    return filteredMsgs.map((m, i) => {
+    return filteredMsgs.map((m) => {
       const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
-      let thinkTime: number | undefined
-
-      if (m.role === "assistant") {
-        const nextIdx = i + 1
-        const nextUserDuration = userMsgDurations.get(nextIdx)
-        if (nextUserDuration !== undefined) {
-          thinkTime = Math.round(nextUserDuration / 1000)
-        } else if (nextIdx >= filteredMsgs.length) {
-          for (let j = i - 1; j >= 0; j--) {
-            const prev = filteredMsgs[j]
-            if (prev?.role === "user" && prev.turnDurationMs !== undefined) {
-              thinkTime = Math.round(prev.turnDurationMs / 1000)
-              break
-            }
-          }
-        }
-      }
 
       return {
+        _tag: "message",
         id: m.id,
         role: m.role,
+        kind: m.kind ?? "regular",
         content: extractText(m.parts),
         createdAt: m.createdAt,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        thinkTime,
-        interrupted: undefined,
       }
     })
   }
@@ -176,13 +223,13 @@ export function Session(props: SessionProps) {
         setMessages((prev) => [
           ...prev,
           {
+            _tag: "message",
             id: crypto.randomUUID(),
             role: "assistant",
+            kind: "regular",
             content: "",
             createdAt: Date.now(),
             toolCalls: undefined,
-            thinkTime: undefined,
-            interrupted: undefined,
           },
         ])
       } else if (event._tag === "StreamChunk") {
@@ -194,30 +241,41 @@ export function Session(props: SessionProps) {
           return [
             ...prev,
             {
+              _tag: "message",
               id: crypto.randomUUID(),
               role: "assistant",
+              kind: "regular",
               content: event.chunk,
               createdAt: Date.now(),
               toolCalls: undefined,
-              thinkTime: undefined,
-              interrupted: undefined,
             },
           ]
         })
       } else if (event._tag === "StreamEnded") {
         const thinkTime = elapsed()
         const interrupted = event.interrupted === true
-        if (thinkTime > 0 || interrupted) {
-          setMessages((prev) => {
-            const last = prev[prev.length - 1]
-            if (last && last.role === "assistant") {
-              return [
-                ...prev.slice(0, -1),
-                { ...last, thinkTime: thinkTime > 0 ? thinkTime : undefined, interrupted },
-              ]
-            }
-            return prev
-          })
+        if (thinkTime > 0) {
+          setEvents((prev) => [
+            ...prev,
+            {
+              _tag: "event",
+              kind: "turn-ended",
+              durationSeconds: thinkTime,
+              createdAt: Date.now(),
+              seq: eventSeq++,
+            },
+          ])
+        }
+        if (interrupted) {
+          setEvents((prev) => [
+            ...prev,
+            {
+              _tag: "event",
+              kind: "interruption",
+              createdAt: Date.now(),
+              seq: eventSeq++,
+            },
+          ])
         }
       } else if (event._tag === "ToolCallStarted") {
         setMessages((prev) => {
@@ -267,6 +325,19 @@ export function Session(props: SessionProps) {
           }
           return prev
         })
+      } else if (event._tag === "CompactionStarted") {
+        startCompaction()
+      } else if (event._tag === "CompactionCompleted") {
+        stopCompaction()
+        setEvents((prev) => [
+          ...prev,
+          {
+            _tag: "event",
+            kind: "compaction",
+            createdAt: Date.now(),
+            seq: eventSeq++,
+          },
+        ])
       } else if (event._tag === "QuestionsAsked") {
         // Handle agent asking questions - transition to prompt state
         handleInputEvent({ _tag: "QuestionsAsked", event: event as typeof QuestionsAsked.Type })
@@ -294,6 +365,33 @@ export function Session(props: SessionProps) {
   // Clear messages handler for /clear command
   const clearMessages = () => {
     setMessages([])
+    setEvents([])
+  }
+
+  const openBranchTree = () => {
+    cast(
+      client.getBranchTree().pipe(
+        Effect.tap((tree) =>
+          Effect.sync(() => {
+            setTreeNodes([...tree])
+            setTreeOpen(true)
+          }),
+        ),
+        Effect.catchAll((err) =>
+          Effect.sync(() => {
+            client.setError(formatError(err))
+          }),
+        ),
+      ),
+    )
+  }
+
+  const openForkPicker = () => {
+    if (messages().length === 0) {
+      client.setError("No messages to fork")
+      return
+    }
+    setForkOpen(true)
   }
 
   // Track pending ESC for double-tap quit
@@ -303,6 +401,8 @@ export function Session(props: SessionProps) {
   useKeyboard((e) => {
     // Let command system handle keybinds first
     if (command.handleKeybind(e)) return
+
+    if (treeOpen() || forkOpen()) return
 
     // ESC: cancel if streaming, double-tap to quit when idle
     if (e.name === "escape") {
@@ -346,7 +446,12 @@ export function Session(props: SessionProps) {
     }
   })
 
-  const handleSubmit = (content: string) => {
+  const handleSubmit = (content: string, mode?: "queue" | "interject") => {
+    if (mode === "interject" && client.isStreaming()) {
+      client.steer({ _tag: "Interject", message: content })
+      return
+    }
+
     // First message in session starts in plan mode
     client.sendMessage(content, !hasMessages() ? "plan" : undefined)
   }
@@ -409,8 +514,21 @@ export function Session(props: SessionProps) {
       openPalette: () => command.openPalette(),
       clearMessages,
       navigateToSessions: () => command.openPalette(),
-      compactHistory: Effect.fail(ClientError("Compact not implemented yet")),
+      compactHistory: Effect.gen(function* () {
+        yield* Effect.sync(() => {
+          startCompaction()
+        })
+        try {
+          yield* client.compactBranch()
+        } finally {
+          yield* Effect.sync(() => {
+            stopCompaction()
+          })
+        }
+      }),
       createBranch: client.createBranch().pipe(Effect.asVoid),
+      openTree: openBranchTree,
+      openFork: openForkPicker,
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
@@ -422,13 +540,44 @@ export function Session(props: SessionProps) {
       Effect.asVoid,
     )
 
+  const handleBranchSelect = (branchId: string) => {
+    setTreeOpen(false)
+    client.switchBranch(branchId)
+    const session = client.session()
+    if (session) {
+      router.navigateToSession(session.sessionId, branchId)
+    }
+  }
+
+  const handleForkSelect = (messageId: string) => {
+    setForkOpen(false)
+    cast(
+      client.forkBranch(messageId).pipe(
+        Effect.tap((branchId) =>
+          Effect.sync(() => {
+            client.switchBranch(branchId)
+            const session = client.session()
+            if (session) {
+              router.navigateToSession(session.sessionId, branchId)
+            }
+          }),
+        ),
+        Effect.catchAll((err) =>
+          Effect.sync(() => {
+            client.setError(formatError(err))
+          }),
+        ),
+      ),
+    )
+  }
+
   return (
     <box flexDirection="column" flexGrow={1}>
       {/* Messages */}
-      <MessageList messages={messages()} toolsExpanded={toolsExpanded()} />
+      <MessageList items={items()} toolsExpanded={toolsExpanded()} />
 
       {/* Thinking indicator */}
-      <ThinkingIndicator elapsed={elapsed()} visible={client.isStreaming()} />
+      <Indicators indicator={indicator()} />
 
       {/* Input with autocomplete above separator */}
       <Input
@@ -445,6 +594,21 @@ export function Session(props: SessionProps) {
           <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
         </box>
       </Input>
+
+      <BranchTree
+        open={treeOpen()}
+        tree={treeNodes()}
+        activeBranchId={client.session()?.branchId}
+        onSelect={handleBranchSelect}
+        onClose={() => setTreeOpen(false)}
+      />
+
+      <MessagePicker
+        open={forkOpen()}
+        messages={messages()}
+        onSelect={handleForkSelect}
+        onClose={() => setForkOpen(false)}
+      />
 
       {/* Separator line */}
       <box flexShrink={0}>

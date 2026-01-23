@@ -6,7 +6,9 @@ import { CommandProvider } from "./command/index"
 import { useRouter, isRoute } from "./router/index"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { BranchPicker } from "./routes/branch-picker"
 import * as State from "./state"
+import type { BranchInfo } from "./client"
 
 export interface AppProps {
   initialPrompt?: string
@@ -38,6 +40,24 @@ function AppContent(props: AppProps) {
                 sessionId={route.sessionId}
                 branchId={route.branchId}
                 initialPrompt={prompt}
+              />
+            )
+          }}
+        </Match>
+        <Match when={isRoute.branchPicker(router.route()) ? router.route() : false}>
+          {(r) => {
+            const route = r() as {
+              sessionId: string
+              sessionName: string
+              branches: readonly BranchInfo[]
+              prompt?: string
+            }
+            return (
+              <BranchPicker
+                sessionId={route.sessionId}
+                sessionName={route.sessionName}
+                branches={route.branches}
+                prompt={route.prompt}
               />
             )
           }}

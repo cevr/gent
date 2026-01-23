@@ -132,6 +132,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
         })
 
         const steerQueue = yield* Queue.unbounded<SteerCommand>()
+        const pendingSteerRef = yield* Ref.make<SteerCommand[]>([])
         const publishEvent = (event: AgentEvent) =>
           eventStore.publish(event).pipe(
             Effect.mapError(
@@ -142,6 +143,58 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                 }),
             ),
           )
+
+        const applySteerCommand = Effect.fn("AgentLoop.applySteerCommand")(function* (
+          sessionId: string,
+          branchId: string,
+          cmd: SteerCommand,
+        ) {
+          if (cmd._tag === "SwitchModel") {
+            yield* Ref.update(stateRef, (s) => ({
+              ...s,
+              model: cmd.model,
+            }))
+            return
+          }
+
+          if (cmd._tag !== "SwitchMode") return
+
+          const newMode = cmd.mode as AgentMode
+          const currentMode = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.mode))
+          if (currentMode === "plan" && newMode === "build") {
+            const decision = yield* planHandler.present({
+              sessionId,
+              branchId,
+              prompt: "Exit plan mode and resume building?",
+            })
+            if (decision === "confirm") {
+              yield* Ref.update(stateRef, (s) => ({
+                ...s,
+                mode: "build" as AgentMode,
+              }))
+            }
+            return
+          }
+
+          yield* Ref.update(stateRef, (s) => ({
+            ...s,
+            mode: newMode,
+          }))
+          if (newMode === "plan") {
+            yield* publishEvent(new PlanModeEntered({ sessionId, branchId }))
+          }
+        })
+
+        const applyPendingSteerCommands = Effect.fn("AgentLoop.applyPendingSteerCommands")(function* (
+          sessionId: string,
+          branchId: string,
+        ) {
+          const pending = yield* Ref.getAndSet(pendingSteerRef, [])
+          if (pending.length === 0) return
+          for (const cmd of pending) {
+            yield* applySteerCommand(sessionId, branchId, cmd)
+          }
+        })
 
         const executeToolCall = Effect.fn("AgentLoop.executeToolCall")(function* (
           toolCall: ToolCallPart,
@@ -231,6 +284,25 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
         ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError | EventStoreError> = Effect.fn(
           "AgentLoop.runLoop",
         )(function* (sessionId: string, branchId: string, initialMessage: Message) {
+          const enqueueInterject = Effect.fn("AgentLoop.enqueueInterject")(function* (
+            content: string,
+            createdAt?: Date,
+          ) {
+            const interjectMsg = new Message({
+              id: Bun.randomUUIDv7(),
+              sessionId,
+              branchId,
+              kind: "interjection",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: content })],
+              createdAt: createdAt ?? new Date(),
+            })
+            yield* Ref.update(stateRef, (s) => ({
+              ...s,
+              followUpQueue: [interjectMsg, ...s.followUpQueue],
+            }))
+          })
+
           // Save user message
           yield* storage.createMessage(initialMessage)
           yield* publishEvent(
@@ -248,6 +320,8 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
           let continueLoop = true
 
           while (continueLoop) {
+            yield* applyPendingSteerCommands(sessionId, branchId)
+
             // Check for steer commands
             const steerCmd = yield* Queue.poll(steerQueue)
             if (steerCmd._tag === "Some") {
@@ -275,49 +349,13 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                 break
               } else if (cmd._tag === "Interject") {
                 // Seamless pivot - queue message for immediate processing
-                const interjectMsg = new Message({
-                  id: Bun.randomUUIDv7(),
-                  sessionId,
-                  branchId,
-                  role: "user",
-                  parts: [new TextPart({ type: "text", text: cmd.message })],
-                  createdAt: new Date(),
-                })
-                yield* Ref.update(stateRef, (s) => ({
-                  ...s,
-                  followUpQueue: [interjectMsg, ...s.followUpQueue],
-                }))
+                yield* enqueueInterject(cmd.message)
                 continueLoop = false
                 break
               } else if (cmd._tag === "SwitchModel") {
-                yield* Ref.update(stateRef, (s) => ({
-                  ...s,
-                  model: cmd.model,
-                }))
+                yield* applySteerCommand(sessionId, branchId, cmd)
               } else if (cmd._tag === "SwitchMode") {
-                const newMode = cmd.mode as AgentMode
-                const currentMode = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.mode))
-                if (currentMode === "plan" && newMode === "build") {
-                  const decision = yield* planHandler.present({
-                    sessionId,
-                    branchId,
-                    prompt: "Exit plan mode and resume building?",
-                  })
-                  if (decision === "confirm") {
-                    yield* Ref.update(stateRef, (s) => ({
-                      ...s,
-                      mode: "build" as AgentMode,
-                    }))
-                  }
-                } else {
-                  yield* Ref.update(stateRef, (s) => ({
-                    ...s,
-                    mode: newMode,
-                  }))
-                  if (newMode === "plan") {
-                    yield* publishEvent(new PlanModeEntered({ sessionId, branchId }))
-                  }
-                }
+                yield* applySteerCommand(sessionId, branchId, cmd)
               }
             }
 
@@ -379,7 +417,19 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
             const toolCalls: ToolCallPart[] = []
             let lastFinishChunk: FinishChunk | undefined
 
-            yield* Stream.runForEach(streamEffect, (chunk) =>
+            const interruptRef = yield* Ref.make<SteerCommand | null>(null)
+            const interruptSignal = Effect.gen(function* () {
+              while (true) {
+                const cmd = yield* Queue.take(steerQueue)
+                if (cmd._tag === "Cancel" || cmd._tag === "Interrupt" || cmd._tag === "Interject") {
+                  yield* Ref.set(interruptRef, cmd)
+                  return
+                }
+                yield* Ref.update(pendingSteerRef, (pending) => [...pending, cmd])
+              }
+            })
+
+            yield* Stream.runForEach(streamEffect.pipe(Stream.interruptWhen(interruptSignal)), (chunk) =>
               Effect.gen(function* () {
                 if (chunk._tag === "TextChunk") {
                   textParts.push(chunk.text)
@@ -404,6 +454,54 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                 }
               }),
             )
+
+            yield* applyPendingSteerCommands(sessionId, branchId)
+            const interruptCmd = yield* Ref.get(interruptRef)
+            if (interruptCmd) {
+              yield* publishEvent(
+                new StreamEnded({
+                  sessionId,
+                  branchId,
+                  interrupted: true,
+                }),
+              )
+
+              const partialText = textParts.join("")
+              let assistantCreatedAtMs: number | null = null
+              if (partialText) {
+                const createdAt = new Date()
+                assistantCreatedAtMs = createdAt.getTime()
+                const assistantMessage = new Message({
+                  id: Bun.randomUUIDv7(),
+                  sessionId,
+                  branchId,
+                  role: "assistant",
+                  parts: [new TextPart({ type: "text", text: partialText })],
+                  createdAt,
+                })
+
+                yield* storage.createMessage(assistantMessage)
+                yield* publishEvent(
+                  new MessageReceived({
+                    sessionId,
+                    branchId,
+                    messageId: assistantMessage.id,
+                    role: "assistant",
+                  }),
+                )
+              }
+
+              if (interruptCmd._tag === "Interject") {
+                const createdAt =
+                  assistantCreatedAtMs !== null
+                    ? new Date(assistantCreatedAtMs + 1)
+                    : new Date()
+                yield* enqueueInterject(interruptCmd.message, createdAt)
+              }
+
+              continueLoop = false
+              break
+            }
 
             yield* publishEvent(
               new StreamEnded({

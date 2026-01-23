@@ -1,24 +1,29 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
-import { formatThinkTime, getSpinnerFrames, formatToolInput } from "./message-list-utils"
+import { getSpinnerFrames, formatToolInput } from "./message-list-utils"
+import { SessionEventIndicator, type SessionEvent } from "./session-event-indicator"
 
 export type { ToolCall }
 
 export interface Message {
+  _tag: "message"
   id: string
   role: "user" | "assistant" | "system" | "tool"
+  kind: "regular" | "interjection"
   content: string
   createdAt: number
   toolCalls: ToolCall[] | undefined
-  thinkTime: number | undefined
-  interrupted: boolean | undefined
 }
 
-function UserMessage(props: { content: string }) {
+export type SessionItem = Message | SessionEvent
+
+function UserMessage(props: { content: string; kind: "regular" | "interjection" }) {
   const { theme } = useTheme()
+  const background = () =>
+    props.kind === "interjection" ? theme.backgroundPanel : theme.backgroundElement
   return (
-    <box marginTop={1} backgroundColor={theme.backgroundElement} paddingLeft={2} paddingRight={2}>
+    <box marginTop={1} backgroundColor={background()} paddingLeft={2} paddingRight={2}>
       <text style={{ fg: theme.text }}>{props.content}</text>
     </box>
   )
@@ -27,8 +32,6 @@ function UserMessage(props: { content: string }) {
 function AssistantMessage(props: {
   content: string
   toolCalls: ToolCall[] | undefined
-  thinkTime: number | undefined
-  interrupted: boolean | undefined
   expanded: boolean
 }) {
   const { theme } = useTheme()
@@ -45,22 +48,6 @@ function AssistantMessage(props: {
       </Show>
       <Show when={props.content}>
         <text style={{ fg: theme.text }}>{props.content}</text>
-      </Show>
-      <Show
-        when={props.interrupted}
-        fallback={
-          <Show when={props.thinkTime !== undefined && props.thinkTime > 0}>
-            <box marginTop={1}>
-              <text style={{ fg: theme.textMuted }}>
-                Thought for {formatThinkTime(props.thinkTime ?? 0)}
-              </text>
-            </box>
-          </Show>
-        }
-      >
-        <box marginTop={1}>
-          <text style={{ fg: theme.warning }}>Interrupted</text>
-        </box>
       </Show>
     </box>
   )
@@ -122,64 +109,33 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
   )
 }
 
-const DOTS_FRAMES = ["", ".", "..", "..."]
-
-export interface ThinkingIndicatorProps {
-  elapsed: number
-  visible: boolean
-}
-
-export function ThinkingIndicator(props: ThinkingIndicatorProps) {
-  const { theme } = useTheme()
-  const [frame, setFrame] = createSignal(0)
-
-  onMount(() => {
-    const interval = setInterval(() => {
-      if (props.visible) {
-        setFrame((f) => (f + 1) % DOTS_FRAMES.length)
-      }
-    }, 500)
-    onCleanup(() => clearInterval(interval))
-  })
-
-  const dots = () => DOTS_FRAMES[frame()]
-
-  return (
-    <Show when={props.visible}>
-      <box flexShrink={0} paddingLeft={1}>
-        <text>
-          <span style={{ fg: theme.textMuted, italic: true }}>thinking{dots()}</span>
-        </text>
-      </box>
-    </Show>
-  )
-}
-
 interface MessageListProps {
-  messages: Message[]
+  items: SessionItem[]
   toolsExpanded: boolean
 }
 
 export function MessageList(props: MessageListProps) {
   return (
-    <scrollbox flexGrow={1} stickyScroll stickyStart="bottom" paddingLeft={1} paddingRight={1}>
-      <For each={props.messages}>
-        {(msg) => (
-          <Show
-            when={msg.role === "user"}
-            fallback={
-              <AssistantMessage
-                content={msg.content}
-                toolCalls={msg.toolCalls}
-                thinkTime={msg.thinkTime}
-                interrupted={msg.interrupted}
-                expanded={props.toolsExpanded}
-              />
-            }
-          >
-            <UserMessage content={msg.content} />
-          </Show>
-        )}
+    <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+      <For each={props.items}>
+        {(item) =>
+          item._tag === "event" ? (
+            <SessionEventIndicator event={item} />
+          ) : (
+            <Show
+              when={item.role === "user"}
+              fallback={
+                <AssistantMessage
+                  content={item.content}
+                  toolCalls={item.toolCalls}
+                  expanded={props.toolsExpanded}
+                />
+              }
+            >
+              <UserMessage content={item.content} kind={item.kind} />
+            </Show>
+          )
+        }
       </For>
     </scrollbox>
   )

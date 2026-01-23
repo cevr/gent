@@ -4,6 +4,7 @@
 
 import { createContext, createSignal, onCleanup, useContext, type ParentProps } from "solid-js"
 import { type AppRoute, Route } from "./types"
+import type { BranchInfo } from "../client"
 import { createAppRouter, type AppRouter } from "./router"
 
 export interface RouterContextValue {
@@ -11,6 +12,12 @@ export interface RouterContextValue {
   navigate: (route: AppRoute) => void
   navigateToHome: () => void
   navigateToSession: (sessionId: string, branchId: string, prompt?: string) => void
+  navigateToBranchPicker: (
+    sessionId: string,
+    sessionName: string,
+    branches: readonly BranchInfo[],
+    prompt?: string,
+  ) => void
   back: () => boolean
   canGoBack: () => boolean
 }
@@ -44,6 +51,8 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
     navigateToHome: () => router.navigate(Route.home()),
     navigateToSession: (sessionId: string, branchId: string, prompt?: string) =>
       router.navigate(Route.session(sessionId, branchId, prompt)),
+    navigateToBranchPicker: (sessionId, sessionName, branches, prompt) =>
+      router.navigate(Route.branchPicker(sessionId, sessionName, branches, prompt)),
     back: router.back,
     canGoBack: router.canGoBack,
   }

@@ -8,6 +8,11 @@ import {
   ListBranchesPayload,
   CreateBranchPayload,
   CreateBranchSuccess,
+  BranchTreeNodeSchema,
+  GetBranchTreePayload,
+  SwitchBranchPayload,
+  ForkBranchPayload,
+  ForkBranchSuccess,
   SendMessagePayload,
   ListMessagesPayload,
   MessageInfo,
@@ -19,6 +24,7 @@ import {
   RespondQuestionsPayload,
   RespondPermissionPayload,
   RespondPlanPayload,
+  CompactBranchPayload,
 } from "./operations.js"
 import { GentRpcError } from "./errors.js"
 
@@ -56,6 +62,22 @@ export class GentRpcs extends RpcGroup.make(
   Rpc.make("createBranch", {
     payload: CreateBranchPayload.fields,
     success: CreateBranchSuccess,
+    error: GentRpcError,
+  }),
+
+  // Branch tree + navigation
+  Rpc.make("getBranchTree", {
+    payload: GetBranchTreePayload.fields,
+    success: Schema.Array(BranchTreeNodeSchema),
+    error: GentRpcError,
+  }),
+  Rpc.make("switchBranch", {
+    payload: SwitchBranchPayload.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("forkBranch", {
+    payload: ForkBranchPayload.fields,
+    success: ForkBranchSuccess,
     error: GentRpcError,
   }),
 
@@ -104,6 +126,12 @@ export class GentRpcs extends RpcGroup.make(
   // Respond to plan prompt
   Rpc.make("respondPlan", {
     payload: RespondPlanPayload.fields,
+    error: GentRpcError,
+  }),
+
+  // Compaction
+  Rpc.make("compactBranch", {
+    payload: CompactBranchPayload.fields,
     error: GentRpcError,
   }),
 ) {}

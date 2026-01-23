@@ -40,6 +40,24 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             ...(name !== undefined ? { name } : {}),
           }),
 
+      getBranchTree: ({ sessionId }) => core.getBranchTree(sessionId),
+
+      switchBranch: ({ sessionId, fromBranchId, toBranchId, summarize }) =>
+        core.switchBranch({
+          sessionId,
+          fromBranchId,
+          toBranchId,
+          ...(summarize !== undefined ? { summarize } : {}),
+        }),
+
+      forkBranch: ({ sessionId, fromBranchId, atMessageId, name }) =>
+        core.forkBranch({
+          sessionId,
+          fromBranchId,
+          atMessageId,
+          ...(name !== undefined ? { name } : {}),
+        }),
+
       sendMessage: ({ sessionId, branchId, content, mode, model }) =>
         core
           .sendMessage({
@@ -73,6 +91,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       respondPlan: ({ requestId, decision, reason }) =>
         planHandler.respond(requestId, decision, reason),
+
+      compactBranch: ({ sessionId, branchId }) =>
+        core.compactBranch({ sessionId, branchId }),
     }
   }),
 )

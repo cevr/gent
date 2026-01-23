@@ -1,5 +1,4 @@
-import { Context, Effect, Layer } from "effect"
-import type { Stream } from "effect"
+import { Context, Effect, Layer, Stream } from "effect"
 import type { PlatformError } from "@effect/platform/Error"
 import {
   Session,
@@ -12,6 +11,11 @@ import {
   SessionNameUpdated,
   PlanConfirmed,
   ModelChanged,
+  CompactionStarted,
+  CompactionCompleted,
+  BranchCreated,
+  BranchSwitched,
+  BranchSummarized,
   type AgentMode,
   type MessagePart,
 } from "@gent/core"
@@ -19,6 +23,7 @@ import { Storage, StorageError } from "@gent/storage"
 import type { ProviderError } from "@gent/providers"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
+import type { CheckpointError } from "@gent/runtime"
 
 // Re-export for consumers
 export { SteerCommand, AgentLoopError }
@@ -90,15 +95,33 @@ export interface SessionInfo {
 export interface BranchInfo {
   id: string
   sessionId: string
+  parentBranchId: string | undefined
+  parentMessageId: string | undefined
   name: string | undefined
   model: string | undefined
+  summary: string | undefined
   createdAt: number
+}
+
+export interface BranchTreeNode {
+  id: string
+  name: string | undefined
+  summary: string | undefined
+  parentMessageId: string | undefined
+  messageCount: number
+  createdAt: number
+  children: readonly BranchTreeNode[]
+}
+
+type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
+  children: MutableBranchTreeNode[]
 }
 
 export interface MessageInfo {
   id: string
   sessionId: string
   branchId: string
+  kind: "regular" | "interjection" | undefined
   role: "user" | "assistant" | "system" | "tool"
   parts: readonly MessagePart[]
   createdAt: number
@@ -111,6 +134,7 @@ export type GentCoreError =
   | PlatformError
   | ProviderError
   | EventStoreError
+  | CheckpointError
 
 // ============================================================================
 // GentCore Service
@@ -140,11 +164,32 @@ export interface GentCoreService {
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchOutput, GentCoreError>
 
+  readonly getBranchTree: (sessionId: string) => Effect.Effect<BranchTreeNode[], GentCoreError>
+
+  readonly switchBranch: (input: {
+    sessionId: string
+    fromBranchId: string
+    toBranchId: string
+    summarize?: boolean
+  }) => Effect.Effect<void, GentCoreError>
+
+  readonly forkBranch: (input: {
+    sessionId: string
+    fromBranchId: string
+    atMessageId: string
+    name?: string
+  }) => Effect.Effect<{ branchId: string }, GentCoreError>
+
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentCoreError>
 
   readonly listMessages: (branchId: string) => Effect.Effect<MessageInfo[], GentCoreError>
 
   readonly listBranches: (sessionId: string) => Effect.Effect<BranchInfo[], GentCoreError>
+
+  readonly compactBranch: (input: {
+    sessionId: string
+    branchId: string
+  }) => Effect.Effect<void, GentCoreError>
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
@@ -187,6 +232,58 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
       const eventStore = yield* EventStore
       const provider = yield* Provider
       const checkpointService = yield* CheckpointService
+
+      const summarizeBranch = Effect.fn("GentCore.summarizeBranch")(function* (branchId: string) {
+        const messages = yield* storage.listMessages(branchId)
+        if (messages.length === 0) return ""
+        const firstMessage = messages[0]
+        if (!firstMessage) return ""
+
+        const recent = messages.slice(-50)
+        const conversation = recent
+          .map((m) => {
+            const text = m.parts
+              .filter((p): p is TextPart => p.type === "text")
+              .map((p) => p.text)
+              .join("\n")
+            return text ? `${m.role}: ${text}` : ""
+          })
+          .filter((line) => line.trim().length > 0)
+          .join("\n\n")
+
+        if (!conversation) return ""
+
+        const prompt = `Summarize this branch concisely. Focus on decisions, open questions, and current state. Keep it short and actionable.
+
+Branch conversation (recent):
+${conversation}`
+
+        const summaryMessage = new Message({
+          id: Bun.randomUUIDv7(),
+          sessionId: firstMessage.sessionId,
+          branchId,
+          role: "user",
+          parts: [new TextPart({ type: "text", text: prompt })],
+          createdAt: new Date(),
+        })
+
+        const streamEffect = yield* provider.stream({
+          model: NAME_GEN_MODEL,
+          messages: [summaryMessage],
+          maxTokens: 400,
+        })
+
+        const parts: string[] = []
+        yield* Stream.runForEach(streamEffect, (chunk) =>
+          Effect.sync(() => {
+            if (chunk._tag === "TextChunk") {
+              parts.push(chunk.text)
+            }
+          }),
+        )
+
+        return parts.join("").trim()
+      })
 
       const service: GentCoreService = {
         createSession: (input) =>
@@ -319,6 +416,154 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
               createdAt: new Date(),
             })
             yield* storage.createBranch(branch)
+            yield* eventStore.publish(
+              new BranchCreated({
+                sessionId: input.sessionId,
+                branchId,
+                ...(branch.parentBranchId !== undefined
+                  ? { parentBranchId: branch.parentBranchId }
+                  : {}),
+                ...(branch.parentMessageId !== undefined
+                  ? { parentMessageId: branch.parentMessageId }
+                  : {}),
+              }),
+            )
+            return { branchId }
+          }),
+
+        getBranchTree: (sessionId) =>
+          Effect.gen(function* () {
+            const branches = yield* storage.listBranches(sessionId)
+            const nodes = new Map<string, MutableBranchTreeNode>()
+
+            for (const branch of branches) {
+              const messageCount = yield* storage.countMessages(branch.id)
+              nodes.set(branch.id, {
+                id: branch.id,
+                name: branch.name,
+                summary: branch.summary,
+                parentMessageId: branch.parentMessageId,
+                messageCount,
+                createdAt: branch.createdAt.getTime(),
+                children: [],
+              })
+            }
+
+            const roots: MutableBranchTreeNode[] = []
+            for (const branch of branches) {
+              const node = nodes.get(branch.id)
+              if (!node) continue
+              if (branch.parentBranchId && nodes.has(branch.parentBranchId)) {
+                const parent = nodes.get(branch.parentBranchId)
+                if (parent) parent.children.push(node)
+              } else {
+                roots.push(node)
+              }
+            }
+
+            const sortNodes = (list: MutableBranchTreeNode[]) => {
+              list.sort((a, b) => a.createdAt - b.createdAt)
+              for (const node of list) {
+                if (node.children.length > 0) sortNodes(node.children)
+              }
+            }
+            sortNodes(roots)
+
+            return roots
+          }),
+
+        switchBranch: (input) =>
+          Effect.gen(function* () {
+            const fromBranch = yield* storage.getBranch(input.fromBranchId)
+            if (!fromBranch || fromBranch.sessionId !== input.sessionId) {
+              return yield* new StorageError({ message: "From branch not found" })
+            }
+            const toBranch = yield* storage.getBranch(input.toBranchId)
+            if (!toBranch || toBranch.sessionId !== input.sessionId) {
+              return yield* new StorageError({ message: "To branch not found" })
+            }
+
+            const shouldSummarize = input.summarize !== false
+            if (shouldSummarize && input.fromBranchId !== input.toBranchId) {
+              const summary = yield* summarizeBranch(input.fromBranchId).pipe(
+                Effect.catchAll(() => Effect.succeed("")),
+              )
+              if (summary) {
+                yield* storage.updateBranchSummary(input.fromBranchId, summary)
+                yield* eventStore.publish(
+                  new BranchSummarized({
+                    sessionId: input.sessionId,
+                    branchId: input.fromBranchId,
+                    summary,
+                  }),
+                )
+              }
+            }
+
+            yield* eventStore.publish(
+              new BranchSwitched({
+                sessionId: input.sessionId,
+                fromBranchId: input.fromBranchId,
+                toBranchId: input.toBranchId,
+              }),
+            )
+          }),
+
+        forkBranch: (input) =>
+          Effect.gen(function* () {
+            const fromBranch = yield* storage.getBranch(input.fromBranchId)
+            if (!fromBranch || fromBranch.sessionId !== input.sessionId) {
+              return yield* new StorageError({ message: "Branch not found" })
+            }
+
+            const messages = yield* storage.listMessages(input.fromBranchId)
+            const targetIndex = messages.findIndex((m) => m.id === input.atMessageId)
+            if (targetIndex === -1) {
+              return yield* new StorageError({ message: "Message not found in branch" })
+            }
+
+            const branchId = Bun.randomUUIDv7()
+            const now = new Date()
+            const branch = new Branch({
+              id: branchId,
+              sessionId: input.sessionId,
+              parentBranchId: input.fromBranchId,
+              parentMessageId: input.atMessageId,
+              name: input.name,
+              createdAt: now,
+            })
+            yield* storage.createBranch(branch)
+
+            const messagesToCopy = messages.slice(0, targetIndex + 1)
+            for (const message of messagesToCopy) {
+              yield* storage.createMessage(
+                new Message({
+                  id: Bun.randomUUIDv7(),
+                  sessionId: message.sessionId,
+                  branchId,
+                  role: message.role,
+                  parts: message.parts,
+                  createdAt: message.createdAt,
+                  ...(message.turnDurationMs !== undefined
+                    ? { turnDurationMs: message.turnDurationMs }
+                    : {}),
+                }),
+              )
+            }
+
+            yield* eventStore.publish(
+              new BranchCreated({
+                sessionId: input.sessionId,
+                branchId,
+                ...(branch.parentBranchId !== undefined
+                  ? { parentBranchId: branch.parentBranchId }
+                  : {}),
+                ...(branch.parentMessageId !== undefined
+                  ? { parentMessageId: branch.parentMessageId }
+                  : {}),
+              }),
+            )
+
             return { branchId }
           }),
 
@@ -362,6 +607,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             id: Bun.randomUUIDv7(),
             sessionId: input.sessionId,
             branchId: input.branchId,
+            kind: "regular",
             role: "user",
             parts: [new TextPart({ type: "text", text: input.content })],
             createdAt: new Date(),
@@ -383,6 +629,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
               id: m.id,
               sessionId: m.sessionId,
               branchId: m.branchId,
+              kind: m.kind,
               role: m.role,
               parts: m.parts,
               createdAt: m.createdAt.getTime(),
@@ -396,10 +643,33 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
             return branches.map((b) => ({
               id: b.id,
               sessionId: b.sessionId,
+              parentBranchId: b.parentBranchId,
+              parentMessageId: b.parentMessageId,
               name: b.name,
               model: b.model,
+              summary: b.summary,
               createdAt: b.createdAt.getTime(),
             }))
+          }),
+
+        compactBranch: (input) =>
+          Effect.gen(function* () {
+            const branch = yield* storage.getBranch(input.branchId)
+            if (!branch || branch.sessionId !== input.sessionId) {
+              return yield* new StorageError({ message: "Branch not found" })
+            }
+
+            yield* eventStore.publish(
+              new CompactionStarted({ sessionId: input.sessionId, branchId: input.branchId }),
+            )
+            const checkpoint = yield* checkpointService.createCompactionCheckpoint(input.branchId)
+            yield* eventStore.publish(
+              new CompactionCompleted({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                compactionId: checkpoint.id,
+              }),
+            )
           }),
 
         steer: (command) => agentLoop.steer(command),
@@ -436,6 +706,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
               id: m.id,
               sessionId: m.sessionId,
               branchId: m.branchId,
+              kind: m.kind,
               role: m.role,
               parts: m.parts,
               createdAt: m.createdAt.getTime(),
