@@ -13,6 +13,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "test": "bun --filter '*' test",
+    "gate": "bun run fmt:check && bun run lint && bun run typecheck",
     "clean": "rm -rf packages/*/dist apps/*/dist .tsbuildinfo */.tsbuildinfo */*/.tsbuildinfo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
     "prepare": "lefthook install"
