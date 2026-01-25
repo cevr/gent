@@ -28,7 +28,8 @@
     "solid-js": "^1.9.10"
   },
   "devDependencies": {
-    "@types/figlet": "^1.7.0"
+    "@types/figlet": "^1.7.0",
+    "bun-pty": "^0.4.8"
   },
   "peerDependencies": {
     "effect": "catalog:"
