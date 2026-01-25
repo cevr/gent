@@ -2,8 +2,9 @@
  * Home route - displays logo, handles first message
  */
 
-import { createEffect, createSignal, onMount } from "solid-js"
+import { createEffect, createSignal, onMount, Show } from "solid-js"
 import { useRenderer, useTerminalDimensions, useKeyboard } from "@opentui/solid"
+import { Effect } from "effect"
 import { getLogos } from "../logo.macro.js" with { type: "macro" }
 import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
@@ -11,6 +12,7 @@ import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
 import { StatusBar } from "../components/status-bar"
 import { Input } from "../components/input"
+import { useRuntime } from "../hooks/use-runtime"
 
 const LOGOS = getLogos()
 
@@ -25,6 +27,7 @@ export function Home(props: HomeProps) {
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
+  const { cast } = useRuntime(client.client.runtime)
 
   const logo = LOGOS[Math.floor(Math.random() * LOGOS.length)]
 
@@ -34,6 +37,8 @@ export function Home(props: HomeProps) {
 
   // Track pending prompt while session is created
   const [pendingPrompt, setPendingPrompt] = createSignal<string | null>(null)
+  const [showWelcome, setShowWelcome] = createSignal(false)
+  const [needsAuth, setNeedsAuth] = createSignal(false)
 
   const exit = () => {
     renderer.destroy()
@@ -99,11 +104,56 @@ export function Home(props: HomeProps) {
     }
   })
 
+  onMount(() => {
+    cast(
+      Effect.gen(function* () {
+        const sessions = yield* client.listSessions()
+        const firstRun = sessions.length === 0
+        yield* Effect.sync(() => {
+          setShowWelcome(firstRun)
+          if (!firstRun) setNeedsAuth(false)
+        })
+        if (!firstRun) return
+
+        const providers = yield* client.client.listAuthProviders()
+        const hasKey = providers.some(
+          (provider) => provider.hasKey && provider.provider !== "bedrock",
+        )
+        yield* Effect.sync(() => {
+          setNeedsAuth(!hasKey)
+        })
+      }).pipe(
+        Effect.catchAll(() =>
+          Effect.sync(() => {
+            setShowWelcome(false)
+            setNeedsAuth(false)
+          }),
+        ),
+      ),
+    )
+  })
+
   return (
     <box flexDirection="column" flexGrow={1}>
       {/* Logo */}
-      <box flexGrow={1} justifyContent="center" alignItems="center">
+      <box flexGrow={1} justifyContent="center" alignItems="center" flexDirection="column">
         <text style={{ fg: theme.textMuted }}>{logo}</text>
+        <Show when={showWelcome()}>
+          <box paddingTop={1} flexDirection="column" alignItems="center">
+            <text style={{ fg: theme.text }}>Welcome to gent</text>
+            <text style={{ fg: theme.textMuted }}>Type a prompt to start.</text>
+            <Show
+              when={needsAuth()}
+              fallback={
+                <text style={{ fg: theme.textMuted }}>
+                  Use /auth for keys, /permissions for rules
+                </text>
+              }
+            >
+              <text style={{ fg: theme.warning }}>No API keys found. Run /auth.</text>
+            </Show>
+          </box>
+        </Show>
       </box>
 
       {/* Input with autocomplete above separator */}

@@ -673,6 +673,8 @@ export function Session(props: SessionProps) {
         <StatusBar.Row>
           <StatusBar.Mode />
           <StatusBar.Separator />
+          <StatusBar.Bypass />
+          <StatusBar.Separator />
           <StatusBar.Model />
         </StatusBar.Row>
         <StatusBar.Row>

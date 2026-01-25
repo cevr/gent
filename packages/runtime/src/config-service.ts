@@ -54,6 +54,7 @@ export class ConfigService extends Context.Tag("ConfigService")<
       const projectConfigPath = path.join(process.cwd(), ConfigService.PROJECT_CONFIG_RELATIVE)
 
       const UserConfigJson = Schema.parseJson(UserConfig)
+      const defaultUserConfig = new UserConfig({ permissions: [] })
 
       // State: user + project configs
       const userConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
@@ -76,6 +77,19 @@ export class ConfigService extends Context.Tag("ConfigService")<
           providers: Object.keys(mergedProviders).length > 0 ? mergedProviders : undefined,
         })
       }
+
+      const ensureUserConfig = Effect.gen(function* () {
+        const exists = yield* fs.exists(userConfigPath)
+        if (exists) return
+        const configDir = path.dirname(userConfigPath)
+        yield* fs.makeDirectory(configDir, { recursive: true })
+        const json = yield* Schema.encode(UserConfigJson)(defaultUserConfig)
+        yield* fs.writeFileString(userConfigPath, json)
+      }).pipe(
+        Effect.catchAll((e) =>
+          Effect.logWarning("Config init failed").pipe(Effect.annotateLogs({ error: String(e) })),
+        ),
+      )
 
       // Load config from disk (merges project over user)
       const loadConfig = Effect.gen(function* () {
@@ -111,6 +125,7 @@ export class ConfigService extends Context.Tag("ConfigService")<
         )
 
       // Initial load
+      yield* ensureUserConfig
       yield* loadConfig
 
       const service: ConfigServiceService = {
