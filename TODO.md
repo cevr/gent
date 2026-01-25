@@ -16,7 +16,7 @@ Priority: P0 critical, P1 high, P2 medium, P3 low.
   - Touch: `apps/tui/src/routes/session.tsx`, `apps/tui/src/commands/slash-commands.ts`, `packages/server/src/core.ts` (compact/branch ops), `packages/server/src/operations.ts` + `packages/server/src/rpcs.ts` (new RPCs), `packages/storage/src/sqlite-storage.ts` (if new queries)
   - Plan needs: UX flow for `/compact`, `/tree`, `/fork`; summary prompt; branch selection UI; event shapes; migration plan if new tables/fields
 
-- [ ] P2 - Provider/model management (registry, custom providers, auth flows)
+- [x] P2 - Provider/model management (registry, custom providers, auth flows)
   - Rationale: model agility; onboarding
   - Research: `packages/providers/*` (ai-sdk adapters), `packages/runtime/src/model-registry.ts` (model list cache), `packages/runtime/src/config-service.ts` (model storage), `packages/core/src/model.ts` (pricing), `packages/core/src/auth-storage.ts` (keys)
   - External refs: `~/.cache/repo/badlogic/pi-mono/packages/coding-agent/README.md` (models/providers), `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/providers.mdx`, `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/models.mdx`
