@@ -32,6 +32,7 @@ export {
   StreamStarted,
   StreamChunk,
   StreamEnded,
+  TurnCompleted,
   UsageSchema,
   type Usage,
   ToolCallStarted,

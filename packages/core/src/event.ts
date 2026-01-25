@@ -42,6 +42,13 @@ export class StreamEnded extends Schema.TaggedClass<StreamEnded>()("StreamEnded"
   interrupted: Schema.optional(Schema.Boolean),
 }) {}
 
+export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnCompleted", {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+  durationMs: Schema.Number,
+  interrupted: Schema.optional(Schema.Boolean),
+}) {}
+
 export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("ToolCallStarted", {
   sessionId: Schema.String,
   branchId: Schema.String,
@@ -205,6 +212,7 @@ export const AgentEvent = Schema.Union(
   StreamStarted,
   StreamChunk,
   StreamEnded,
+  TurnCompleted,
   ToolCallStarted,
   ToolCallCompleted,
   PlanModeEntered,

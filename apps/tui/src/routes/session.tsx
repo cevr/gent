@@ -53,7 +53,6 @@ export function Session(props: SessionProps) {
 
   const [messages, setMessages] = createSignal<Message[]>([])
   const [events, setEvents] = createSignal<SessionEvent[]>([])
-  const [elapsed, setElapsed] = createSignal(0)
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
   const [treeOpen, setTreeOpen] = createSignal(false)
@@ -117,25 +116,7 @@ export function Session(props: SessionProps) {
     })
   }
 
-  // Track elapsed time while streaming
-  let elapsedInterval: ReturnType<typeof setInterval> | null = null
-
-  createEffect(() => {
-    if (client.isStreaming()) {
-      setElapsed(0)
-      elapsedInterval = setInterval(() => {
-        setElapsed((e) => e + 1)
-      }, 1000)
-    } else {
-      if (elapsedInterval) {
-        clearInterval(elapsedInterval)
-        elapsedInterval = null
-      }
-    }
-  })
-
   onCleanup(() => {
-    if (elapsedInterval) clearInterval(elapsedInterval)
     if (compactionTimer) clearTimeout(compactionTimer)
     if (modelToastTimer) clearTimeout(modelToastTimer)
   })
@@ -291,27 +272,26 @@ export function Session(props: SessionProps) {
             },
           ]
         })
-      } else if (event._tag === "StreamEnded") {
-        const thinkTime = elapsed()
-        const interrupted = event.interrupted === true
-        if (thinkTime > 0) {
-          setEvents((prev) => [
-            ...prev,
-            {
-              _tag: "event",
-              kind: "turn-ended",
-              durationSeconds: thinkTime,
-              createdAt: Date.now(),
-              seq: eventSeq++,
-            },
-          ])
-        }
-        if (interrupted) {
+      } else if (event._tag === "TurnCompleted") {
+        // Server is source of truth for turn completion/interruption
+        const durationSeconds = Math.round(event.durationMs / 1000)
+        if (event.interrupted) {
           setEvents((prev) => [
             ...prev,
             {
               _tag: "event",
               kind: "interruption",
+              createdAt: Date.now(),
+              seq: eventSeq++,
+            },
+          ])
+        } else if (durationSeconds > 0) {
+          setEvents((prev) => [
+            ...prev,
+            {
+              _tag: "event",
+              kind: "turn-ended",
+              durationSeconds,
               createdAt: Date.now(),
               seq: eventSeq++,
             },

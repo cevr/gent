@@ -15,6 +15,7 @@ import {
   StreamStarted,
   StreamChunk as EventStreamChunk,
   StreamEnded,
+  TurnCompleted,
   ToolCallStarted,
   ToolCallCompleted,
   MessageReceived,
@@ -324,8 +325,9 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               }),
             )
 
-            // Track turn start time
+            // Track turn start time and interruption state
             const turnStartTime = yield* DateTime.now
+            let turnInterrupted = false
 
             let continueLoop = true
 
@@ -338,6 +340,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                 const cmd = steerCmd.value
                 if (cmd._tag === "Cancel") {
                   continueLoop = false
+                  turnInterrupted = true
                   yield* publishEvent(
                     new StreamEnded({
                       sessionId,
@@ -349,6 +352,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
                 } else if (cmd._tag === "Interrupt") {
                   // Hard stop - emit StreamEnded with interrupted flag
                   continueLoop = false
+                  turnInterrupted = true
                   yield* publishEvent(
                     new StreamEnded({
                       sessionId,
@@ -477,6 +481,7 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               yield* applyPendingSteerCommands(sessionId, branchId)
               const interruptCmd = yield* Ref.get(interruptRef)
               if (interruptCmd) {
+                turnInterrupted = true
                 yield* publishEvent(
                   new StreamEnded({
                     sessionId,
@@ -618,11 +623,19 @@ export class AgentLoop extends Context.Tag("AgentLoop")<AgentLoop, AgentLoopServ
               }
             }
 
-            // Update user message with turn duration
+            // Update user message with turn duration and emit TurnCompleted
             const turnEndTime = yield* DateTime.now
             const turnDurationMs =
               DateTime.toEpochMillis(turnEndTime) - DateTime.toEpochMillis(turnStartTime)
             yield* storage.updateMessageTurnDuration(initialMessage.id, turnDurationMs)
+            yield* publishEvent(
+              new TurnCompleted({
+                sessionId,
+                branchId,
+                durationMs: Number(turnDurationMs),
+                ...(turnInterrupted ? { interrupted: true } : {}),
+              }),
+            )
 
             // Process follow-up queue
             const finalState = yield* Ref.get(stateRef)
