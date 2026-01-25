@@ -12,14 +12,14 @@ import {
   extractToolCallsWithResults,
   type MessageInfoReadonly,
   type BranchTreeNode,
-} from "../client.js"
+  useClient,
+} from "../client/index"
 import { StatusBar } from "../components/status-bar"
 import { MessageList, type Message, type SessionItem } from "../components/message-list"
 import { Indicators, type Indicator } from "../components/indicators"
 import { Input } from "../components/input"
 import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
-import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useRuntime } from "../hooks/use-runtime"

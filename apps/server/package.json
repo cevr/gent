@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "bun run --watch src/main.ts"
+    "dev": "bun run --watch src/main.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@effect/platform": "catalog:",

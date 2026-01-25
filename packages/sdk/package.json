@@ -1,21 +1,21 @@
 {
-  "name": "@gent/tools",
+  "name": "@gent/sdk",
   "version": "0.0.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@gent/core": "workspace:*",
-    "@types/turndown": "^5.0.6",
-    "linkedom": "^0.18.12",
-    "turndown": "^7.2.2"
+    "@gent/server": "workspace:*"
   },
   "peerDependencies": {
     "@effect/platform": "catalog:",
+    "@effect/rpc": "catalog:",
     "effect": "catalog:"
   }
 }

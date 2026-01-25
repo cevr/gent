@@ -50,16 +50,16 @@ export class MessagesApi extends HttpApiGroup.make("messages")
   )
   .add(HttpApiEndpoint.post("steer", "/steer").setPayload(SteerRequest).addSuccess(Schema.Void)) {}
 
+// EventsApi deprecated - use RPC streaming via /rpc endpoint instead
 export class EventsApi extends HttpApiGroup.make("events").add(
   HttpApiEndpoint.get("subscribe", "/events/:sessionId")
     .setPath(Schema.Struct({ sessionId: Schema.String }))
-    .addSuccess(Schema.String), // SSE stream
+    .addSuccess(Schema.String), // SSE stream (deprecated)
 ) {}
 
-// Full API
+// Full API (REST endpoints - use /rpc for streaming)
 
 export class GentApi extends HttpApi.make("gent")
   .add(SessionsApi)
   .add(MessagesApi)
-  .add(EventsApi)
   .annotate(OpenApi.Title, "Gent API") {}

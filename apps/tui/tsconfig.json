@@ -1,18 +1,11 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": "src",
+    "noEmit": true,
     "jsx": "preserve",
     "jsxImportSource": "@opentui/solid",
     "resolveJsonModule": true
   },
   "include": ["src", "src/theme/themes/*.json"],
-  "exclude": ["tests"],
-  "references": [
-    { "path": "../../packages/atom-solid" },
-    { "path": "../../packages/core" },
-    { "path": "../../packages/server" },
-    { "path": "../../packages/runtime" }
-  ]
+  "exclude": ["tests"]
 }

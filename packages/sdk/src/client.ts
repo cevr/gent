@@ -1,7 +1,9 @@
-import { Effect } from "effect"
-import type { Stream, Runtime } from "effect"
-import type { RpcClient, RpcGroup } from "@effect/rpc"
-import type { GentRpcs, GentRpcError } from "@gent/server"
+import { Effect, Layer } from "effect"
+import type { Stream, Runtime, Scope } from "effect"
+import { RpcClient, RpcTest, RpcSerialization } from "@effect/rpc"
+import type { RpcGroup } from "@effect/rpc"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "@effect/platform"
+import { GentRpcs, RpcHandlersLive, type GentRpcsClient, type GentRpcError } from "@gent/server"
 import type {
   AgentMode,
   EventEnvelope,
@@ -16,6 +18,12 @@ import type {
 } from "@gent/core"
 
 export type { MessagePart, TextPart, ToolCallPart, ToolResultPart, PermissionRule }
+
+// Re-export RPC types
+export type { GentRpcsClient, GentRpcError }
+
+// RPC client type alias
+export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 
 // Auth provider info
 export interface AuthProviderInfo {
@@ -128,9 +136,6 @@ export function extractToolCallsWithResults(
       }
     })
 }
-
-// RPC client type from GentRpcs
-export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 
 // Message type returned from RPC (readonly)
 export interface MessageInfoReadonly {
@@ -430,4 +435,111 @@ export function createClient(
 
     runtime,
   }
+}
+
+// =============================================================================
+// makeClient - protocol-based client creation
+// =============================================================================
+
+/**
+ * Creates a GentClient from RPC protocol layers.
+ * Use with HttpTransport or other protocol layers.
+ *
+ * @example
+ * ```ts
+ * const client = await Effect.runPromise(
+ *   makeClient.pipe(
+ *     Effect.provide(HttpTransport({ url: "http://localhost:3000/rpc" })),
+ *     Effect.scoped,
+ *   )
+ * )
+ * ```
+ */
+export const makeClient: Effect.Effect<GentClient, never, RpcClient.Protocol | Scope.Scope> =
+  Effect.gen(function* () {
+    const rpcClient = yield* RpcClient.make(GentRpcs)
+    const runtime = yield* Effect.runtime<never>()
+    // RpcClient.make returns a client with RpcClientError in error types,
+    // but we want the specific GentRpcError. Cast to expected type.
+    return createClient(rpcClient as unknown as GentRpcClient, runtime as Runtime.Runtime<unknown>)
+  })
+
+// =============================================================================
+// In-process transport helpers
+// =============================================================================
+
+/**
+ * Context required by RpcHandlersLive.
+ * Layer must provide these services for the RPC handlers to work.
+ */
+export type RpcHandlersContext = Layer.Layer.Context<typeof RpcHandlersLive>
+
+/**
+ * Creates an in-process RPC client for testing or embedded use.
+ * Requires a layer that provides all handler dependencies (GentCore, etc).
+ *
+ * The layer must provide RpcHandlersContext, which includes:
+ * - GentCore
+ * - AskUserHandler
+ * - PermissionHandler
+ * - PlanHandler
+ * - Permission
+ * - ConfigService
+ * - AuthStorage
+ * - ProviderFactory
+ */
+export const makeInProcessRpcClient = <E, R>(
+  handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
+): Effect.Effect<GentRpcClient, E, R> =>
+  RpcTest.makeClient(GentRpcs).pipe(
+    Effect.provide(Layer.provide(RpcHandlersLive, handlersLayer)),
+    Effect.scoped,
+    // RpcTest.makeClient types include RpcClientError, but in-process testing
+    // eliminates that possibility. Cast to the expected type.
+    Effect.map((client) => client as unknown as GentRpcClient),
+  )
+
+/**
+ * Creates a full GentClient for in-process use.
+ * Includes runtime for synchronous execution.
+ */
+export const makeInProcessClient = <E, R>(
+  handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
+): Effect.Effect<GentClient, E, R> =>
+  Effect.gen(function* () {
+    const rpcClient = yield* makeInProcessRpcClient(handlersLayer)
+    const runtime = yield* Effect.runtime<never>()
+    return createClient(rpcClient, runtime as Runtime.Runtime<unknown>)
+  })
+
+// =============================================================================
+// HTTP transport
+// =============================================================================
+
+export interface HttpTransportConfig {
+  /** Base URL for RPC endpoint (e.g., "http://localhost:3000/rpc") */
+  url: string
+  /** Optional headers to include with requests */
+  headers?: Record<string, string>
+}
+
+/**
+ * Creates an HTTP transport layer for RPC-over-HTTP.
+ * Uses ndjson serialization for streaming support.
+ */
+export const HttpTransport = (config: HttpTransportConfig): Layer.Layer<RpcClient.Protocol> => {
+  const headers = config.headers
+  const clientLayer = headers
+    ? Layer.effect(
+        HttpClient.HttpClient,
+        Effect.map(HttpClient.HttpClient, (client) =>
+          client.pipe(HttpClient.mapRequest(HttpClientRequest.setHeaders(headers))),
+        ),
+      ).pipe(Layer.provide(FetchHttpClient.layer))
+    : FetchHttpClient.layer
+
+  return RpcClient.layerProtocolHttp({ url: config.url }).pipe(
+    Layer.provide(RpcSerialization.layerNdjson),
+    Layer.provide(clientLayer),
+  )
 }

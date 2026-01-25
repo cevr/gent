@@ -1,14 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": "src"
+    "noEmit": true
   },
-  "include": ["src"],
-  "references": [
-    { "path": "../core" },
-    { "path": "../storage" },
-    { "path": "../tools" },
-    { "path": "../providers" }
-  ]
+  "include": ["src"]
 }

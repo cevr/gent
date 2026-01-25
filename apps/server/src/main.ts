@@ -6,8 +6,16 @@ import {
   HttpServerResponse,
   OpenApi,
 } from "@effect/platform"
-import { Effect, Layer, Stream, Schema } from "effect"
-import { GentApi, GentCore, createDependencies, SteerCommand } from "@gent/server"
+import { RpcServer, RpcSerialization } from "@effect/rpc"
+import { Effect, Layer, Schema } from "effect"
+import {
+  GentApi,
+  GentCore,
+  GentRpcs,
+  RpcHandlersLive,
+  createDependencies,
+  SteerCommand,
+} from "@gent/server"
 import { DEFAULT_MODEL_ID } from "@gent/core"
 
 // Sessions API Handlers
@@ -61,28 +69,6 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
   }),
 )
 
-// Events API Handlers (SSE)
-const EventsApiLive = HttpApiBuilder.group(GentApi, "events", (handlers) =>
-  Effect.gen(function* () {
-    const core = yield* GentCore
-    return handlers.handle("subscribe", ({ path }) =>
-      Effect.gen(function* () {
-        const events = core.subscribeEvents({ sessionId: path.sessionId })
-
-        // Format as SSE
-        const sseStream = events.pipe(Stream.map((e) => `data: ${JSON.stringify(e)}\n\n`))
-
-        // Return SSE stream as string (simplified)
-        const chunks: string[] = []
-        yield* Stream.runForEach(Stream.take(sseStream, 100), (chunk) =>
-          Effect.sync(() => chunks.push(chunk)),
-        )
-        return chunks.join("")
-      }).pipe(Effect.orDie),
-    )
-  }),
-)
-
 // Platform layer for Storage
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 
@@ -96,11 +82,24 @@ const DepsLive = createDependencies({
 // GentCore layer
 const GentCoreLive = GentCore.Live.pipe(Layer.provide(DepsLive))
 
-// API Groups Layer
-const HttpGroupsLive = Layer.provideMerge(
-  Layer.provideMerge(SessionsApiLive, MessagesApiLive),
-  EventsApiLive,
-).pipe(Layer.provide(GentCoreLive))
+// Combined layer for RPC handlers
+const CoreWithDeps = Layer.merge(GentCoreLive, DepsLive)
+
+// RPC-over-HTTP routes with ndjson for streaming
+const RpcRoutes = RpcServer.layerHttpRouter({
+  group: GentRpcs,
+  path: "/rpc",
+  protocol: "http",
+}).pipe(
+  Layer.provide(RpcSerialization.layerNdjson),
+  Layer.provide(RpcHandlersLive),
+  Layer.provide(CoreWithDeps),
+)
+
+// API Groups Layer (REST endpoints)
+const HttpGroupsLive = Layer.provideMerge(SessionsApiLive, MessagesApiLive).pipe(
+  Layer.provide(GentCoreLive),
+)
 
 // API Routes
 const HttpApiRoutes = HttpLayerRouter.addHttpApi(GentApi).pipe(Layer.provide(HttpGroupsLive))
@@ -118,8 +117,8 @@ const OpenApiJsonRoute = HttpLayerRouter.add(
   HttpServerResponse.json(OpenApi.fromApi(GentApi)),
 ).pipe(Layer.provide(HttpLayerRouter.layer))
 
-// Merge all routes
-const AllRoutes = Layer.mergeAll(HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
+// Merge all routes (REST API + RPC + docs)
+const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
   Layer.provide(HttpLayerRouter.cors()),
 )
 

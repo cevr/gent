@@ -33,7 +33,7 @@ import {
   type BranchTreeNode,
   type SteerCommand,
   createClient,
-} from "../client"
+} from "@gent/sdk"
 import * as State from "../state"
 
 // Event listener type

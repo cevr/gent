@@ -3,18 +3,17 @@ import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
 import { Console, Effect, Layer, ManagedRuntime, Option, Stream } from "effect"
 import type { Runtime } from "effect"
-import { RpcTest } from "@effect/rpc"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
   createDependencies,
   GentCore,
   RpcHandlersLive,
-  GentRpcs,
   type GentCoreService,
   type GentCoreError,
   type SessionInfo,
   type BranchInfo,
 } from "@gent/server"
+import { makeInProcessRpcClient, type GentRpcClient } from "@gent/sdk"
 import { DevTracerLive, clearLog } from "@gent/runtime"
 import { DEFAULT_MODEL_ID } from "@gent/core"
 import * as path from "node:path"
@@ -24,7 +23,6 @@ import { App } from "./app"
 import { ClientProvider, type Session } from "./client/index"
 import { RouterProvider, Route } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
-import type { GentRpcClient } from "./client"
 import * as State from "./state"
 
 // ============================================================================
@@ -302,8 +300,8 @@ const main = Command.make(
         return
       }
 
-      // Create RPC client for TUI
-      const rpcClient: GentRpcClient = yield* RpcTest.makeClient(GentRpcs)
+      // Create RPC client for TUI using SDK helper
+      const rpcClient: GentRpcClient = yield* makeInProcessRpcClient(CoreWithDeps)
 
       // Get runtime for client
       const runtime = yield* serverRuntime.runtimeEffect
