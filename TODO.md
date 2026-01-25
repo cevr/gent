@@ -2,7 +2,7 @@
 
 Priority: P0 critical, P1 high, P2 medium, P3 low.
 
-- [ ] P0 - Prompt/config wiring + auth/perm persistence
+- [x] P0 - Prompt/config wiring + auth/perm persistence
   - Rationale: baseline correctness; current prompt ignores AGENTS/skills/config; perms in-memory only
   - Research: `packages/server/src/system-prompt.ts` (prompt assembly), `packages/core/src/skills.ts` (skills load/format), `packages/runtime/src/config-service.ts` (user/project config), `packages/core/src/auth-storage.ts` (keychain/file), `packages/core/src/permission.ts` + `packages/core/src/permission-handler.ts` (policy + UI flow), `packages/server/src/index.ts` (dependency wiring), `packages/server/src/core.ts` (sendMessage path)
   - External refs: `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/rules.mdx`, `~/.cache/repo/anomalyco/opencode/packages/web/src/content/docs/config.mdx`, `~/.cache/repo/badlogic/pi-mono/packages/coding-agent/README.md`, `~/.cache/repo/badlogic/pi-mono/packages/coding-agent/docs/skills.md`
