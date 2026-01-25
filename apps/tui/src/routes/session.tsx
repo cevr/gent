@@ -7,6 +7,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import {
   extractText,
+  extractImages,
   buildToolResultMap,
   extractToolCallsWithResults,
   type MessageInfoReadonly,
@@ -186,6 +187,7 @@ export function Session(props: SessionProps) {
         role: m.role,
         kind: m.kind ?? "regular",
         content: extractText(m.parts),
+        images: extractImages(m.parts),
         createdAt: m.createdAt,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       }
@@ -264,6 +266,7 @@ export function Session(props: SessionProps) {
             role: "assistant",
             kind: "regular",
             content: "",
+            images: [],
             createdAt: Date.now(),
             toolCalls: undefined,
           },
@@ -282,6 +285,7 @@ export function Session(props: SessionProps) {
               role: "assistant",
               kind: "regular",
               content: event.chunk,
+              images: [],
               createdAt: Date.now(),
               toolCalls: undefined,
             },
@@ -670,8 +674,6 @@ export function Session(props: SessionProps) {
           <StatusBar.Mode />
           <StatusBar.Separator />
           <StatusBar.Model />
-          <StatusBar.Separator />
-          <StatusBar.Status />
         </StatusBar.Row>
         <StatusBar.Row>
           <StatusBar.Cwd />

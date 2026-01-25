@@ -10,6 +10,48 @@ import { useWorkspace } from "../workspace/index"
 import { useSkills } from "../hooks/use-skills"
 import { useFileSearch } from "../hooks/use-file-search"
 import { useScrollSync } from "../hooks/use-scroll-sync"
+import { truncatePath } from "./message-list-utils"
+
+/** Get file type tag from extension */
+function getFileTag(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase()
+  switch (ext) {
+    case "ts":
+    case "tsx":
+      return "[ts]"
+    case "js":
+    case "jsx":
+      return "[js]"
+    case "md":
+    case "mdx":
+      return "[md]"
+    case "json":
+      return "[json]"
+    case "css":
+    case "scss":
+    case "less":
+      return "[css]"
+    case "html":
+      return "[html]"
+    case "py":
+      return "[py]"
+    case "rs":
+      return "[rs]"
+    case "go":
+      return "[go]"
+    case "yaml":
+    case "yml":
+      return "[yaml]"
+    case "toml":
+      return "[toml]"
+    case "sh":
+    case "bash":
+    case "zsh":
+      return "[sh]"
+    default:
+      return ""
+  }
+}
 
 export type AutocompleteType = "$" | "@" | "/"
 
@@ -78,12 +120,15 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       }
 
       case "@": {
-        // Files
-        return fileSearch.results().map((f) => ({
-          id: f.path,
-          label: f.name,
-          description: f.path,
-        }))
+        // Files - show tag + name, truncated path
+        return fileSearch.results().map((f) => {
+          const tag = getFileTag(f.path)
+          return {
+            id: f.path,
+            label: tag ? `${tag} ${f.name}` : f.name,
+            description: truncatePath(f.path, 40),
+          }
+        })
       }
 
       case "/": {

@@ -29,6 +29,18 @@ export function extractText(parts: readonly MessagePart[]): string {
   return textPart?.text ?? ""
 }
 
+export interface ImageInfo {
+  mediaType: string
+}
+
+export function extractImages(parts: readonly MessagePart[]): ImageInfo[] {
+  return parts
+    .filter((p): p is ImagePart => p.type === "image")
+    .map((p) => ({ mediaType: p.mediaType ?? "image" }))
+}
+
+type ImagePart = { type: "image"; image: string; mediaType?: string }
+
 export interface ExtractedToolCall {
   id: string
   toolName: string

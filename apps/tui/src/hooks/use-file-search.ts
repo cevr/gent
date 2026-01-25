@@ -89,6 +89,7 @@ export interface FileMatch {
 export interface UseFileSearchOptions {
   cwd: string
   maxResults?: number
+  includeHidden?: boolean
 }
 
 export interface UseFileSearchReturn {
@@ -134,7 +135,7 @@ export function fuzzyScore(query: string, target: string): number {
 }
 
 export function useFileSearch(options: UseFileSearchOptions): UseFileSearchReturn {
-  const { cwd, maxResults = 50 } = options
+  const { cwd, maxResults = 50, includeHidden = false } = options
 
   let gitignorePatterns: Set<string> | null = null
 
@@ -164,7 +165,8 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
         if (next.done) break
         const path = next.value
 
-        if (path.startsWith(".") || path.includes("/.")) {
+        // Skip hidden files unless includeHidden is true
+        if (!includeHidden && (path.startsWith(".") || path.includes("/."))) {
           continue
         }
 

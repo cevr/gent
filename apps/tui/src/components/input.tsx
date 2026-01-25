@@ -40,6 +40,38 @@ interface InputContextValue {
 
 const InputContext = createContext<InputContextValue>()
 
+// Paste placeholder management
+const PASTE_THRESHOLD_LINES = 3
+const PASTE_THRESHOLD_LENGTH = 150
+let pasteIdCounter = 0
+const pasteStore = new Map<string, string>()
+
+function countLines(text: string): number {
+  return text.split("\n").length
+}
+
+function createPastePlaceholder(text: string): string {
+  const id = `paste-${++pasteIdCounter}`
+  pasteStore.set(id, text)
+  const lines = countLines(text)
+  return `[Pasted ~${lines} lines #${id}]`
+}
+
+function expandPastePlaceholders(text: string): string {
+  return text.replace(/\[Pasted ~\d+ lines #(paste-\d+)\]/g, (_, id) => {
+    const content = pasteStore.get(id)
+    if (content) {
+      pasteStore.delete(id)
+      return content
+    }
+    return _
+  })
+}
+
+function isLargePaste(inserted: string): boolean {
+  return countLines(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
+}
+
 export interface InputProps {
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
@@ -66,6 +98,7 @@ export function Input(props: InputProps) {
   const [internalMode, setInternalMode] = createSignal<"normal" | "shell">("normal")
   const [autocomplete, setAutocomplete] = createSignal<AutocompleteState | null>(null)
   let submitMode: "queue" | "interject" = "queue"
+  let previousValue = ""
 
   // Effective mode from props or internal state
   const effectiveMode = (): "normal" | "shell" | "prompt" => {
@@ -133,8 +166,25 @@ export function Input(props: InputProps) {
     inputRef?.focus()
   }
 
-  // Handle input changes for autocomplete detection
+  // Handle input changes for autocomplete detection and paste detection
   const handleInputChange = (value: string) => {
+    // Detect large pastes by comparing with previous value
+    // If value grew significantly, check if it's a paste
+    if (value.length > previousValue.length && inputRef) {
+      const inserted = value.slice(previousValue.length)
+      if (isLargePaste(inserted)) {
+        // Replace the pasted content with a placeholder
+        const placeholder = createPastePlaceholder(inserted)
+        const newValue = previousValue + placeholder
+        inputRef.value = newValue
+        inputRef.cursorPosition = newValue.length
+        previousValue = newValue
+        setAutocomplete(null)
+        return
+      }
+    }
+    previousValue = value
+
     // No autocomplete in shell mode
     if (effectiveMode() === "shell") {
       setAutocomplete(null)
@@ -237,7 +287,9 @@ export function Input(props: InputProps) {
   })
 
   const handleSubmit = (value: string) => {
-    const text = value.trim()
+    // Expand paste placeholders before processing
+    const expanded = expandPastePlaceholders(value)
+    const text = expanded.trim()
     if (!text) return
 
     // Close autocomplete
@@ -333,6 +385,7 @@ export function Input(props: InputProps) {
 
   const clearInput = () => {
     if (inputRef) inputRef.value = ""
+    previousValue = ""
   }
 
   // Focus input on mount

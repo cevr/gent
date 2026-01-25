@@ -182,7 +182,8 @@ const CoreWithDeps = Layer.merge(GentCoreLive, ServerDepsLayer)
 const RpcLayer = RpcHandlersLive.pipe(Layer.provide(CoreWithDeps))
 
 // Full layer stack for RPC client
-const FullLayer = Layer.mergeAll(RpcLayer, GentCoreLive)
+// Include PlatformLayer for CommandExecutor (needed by workspace git commands)
+const FullLayer = Layer.mergeAll(RpcLayer, GentCoreLive, PlatformLayer)
 
 // Clear trace log on startup
 clearLog(TRACE_LOG)

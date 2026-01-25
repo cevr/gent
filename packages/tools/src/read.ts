@@ -49,6 +49,25 @@ export const ReadTool = defineTool({
 
     const filePath = path.resolve(params.path)
 
+    // Check if path is a directory
+    const stat = yield* fs.stat(filePath).pipe(
+      Effect.mapError(
+        (e) =>
+          new ReadError({
+            message: `Path does not exist: ${filePath}`,
+            path: filePath,
+            cause: e,
+          }),
+      ),
+    )
+
+    if (stat.type === "Directory") {
+      return yield* new ReadError({
+        message: `Cannot read directory. Use glob or bash ls to list directory contents.`,
+        path: filePath,
+      })
+    }
+
     const content = yield* fs.readFileString(filePath).pipe(
       Effect.mapError(
         (e) =>

@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import {
   extractText,
+  extractImages,
   extractToolCalls,
   buildToolResultMap,
   extractToolCallsWithResults,
@@ -39,6 +40,51 @@ describe("extractText", () => {
 
   test("returns empty string for empty parts", () => {
     expect(extractText([])).toBe("")
+  })
+})
+
+describe("extractImages", () => {
+  test("extracts images from parts", () => {
+    const parts: MessagePart[] = [
+      { type: "image", image: "data:image/png;base64,abc", mediaType: "image/png" },
+      { type: "text", text: "Some text" },
+      { type: "image", image: "data:image/jpeg;base64,xyz", mediaType: "image/jpeg" },
+    ]
+
+    const images = extractImages(parts)
+    expect(images.length).toBe(2)
+    expect(images[0]).toEqual({ mediaType: "image/png" })
+    expect(images[1]).toEqual({ mediaType: "image/jpeg" })
+  })
+
+  test("returns empty array when no images", () => {
+    const parts: MessagePart[] = [{ type: "text", text: "Just text" }]
+    expect(extractImages(parts)).toEqual([])
+  })
+
+  test("uses fallback mediaType when not provided", () => {
+    const parts: MessagePart[] = [{ type: "image", image: "data:abc" }]
+
+    const images = extractImages(parts)
+    expect(images[0]).toEqual({ mediaType: "image" })
+  })
+
+  test("handles empty parts", () => {
+    expect(extractImages([])).toEqual([])
+  })
+
+  test("handles mixed content with images", () => {
+    const parts: MessagePart[] = [
+      { type: "text", text: "Before" },
+      { type: "image", image: "abc", mediaType: "image/gif" },
+      { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
+      { type: "image", image: "xyz", mediaType: "image/webp" },
+    ]
+
+    const images = extractImages(parts)
+    expect(images.length).toBe(2)
+    expect(images[0]?.mediaType).toBe("image/gif")
+    expect(images[1]?.mediaType).toBe("image/webp")
   })
 })
 

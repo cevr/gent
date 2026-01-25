@@ -3,6 +3,7 @@ import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
 import { getSpinnerFrames, formatToolInput } from "./message-list-utils"
 import { SessionEventIndicator, type SessionEvent } from "./session-event-indicator"
+import type { ImageInfo } from "../client"
 
 export type { ToolCall }
 
@@ -12,33 +13,72 @@ export interface Message {
   role: "user" | "assistant" | "system" | "tool"
   kind: "regular" | "interjection"
   content: string
+  images: ImageInfo[]
   createdAt: number
   toolCalls: ToolCall[] | undefined
 }
 
 export type SessionItem = Message | SessionEvent
 
-function UserMessage(props: { content: string; kind: "regular" | "interjection" }) {
+function UserMessage(props: {
+  content: string
+  images: ImageInfo[]
+  kind: "regular" | "interjection"
+}) {
   const { theme } = useTheme()
-  const background = () =>
-    props.kind === "interjection" ? theme.backgroundPanel : theme.backgroundElement
+  const isInterjection = () => props.kind === "interjection"
+  const background = () => (isInterjection() ? theme.backgroundPanel : theme.backgroundElement)
+  const textColor = () => (isInterjection() ? theme.warning : theme.text)
+  const hasContent = () => props.content || props.images.length > 0
+
   return (
-    <box marginTop={1} backgroundColor={background()} paddingLeft={2} paddingRight={2}>
-      <text style={{ fg: theme.text }}>{props.content}</text>
-    </box>
+    <Show when={hasContent()}>
+      <box
+        marginTop={1}
+        backgroundColor={background()}
+        paddingLeft={2}
+        paddingRight={2}
+        flexDirection="column"
+      >
+        <Show when={props.images.length > 0}>
+          <For each={props.images}>
+            {(img) => (
+              <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
+            )}
+          </For>
+        </Show>
+        <Show when={props.content}>
+          <text style={{ fg: textColor() }}>
+            {isInterjection() ? "[!] " : ""}
+            {props.content}
+          </text>
+        </Show>
+      </box>
+    </Show>
   )
 }
 
 function AssistantMessage(props: {
   content: string
+  images: ImageInfo[]
   toolCalls: ToolCall[] | undefined
   expanded: boolean
 }) {
   const { theme } = useTheme()
-  const hasContent = () => props.content || (props.toolCalls && props.toolCalls.length > 0)
+  const hasContent = () =>
+    props.content || props.images.length > 0 || (props.toolCalls && props.toolCalls.length > 0)
 
   return (
     <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
+      <Show when={props.images.length > 0}>
+        <box flexDirection="column" marginBottom={props.content || props.toolCalls?.length ? 1 : 0}>
+          <For each={props.images}>
+            {(img) => (
+              <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
+            )}
+          </For>
+        </box>
+      </Show>
       <Show when={props.toolCalls && props.toolCalls.length > 0}>
         <box flexDirection="column" marginBottom={props.content ? 1 : 0}>
           <For each={props.toolCalls}>
@@ -127,12 +167,13 @@ export function MessageList(props: MessageListProps) {
               fallback={
                 <AssistantMessage
                   content={item.content}
+                  images={item.images}
                   toolCalls={item.toolCalls}
                   expanded={props.toolsExpanded}
                 />
               }
             >
-              <UserMessage content={item.content} kind={item.kind} />
+              <UserMessage content={item.content} images={item.images} kind={item.kind} />
             </Show>
           )
         }

@@ -1,5 +1,8 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import type { Scope } from "effect"
+import { Effect, Layer, pipe } from "effect"
+import type { Path } from "@effect/platform"
+import { FileSystem } from "@effect/platform"
 import { BunContext } from "@effect/platform-bun"
 import {
   ReadTool,
@@ -13,9 +16,6 @@ import {
 } from "@gent/tools"
 import type { ToolContext } from "@gent/core"
 import { TodoItem } from "@gent/core"
-import * as fs from "node:fs"
-import * as path from "node:path"
-import * as os from "node:os"
 
 const ctx: ToolContext = {
   sessionId: "test-session",
@@ -26,72 +26,82 @@ const ctx: ToolContext = {
 // Layer providing FileSystem and Path from @effect/platform-bun
 const PlatformLayer = BunContext.layer
 
+// Helper to run scoped effects with platform layer
+const runScoped = <A, E>(
+  effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Scope.Scope>,
+) => Effect.runPromise(pipe(effect, Effect.scoped, Effect.provide(PlatformLayer)))
+
 describe("Tools", () => {
   describe("ReadTool", () => {
-    test("reads a file", async () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-test-"))
-      const testFile = path.join(tmpDir, "test.txt")
-      fs.writeFileSync(testFile, "Hello, World!")
+    test("reads a file", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+          const testFile = `${tmpDir}/test.txt`
+          yield* fs.writeFileString(testFile, "Hello, World!")
 
-      try {
-        const result = await Effect.runPromise(
-          ReadTool.execute({ path: testFile }, ctx).pipe(Effect.provide(PlatformLayer)),
-        )
-        expect(result.content).toBe("1\tHello, World!")
-      } finally {
-        fs.rmSync(tmpDir, { recursive: true })
-      }
-    })
+          const result = yield* ReadTool.execute({ path: testFile }, ctx)
+          expect(result.content).toBe("1\tHello, World!")
+        }),
+      ))
 
-    test("returns error for non-existent file", async () => {
-      const result = await Effect.runPromise(
-        Effect.either(ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx)).pipe(
-          Effect.provide(PlatformLayer),
-        ),
-      )
-      expect(result._tag).toBe("Left")
-    })
+    test("returns error for non-existent file", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const result = yield* Effect.either(
+            ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx),
+          )
+          expect(result._tag).toBe("Left")
+        }),
+      ))
+
+    test("returns error for directory", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+
+          const result = yield* Effect.either(ReadTool.execute({ path: tmpDir }, ctx))
+          expect(result._tag).toBe("Left")
+          if (result._tag === "Left") {
+            expect(result.left.message).toContain("Cannot read directory")
+          }
+        }),
+      ))
   })
 
   describe("GlobTool", () => {
-    test("finds files matching pattern", async () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-glob-"))
-      fs.writeFileSync(path.join(tmpDir, "a.ts"), "")
-      fs.writeFileSync(path.join(tmpDir, "b.ts"), "")
-      fs.writeFileSync(path.join(tmpDir, "c.js"), "")
+    test("finds files matching pattern", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+          yield* fs.writeFileString(`${tmpDir}/a.ts`, "")
+          yield* fs.writeFileString(`${tmpDir}/b.ts`, "")
+          yield* fs.writeFileString(`${tmpDir}/c.js`, "")
 
-      try {
-        const result = await Effect.runPromise(
-          GlobTool.execute({ pattern: "*.ts", path: tmpDir }, ctx).pipe(
-            Effect.provide(PlatformLayer),
-          ),
-        )
-        expect(result.files.length).toBe(2)
-        expect(result.files.every((f) => f.endsWith(".ts"))).toBe(true)
-      } finally {
-        fs.rmSync(tmpDir, { recursive: true })
-      }
-    })
+          const result = yield* GlobTool.execute({ pattern: "*.ts", path: tmpDir }, ctx)
+          expect(result.files.length).toBe(2)
+          expect(result.files.every((f) => f.endsWith(".ts"))).toBe(true)
+        }),
+      ))
   })
 
   describe("GrepTool", () => {
-    test("finds pattern in files", async () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-grep-"))
-      fs.writeFileSync(path.join(tmpDir, "file1.ts"), "const foo = 1")
-      fs.writeFileSync(path.join(tmpDir, "file2.ts"), "const bar = 2")
-      fs.writeFileSync(path.join(tmpDir, "file3.ts"), "const foo = 3")
+    test("finds pattern in files", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+          yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
+          yield* fs.writeFileString(`${tmpDir}/file2.ts`, "const bar = 2")
+          yield* fs.writeFileString(`${tmpDir}/file3.ts`, "const foo = 3")
 
-      try {
-        const result = await Effect.runPromise(
-          GrepTool.execute({ pattern: "foo", path: tmpDir }, ctx).pipe(
-            Effect.provide(PlatformLayer),
-          ),
-        )
-        expect(result.matches.length).toBe(2)
-      } finally {
-        fs.rmSync(tmpDir, { recursive: true })
-      }
-    })
+          const result = yield* GrepTool.execute({ pattern: "foo", path: tmpDir }, ctx)
+          expect(result.matches.length).toBe(2)
+        }),
+      ))
   })
 })
 

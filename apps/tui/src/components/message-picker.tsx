@@ -21,10 +21,17 @@ const truncate = (value: string, max: number): string =>
   value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
 
 const buildItems = (messages: readonly Message[]): PickerItem[] =>
-  messages.map((m) => ({
-    id: m.id,
-    label: `${m.role === "user" ? "U" : "A"}: ${m.content.replace(/\s+/g, " ")}`,
-  }))
+  messages.map((m) => {
+    const rolePrefix = m.role === "user" ? "U" : "A"
+    let labelContent = m.content.replace(/\s+/g, " ")
+    if (!labelContent && m.images.length > 0) {
+      labelContent = `[Image${m.images.length > 1 ? ` x${m.images.length}` : ""}]`
+    }
+    return {
+      id: m.id,
+      label: `${rolePrefix}: ${labelContent}`,
+    }
+  })
 
 export function MessagePicker(props: MessagePickerProps) {
   const { theme } = useTheme()
