@@ -45,3 +45,6 @@ export {
   type ImageInfo,
   type ExtractedToolCall,
 } from "./client.js"
+
+// Direct client (in-process, no RPC layer)
+export { makeDirectClient, type DirectClient, type DirectClientContext } from "./direct-client.js"

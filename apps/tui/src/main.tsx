@@ -7,14 +7,13 @@ import { RegistryProvider } from "@gent/atom-solid"
 import {
   createDependencies,
   GentCore,
-  RpcHandlersLive,
   type GentCoreService,
   type GentCoreError,
   type SessionInfo,
   type BranchInfo,
 } from "@gent/server"
-import { makeInProcessRpcClient, type GentRpcClient } from "@gent/sdk"
-import { DevTracerLive, clearLog } from "@gent/runtime"
+import { makeDirectClient, type DirectClient } from "@gent/sdk"
+import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
 import { DEFAULT_MODEL_ID } from "@gent/core"
 import * as path from "node:path"
 
@@ -154,14 +153,14 @@ const resolveInitialState = (input: {
 // Data directory
 const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
 const DB_PATH = path.join(DATA_DIR, "data.db")
-const TRACE_LOG = "/tmp/gent-trace.log"
+// Unified tracer logs to /tmp/gent-unified.log
 const ATOM_CACHE_MAX = 256
 
 // Platform layer
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 
-// Dev tracer layer
-const TracerLayer = DevTracerLive(TRACE_LOG)
+// Unified tracer layer - logs both Effect spans and TUI events
+const TracerLayer = UnifiedTracerLive
 
 // Dependencies layer with tracing
 const ServerDepsLayer = createDependencies({
@@ -173,20 +172,17 @@ const ServerDepsLayer = createDependencies({
 // GentCore layer on top of dependencies
 const GentCoreLive = GentCore.Live.pipe(Layer.provide(ServerDepsLayer))
 
-// Combined layer with GentCore + AskUserHandler for RPC handlers
+// Combined layer with GentCore + dependencies
 const CoreWithDeps = Layer.merge(GentCoreLive, ServerDepsLayer)
 
-// RPC handlers layer (requires GentCore + AskUserHandler)
-const RpcLayer = RpcHandlersLive.pipe(Layer.provide(CoreWithDeps))
-
-// Full layer stack for RPC client
+// Full layer stack - includes all services needed by DirectClient
 // Include PlatformLayer for CommandExecutor (needed by workspace git commands)
-const FullLayer = Layer.mergeAll(RpcLayer, GentCoreLive, PlatformLayer)
+const FullLayer = Layer.mergeAll(CoreWithDeps, PlatformLayer)
 
 // Clear trace log on startup
-clearLog(TRACE_LOG)
+clearUnifiedLog()
 
-// Create managed runtime
+// Create managed runtime - scope stays alive for TUI lifetime
 const serverRuntime = ManagedRuntime.make(FullLayer)
 
 // Headless runner - streams events to stdout
@@ -300,8 +296,8 @@ const main = Command.make(
         return
       }
 
-      // Create RPC client for TUI using SDK helper
-      const rpcClient: GentRpcClient = yield* makeInProcessRpcClient(CoreWithDeps)
+      // Create direct client for TUI (no RPC layer, avoids scope issues)
+      const directClient: DirectClient = yield* makeDirectClient
 
       // Get runtime for client
       const runtime = yield* serverRuntime.runtimeEffect
@@ -342,7 +338,7 @@ const main = Command.make(
           <WorkspaceProvider cwd={cwd} runtime={uiRuntime}>
             <RegistryProvider runtime={uiRuntime} maxEntries={ATOM_CACHE_MAX}>
               <ClientProvider
-                rpcClient={rpcClient}
+                rpcClient={directClient}
                 runtime={uiRuntime}
                 initialSession={initialSession}
               >

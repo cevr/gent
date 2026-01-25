@@ -48,12 +48,10 @@ export function Home(props: HomeProps) {
   // Navigate when session becomes active after pending prompt
   createEffect(() => {
     const prompt = pendingPrompt()
-    if (!prompt) return
     const session = client.session()
-    if (session) {
-      setPendingPrompt(null)
-      router.navigateToSession(session.sessionId, session.branchId, prompt)
-    }
+    if (!prompt || !session) return
+    setPendingPrompt(null)
+    router.navigateToSession(session.sessionId, session.branchId, prompt)
   })
 
   useKeyboard((e) => {

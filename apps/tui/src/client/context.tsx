@@ -5,28 +5,18 @@ import {
   onMount,
   onCleanup,
   type ParentProps,
-  DEV,
 } from "solid-js"
-import { createStore, produce, DEV as STORE_DEV } from "solid-js/store"
+import { createStore, produce } from "solid-js/store"
 import { Effect, Stream, Runtime } from "effect"
 import { calculateCost, type AgentEvent, type AgentMode, type EventEnvelope } from "@gent/core"
 import type { GentRpcError } from "@gent/server"
-import { log, logEvent, logError, clearLog } from "../utils/log"
+import { tuiLog, tuiEvent, tuiError, clearUnifiedLog } from "../utils/unified-tracer"
 import { formatError } from "../utils/format-error"
-
-// Setup Solid dev hooks for tracing
-if (DEV) {
-  DEV.hooks.afterUpdate = () => log("solid: afterUpdate")
-  DEV.hooks.afterCreateOwner = (owner) => log(`solid: createOwner ${owner.name ?? "anonymous"}`)
-}
-if (STORE_DEV) {
-  STORE_DEV.hooks.onStoreNodeUpdate = (_state, prop, value) =>
-    log(`store: ${String(prop)} = ${JSON.stringify(value)}`)
-}
 
 import {
   type GentClient,
   type GentRpcClient,
+  type DirectClient,
   type MessageInfoReadonly,
   type SessionInfo,
   type BranchInfo,
@@ -151,16 +141,22 @@ export function useClient(): ClientContextValue {
 // =============================================================================
 
 interface ClientProviderProps extends ParentProps {
-  rpcClient: GentRpcClient
+  rpcClient: GentRpcClient | DirectClient
   runtime: Runtime.Runtime<unknown>
   initialSession: Session | undefined
 }
 
 export function ClientProvider(props: ClientProviderProps) {
-  clearLog()
-  log("ClientProvider init")
+  clearUnifiedLog()
+  tuiLog("ClientProvider init")
 
-  const client = createClient(props.rpcClient, props.runtime)
+  // DirectClient already has the right shape, use it directly
+  // For GentRpcClient, wrap with createClient
+  const client: GentClient =
+    "runtime" in props.rpcClient &&
+    typeof (props.rpcClient as DirectClient).createSession === "function"
+      ? (props.rpcClient as unknown as GentClient)
+      : createClient(props.rpcClient as GentRpcClient, props.runtime)
 
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
@@ -200,12 +196,11 @@ export function ClientProvider(props: ClientProviderProps) {
   createEffect(() => {
     const s = session()
     if (!s) {
-      log("event subscription: no session")
       eventBuffer.length = 0
       return
     }
 
-    log(`event subscription: ${s.sessionId}`)
+    tuiLog(`event subscription: ${s.sessionId}`)
     let cancelled = false
     eventBuffer.length = 0
 
@@ -262,7 +257,7 @@ export function ClientProvider(props: ClientProviderProps) {
             }
 
             const event = envelope.event
-            logEvent(`event: ${event._tag}`)
+            tuiEvent(`event: ${event._tag}`)
 
             // Update agent state based on events
             switch (event._tag) {
@@ -287,7 +282,7 @@ export function ClientProvider(props: ClientProviderProps) {
                 break
 
               case "ErrorOccurred":
-                logError("ErrorOccurred", event.error)
+                tuiError("ErrorOccurred", event.error)
                 setAgentStore({ status: AgentStatus.error(event.error) })
                 break
 
@@ -346,7 +341,7 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.catchAll((err) =>
           Effect.sync(() => {
             if (!cancelled) {
-              logError("stream error", formatError(err))
+              tuiError("stream error", formatError(err))
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }
           }),
@@ -355,7 +350,6 @@ export function ClientProvider(props: ClientProviderProps) {
     )
 
     onCleanup(() => {
-      log("event subscription cleanup")
       cancelled = true
     })
   })
@@ -385,7 +379,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
     // Fire-and-forget actions using cast
     sendMessage: (content, mode, model) => {
-      log(`sendMessage: ${content.slice(0, 50)}...`)
       const s = session()
 
       // Session required for sending messages
@@ -408,6 +401,7 @@ export function ClientProvider(props: ClientProviderProps) {
         client.createSession(firstMessage !== undefined ? { firstMessage } : undefined).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
+              tuiLog(`createSession success: ${result.sessionId}`)
               setSessionStore({
                 sessionState: {
                   status: "active",
@@ -424,6 +418,7 @@ export function ClientProvider(props: ClientProviderProps) {
           ),
           Effect.catchAll((err) =>
             Effect.sync(() => {
+              tuiError("createSession", err)
               setSessionStore({ sessionState: { status: "none" } })
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }),
@@ -596,7 +591,7 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.catchAll((err) =>
           Effect.sync(() => {
             // Non-fatal - will use default models
-            log(`listModels failed: ${formatError(err)}`)
+            tuiError("listModels", err)
           }),
         ),
       ),
