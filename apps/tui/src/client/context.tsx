@@ -268,16 +268,16 @@ export function ClientProvider(props: ClientProviderProps) {
               case "StreamEnded":
                 setAgentStore({ status: AgentStatus.idle() })
                 if (event.usage) {
-                  // Get pricing from UI-selected model (State) or session model
-                  const modelInfo = agentStore.model
-                    ? State.models().find((m) => m.id === agentStore.model)
-                    : State.currentModelInfo()
-                  const turnCost = calculateCost(event.usage, modelInfo?.pricing)
-                  setAgentStore(
-                    produce((draft) => {
-                      draft.cost += turnCost
-                    }),
-                  )
+                  const modelId = agentStore.model
+                  if (modelId) {
+                    const modelInfo = State.models().find((m) => m.id === modelId)
+                    const turnCost = calculateCost(event.usage, modelInfo?.pricing)
+                    setAgentStore(
+                      produce((draft) => {
+                        draft.cost += turnCost
+                      }),
+                    )
+                  }
                 }
                 break
 
@@ -323,6 +323,18 @@ export function ClientProvider(props: ClientProviderProps) {
                     produce((draft) => {
                       if (draft.sessionState.status === "active") {
                         draft.sessionState.session.name = event.name
+                      }
+                    }),
+                  )
+                }
+                break
+
+              case "BranchSwitched":
+                if (event.sessionId === s.sessionId) {
+                  setSessionStore(
+                    produce((draft) => {
+                      if (draft.sessionState.status === "active") {
+                        draft.sessionState.session.branchId = event.toBranchId
                       }
                     }),
                   )
@@ -567,14 +579,6 @@ export function ClientProvider(props: ClientProviderProps) {
               }),
             ),
           ),
-      )
-
-      setSessionStore(
-        produce((draft) => {
-          if (draft.sessionState.status === "active") {
-            draft.sessionState.session.branchId = branchId
-          }
-        }),
       )
     },
   }
