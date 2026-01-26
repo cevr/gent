@@ -26,7 +26,49 @@
     },
     "plugins": [
       {
-        "name": "@effect/language-service"
+        "name": "@effect/language-service",
+        "diagnostics": true,
+        "diagnosticsName": true,
+        "diagnosticSeverity": {
+          "anyUnknownInErrorContext": "error",
+          "deterministicKeys": "warning",
+          "importFromBarrel": "warning",
+          "instanceOfSchema": "warning",
+          "missedPipeableOpportunity": "suggestion",
+          "missingEffectServiceDependency": "warning",
+          "schemaUnionOfLiterals": "warning",
+          "strictBooleanExpressions": "warning",
+          "strictEffectProvide": "warning",
+          "catchAllToMapError": "warning",
+          "catchUnfailableEffect": "warning",
+          "effectFnOpportunity": "warning",
+          "effectMapVoid": "warning",
+          "effectSucceedWithVoid": "warning",
+          "leakingRequirements": "warning",
+          "preferSchemaOverJson": "warning",
+          "redundantSchemaTagIdentifier": "warning",
+          "returnEffectInGen": "warning",
+          "runEffectInsideEffect": "error",
+          "schemaStructWithTag": "warning",
+          "schemaSyncInEffect": "warning",
+          "tryCatchInEffectGen": "warning",
+          "unnecessaryEffectGen": "warning",
+          "unnecessaryFailYieldableError": "warning",
+          "unnecessaryPipe": "warning",
+          "unnecessaryPipeChain": "warning"
+        },
+        "keyPatterns": [
+          {
+            "target": "service",
+            "pattern": "default",
+            "skipLeadingPath": ["packages/"]
+          },
+          {
+            "target": "error",
+            "pattern": "default",
+            "skipLeadingPath": ["packages/"]
+          }
+        ]
       }
     ]
   },
