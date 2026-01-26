@@ -106,6 +106,13 @@ export function Session(props: SessionProps) {
   // Derived - no separate signal needed
   const hasMessages = () => messages().length > 0
 
+  const resolveSendModel = () => {
+    const selected = State.currentModel()
+    const serverModel = client.model()
+    if (serverModel && serverModel === selected) return undefined
+    return selected
+  }
+
   const items = (): SessionItem[] => {
     const combined: SessionItem[] = [...messages(), ...events()]
     return combined.sort((a, b) => {
@@ -175,12 +182,9 @@ export function Session(props: SessionProps) {
     })
   }
 
-  // Load messages when session becomes active
-  createEffect(() => {
-    if (!client.isActive()) return
-
+  const loadMessages = (branchId: string) => {
     cast(
-      client.listMessages().pipe(
+      client.client.listMessages(branchId).pipe(
         Effect.map((msgs) => buildMessages(msgs)),
         Effect.tap((msgs) =>
           Effect.sync(() => {
@@ -194,11 +198,19 @@ export function Session(props: SessionProps) {
         ),
       ),
     )
+  }
+
+  // Load messages when session becomes active
+  createEffect(() => {
+    if (!client.isActive()) return
+
+    loadMessages(props.branchId)
   })
 
   const sendInitialPrompt = () => {
     if (!props.initialPrompt || initialPromptSent) return
     initialPromptSent = true
+    const model = resolveSendModel()
     cast(
       client.client
         .sendMessage({
@@ -206,6 +218,7 @@ export function Session(props: SessionProps) {
           branchId: props.branchId,
           content: props.initialPrompt,
           mode: "plan",
+          ...(model ? { model } : {}),
         })
         .pipe(
           Effect.tapError((err) =>
@@ -223,21 +236,13 @@ export function Session(props: SessionProps) {
 
     const unsubscribe = client.subscribeEvents((event) => {
       if (event._tag === "MessageReceived") {
-        cast(
-          client.listMessages().pipe(
-            Effect.map((msgs) => buildMessages(msgs)),
-            Effect.tap((msgs) =>
-              Effect.sync(() => {
-                setMessages(msgs)
-              }),
-            ),
-            Effect.catchAll((err) =>
-              Effect.sync(() => {
-                client.setError(formatError(err))
-              }),
-            ),
-          ),
-        )
+        loadMessages(props.branchId)
+      } else if (event._tag === "BranchSwitched") {
+        if (event.toBranchId !== props.branchId) {
+          setMessages([])
+          setEvents([])
+          router.navigateToSession(event.sessionId, event.toBranchId)
+        }
       } else if (event._tag === "StreamStarted") {
         setMessages((prev) => [
           ...prev,
@@ -479,7 +484,7 @@ export function Session(props: SessionProps) {
     }
 
     // First message in session starts in plan mode
-    client.sendMessage(content, !hasMessages() ? "plan" : undefined)
+    client.sendMessage(content, !hasMessages() ? "plan" : undefined, resolveSendModel())
   }
 
   // Handle input state transitions
@@ -575,10 +580,6 @@ export function Session(props: SessionProps) {
   const handleBranchSelect = (branchId: string) => {
     setTreeOpen(false)
     client.switchBranch(branchId)
-    const session = client.session()
-    if (session) {
-      router.navigateToSession(session.sessionId, branchId)
-    }
   }
 
   const handleForkSelect = (messageId: string) => {
@@ -588,10 +589,6 @@ export function Session(props: SessionProps) {
         Effect.tap((branchId) =>
           Effect.sync(() => {
             client.switchBranch(branchId)
-            const session = client.session()
-            if (session) {
-              router.navigateToSession(session.sessionId, branchId)
-            }
           }),
         ),
         Effect.catchAll((err) =>
@@ -652,8 +649,6 @@ export function Session(props: SessionProps) {
         <StatusBar.ErrorRow />
         <StatusBar.Row>
           <StatusBar.Mode />
-          <StatusBar.Separator />
-          <StatusBar.Bypass />
           <StatusBar.Separator />
           <StatusBar.Model />
         </StatusBar.Row>

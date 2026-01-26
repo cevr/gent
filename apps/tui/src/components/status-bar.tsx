@@ -75,27 +75,22 @@ function Mode() {
   )
 }
 
-function Bypass() {
+function Model() {
   const { theme } = useTheme()
   const client = useClient()
 
-  const bypass = () => client.session()?.bypass ?? true
-
-  return (
-    <Show when={client.session()}>
-      <span style={{ fg: bypass() ? theme.warning : theme.success }}>
-        {bypass() ? "bypass:on" : "bypass:off"}
-      </span>
-    </Show>
-  )
-}
-
-function Model() {
-  const { theme } = useTheme()
-
   const display = () => {
-    const info = State.currentModelInfo()
-    return shortenModel(info?.name ?? State.currentModel())
+    const serverModel = client.model()
+    const nextInfo = State.currentModelInfo()
+    const nextLabel = shortenModel(nextInfo?.name ?? State.currentModel())
+
+    if (!serverModel) return `next:${nextLabel}`
+
+    const serverInfo = State.models().find((m) => m.id === serverModel)
+    const serverLabel = shortenModel(serverInfo?.name ?? serverModel)
+
+    if (serverModel === State.currentModel()) return serverLabel
+    return `${serverLabel} next:${nextLabel}`
   }
 
   return <span style={{ fg: theme.textMuted }}>{display()}</span>
@@ -190,7 +185,6 @@ export const StatusBar = {
   Row,
   ErrorRow,
   Mode,
-  Bypass,
   Model,
   Status,
   Cwd,
