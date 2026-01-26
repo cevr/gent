@@ -9,10 +9,10 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "solid-js": "^1.9.10"
+    "solid-js": "^1.9.11"
   },
   "peerDependencies": {
     "effect": "catalog:",
-    "solid-js": "^1.9.10"
+    "solid-js": "^1.9.11"
   }
 }

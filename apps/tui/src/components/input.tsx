@@ -112,7 +112,7 @@ export function Input(props: InputProps) {
   const deleteWordBackward = () => {
     if (!inputRef) return
     const value = inputRef.value
-    const cursor = inputRef.cursorPosition
+    const cursor = inputRef.cursorOffset
     if (cursor === 0) return
 
     let pos = cursor - 1
@@ -120,18 +120,18 @@ export function Input(props: InputProps) {
     while (pos > 0 && value[pos - 1] !== " ") pos--
 
     inputRef.value = value.slice(0, pos) + value.slice(cursor)
-    inputRef.cursorPosition = pos
+    inputRef.cursorOffset = pos
   }
 
   // Delete line backward
   const deleteLineBackward = () => {
     if (!inputRef) return
     const value = inputRef.value
-    const cursor = inputRef.cursorPosition
+    const cursor = inputRef.cursorOffset
     if (cursor === 0) return
 
     inputRef.value = value.slice(cursor)
-    inputRef.cursorPosition = 0
+    inputRef.cursorOffset = 0
   }
 
   // Handle autocomplete selection
@@ -156,7 +156,7 @@ export function Input(props: InputProps) {
     }
 
     inputRef.value = beforeTrigger + insertion
-    inputRef.cursorPosition = beforeTrigger.length + insertion.length
+    inputRef.cursorOffset = beforeTrigger.length + insertion.length
     setAutocomplete(null)
   }
 
@@ -177,7 +177,7 @@ export function Input(props: InputProps) {
         const placeholder = createPastePlaceholder(inserted)
         const newValue = previousValue + placeholder
         inputRef.value = newValue
-        inputRef.cursorPosition = newValue.length
+        inputRef.cursorOffset = newValue.length
         previousValue = newValue
         setAutocomplete(null)
         return
@@ -240,7 +240,7 @@ export function Input(props: InputProps) {
     // Shell mode: ! at position 0 enters shell mode
     if (
       e.name === "!" &&
-      inputRef?.cursorPosition === 0 &&
+      inputRef?.cursorOffset === 0 &&
       effectiveMode() === "normal" &&
       !autocomplete()
     ) {
@@ -256,7 +256,7 @@ export function Input(props: InputProps) {
         return
       }
       // Backspace at position 0 or 1 exits shell mode (like deleting the implicit !)
-      if (e.name === "backspace" && (inputRef?.cursorPosition ?? 0) <= 1) {
+      if (e.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
         setInternalMode("normal")
         return
       }
@@ -265,7 +265,7 @@ export function Input(props: InputProps) {
     // / at position 0 opens command autocomplete
     if (
       e.name === "/" &&
-      inputRef?.cursorPosition === 0 &&
+      inputRef?.cursorOffset === 0 &&
       effectiveMode() === "normal" &&
       !autocomplete()
     ) {
@@ -286,7 +286,8 @@ export function Input(props: InputProps) {
     }
   })
 
-  const handleSubmit = (value: string) => {
+  const handleSubmit = () => {
+    const value = inputRef?.value ?? ""
     // Expand paste placeholders before processing
     const expanded = expandPastePlaceholders(value)
     const text = expanded.trim()

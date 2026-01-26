@@ -21,11 +21,11 @@
     "@gent/core": "workspace:*",
     "@gent/sdk": "workspace:*",
     "@gent/server": "workspace:*",
-    "@opentui/core": "^0.1.74",
-    "@opentui/solid": "^0.1.74",
+    "@opentui/core": "^0.1.75",
+    "@opentui/solid": "^0.1.75",
     "diff": "^8.0.3",
-    "figlet": "^1.9.4",
-    "solid-js": "^1.9.10"
+    "figlet": "^1.10.0",
+    "solid-js": "^1.9.11"
   },
   "devDependencies": {
     "@types/figlet": "^1.7.0",
