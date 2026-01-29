@@ -16,9 +16,9 @@ call_lefthook()
   elif lefthook -h >/dev/null 2>&1
   then
     lefthook "$@"
-  elif /Users/cvr/Developer/personal/gent/node_modules/.bun/lefthook-darwin-arm64@2.0.15/node_modules/lefthook-darwin-arm64/bin/lefthook -h >/dev/null 2>&1
+  elif /Users/cvr/Developer/personal/gent/node_modules/.bun/lefthook-darwin-arm64@2.0.16/node_modules/lefthook-darwin-arm64/bin/lefthook -h >/dev/null 2>&1
   then
-    /Users/cvr/Developer/personal/gent/node_modules/.bun/lefthook-darwin-arm64@2.0.15/node_modules/lefthook-darwin-arm64/bin/lefthook "$@"
+    /Users/cvr/Developer/personal/gent/node_modules/.bun/lefthook-darwin-arm64@2.0.16/node_modules/lefthook-darwin-arm64/bin/lefthook "$@"
   else
     dir="$(git rev-parse --show-toplevel)"
     osArch=$(uname | tr '[:upper:]' '[:lower:]')
