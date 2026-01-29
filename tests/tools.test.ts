@@ -13,9 +13,11 @@ import {
   TodoHandler,
   QuestionTool,
   QuestionHandler,
+  PlanTool,
+  TaskTool,
 } from "@gent/tools"
 import type { ToolContext } from "@gent/core"
-import { TodoItem } from "@gent/core"
+import { AgentRegistry, PlanHandler, SubagentRunnerService, TodoItem } from "@gent/core"
 
 const ctx: ToolContext = {
   sessionId: "test-session",
@@ -190,5 +192,40 @@ describe("Question Tool", () => {
     expect(result.answers.length).toBe(2)
     expect(result.answers[0]).toEqual(["Option A"])
     expect(result.answers[1]).toEqual(["Option B", "Option C"])
+  })
+})
+
+describe("Plan Tool", () => {
+  test("writes plan and returns decision", async () => {
+    const layer = Layer.merge(PlanHandler.Test(["confirm"]), PlatformLayer)
+
+    const result = await Effect.runPromise(
+      PlanTool.execute({ plan: "## Plan\\n- Step 1" }, ctx).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.decision).toBe("confirm")
+    expect(result.planPath).toContain(".gent/plans/")
+  })
+})
+
+describe("Task Tool", () => {
+  test("delegates to subagent and returns output", async () => {
+    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+      run: (params) =>
+        Effect.succeed({
+          _tag: "success" as const,
+          text: `${params.agent.name}:${params.prompt}`,
+          sessionId: "child-session",
+          agentName: params.agent.name,
+        }),
+    })
+
+    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
+
+    const result = await Effect.runPromise(
+      TaskTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output).toBe("explore:hello")
   })
 })

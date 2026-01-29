@@ -16,6 +16,7 @@ TUI (@opentui/solid) ←── SSE ──→ Server (HttpApi)
                               ┌───────▼───────┐
                               │    Runtime    │
                               │  AgentLoop    │
+                              │  AgentActor   │
                               │  EventStore   │
                               └───────┬───────┘
                                       │
@@ -36,7 +37,7 @@ packages/
 ├── storage/        # SQLite (bun:sqlite) - baked in
 ├── tools/          # Effect services
 ├── providers/      # Vercel AI SDK adapters
-├── runtime/        # AgentLoop, EventStore, Hooks
+├── runtime/        # AgentLoop, AgentActor, EventStore, Hooks
 ├── api/            # HttpApi definitions
 └── test-utils/     # Mock layers, sequence recording
 
@@ -56,25 +57,24 @@ MessagePart = TextPart | ToolCallPart | ToolResultPart | ReasoningPart | ImagePa
 Message = { id, sessionId, branchId, role, parts[], createdAt }
 ```
 
-### Agent Loop + Magic Plan Mode
+### Agent Loop + Agents
 
-Single loop. Agent decides when to plan:
+Single loop for primary agents. Subagents run via AgentActor (effect-machine):
 
 ```typescript
 AgentLoop {
-  run(message)      // Agent decides: plan vs execute
+  run(message)      // Executes; tools can include plan
   steer(command)    // Interrupt mid-run
   followUp(message) // Queue for after completion
 }
 ```
 
-**Plan flow:**
+**Plan flow (tool-driven):**
 
-1. Agent analyzes task complexity OR user asks for plan
-2. If planning needed → read-only tools, uses AskUser to clarify
-3. Writes plan to `.gent/plans/{timestamp}-{slug}.md`
-4. User approves via UI
-5. Context clears → plan loads → execution begins
+1. Agent emits `plan` tool with markdown
+2. Plan saved to `.gent/plans/{session}-{toolCall}.md`
+3. UI shows markdown inline, user confirms/rejects
+4. On confirm, PlanCheckpoint can reset context
 
 **AskUser tool:** Used frequently for clarifying intent, validating assumptions, getting preferences. Not for approval.
 
@@ -128,7 +128,7 @@ Fork at any message. Tree navigation. Independent compaction per branch.
 {
   "models": {
     "default": "anthropic/claude-sonnet-4",
-    "plan": "anthropic/claude-sonnet-4"
+    "deep": "anthropic/claude-sonnet-4"
   },
   "permissions": []
 }
@@ -139,7 +139,7 @@ Fork at any message. Tree navigation. Independent compaction per branch.
 - SQLite storage
 - All core tools enabled
 - Compaction at 100k tokens
-- Magic plan mode
+- Agent switching (default/deep)
 - Plans in `.gent/plans/`
 
 ## Testing

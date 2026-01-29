@@ -29,6 +29,10 @@ export const formatError = (error: UiError): string => {
     case "BadArgument":
       return `${error.module}.${error.method}: ${error.description ?? "bad argument"}`
     case "SystemError":
-      return `${error.module}.${error.method}: ${error.reason}${error.pathOrDescriptor ? ` (${error.pathOrDescriptor})` : ""}`
+      return `${error.module}.${error.method}: ${error.reason}${
+        error.pathOrDescriptor !== undefined && error.pathOrDescriptor !== null
+          ? ` (${error.pathOrDescriptor})`
+          : ""
+      }`
   }
 }

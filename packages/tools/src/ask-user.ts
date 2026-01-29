@@ -59,7 +59,7 @@ export interface AskUserHandlerService {
   ) => Effect.Effect<void>
 }
 
-export class AskUserHandler extends Context.Tag("AskUserHandler")<
+export class AskUserHandler extends Context.Tag("@gent/tools/src/ask-user/AskUserHandler")<
   AskUserHandler,
   AskUserHandlerService
 >() {
@@ -99,7 +99,9 @@ export class AskUserHandler extends Context.Tag("AskUserHandler")<
         respond: (requestId, answers) =>
           Effect.gen(function* () {
             const deferred = pending.get(requestId)
-            if (deferred) yield* Deferred.succeed(deferred, answers)
+            if (deferred !== undefined) {
+              yield* Deferred.succeed(deferred, answers)
+            }
           }),
       }
     }),

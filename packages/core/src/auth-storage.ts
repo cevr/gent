@@ -20,7 +20,10 @@ export interface AuthStorageService {
 
 // Auth Storage Service Tag
 
-export class AuthStorage extends Context.Tag("AuthStorage")<AuthStorage, AuthStorageService>() {
+export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthStorage")<
+  AuthStorage,
+  AuthStorageService
+>() {
   // macOS Keychain implementation
   static LiveKeychain = (serviceName: string = "gent"): Layer.Layer<AuthStorage> =>
     Layer.effect(
@@ -53,7 +56,7 @@ export class AuthStorage extends Context.Tag("AuthStorage")<AuthStorage, AuthSto
             exec(
               `security find-generic-password -s "${serviceName}" -a "${provider}" -w 2>/dev/null`,
             ).pipe(
-              Effect.map((key) => (key ? key : undefined)),
+              Effect.map((key) => (key.length > 0 ? key : undefined)),
               Effect.catchAll(() => Effect.succeed(undefined)),
             ),
 

@@ -170,10 +170,9 @@ export interface CheckpointServiceApi {
   readonly estimateTokens: (messages: ReadonlyArray<Message>) => Effect.Effect<number>
 }
 
-export class CheckpointService extends Context.Tag("CheckpointService")<
-  CheckpointService,
-  CheckpointServiceApi
->() {
+export class CheckpointService extends Context.Tag(
+  "@gent/runtime/src/checkpoint/CheckpointService",
+)<CheckpointService, CheckpointServiceApi>() {
   static Live = (
     model: string,
     config: CompactionConfig = DEFAULT_COMPACTION_CONFIG,
@@ -204,7 +203,7 @@ export class CheckpointService extends Context.Tag("CheckpointService")<
 
               const tokens = estimateTokens(messages)
               const firstMessage = messages[0]
-              if (!firstMessage) {
+              if (firstMessage === undefined) {
                 return yield* new CheckpointError({
                   message: "Cannot create compaction checkpoint: failed to access first message",
                 })
@@ -215,7 +214,7 @@ export class CheckpointService extends Context.Tag("CheckpointService")<
               const keepCount = Math.max(Math.ceil(messages.length * 0.2), 10)
               const firstKeptIndex = Math.max(0, messages.length - keepCount)
               const firstKeptMessage = messages[firstKeptIndex]
-              if (!firstKeptMessage) {
+              if (firstKeptMessage === undefined) {
                 return yield* new CheckpointError({
                   message:
                     "Cannot create compaction checkpoint: failed to determine first kept message",

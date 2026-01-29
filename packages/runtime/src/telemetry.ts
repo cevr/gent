@@ -61,7 +61,9 @@ class DevSpan implements Tracer.Span {
     const indent = "  ".repeat(this.depth)
     const timestamp = new Date().toISOString().slice(11, 23) // HH:mm:ss.SSS
     const icon = event === "START" ? ">" : event === "END" ? "<" : event === "ERROR" ? "!" : "."
-    const line = `[${timestamp}] ${indent}${icon} ${message}${extra ? ` ${extra}` : ""}\n`
+    const line = `[${timestamp}] ${indent}${icon} ${message}${
+      extra !== undefined && extra !== "" ? ` ${extra}` : ""
+    }\n`
     try {
       appendFileSync(this.logFile, line)
     } catch {

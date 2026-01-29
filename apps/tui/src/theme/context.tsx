@@ -21,7 +21,7 @@ const ThemeContext = createContext<ThemeContextValue>()
 
 export function useTheme(): ThemeContextValue {
   const ctx = useContext(ThemeContext)
-  if (!ctx) throw new Error("useTheme must be used within ThemeProvider")
+  if (ctx === undefined) throw new Error("useTheme must be used within ThemeProvider")
   return ctx
 }
 
@@ -56,7 +56,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
     renderer
       .getPalette({ size: 16 })
       .then((colors) => {
-        if (!colors.palette[0]) {
+        if (colors.palette[0] === undefined) {
           // No palette available, fall back to opencode theme
           if (store.active === "system") {
             setStore(
@@ -89,7 +89,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
         }
       })
       .finally(() => {
-        if (!store.ready) {
+        if (store.ready === false) {
           setStore("ready", true)
         }
       })
@@ -103,7 +103,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
 
   const values = createMemo(() => {
     const activeTheme = store.themes[store.active] ?? store.themes["opencode"]
-    if (!activeTheme) throw new Error(`Theme not found: ${store.active}`)
+    if (activeTheme === undefined) throw new Error(`Theme not found: ${store.active}`)
     return resolveTheme(activeTheme, store.mode)
   })
 

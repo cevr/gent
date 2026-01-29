@@ -62,6 +62,7 @@ export const EditTool = defineTool({
 
     // Count occurrences
     const occurrences = content.split(params.oldString).length - 1
+    const replaceAll = params.replaceAll === true
 
     if (occurrences === 0) {
       return yield* new EditError({
@@ -70,14 +71,14 @@ export const EditTool = defineTool({
       })
     }
 
-    if (occurrences > 1 && !params.replaceAll) {
+    if (occurrences > 1 && !replaceAll) {
       return yield* new EditError({
         message: `oldString found ${occurrences} times. Use replaceAll to replace all, or provide more context for unique match.`,
         path: filePath,
       })
     }
 
-    const newContent = params.replaceAll
+    const newContent = replaceAll
       ? content.split(params.oldString).join(params.newString)
       : content.replace(params.oldString, params.newString)
 
@@ -94,7 +95,7 @@ export const EditTool = defineTool({
 
     return {
       path: filePath,
-      replacements: params.replaceAll ? occurrences : 1,
+      replacements: replaceAll ? occurrences : 1,
     }
   }),
 })

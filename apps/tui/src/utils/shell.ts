@@ -24,7 +24,7 @@ export interface ShellResult {
 export const executeShell = (command: string, cwd: string) =>
   Effect.gen(function* () {
     const { stdout, stderr } = yield* runCommand(command, cwd)
-    const fullOutput = stderr ? `${stdout}\n${stderr}` : stdout
+    const fullOutput = stderr.length > 0 ? `${stdout}\n${stderr}` : stdout
 
     const lines = fullOutput.split("\n")
     const needsTruncation = lines.length > MAX_LINES || fullOutput.length > MAX_BYTES

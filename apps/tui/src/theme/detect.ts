@@ -11,7 +11,7 @@ export function detectColorScheme(): "dark" | "light" {
   // Check COLORFGBG env (set by some terminals like rxvt, xterm, some terminal emulators)
   // Format: "fg;bg" where higher bg number = light theme
   const colorFgBg = process.env["COLORFGBG"]
-  if (colorFgBg) {
+  if (colorFgBg !== undefined && colorFgBg.length > 0) {
     const parts = colorFgBg.split(";")
     const bg = parseInt(parts[parts.length - 1] ?? "0", 10)
     // ANSI colors 0-6 are typically dark, 7+ are light

@@ -46,7 +46,7 @@ export const GlobTool = defineTool({
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
 
-    const basePath = params.path ? pathService.resolve(params.path) : process.cwd()
+    const basePath = params.path !== undefined ? pathService.resolve(params.path) : process.cwd()
     const limit = params.limit ?? 100
 
     const glob = new Glob(params.pattern)

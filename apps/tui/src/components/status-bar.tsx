@@ -23,7 +23,7 @@ function shortenModel(model: string): string {
 }
 
 function relativePath(cwd: string, gitRoot: string | null): string {
-  if (gitRoot) {
+  if (gitRoot !== null) {
     const repoParts = gitRoot.split("/")
     const repoName = repoParts[repoParts.length - 1] ?? ""
     if (cwd === gitRoot) return repoName
@@ -56,7 +56,7 @@ function ErrorRow() {
   const client = useClient()
 
   return (
-    <Show when={client.error()}>
+    <Show when={client.error() !== null}>
       <box paddingLeft={1} paddingRight={1}>
         <text style={{ fg: theme.error }}>{client.error()}</text>
       </box>
@@ -64,15 +64,11 @@ function ErrorRow() {
   )
 }
 
-function Mode() {
+function Agent() {
   const { theme } = useTheme()
   const client = useClient()
 
-  return (
-    <span style={{ fg: client.mode() === "build" ? theme.success : theme.warning }}>
-      {client.mode()}
-    </span>
-  )
+  return <span style={{ fg: theme.primary }}>{client.agent()}</span>
 }
 
 function Model() {
@@ -84,7 +80,7 @@ function Model() {
     const nextInfo = State.currentModelInfo()
     const nextLabel = shortenModel(nextInfo?.name ?? State.currentModel())
 
-    if (!serverModel) return `next:${nextLabel}`
+    if (serverModel === undefined) return `next:${nextLabel}`
 
     const serverInfo = State.models().find((m) => m.id === serverModel)
     const serverLabel = shortenModel(serverInfo?.name ?? serverModel)
@@ -113,7 +109,7 @@ function Status() {
   }
 
   return (
-    <Show when={indicator().text}>
+    <Show when={indicator().text.length > 0}>
       <span style={{ fg: indicator().color }}>{indicator().text}</span>
     </Show>
   )
@@ -133,17 +129,17 @@ function Git() {
   const workspace = useWorkspace()
 
   return (
-    <Show when={workspace.gitStatus()}>
+    <Show when={workspace.gitStatus()} keyed>
       {(git) => (
         <>
-          <span style={{ fg: theme.warning }}>{git().branch}</span>
-          <Show when={git().files > 0}>
-            <span style={{ fg: theme.text }}> ~{git().files}</span>
-            <Show when={git().additions > 0}>
-              <span style={{ fg: theme.success }}> +{git().additions}</span>
+          <span style={{ fg: theme.warning }}>{git.branch}</span>
+          <Show when={git.files > 0}>
+            <span style={{ fg: theme.text }}> ~{git.files}</span>
+            <Show when={git.additions > 0}>
+              <span style={{ fg: theme.success }}> +{git.additions}</span>
             </Show>
-            <Show when={git().deletions > 0}>
-              <span style={{ fg: theme.error }}> -{git().deletions}</span>
+            <Show when={git.deletions > 0}>
+              <span style={{ fg: theme.error }}> -{git.deletions}</span>
             </Show>
           </Show>
         </>
@@ -184,7 +180,7 @@ export const StatusBar = {
   Root,
   Row,
   ErrorRow,
-  Mode,
+  Agent,
   Model,
   Status,
   Cwd,

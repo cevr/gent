@@ -52,7 +52,7 @@ function createMockClient() {
         messages: [],
         lastEventId: null,
         isStreaming: false,
-        mode: "plan" as const,
+        agent: "default" as const,
         model: undefined,
       }),
     ),

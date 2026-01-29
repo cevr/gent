@@ -82,7 +82,7 @@ export function BranchPicker(props: BranchPickerProps) {
 
     if (e.name === "return") {
       const branch = props.branches[selectedIndex()]
-      if (branch) {
+      if (branch !== undefined) {
         client.switchSession(props.sessionId, branch.id, props.sessionName, branch.model)
         router.navigateToSession(props.sessionId, branch.id, props.prompt)
       }
@@ -142,7 +142,10 @@ export function BranchPicker(props: BranchPickerProps) {
             {(branch, index) => {
               const isSelected = () => selectedIndex() === index()
               const count = () => messageCounts().get(branch.id)
-              const summary = branch.summary ? ` - ${branch.summary.replace(/\s+/g, " ")}` : ""
+              const summary =
+                branch.summary !== undefined && branch.summary.length > 0
+                  ? ` - ${branch.summary.replace(/\s+/g, " ")}`
+                  : ""
               const line = `${formatBranchLabel(branch, count())}${summary}`
               return (
                 <box

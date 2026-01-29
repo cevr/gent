@@ -32,10 +32,10 @@ const loadGitignorePatterns = (cwd: string): Effect.Effect<Set<string>> =>
     while (traversals < MAX_PARENT_TRAVERSAL) {
       const gitignorePath = join(dir, ".gitignore")
       const content = yield* readFileIfExists(gitignorePath)
-      if (content) {
+      if (content !== null && content.length > 0) {
         for (const line of content.split("\n")) {
           const trimmed = line.trim()
-          if (trimmed && !trimmed.startsWith("#")) {
+          if (trimmed.length > 0 && !trimmed.startsWith("#")) {
             patterns.add(trimmed)
           }
         }
@@ -141,7 +141,7 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
 
   const getGitignorePatterns = (): Effect.Effect<Set<string>> =>
     Effect.suspend(() => {
-      if (gitignorePatterns) return Effect.succeed(gitignorePatterns)
+      if (gitignorePatterns !== null) return Effect.succeed(gitignorePatterns)
       return loadGitignorePatterns(cwd).pipe(
         Effect.tap((patterns) => {
           gitignorePatterns = patterns
@@ -162,7 +162,7 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
           ),
         )
 
-        if (next.done) break
+        if (next.done === true) break
         const path = next.value
 
         // Skip hidden files unless includeHidden is true
@@ -196,7 +196,7 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
     let cancel: (() => void) | undefined
 
     const cleanup = () => {
-      if (!cancel) return
+      if (cancel === undefined) return
       cancel()
       cancel = undefined
     }
@@ -204,7 +204,7 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
     createEffect(() => {
       const value = query()
       cleanup()
-      if (!value) {
+      if (value.length === 0) {
         setResults([])
         setIsSearching(false)
         return

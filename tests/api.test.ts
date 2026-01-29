@@ -3,44 +3,33 @@ import { Schema } from "effect"
 import { SendMessagePayload } from "@gent/server"
 
 describe("SendMessage API", () => {
-  test("SendMessagePayload accepts mode parameter", () => {
+  test("SendMessagePayload accepts model parameter", () => {
     const payload = {
       sessionId: "s1",
       branchId: "b1",
       content: "Hello",
-      mode: "plan" as const,
+      model: "openai/opus-4.5",
     }
     const decoded = Schema.decodeUnknownSync(SendMessagePayload)(payload)
-    expect(decoded.mode).toBe("plan")
+    expect(decoded.model).toBe("openai/opus-4.5")
   })
 
-  test("SendMessagePayload mode is optional", () => {
+  test("SendMessagePayload model is optional", () => {
     const payload = {
       sessionId: "s1",
       branchId: "b1",
       content: "Hello",
     }
     const decoded = Schema.decodeUnknownSync(SendMessagePayload)(payload)
-    expect(decoded.mode).toBeUndefined()
+    expect(decoded.model).toBeUndefined()
   })
 
-  test("SendMessagePayload accepts build mode", () => {
+  test("SendMessagePayload rejects invalid model type", () => {
     const payload = {
       sessionId: "s1",
       branchId: "b1",
       content: "Hello",
-      mode: "build" as const,
-    }
-    const decoded = Schema.decodeUnknownSync(SendMessagePayload)(payload)
-    expect(decoded.mode).toBe("build")
-  })
-
-  test("SendMessagePayload rejects invalid mode", () => {
-    const payload = {
-      sessionId: "s1",
-      branchId: "b1",
-      content: "Hello",
-      mode: "invalid",
+      model: 123,
     }
     expect(() => Schema.decodeUnknownSync(SendMessagePayload)(payload)).toThrow()
   })

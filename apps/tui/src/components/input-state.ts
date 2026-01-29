@@ -128,7 +128,7 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
         case "TypeExclaim":
           return { state: InputState.shell(), effect: { _tag: "ClearInput" } }
         case "Escape":
-          if (state.autocomplete) {
+          if (state.autocomplete !== null) {
             return { state: InputState.normal(null) }
           }
           return { state }
@@ -220,7 +220,8 @@ const summarizeInput = (input: unknown): string => {
 
 const permissionQuestion = (event: typeof PermissionRequested.Type): Question => {
   const summary = summarizeInput(event.input)
-  const question = summary ? `Allow ${event.toolName} (${summary})?` : `Allow ${event.toolName}?`
+  const question =
+    summary.length > 0 ? `Allow ${event.toolName} (${summary})?` : `Allow ${event.toolName}?`
   return {
     question,
     header: "Permission",
@@ -235,11 +236,18 @@ const permissionQuestion = (event: typeof PermissionRequested.Type): Question =>
 }
 
 const planQuestion = (event: typeof PlanPresented.Type): Question => {
-  const base = event.prompt ?? (event.planPath ? `Plan ready: ${event.planPath}` : "Plan ready")
-  const question = event.prompt ? base : `${base} Confirm?`
+  const base =
+    event.planPath !== undefined && event.planPath.length > 0
+      ? `Plan ready: ${event.planPath}`
+      : "Plan ready"
+  const question =
+    event.prompt !== undefined && event.prompt.length > 0
+      ? "Review plan and confirm?"
+      : `${base} Confirm?`
   return {
     question,
     header: "Plan",
+    ...(event.prompt !== undefined && event.prompt.length > 0 ? { markdown: event.prompt } : {}),
     options: [{ label: "Confirm" }, { label: "Reject" }],
     multiple: false,
   }

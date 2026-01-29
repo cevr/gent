@@ -80,9 +80,9 @@ export const WebFetchTool = defineTool({
 
     // Select content
     let contentEl: Element | null = null
-    if (params.selector) {
+    if (params.selector !== undefined) {
       contentEl = document.querySelector(params.selector)
-      if (!contentEl) {
+      if (contentEl === null) {
         return yield* new WebFetchError({
           message: `Selector "${params.selector}" not found`,
           url: params.url,

@@ -19,10 +19,21 @@ export interface PlanHandlerService {
     requestId: string,
     decision: PlanDecision,
     reason?: string,
-  ) => Effect.Effect<void, EventStoreError>
+  ) => Effect.Effect<
+    | {
+        sessionId: string
+        branchId: string
+        planPath?: string
+      }
+    | undefined,
+    EventStoreError
+  >
 }
 
-export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHandlerService>() {
+export class PlanHandler extends Context.Tag("@gent/core/src/plan-handler/PlanHandler")<
+  PlanHandler,
+  PlanHandlerService
+>() {
   static Live: Layer.Layer<PlanHandler, never, EventStore> = Layer.effect(
     PlanHandler,
     Effect.gen(function* () {
@@ -67,7 +78,7 @@ export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHan
 
         respond: Effect.fn("PlanHandler.respond")(function* (requestId, decision, reason) {
           const entry = pending.get(requestId)
-          if (!entry) return
+          if (entry === undefined) return undefined
 
           if (decision === "confirm") {
             yield* eventStore.publish(
@@ -92,6 +103,11 @@ export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHan
 
           yield* Deferred.succeed(entry.deferred, decision)
           pending.delete(requestId)
+          return {
+            sessionId: entry.sessionId,
+            branchId: entry.branchId,
+            ...(entry.planPath !== undefined ? { planPath: entry.planPath } : {}),
+          }
         }),
       }
     }),
@@ -103,7 +119,7 @@ export class PlanHandler extends Context.Tag("PlanHandler")<PlanHandler, PlanHan
     let index = 0
     return Layer.succeed(PlanHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "confirm"),
-      respond: () => Effect.void,
+      respond: () => Effect.succeed(undefined),
     })
   }
 }

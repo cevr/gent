@@ -48,7 +48,7 @@ export interface ModelRegistryService {
   readonly refresh: () => Effect.Effect<void>
 }
 
-export class ModelRegistry extends Context.Tag("ModelRegistry")<
+export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry/ModelRegistry")<
   ModelRegistry,
   ModelRegistryService
 >() {
@@ -72,7 +72,7 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
       // Load cache from disk
       const loadCache = Effect.gen(function* () {
         const exists = yield* fs.exists(cachePath)
-        if (!exists) return undefined
+        if (exists === false) return undefined
 
         const content = yield* fs.readFileString(cachePath)
         const cache = yield* Schema.decodeUnknown(CacheFileJson)(content)
@@ -83,7 +83,9 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
         }
         return undefined
       }).pipe(
-        Effect.flatMap((models) => (models ? Ref.set(modelsRef, models) : Effect.void)),
+        Effect.flatMap((models) =>
+          models !== undefined ? Ref.set(modelsRef, models) : Effect.void,
+        ),
         Effect.catchAll(() => Effect.void),
       )
 
@@ -122,7 +124,7 @@ export class ModelRegistry extends Context.Tag("ModelRegistry")<
         const models: Model[] = []
         for (const m of apiModels) {
           const providerId = PROVIDER_MAP[m.provider]
-          if (!providerId) continue
+          if (providerId === undefined) continue
 
           models.push(
             new Model({

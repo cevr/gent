@@ -1,6 +1,18 @@
 import { describe, test, expect } from "bun:test"
-import { Effect } from "effect"
-import { Skills, Skill, formatSkillsForPrompt, AuthStorage, calculateCost } from "@gent/core"
+import { Effect, Layer } from "effect"
+import {
+  Skills,
+  Skill,
+  formatSkillsForPrompt,
+  AuthStorage,
+  calculateCost,
+  EventStore,
+  AgentSwitched,
+} from "@gent/core"
+import { Storage } from "@gent/storage"
+import { Provider } from "@gent/providers"
+import { GentCore } from "@gent/server"
+import { AgentLoop, CheckpointService } from "@gent/runtime"
 
 describe("Skills System", () => {
   test("Skills.Test provides test skills", async () => {
@@ -114,5 +126,42 @@ describe("Cost Calculation", () => {
     const cost = calculateCost(usage, pricing)
     // (100000 / 1M) * 3 + (50000 / 1M) * 15 = 0.3 + 0.75 = 1.05
     expect(cost).toBeCloseTo(1.05, 6)
+  })
+})
+
+describe("Session State", () => {
+  test("getSessionState returns latest agent switch", async () => {
+    const testLayer = Layer.mergeAll(
+      Storage.Test(),
+      Provider.Test([]),
+      EventStore.Test(),
+      AgentLoop.Test(),
+      CheckpointService.Test(),
+      GentCore.Live,
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        const storage = yield* Storage
+        const session = yield* core.createSession({ name: "Test Session" })
+
+        yield* storage.appendEvent(
+          new AgentSwitched({
+            sessionId: session.sessionId,
+            branchId: session.branchId,
+            fromAgent: "default",
+            toAgent: "deep",
+          }),
+        )
+
+        return yield* core.getSessionState({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+        })
+      }).pipe(Effect.provide(testLayer)),
+    )
+
+    expect(result.agent).toBe("deep")
   })
 })

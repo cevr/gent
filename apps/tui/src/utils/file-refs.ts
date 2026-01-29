@@ -28,12 +28,12 @@ export function parseFileRefs(text: string): FileRef[] {
 
   while ((match = pattern.exec(text)) !== null) {
     const path = match[1]
-    if (!path) continue
+    if (path === undefined || path.length === 0) continue
 
     const ref: FileRef = { path }
-    if (match[2]) {
+    if (match[2] !== undefined) {
       ref.startLine = parseInt(match[2], 10)
-      if (match[3]) {
+      if (match[3] !== undefined) {
         ref.endLine = parseInt(match[3], 10)
       }
     }
@@ -108,7 +108,7 @@ export const expandFileRefs = (text: string, cwd: string) => {
 
     let result = text
     for (const exp of expanded) {
-      if (exp) {
+      if (exp !== null) {
         result = result.replace(exp.matchStr, exp.codeBlock)
       }
     }

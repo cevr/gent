@@ -75,6 +75,7 @@ interface SlashCommand {
 
 const SLASH_COMMANDS: SlashCommand[] = [
   { id: "model", label: "/model", description: "Switch model" },
+  { id: "agent", label: "/agent", description: "Switch agent" },
   { id: "clear", label: "/clear", description: "Clear messages" },
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },
   { id: "compact", label: "/compact", description: "Compact history" },
@@ -125,7 +126,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
           const tag = getFileTag(f.path)
           return {
             id: f.path,
-            label: tag ? `${tag} ${f.name}` : f.name,
+            label: tag.length > 0 ? `${tag} ${f.name}` : f.name,
             description: truncatePath(f.path, 40),
           }
         })
@@ -171,18 +172,18 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
     if (e.name === "return" || e.name === "tab") {
       const item = list[selectedIndex()]
-      if (item) {
+      if (item !== undefined) {
         props.onSelect(item.id)
       }
       return
     }
 
-    if (e.name === "up" || (e.ctrl && e.name === "p")) {
+    if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
       setSelectedIndex((i) => (i > 0 ? i - 1 : list.length - 1))
       return
     }
 
-    if (e.name === "down" || (e.ctrl && e.name === "n")) {
+    if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
       setSelectedIndex((i) => (i < list.length - 1 ? i + 1 : 0))
       return
     }
@@ -214,7 +215,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         <box paddingLeft={1} paddingRight={1} flexShrink={0}>
           <text style={{ fg: theme.textMuted }}>
             {title()}
-            <Show when={props.state.filter}>
+            <Show when={props.state.filter.length > 0}>
               <span style={{ fg: theme.text }}> › {props.state.filter}</span>
             </Show>
           </text>
@@ -239,7 +240,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
                   >
                     {item.label}
                   </text>
-                  <Show when={item.description}>
+                  <Show when={item.description !== undefined}>
                     <text
                       style={{
                         fg: isSelected() ? theme.selectedListItemText : theme.textMuted,

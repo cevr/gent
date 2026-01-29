@@ -22,7 +22,7 @@ const WorkspaceContext = createContext<WorkspaceContextValue>()
 
 export function useWorkspace(): WorkspaceContextValue {
   const ctx = useContext(WorkspaceContext)
-  if (!ctx) throw new Error("useWorkspace must be used within WorkspaceProvider")
+  if (ctx === undefined) throw new Error("useWorkspace must be used within WorkspaceProvider")
   return ctx
 }
 
@@ -49,12 +49,12 @@ const getGitInfo = (cwd: string) =>
     const root = yield* gitCommand(cwd, ["rev-parse", "--show-toplevel"]).pipe(
       Effect.catchAll(() => Effect.succeed("")),
     )
-    if (!root) return null
+    if (root.length === 0) return null
 
     const branch = yield* gitCommand(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
       Effect.catchAll(() => Effect.succeed("")),
     )
-    if (!branch) return null
+    if (branch.length === 0) return null
 
     const diffText = yield* gitCommand(cwd, ["diff", "--stat", "HEAD"]).pipe(
       Effect.catchAll(() => Effect.succeed("")),
@@ -72,16 +72,20 @@ const getGitInfo = (cwd: string) =>
     const addMatch = summaryLine.match(/(\d+) insertions?\(\+\)/)
     const delMatch = summaryLine.match(/(\d+) deletions?\(-\)/)
 
-    if (filesMatch?.[1]) files = parseInt(filesMatch[1], 10)
-    if (addMatch?.[1]) additions = parseInt(addMatch[1], 10)
-    if (delMatch?.[1]) deletions = parseInt(delMatch[1], 10)
+    const filesValue = filesMatch?.[1]
+    const addValue = addMatch?.[1]
+    const delValue = delMatch?.[1]
+
+    if (filesValue !== undefined) files = parseInt(filesValue, 10)
+    if (addValue !== undefined) additions = parseInt(addValue, 10)
+    if (delValue !== undefined) deletions = parseInt(delValue, 10)
 
     return { root, status: { branch, files, additions, deletions } }
   })
 
 function deriveProjectName(cwd: string, gitRoot: string | null): string {
   // Prefer git repo name
-  if (gitRoot) {
+  if (gitRoot !== null) {
     const parts = gitRoot.split("/")
     return parts[parts.length - 1] ?? gitRoot
   }
@@ -96,7 +100,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
   let currentFiber: Fiber.RuntimeFiber<GitInfo | null, never> | null = null
 
   const refreshGitInfo = () => {
-    if (currentFiber) {
+    if (currentFiber !== null) {
       Runtime.runFork(runtime)(Fiber.interruptFork(currentFiber))
     }
     currentFiber = Runtime.runFork(runtime)(
@@ -120,7 +124,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     }, 2000)
 
     onCleanup(() => {
-      if (currentFiber) {
+      if (currentFiber !== null) {
         Runtime.runFork(runtime)(Fiber.interruptFork(currentFiber))
       }
       clearInterval(interval)

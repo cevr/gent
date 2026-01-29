@@ -9,9 +9,16 @@ const toEventStoreError =
   (error: StorageError): EventStoreError =>
     new EventStoreError({ message, cause: error })
 
+const getEventSessionId = (event: EventEnvelope["event"]): string | undefined => {
+  if ("sessionId" in event) return event.sessionId as string
+  if ("parentSessionId" in event) return event.parentSessionId as string
+  return undefined
+}
+
 const matchesEventFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
-  if (env.event.sessionId !== sessionId) return false
-  if (!branchId) return true
+  const eventSessionId = getEventSessionId(env.event)
+  if (eventSessionId === undefined || eventSessionId !== sessionId) return false
+  if (branchId === undefined) return true
   const eventBranchId =
     "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
   return eventBranchId === branchId || eventBranchId === undefined

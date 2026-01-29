@@ -49,7 +49,7 @@ export function Home(props: HomeProps) {
   createEffect(() => {
     const prompt = pendingPrompt()
     const session = client.session()
-    if (!prompt || !session) return
+    if (prompt === null || session === null) return
     setPendingPrompt(null)
     router.navigateToSession(session.sessionId, session.branchId, prompt)
   })
@@ -75,15 +75,15 @@ export function Home(props: HomeProps) {
     }
 
     // Ctrl+C: always quit immediately
-    if (e.ctrl && e.name === "c") {
+    if (e.ctrl === true && e.name === "c") {
       exit()
       return
     }
 
-    // Shift+Tab: cycle agent mode
-    if (e.shift && e.name === "tab") {
-      const newMode = client.mode() === "build" ? "plan" : "build"
-      client.steer({ _tag: "SwitchMode", mode: newMode })
+    // Shift+Tab: toggle agent (default <-> deep)
+    if (e.shift === true && e.name === "tab") {
+      const nextAgent = client.agent() === "deep" ? "default" : "deep"
+      client.steer({ _tag: "SwitchAgent", agent: nextAgent })
       return
     }
   })
@@ -171,7 +171,7 @@ export function Home(props: HomeProps) {
       {/* Status Bar */}
       <StatusBar.Root>
         <StatusBar.Row>
-          <StatusBar.Mode />
+          <StatusBar.Agent />
           <StatusBar.Separator />
           <StatusBar.Model />
         </StatusBar.Row>

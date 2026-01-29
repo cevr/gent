@@ -73,12 +73,11 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(name !== undefined ? { name } : {}),
         }),
 
-      sendMessage: ({ sessionId, branchId, content, mode, model }) =>
+      sendMessage: ({ sessionId, branchId, content, model }) =>
         core.sendMessage({
           sessionId,
           branchId,
           content,
-          ...(mode !== undefined ? { mode } : {}),
           ...(model !== undefined ? { model } : {}),
         }),
 
@@ -101,7 +100,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       respondPermission: ({ requestId, decision, persist }) =>
         Effect.gen(function* () {
           const request = yield* permissionHandler.respond(requestId, decision)
-          if (persist && request) {
+          if (persist === true && request !== undefined) {
             const rule = new PermissionRule({
               tool: request.toolName,
               action: decision,
@@ -112,7 +111,17 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       respondPlan: ({ requestId, decision, reason }) =>
-        planHandler.respond(requestId, decision, reason),
+        Effect.gen(function* () {
+          const entry = yield* planHandler.respond(requestId, decision, reason)
+          if (decision !== "confirm" || entry?.planPath === undefined) return
+          yield* core.approvePlan({
+            sessionId: entry.sessionId,
+            branchId: entry.branchId,
+            planPath: entry.planPath,
+            requestId,
+            emitEvent: false,
+          })
+        }),
 
       compactBranch: ({ sessionId, branchId }) => core.compactBranch({ sessionId, branchId }),
 
@@ -136,7 +145,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
           const providers: AuthProviderInfo[] = KNOWN_PROVIDERS.map((provider) => {
             const envVar = PROVIDER_ENV_VARS[provider]
-            const hasEnv = envVar ? !!process.env[envVar] : false
+            const hasEnv =
+              envVar !== undefined && envVar !== "" ? process.env[envVar] !== undefined : false
             const hasStored = storedSet.has(provider)
 
             if (hasEnv) {

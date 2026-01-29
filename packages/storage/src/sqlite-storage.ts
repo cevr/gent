@@ -23,6 +23,11 @@ const decodeTodoItem = Schema.decodeUnknownSync(TodoItem)
 const EventJson = Schema.parseJson(AgentEvent)
 const decodeEvent = Schema.decodeUnknownSync(EventJson)
 const encodeEvent = Schema.encodeSync(EventJson)
+const getEventSessionId = (event: AgentEvent): string | undefined => {
+  if ("sessionId" in event) return event.sessionId as string
+  if ("parentSessionId" in event) return event.parentSessionId as string
+  return undefined
+}
 
 // Storage Error
 
@@ -82,6 +87,11 @@ export interface StorageService {
     branchId: string
     tags: ReadonlyArray<string>
   }) => Effect.Effect<string | undefined, StorageError>
+  readonly getLatestEvent: (params: {
+    sessionId: string
+    branchId: string
+    tags: ReadonlyArray<string>
+  }) => Effect.Effect<AgentEvent | undefined, StorageError>
 
   // Checkpoints
   readonly createCheckpoint: (checkpoint: Checkpoint) => Effect.Effect<Checkpoint, StorageError>
@@ -113,6 +123,8 @@ const makeStorage = (db: Database): StorageService => {
       name TEXT,
       cwd TEXT,
       bypass INTEGER,
+      parent_session_id TEXT,
+      parent_branch_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
@@ -127,6 +139,18 @@ const makeStorage = (db: Database): StorageService => {
   // Migration: add bypass column to existing sessions table
   try {
     db.run(`ALTER TABLE sessions ADD COLUMN bypass INTEGER`)
+  } catch {
+    // Column already exists - ignore
+  }
+  // Migration: add parent session column to existing sessions table
+  try {
+    db.run(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`)
+  } catch {
+    // Column already exists - ignore
+  }
+  // Migration: add parent branch column to existing sessions table
+  try {
+    db.run(`ALTER TABLE sessions ADD COLUMN parent_branch_id TEXT`)
   } catch {
     // Column already exists - ignore
   }
@@ -238,12 +262,14 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           db.run(
-            `INSERT INTO sessions (id, name, cwd, bypass, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO sessions (id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               session.id,
               session.name ?? null,
               session.cwd ?? null,
               session.bypass === undefined ? null : session.bypass ? 1 : 0,
+              session.parentSessionId ?? null,
+              session.parentBranchId ?? null,
               session.createdAt.getTime(),
               session.updatedAt.getTime(),
             ],
@@ -262,22 +288,26 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions WHERE id = ?`,
+              `SELECT id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ?`,
             )
             .get(id) as {
             id: string
             name: string | null
             cwd: string | null
             bypass?: number | null
+            parent_session_id: string | null
+            parent_branch_id: string | null
             created_at: number
             updated_at: number
           } | null
-          if (!row) return undefined
+          if (row === null) return undefined
           return new Session({
             id: row.id,
             name: row.name ?? undefined,
             cwd: row.cwd ?? undefined,
             bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
+            parentSessionId: row.parent_session_id ?? undefined,
+            parentBranchId: row.parent_branch_id ?? undefined,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
           })
@@ -294,22 +324,26 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const row = db
             .query(
-              `SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`,
+              `SELECT id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ? ORDER BY updated_at DESC LIMIT 1`,
             )
             .get(cwd) as {
             id: string
             name: string | null
             cwd: string | null
             bypass?: number | null
+            parent_session_id: string | null
+            parent_branch_id: string | null
             created_at: number
             updated_at: number
           } | null
-          if (!row) return undefined
+          if (row === null) return undefined
           return new Session({
             id: row.id,
             name: row.name ?? undefined,
             cwd: row.cwd ?? undefined,
             bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
+            parentSessionId: row.parent_session_id ?? undefined,
+            parentBranchId: row.parent_branch_id ?? undefined,
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
           })
@@ -326,13 +360,15 @@ const makeStorage = (db: Database): StorageService => {
         try: () => {
           const rows = db
             .query(
-              `SELECT id, name, cwd, bypass, created_at, updated_at FROM sessions ORDER BY updated_at DESC`,
+              `SELECT id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`,
             )
             .all() as Array<{
             id: string
             name: string | null
             cwd: string | null
             bypass?: number | null
+            parent_session_id: string | null
+            parent_branch_id: string | null
             created_at: number
             updated_at: number
           }>
@@ -343,6 +379,8 @@ const makeStorage = (db: Database): StorageService => {
                 name: row.name ?? undefined,
                 cwd: row.cwd ?? undefined,
                 bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
+                parentSessionId: row.parent_session_id ?? undefined,
+                parentBranchId: row.parent_branch_id ?? undefined,
                 createdAt: new Date(row.created_at),
                 updatedAt: new Date(row.updated_at),
               }),
@@ -428,7 +466,7 @@ const makeStorage = (db: Database): StorageService => {
             summary: string | null
             created_at: number
           } | null
-          if (!row) return undefined
+          if (row === null) return undefined
           return new Branch({
             id: row.id,
             sessionId: row.session_id,
@@ -571,7 +609,7 @@ const makeStorage = (db: Database): StorageService => {
             created_at: number
             turn_duration_ms: number | null
           } | null
-          if (!row) return undefined
+          if (row === null) return undefined
           const parts = decodeMessageParts(row.parts)
           return new Message({
             id: row.id,
@@ -632,11 +670,11 @@ const makeStorage = (db: Database): StorageService => {
     deleteMessages: (branchId, afterMessageId) =>
       Effect.try({
         try: () => {
-          if (afterMessageId) {
+          if (afterMessageId !== undefined) {
             const msg = db
               .query(`SELECT id, created_at FROM messages WHERE id = ?`)
               .get(afterMessageId) as { id: string; created_at: number } | null
-            if (msg) {
+            if (msg !== null) {
               db.run(
                 `DELETE FROM messages WHERE branch_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))`,
                 [branchId, msg.created_at, msg.created_at, msg.id],
@@ -669,12 +707,16 @@ const makeStorage = (db: Database): StorageService => {
     appendEvent: (event) =>
       Effect.try({
         try: () => {
+          const sessionId = getEventSessionId(event)
+          if (sessionId === undefined) {
+            throw new Error("Event missing sessionId")
+          }
           const branchId = "branchId" in event ? (event.branchId as string | undefined) : undefined
           const createdAt = Date.now()
           const eventJson = encodeEvent(event)
           db.run(
             `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
-            [event.sessionId, branchId ?? null, event._tag, eventJson, createdAt],
+            [sessionId, branchId ?? null, event._tag, eventJson, createdAt],
           )
           const row = db.query(`SELECT last_insert_rowid() as id`).get() as { id: number }
           return new EventEnvelope({
@@ -694,25 +736,26 @@ const makeStorage = (db: Database): StorageService => {
       Effect.try({
         try: () => {
           const sinceId = afterId ?? 0
-          const rows = branchId
-            ? (db
-                .query(
-                  `SELECT id, event_json, created_at FROM events WHERE session_id = ? AND (branch_id = ? OR branch_id IS NULL) AND id > ? ORDER BY id ASC`,
-                )
-                .all(sessionId, branchId, sinceId) as Array<{
-                id: number
-                event_json: string
-                created_at: number
-              }>)
-            : (db
-                .query(
-                  `SELECT id, event_json, created_at FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC`,
-                )
-                .all(sessionId, sinceId) as Array<{
-                id: number
-                event_json: string
-                created_at: number
-              }>)
+          const rows =
+            branchId !== undefined
+              ? (db
+                  .query(
+                    `SELECT id, event_json, created_at FROM events WHERE session_id = ? AND (branch_id = ? OR branch_id IS NULL) AND id > ? ORDER BY id ASC`,
+                  )
+                  .all(sessionId, branchId, sinceId) as Array<{
+                  id: number
+                  event_json: string
+                  created_at: number
+                }>)
+              : (db
+                  .query(
+                    `SELECT id, event_json, created_at FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC`,
+                  )
+                  .all(sessionId, sinceId) as Array<{
+                  id: number
+                  event_json: string
+                  created_at: number
+                }>)
           return rows.map((row) => {
             const event = decodeEvent(row.event_json)
             return new EventEnvelope({
@@ -732,15 +775,16 @@ const makeStorage = (db: Database): StorageService => {
     getLatestEventId: ({ sessionId, branchId }) =>
       Effect.try({
         try: () => {
-          const row = branchId
-            ? (db
-                .query(
-                  `SELECT id FROM events WHERE session_id = ? AND (branch_id = ? OR branch_id IS NULL) ORDER BY id DESC LIMIT 1`,
-                )
-                .get(sessionId, branchId) as { id: number } | null)
-            : (db
-                .query(`SELECT id FROM events WHERE session_id = ? ORDER BY id DESC LIMIT 1`)
-                .get(sessionId) as { id: number } | null)
+          const row =
+            branchId !== undefined
+              ? (db
+                  .query(
+                    `SELECT id FROM events WHERE session_id = ? AND (branch_id = ? OR branch_id IS NULL) ORDER BY id DESC LIMIT 1`,
+                  )
+                  .get(sessionId, branchId) as { id: number } | null)
+              : (db
+                  .query(`SELECT id FROM events WHERE session_id = ? ORDER BY id DESC LIMIT 1`)
+                  .get(sessionId) as { id: number } | null)
           return row?.id
         },
         catch: (e) =>
@@ -765,6 +809,26 @@ const makeStorage = (db: Database): StorageService => {
         catch: (e) =>
           new StorageError({
             message: "Failed to get latest event tag",
+            cause: e,
+          }),
+      }),
+
+    getLatestEvent: ({ sessionId, branchId, tags }) =>
+      Effect.try({
+        try: () => {
+          if (tags.length === 0) return undefined
+          const placeholders = tags.map(() => "?").join(", ")
+          const row = db
+            .query(
+              `SELECT event_json FROM events WHERE session_id = ? AND branch_id = ? AND event_tag IN (${placeholders}) ORDER BY id DESC LIMIT 1`,
+            )
+            .get(sessionId, branchId, ...tags) as { event_json: string } | null
+          if (row === null) return undefined
+          return decodeEvent(row.event_json)
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to get latest event",
             cause: e,
           }),
       }),
@@ -828,7 +892,7 @@ const makeStorage = (db: Database): StorageService => {
             token_count: number
             created_at: number
           } | null
-          if (!row) return undefined
+          if (row === null) return undefined
           if (row._tag === "CompactionCheckpoint") {
             if (row.summary === null || row.first_kept_message_id === null) {
               throw new Error("Corrupt CompactionCheckpoint: missing summary or firstKeptMessageId")
@@ -870,7 +934,7 @@ const makeStorage = (db: Database): StorageService => {
           const afterMsg = db
             .query(`SELECT id, created_at FROM messages WHERE id = ?`)
             .get(afterMessageId) as { id: string; created_at: number } | null
-          if (!afterMsg) return []
+          if (afterMsg === null) return []
 
           const rows = db
             .query(
@@ -1018,7 +1082,10 @@ const makeStorage = (db: Database): StorageService => {
   }
 }
 
-export class Storage extends Context.Tag("Storage")<Storage, StorageService>() {
+export class Storage extends Context.Tag("@gent/storage/src/sqlite-storage/Storage")<
+  Storage,
+  StorageService
+>() {
   static Live = (
     dbPath: string,
   ): Layer.Layer<Storage, PlatformError, FileSystem.FileSystem | Path.Path> =>

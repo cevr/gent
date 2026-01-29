@@ -39,7 +39,7 @@ export interface QuestionHandlerService {
   ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>, EventStoreError>
 }
 
-export class QuestionHandler extends Context.Tag("QuestionHandler")<
+export class QuestionHandler extends Context.Tag("@gent/tools/src/question/QuestionHandler")<
   QuestionHandler,
   QuestionHandlerService
 >() {

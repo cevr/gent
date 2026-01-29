@@ -81,7 +81,7 @@ export function BranchTree(props: BranchTreeProps) {
 
     if (e.name === "return") {
       const item = list[selectedIndex()]
-      if (item) {
+      if (item !== undefined) {
         props.onSelect(item.id)
       }
       return
@@ -106,7 +106,10 @@ export function BranchTree(props: BranchTreeProps) {
   const formatLine = (item: FlatNode, width: number) => {
     const indent = "  ".repeat(item.depth)
     const active = item.isActive ? " <- active" : ""
-    const summary = item.summary ? ` - ${item.summary.replace(/\s+/g, " ")}` : ""
+    const summary =
+      item.summary !== undefined && item.summary.length > 0
+        ? ` - ${item.summary.replace(/\s+/g, " ")}`
+        : ""
     return truncate(`${indent}${item.label}${active}${summary}`, width)
   }
 

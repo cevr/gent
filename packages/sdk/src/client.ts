@@ -5,7 +5,7 @@ import type { RpcGroup } from "@effect/rpc"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "@effect/platform"
 import { GentRpcs, RpcHandlersLive, type GentRpcsClient, type GentRpcError } from "@gent/server"
 import type {
-  AgentMode,
+  AgentName,
   EventEnvelope,
   MessagePart,
   TextPart,
@@ -72,7 +72,7 @@ function summarizeOutput(output: { type: "json" | "error-json"; value: unknown }
     // Limit to 100 characters to prevent UI overflow
     return firstLine.length > 100 ? firstLine.slice(0, 100) + "..." : firstLine
   }
-  if (value && typeof value === "object") {
+  if (value !== null && typeof value === "object") {
     const str = JSON.stringify(value)
     return str.length > 100 ? str.slice(0, 100) + "..." : str
   }
@@ -129,7 +129,7 @@ export function extractToolCallsWithResults(
       return {
         id: tc.toolCallId,
         toolName: tc.toolName,
-        status: result?.isError ? ("error" as const) : ("completed" as const),
+        status: result?.isError === true ? ("error" as const) : ("completed" as const),
         input: tc.input,
         summary: result?.summary,
         output: result?.output,
@@ -155,7 +155,7 @@ export type SteerCommand =
   | { _tag: "Interrupt" }
   | { _tag: "Interject"; message: string }
   | { _tag: "SwitchModel"; model: string }
-  | { _tag: "SwitchMode"; mode: "build" | "plan" }
+  | { _tag: "SwitchAgent"; agent: AgentName }
 
 // Session info (minimal for client)
 export interface SessionInfo {
@@ -164,6 +164,8 @@ export interface SessionInfo {
   cwd?: string
   bypass?: boolean
   branchId?: string
+  parentSessionId?: string
+  parentBranchId?: string
   createdAt: number
   updatedAt: number
 }
@@ -195,7 +197,7 @@ export interface SessionState {
   messages: readonly MessageInfoReadonly[]
   lastEventId: number | null
   isStreaming: boolean
-  mode: AgentMode
+  agent: AgentName
   model?: string
   bypass?: boolean
 }
@@ -217,7 +219,6 @@ export interface GentClient {
     sessionId: string
     branchId: string
     content: string
-    mode?: AgentMode
     model?: string
   }) => Effect.Effect<void, GentRpcError>
 
@@ -491,12 +492,14 @@ export type RpcHandlersContext = Layer.Layer.Context<typeof RpcHandlersLive>
 export const makeInProcessRpcClient = <E, R>(
   handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
 ): Effect.Effect<GentRpcClient, E, R> =>
-  RpcTest.makeClient(GentRpcs).pipe(
-    Effect.provide(Layer.provide(RpcHandlersLive, handlersLayer)),
-    Effect.scoped,
-    // RpcTest.makeClient types include RpcClientError, but in-process testing
-    // eliminates that possibility. Cast to the expected type.
-    Effect.map((client) => client as unknown as GentRpcClient),
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
+      const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
+      // RpcTest.makeClient types include RpcClientError, but in-process testing
+      // eliminates that possibility. Cast to the expected type.
+      return client as unknown as GentRpcClient
+    }),
   )
 
 /**
@@ -529,14 +532,15 @@ export interface HttpTransportConfig {
  */
 export const HttpTransport = (config: HttpTransportConfig): Layer.Layer<RpcClient.Protocol> => {
   const headers = config.headers
-  const clientLayer = headers
-    ? Layer.effect(
-        HttpClient.HttpClient,
-        Effect.map(HttpClient.HttpClient, (client) =>
-          client.pipe(HttpClient.mapRequest(HttpClientRequest.setHeaders(headers))),
-        ),
-      ).pipe(Layer.provide(FetchHttpClient.layer))
-    : FetchHttpClient.layer
+  const clientLayer =
+    headers !== undefined
+      ? Layer.effect(
+          HttpClient.HttpClient,
+          Effect.map(HttpClient.HttpClient, (client) =>
+            client.pipe(HttpClient.mapRequest(HttpClientRequest.setHeaders(headers))),
+          ),
+        ).pipe(Layer.provide(FetchHttpClient.layer))
+      : FetchHttpClient.layer
 
   return RpcClient.layerProtocolHttp({ url: config.url }).pipe(
     Layer.provide(RpcSerialization.layerNdjson),

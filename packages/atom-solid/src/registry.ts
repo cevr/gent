@@ -46,7 +46,7 @@ class RegistryImpl implements Registry {
       return undefined
     })
 
-    if (!owner) {
+    if (owner === null) {
       throw new Error("Registry root owner not created")
     }
 
@@ -72,7 +72,7 @@ class RegistryImpl implements Registry {
 
   refresh<A>(atom: Atom<A>): void {
     const instance = this.instances.get(atom as Atom<unknown>)
-    if (instance) {
+    if (instance !== undefined) {
       this.touch(atom as Atom<unknown>, instance)
     }
     instance?.refresh?.()
@@ -106,12 +106,12 @@ class RegistryImpl implements Registry {
 
   private ensure<A>(atom: Atom<A>): AtomInstance<A> {
     const existing = this.instances.get(atom as Atom<unknown>)
-    if (existing) {
+    if (existing !== undefined) {
       this.touch(atom as Atom<unknown>, existing)
       return existing as AtomInstance<A>
     }
     const created = runWithOwner(this.owner, () => atom.build(this))
-    if (!created) {
+    if (created === undefined) {
       throw new Error("Atom build returned no instance")
     }
     this.instances.set(atom as Atom<unknown>, created as AtomInstance<unknown>)
@@ -122,16 +122,17 @@ class RegistryImpl implements Registry {
   private touch(atom: Atom<unknown>, instance?: AtomInstance<unknown>): void {
     if (!this.shouldEvict) return
     const value = instance ?? this.instances.get(atom)
-    if (!value) return
+    if (value === undefined) return
     this.instances.delete(atom)
     this.instances.set(atom, value)
   }
 
   private evictIfNeeded(): void {
-    if (!this.shouldEvict || !this.maxEntries) return
-    while (this.instances.size > this.maxEntries) {
+    if (!this.shouldEvict) return
+    const maxEntries = this.maxEntries ?? 0
+    while (this.instances.size > maxEntries) {
       const evictable = this.findEvictable()
-      if (!evictable) return
+      if (evictable === null) return
       this.instances.delete(evictable.atom)
       this.refCounts.delete(evictable.atom)
       evictable.instance.dispose?.()

@@ -35,7 +35,7 @@ const writeLine = (line: string) => {
 export const tuiLog = (msg: string) => writeLine(`${timestamp()} [tui] ${msg}`)
 
 export const tuiEvent = (tag: string, data?: Record<string, unknown>) =>
-  tuiLog(`${tag}${data ? " " + JSON.stringify(data) : ""}`)
+  tuiLog(`${tag}${data !== undefined ? " " + JSON.stringify(data) : ""}`)
 
 export const tuiError = (tag: string, err: unknown) =>
   tuiLog(`! ${tag} - ${err instanceof Error ? err.message : String(err)}`)
@@ -101,7 +101,11 @@ class UnifiedSpan implements Tracer.Span {
   private log(event: string, message: string, extra?: string) {
     const indent = "  ".repeat(this.depth)
     const icon = event === "START" ? ">" : event === "END" ? "<" : event === "ERROR" ? "!" : "."
-    writeLine(`${timestamp()} [effect] ${indent}${icon} ${message}${extra ? ` ${extra}` : ""}`)
+    writeLine(
+      `${timestamp()} [effect] ${indent}${icon} ${message}${
+        extra !== undefined && extra.length > 0 ? ` ${extra}` : ""
+      }`,
+    )
   }
 
   end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {

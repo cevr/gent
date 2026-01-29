@@ -21,7 +21,7 @@ export interface SkillsService {
 
 // Skills Service Tag
 
-export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
+export class Skills extends Context.Tag("@gent/core/src/skills")<Skills, SkillsService>() {
   static Live = (options: {
     cwd: string
     globalDir: string
@@ -52,7 +52,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
               if (stat.type === "File" && entry.endsWith(".md")) {
                 const content = yield* fs.readFileString(filePath)
                 const parsed = parseSkillFile(content, entry)
-                if (parsed && !options.ignored?.includes(parsed.name)) {
+                if (parsed !== null && options.ignored?.includes(parsed.name) !== true) {
                   result.push(
                     new Skill({
                       ...parsed,
@@ -67,7 +67,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
                 if (skillExists) {
                   const content = yield* fs.readFileString(skillPath)
                   const parsed = parseSkillFile(content, entry)
-                  if (parsed && !options.ignored?.includes(parsed.name)) {
+                  if (parsed !== null && options.ignored?.includes(parsed.name) !== true) {
                     result.push(
                       new Skill({
                         ...parsed,
@@ -90,7 +90,7 @@ export class Skills extends Context.Tag("Skills")<Skills, SkillsService>() {
           ]
 
           // Add Claude Code skills dir if provided
-          if (options.claudeSkillsDir) {
+          if (options.claudeSkillsDir !== undefined) {
             dirs.push(options.claudeSkillsDir)
           }
 
@@ -162,7 +162,7 @@ function parseSkillFile(
 
       const nameValue = nameMatch?.[1]
       const descValue = descMatch?.[1]
-      if (nameValue && descValue) {
+      if (nameValue !== undefined && descValue !== undefined) {
         return {
           name: nameValue.trim(),
           description: descValue.trim(),

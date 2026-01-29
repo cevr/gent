@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import { Storage } from "@gent/storage"
-import { Session, Branch, Message, TextPart, TodoItem } from "@gent/core"
+import { Session, Branch, Message, TextPart, TodoItem, AgentSwitched } from "@gent/core"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
   Effect.runPromise(Effect.provide(effect, Storage.Test()))
@@ -93,6 +93,58 @@ describe("Storage", () => {
           const retrieved = yield* storage.getSession("delete-test")
 
           expect(retrieved).toBeUndefined()
+        }),
+      )
+    })
+  })
+
+  describe("Events", () => {
+    test("getLatestEvent returns latest event by tag", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const session = new Session({
+            id: "event-session",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          const branch = new Branch({
+            id: "event-branch",
+            sessionId: "event-session",
+            createdAt: new Date(),
+          })
+
+          yield* storage.createSession(session)
+          yield* storage.createBranch(branch)
+
+          yield* storage.appendEvent(
+            new AgentSwitched({
+              sessionId: session.id,
+              branchId: branch.id,
+              fromAgent: "default",
+              toAgent: "deep",
+            }),
+          )
+
+          yield* storage.appendEvent(
+            new AgentSwitched({
+              sessionId: session.id,
+              branchId: branch.id,
+              fromAgent: "deep",
+              toAgent: "default",
+            }),
+          )
+
+          const latest = yield* storage.getLatestEvent({
+            sessionId: session.id,
+            branchId: branch.id,
+            tags: ["AgentSwitched"],
+          })
+
+          expect(latest?._tag).toBe("AgentSwitched")
+          if (latest && latest._tag === "AgentSwitched") {
+            expect(latest.toAgent).toBe("default")
+          }
         }),
       )
     })

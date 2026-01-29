@@ -36,7 +36,7 @@ const REFRESH_INTERVAL = 30_000
 const loadCache = (): Effect.Effect<Skill[] | null> =>
   Effect.tryPromise(() => readFile(CACHE_PATH, "utf-8")).pipe(
     Effect.map((content) => {
-      if (!content) return null
+      if (content.length === 0) return null
       try {
         const cache = JSON.parse(content) as SkillCache
         return cache.skills
@@ -107,7 +107,7 @@ export function useSkills(): UseSkillsReturn {
         })
 
         const cached = yield* loadCache()
-        if (cached) {
+        if (cached !== null) {
           yield* Effect.sync(() => {
             setState({ skills: cached, isRefreshing: true })
           })
@@ -128,7 +128,7 @@ export function useSkills(): UseSkillsReturn {
     }
 
     const cleanupRefresh = () => {
-      if (!cancelRefresh) return
+      if (cancelRefresh === undefined) return
       cancelRefresh()
       cancelRefresh = undefined
     }

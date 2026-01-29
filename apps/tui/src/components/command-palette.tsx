@@ -3,6 +3,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import type { ModelId } from "@gent/core"
+import { Agents } from "@gent/core"
 import { useCommand } from "../command/index"
 import { useTheme } from "../theme/index"
 import { useClient } from "../client/index"
@@ -74,6 +75,11 @@ export function CommandPalette() {
         onSelect: () => pushLevel(themeMenu()),
       },
       {
+        id: "agent",
+        title: "Agent",
+        onSelect: () => pushLevel(agentMenu()),
+      },
+      {
         id: "model",
         title: "Model",
         onSelect: () => pushLevel(providerMenu()),
@@ -86,6 +92,70 @@ export function CommandPalette() {
     const currentSession = client.session()
     const sessionList = sessions()
 
+    type SessionNode = {
+      session: SessionInfo
+      children: SessionNode[]
+    }
+
+    const buildSessionTree = (list: SessionInfo[]): SessionNode[] => {
+      const nodes = new Map<string, SessionNode>()
+      for (const session of list) {
+        nodes.set(session.id, { session, children: [] })
+      }
+
+      const roots: SessionNode[] = []
+      for (const session of list) {
+        const node = nodes.get(session.id)
+        if (node === undefined) continue
+        if (session.parentSessionId !== undefined && nodes.has(session.parentSessionId)) {
+          nodes.get(session.parentSessionId)?.children.push(node)
+        } else {
+          roots.push(node)
+        }
+      }
+
+      const sortNodes = (list: SessionNode[]) => {
+        list.sort((a, b) => b.session.updatedAt - a.session.updatedAt)
+        for (const node of list) {
+          if (node.children.length > 0) sortNodes(node.children)
+        }
+      }
+      sortNodes(roots)
+
+      return roots
+    }
+
+    const flattenSessionTree = (nodes: SessionNode[], depth = 0): MenuItem[] => {
+      const items: MenuItem[] = []
+      const prefix = depth > 0 ? `${"  ".repeat(depth)}- ` : ""
+
+      for (const node of nodes) {
+        const session = node.session
+        const isActive = currentSession?.sessionId === session.id
+        const title = isActive
+          ? `${prefix}${session.name ?? "Unnamed"} •`
+          : `${prefix}${session.name ?? "Unnamed"}`
+
+        items.push({
+          id: `session.${session.id}`,
+          title,
+          onSelect: () => {
+            if (session.branchId !== undefined) {
+              client.switchSession(session.id, session.branchId, session.name ?? "Unnamed")
+              router.navigateToSession(session.id, session.branchId)
+            }
+            command.closePalette()
+          },
+        })
+
+        if (node.children.length > 0) {
+          items.push(...flattenSessionTree(node.children, depth + 1))
+        }
+      }
+
+      return items
+    }
+
     const items: MenuItem[] = [
       {
         id: "session.new",
@@ -96,20 +166,7 @@ export function CommandPalette() {
           command.closePalette()
         },
       },
-      ...sessionList.map((s) => {
-        const isActive = currentSession?.sessionId === s.id
-        return {
-          id: `session.${s.id}`,
-          title: isActive ? `${s.name ?? "Unnamed"} •` : (s.name ?? "Unnamed"),
-          onSelect: () => {
-            if (s.branchId) {
-              client.switchSession(s.id, s.branchId, s.name ?? "Unnamed")
-              router.navigateToSession(s.id, s.branchId)
-            }
-            command.closePalette()
-          },
-        }
-      }),
+      ...flattenSessionTree(buildSessionTree(sessionList)),
     ]
 
     return {
@@ -155,6 +212,24 @@ export function CommandPalette() {
     }
   }
 
+  // Agent submenu - primary agents only
+  const agentMenu = (): MenuLevel => {
+    const current = client.agent()
+    const agents = Object.values(Agents).filter((a) => a.kind === "primary" && a.hidden !== true)
+
+    return {
+      title: "Agent",
+      items: agents.map((agent) => ({
+        id: `agent.${agent.name}`,
+        title: agent.name === current ? `${agent.name} •` : agent.name,
+        onSelect: () => {
+          client.steer({ _tag: "SwitchAgent", agent: agent.name })
+          command.closePalette()
+        },
+      })),
+    }
+  }
+
   // Provider submenu - lists providers with models, or direct model list when searching
   const providerMenu = (): MenuLevel => ({
     title: "Model",
@@ -162,7 +237,7 @@ export function CommandPalette() {
       const query = searchQuery().toLowerCase().trim()
 
       // If searching, show flat model list filtered by query
-      if (query) {
+      if (query.length > 0) {
         const allModels = showAllModels() ? State.models() : State.currentGenModels()
         const filtered = allModels.filter(
           (m) =>
@@ -285,7 +360,7 @@ export function CommandPalette() {
   const handleSelect = () => {
     const items = currentItems()
     const item = items[selectedIndex()]
-    if (item) {
+    if (item !== undefined) {
       item.onSelect()
     }
   }
@@ -305,7 +380,7 @@ export function CommandPalette() {
 
     if (e.name === "escape") {
       // Clear search first, then pop level
-      if (searchQuery()) {
+      if (searchQuery().length > 0) {
         setSearchQuery("")
         setSelectedIndex(0)
         return
@@ -321,7 +396,7 @@ export function CommandPalette() {
 
     if (e.name === "backspace") {
       // Handle search query backspace
-      if (level.searchable && searchQuery()) {
+      if (level.searchable === true && searchQuery().length > 0) {
         setSearchQuery((q) => q.slice(0, -1))
         setSelectedIndex(0)
         return
@@ -339,18 +414,18 @@ export function CommandPalette() {
     }
 
     const items = levelItems(level)
-    if (e.name === "up" || (e.ctrl && e.name === "p")) {
+    if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
       setSelectedIndex((i) => (i > 0 ? i - 1 : items.length - 1))
       return
     }
 
-    if (e.name === "down" || (e.ctrl && e.name === "n")) {
+    if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
       setSelectedIndex((i) => (i < items.length - 1 ? i + 1 : 0))
       return
     }
 
     // Handle search input for searchable levels
-    if (level.searchable && e.sequence && e.sequence.length === 1) {
+    if (level.searchable === true && e.sequence !== undefined && e.sequence.length === 1) {
       const char = e.sequence
       // Only accept printable characters
       if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
@@ -407,10 +482,13 @@ export function CommandPalette() {
         {/* Header with search */}
         <box paddingLeft={1} paddingRight={1} flexShrink={0}>
           <text style={{ fg: theme.text }}>
-            <Show when={breadcrumb()}>
+            <Show when={breadcrumb().length > 0}>
               <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
             </Show>
-            <Show when={currentLevel().searchable && searchQuery()} fallback={currentLevel().title}>
+            <Show
+              when={currentLevel().searchable === true && searchQuery().length > 0}
+              fallback={currentLevel().title}
+            >
               <span style={{ fg: theme.textMuted }}>Search: </span>
               {searchQuery()}
               <span style={{ fg: theme.primary }}>│</span>

@@ -29,7 +29,7 @@ function UserMessage(props: {
   const isInterjection = () => props.kind === "interjection"
   const background = () => (isInterjection() ? theme.backgroundPanel : theme.backgroundElement)
   const textColor = () => (isInterjection() ? theme.warning : theme.text)
-  const hasContent = () => props.content || props.images.length > 0
+  const hasContent = () => props.content.length > 0 || props.images.length > 0
 
   return (
     <Show when={hasContent()}>
@@ -47,7 +47,7 @@ function UserMessage(props: {
             )}
           </For>
         </Show>
-        <Show when={props.content}>
+        <Show when={props.content.length > 0}>
           <text style={{ fg: textColor() }}>
             {isInterjection() ? "[!] " : ""}
             {props.content}
@@ -66,12 +66,22 @@ function AssistantMessage(props: {
 }) {
   const { theme } = useTheme()
   const hasContent = () =>
-    props.content || props.images.length > 0 || (props.toolCalls && props.toolCalls.length > 0)
+    props.content.length > 0 ||
+    props.images.length > 0 ||
+    (props.toolCalls !== undefined && props.toolCalls.length > 0)
 
   return (
     <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
       <Show when={props.images.length > 0}>
-        <box flexDirection="column" marginBottom={props.content || props.toolCalls?.length ? 1 : 0}>
+        <box
+          flexDirection="column"
+          marginBottom={
+            props.content.length > 0 ||
+            (props.toolCalls !== undefined && props.toolCalls.length > 0)
+              ? 1
+              : 0
+          }
+        >
           <For each={props.images}>
             {(img) => (
               <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
@@ -79,14 +89,14 @@ function AssistantMessage(props: {
           </For>
         </box>
       </Show>
-      <Show when={props.toolCalls && props.toolCalls.length > 0}>
-        <box flexDirection="column" marginBottom={props.content ? 1 : 0}>
+      <Show when={props.toolCalls !== undefined && props.toolCalls.length > 0}>
+        <box flexDirection="column" marginBottom={props.content.length > 0 ? 1 : 0}>
           <For each={props.toolCalls}>
             {(tc) => <SingleToolCall toolCall={tc} expanded={props.expanded} />}
           </For>
         </box>
       </Show>
-      <Show when={props.content}>
+      <Show when={props.content.length > 0}>
         <text style={{ fg: theme.text }}>{props.content}</text>
       </Show>
     </box>
@@ -135,7 +145,7 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
       <text>
         <span style={{ fg: statusColor() }}>[{statusIcon()}]</span>
         <span style={{ fg: theme.info }}> {props.toolCall.toolName}</span>
-        <Show when={inputSummary()}>
+        <Show when={inputSummary().length > 0}>
           <span style={{ fg: theme.textMuted }}>({inputSummary()})</span>
         </Show>
       </text>

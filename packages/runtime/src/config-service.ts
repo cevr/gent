@@ -1,12 +1,14 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
-import { ModelId, ProviderId, PermissionRule, CustomProviderConfig } from "@gent/core"
+import { AgentName, ModelId, ProviderId, PermissionRule, CustomProviderConfig } from "@gent/core"
 
 // User config schema - stored at ~/.gent/config.json
 
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   model: Schema.optional(ModelId),
   provider: Schema.optional(ProviderId),
+  agent: Schema.optional(AgentName),
+  subprocessBinaryPath: Schema.optional(Schema.String),
   permissions: Schema.optional(Schema.Array(PermissionRule)),
   /** Custom provider configurations keyed by provider name */
   providers: Schema.optional(Schema.Record({ key: Schema.String, value: CustomProviderConfig })),
@@ -26,6 +28,10 @@ export interface ConfigServiceService {
   readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
   readonly getModel: () => Effect.Effect<ModelId | undefined>
   readonly setModel: (modelId: ModelId) => Effect.Effect<void>
+  readonly getAgent: () => Effect.Effect<AgentName | undefined>
+  readonly setAgent: (agent: AgentName) => Effect.Effect<void>
+  readonly getSubprocessBinaryPath: () => Effect.Effect<string | undefined>
+  readonly setSubprocessBinaryPath: (path: string) => Effect.Effect<void>
   readonly getPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
   readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
   readonly removePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void>
@@ -34,7 +40,7 @@ export interface ConfigServiceService {
   >
 }
 
-export class ConfigService extends Context.Tag("ConfigService")<
+export class ConfigService extends Context.Tag("@gent/runtime/src/config-service/ConfigService")<
   ConfigService,
   ConfigServiceService
 >() {
@@ -73,6 +79,8 @@ export class ConfigService extends Context.Tag("ConfigService")<
         return new UserConfig({
           model: project.model ?? user.model,
           provider: project.provider ?? user.provider,
+          agent: project.agent ?? user.agent,
+          subprocessBinaryPath: project.subprocessBinaryPath ?? user.subprocessBinaryPath,
           permissions: permissions.length > 0 ? permissions : undefined,
           providers: Object.keys(mergedProviders).length > 0 ? mergedProviders : undefined,
         })
@@ -142,6 +150,8 @@ export class ConfigService extends Context.Tag("ConfigService")<
             const updated = new UserConfig({
               model: partial.model ?? current.model,
               provider: partial.provider ?? current.provider,
+              agent: partial.agent ?? current.agent,
+              subprocessBinaryPath: partial.subprocessBinaryPath ?? current.subprocessBinaryPath,
               permissions: partial.permissions ?? current.permissions,
               providers: partial.providers ?? current.providers,
             })
@@ -163,6 +173,15 @@ export class ConfigService extends Context.Tag("ConfigService")<
             })
           }),
 
+        getAgent: () => service.get().pipe(Effect.map((c) => c.agent)),
+
+        setAgent: (agent) => service.set({ agent }),
+
+        getSubprocessBinaryPath: () =>
+          service.get().pipe(Effect.map((c) => c.subprocessBinaryPath)),
+
+        setSubprocessBinaryPath: (pathValue) => service.set({ subprocessBinaryPath: pathValue }),
+
         getPermissionRules: () =>
           Effect.gen(function* () {
             const user = yield* Ref.get(userConfigRef)
@@ -177,6 +196,8 @@ export class ConfigService extends Context.Tag("ConfigService")<
             const updated = new UserConfig({
               model: current.model,
               provider: current.provider,
+              agent: current.agent,
+              subprocessBinaryPath: current.subprocessBinaryPath,
               permissions,
               providers: current.providers,
             })
@@ -193,6 +214,8 @@ export class ConfigService extends Context.Tag("ConfigService")<
             const updated = new UserConfig({
               model: current.model,
               provider: current.provider,
+              agent: current.agent,
+              subprocessBinaryPath: current.subprocessBinaryPath,
               permissions: permissions.length > 0 ? permissions : undefined,
               providers: current.providers,
             })
@@ -225,6 +248,8 @@ export class ConfigService extends Context.Tag("ConfigService")<
       return new UserConfig({
         model: project.model ?? user.model,
         provider: project.provider ?? user.provider,
+        agent: project.agent ?? user.agent,
+        subprocessBinaryPath: project.subprocessBinaryPath ?? user.subprocessBinaryPath,
         permissions: permissions.length > 0 ? permissions : undefined,
         providers: Object.keys(mergedProviders).length > 0 ? mergedProviders : undefined,
       })
@@ -244,6 +269,8 @@ export class ConfigService extends Context.Tag("ConfigService")<
             new UserConfig({
               model: partial.model ?? current.model,
               provider: partial.provider ?? current.provider,
+              agent: partial.agent ?? current.agent,
+              subprocessBinaryPath: partial.subprocessBinaryPath ?? current.subprocessBinaryPath,
               permissions: partial.permissions ?? current.permissions,
               providers: partial.providers ?? current.providers,
             }),
@@ -262,6 +289,27 @@ export class ConfigService extends Context.Tag("ConfigService")<
           () => new UserConfig({ model: modelId, provider: providerId }),
         )
       },
+      getAgent: () =>
+        Effect.gen(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return mergeConfigs(user, project).agent
+        }),
+      setAgent: (agent) =>
+        Ref.update(userConfigRef, (current) => new UserConfig({ ...current, agent })).pipe(
+          Effect.asVoid,
+        ),
+      getSubprocessBinaryPath: () =>
+        Effect.gen(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return mergeConfigs(user, project).subprocessBinaryPath
+        }),
+      setSubprocessBinaryPath: (pathValue) =>
+        Ref.update(
+          userConfigRef,
+          (current) => new UserConfig({ ...current, subprocessBinaryPath: pathValue }),
+        ).pipe(Effect.asVoid),
       getPermissionRules: () =>
         Effect.gen(function* () {
           const user = yield* Ref.get(userConfigRef)

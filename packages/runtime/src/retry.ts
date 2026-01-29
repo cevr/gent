@@ -31,7 +31,7 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
 // Check if error is retryable
 
 export const isRetryable = (error: unknown): boolean => {
-  if (!(error instanceof ProviderError)) return false
+  if (!Schema.is(ProviderError)(error)) return false
 
   const message = error.message.toLowerCase()
   const cause = error.cause
@@ -57,7 +57,7 @@ export const isRetryable = (error: unknown): boolean => {
   if (message.includes("gateway timeout")) return true
 
   // Check cause for status codes
-  if (cause && typeof cause === "object" && "status" in cause) {
+  if (cause !== null && typeof cause === "object" && "status" in cause) {
     const status = (cause as { status: number }).status
     if (status === 429 || status === 529 || (status >= 500 && status < 600)) {
       return true
@@ -70,15 +70,15 @@ export const isRetryable = (error: unknown): boolean => {
 // Extract retry-after from error/headers
 
 export const getRetryAfter = (error: unknown): number | undefined => {
-  if (!error || typeof error !== "object") return undefined
+  if (error === null || typeof error !== "object") return undefined
 
   // Check cause for headers
   const cause = (error as { cause?: unknown }).cause
-  if (cause && typeof cause === "object" && "headers" in cause) {
+  if (cause !== null && typeof cause === "object" && "headers" in cause) {
     const headers = (cause as { headers: unknown }).headers
     if (headers instanceof Headers) {
       const retryAfter = headers.get("retry-after")
-      if (retryAfter) {
+      if (retryAfter !== null && retryAfter !== "") {
         // Could be seconds or HTTP date
         const seconds = parseInt(retryAfter, 10)
         if (!isNaN(seconds)) return seconds * 1000

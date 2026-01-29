@@ -7,8 +7,14 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { Effect, Stream, Runtime } from "effect"
-import { calculateCost, type AgentEvent, type AgentMode, type EventEnvelope } from "@gent/core"
+import { Effect, Stream, Runtime, Schema } from "effect"
+import {
+  AgentName as AgentNameSchema,
+  calculateCost,
+  type AgentEvent,
+  type AgentName,
+  type EventEnvelope,
+} from "@gent/core"
 import type { GentRpcError } from "@gent/server"
 import { tuiLog, tuiEvent, tuiError, clearUnifiedLog } from "../utils/unified-tracer"
 import { formatError } from "../utils/format-error"
@@ -63,7 +69,7 @@ export const AgentStatus = {
 } as const
 
 export interface AgentState {
-  mode: AgentMode
+  agent: AgentName
   status: AgentStatus
   cost: number
   model: string | undefined
@@ -84,7 +90,7 @@ export interface ClientContextValue {
   isLoading: () => boolean
 
   // Agent state (derived from events)
-  mode: () => AgentMode
+  agent: () => AgentName
   agentStatus: () => AgentStatus
   cost: () => number
   model: () => string | undefined
@@ -97,7 +103,7 @@ export interface ClientContextValue {
   setError: (error: string | null) => void
 
   // Session actions (fire-and-forget, update state internally)
-  sendMessage: (content: string, mode?: "plan" | "build", model?: string) => void
+  sendMessage: (content: string, model?: string) => void
   createSession: (firstMessage?: string) => void
   switchSession: (
     sessionId: string,
@@ -132,7 +138,7 @@ const ClientContext = createContext<ClientContextValue>()
 
 export function useClient(): ClientContextValue {
   const ctx = useContext(ClientContext)
-  if (!ctx) throw new Error("useClient must be used within ClientProvider")
+  if (ctx === undefined) throw new Error("useClient must be used within ClientProvider")
   return ctx
 }
 
@@ -144,11 +150,14 @@ interface ClientProviderProps extends ParentProps {
   rpcClient: GentRpcClient | DirectClient
   runtime: Runtime.Runtime<unknown>
   initialSession: Session | undefined
+  initialAgent?: AgentName
 }
 
 export function ClientProvider(props: ClientProviderProps) {
   clearUnifiedLog()
   tuiLog("ClientProvider init")
+
+  const defaultAgent: AgentName = props.initialAgent ?? "default"
 
   // DirectClient already has the right shape, use it directly
   // For GentRpcClient, wrap with createClient
@@ -163,16 +172,23 @@ export function ClientProvider(props: ClientProviderProps) {
     Runtime.runFork(client.runtime)(effect)
   }
 
+  onMount(() => {
+    if (props.initialAgent !== undefined) {
+      cast(client.steer({ _tag: "SwitchAgent", agent: props.initialAgent }))
+    }
+  })
+
   // Session state
   const [sessionStore, setSessionStore] = createStore<{ sessionState: SessionState }>({
-    sessionState: props.initialSession
-      ? { status: "active", session: props.initialSession }
-      : { status: "none" },
+    sessionState:
+      props.initialSession !== undefined
+        ? { status: "active", session: props.initialSession }
+        : { status: "none" },
   })
 
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
-    mode: "plan",
+    agent: defaultAgent,
     status: AgentStatus.idle(),
     cost: 0,
     model: props.initialSession?.model,
@@ -195,7 +211,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // Subscribe to events when session becomes active - SINGLE shared subscription
   createEffect(() => {
     const s = session()
-    if (!s) {
+    if (s === null) {
       eventBuffer.length = 0
       return
     }
@@ -214,7 +230,7 @@ export function ClientProvider(props: ClientProviderProps) {
         yield* Effect.sync(() => {
           setAgentStore(
             produce((draft) => {
-              draft.mode = snapshot.mode
+              draft.agent = props.initialAgent ?? snapshot.agent ?? defaultAgent
               draft.status = snapshot.isStreaming ? AgentStatus.streaming() : AgentStatus.idle()
               if (snapshot.model !== undefined) {
                 draft.model = snapshot.model
@@ -267,9 +283,9 @@ export function ClientProvider(props: ClientProviderProps) {
 
               case "StreamEnded":
                 setAgentStore({ status: AgentStatus.idle() })
-                if (event.usage) {
+                if (event.usage !== undefined) {
                   const modelId = agentStore.model
-                  if (modelId) {
+                  if (modelId !== undefined) {
                     const modelInfo = State.models().find((m) => m.id === modelId)
                     const turnCost = calculateCost(event.usage, modelInfo?.pricing)
                     setAgentStore(
@@ -286,16 +302,10 @@ export function ClientProvider(props: ClientProviderProps) {
                 setAgentStore({ status: AgentStatus.error(event.error) })
                 break
 
-              case "PlanModeEntered":
-                setAgentStore({ mode: "plan" })
-                break
-
-              case "PlanConfirmed":
-                setAgentStore({ mode: "build" })
-                break
-
-              case "PlanRejected":
-                setAgentStore({ mode: "plan" })
+              case "AgentSwitched":
+                setAgentStore({
+                  agent: Schema.is(AgentNameSchema)(event.toAgent) ? event.toAgent : defaultAgent,
+                })
                 break
 
               case "ModelChanged":
@@ -376,7 +386,7 @@ export function ClientProvider(props: ClientProviderProps) {
     isLoading,
 
     // Agent state
-    mode: () => agentStore.mode,
+    agent: () => agentStore.agent,
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
     model: () => agentStore.model,
@@ -387,21 +397,20 @@ export function ClientProvider(props: ClientProviderProps) {
 
     // Agent state setters (for local errors only)
     setError: (error) =>
-      setAgentStore({ status: error ? AgentStatus.error(error) : AgentStatus.idle() }),
+      setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
 
     // Fire-and-forget actions using cast
-    sendMessage: (content, mode, model) => {
+    sendMessage: (content, model) => {
       const s = session()
 
       // Session required for sending messages
-      if (!s) return
+      if (s === null) return
 
       cast(
         client.sendMessage({
           sessionId: s.sessionId,
           branchId: s.branchId,
           content,
-          ...(mode !== undefined ? { mode } : {}),
           ...(model !== undefined ? { model } : {}),
         }),
       )
@@ -441,7 +450,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name, model, bypass) => {
       const current = session()
-      if (current) {
+      if (current !== null) {
         setSessionStore({
           sessionState: { status: "switching", fromSession: current, toSessionId: sessionId },
         })
@@ -450,7 +459,7 @@ export function ClientProvider(props: ClientProviderProps) {
       }
 
       // Switch to new session - reset agent state with new model
-      setAgentStore({ mode: "plan", status: AgentStatus.idle(), cost: 0, model })
+      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0, model })
       setSessionStore({
         sessionState: {
           status: "active",
@@ -467,13 +476,13 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       setSessionStore({ sessionState: { status: "none" } })
-      setAgentStore({ mode: "plan", status: AgentStatus.idle(), cost: 0, model: undefined })
+      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0, model: undefined })
     },
 
     // Return Effects for caller to run
     listMessages: () => {
       const s = session()
-      if (!s) return Effect.succeed([] as readonly MessageInfoReadonly[])
+      if (s === null) return Effect.succeed([] as readonly MessageInfoReadonly[])
       return client.listMessages(s.branchId)
     },
 
@@ -481,13 +490,13 @@ export function ClientProvider(props: ClientProviderProps) {
 
     listBranches: () => {
       const s = session()
-      if (!s) return Effect.succeed([] as readonly BranchInfo[])
+      if (s === null) return Effect.succeed([] as readonly BranchInfo[])
       return client.listBranches(s.sessionId)
     },
 
     updateSessionBypass: (bypass) => {
       const s = session()
-      if (!s) return Effect.succeed(undefined)
+      if (s === null) return Effect.succeed(undefined)
       return client.updateSessionBypass(s.sessionId, bypass).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
@@ -506,19 +515,19 @@ export function ClientProvider(props: ClientProviderProps) {
 
     createBranch: (name) => {
       const s = session()
-      if (!s) return Effect.succeed("" as string)
+      if (s === null) return Effect.succeed("" as string)
       return client.createBranch(s.sessionId, name)
     },
 
     getBranchTree: () => {
       const s = session()
-      if (!s) return Effect.succeed([] as readonly BranchTreeNode[])
+      if (s === null) return Effect.succeed([] as readonly BranchTreeNode[])
       return client.getBranchTree(s.sessionId)
     },
 
     forkBranch: (messageId, name) => {
       const s = session()
-      if (!s) return Effect.succeed("" as string)
+      if (s === null) return Effect.succeed("" as string)
       return client
         .forkBranch({
           sessionId: s.sessionId,
@@ -531,7 +540,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     compactBranch: () => {
       const s = session()
-      if (!s) return Effect.void
+      if (s === null) return Effect.void
       return client.compactBranch({ sessionId: s.sessionId, branchId: s.branchId })
     },
 
@@ -553,16 +562,16 @@ export function ClientProvider(props: ClientProviderProps) {
 
     // Fire-and-forget steering
     steer: (command) => {
-      // Update local mode immediately for responsive UI
-      if (command._tag === "SwitchMode") {
-        setAgentStore({ mode: command.mode })
+      // Update local agent immediately for responsive UI
+      if (command._tag === "SwitchAgent") {
+        setAgentStore({ agent: command.agent })
       }
       cast(client.steer(command))
     },
 
     switchBranch: (branchId, summarize) => {
       const s = session()
-      if (!s) return
+      if (s === null) return
 
       cast(
         client

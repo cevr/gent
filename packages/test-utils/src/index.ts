@@ -39,7 +39,7 @@ export interface SequenceRecorderService {
   readonly clear: () => Effect.Effect<void>
 }
 
-export class SequenceRecorder extends Context.Tag("SequenceRecorder")<
+export class SequenceRecorder extends Context.Tag("@gent/test-utils/src/index/SequenceRecorder")<
   SequenceRecorder,
   SequenceRecorderService
 >() {
@@ -100,9 +100,16 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
     const events: EventEnvelope[] = []
     let nextId = 0
 
+    const getEventSessionId = (event: EventEnvelope["event"]): string | undefined => {
+      if ("sessionId" in event) return event.sessionId as string
+      if ("parentSessionId" in event) return event.parentSessionId as string
+      return undefined
+    }
+
     const matchesFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
-      if (env.event.sessionId !== sessionId) return false
-      if (!branchId) return true
+      const eventSessionId = getEventSessionId(env.event)
+      if (eventSessionId === undefined || eventSessionId !== sessionId) return false
+      if (branchId === undefined) return true
       const eventBranchId =
         "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
       return eventBranchId === branchId || eventBranchId === undefined
@@ -358,10 +365,10 @@ export const assertSequence = (
     let found = false
     while (actualIdx < actual.length) {
       const call = actual[actualIdx]
-      if (call && call.service === exp.service && call.method === exp.method) {
-        if (exp.match) {
+      if (call !== undefined && call.service === exp.service && call.method === exp.method) {
+        if (exp.match !== undefined) {
           const argsObj = call.args as Record<string, unknown> | undefined
-          if (argsObj) {
+          if (argsObj !== undefined) {
             const matches = Object.entries(exp.match).every(([k, v]) => argsObj[k] === v)
             if (matches) {
               found = true
@@ -381,7 +388,7 @@ export const assertSequence = (
     if (!found) {
       throw new Error(
         `Expected call not found: ${exp.service}.${exp.method}${
-          exp.match ? ` with ${JSON.stringify(exp.match)}` : ""
+          exp.match !== undefined ? ` with ${JSON.stringify(exp.match)}` : ""
         }`,
       )
     }
@@ -407,11 +414,26 @@ export const mockToolCallResponse = (
 // Test Effect Runner
 
 export const runTest = <A, E>(effect: Effect.Effect<A, E, never>, config: TestLayerConfig = {}) =>
-  effect.pipe(Effect.provide(createTestLayer(config)), Effect.runPromise)
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(createTestLayer(config))
+        return yield* effect.pipe(Effect.provide(context))
+      }),
+    ),
+  )
 
 // Run with recording
 
 export const runTestWithRecording = <A, E>(
   effect: Effect.Effect<A, E, SequenceRecorder>,
   config: Omit<TestLayerConfig, "recording"> = {},
-) => Effect.runPromise(Effect.provide(effect, createRecordingTestLayer(config)))
+) =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(createRecordingTestLayer(config))
+        return yield* effect.pipe(Effect.provide(context))
+      }),
+    ),
+  )

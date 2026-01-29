@@ -66,7 +66,7 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
 
 export function useRouter(): RouterContextValue {
   const ctx = useContext(RouterContext)
-  if (!ctx) {
+  if (ctx === undefined) {
     throw new Error("useRouter must be used within RouterProvider")
   }
   return ctx

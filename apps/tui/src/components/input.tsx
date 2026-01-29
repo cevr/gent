@@ -13,7 +13,7 @@ import {
   type Accessor,
 } from "solid-js"
 import { Effect } from "effect"
-import type { InputRenderable } from "@opentui/core"
+import { SyntaxStyle, type InputRenderable } from "@opentui/core"
 import type { Question } from "@gent/core"
 import { useKeyboard } from "@opentui/solid"
 import { useTheme } from "../theme/index"
@@ -45,6 +45,7 @@ const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
 let pasteIdCounter = 0
 const pasteStore = new Map<string, string>()
+const markdownSyntaxStyle = SyntaxStyle.create()
 
 function countLines(text: string): number {
   return text.split("\n").length
@@ -60,7 +61,7 @@ function createPastePlaceholder(text: string): string {
 function expandPastePlaceholders(text: string): string {
   return text.replace(/\[Pasted ~\d+ lines #(paste-\d+)\]/g, (_, id) => {
     const content = pasteStore.get(id)
-    if (content) {
+    if (content !== undefined) {
       pasteStore.delete(id)
       return content
     }
@@ -102,7 +103,7 @@ export function Input(props: InputProps) {
 
   // Effective mode from props or internal state
   const effectiveMode = (): "normal" | "shell" | "prompt" => {
-    if (props.inputState) {
+    if (props.inputState !== undefined) {
       return props.inputState._tag
     }
     return internalMode()
@@ -110,7 +111,7 @@ export function Input(props: InputProps) {
 
   // Delete word backward
   const deleteWordBackward = () => {
-    if (!inputRef) return
+    if (inputRef === null) return
     const value = inputRef.value
     const cursor = inputRef.cursorOffset
     if (cursor === 0) return
@@ -125,7 +126,7 @@ export function Input(props: InputProps) {
 
   // Delete line backward
   const deleteLineBackward = () => {
-    if (!inputRef) return
+    if (inputRef === null) return
     const value = inputRef.value
     const cursor = inputRef.cursorOffset
     if (cursor === 0) return
@@ -137,7 +138,7 @@ export function Input(props: InputProps) {
   // Handle autocomplete selection
   const handleAutocompleteSelect = (value: string) => {
     const state = autocomplete()
-    if (!state || !inputRef) return
+    if (state === null || inputRef === null) return
 
     const currentValue = inputRef.value
     const beforeTrigger = currentValue.slice(0, state.triggerPos)
@@ -170,7 +171,7 @@ export function Input(props: InputProps) {
   const handleInputChange = (value: string) => {
     // Detect large pastes by comparing with previous value
     // If value grew significantly, check if it's a paste
-    if (value.length > previousValue.length && inputRef) {
+    if (value.length > previousValue.length && inputRef !== null) {
       const inserted = value.slice(previousValue.length)
       if (isLargePaste(inserted)) {
         // Replace the pasted content with a placeholder
@@ -192,7 +193,8 @@ export function Input(props: InputProps) {
     }
 
     // Handle / command autocomplete
-    if (autocomplete()?.type === "/") {
+    const currentAutocomplete = autocomplete()
+    if (currentAutocomplete !== null && currentAutocomplete.type === "/") {
       if (value.startsWith("/")) {
         setAutocomplete({ type: "/", filter: value.slice(1), triggerPos: 0 })
       } else {
@@ -203,9 +205,9 @@ export function Input(props: InputProps) {
 
     // Detect $ or @ triggers
     const match = value.match(/(?:^|[\s])([$@])([^\s]*)$/)
-    if (match) {
+    if (match !== null) {
       const [fullMatch, prefix, filter] = match
-      if (!prefix) return
+      if (prefix === undefined || prefix.length === 0) return
       const triggerPos = value.length - fullMatch.length + (fullMatch.startsWith(" ") ? 1 : 0)
       setAutocomplete({ type: prefix as AutocompleteType, filter: filter ?? "", triggerPos })
     } else {
@@ -218,12 +220,12 @@ export function Input(props: InputProps) {
       e.name === "return" &&
       effectiveMode() !== "prompt" &&
       effectiveMode() !== "shell" &&
-      !autocomplete()
+      autocomplete() === null
     ) {
-      submitMode = e.super || e.meta ? "interject" : "queue"
+      submitMode = e.super === true || e.meta === true ? "interject" : "queue"
     }
     // Handle autocomplete keyboard first
-    if (autocomplete()) {
+    if (autocomplete() !== null) {
       if (e.name === "escape") {
         setAutocomplete(null)
         return
@@ -232,7 +234,7 @@ export function Input(props: InputProps) {
       if (["up", "down", "return", "tab"].includes(e.name)) {
         return
       }
-      if (e.ctrl && (e.name === "p" || e.name === "n")) {
+      if (e.ctrl === true && (e.name === "p" || e.name === "n")) {
         return
       }
     }
@@ -242,7 +244,7 @@ export function Input(props: InputProps) {
       e.name === "!" &&
       inputRef?.cursorOffset === 0 &&
       effectiveMode() === "normal" &&
-      !autocomplete()
+      autocomplete() === null
     ) {
       setInternalMode("shell")
       return
@@ -252,7 +254,7 @@ export function Input(props: InputProps) {
     if (effectiveMode() === "shell") {
       if (e.name === "escape") {
         setInternalMode("normal")
-        if (inputRef) inputRef.value = ""
+        if (inputRef !== null) inputRef.value = ""
         return
       }
       // Backspace at position 0 or 1 exits shell mode (like deleting the implicit !)
@@ -267,20 +269,20 @@ export function Input(props: InputProps) {
       e.name === "/" &&
       inputRef?.cursorOffset === 0 &&
       effectiveMode() === "normal" &&
-      !autocomplete()
+      autocomplete() === null
     ) {
       setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
       return
     }
 
     // Option+Backspace / Ctrl+W: delete word backward
-    if ((e.meta && e.name === "backspace") || (e.ctrl && e.name === "w")) {
+    if ((e.meta === true && e.name === "backspace") || (e.ctrl === true && e.name === "w")) {
       deleteWordBackward()
       return
     }
 
     // Cmd+Backspace / Ctrl+U: delete line backward
-    if ((e.super && e.name === "backspace") || (e.ctrl && e.name === "u")) {
+    if ((e.super === true && e.name === "backspace") || (e.ctrl === true && e.name === "u")) {
       deleteLineBackward()
       return
     }
@@ -291,7 +293,7 @@ export function Input(props: InputProps) {
     // Expand paste placeholders before processing
     const expanded = expandPastePlaceholders(value)
     const text = expanded.trim()
-    if (!text) return
+    if (text.length === 0) return
 
     // Close autocomplete
     setAutocomplete(null)
@@ -327,33 +329,34 @@ export function Input(props: InputProps) {
 
     // 2. Slash command: /cmd [args]
     const parsed = parseSlashCommand(text)
-    if (parsed) {
+    if (parsed !== null) {
       const [cmd, args] = parsed
       clearInput()
 
-      const commandEffect = props.onSlashCommand
-        ? props.onSlashCommand(cmd, args)
-        : executeSlashCommand(cmd, args, {
-            openPalette: () => command.openPalette(),
-            clearMessages: props.clearMessages ?? (() => {}),
-            navigateToSessions: () => command.openPalette(),
-            compactHistory: Effect.fail(ClientError("Compact not implemented yet")),
-            createBranch: Effect.void,
-            openTree: () => {},
-            openFork: () => {},
-            toggleBypass: Effect.fail(ClientError("Bypass not implemented yet")),
-            openPermissions: () => {},
-            openAuth: () => {},
-          }).pipe(
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                if (result.error) {
-                  client.setError(result.error)
-                }
-              }),
-            ),
-            Effect.asVoid,
-          )
+      const commandEffect =
+        props.onSlashCommand !== undefined
+          ? props.onSlashCommand(cmd, args)
+          : executeSlashCommand(cmd, args, {
+              openPalette: () => command.openPalette(),
+              clearMessages: props.clearMessages ?? (() => {}),
+              navigateToSessions: () => command.openPalette(),
+              compactHistory: Effect.fail(ClientError("Compact not implemented yet")),
+              createBranch: Effect.void,
+              openTree: () => {},
+              openFork: () => {},
+              toggleBypass: Effect.fail(ClientError("Bypass not implemented yet")),
+              openPermissions: () => {},
+              openAuth: () => {},
+            }).pipe(
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  if (result.error !== undefined) {
+                    client.setError(result.error)
+                  }
+                }),
+              ),
+              Effect.asVoid,
+            )
 
       cast(
         commandEffect.pipe(
@@ -385,7 +388,7 @@ export function Input(props: InputProps) {
   }
 
   const clearInput = () => {
-    if (inputRef) inputRef.value = ""
+    if (inputRef !== null) inputRef.value = ""
     previousValue = ""
   }
 
@@ -417,7 +420,7 @@ export function Input(props: InputProps) {
   // Get current question
   const currentQuestion = () => {
     const prompt = currentPrompt()
-    if (!prompt) return null
+    if (prompt === null) return null
     return prompt.questions[prompt.currentIndex] ?? null
   }
 
@@ -427,8 +430,8 @@ export function Input(props: InputProps) {
       {props.children}
 
       {/* Prompt UI when in prompt mode */}
-      <Show when={currentQuestion()}>
-        {(question) => <PromptUI question={question()} onSubmit={handlePromptSubmit} />}
+      <Show when={currentQuestion()} keyed>
+        {(question) => <PromptUI question={question} onSubmit={handlePromptSubmit} />}
       </Show>
 
       {/* Normal input row (hidden when in prompt mode) */}
@@ -461,13 +464,13 @@ export function Input(props: InputProps) {
 /** Autocomplete popup - place where you want it to render */
 Input.Autocomplete = function InputAutocomplete() {
   const ctx = useContext(InputContext)
-  if (!ctx) return null
+  if (ctx === undefined) return null
 
   return (
-    <Show when={ctx.autocomplete()}>
+    <Show when={ctx.autocomplete()} keyed>
       {(state) => (
         <AutocompletePopup
-          state={state()}
+          state={state}
           onSelect={ctx.handleAutocompleteSelect}
           onClose={ctx.handleAutocompleteClose}
         />
@@ -501,11 +504,11 @@ function PromptUI(props: PromptUIProps) {
 
   useKeyboard((e) => {
     // Navigation
-    if (e.name === "up" || (e.ctrl && e.name === "p")) {
+    if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
       setFocusIndex((i) => (i - 1 + focusableCount()) % focusableCount())
       return
     }
-    if (e.name === "down" || (e.ctrl && e.name === "n")) {
+    if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
       setFocusIndex((i) => (i + 1) % focusableCount())
       return
     }
@@ -513,7 +516,7 @@ function PromptUI(props: PromptUIProps) {
     // Selection with space (when focused on option)
     if (e.name === "space" && focusIndex() < options().length) {
       const opt = options()[focusIndex()]
-      if (!opt) return
+      if (opt === undefined) return
       const label = opt.label
 
       if (isMultiple()) {
@@ -544,7 +547,7 @@ function PromptUI(props: PromptUIProps) {
   const submitAnswer = () => {
     const selections: string[] = [...selected()]
     const freeform = freeformText().trim()
-    if (freeform) {
+    if (freeform.length > 0) {
       selections.push(freeform)
     }
     // If no selections and no freeform, use "Other" as default
@@ -561,7 +564,7 @@ function PromptUI(props: PromptUIProps) {
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
       {/* Header if present */}
-      <Show when={props.question.header}>
+      <Show when={props.question.header !== undefined && props.question.header.length > 0}>
         <text style={{ fg: theme.textMuted }}>
           <b>{props.question.header}</b>
         </text>
@@ -569,6 +572,15 @@ function PromptUI(props: PromptUIProps) {
 
       {/* Question */}
       <text style={{ fg: theme.text }}>{props.question.question}</text>
+
+      {/* Markdown body */}
+      <Show when={props.question.markdown} keyed>
+        {(markdown) => (
+          <box marginTop={1} paddingRight={1}>
+            <markdown content={markdown} syntaxStyle={markdownSyntaxStyle} />
+          </box>
+        )}
+      </Show>
 
       {/* Options */}
       <Show when={hasOptions()}>
@@ -587,7 +599,7 @@ function PromptUI(props: PromptUIProps) {
                       : "( ) "}
                   {opt.label}
                 </text>
-                <Show when={opt.description}>
+                <Show when={opt.description !== undefined && opt.description.length > 0}>
                   <text style={{ fg: theme.textMuted }}> - {opt.description}</text>
                 </Show>
               </box>

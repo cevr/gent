@@ -18,6 +18,8 @@ describe("ConfigService", () => {
         ),
       )
       expect(result.model).toBeUndefined()
+      expect(result.agent).toBeUndefined()
+      expect(result.subprocessBinaryPath).toBeUndefined()
       expect(result.permissions).toBeUndefined()
     })
 
@@ -75,6 +77,30 @@ describe("ConfigService", () => {
       )
       expect(result.model).toBe("anthropic/claude-sonnet-4-20250514" as ModelId)
       expect(result.provider).toBe("anthropic")
+    })
+
+    it("setAgent updates agent", async () => {
+      const layer = ConfigService.Test()
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* cfg.setAgent("deep")
+          return yield* cfg.get()
+        }).pipe(Effect.provide(layer)),
+      )
+      expect(result.agent).toBe("deep")
+    })
+
+    it("setSubprocessBinaryPath updates path", async () => {
+      const layer = ConfigService.Test()
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* cfg.setSubprocessBinaryPath("/usr/local/bin/gent")
+          return yield* cfg.get()
+        }).pipe(Effect.provide(layer)),
+      )
+      expect(result.subprocessBinaryPath).toBe("/usr/local/bin/gent")
     })
   })
 

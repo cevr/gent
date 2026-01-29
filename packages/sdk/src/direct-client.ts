@@ -15,7 +15,7 @@ import {
   PermissionRule,
   PlanHandler,
   AuthStorage,
-  type AgentMode,
+  type AgentName,
   type EventEnvelope,
   type PermissionDecision,
   type PlanDecision,
@@ -56,6 +56,8 @@ export interface SessionInfo {
   cwd?: string
   bypass?: boolean
   branchId?: string
+  parentSessionId?: string
+  parentBranchId?: string
   createdAt: number
   updatedAt: number
 }
@@ -87,7 +89,7 @@ export interface SessionState {
   messages: readonly MessageInfoReadonly[]
   lastEventId: number | null
   isStreaming: boolean
-  mode: AgentMode
+  agent: AgentName
   model?: string
   bypass?: boolean
 }
@@ -143,7 +145,6 @@ export interface DirectClient {
     sessionId: string
     branchId: string
     content: string
-    mode?: AgentMode
     model?: string
   }) => Effect.Effect<void, GentCoreError>
 
@@ -279,7 +280,6 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
           sessionId: input.sessionId,
           branchId: input.branchId,
           content: input.content,
-          ...(input.mode !== undefined ? { mode: input.mode } : {}),
           ...(input.model !== undefined ? { model: input.model } : {}),
         }),
 
@@ -302,7 +302,7 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       respondPermission: (requestId, decision, persist) =>
         Effect.gen(function* () {
           const request = yield* permissionHandler.respond(requestId, decision)
-          if (persist && request) {
+          if (persist === true && request !== undefined) {
             const rule = new PermissionRule({
               tool: request.toolName,
               action: decision,
@@ -337,7 +337,8 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
 
           const providers: AuthProviderInfo[] = KNOWN_PROVIDERS.map((provider) => {
             const envVar = PROVIDER_ENV_VARS[provider]
-            const hasEnv = envVar ? !!process.env[envVar] : false
+            const hasEnv =
+              envVar !== undefined && envVar !== "" ? process.env[envVar] !== undefined : false
             const hasStored = storedSet.has(provider)
 
             if (hasEnv) {

@@ -37,7 +37,6 @@ export {
   type Usage,
   ToolCallStarted,
   ToolCallCompleted,
-  PlanModeEntered,
   PermissionRequested,
   PlanPresented,
   PlanConfirmed,
@@ -58,6 +57,9 @@ export {
   BranchSwitched,
   BranchSummarized,
   ModelChanged,
+  AgentSwitched,
+  SubagentSpawned,
+  SubagentCompleted,
 } from "./event.js"
 
 // Permission Types
@@ -71,7 +73,6 @@ export { PlanHandler } from "./plan-handler"
 
 // Config Types
 export {
-  AgentMode,
   GentConfig,
   ModelConfig,
   defaultConfig,
@@ -79,9 +80,6 @@ export {
   CustomProviderConfig,
   ProviderApi,
 } from "./config"
-
-// Plan Mode
-export { PLAN_MODE_TOOLS, isToolAllowedInPlanMode } from "./plan-mode"
 
 // Model Types
 export {
@@ -95,6 +93,27 @@ export {
   DEFAULT_MODEL_ID,
   calculateCost,
 } from "./model.js"
+
+// Agent Types
+export {
+  AgentKind,
+  AgentName,
+  AgentDefinition,
+  defineAgent,
+  type AgentDefinitionInput,
+  Agents,
+  type BuiltinAgentName,
+  AgentRegistry,
+  SubagentRunnerService,
+  SubagentError,
+  type SubagentRunner,
+  type SubagentResult,
+  DEFAULT_PROMPT,
+  DEEP_PROMPT,
+  EXPLORE_PROMPT,
+  ARCHITECT_PROMPT,
+  COMPACTION_PROMPT,
+} from "./agent"
 
 // Current Gen (auto-generated)
 export { CURRENT_GEN_MODEL_IDS } from "./current-gen"

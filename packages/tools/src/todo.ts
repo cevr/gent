@@ -8,7 +8,10 @@ export interface TodoHandlerService {
   readonly replace: (todos: ReadonlyArray<TodoItem>) => Effect.Effect<void>
 }
 
-export class TodoHandler extends Context.Tag("TodoHandler")<TodoHandler, TodoHandlerService>() {
+export class TodoHandler extends Context.Tag("@gent/tools/src/todo/TodoHandler")<
+  TodoHandler,
+  TodoHandlerService
+>() {
   static Test = (initialTodos: ReadonlyArray<TodoItem> = []): Layer.Layer<TodoHandler> => {
     let todos = [...initialTodos]
     return Layer.succeed(TodoHandler, {

@@ -59,7 +59,7 @@ export function Permissions(props: PermissionsProps) {
   const deleteSelected = () => {
     const list = rules()
     const rule = list[selectedIndex()]
-    if (!rule) return
+    if (rule === undefined) return
 
     cast(
       props.client.deletePermissionRule(rule.tool, rule.pattern).pipe(
@@ -108,7 +108,8 @@ export function Permissions(props: PermissionsProps) {
 
   const formatRule = (rule: PermissionRule): string => {
     const action = rule.action === "allow" ? "Allow" : rule.action === "deny" ? "Deny" : "Ask"
-    const pattern = rule.pattern ? ` (${rule.pattern})` : ""
+    const pattern =
+      rule.pattern !== undefined && rule.pattern.length > 0 ? ` (${rule.pattern})` : ""
     return `${action}: ${rule.tool}${pattern}`
   }
 
@@ -144,7 +145,7 @@ export function Permissions(props: PermissionsProps) {
           <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
         </box>
 
-        <Show when={error()}>
+        <Show when={error() !== null}>
           <box paddingLeft={1} paddingRight={1} flexShrink={0}>
             <text style={{ fg: theme.error }}>{error()}</text>
           </box>

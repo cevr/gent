@@ -70,7 +70,7 @@ export function Session(props: SessionProps) {
 
   const startCompaction = () => {
     compactionStartedAt = Date.now()
-    if (compactionTimer) {
+    if (compactionTimer !== null) {
       clearTimeout(compactionTimer)
       compactionTimer = null
     }
@@ -93,7 +93,7 @@ export function Session(props: SessionProps) {
       return
     }
 
-    if (compactionTimer) {
+    if (compactionTimer !== null) {
       clearTimeout(compactionTimer)
     }
     compactionTimer = setTimeout(() => {
@@ -103,13 +103,10 @@ export function Session(props: SessionProps) {
     }, remainingMs)
   }
 
-  // Derived - no separate signal needed
-  const hasMessages = () => messages().length > 0
-
   const resolveSendModel = () => {
     const selected = State.currentModel()
     const serverModel = client.model()
-    if (serverModel && serverModel === selected) return undefined
+    if (serverModel !== undefined && serverModel === selected) return undefined
     return selected
   }
 
@@ -124,8 +121,8 @@ export function Session(props: SessionProps) {
   }
 
   onCleanup(() => {
-    if (compactionTimer) clearTimeout(compactionTimer)
-    if (modelToastTimer) clearTimeout(modelToastTimer)
+    if (compactionTimer !== null) clearTimeout(compactionTimer)
+    if (modelToastTimer !== null) clearTimeout(modelToastTimer)
   })
 
   // Cycle through current-gen models with Ctrl+P
@@ -138,11 +135,11 @@ export function Session(props: SessionProps) {
     const nextIdx = (currentIdx + 1) % currentGenModels.length
     const nextModel = currentGenModels[nextIdx]
 
-    if (nextModel) {
+    if (nextModel !== undefined) {
       State.setModel(nextModel.id as ModelId)
 
       // Show toast notification
-      if (modelToastTimer) clearTimeout(modelToastTimer)
+      if (modelToastTimer !== null) clearTimeout(modelToastTimer)
       setModelToast(`${nextModel.name}`)
       modelToastTimer = setTimeout(() => {
         setModelToast(null)
@@ -153,11 +150,11 @@ export function Session(props: SessionProps) {
 
   const indicator = (): Indicator | null => {
     const error = client.error()
-    if (error) return { _tag: "error", message: error }
+    if (error !== null) return { _tag: "error", message: error }
     if (compacting()) return { _tag: "compacting" }
     if (client.isStreaming()) return { _tag: "thinking" }
     const toast = modelToast()
-    if (toast) return { _tag: "toast", message: `Model: ${toast}` }
+    if (toast !== null) return { _tag: "toast", message: `Model: ${toast}` }
     return null
   }
 
@@ -208,7 +205,7 @@ export function Session(props: SessionProps) {
   })
 
   const sendInitialPrompt = () => {
-    if (!props.initialPrompt || initialPromptSent) return
+    if (props.initialPrompt === undefined || props.initialPrompt === "" || initialPromptSent) return
     initialPromptSent = true
     const model = resolveSendModel()
     cast(
@@ -217,8 +214,7 @@ export function Session(props: SessionProps) {
           sessionId: props.sessionId,
           branchId: props.branchId,
           content: props.initialPrompt,
-          mode: "plan",
-          ...(model ? { model } : {}),
+          ...(model !== undefined ? { model } : {}),
         })
         .pipe(
           Effect.tapError((err) =>
@@ -260,7 +256,7 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "StreamChunk") {
         setMessages((prev) => {
           const last = prev[prev.length - 1]
-          if (last && last.role === "assistant") {
+          if (last !== undefined && last.role === "assistant") {
             return [...prev.slice(0, -1), { ...last, content: last.content + event.chunk }]
           }
           return [
@@ -280,7 +276,7 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "TurnCompleted") {
         // Server is source of truth for turn completion/interruption
         const durationSeconds = Math.round(event.durationMs / 1000)
-        if (event.interrupted) {
+        if (event.interrupted === true) {
           setEvents((prev) => [
             ...prev,
             {
@@ -305,7 +301,7 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "ToolCallStarted") {
         setMessages((prev) => {
           const last = prev[prev.length - 1]
-          if (last && last.role === "assistant") {
+          if (last !== undefined && last.role === "assistant") {
             const toolCalls = last.toolCalls ?? []
             return [
               ...prev.slice(0, -1),
@@ -330,7 +326,7 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "ToolCallCompleted") {
         setMessages((prev) => {
           const last = prev[prev.length - 1]
-          if (last && last.role === "assistant" && last.toolCalls) {
+          if (last !== undefined && last.role === "assistant" && last.toolCalls !== undefined) {
             return [
               ...prev.slice(0, -1),
               {
@@ -374,7 +370,7 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "PlanPresented") {
         handleInputEvent({ _tag: "PlanPresented", event: event as typeof PlanPresented.Type })
       }
-      // Note: agent state (mode, status, cost, error) is updated by ClientProvider
+      // Note: agent state (status, cost, error) is updated by ClientProvider
     })
 
     sendInitialPrompt()
@@ -452,26 +448,26 @@ export function Session(props: SessionProps) {
     }
 
     // Ctrl+C: always quit immediately
-    if (e.ctrl && e.name === "c") {
+    if (e.ctrl === true && e.name === "c") {
       exit()
       return
     }
 
-    // Shift+Tab: cycle agent mode
-    if (e.shift && e.name === "tab") {
-      const newMode = client.mode() === "build" ? "plan" : "build"
-      client.steer({ _tag: "SwitchMode", mode: newMode })
+    // Shift+Tab: toggle agent (default <-> deep)
+    if (e.shift === true && e.name === "tab") {
+      const nextAgent = client.agent() === "deep" ? "default" : "deep"
+      client.steer({ _tag: "SwitchAgent", agent: nextAgent })
       return
     }
 
     // Ctrl+O: toggle tool output expansion
-    if (e.ctrl && e.name === "o") {
+    if (e.ctrl === true && e.name === "o") {
       setToolsExpanded((prev) => !prev)
       return
     }
 
     // Ctrl+P: cycle through current-gen models (when not in command palette)
-    if (e.ctrl && e.name === "p" && !command.paletteOpen()) {
+    if (e.ctrl === true && e.name === "p" && command.paletteOpen() === false) {
       cycleModel()
       return
     }
@@ -483,15 +479,14 @@ export function Session(props: SessionProps) {
       return
     }
 
-    // First message in session starts in plan mode
-    client.sendMessage(content, !hasMessages() ? "plan" : undefined, resolveSendModel())
+    client.sendMessage(content, resolveSendModel())
   }
 
   // Handle input state transitions
   const handleInputEvent = (event: InputEvent) => {
     const result = transition(inputState(), event)
     setInputState(result.state)
-    if (result.effect) {
+    if (result.effect !== undefined) {
       handleInputEffect(result.effect)
     }
   }
@@ -569,7 +564,7 @@ export function Session(props: SessionProps) {
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
-          if (result.error) {
+          if (result.error !== undefined) {
             client.setError(result.error)
           }
         }),
@@ -648,7 +643,7 @@ export function Session(props: SessionProps) {
       <StatusBar.Root>
         <StatusBar.ErrorRow />
         <StatusBar.Row>
-          <StatusBar.Mode />
+          <StatusBar.Agent />
           <StatusBar.Separator />
           <StatusBar.Model />
         </StatusBar.Row>
@@ -687,5 +682,8 @@ const pickPlanDecision = (
   if (normalized.includes("confirm")) return { decision: "confirm" }
   if (normalized.includes("reject")) return { decision: "reject" }
   const reason = selections[0]
-  return { decision: "reject", reason: reason && reason.length > 0 ? reason : undefined }
+  return {
+    decision: "reject",
+    reason: reason !== undefined && reason.length > 0 ? reason : undefined,
+  }
 }

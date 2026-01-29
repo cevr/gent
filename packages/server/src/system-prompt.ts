@@ -71,7 +71,7 @@ Platform: ${platform}
 Git repository: ${isGitRepo ? "yes" : "no"}
 Date: ${date}`
 
-  if (customInstructions) {
+  if (customInstructions !== undefined && customInstructions !== "") {
     prompt += `
 
 # Project Instructions
@@ -79,8 +79,8 @@ Date: ${date}`
 ${customInstructions}`
   }
 
-  const skillsBlock = skills ? formatSkillsForPrompt(skills) : ""
-  if (skillsBlock) {
+  const skillsBlock = skills !== undefined ? formatSkillsForPrompt(skills) : ""
+  if (skillsBlock !== "") {
     prompt += `
 
 ${skillsBlock}`

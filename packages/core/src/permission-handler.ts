@@ -23,10 +23,9 @@ export interface PermissionHandlerService {
   >
 }
 
-export class PermissionHandler extends Context.Tag("PermissionHandler")<
-  PermissionHandler,
-  PermissionHandlerService
->() {
+export class PermissionHandler extends Context.Tag(
+  "@gent/core/src/permission-handler/PermissionHandler",
+)<PermissionHandler, PermissionHandlerService>() {
   static Live: Layer.Layer<PermissionHandler, never, EventStore> = Layer.effect(
     PermissionHandler,
     Effect.gen(function* () {
@@ -74,7 +73,7 @@ export class PermissionHandler extends Context.Tag("PermissionHandler")<
 
         respond: Effect.fn("PermissionHandler.respond")(function* (requestId, decision) {
           const entry = pending.get(requestId)
-          if (!entry) return undefined
+          if (entry === undefined) return undefined
           yield* Deferred.succeed(entry.deferred, decision)
           pending.delete(requestId)
           return {

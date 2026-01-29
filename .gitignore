@@ -8,4 +8,4 @@ bin/
 *.d.ts
 *.d.ts.map
 .gent/data.db
-bun.lock
+.gent/plans/

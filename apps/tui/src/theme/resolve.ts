@@ -42,14 +42,14 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
   const hasSelectedListItemText = selectedListItemTextValue !== undefined
   if (hasSelectedListItemText) {
     resolved.selectedListItemText = resolveColor(selectedListItemTextValue)
-  } else if (resolved.background) {
+  } else if (resolved.background !== undefined) {
     resolved.selectedListItemText = resolved.background
   }
 
   // Handle backgroundMenu - optional with fallback to backgroundElement
   if (theme.theme.backgroundMenu !== undefined) {
     resolved.backgroundMenu = resolveColor(theme.theme.backgroundMenu)
-  } else if (resolved.backgroundElement) {
+  } else if (resolved.backgroundElement !== undefined) {
     resolved.backgroundMenu = resolved.backgroundElement
   }
 
@@ -129,7 +129,7 @@ export function generateSystemTheme(colors: TerminalColors, mode: "dark" | "ligh
 
   const col = (i: number) => {
     const value = colors.palette[i]
-    if (value) return RGBA.fromHex(value)
+    if (value !== undefined && value !== null && value.length > 0) return RGBA.fromHex(value)
     return ansiToRgba(i)
   }
 

@@ -24,7 +24,7 @@ const buildItems = (messages: readonly Message[]): PickerItem[] =>
   messages.map((m) => {
     const rolePrefix = m.role === "user" ? "U" : "A"
     let labelContent = m.content.replace(/\s+/g, " ")
-    if (!labelContent && m.images.length > 0) {
+    if (labelContent.length === 0 && m.images.length > 0) {
       labelContent = `[Image${m.images.length > 1 ? ` x${m.images.length}` : ""}]`
     }
     return {
@@ -62,7 +62,7 @@ export function MessagePicker(props: MessagePickerProps) {
 
     if (e.name === "return") {
       const item = list[selectedIndex()]
-      if (item) props.onSelect(item.id)
+      if (item !== undefined) props.onSelect(item.id)
       return
     }
 

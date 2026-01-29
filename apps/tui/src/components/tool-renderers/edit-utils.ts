@@ -19,15 +19,15 @@ export function getFiletype(path: string): string | undefined {
     yml: "yaml",
     toml: "toml",
   }
-  return ext ? map[ext] : undefined
+  return ext !== undefined ? map[ext] : undefined
 }
 
 /**
  * Count lines added/removed from old and new strings
  */
 export function countDiffLines(oldStr: string, newStr: string): { added: number; removed: number } {
-  const oldLines = oldStr ? oldStr.split("\n").length : 0
-  const newLines = newStr ? newStr.split("\n").length : 0
+  const oldLines = oldStr.length > 0 ? oldStr.split("\n").length : 0
+  const newLines = newStr.length > 0 ? newStr.split("\n").length : 0
   if (newLines > oldLines) {
     return { added: newLines - oldLines, removed: 0 }
   } else if (oldLines > newLines) {
@@ -54,7 +54,7 @@ export interface EditDiffResult {
  * Generate unified diff from edit input for <diff> component
  */
 export function getEditUnifiedDiff(input: unknown): EditDiffResult | null {
-  if (!input || typeof input !== "object") return null
+  if (input === null || input === undefined || typeof input !== "object") return null
   const obj = input as Record<string, unknown>
   const path = obj["path"]
   const oldStr = obj["oldString"] ?? obj["old_string"]

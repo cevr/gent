@@ -48,7 +48,10 @@ export interface PermissionService {
   readonly getRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 }
 
-export class Permission extends Context.Tag("Permission")<Permission, PermissionService>() {
+export class Permission extends Context.Tag("@gent/core/src/permission")<
+  Permission,
+  PermissionService
+>() {
   static Live = (
     initialRules: ReadonlyArray<PermissionRule> = [],
     defaultAction: PermissionRule["action"] = "allow",
@@ -67,7 +70,7 @@ export class Permission extends Context.Tag("Permission")<Permission, Permission
             const argsStr = JSON.stringify(args)
             for (const rule of rules) {
               if (rule.tool !== tool && rule.tool !== "*") continue
-              if (rule.pattern) {
+              if (rule.pattern !== undefined) {
                 const regex = new RegExp(rule.pattern)
                 if (!regex.test(argsStr)) continue
               }

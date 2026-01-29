@@ -21,7 +21,7 @@ const CommandContext = createContext<CommandContextValue>()
 
 export function useCommand(): CommandContextValue {
   const ctx = useContext(CommandContext)
-  if (!ctx) throw new Error("useCommand must be used within CommandProvider")
+  if (ctx === undefined) throw new Error("useCommand must be used within CommandProvider")
   return ctx
 }
 
@@ -65,7 +65,7 @@ export function CommandProvider(props: CommandProviderProps) {
     meta?: boolean
   }): boolean => {
     // Check for palette keybind (Ctrl+P)
-    if (event.ctrl && event.name === "p" && !event.shift && !event.meta) {
+    if (event.ctrl === true && event.name === "p" && event.shift !== true && event.meta !== true) {
       setPaletteOpen(true)
       return true
     }
@@ -74,9 +74,9 @@ export function CommandProvider(props: CommandProviderProps) {
     if (paletteOpen()) return false
 
     for (const cmd of commands()) {
-      if (!cmd.keybind) continue
+      if (cmd.keybind === undefined) continue
       const kb = parseKeybind(cmd.keybind)
-      if (kb && matchKeybind(kb, event)) {
+      if (kb !== null && matchKeybind(kb, event)) {
         cmd.onSelect()
         return true
       }

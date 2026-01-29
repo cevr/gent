@@ -67,7 +67,7 @@ export function Auth(props: AuthProps) {
   const deleteSelected = () => {
     const list = providers()
     const provider = list[selectedIndex()]
-    if (!provider || provider.source !== "stored") return
+    if (provider === undefined || provider.source !== "stored") return
 
     cast(
       props.client.deleteAuthKey(provider.provider).pipe(
@@ -85,7 +85,7 @@ export function Auth(props: AuthProps) {
     const list = providers()
     const provider = list[selectedIndex()]
     const key = keyInput().trim()
-    if (!provider || !key) return
+    if (provider === undefined || key.length === 0) return
 
     cast(
       props.client.setAuthKey(provider.provider, key).pipe(
@@ -120,7 +120,12 @@ export function Auth(props: AuthProps) {
         setKeyInput((prev) => prev.slice(0, -1))
         return
       }
-      if (e.sequence && e.sequence.length === 1 && !e.ctrl && !e.meta) {
+      if (
+        e.sequence !== undefined &&
+        e.sequence.length === 1 &&
+        e.ctrl !== true &&
+        e.meta !== true
+      ) {
         setKeyInput((prev) => prev + e.sequence)
       }
       return
@@ -198,7 +203,7 @@ export function Auth(props: AuthProps) {
           <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
         </box>
 
-        <Show when={error()}>
+        <Show when={error() !== null}>
           <box paddingLeft={1} paddingRight={1} flexShrink={0}>
             <text style={{ fg: theme.error }}>{error()}</text>
           </box>

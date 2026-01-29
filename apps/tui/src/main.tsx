@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime, Option, Stream } from "effect"
+import { Console, Effect, Layer, ManagedRuntime, Option, Schema, Stream } from "effect"
 import type { Runtime } from "effect"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
@@ -14,7 +14,7 @@ import {
 } from "@gent/server"
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
 import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
-import { DEFAULT_MODEL_ID } from "@gent/core"
+import { AgentName, DEFAULT_MODEL_ID } from "@gent/core"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
@@ -56,29 +56,31 @@ const resolveInitialState = (input: {
     // 1. Headless mode
     if (headless) {
       const promptText = Option.isSome(promptArg) ? promptArg.value : undefined
-      if (!promptText) {
+      if (promptText === undefined || promptText.length === 0) {
         yield* Console.error("Error: --headless requires a prompt argument")
         return process.exit(1)
       }
       // Get or create session
-      let sess: SessionInfo | null = null
       if (Option.isSome(session)) {
-        sess = yield* core.getSession(session.value)
-        if (!sess) {
+        const sess = yield* core.getSession(session.value)
+        if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
           return process.exit(1)
         }
-      } else {
-        const result = yield* core.createSession({ name: "headless session", cwd, bypass })
-        sess = {
-          id: result.sessionId,
-          name: result.name,
-          cwd,
-          bypass: result.bypass,
-          branchId: result.branchId,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        }
+        return { _tag: "headless" as const, session: sess, prompt: promptText }
+      }
+
+      const result = yield* core.createSession({ name: "headless session", cwd, bypass })
+      const sess: SessionInfo = {
+        id: result.sessionId,
+        name: result.name,
+        cwd,
+        bypass: result.bypass,
+        branchId: result.branchId,
+        parentSessionId: undefined,
+        parentBranchId: undefined,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
       }
       return { _tag: "headless" as const, session: sess, prompt: promptText }
     }
@@ -86,7 +88,7 @@ const resolveInitialState = (input: {
     // 2. Explicit session ID
     if (Option.isSome(session)) {
       const sess = yield* core.getSession(session.value)
-      if (!sess) {
+      if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
         return process.exit(1)
       }
@@ -105,19 +107,23 @@ const resolveInitialState = (input: {
 
     // 3. Continue from cwd
     if (continue_) {
-      let sess = yield* core.getLastSessionByCwd(cwd)
-      if (!sess) {
+      const sess: SessionInfo = yield* Effect.gen(function* () {
+        const existing = yield* core.getLastSessionByCwd(cwd)
+        if (existing !== null) return existing
+
         const result = yield* core.createSession({ cwd, bypass })
-        sess = {
+        return {
           id: result.sessionId,
           name: result.name,
           cwd,
           bypass: result.bypass,
           branchId: result.branchId,
+          parentSessionId: undefined,
+          parentBranchId: undefined,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         }
-      }
+      })
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
       const branches = yield* core.listBranches(sess.id)
       if (branches.length > 1) {
@@ -140,6 +146,8 @@ const resolveInitialState = (input: {
         cwd,
         bypass: result.bypass,
         branchId: result.branchId,
+        parentSessionId: undefined,
+        parentBranchId: undefined,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }
@@ -261,6 +269,10 @@ const main = Command.make(
       Args.withDescription("Prompt for headless mode"),
       Args.optional,
     ),
+    agent: Options.text("agent").pipe(
+      Options.withDescription("Default agent (default | deep)"),
+      Options.optional,
+    ),
     bypass: Options.boolean("bypass").pipe(
       Options.withDescription(
         "Auto-allow all tool calls (default: true, use --no-bypass to disable)",
@@ -268,11 +280,22 @@ const main = Command.make(
       Options.withDefault(true),
     ),
   },
-  ({ session, continue_, headless, prompt, promptArg, bypass }) =>
+  ({ session, continue_, headless, prompt, promptArg, bypass, agent }) =>
     Effect.gen(function* () {
       // Get core service for direct access (headless, session management)
       const core = yield* GentCore
       const cwd = process.cwd()
+
+      let initialAgent: AgentName | undefined
+      if (Option.isSome(agent)) {
+        initialAgent = yield* Schema.decodeUnknown(AgentName)(agent.value).pipe(
+          Effect.catchAll(() =>
+            Console.error(`Error: invalid agent ${agent.value}`).pipe(
+              Effect.flatMap(() => Effect.sync(() => process.exit(1))),
+            ),
+          ),
+        )
+      }
 
       // Resolve initial state (discriminated union)
       const state = yield* resolveInitialState({
@@ -286,9 +309,13 @@ const main = Command.make(
         bypass,
       })
 
+      if (initialAgent !== undefined) {
+        yield* core.steer({ _tag: "SwitchAgent", agent: initialAgent })
+      }
+
       // Handle headless mode
       if (state._tag === "headless") {
-        if (!state.session.branchId) {
+        if (state.session.branchId === undefined) {
           yield* Console.error("Error: session has no branch")
           return process.exit(1)
         }
@@ -311,7 +338,7 @@ const main = Command.make(
       let initialRoute = Route.home()
       let initialPrompt: string | undefined
 
-      if (state._tag === "session" && state.session.branchId) {
+      if (state._tag === "session" && state.session.branchId !== undefined) {
         initialSession = {
           sessionId: state.session.id,
           branchId: state.session.branchId,
@@ -341,6 +368,7 @@ const main = Command.make(
                 rpcClient={directClient}
                 runtime={uiRuntime}
                 initialSession={initialSession}
+                initialAgent={initialAgent}
               >
                 <RouterProvider initialRoute={initialRoute}>
                   <App initialPrompt={initialPrompt} initialModel={DEFAULT_MODEL_ID} />
@@ -389,6 +417,7 @@ const cli = Command.run(command, {
 
 // Full runtime layer for CLI
 const CliLayer = Layer.mergeAll(FullLayer, BunContext.layer, TracerLayer)
+const CliRuntime = ManagedRuntime.make(CliLayer)
 
 // Run with all layers
-cli(process.argv).pipe(Effect.provide(CliLayer), BunRuntime.runMain)
+cli(process.argv).pipe(Effect.provide(CliRuntime), BunRuntime.runMain)

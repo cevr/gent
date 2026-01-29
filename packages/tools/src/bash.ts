@@ -52,7 +52,7 @@ export const BashTool = defineTool({
           stdout: "pipe",
           stderr: "pipe",
         }
-        if (params.cwd) spawnOpts.cwd = params.cwd
+        if (params.cwd !== undefined) spawnOpts.cwd = params.cwd
         const proc = Bun.spawn(["bash", "-c", params.command], spawnOpts)
 
         const timeoutId = setTimeout(() => proc.kill(), timeout)

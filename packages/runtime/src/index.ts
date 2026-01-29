@@ -1,4 +1,12 @@
-export { AgentLoop, AgentLoopError, SteerCommand } from "./agent-loop"
+export {
+  AgentLoop,
+  AgentLoopError,
+  SteerCommand,
+  AgentActor,
+  SubagentRunnerConfig,
+  InProcessRunner,
+  SubprocessRunner,
+} from "./agent"
 
 export {
   CheckpointService,

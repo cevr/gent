@@ -39,7 +39,7 @@ export const calculateCost = (
   usage: { inputTokens: number; outputTokens: number },
   pricing: ModelPricing | undefined,
 ): number => {
-  if (!pricing) return 0
+  if (pricing === undefined) return 0
   const inputCost = (usage.inputTokens / 1_000_000) * pricing.input
   const outputCost = (usage.outputTokens / 1_000_000) * pricing.output
   return inputCost + outputCost
@@ -104,6 +104,20 @@ export const DEFAULT_MODELS: readonly Model[] = [
   }),
   // OpenAI - https://openai.com/api/pricing/
   new Model({
+    id: "openai/opus-4.5" as ModelId,
+    name: "Opus 4.5",
+    provider: "openai",
+    contextLength: 200000,
+    pricing: { input: 0, output: 0 },
+  }),
+  new Model({
+    id: "openai/codex-5.2" as ModelId,
+    name: "Codex 5.2",
+    provider: "openai",
+    contextLength: 200000,
+    pricing: { input: 0, output: 0 },
+  }),
+  new Model({
     id: "openai/gpt-4o" as ModelId,
     name: "GPT-4o",
     provider: "openai",
@@ -164,4 +178,4 @@ export const DEFAULT_MODELS: readonly Model[] = [
 ]
 
 // Default model ID for the application
-export const DEFAULT_MODEL_ID = "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0" as ModelId
+export const DEFAULT_MODEL_ID = "openai/opus-4.5" as ModelId

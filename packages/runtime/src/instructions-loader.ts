@@ -5,10 +5,9 @@ export interface InstructionsLoaderService {
   readonly load: (cwd: string) => Effect.Effect<string>
 }
 
-export class InstructionsLoader extends Context.Tag("InstructionsLoader")<
-  InstructionsLoader,
-  InstructionsLoaderService
->() {
+export class InstructionsLoader extends Context.Tag(
+  "@gent/runtime/src/instructions-loader/InstructionsLoader",
+)<InstructionsLoader, InstructionsLoaderService>() {
   static Live: Layer.Layer<InstructionsLoader, never, FileSystem.FileSystem | Path.Path> =
     Layer.scoped(
       InstructionsLoader,

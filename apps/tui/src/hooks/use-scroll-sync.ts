@@ -25,11 +25,11 @@ export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncO
 
   const syncScroll = (id: string): boolean => {
     const scrollRef = getRef()
-    if (!scrollRef) return false
+    if (scrollRef === undefined) return false
 
     const children = scrollRef.getChildren()
     const target = children.find((child) => child.id === id)
-    if (!target) return false
+    if (target === undefined) return false
 
     const relativeY = target.y - scrollRef.y
     const viewportHeight = scrollRef.height

@@ -126,7 +126,7 @@ export const RepoExplorerTool = defineTool({
               // Check if already exists
               try {
                 await fs.access(cachePath)
-                if (params.update) {
+                if (params.update === true) {
                   await $`git -C ${cachePath} pull --ff-only`.quiet()
                 }
                 return
@@ -134,7 +134,7 @@ export const RepoExplorerTool = defineTool({
                 // Clone
                 const url = `https://github.com/${parsed.name}.git`
                 const args = ["git", "clone", "--depth", "100"]
-                if (parsed.version) {
+                if (parsed.version !== undefined) {
                   args.push("--branch", parsed.version)
                 }
                 args.push(url, cachePath)
@@ -142,11 +142,11 @@ export const RepoExplorerTool = defineTool({
               }
             } else if (parsed.type === "npm") {
               // Use npm pack to download
-              await $`npm pack ${parsed.name}${parsed.version ? `@${parsed.version}` : ""} --pack-destination ${cachePath}`.quiet()
+              await $`npm pack ${parsed.name}${parsed.version !== undefined ? `@${parsed.version}` : ""} --pack-destination ${cachePath}`.quiet()
               // Extract
               const tarballs = await fs.readdir(cachePath)
               const tarball = tarballs.find((f) => f.endsWith(".tgz"))
-              if (tarball) {
+              if (tarball !== undefined) {
                 await $`tar -xzf ${path.join(cachePath, tarball)} -C ${cachePath}`.quiet()
               }
             }
@@ -185,7 +185,7 @@ export const RepoExplorerTool = defineTool({
       }
 
       case "search": {
-        if (!params.query) {
+        if (params.query === undefined || params.query === "") {
           return yield* new RepoExplorerError({
             message: "Query required for search",
             spec: params.spec,

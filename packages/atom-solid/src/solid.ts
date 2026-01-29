@@ -97,7 +97,7 @@ export const useAtomSubscribe = <A>(
     const next = value()
     if (first) {
       first = false
-      if (!options?.immediate) return
+      if (options?.immediate !== true) return
     }
     f(next)
   })

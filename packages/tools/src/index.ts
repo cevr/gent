@@ -44,22 +44,11 @@ export { QuestionTool, QuestionParams, QuestionResult, QuestionHandler } from ".
 // WebFetch Tool
 export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch"
 
-// Plan Mode Tools
-export {
-  PlanEnterTool,
-  PlanEnterParams,
-  PlanEnterResult,
-  PlanExitTool,
-  PlanExitParams,
-  PlanExitResult,
-  PlanModeHandler,
-} from "./plan-mode.js"
+// Plan Tool
+export { PlanTool, PlanParams, PlanResult } from "./plan"
 
-// Re-export from core for backwards compat
-export { PLAN_MODE_TOOLS, isToolAllowedInPlanMode } from "@gent/core"
-
-// Re-export isToolAllowedInMode for backwards compat with tests
-export { isToolAllowedInMode } from "./plan-mode"
+// Task Tool
+export { TaskTool, TaskParams } from "./task"
 
 // All Tools
 import type { AnyToolDefinition } from "@gent/core"
@@ -74,7 +63,8 @@ import { RepoExplorerTool } from "./repo-explorer"
 import { TodoReadTool, TodoWriteTool } from "./todo"
 import { QuestionTool } from "./question"
 import { WebFetchTool } from "./webfetch"
-import { PlanEnterTool, PlanExitTool } from "./plan-mode"
+import { PlanTool } from "./plan"
+import { TaskTool } from "./task"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -89,6 +79,6 @@ export const AllTools: AnyToolDefinition[] = [
   TodoWriteTool,
   QuestionTool,
   WebFetchTool,
-  PlanEnterTool,
-  PlanExitTool,
+  PlanTool,
+  TaskTool,
 ]

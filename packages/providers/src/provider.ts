@@ -79,7 +79,10 @@ export interface ProviderService {
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
 
-export class Provider extends Context.Tag("Provider")<Provider, ProviderService>() {
+export class Provider extends Context.Tag("@gent/providers/src/provider")<
+  Provider,
+  ProviderService
+>() {
   static Live: Layer.Layer<Provider, never, ProviderFactory> = Layer.effect(
     Provider,
     Effect.gen(function* () {
@@ -90,7 +93,7 @@ export class Provider extends Context.Tag("Provider")<Provider, ProviderService>
           const model = yield* factory.getModel(request.model)
 
           const messages = convertMessages(request.messages)
-          const tools = request.tools ? convertTools(request.tools) : undefined
+          const tools = request.tools !== undefined ? convertTools(request.tools) : undefined
 
           return Stream.async<StreamChunk, ProviderError>((emit) => {
             // eslint-disable-next-line @typescript-eslint/no-floating-promises -- intentional fire-and-forget async IIFE for Stream.async
@@ -100,10 +103,16 @@ export class Provider extends Context.Tag("Provider")<Provider, ProviderService>
                   model,
                   messages,
                 }
-                if (tools) opts.tools = tools
-                if (request.systemPrompt) opts.system = request.systemPrompt
-                if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
-                if (request.temperature) opts.temperature = request.temperature
+                if (tools !== undefined) opts.tools = tools
+                if (request.systemPrompt !== undefined && request.systemPrompt !== "") {
+                  opts.system = request.systemPrompt
+                }
+                if (request.maxTokens !== undefined) {
+                  opts.maxOutputTokens = request.maxTokens
+                }
+                if (request.temperature !== undefined) {
+                  opts.temperature = request.temperature
+                }
 
                 const result = streamText(opts)
 
@@ -128,12 +137,13 @@ export class Provider extends Context.Tag("Provider")<Provider, ProviderService>
                       await emit.single(
                         new FinishChunk({
                           finishReason: part.finishReason ?? "stop",
-                          usage: part.totalUsage
-                            ? {
-                                inputTokens: part.totalUsage.inputTokens ?? 0,
-                                outputTokens: part.totalUsage.outputTokens ?? 0,
-                              }
-                            : undefined,
+                          usage:
+                            part.totalUsage !== undefined
+                              ? {
+                                  inputTokens: part.totalUsage.inputTokens ?? 0,
+                                  outputTokens: part.totalUsage.outputTokens ?? 0,
+                                }
+                              : undefined,
                         }),
                       )
                       break
@@ -170,8 +180,10 @@ export class Provider extends Context.Tag("Provider")<Provider, ProviderService>
             model,
             prompt: request.prompt,
           }
-          if (request.systemPrompt) opts.system = request.systemPrompt
-          if (request.maxTokens) opts.maxOutputTokens = request.maxTokens
+          if (request.systemPrompt !== undefined && request.systemPrompt !== "") {
+            opts.system = request.systemPrompt
+          }
+          if (request.maxTokens !== undefined) opts.maxOutputTokens = request.maxTokens
 
           const result = yield* Effect.tryPromise({
             try: () => generateText(opts),

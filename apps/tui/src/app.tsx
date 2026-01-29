@@ -24,7 +24,7 @@ function AppContent(props: AppProps) {
 
   // Initialize model state on mount
   onMount(() => {
-    if (props.initialModel) {
+    if (props.initialModel !== undefined) {
       State.initModelState(props.initialModel)
     }
   })

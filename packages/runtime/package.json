@@ -12,7 +12,8 @@
     "@gent/core": "workspace:*",
     "@gent/providers": "workspace:*",
     "@gent/storage": "workspace:*",
-    "@gent/tools": "workspace:*"
+    "@gent/tools": "workspace:*",
+    "effect-machine": "catalog:"
   },
   "peerDependencies": {
     "@effect/platform": "catalog:",

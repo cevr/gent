@@ -34,7 +34,7 @@ export function Indicators(props: IndicatorsProps) {
 
   onMount(() => {
     const interval = setInterval(() => {
-      if (props.indicator && props.indicator._tag !== "error") {
+      if (props.indicator !== null && props.indicator._tag !== "error") {
         setFrame((f) => (f + 1) % DOTS_FRAMES.length)
       }
     }, 500)
@@ -70,11 +70,11 @@ export function Indicators(props: IndicatorsProps) {
   }
 
   return (
-    <Show when={props.indicator}>
-      {(current) => (
+    <Show when={props.indicator} keyed>
+      {(indicator) => (
         <box flexShrink={0} paddingLeft={1}>
           <text>
-            <span style={renderStyle(current())}>{renderText(current())}</span>
+            <span style={renderStyle(indicator)}>{renderText(indicator)}</span>
           </text>
         </box>
       )}

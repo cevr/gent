@@ -35,7 +35,7 @@ describe("createClient", () => {
           messages: [],
           lastEventId: null,
           isStreaming: false,
-          mode: "plan" as const,
+          agent: "default" as const,
         }),
       steer: () => Effect.void,
       subscribeEvents: () => Effect.succeed([]),

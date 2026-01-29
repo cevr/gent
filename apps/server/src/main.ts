@@ -36,7 +36,7 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
       .handle("get", ({ path }) =>
         core.getSession(path.sessionId).pipe(
           Effect.flatMap((s) =>
-            s ? Effect.succeed(s) : Effect.die(new Error("Session not found")),
+            s !== null ? Effect.succeed(s) : Effect.die(new Error("Session not found")),
           ),
           Effect.orDie,
         ),

@@ -8,8 +8,9 @@ import {
   PlanHandler,
   Skills,
   AuthStorage,
-  type EventStore,
+  AgentRegistry,
 } from "@gent/core"
+import type { AgentName, SubagentRunnerService, EventStore } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider, ProviderFactory, CustomProvidersConfig } from "@gent/providers"
 import {
@@ -19,6 +20,9 @@ import {
   CheckpointService,
   ConfigService,
   InstructionsLoader,
+  AgentActor,
+  InProcessRunner,
+  SubagentRunnerConfig,
 } from "@gent/runtime"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
 import { EventStoreLive } from "./event-store.js"
@@ -121,6 +125,8 @@ export {
 export interface DependenciesConfig {
   cwd: string
   defaultModel: string
+  defaultAgent?: AgentName
+  subprocessBinaryPath?: string
   dbPath?: string
   compactionModel?: string
   skillsDirs?: ReadonlyArray<string>
@@ -136,6 +142,8 @@ export const createDependencies = (
   | Provider
   | ProviderFactory
   | ToolRegistry
+  | AgentRegistry
+  | SubagentRunnerService
   | EventStore
   | Permission
   | Skills
@@ -184,6 +192,7 @@ export const createDependencies = (
     StorageLive,
     AuthStorageLive,
     ToolRegistry.Live(AllTools),
+    AgentRegistry.Live,
     EventStoreLayer,
     ConfigServiceLive,
     InstructionsLoaderLive,
@@ -232,12 +241,13 @@ export const createDependencies = (
   const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseWithPermission)
 
   // AgentLoop requires CheckpointService and FileSystem
-  const AgentLoopLive = Layer.unwrapEffect(
+  const AgentRuntimeLive = Layer.unwrapEffect(
     Effect.gen(function* () {
       const instructions = yield* InstructionsLoader
       const skills = yield* Skills
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
+      const configService = yield* ConfigService
 
       const customInstructions = yield* instructions.load(config.cwd)
       const skillsList = yield* skills.list()
@@ -251,10 +261,34 @@ export const createDependencies = (
         skills: skillsList,
       })
 
-      return AgentLoop.Live({
+      const configFromFile = yield* configService.get()
+      const defaultAgent = config.defaultAgent ?? configFromFile.agent
+      const subprocessBinaryPath =
+        config.subprocessBinaryPath ?? configFromFile.subprocessBinaryPath
+
+      const agentActorLive = AgentActor.Live
+      const subagentRunnerConfigLive = SubagentRunnerConfig.Live({
         systemPrompt,
         defaultModel: config.defaultModel,
+        ...(subprocessBinaryPath !== undefined && subprocessBinaryPath !== ""
+          ? { subprocessBinaryPath }
+          : {}),
       })
+      const subagentRunnerLive = InProcessRunner.pipe(
+        Layer.provideMerge(agentActorLive),
+        Layer.provideMerge(subagentRunnerConfigLive),
+      )
+
+      return Layer.mergeAll(
+        AgentLoop.Live({
+          systemPrompt,
+          defaultModel: config.defaultModel,
+          ...(defaultAgent !== undefined ? { defaultAgent } : {}),
+        }),
+        agentActorLive,
+        subagentRunnerConfigLive,
+        subagentRunnerLive,
+      )
     }),
   )
 
@@ -268,7 +302,7 @@ export const createDependencies = (
     PlanHandlerLive,
   )
 
-  return Layer.merge(AllDeps, Layer.provide(AgentLoopLive, AllDeps))
+  return Layer.merge(AllDeps, Layer.provide(AgentRuntimeLive, AllDeps))
 }
 
 // Re-export AskUserHandler for RPC handlers

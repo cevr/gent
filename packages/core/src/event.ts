@@ -70,11 +70,6 @@ export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
   },
 ) {}
 
-export class PlanModeEntered extends Schema.TaggedClass<PlanModeEntered>()("PlanModeEntered", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
-}) {}
-
 export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>()(
   "PermissionRequested",
   {
@@ -150,6 +145,7 @@ export type QuestionOption = typeof QuestionOptionSchema.Type
 export const QuestionSchema = Schema.Struct({
   question: Schema.String,
   header: Schema.optional(Schema.String),
+  markdown: Schema.optional(Schema.String),
   options: Schema.optional(Schema.Array(QuestionOptionSchema)),
   multiple: Schema.optional(Schema.Boolean),
 })
@@ -205,6 +201,30 @@ export class ModelChanged extends Schema.TaggedClass<ModelChanged>()("ModelChang
   model: Schema.String,
 }) {}
 
+export class AgentSwitched extends Schema.TaggedClass<AgentSwitched>()("AgentSwitched", {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+  fromAgent: Schema.String,
+  toAgent: Schema.String,
+}) {}
+
+export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("SubagentSpawned", {
+  parentSessionId: Schema.String,
+  childSessionId: Schema.String,
+  agentName: Schema.String,
+  prompt: Schema.String,
+}) {}
+
+export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
+  "SubagentCompleted",
+  {
+    parentSessionId: Schema.String,
+    childSessionId: Schema.String,
+    agentName: Schema.String,
+    success: Schema.Boolean,
+  },
+) {}
+
 export const AgentEvent = Schema.Union(
   SessionStarted,
   SessionEnded,
@@ -215,7 +235,6 @@ export const AgentEvent = Schema.Union(
   TurnCompleted,
   ToolCallStarted,
   ToolCallCompleted,
-  PlanModeEntered,
   PermissionRequested,
   PlanPresented,
   PlanConfirmed,
@@ -231,6 +250,9 @@ export const AgentEvent = Schema.Union(
   BranchSwitched,
   BranchSummarized,
   ModelChanged,
+  AgentSwitched,
+  SubagentSpawned,
+  SubagentCompleted,
 )
 export type AgentEvent = typeof AgentEvent.Type
 
@@ -257,9 +279,16 @@ export interface EventStoreService {
   }) => Stream.Stream<EventEnvelope, EventStoreError>
 }
 
+const getEventSessionId = (event: AgentEvent): string | undefined => {
+  if ("sessionId" in event) return event.sessionId as string
+  if ("parentSessionId" in event) return event.parentSessionId as string
+  return undefined
+}
+
 const matchesEventFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
-  if (env.event.sessionId !== sessionId) return false
-  if (!branchId) return true
+  const eventSessionId = getEventSessionId(env.event)
+  if (eventSessionId === undefined || eventSessionId !== sessionId) return false
+  if (branchId === undefined) return true
   const eventBranchId =
     "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
   return eventBranchId === branchId || eventBranchId === undefined
@@ -267,7 +296,10 @@ const matchesEventFilter = (env: EventEnvelope, sessionId: string, branchId?: st
 
 // EventStore Service
 
-export class EventStore extends Context.Tag("EventStore")<EventStore, EventStoreService>() {
+export class EventStore extends Context.Tag("@gent/core/src/event/EventStore")<
+  EventStore,
+  EventStoreService
+>() {
   static Live: Layer.Layer<EventStore> = Layer.scoped(
     EventStore,
     Effect.gen(function* () {

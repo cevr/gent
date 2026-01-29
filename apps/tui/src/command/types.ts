@@ -15,7 +15,7 @@ export interface Keybind {
 }
 
 export function parseKeybind(config: string): Keybind | null {
-  if (!config) return null
+  if (config.length === 0) return null
 
   const parts = config.toLowerCase().split("+")
   const keybind: Keybind = {
@@ -62,13 +62,13 @@ export function matchKeybind(
 
 export function formatKeybind(config: string): string {
   const kb = parseKeybind(config)
-  if (!kb) return ""
+  if (kb === null) return ""
 
   const parts: string[] = []
   if (kb.ctrl) parts.push("Ctrl")
   if (kb.shift) parts.push("Shift")
   if (kb.meta) parts.push("Cmd")
-  if (kb.key) parts.push(kb.key.toUpperCase())
+  if (kb.key.length > 0) parts.push(kb.key.toUpperCase())
 
   return parts.join("+")
 }

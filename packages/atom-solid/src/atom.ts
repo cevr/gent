@@ -78,13 +78,14 @@ export const effect = <A, E, R>(
       })
       return () => {
         cancelled = true
-        Runtime.runFork(runtime)(Fiber.interruptFork(fiber))
+        const interrupt = Fiber.interruptFork(fiber)
+        Runtime.runFork(runtime)(interrupt)
       }
     }
 
     let cancel: (() => void) | undefined
     const cleanup = () => {
-      if (!cancel) return
+      if (cancel === undefined) return
       cancel()
       cancel = undefined
     }

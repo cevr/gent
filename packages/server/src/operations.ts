@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { AgentMode, EventEnvelope, MessagePart, PermissionDecision, PlanDecision } from "@gent/core"
+import { AgentName, EventEnvelope, MessagePart, PermissionDecision, PlanDecision } from "@gent/core"
 
 // ============================================================================
 // Session Operations
@@ -25,6 +25,8 @@ export const SessionInfo = Schema.Struct({
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
   branchId: Schema.optional(Schema.String),
+  parentSessionId: Schema.optional(Schema.String),
+  parentBranchId: Schema.optional(Schema.String),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 })
@@ -107,7 +109,6 @@ export const SendMessagePayload = Schema.Struct({
   sessionId: Schema.String,
   branchId: Schema.String,
   content: Schema.String,
-  mode: Schema.optional(AgentMode),
   model: Schema.optional(Schema.String),
 })
 
@@ -137,7 +138,7 @@ export const SessionState = Schema.Struct({
   messages: Schema.Array(MessageInfo),
   lastEventId: Schema.NullOr(Schema.Number),
   isStreaming: Schema.Boolean,
-  mode: AgentMode,
+  agent: AgentName,
   model: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
 })
@@ -151,7 +152,7 @@ export const SteerPayload = Schema.Union(
   Schema.TaggedStruct("Interrupt", {}),
   Schema.TaggedStruct("Interject", { message: Schema.String }),
   Schema.TaggedStruct("SwitchModel", { model: Schema.String }),
-  Schema.TaggedStruct("SwitchMode", { mode: Schema.Literal("build", "plan") }),
+  Schema.TaggedStruct("SwitchAgent", { agent: AgentName }),
 )
 export type SteerPayload = typeof SteerPayload.Type
 

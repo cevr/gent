@@ -75,7 +75,7 @@ export const GrepTool = defineTool({
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
 
-    const basePath = params.path ? pathService.resolve(params.path) : process.cwd()
+    const basePath = params.path !== undefined ? pathService.resolve(params.path) : process.cwd()
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
     const flags = params.caseSensitive === false ? "gi" : "g"

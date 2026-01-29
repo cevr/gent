@@ -62,7 +62,7 @@ export function formatToolInput(
   input: unknown,
   cwd: string = process.cwd(),
 ): string {
-  if (!input || typeof input !== "object") return ""
+  if (input === null || input === undefined || typeof input !== "object") return ""
   const obj = input as Record<string, unknown>
 
   switch (toolName.toLowerCase()) {
@@ -77,13 +77,13 @@ export function formatToolInput(
       const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
       const searchPath =
         typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(cwd, 30)
-      return pattern ? `${pattern} in ${searchPath}` : ""
+      return pattern.length > 0 ? `${pattern} in ${searchPath}` : ""
     }
     case "grep": {
       const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
       const searchPath =
         typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(cwd, 30)
-      return pattern ? `${pattern} in ${searchPath}` : ""
+      return pattern.length > 0 ? `${pattern} in ${searchPath}` : ""
     }
     default:
       return ""

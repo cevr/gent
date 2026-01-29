@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
+import type { AgentName } from "./agent/agent-definition"
 
 // Tool Definition
 
@@ -23,6 +24,7 @@ export interface ToolContext {
   readonly sessionId: string
   readonly branchId: string
   readonly toolCallId: string
+  readonly agentName?: AgentName
 }
 
 // Tool Factory
@@ -49,7 +51,10 @@ export interface ToolRegistryService {
   readonly register: (tool: AnyToolDefinition) => Effect.Effect<void>
 }
 
-export class ToolRegistry extends Context.Tag("ToolRegistry")<ToolRegistry, ToolRegistryService>() {
+export class ToolRegistry extends Context.Tag("@gent/core/src/tool/ToolRegistry")<
+  ToolRegistry,
+  ToolRegistryService
+>() {
   static Live = (tools: ReadonlyArray<AnyToolDefinition>): Layer.Layer<ToolRegistry> =>
     Layer.succeed(ToolRegistry, {
       get: (name) => Effect.succeed(tools.find((t) => t.name === name)),

@@ -36,10 +36,9 @@ export interface ProviderFactoryService {
 }
 
 // Service tag
-export class ProviderFactory extends Context.Tag("ProviderFactory")<
-  ProviderFactory,
-  ProviderFactoryService
->() {
+export class ProviderFactory extends Context.Tag(
+  "@gent/providers/src/provider-factory/ProviderFactory",
+)<ProviderFactory, ProviderFactoryService>() {
   static Live: Layer.Layer<ProviderFactory, never, AuthStorage | CustomProvidersConfig> =
     Layer.effect(
       ProviderFactory,
@@ -58,7 +57,9 @@ export class ProviderFactory extends Context.Tag("ProviderFactory")<
 }
 
 // Config context for custom providers
-export class CustomProvidersConfig extends Context.Tag("CustomProvidersConfig")<
+export class CustomProvidersConfig extends Context.Tag(
+  "@gent/providers/src/provider-factory/CustomProvidersConfig",
+)<
   CustomProvidersConfig,
   { providers: Readonly<Record<string, CustomProviderConfig>> | undefined }
 >() {
@@ -90,16 +91,16 @@ const resolveApiKey = (
   customEnvVar?: string,
 ): Effect.Effect<string | undefined> => {
   // Check custom env var first
-  if (customEnvVar) {
+  if (customEnvVar !== undefined && customEnvVar !== "") {
     const envKey = process.env[customEnvVar]
-    if (envKey) return Effect.succeed(envKey)
+    if (envKey !== undefined && envKey !== "") return Effect.succeed(envKey)
   }
 
   // Check default env var
   const defaultEnvVar = PROVIDER_ENV_VARS[providerName]
-  if (defaultEnvVar) {
+  if (defaultEnvVar !== undefined && defaultEnvVar !== "") {
     const envKey = process.env[defaultEnvVar]
-    if (envKey) return Effect.succeed(envKey)
+    if (envKey !== undefined && envKey !== "") return Effect.succeed(envKey)
   }
 
   // Fall back to AuthStorage
@@ -114,24 +115,25 @@ const createProviderClient = (
   apiKey: string | undefined,
   baseUrl: string | undefined,
 ): ProviderClient | undefined => {
+  const resolvedApiKey = apiKey !== undefined && apiKey !== "" ? { apiKey } : undefined
   switch (api) {
     case "anthropic":
-      return createAnthropic(apiKey ? { apiKey } : undefined)
+      return createAnthropic(resolvedApiKey)
     case "openai":
-      return createOpenAI(apiKey ? { apiKey } : undefined)
+      return createOpenAI(resolvedApiKey)
     case "openai-compatible":
-      if (!baseUrl) return undefined
+      if (baseUrl === undefined || baseUrl === "") return undefined
       return createOpenAI({
         baseURL: baseUrl,
-        ...(apiKey ? { apiKey } : {}),
+        ...(resolvedApiKey ?? {}),
       })
     case "azure-openai":
       // Azure OpenAI uses different config, requires resource name etc.
       // For now, treat as openai-compatible with baseUrl
-      if (!baseUrl) return undefined
+      if (baseUrl === undefined || baseUrl === "") return undefined
       return createOpenAI({
         baseURL: baseUrl,
-        ...(apiKey ? { apiKey } : {}),
+        ...(resolvedApiKey ?? {}),
       })
     case "bedrock":
       return createAmazonBedrock({
@@ -141,14 +143,14 @@ const createProviderClient = (
           return {
             accessKeyId: creds.accessKeyId,
             secretAccessKey: creds.secretAccessKey,
-            ...(creds.sessionToken && { sessionToken: creds.sessionToken }),
+            ...(creds.sessionToken !== undefined ? { sessionToken: creds.sessionToken } : {}),
           }
         },
       })
     case "google":
-      return createGoogleGenerativeAI(apiKey ? { apiKey } : undefined)
+      return createGoogleGenerativeAI(resolvedApiKey)
     case "mistral":
-      return createMistral(apiKey ? { apiKey } : undefined)
+      return createMistral(resolvedApiKey)
   }
 }
 
@@ -190,10 +192,10 @@ const makeProviderFactory = (
     // Check if custom provider
     const customConfig = customProviders?.[providerName]
 
-    if (customConfig) {
+    if (customConfig !== undefined) {
       const apiKey = yield* resolveApiKey(providerName, auth, customConfig.apiKeyEnv)
       const client = createProviderClient(customConfig.api, apiKey, customConfig.baseUrl)
-      if (!client) {
+      if (client === undefined) {
         const message =
           customConfig.api === "azure-openai"
             ? "Azure OpenAI provider requires baseUrl"
@@ -208,7 +210,7 @@ const makeProviderFactory = (
 
     // Built-in provider
     const api = getBuiltinApi(providerName)
-    if (!api) {
+    if (api === undefined) {
       return yield* new ProviderError({
         message: `Unknown provider: ${providerName}`,
         model: modelId,
@@ -217,7 +219,7 @@ const makeProviderFactory = (
 
     const apiKey = yield* resolveApiKey(providerName, auth)
     const client = createProviderClient(api, apiKey, undefined)
-    if (!client) {
+    if (client === undefined) {
       return yield* new ProviderError({
         message: `Provider requires baseUrl: ${api}`,
         model: modelId,

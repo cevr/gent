@@ -123,7 +123,7 @@ The agent's brain.
 
 ### 4.1 Agent Loop
 
-**Read:** `packages/runtime/src/agent-loop.ts`
+**Read:** `packages/runtime/src/agent/agent-loop.ts`
 
 This is the heart. Study it carefully.
 
@@ -131,7 +131,7 @@ This is the heart. Study it carefully.
 
 **Core algorithm:** `runLoop` (line ~187) is a recursive generator:
 
-1. Check steer queue (Cancel, Interrupt, Interject, SwitchModel, SwitchMode)
+1. Check steer queue (Cancel, Interrupt, Interject, SwitchModel, SwitchAgent)
 2. Load messages (checkpoint-aware)
 3. Build provider request (system prompt + history + tools)
 4. Stream from provider, accumulate chunks
@@ -144,7 +144,7 @@ This is the heart. Study it carefully.
 - `Cancel` / `Interrupt` — hard stop, emit `StreamEnded(interrupted: true)`
 - `Interject` — queue message for immediate processing (no StreamEnded)
 - `SwitchModel` — change model mid-run
-- `SwitchMode` — toggle plan/build mode
+- `SwitchAgent` — switch primary agent (default/deep)
 
 **Hint:** Tool execution happens at line ~125. Permission check → schema decode → run effect → wrap result.
 

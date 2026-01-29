@@ -16,7 +16,7 @@ import {
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
-  type AgentMode,
+  type AgentName,
   type MessagePart,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
@@ -60,7 +60,6 @@ export interface SendMessageInput {
   sessionId: string
   branchId: string
   content: string
-  mode?: AgentMode
   model?: string
 }
 
@@ -81,7 +80,7 @@ export interface SessionState {
   messages: MessageInfo[]
   lastEventId: number | null
   isStreaming: boolean
-  mode: AgentMode
+  agent: AgentName
   model: string | undefined
   bypass: boolean | undefined
 }
@@ -92,6 +91,8 @@ export interface SessionInfo {
   cwd: string | undefined
   bypass: boolean | undefined
   branchId: string | undefined
+  parentSessionId: string | undefined
+  parentBranchId: string | undefined
   createdAt: number
   updatedAt: number
 }
@@ -149,6 +150,7 @@ export interface ApprovePlanInput {
   branchId: string
   planPath: string
   requestId?: string
+  emitEvent?: boolean
 }
 
 export interface GentCoreService {
@@ -232,7 +234,10 @@ const generateSessionName = Effect.fn("generateSessionName")(function* (
   return result.trim() || "New Chat"
 })
 
-export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>() {
+export class GentCore extends Context.Tag("@gent/server/src/core/GentCore")<
+  GentCore,
+  GentCoreService
+>() {
   static Live: Layer.Layer<
     GentCore,
     never,
@@ -250,7 +255,7 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
         const messages = yield* storage.listMessages(branchId)
         if (messages.length === 0) return ""
         const firstMessage = messages[0]
-        if (!firstMessage) return ""
+        if (firstMessage === undefined) return ""
 
         const recent = messages.slice(-50)
         const conversation = recent
@@ -259,12 +264,12 @@ export class GentCore extends Context.Tag("GentCore")<GentCore, GentCoreService>
               .filter((p): p is TextPart => p.type === "text")
               .map((p) => p.text)
               .join("\n")
-            return text ? `${m.role}: ${text}` : ""
+            return text !== "" ? `${m.role}: ${text}` : ""
           })
           .filter((line) => line.trim().length > 0)
           .join("\n\n")
 
-        if (!conversation) return ""
+        if (conversation === "") return ""
 
         const prompt = `Summarize this branch concisely. Focus on decisions, open questions, and current state. Keep it short and actionable.
 
@@ -328,7 +333,7 @@ ${conversation}`
             yield* storage.createBranch(branch)
 
             const firstMessage = input.firstMessage
-            if (firstMessage) {
+            if (firstMessage !== undefined) {
               // Fork name generation (non-blocking)
               yield* Effect.forkDaemon(
                 Effect.gen(function* () {
@@ -381,6 +386,8 @@ ${conversation}`
                     cwd: s.cwd,
                     bypass: s.bypass,
                     branchId: branches[0]?.id,
+                    parentSessionId: s.parentSessionId,
+                    parentBranchId: s.parentBranchId,
                     createdAt: s.createdAt.getTime(),
                     updatedAt: s.updatedAt.getTime(),
                   }
@@ -393,7 +400,7 @@ ${conversation}`
         getSession: (sessionId) =>
           Effect.gen(function* () {
             const session = yield* storage.getSession(sessionId)
-            if (!session) return null
+            if (session === undefined) return null
             const branches = yield* storage.listBranches(sessionId)
             return {
               id: session.id,
@@ -401,6 +408,8 @@ ${conversation}`
               cwd: session.cwd,
               bypass: session.bypass,
               branchId: branches[0]?.id,
+              parentSessionId: session.parentSessionId,
+              parentBranchId: session.parentBranchId,
               createdAt: session.createdAt.getTime(),
               updatedAt: session.updatedAt.getTime(),
             }
@@ -409,7 +418,7 @@ ${conversation}`
         getLastSessionByCwd: (cwd) =>
           Effect.gen(function* () {
             const session = yield* storage.getLastSessionByCwd(cwd)
-            if (!session) return null
+            if (session === undefined) return null
             const branches = yield* storage.listBranches(session.id)
             return {
               id: session.id,
@@ -417,6 +426,8 @@ ${conversation}`
               cwd: session.cwd,
               bypass: session.bypass,
               branchId: branches[0]?.id,
+              parentSessionId: session.parentSessionId,
+              parentBranchId: session.parentBranchId,
               createdAt: session.createdAt.getTime(),
               updatedAt: session.updatedAt.getTime(),
             }
@@ -470,10 +481,14 @@ ${conversation}`
             const roots: MutableBranchTreeNode[] = []
             for (const branch of branches) {
               const node = nodes.get(branch.id)
-              if (!node) continue
-              if (branch.parentBranchId && nodes.has(branch.parentBranchId)) {
+              if (node === undefined) continue
+              if (
+                branch.parentBranchId !== undefined &&
+                branch.parentBranchId !== "" &&
+                nodes.has(branch.parentBranchId)
+              ) {
                 const parent = nodes.get(branch.parentBranchId)
-                if (parent) parent.children.push(node)
+                if (parent !== undefined) parent.children.push(node)
               } else {
                 roots.push(node)
               }
@@ -493,11 +508,11 @@ ${conversation}`
         switchBranch: (input) =>
           Effect.gen(function* () {
             const fromBranch = yield* storage.getBranch(input.fromBranchId)
-            if (!fromBranch || fromBranch.sessionId !== input.sessionId) {
+            if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
               return yield* new StorageError({ message: "From branch not found" })
             }
             const toBranch = yield* storage.getBranch(input.toBranchId)
-            if (!toBranch || toBranch.sessionId !== input.sessionId) {
+            if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
               return yield* new StorageError({ message: "To branch not found" })
             }
 
@@ -506,7 +521,7 @@ ${conversation}`
               const summary = yield* summarizeBranch(input.fromBranchId).pipe(
                 Effect.catchAll(() => Effect.succeed("")),
               )
-              if (summary) {
+              if (summary !== "") {
                 yield* storage.updateBranchSummary(input.fromBranchId, summary)
                 yield* eventStore.publish(
                   new BranchSummarized({
@@ -530,7 +545,7 @@ ${conversation}`
         forkBranch: (input) =>
           Effect.gen(function* () {
             const fromBranch = yield* storage.getBranch(input.fromBranchId)
-            if (!fromBranch || fromBranch.sessionId !== input.sessionId) {
+            if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
               return yield* new StorageError({ message: "Branch not found" })
             }
 
@@ -589,13 +604,8 @@ ${conversation}`
           const session = yield* storage.getSession(input.sessionId)
           const bypass = session?.bypass ?? true
 
-          // Switch mode if specified (before starting the run)
-          if (input.mode) {
-            yield* agentLoop.steer({ _tag: "SwitchMode", mode: input.mode })
-          }
-
           // Update branch model if specified
-          if (input.model) {
+          if (input.model !== undefined && input.model !== "") {
             yield* storage.updateBranchModel(input.branchId, input.model)
             yield* agentLoop.steer({ _tag: "SwitchModel", model: input.model })
             yield* eventStore.publish(
@@ -609,7 +619,7 @@ ${conversation}`
 
           yield* Effect.forkDaemon(
             Effect.gen(function* () {
-              if (!session || session.name !== "New Chat") return
+              if (session === undefined || session.name !== "New Chat") return
               const generatedName = yield* generateSessionName(provider, input.content)
               const updatedSession = new Session({
                 ...session,
@@ -675,7 +685,7 @@ ${conversation}`
         compactBranch: (input) =>
           Effect.gen(function* () {
             const branch = yield* storage.getBranch(input.branchId)
-            if (!branch || branch.sessionId !== input.sessionId) {
+            if (branch === undefined || branch.sessionId !== input.sessionId) {
               return yield* new StorageError({ message: "Branch not found" })
             }
 
@@ -700,24 +710,26 @@ ${conversation}`
             yield* checkpointService.createPlanCheckpoint(input.branchId, input.planPath)
 
             // Emit plan confirmed event
-            yield* eventStore.publish(
-              new PlanConfirmed({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                requestId: input.requestId ?? Bun.randomUUIDv7(),
-                planPath: input.planPath,
-              }),
-            )
+            if (input.emitEvent !== false) {
+              yield* eventStore.publish(
+                new PlanConfirmed({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  requestId: input.requestId ?? Bun.randomUUIDv7(),
+                  planPath: input.planPath,
+                }),
+              )
+            }
           }),
 
         getSessionState: (input) =>
           Effect.gen(function* () {
             const session = yield* storage.getSession(input.sessionId)
-            if (!session) {
+            if (session === undefined) {
               return yield* new StorageError({ message: "Session not found" })
             }
             const branch = yield* storage.getBranch(input.branchId)
-            if (!branch || branch.sessionId !== input.sessionId) {
+            if (branch === undefined || branch.sessionId !== input.sessionId) {
               return yield* new StorageError({ message: "Branch not found" })
             }
 
@@ -744,11 +756,15 @@ ${conversation}`
               tags: ["StreamStarted", "StreamEnded"],
             })
 
-            const modeTag = yield* storage.getLatestEventTag({
+            const latestAgentEvent = yield* storage.getLatestEvent({
               sessionId: input.sessionId,
               branchId: input.branchId,
-              tags: ["PlanModeEntered", "PlanConfirmed", "PlanRejected"],
+              tags: ["AgentSwitched"],
             })
+            const currentAgent =
+              latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
+                ? (latestAgentEvent.toAgent as AgentName)
+                : "default"
 
             return {
               sessionId: input.sessionId,
@@ -756,7 +772,7 @@ ${conversation}`
               messages: messageInfos,
               lastEventId: lastEventId ?? null,
               isStreaming: streamTag === "StreamStarted",
-              mode: modeTag === "PlanConfirmed" ? "build" : "plan",
+              agent: currentAgent,
               model: branch.model,
               bypass: session.bypass,
             }
@@ -765,7 +781,7 @@ ${conversation}`
         updateSessionBypass: (input) =>
           Effect.gen(function* () {
             const session = yield* storage.getSession(input.sessionId)
-            if (!session) {
+            if (session === undefined) {
               return yield* new StorageError({ message: "Session not found" })
             }
             const updated = new Session({
