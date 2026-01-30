@@ -18,6 +18,9 @@ export const DEFAULTS = {
 
   // Follow-up queue max size
   followUpQueueMax: 10,
+
+  // Tool execution concurrency
+  toolConcurrency: 4,
 } as const
 
 export type Defaults = typeof DEFAULTS

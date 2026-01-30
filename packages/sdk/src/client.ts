@@ -4,6 +4,7 @@ import { RpcClient, RpcTest, RpcSerialization } from "@effect/rpc"
 import type { RpcGroup } from "@effect/rpc"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "@effect/platform"
 import { GentRpcs, RpcHandlersLive, type GentRpcsClient, type GentRpcError } from "@gent/server"
+import { stringifyOutput, summarizeOutput } from "@gent/core"
 import type {
   AgentName,
   EventEnvelope,
@@ -56,27 +57,6 @@ export interface ExtractedToolCall {
   input: unknown | undefined
   summary: string | undefined
   output: string | undefined
-}
-
-// Stringify tool output to full string
-function stringifyOutput(value: unknown): string {
-  if (typeof value === "string") return value
-  return JSON.stringify(value, null, 2)
-}
-
-// Summarize tool output for display - truncate long strings and format objects
-function summarizeOutput(output: { type: "json" | "error-json"; value: unknown }): string {
-  const value = output.value
-  if (typeof value === "string") {
-    const firstLine = value.split("\n")[0] ?? ""
-    // Limit to 100 characters to prevent UI overflow
-    return firstLine.length > 100 ? firstLine.slice(0, 100) + "..." : firstLine
-  }
-  if (value !== null && typeof value === "object") {
-    const str = JSON.stringify(value)
-    return str.length > 100 ? str.slice(0, 100) + "..." : str
-  }
-  return String(value)
 }
 
 // Extract tool calls from a single message's parts (no result joining)

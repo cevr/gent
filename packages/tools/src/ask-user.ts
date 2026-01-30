@@ -121,6 +121,7 @@ export class AskUserHandler extends Context.Tag("@gent/tools/src/ask-user/AskUse
 
 export const AskUserTool = defineTool({
   name: "ask_user",
+  concurrency: "serial",
   description:
     "Ask user for clarification. Use frequently to validate assumptions and get preferences.",
   params: AskUserParams,

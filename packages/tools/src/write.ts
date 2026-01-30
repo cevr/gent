@@ -32,6 +32,7 @@ export const WriteResult = Schema.Struct({
 
 export const WriteTool = defineTool({
   name: "write",
+  concurrency: "serial",
   description: "Write content to file. Creates directories if needed.",
   params: WriteParams,
   execute: Effect.fn("WriteTool.execute")(function* (params) {

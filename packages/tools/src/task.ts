@@ -27,6 +27,7 @@ export const TaskParams = Schema.Struct({
 
 export const TaskTool = defineTool({
   name: "task",
+  concurrency: "serial",
   description:
     "Delegate work to specialized subagents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}).",
   params: TaskParams,

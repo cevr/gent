@@ -82,6 +82,7 @@ export const QuestionResult = Schema.Struct({
 
 export const QuestionTool = defineTool({
   name: "question",
+  concurrency: "serial",
   description:
     "Ask user structured questions with predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or making implementation choices.",
   params: QuestionParams,

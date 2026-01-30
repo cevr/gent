@@ -7,8 +7,6 @@ import {
   ErrorOccurred,
   Message,
   MessageReceived,
-  Permission,
-  PermissionHandler,
   StreamChunk as EventStreamChunk,
   StreamEnded,
   StreamStarted,
@@ -17,16 +15,17 @@ import {
   ToolCallPart,
   ToolCallStarted,
   ToolRegistry,
-  ToolResultPart,
   SubagentError,
-  type ToolDefinition,
+  DEFAULTS,
+  summarizeToolOutput,
+  stringifyOutput,
 } from "@gent/core"
 import type { FinishChunk } from "@gent/providers"
 import { Provider } from "@gent/providers"
 import { Storage } from "@gent/storage"
 import { withRetry } from "../retry"
 import { buildSystemPrompt } from "./system-prompt"
-import { summarizeToolOutput, stringifyOutput } from "./shared"
+import { ToolRunner } from "./tool-runner"
 
 const AgentState = State({
   Idle: {},
@@ -87,7 +86,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
   static Live: Layer.Layer<
     AgentActor,
     never,
-    Storage | Provider | ToolRegistry | EventStore | Permission | PermissionHandler | AgentRegistry
+    Storage | Provider | ToolRegistry | EventStore | AgentRegistry | ToolRunner
   > = Layer.effect(
     AgentActor,
     Effect.gen(function* () {
@@ -95,9 +94,9 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
       const provider = yield* Provider
       const toolRegistry = yield* ToolRegistry
       const eventStore = yield* EventStore
-      const permission = yield* Permission
-      const permissionHandler = yield* PermissionHandler
       const agentRegistry = yield* AgentRegistry
+      const toolRunner = yield* ToolRunner
+      const serialSemaphore = yield* Effect.makeSemaphore(1)
 
       const runEffect: (input: AgentRunInput) => Effect.Effect<void, never> = (input) =>
         Effect.gen(function* () {
@@ -134,21 +133,21 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
             }),
           )
 
+          const allTools = yield* toolRegistry.list()
+          const tools = allTools.filter((tool) => {
+            if (agent.allowedTools !== undefined && !agent.allowedTools.includes(tool.name)) {
+              return false
+            }
+            if (agent.deniedTools !== undefined && agent.deniedTools.includes(tool.name)) {
+              return false
+            }
+            return true
+          })
+
+          const messages: Message[] = [userMessage]
           let continueLoop = true
 
           while (continueLoop) {
-            const messages = yield* storage.listMessages(input.branchId)
-            const allTools = yield* toolRegistry.list()
-            const tools = allTools.filter((tool) => {
-              if (agent.allowedTools !== undefined && !agent.allowedTools.includes(tool.name)) {
-                return false
-              }
-              if (agent.deniedTools !== undefined && agent.deniedTools.includes(tool.name)) {
-                return false
-              }
-              return true
-            })
-
             yield* eventStore.publish(
               new StreamStarted({ sessionId: input.sessionId, branchId: input.branchId }),
             )
@@ -218,6 +217,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
             })
 
             yield* storage.createMessage(assistantMessage)
+            messages.push(assistantMessage)
             yield* eventStore.publish(
               new MessageReceived({
                 sessionId: input.sessionId,
@@ -228,159 +228,49 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
             )
 
             if (toolCalls.length > 0) {
-              const toolResults: ToolResultPart[] = []
-
-              for (const toolCall of toolCalls) {
-                yield* eventStore.publish(
-                  new ToolCallStarted({
-                    sessionId: input.sessionId,
-                    branchId: input.branchId,
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolCall.toolName,
-                    input: toolCall.input,
-                  }),
-                )
-
-                const result = yield* Effect.gen(function* () {
-                  const tool = yield* toolRegistry.get(toolCall.toolName)
-                  if (tool === undefined) {
-                    return new ToolResultPart({
-                      type: "tool-result",
-                      toolCallId: toolCall.toolCallId,
-                      toolName: toolCall.toolName,
-                      output: {
-                        type: "error-json",
-                        value: { error: `Unknown tool: ${toolCall.toolName}` },
-                      },
-                    })
-                  }
-
-                  const permResult =
-                    input.bypass === true
-                      ? "allowed"
-                      : yield* permission.check(toolCall.toolName, toolCall.input)
-
-                  if (permResult === "denied") {
-                    return new ToolResultPart({
-                      type: "tool-result",
-                      toolCallId: toolCall.toolCallId,
-                      toolName: toolCall.toolName,
-                      output: { type: "error-json", value: { error: "Permission denied" } },
-                    })
-                  }
-
-                  if (permResult === "ask") {
-                    const decision = yield* permissionHandler.request(
-                      {
-                        toolCallId: toolCall.toolCallId,
-                        toolName: toolCall.toolName,
-                        input: toolCall.input,
-                      },
-                      {
+              const toolResults = yield* Effect.forEach(
+                toolCalls,
+                (toolCall) =>
+                  Effect.gen(function* () {
+                    yield* eventStore.publish(
+                      new ToolCallStarted({
                         sessionId: input.sessionId,
                         branchId: input.branchId,
                         toolCallId: toolCall.toolCallId,
-                        agentName: agent.name,
-                      },
+                        toolName: toolCall.toolName,
+                        input: toolCall.input,
+                      }),
                     )
 
-                    if (decision === "deny") {
-                      return new ToolResultPart({
-                        type: "tool-result",
-                        toolCallId: toolCall.toolCallId,
-                        toolName: toolCall.toolName,
-                        output: {
-                          type: "error-json",
-                          value: { error: "Permission denied by user" },
-                        },
-                      })
-                    }
-                  }
-
-                  const decodedInput = yield* Effect.try({
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- tool.params is AnyToolDefinition with any schema type
-                    try: () => Schema.decodeUnknownSync(tool.params)(toolCall.input),
-                    catch: (e) =>
-                      new SubagentError({
-                        message: `Invalid tool input: ${String(e)}`,
-                        cause: e,
-                      }),
-                  }).pipe(Effect.either)
-
-                  if (decodedInput._tag === "Left") {
-                    const error =
-                      decodedInput.left instanceof Error
-                        ? decodedInput.left.message
-                        : String(decodedInput.left)
-                    return new ToolResultPart({
-                      type: "tool-result",
-                      toolCallId: toolCall.toolCallId,
-                      toolName: toolCall.toolName,
-                      output: {
-                        type: "error-json",
-                        value: {
-                          error: `Invalid tool input: ${error}`,
-                        },
-                      },
-                    })
-                  }
-
-                  const toolDefinition = tool as ToolDefinition<
-                    string,
-                    Schema.Schema.AnyNoContext,
-                    unknown,
-                    unknown,
-                    never
-                  >
-                  const result = yield* toolDefinition
-                    .execute(decodedInput.right, {
+                    const tool = yield* toolRegistry.get(toolCall.toolName)
+                    const ctx = {
                       sessionId: input.sessionId,
                       branchId: input.branchId,
                       toolCallId: toolCall.toolCallId,
                       agentName: agent.name,
-                    })
-                    .pipe(
-                      Effect.mapError(
-                        (e) => new SubagentError({ message: `Tool failed: ${String(e)}` }),
-                      ),
-                      Effect.either,
+                    }
+                    const run = toolRunner.run(toolCall, ctx, { bypass: input.bypass })
+                    const result = yield* tool?.concurrency === "serial"
+                      ? serialSemaphore.withPermits(1)(run)
+                      : run
+
+                    const outputSummary = summarizeToolOutput(result)
+                    yield* eventStore.publish(
+                      new ToolCallCompleted({
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                        toolCallId: toolCall.toolCallId,
+                        toolName: toolCall.toolName,
+                        isError: result.output.type === "error-json",
+                        summary: outputSummary,
+                        output: stringifyOutput(result.output.value),
+                      }),
                     )
 
-                  if (result._tag === "Left") {
-                    return new ToolResultPart({
-                      type: "tool-result",
-                      toolCallId: toolCall.toolCallId,
-                      toolName: toolCall.toolName,
-                      output: {
-                        type: "error-json",
-                        value: { error: result.left.message },
-                      },
-                    })
-                  }
-
-                  return new ToolResultPart({
-                    type: "tool-result",
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolCall.toolName,
-                    output: { type: "json", value: result.right },
-                  })
-                })
-
-                toolResults.push(result)
-
-                const outputSummary = summarizeToolOutput(result)
-                yield* eventStore.publish(
-                  new ToolCallCompleted({
-                    sessionId: input.sessionId,
-                    branchId: input.branchId,
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolCall.toolName,
-                    isError: result.output.type === "error-json",
-                    summary: outputSummary,
-                    output: stringifyOutput(result.output.value),
+                    return result
                   }),
-                )
-              }
+                { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
+              )
 
               const toolResultMessage = new Message({
                 id: Bun.randomUUIDv7(),
@@ -391,6 +281,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
                 createdAt: new Date(),
               })
               yield* storage.createMessage(toolResultMessage)
+              messages.push(toolResultMessage)
               continueLoop = true
             } else {
               continueLoop = false

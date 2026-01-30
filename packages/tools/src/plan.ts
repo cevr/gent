@@ -24,6 +24,7 @@ const defaultPlanPath = (sessionId: string, toolCallId: string) =>
 
 export const PlanTool = defineTool({
   name: "plan",
+  concurrency: "serial",
   description:
     "Present a plan for confirmation using the plan UI. The plan is saved to disk and shown inline as markdown.",
   params: PlanParams,

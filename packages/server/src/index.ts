@@ -23,6 +23,7 @@ import {
   AgentActor,
   InProcessRunner,
   SubagentRunnerConfig,
+  ToolRunner,
 } from "@gent/runtime"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
 import { EventStoreLive } from "./event-store.js"
@@ -231,6 +232,11 @@ export const createDependencies = (
   // PermissionHandler requires EventStore
   const PermissionHandlerLive = Layer.provide(PermissionHandler.Live, BaseWithPermission)
 
+  const ToolRunnerLive = Layer.provide(
+    ToolRunner.Live,
+    Layer.merge(BaseWithPermission, PermissionHandlerLive),
+  )
+
   // PlanHandler requires EventStore
   const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseWithPermission)
 
@@ -299,6 +305,7 @@ export const createDependencies = (
     AskUserHandlerLive,
     QuestionHandlerLive,
     PermissionHandlerLive,
+    ToolRunnerLive,
     PlanHandlerLive,
   )
 

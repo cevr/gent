@@ -57,7 +57,12 @@ export class Permission extends Context.Tag("@gent/core/src/permission")<
     defaultAction: PermissionRule["action"] = "allow",
   ): Layer.Layer<Permission> =>
     Layer.sync(Permission, () => {
-      let rules = [...initialRules]
+      type StoredRule = { rule: PermissionRule; regex?: RegExp }
+      const toStored = (rule: PermissionRule): StoredRule => ({
+        rule,
+        regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
+      })
+      let rules = initialRules.map(toStored)
       const defaultResult =
         defaultAction === "allow"
           ? ("allowed" as const)
@@ -68,12 +73,10 @@ export class Permission extends Context.Tag("@gent/core/src/permission")<
         check: (tool, args) =>
           Effect.sync(() => {
             const argsStr = JSON.stringify(args)
-            for (const rule of rules) {
+            for (const entry of rules) {
+              const rule = entry.rule
               if (rule.tool !== tool && rule.tool !== "*") continue
-              if (rule.pattern !== undefined) {
-                const regex = new RegExp(rule.pattern)
-                if (!regex.test(argsStr)) continue
-              }
+              if (entry.regex !== undefined && !entry.regex.test(argsStr)) continue
               // Map rule action to result
               if (rule.action === "allow") return "allowed" as const
               if (rule.action === "deny") return "denied" as const
@@ -83,14 +86,16 @@ export class Permission extends Context.Tag("@gent/core/src/permission")<
           }),
         addRule: (rule) =>
           Effect.sync(() => {
-            rules.push(rule)
+            rules.push(toStored(rule))
           }),
         removeRule: (tool, pattern) =>
           Effect.sync(() => {
-            const idx = rules.findIndex((r) => r.tool === tool && r.pattern === pattern)
+            const idx = rules.findIndex(
+              (entry) => entry.rule.tool === tool && entry.rule.pattern === pattern,
+            )
             if (idx !== -1) rules.splice(idx, 1)
           }),
-        getRules: () => Effect.succeed(rules),
+        getRules: () => Effect.succeed(rules.map((entry) => entry.rule)),
       }
     })
 

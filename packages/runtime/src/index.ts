@@ -6,6 +6,7 @@ export {
   SubagentRunnerConfig,
   InProcessRunner,
   SubprocessRunner,
+  ToolRunner,
 } from "./agent"
 
 export {
@@ -23,12 +24,7 @@ export {
 
 export { ModelRegistry, ModelRegistryError, type ModelRegistryService } from "./model-registry"
 
-export {
-  ConfigService,
-  ConfigServiceError,
-  UserConfig,
-  type ConfigServiceService,
-} from "./config-service.js"
+export { ConfigService, UserConfig, type ConfigServiceService } from "./config-service.js"
 
 export { InstructionsLoader, type InstructionsLoaderService } from "./instructions-loader.js"
 

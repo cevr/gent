@@ -1,10 +1,9 @@
-import { Context, DateTime, Effect, Layer, Ref, Runtime, Schema, Stream, Queue } from "effect"
+import { Context, DateTime, Effect, Layer, Ref, Schema, Stream, Queue } from "effect"
 import type {
   AgentEvent,
   EventStoreError,
   ToolContext,
   AgentName as AgentNameType,
-  ToolDefinition,
 } from "@gent/core"
 import {
   AgentName,
@@ -13,7 +12,6 @@ import {
   Message,
   TextPart,
   ToolCallPart,
-  ToolResultPart,
   EventStore,
   StreamStarted,
   StreamChunk as EventStreamChunk,
@@ -23,10 +21,10 @@ import {
   ToolCallCompleted,
   MessageReceived,
   ToolRegistry,
-  Permission,
-  PermissionHandler,
   ErrorOccurred,
   DEFAULTS,
+  summarizeToolOutput,
+  stringifyOutput,
 } from "@gent/core"
 import type { StorageError } from "@gent/storage"
 import { Storage } from "@gent/storage"
@@ -36,7 +34,7 @@ import { withRetry } from "../retry"
 import { CheckpointService } from "../checkpoint"
 import { FileSystem } from "@effect/platform"
 import { buildSystemPrompt } from "./system-prompt"
-import { stringifyOutput, summarizeToolOutput } from "./shared"
+import { ToolRunner } from "./tool-runner"
 
 // Agent Loop Error
 
@@ -93,10 +91,9 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
     | ToolRegistry
     | AgentRegistry
     | EventStore
-    | Permission
-    | PermissionHandler
     | CheckpointService
     | FileSystem.FileSystem
+    | ToolRunner
   > =>
     Layer.scoped(
       AgentLoop,
@@ -106,11 +103,10 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
         const toolRegistry = yield* ToolRegistry
         const agentRegistry = yield* AgentRegistry
         const eventStore = yield* EventStore
-        const permission = yield* Permission
-        const permissionHandler = yield* PermissionHandler
         const checkpointService = yield* CheckpointService
         const fs = yield* FileSystem.FileSystem
-        const runtime = yield* Effect.runtime<never>()
+        const toolRunner = yield* ToolRunner
+        const serialSemaphore = yield* Effect.makeSemaphore(1)
 
         const stateRef = yield* Ref.make<AgentLoopState>({
           running: false,
@@ -177,91 +173,6 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
           },
         )
 
-        const executeToolCall = Effect.fn("AgentLoop.executeToolCall")(function* (
-          toolCall: ToolCallPart,
-          ctx: ToolContext,
-          options?: { bypass?: boolean },
-        ) {
-          const tool = yield* toolRegistry.get(toolCall.toolName)
-
-          if (tool === undefined) {
-            return new ToolResultPart({
-              type: "tool-result",
-              toolCallId: toolCall.toolCallId,
-              toolName: toolCall.toolName,
-              output: {
-                type: "error-json",
-                value: { error: `Unknown tool: ${toolCall.toolName}` },
-              },
-            })
-          }
-
-          // Check permission
-          const permResult =
-            options?.bypass === true
-              ? "allowed"
-              : yield* permission.check(toolCall.toolName, toolCall.input)
-
-          if (permResult === "denied") {
-            return new ToolResultPart({
-              type: "tool-result",
-              toolCallId: toolCall.toolCallId,
-              toolName: toolCall.toolName,
-              output: { type: "error-json", value: { error: "Permission denied" } },
-            })
-          }
-
-          if (permResult === "ask") {
-            const decision = yield* permissionHandler.request(
-              {
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                input: toolCall.input,
-              },
-              ctx,
-            )
-            if (decision === "deny") {
-              return new ToolResultPart({
-                type: "tool-result",
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                output: { type: "error-json", value: { error: "Permission denied by user" } },
-              })
-            }
-          }
-
-          // Decode input using tool's params schema
-          const decodedInput = yield* Effect.try({
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- tool.params is AnyToolDefinition with any schema type
-            try: () => Schema.decodeUnknownSync(tool.params)(toolCall.input),
-            catch: (e) =>
-              new AgentLoopError({
-                message: `Invalid tool input: ${e instanceof Error ? e.message : String(e)}`,
-                cause: e,
-              }),
-          })
-
-          // Execute tool using runtime
-          const toolEffect = (
-            tool as ToolDefinition<string, Schema.Schema.AnyNoContext, unknown, never, never>
-          ).execute(decodedInput, ctx)
-          const result = yield* Effect.tryPromise({
-            try: () => Runtime.runPromise(runtime)(toolEffect),
-            catch: (e) =>
-              new AgentLoopError({
-                message: `Tool execution failed: ${e}`,
-                cause: e,
-              }),
-          })
-
-          return new ToolResultPart({
-            type: "tool-result",
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            output: { type: "json", value: result },
-          })
-        })
-
         const runLoop: (
           sessionId: string,
           branchId: string,
@@ -309,6 +220,13 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
             let turnInterrupted = false
 
             let continueLoop = true
+            let cachedMessages: Message[] | undefined
+            let cachedCheckpointId: string | undefined
+            let cachedContextPrefix = ""
+
+            const appendCachedMessage = (message: Message) => {
+              if (cachedMessages !== undefined) cachedMessages.push(message)
+            }
 
             while (continueLoop) {
               yield* applyPendingSteerCommands(sessionId, branchId)
@@ -356,33 +274,43 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
               // Checkpoint-aware message loading
               const checkpoint = yield* checkpointService.getLatestCheckpoint(branchId)
+              const checkpointId = checkpoint?.id ?? "none"
               const { messages, contextPrefix } = yield* Effect.gen(function* () {
-                if (checkpoint === undefined) {
+                if (cachedMessages !== undefined && cachedCheckpointId === checkpointId) {
                   return {
-                    messages: yield* storage.listMessages(branchId),
-                    contextPrefix: "",
+                    messages: cachedMessages,
+                    contextPrefix: cachedContextPrefix,
                   }
+                }
+                if (checkpoint === undefined) {
+                  const loaded = yield* storage.listMessages(branchId)
+                  cachedMessages = [...loaded]
+                  cachedContextPrefix = ""
+                  cachedCheckpointId = checkpointId
+                  return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
                 }
                 if (checkpoint._tag === "PlanCheckpoint") {
                   const planContent = yield* fs
                     .readFileString(checkpoint.planPath)
                     .pipe(Effect.catchAll(() => Effect.succeed("")))
-                  return {
-                    messages: yield* storage.listMessagesSince(branchId, checkpoint.createdAt),
-                    contextPrefix: planContent !== "" ? `Plan to execute:\n${planContent}\n\n` : "",
-                  }
+                  const loaded = yield* storage.listMessagesSince(branchId, checkpoint.createdAt)
+                  cachedMessages = [...loaded]
+                  cachedContextPrefix =
+                    planContent !== "" ? `Plan to execute:\n${planContent}\n\n` : ""
+                  cachedCheckpointId = checkpointId
+                  return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
                 }
-                // CompactionCheckpoint
-                return {
-                  messages: yield* storage.listMessagesAfter(
-                    branchId,
-                    checkpoint.firstKeptMessageId,
-                  ),
-                  contextPrefix:
-                    checkpoint.summary !== undefined && checkpoint.summary !== ""
-                      ? `Previous context:\n${checkpoint.summary}\n\n`
-                      : "",
-                }
+                const loaded = yield* storage.listMessagesAfter(
+                  branchId,
+                  checkpoint.firstKeptMessageId,
+                )
+                cachedMessages = [...loaded]
+                cachedContextPrefix =
+                  checkpoint.summary !== undefined && checkpoint.summary !== ""
+                    ? `Previous context:\n${checkpoint.summary}\n\n`
+                    : ""
+                cachedCheckpointId = checkpointId
+                return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
               })
 
               const agent = yield* agentRegistry.get(state.currentAgent)
@@ -499,6 +427,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                   })
 
                   yield* storage.createMessage(assistantMessage)
+                  appendCachedMessage(assistantMessage)
                   yield* publishEvent(
                     new MessageReceived({
                       sessionId,
@@ -545,6 +474,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               })
 
               yield* storage.createMessage(assistantMessage)
+              appendCachedMessage(assistantMessage)
               yield* publishEvent(
                 new MessageReceived({
                   sessionId,
@@ -556,47 +486,49 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
               // Execute tool calls if any
               if (toolCalls.length > 0) {
-                const toolResults: ToolResultPart[] = []
+                const toolResults = yield* Effect.forEach(
+                  toolCalls,
+                  (toolCall) =>
+                    Effect.gen(function* () {
+                      yield* publishEvent(
+                        new ToolCallStarted({
+                          sessionId,
+                          branchId,
+                          toolCallId: toolCall.toolCallId,
+                          toolName: toolCall.toolName,
+                          input: toolCall.input,
+                        }),
+                      )
 
-                for (const toolCall of toolCalls) {
-                  yield* publishEvent(
-                    new ToolCallStarted({
-                      sessionId,
-                      branchId,
-                      toolCallId: toolCall.toolCallId,
-                      toolName: toolCall.toolName,
-                      input: toolCall.input,
+                      const tool = yield* toolRegistry.get(toolCall.toolName)
+                      const ctx: ToolContext = {
+                        sessionId,
+                        branchId,
+                        toolCallId: toolCall.toolCallId,
+                        agentName: state.currentAgent,
+                      }
+                      const run = toolRunner.run(toolCall, ctx, { bypass })
+                      const result = yield* tool?.concurrency === "serial"
+                        ? serialSemaphore.withPermits(1)(run)
+                        : run
+
+                      const outputSummary = summarizeToolOutput(result)
+                      yield* publishEvent(
+                        new ToolCallCompleted({
+                          sessionId,
+                          branchId,
+                          toolCallId: toolCall.toolCallId,
+                          toolName: toolCall.toolName,
+                          isError: result.output.type === "error-json",
+                          summary: outputSummary,
+                          output: stringifyOutput(result.output.value),
+                        }),
+                      )
+
+                      return result
                     }),
-                  )
-
-                  const result = yield* executeToolCall(
-                    toolCall,
-                    {
-                      sessionId,
-                      branchId,
-                      toolCallId: toolCall.toolCallId,
-                      agentName: state.currentAgent,
-                    },
-                    { bypass },
-                  )
-
-                  toolResults.push(result)
-
-                  // Extract output summary for display
-                  const outputSummary = summarizeToolOutput(result)
-
-                  yield* publishEvent(
-                    new ToolCallCompleted({
-                      sessionId,
-                      branchId,
-                      toolCallId: toolCall.toolCallId,
-                      toolName: toolCall.toolName,
-                      isError: result.output.type === "error-json",
-                      summary: outputSummary,
-                      output: stringifyOutput(result.output.value),
-                    }),
-                  )
-                }
+                  { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
+                )
 
                 // Create tool result message
                 const toolResultMessage = new Message({
@@ -609,6 +541,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                 })
 
                 yield* storage.createMessage(toolResultMessage)
+                appendCachedMessage(toolResultMessage)
 
                 // Continue loop to process tool results
                 continueLoop = true

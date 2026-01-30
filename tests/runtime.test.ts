@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import {
   isRetryable,
   getRetryDelay,
@@ -10,16 +10,23 @@ import {
   AgentActor,
   InProcessRunner,
   SubagentRunnerConfig,
+  ToolRunner,
 } from "@gent/runtime"
-import { ProviderError } from "@gent/providers"
+import { ProviderError, ToolCallChunk, FinishChunk } from "@gent/providers"
 import {
   Message,
   TextPart,
   ToolResultPart,
   Agents,
+  AgentRegistry,
   Session,
   Branch,
   SubagentRunnerService,
+  defineTool,
+  ToolRegistry,
+  Permission,
+  PermissionHandler,
+  EventStore,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/test-utils"
@@ -173,5 +180,143 @@ describe("Subagent Runner", () => {
         ])
       }).pipe(Effect.provide(layer)),
     )
+  })
+})
+
+describe("ToolRunner", () => {
+  test("returns error result when tool fails", async () => {
+    const FailTool = defineTool({
+      name: "fail",
+      concurrency: "parallel",
+      description: "Fails on purpose",
+      params: Schema.Struct({}),
+      execute: () => Effect.fail(new Error("boom")),
+    })
+
+    const layer = Layer.mergeAll(
+      ToolRegistry.Live([FailTool]),
+      Permission.Test(),
+      PermissionHandler.Test(["allow"]),
+      ToolRunner.Live,
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc1", toolName: "fail", input: {} },
+          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "default" },
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("error-json")
+    const error = (result.output.value as { error?: string }).error ?? ""
+    expect(error).toContain("Tool failed")
+  })
+})
+
+describe("Tool concurrency", () => {
+  test("serial tool calls do not overlap", async () => {
+    const events: string[] = []
+    let running = 0
+    let maxRunning = 0
+
+    const makeSerialTool = (name: string) =>
+      defineTool({
+        name,
+        concurrency: "serial",
+        description: `Serial tool ${name}`,
+        params: Schema.Struct({}),
+        execute: () =>
+          Effect.gen(function* () {
+            yield* Effect.sync(() => {
+              running += 1
+              maxRunning = Math.max(maxRunning, running)
+              events.push(`start:${name}`)
+            })
+
+            yield* Effect.promise(
+              () =>
+                new Promise<void>((resolve) => {
+                  setTimeout(resolve, 20)
+                }),
+            )
+
+            yield* Effect.sync(() => {
+              events.push(`end:${name}`)
+              running -= 1
+            })
+
+            return { ok: true }
+          }),
+      })
+
+    const toolA = makeSerialTool("serial-a")
+    const toolB = makeSerialTool("serial-b")
+
+    const providerResponses = [
+      [
+        new ToolCallChunk({ toolCallId: "tc-1", toolName: "serial-a", input: {} }),
+        new ToolCallChunk({ toolCallId: "tc-2", toolName: "serial-b", input: {} }),
+        new FinishChunk({ finishReason: "tool_calls" }),
+      ],
+      [new FinishChunk({ finishReason: "stop" })],
+    ]
+
+    const layer = Layer.mergeAll(
+      Storage.Test(),
+      Provider.Test(providerResponses),
+      ToolRegistry.Live([toolA, toolB]),
+      EventStore.Test(),
+      AgentRegistry.Live,
+      Permission.Test(),
+      PermissionHandler.Test(["allow"]),
+      ToolRunner.Live,
+      AgentActor.Live,
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const actor = yield* AgentActor
+
+        const now = new Date()
+        const session = new Session({
+          id: "serial-session",
+          name: "Serial Test",
+          bypass: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "serial-branch",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        yield* actor.run({
+          sessionId: session.id,
+          branchId: branch.id,
+          agentName: "default",
+          prompt: "run serial tools",
+          defaultModel: "test",
+          systemPrompt: "",
+          bypass: true,
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(maxRunning).toBe(1)
+    expect(events.length).toBe(4)
+    expect(events[0]?.startsWith("start:")).toBe(true)
+    expect(events[1]?.startsWith("end:")).toBe(true)
+    expect(events[2]?.startsWith("start:")).toBe(true)
+    expect(events[3]?.startsWith("end:")).toBe(true)
+    expect(events[0]?.slice("start:".length)).toBe(events[1]?.slice("end:".length))
+    expect(events[2]?.slice("start:".length)).toBe(events[3]?.slice("end:".length))
   })
 })

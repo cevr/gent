@@ -14,13 +14,6 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   providers: Schema.optional(Schema.Record({ key: Schema.String, value: CustomProviderConfig })),
 }) {}
 
-// ConfigService Error
-
-export class ConfigServiceError extends Schema.TaggedError<ConfigServiceError>()(
-  "ConfigServiceError",
-  { message: Schema.String },
-) {}
-
 // ConfigService
 
 export interface ConfigServiceService {

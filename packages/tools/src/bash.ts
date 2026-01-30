@@ -40,6 +40,7 @@ export const BashResult = Schema.Struct({
 
 export const BashTool = defineTool({
   name: "bash",
+  concurrency: "serial",
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
   params: BashParams,

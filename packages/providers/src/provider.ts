@@ -12,6 +12,9 @@ import {
 } from "ai"
 import { ProviderFactory } from "./provider-factory"
 
+type StreamTextResult = ReturnType<typeof streamText>
+type FullStreamPart = StreamTextResult extends { fullStream: AsyncIterable<infer A> } ? A : never
+
 // Provider Error
 
 export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
@@ -95,82 +98,87 @@ export class Provider extends Context.Tag("@gent/providers/src/provider")<
           const messages = convertMessages(request.messages)
           const tools = request.tools !== undefined ? convertTools(request.tools) : undefined
 
-          return Stream.async<StreamChunk, ProviderError>((emit) => {
-            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- intentional fire-and-forget async IIFE for Stream.async
-            ;(async () => {
-              try {
-                const opts: Parameters<typeof streamText>[0] = {
-                  model,
-                  messages,
-                }
-                if (tools !== undefined) opts.tools = tools
-                if (request.systemPrompt !== undefined && request.systemPrompt !== "") {
-                  opts.system = request.systemPrompt
-                }
-                if (request.maxTokens !== undefined) {
-                  opts.maxOutputTokens = request.maxTokens
-                }
-                if (request.temperature !== undefined) {
-                  opts.temperature = request.temperature
-                }
+          const opts: Parameters<typeof streamText>[0] = {
+            model,
+            messages,
+          }
+          if (tools !== undefined) opts.tools = tools
+          if (request.systemPrompt !== undefined && request.systemPrompt !== "") {
+            opts.system = request.systemPrompt
+          }
+          if (request.maxTokens !== undefined) {
+            opts.maxOutputTokens = request.maxTokens
+          }
+          if (request.temperature !== undefined) {
+            opts.temperature = request.temperature
+          }
 
-                const result = streamText(opts)
+          const result = yield* Effect.try({
+            try: () => streamText(opts),
+            catch: (e) =>
+              new ProviderError({
+                message: `Stream failed: ${e}`,
+                model: request.model,
+                cause: e,
+              }),
+          })
 
-                for await (const part of result.fullStream) {
-                  switch (part.type) {
-                    case "text-delta":
-                      await emit.single(new TextChunk({ text: part.text }))
-                      break
-                    case "tool-call":
-                      await emit.single(
-                        new ToolCallChunk({
-                          toolCallId: part.toolCallId,
-                          toolName: part.toolName,
-                          input: part.input,
-                        }),
-                      )
-                      break
-                    case "reasoning-delta":
-                      await emit.single(new ReasoningChunk({ text: part.text }))
-                      break
-                    case "finish":
-                      await emit.single(
-                        new FinishChunk({
-                          finishReason: part.finishReason ?? "stop",
-                          usage:
-                            part.totalUsage !== undefined
-                              ? {
-                                  inputTokens: part.totalUsage.inputTokens ?? 0,
-                                  outputTokens: part.totalUsage.outputTokens ?? 0,
-                                }
-                              : undefined,
-                        }),
-                      )
-                      break
-                    case "error":
-                      const err = part.error as Error
-                      await emit.fail(
-                        new ProviderError({
-                          message: `API error: ${err?.message ?? String(part.error)}`,
-                          model: request.model,
-                          cause: part.error,
-                        }),
-                      )
-                      return
-                  }
-                }
-                await emit.end()
-              } catch (e) {
-                await emit.fail(
+          const toChunk = (
+            part: FullStreamPart,
+          ): Effect.Effect<StreamChunk | null, ProviderError> => {
+            switch (part.type) {
+              case "text-delta":
+                return Effect.succeed<StreamChunk>(new TextChunk({ text: part.text }))
+              case "tool-call":
+                return Effect.succeed<StreamChunk>(
+                  new ToolCallChunk({
+                    toolCallId: part.toolCallId,
+                    toolName: part.toolName,
+                    input: part.input,
+                  }),
+                )
+              case "reasoning-delta":
+                return Effect.succeed<StreamChunk>(new ReasoningChunk({ text: part.text }))
+              case "finish":
+                return Effect.succeed<StreamChunk>(
+                  new FinishChunk({
+                    finishReason: part.finishReason ?? "stop",
+                    usage:
+                      part.totalUsage !== undefined
+                        ? {
+                            inputTokens: part.totalUsage.inputTokens ?? 0,
+                            outputTokens: part.totalUsage.outputTokens ?? 0,
+                          }
+                        : undefined,
+                  }),
+                )
+              case "error": {
+                const err = part.error as Error
+                return Effect.fail(
                   new ProviderError({
-                    message: `Stream failed: ${e}`,
+                    message: `API error: ${err?.message ?? String(part.error)}`,
                     model: request.model,
-                    cause: e,
+                    cause: part.error,
                   }),
                 )
               }
-            })()
-          })
+              default:
+                return Effect.succeed(null)
+            }
+          }
+
+          return Stream.fromAsyncIterable<FullStreamPart, ProviderError>(
+            result.fullStream,
+            (e) =>
+              new ProviderError({
+                message: `Stream failed: ${e}`,
+                model: request.model,
+                cause: e,
+              }),
+          ).pipe(
+            Stream.mapEffect(toChunk),
+            Stream.filter((chunk): chunk is StreamChunk => chunk !== null),
+          )
         }),
 
         generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
@@ -302,16 +310,24 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
   return result
 }
 
+const toolCache = new WeakMap<AnyToolDefinition, ToolSet[string]>()
+
 function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
   const result: ToolSet = {}
 
   for (const t of tools) {
-    // Convert Effect Schema to JSON Schema, then wrap with AI SDK's jsonSchema helper
+    const cached = toolCache.get(t)
+    if (cached !== undefined) {
+      result[t.name] = cached
+      continue
+    }
     const effectJsonSchema = JSONSchema.make(t.params as Schema.Schema<unknown, unknown, never>)
-    result[t.name] = tool({
+    const wrapped = tool({
       description: t.description,
       inputSchema: jsonSchema(effectJsonSchema),
-    })
+    }) as ToolSet[string]
+    toolCache.set(t, wrapped)
+    result[t.name] = wrapped
   }
 
   return result

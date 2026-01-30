@@ -40,6 +40,7 @@ export const EditResult = Schema.Struct({
 
 export const EditTool = defineTool({
   name: "edit",
+  concurrency: "serial",
   description:
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
   params: EditParams,

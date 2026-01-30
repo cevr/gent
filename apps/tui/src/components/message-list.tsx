@@ -1,9 +1,10 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show } from "solid-js"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
 import { getSpinnerFrames, formatToolInput } from "./message-list-utils"
 import { SessionEventIndicator, type SessionEvent } from "./session-event-indicator"
 import type { ImageInfo } from "../client"
+import { useSpinnerClock } from "../hooks/use-spinner-clock"
 
 export type { ToolCall }
 
@@ -104,17 +105,9 @@ function AssistantMessage(props: {
 }
 
 function useSpinner(toolName: string) {
-  const [frame, setFrame] = createSignal(0)
   const frames = getSpinnerFrames(toolName)
-
-  onMount(() => {
-    const interval = setInterval(() => {
-      setFrame((f) => (f + 1) % frames.length)
-    }, 150)
-    onCleanup(() => clearInterval(interval))
-  })
-
-  return () => frames[frame()] ?? frames[0]
+  const tick = useSpinnerClock()
+  return () => frames[tick() % frames.length] ?? frames[0]
 }
 
 function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {

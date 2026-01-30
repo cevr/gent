@@ -109,6 +109,7 @@ function getCachePath(spec: string): string {
 
 export const RepoExplorerTool = defineTool({
   name: "repo_explorer",
+  concurrency: "serial",
   description:
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, get paths.",
   params: RepoExplorerParams,

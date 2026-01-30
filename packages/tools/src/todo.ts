@@ -46,6 +46,7 @@ export const TodoReadResult = Schema.Struct({
 
 export const TodoReadTool = defineTool({
   name: "todo_read",
+  concurrency: "serial",
   description: "Read current todo list for tracking task progress",
   params: TodoReadParams,
   execute: Effect.fn("TodoReadTool.execute")(function* () {
@@ -92,6 +93,7 @@ export const TodoWriteResult = Schema.Struct({
 
 export const TodoWriteTool = defineTool({
   name: "todo_write",
+  concurrency: "serial",
   description:
     "Update todo list with new tasks. Replaces entire list. Use for tracking multi-step work.",
   params: TodoWriteParams,
