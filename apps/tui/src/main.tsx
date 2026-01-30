@@ -294,10 +294,22 @@ const main = Command.make(
 
       // Handle headless mode
       if (state._tag === "headless") {
+        const branchId = state.session.branchId
+        if (branchId === undefined) {
+          yield* Console.error("Error: session has no branch")
+          return process.exit(1)
+        }
         const internalAgent = process.env["GENT_INTERNAL_AGENT"]
         if (internalAgent !== undefined && internalAgent !== "") {
           yield* Schema.decodeUnknown(AgentName)(internalAgent).pipe(
-            Effect.flatMap((agent) => core.steer({ _tag: "SwitchAgent", agent })),
+            Effect.flatMap((agent) =>
+              core.steer({
+                _tag: "SwitchAgent",
+                sessionId: state.session.id,
+                branchId,
+                agent,
+              }),
+            ),
             Effect.catchAll(() =>
               Console.error(`Error: invalid internal agent ${internalAgent}`).pipe(
                 Effect.flatMap(() => Effect.sync(() => process.exit(1))),
@@ -305,11 +317,7 @@ const main = Command.make(
             ),
           )
         }
-        if (state.session.branchId === undefined) {
-          yield* Console.error("Error: session has no branch")
-          return process.exit(1)
-        }
-        yield* runHeadless(core, state.session.id, state.session.branchId, state.prompt)
+        yield* runHeadless(core, state.session.id, branchId, state.prompt)
         return
       }
 

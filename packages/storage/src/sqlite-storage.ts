@@ -44,6 +44,10 @@ export interface StorageService {
   readonly getSession: (id: string) => Effect.Effect<Session | undefined, StorageError>
   readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
+  readonly listFirstBranches: () => Effect.Effect<
+    ReadonlyArray<{ sessionId: string; branchId: string | undefined }>,
+    StorageError
+  >
   readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
   readonly deleteSession: (id: string) => Effect.Effect<void, StorageError>
 
@@ -381,6 +385,34 @@ const makeStorage = (db: Database): StorageService => {
         catch: (e) =>
           new StorageError({
             message: "Failed to list sessions",
+            cause: e,
+          }),
+      }),
+
+    listFirstBranches: () =>
+      Effect.try({
+        try: () => {
+          const rows = db
+            .query(
+              `SELECT s.id AS session_id, b.id AS branch_id
+               FROM sessions s
+               LEFT JOIN branches b
+                 ON b.session_id = s.id
+                 AND b.created_at = (
+                   SELECT MIN(created_at) FROM branches WHERE session_id = s.id
+                 )
+               ORDER BY s.updated_at DESC`,
+            )
+            .all() as Array<{ session_id: string; branch_id: string | null }>
+
+          return rows.map((row) => ({
+            sessionId: row.session_id,
+            branchId: row.branch_id ?? undefined,
+          }))
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to list first branches",
             cause: e,
           }),
       }),

@@ -133,7 +133,7 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
         }
       })
 
-      yield* Effect.forkDaemon(refresh)
+      yield* Effect.forkScoped(refresh)
 
       return ModelRegistry.of({
         list: () => load,

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
 import {
   isRetryable,
   getRetryDelay,
@@ -7,11 +7,13 @@ import {
   pruneToolOutputs,
   estimateTokens,
   DEFAULT_COMPACTION_CONFIG,
+  AgentLoop,
   AgentActor,
   ActorSystemDefault,
   InProcessRunner,
   SubagentRunnerConfig,
   ToolRunner,
+  CheckpointService,
 } from "@gent/runtime"
 import { Provider, ProviderError, ToolCallChunk, FinishChunk } from "@gent/providers"
 import {
@@ -32,6 +34,7 @@ import {
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/test-utils"
+import { BunContext } from "@effect/platform-bun"
 
 describe("Retry Logic", () => {
   test("isRetryable detects rate limits", () => {
@@ -302,6 +305,124 @@ describe("Subagent Runner", () => {
 
     expect(result._tag).toBe("error")
     expect(result.error).toContain("timed out")
+  })
+})
+
+describe("AgentLoop actor model", () => {
+  const makeMessage = (sessionId: string, branchId: string, text: string) =>
+    new Message({
+      id: `${sessionId}-${branchId}-${text}`,
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [new TextPart({ type: "text", text })],
+      createdAt: new Date(),
+    })
+
+  const makeLayer = (providerLayer: Layer.Layer<Provider>) =>
+    Layer.mergeAll(
+      Storage.Test(),
+      providerLayer,
+      ToolRegistry.Test(),
+      AgentRegistry.Live,
+      EventStore.Test(),
+      CheckpointService.Test(),
+      ToolRunner.Test(),
+      AgentLoop.Live({ systemPrompt: "" }),
+    ).pipe(Layer.provide(BunContext.layer))
+
+  test("runs sessions concurrently", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    let calls = 0
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
+            ),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+      },
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const layer = makeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const messageA = makeMessage("s1", "b1", "hello")
+          const messageB = makeMessage("s2", "b2", "world")
+
+          const fiberA = yield* Effect.fork(agentLoop.run(messageA))
+          yield* Effect.sleep("10 millis")
+          const fiberB = yield* Effect.fork(agentLoop.run(messageB))
+
+          const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeout("200 millis"))
+          expect(Option.isSome(finishedB)).toBe(true)
+
+          const statusA = yield* Fiber.poll(fiberA)
+          expect(Option.isNone(statusA)).toBe(true)
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiberA)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("interrupt scoped to session/branch", async () => {
+    const gateA = await Effect.runPromise(Deferred.make<void>())
+    const gateB = await Effect.runPromise(Deferred.make<void>())
+    let calls = 0
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => {
+        calls += 1
+        const gate = calls === 1 ? gateA : gateB
+        return Effect.succeed(
+          Stream.fromEffect(Deferred.await(gate)).pipe(
+            Stream.map(() => new FinishChunk({ finishReason: "stop" })),
+          ),
+        )
+      },
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const layer = makeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const messageA = makeMessage("s1", "b1", "alpha")
+          const messageB = makeMessage("s2", "b2", "beta")
+
+          const fiberA = yield* Effect.fork(agentLoop.run(messageA))
+          const fiberB = yield* Effect.fork(agentLoop.run(messageB))
+
+          yield* Effect.sleep("10 millis")
+          yield* agentLoop.steer({ _tag: "Interrupt", sessionId: "s1", branchId: "b1" })
+
+          const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeout("200 millis"))
+          expect(Option.isSome(finishedA)).toBe(true)
+
+          const statusB = yield* Fiber.poll(fiberB)
+          expect(Option.isNone(statusB)).toBe(true)
+
+          yield* Deferred.succeed(gateA, undefined)
+          yield* Deferred.succeed(gateB, undefined)
+          yield* Fiber.join(fiberB)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
   })
 })
 

@@ -161,11 +161,16 @@ export const SessionState = Schema.Struct({
 // Steer Operations
 // ============================================================================
 
+const SteerTargetFields = {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+}
+
 export const SteerPayload = Schema.Union(
-  Schema.TaggedStruct("Cancel", {}),
-  Schema.TaggedStruct("Interrupt", {}),
-  Schema.TaggedStruct("Interject", { message: Schema.String }),
-  Schema.TaggedStruct("SwitchAgent", { agent: AgentName }),
+  Schema.TaggedStruct("Cancel", SteerTargetFields),
+  Schema.TaggedStruct("Interrupt", SteerTargetFields),
+  Schema.TaggedStruct("Interject", { ...SteerTargetFields, message: Schema.String }),
+  Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
 )
 export type SteerPayload = typeof SteerPayload.Type
 

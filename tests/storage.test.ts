@@ -57,6 +57,58 @@ describe("Storage", () => {
       )
     })
 
+    test("lists first branch per session", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const now = Date.now()
+
+          yield* storage.createSession(
+            new Session({
+              id: "s1",
+              createdAt: new Date(now),
+              updatedAt: new Date(now),
+            }),
+          )
+          yield* storage.createSession(
+            new Session({
+              id: "s2",
+              createdAt: new Date(now + 1),
+              updatedAt: new Date(now + 1),
+            }),
+          )
+
+          yield* storage.createBranch(
+            new Branch({
+              id: "s1-b1",
+              sessionId: "s1",
+              createdAt: new Date(now + 10),
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: "s1-b0",
+              sessionId: "s1",
+              createdAt: new Date(now),
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: "s2-b1",
+              sessionId: "s2",
+              createdAt: new Date(now + 5),
+            }),
+          )
+
+          const firstBranches = yield* storage.listFirstBranches()
+          const map = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
+
+          expect(map.get("s1")).toBe("s1-b0")
+          expect(map.get("s2")).toBe("s2-b1")
+        }),
+      )
+    })
+
     test("updates a session", async () => {
       await run(
         Effect.gen(function* () {

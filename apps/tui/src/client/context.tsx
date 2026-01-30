@@ -36,6 +36,12 @@ import {
 // Event listener type
 type EventListener = (event: AgentEvent) => void
 
+type SteerCommandInput =
+  | { _tag: "Cancel" }
+  | { _tag: "Interrupt" }
+  | { _tag: "Interject"; message: string }
+  | { _tag: "SwitchAgent"; agent: AgentName }
+
 const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Model | undefined =>
   models[resolveAgentModelId(agent)]
 
@@ -127,7 +133,7 @@ export interface ClientContextValue {
   subscribeEvents: (onEvent: (event: AgentEvent) => void) => () => void
 
   // Steering (fire-and-forget)
-  steer: (command: SteerCommand) => void
+  steer: (command: SteerCommandInput) => void
 }
 
 const ClientContext = createContext<ClientContextValue>()
@@ -542,11 +548,18 @@ export function ClientProvider(props: ClientProviderProps) {
 
     // Fire-and-forget steering
     steer: (command) => {
-      // Update local agent immediately for responsive UI
-      if (command._tag === "SwitchAgent") {
-        setAgentStore({ agent: command.agent })
+      const s = session()
+      if (s === null) return
+      const fullCommand: SteerCommand = {
+        ...command,
+        sessionId: s.sessionId,
+        branchId: s.branchId,
       }
-      cast(client.steer(command))
+      // Update local agent immediately for responsive UI
+      if (fullCommand._tag === "SwitchAgent") {
+        setAgentStore({ agent: fullCommand.agent })
+      }
+      cast(client.steer(fullCommand))
     },
 
     switchBranch: (branchId, summarize) => {

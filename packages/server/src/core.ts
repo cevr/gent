@@ -371,26 +371,19 @@ ${conversation}`
         listSessions: () =>
           Effect.gen(function* () {
             const sessions = yield* storage.listSessions()
-            // Include first branch ID for each session
-            const sessionsWithBranch = yield* Effect.all(
-              sessions.map((s) =>
-                Effect.gen(function* () {
-                  const branches = yield* storage.listBranches(s.id)
-                  return {
-                    id: s.id,
-                    name: s.name,
-                    cwd: s.cwd,
-                    bypass: s.bypass,
-                    branchId: branches[0]?.id,
-                    parentSessionId: s.parentSessionId,
-                    parentBranchId: s.parentBranchId,
-                    createdAt: s.createdAt.getTime(),
-                    updatedAt: s.updatedAt.getTime(),
-                  }
-                }),
-              ),
-            )
-            return sessionsWithBranch
+            const firstBranches = yield* storage.listFirstBranches()
+            const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
+            return sessions.map((s) => ({
+              id: s.id,
+              name: s.name,
+              cwd: s.cwd,
+              bypass: s.bypass,
+              branchId: branchMap.get(s.id),
+              parentSessionId: s.parentSessionId,
+              parentBranchId: s.parentBranchId,
+              createdAt: s.createdAt.getTime(),
+              updatedAt: s.updatedAt.getTime(),
+            }))
           }),
 
         getSession: (sessionId) =>

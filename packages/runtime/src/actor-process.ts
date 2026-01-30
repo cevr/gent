@@ -119,7 +119,12 @@ export const LocalActorProcessLive: Layer.Layer<
           const bypass = input.bypass ?? session?.bypass ?? true
 
           if (input.mode !== undefined) {
-            yield* agentLoop.steer({ _tag: "SwitchAgent", agent: input.mode })
+            yield* agentLoop.steer({
+              _tag: "SwitchAgent",
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              agent: input.mode,
+            })
           }
 
           const message = new Message({
@@ -182,21 +187,34 @@ export const LocalActorProcessLive: Layer.Layer<
                 message: "interject requires message",
               })
             }
-            yield* agentLoop.steer({ _tag: "Interject", message: input.message })
+            yield* agentLoop.steer({
+              _tag: "Interject",
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              message: input.message,
+            })
             return
           }
 
           if (input.kind === "cancel") {
-            yield* agentLoop.steer({ _tag: "Cancel" })
+            yield* agentLoop.steer({
+              _tag: "Cancel",
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+            })
             return
           }
 
-          yield* agentLoop.steer({ _tag: "Interrupt" })
+          yield* agentLoop.steer({
+            _tag: "Interrupt",
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+          })
         }).pipe(Effect.catchAllCause((cause) => Effect.fail(wrapError("interrupt failed", cause)))),
 
       getState: (_input) =>
         Effect.gen(function* () {
-          const running = yield* agentLoop.isRunning()
+          const running = yield* agentLoop.isRunning(_input)
           return {
             status: running ? "running" : "idle",
             agent: undefined,
