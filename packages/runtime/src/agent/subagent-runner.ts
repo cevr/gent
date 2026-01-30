@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer } from "effect"
+import { Cause, Duration, Effect, Layer, Schedule } from "effect"
 import {
   Branch,
   EventStore,
@@ -63,7 +63,7 @@ export const InProcessRunner: Layer.Layer<
             }),
           )
 
-          yield* actor.run({
+          const runSubagent = actor.run({
             sessionId,
             branchId,
             agentName: params.agent.name,
@@ -72,6 +72,38 @@ export const InProcessRunner: Layer.Layer<
             systemPrompt: runnerConfig.systemPrompt,
             bypass,
           })
+
+          const retrySchedule =
+            runnerConfig.maxAttempts > 1
+              ? Schedule.modifyDelay(
+                  Schedule.intersect(
+                    Schedule.recurs(runnerConfig.maxAttempts - 1),
+                    Schedule.exponential(Duration.millis(runnerConfig.retryInitialDelayMs)),
+                  ),
+                  (_out, duration) =>
+                    Duration.millis(
+                      Math.min(Duration.toMillis(duration), runnerConfig.retryMaxDelayMs),
+                    ),
+                )
+              : null
+
+          const runWithRetry =
+            retrySchedule === null ? runSubagent : runSubagent.pipe(Effect.retry(retrySchedule))
+
+          const runWithTimeout =
+            runnerConfig.timeoutMs === undefined
+              ? runWithRetry
+              : runWithRetry.pipe(
+                  Effect.timeoutFail({
+                    duration: Duration.millis(runnerConfig.timeoutMs),
+                    onTimeout: () =>
+                      new SubagentError({
+                        message: `Subagent timed out after ${runnerConfig.timeoutMs}ms`,
+                      }),
+                  }),
+                )
+
+          yield* runWithTimeout
 
           const messages = yield* storage.listMessages(branchId)
           let text = ""

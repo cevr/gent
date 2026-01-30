@@ -3,6 +3,8 @@ export {
   AgentLoopError,
   SteerCommand,
   AgentActor,
+  ActorSystemDefault,
+  ActorSystemService,
   SubagentRunnerConfig,
   InProcessRunner,
   SubprocessRunner,

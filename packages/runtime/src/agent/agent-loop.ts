@@ -1,4 +1,5 @@
-import { Context, DateTime, Effect, Layer, Ref, Schema, Stream, Queue } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { Event, Machine, State } from "effect-machine"
 import type {
   AgentEvent,
   EventStoreError,
@@ -54,14 +55,27 @@ export const SteerCommand = Schema.Union(
 )
 export type SteerCommand = typeof SteerCommand.Type
 
-// Agent Loop State
+// Agent Loop Context
 
-interface AgentLoopState {
-  running: boolean
+interface LoopContext {
   model: string
   currentAgent: AgentNameType
   followUpQueue: Message[]
 }
+
+// Agent Loop Machine
+
+const AgentLoopState = State({
+  Idle: {},
+  Running: { message: Message, bypass: Schema.Boolean },
+  Interrupted: { sessionId: Schema.String, branchId: Schema.String },
+})
+
+const AgentLoopEvent = Event({
+  Start: { message: Message, bypass: Schema.UndefinedOr(Schema.Boolean) },
+  Completed: { interrupted: Schema.Boolean, sessionId: Schema.String, branchId: Schema.String },
+  Failed: { error: Schema.String },
+})
 
 // Agent Loop Service
 
@@ -108,8 +122,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
         const toolRunner = yield* ToolRunner
         const serialSemaphore = yield* Effect.makeSemaphore(1)
 
-        const stateRef = yield* Ref.make<AgentLoopState>({
-          running: false,
+        const stateRef = yield* Ref.make<LoopContext>({
           model: config.defaultModel,
           currentAgent: config.defaultAgent ?? "default",
           followUpQueue: [],
@@ -178,231 +191,68 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
           branchId: string,
           initialMessage: Message,
           bypass: boolean,
-        ) => Effect.Effect<void, AgentLoopError | StorageError | ProviderError | EventStoreError> =
-          Effect.fn("AgentLoop.runLoop")(function* (
-            sessionId: string,
-            branchId: string,
-            initialMessage: Message,
-            bypass: boolean,
+        ) => Effect.Effect<
+          boolean,
+          AgentLoopError | StorageError | ProviderError | EventStoreError
+        > = Effect.fn("AgentLoop.runLoop")(function* (
+          sessionId: string,
+          branchId: string,
+          initialMessage: Message,
+          bypass: boolean,
+        ) {
+          const enqueueInterject = Effect.fn("AgentLoop.enqueueInterject")(function* (
+            content: string,
+            createdAt?: Date,
           ) {
-            const enqueueInterject = Effect.fn("AgentLoop.enqueueInterject")(function* (
-              content: string,
-              createdAt?: Date,
-            ) {
-              const interjectMsg = new Message({
-                id: Bun.randomUUIDv7(),
-                sessionId,
-                branchId,
-                kind: "interjection",
-                role: "user",
-                parts: [new TextPart({ type: "text", text: content })],
-                createdAt: createdAt ?? new Date(),
-              })
-              yield* Ref.update(stateRef, (s) => ({
-                ...s,
-                followUpQueue: [interjectMsg, ...s.followUpQueue],
-              }))
+            const interjectMsg = new Message({
+              id: Bun.randomUUIDv7(),
+              sessionId,
+              branchId,
+              kind: "interjection",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: content })],
+              createdAt: createdAt ?? new Date(),
             })
+            yield* Ref.update(stateRef, (s) => ({
+              ...s,
+              followUpQueue: [interjectMsg, ...s.followUpQueue],
+            }))
+          })
 
-            // Save user message
-            yield* storage.createMessage(initialMessage)
-            yield* publishEvent(
-              new MessageReceived({
-                sessionId,
-                branchId,
-                messageId: initialMessage.id,
-                role: "user",
-              }),
-            )
+          // Save user message
+          yield* storage.createMessage(initialMessage)
+          yield* publishEvent(
+            new MessageReceived({
+              sessionId,
+              branchId,
+              messageId: initialMessage.id,
+              role: "user",
+            }),
+          )
 
-            // Track turn start time and interruption state
-            const turnStartTime = yield* DateTime.now
-            let turnInterrupted = false
+          // Track turn start time and interruption state
+          const turnStartTime = yield* DateTime.now
+          let turnInterrupted = false
+          let interrupted = false
 
-            let continueLoop = true
-            let cachedMessages: Message[] | undefined
-            let cachedCheckpointId: string | undefined
-            let cachedContextPrefix = ""
+          let continueLoop = true
+          let cachedMessages: Message[] | undefined
+          let cachedCheckpointId: string | undefined
+          let cachedContextPrefix = ""
 
-            const appendCachedMessage = (message: Message) => {
-              if (cachedMessages !== undefined) cachedMessages.push(message)
-            }
+          const appendCachedMessage = (message: Message) => {
+            if (cachedMessages !== undefined) cachedMessages.push(message)
+          }
 
-            while (continueLoop) {
-              yield* applyPendingSteerCommands(sessionId, branchId)
+          while (continueLoop) {
+            yield* applyPendingSteerCommands(sessionId, branchId)
 
-              // Check for steer commands
-              const steerCmd = yield* Queue.poll(steerQueue)
-              if (steerCmd._tag === "Some") {
-                const cmd = steerCmd.value
-                if (cmd._tag === "Cancel") {
-                  continueLoop = false
-                  turnInterrupted = true
-                  yield* publishEvent(
-                    new StreamEnded({
-                      sessionId,
-                      branchId,
-                      interrupted: true,
-                    }),
-                  )
-                  break
-                } else if (cmd._tag === "Interrupt") {
-                  // Hard stop - emit StreamEnded with interrupted flag
-                  continueLoop = false
-                  turnInterrupted = true
-                  yield* publishEvent(
-                    new StreamEnded({
-                      sessionId,
-                      branchId,
-                      interrupted: true,
-                    }),
-                  )
-                  break
-                } else if (cmd._tag === "Interject") {
-                  // Seamless pivot - queue message for immediate processing
-                  yield* enqueueInterject(cmd.message)
-                  continueLoop = false
-                  break
-                } else if (cmd._tag === "SwitchModel") {
-                  yield* applySteerCommand(sessionId, branchId, cmd)
-                } else if (cmd._tag === "SwitchAgent") {
-                  yield* applySteerCommand(sessionId, branchId, cmd)
-                }
-              }
-
-              const state = yield* Ref.get(stateRef)
-
-              // Checkpoint-aware message loading
-              const checkpoint = yield* checkpointService.getLatestCheckpoint(branchId)
-              const checkpointId = checkpoint?.id ?? "none"
-              const { messages, contextPrefix } = yield* Effect.gen(function* () {
-                if (cachedMessages !== undefined && cachedCheckpointId === checkpointId) {
-                  return {
-                    messages: cachedMessages,
-                    contextPrefix: cachedContextPrefix,
-                  }
-                }
-                if (checkpoint === undefined) {
-                  const loaded = yield* storage.listMessages(branchId)
-                  cachedMessages = [...loaded]
-                  cachedContextPrefix = ""
-                  cachedCheckpointId = checkpointId
-                  return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
-                }
-                if (checkpoint._tag === "PlanCheckpoint") {
-                  const planContent = yield* fs
-                    .readFileString(checkpoint.planPath)
-                    .pipe(Effect.catchAll(() => Effect.succeed("")))
-                  const loaded = yield* storage.listMessagesSince(branchId, checkpoint.createdAt)
-                  cachedMessages = [...loaded]
-                  cachedContextPrefix =
-                    planContent !== "" ? `Plan to execute:\n${planContent}\n\n` : ""
-                  cachedCheckpointId = checkpointId
-                  return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
-                }
-                const loaded = yield* storage.listMessagesAfter(
-                  branchId,
-                  checkpoint.firstKeptMessageId,
-                )
-                cachedMessages = [...loaded]
-                cachedContextPrefix =
-                  checkpoint.summary !== undefined && checkpoint.summary !== ""
-                    ? `Previous context:\n${checkpoint.summary}\n\n`
-                    : ""
-                cachedCheckpointId = checkpointId
-                return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
-              })
-
-              const agent = yield* agentRegistry.get(state.currentAgent)
-              if (agent === undefined) {
-                yield* publishEvent(
-                  new ErrorOccurred({
-                    sessionId,
-                    branchId,
-                    error: `Unknown agent: ${state.currentAgent}`,
-                  }),
-                )
-                return
-              }
-
-              const allTools = yield* toolRegistry.list()
-              const tools = allTools.filter((tool) => {
-                if (agent.allowedTools !== undefined && !agent.allowedTools.includes(tool.name)) {
-                  return false
-                }
-                if (agent.deniedTools !== undefined && agent.deniedTools.includes(tool.name)) {
-                  return false
-                }
-                return true
-              })
-
-              const systemPrompt = buildSystemPrompt(config.systemPrompt, agent, contextPrefix)
-
-              // Start streaming
-              yield* publishEvent(new StreamStarted({ sessionId, branchId }))
-
-              const streamEffect = yield* withRetry(
-                provider.stream({
-                  model: agent.preferredModel ?? state.model,
-                  messages: [...messages],
-                  tools: [...tools],
-                  systemPrompt,
-                  ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
-                }),
-              ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
-
-              // Collect response parts
-              const textParts: string[] = []
-              const toolCalls: ToolCallPart[] = []
-              let lastFinishChunk: FinishChunk | undefined
-
-              const interruptRef = yield* Ref.make<SteerCommand | null>(null)
-              const interruptSignal = Effect.gen(function* () {
-                while (true) {
-                  const cmd = yield* Queue.take(steerQueue)
-                  if (
-                    cmd._tag === "Cancel" ||
-                    cmd._tag === "Interrupt" ||
-                    cmd._tag === "Interject"
-                  ) {
-                    yield* Ref.set(interruptRef, cmd)
-                    return
-                  }
-                  yield* Ref.update(pendingSteerRef, (pending) => [...pending, cmd])
-                }
-              })
-
-              yield* Stream.runForEach(
-                streamEffect.pipe(Stream.interruptWhen(interruptSignal)),
-                (chunk) =>
-                  Effect.gen(function* () {
-                    if (chunk._tag === "TextChunk") {
-                      textParts.push(chunk.text)
-                      yield* publishEvent(
-                        new EventStreamChunk({
-                          sessionId,
-                          branchId,
-                          chunk: chunk.text,
-                        }),
-                      )
-                    } else if (chunk._tag === "ToolCallChunk") {
-                      toolCalls.push(
-                        new ToolCallPart({
-                          type: "tool-call",
-                          toolCallId: chunk.toolCallId,
-                          toolName: chunk.toolName,
-                          input: chunk.input,
-                        }),
-                      )
-                    } else if (chunk._tag === "FinishChunk") {
-                      lastFinishChunk = chunk
-                    }
-                  }),
-              )
-
-              yield* applyPendingSteerCommands(sessionId, branchId)
-              const interruptCmd = yield* Ref.get(interruptRef)
-              if (interruptCmd !== null) {
+            // Check for steer commands
+            const steerCmd = yield* Queue.poll(steerQueue)
+            if (steerCmd._tag === "Some") {
+              const cmd = steerCmd.value
+              if (cmd._tag === "Cancel") {
+                continueLoop = false
                 turnInterrupted = true
                 yield* publishEvent(
                   new StreamEnded({
@@ -411,179 +261,399 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                     interrupted: true,
                   }),
                 )
-
-                const partialText = textParts.join("")
-                let assistantCreatedAtMs: number | null = null
-                if (partialText !== "") {
-                  const createdAt = new Date()
-                  assistantCreatedAtMs = createdAt.getTime()
-                  const assistantMessage = new Message({
-                    id: Bun.randomUUIDv7(),
+                break
+              } else if (cmd._tag === "Interrupt") {
+                // Hard stop - emit StreamEnded with interrupted flag
+                continueLoop = false
+                turnInterrupted = true
+                yield* publishEvent(
+                  new StreamEnded({
                     sessionId,
                     branchId,
-                    role: "assistant",
-                    parts: [new TextPart({ type: "text", text: partialText })],
-                    createdAt,
-                  })
-
-                  yield* storage.createMessage(assistantMessage)
-                  appendCachedMessage(assistantMessage)
-                  yield* publishEvent(
-                    new MessageReceived({
-                      sessionId,
-                      branchId,
-                      messageId: assistantMessage.id,
-                      role: "assistant",
-                    }),
-                  )
-                }
-
-                if (interruptCmd._tag === "Interject") {
-                  const createdAt =
-                    assistantCreatedAtMs !== null ? new Date(assistantCreatedAtMs + 1) : new Date()
-                  yield* enqueueInterject(interruptCmd.message, createdAt)
-                }
-
+                    interrupted: true,
+                  }),
+                )
+                break
+              } else if (cmd._tag === "Interject") {
+                // Seamless pivot - queue message for immediate processing
+                yield* enqueueInterject(cmd.message)
                 continueLoop = false
                 break
+              } else if (cmd._tag === "SwitchModel") {
+                yield* applySteerCommand(sessionId, branchId, cmd)
+              } else if (cmd._tag === "SwitchAgent") {
+                yield* applySteerCommand(sessionId, branchId, cmd)
               }
+            }
 
+            const state = yield* Ref.get(stateRef)
+
+            // Checkpoint-aware message loading
+            const checkpoint = yield* checkpointService.getLatestCheckpoint(branchId)
+            const checkpointId = checkpoint?.id ?? "none"
+            const { messages, contextPrefix } = yield* Effect.gen(function* () {
+              if (cachedMessages !== undefined && cachedCheckpointId === checkpointId) {
+                return {
+                  messages: cachedMessages,
+                  contextPrefix: cachedContextPrefix,
+                }
+              }
+              if (checkpoint === undefined) {
+                const loaded = yield* storage.listMessages(branchId)
+                cachedMessages = [...loaded]
+                cachedContextPrefix = ""
+                cachedCheckpointId = checkpointId
+                return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
+              }
+              if (checkpoint._tag === "PlanCheckpoint") {
+                const planContent = yield* fs
+                  .readFileString(checkpoint.planPath)
+                  .pipe(Effect.catchAll(() => Effect.succeed("")))
+                const loaded = yield* storage.listMessagesSince(branchId, checkpoint.createdAt)
+                cachedMessages = [...loaded]
+                cachedContextPrefix =
+                  planContent !== "" ? `Plan to execute:\n${planContent}\n\n` : ""
+                cachedCheckpointId = checkpointId
+                return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
+              }
+              const loaded = yield* storage.listMessagesAfter(
+                branchId,
+                checkpoint.firstKeptMessageId,
+              )
+              cachedMessages = [...loaded]
+              cachedContextPrefix =
+                checkpoint.summary !== undefined && checkpoint.summary !== ""
+                  ? `Previous context:\n${checkpoint.summary}\n\n`
+                  : ""
+              cachedCheckpointId = checkpointId
+              return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
+            })
+
+            const agent = yield* agentRegistry.get(state.currentAgent)
+            if (agent === undefined) {
+              yield* publishEvent(
+                new ErrorOccurred({
+                  sessionId,
+                  branchId,
+                  error: `Unknown agent: ${state.currentAgent}`,
+                }),
+              )
+              return interrupted
+            }
+
+            const allTools = yield* toolRegistry.list()
+            const tools = allTools.filter((tool) => {
+              if (agent.allowedTools !== undefined && !agent.allowedTools.includes(tool.name)) {
+                return false
+              }
+              if (agent.deniedTools !== undefined && agent.deniedTools.includes(tool.name)) {
+                return false
+              }
+              return true
+            })
+
+            const systemPrompt = buildSystemPrompt(config.systemPrompt, agent, contextPrefix)
+
+            // Start streaming
+            yield* publishEvent(new StreamStarted({ sessionId, branchId }))
+
+            const streamEffect = yield* withRetry(
+              provider.stream({
+                model: agent.preferredModel ?? state.model,
+                messages: [...messages],
+                tools: [...tools],
+                systemPrompt,
+                ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
+              }),
+            ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
+
+            // Collect response parts
+            const textParts: string[] = []
+            const toolCalls: ToolCallPart[] = []
+            let lastFinishChunk: FinishChunk | undefined
+
+            const interruptRef = yield* Ref.make<SteerCommand | null>(null)
+            const interruptSignal = Effect.gen(function* () {
+              while (true) {
+                const cmd = yield* Queue.take(steerQueue)
+                if (cmd._tag === "Cancel" || cmd._tag === "Interrupt" || cmd._tag === "Interject") {
+                  yield* Ref.set(interruptRef, cmd)
+                  return
+                }
+                yield* Ref.update(pendingSteerRef, (pending) => [...pending, cmd])
+              }
+            })
+
+            yield* Stream.runForEach(
+              streamEffect.pipe(Stream.interruptWhen(interruptSignal)),
+              (chunk) =>
+                Effect.gen(function* () {
+                  if (chunk._tag === "TextChunk") {
+                    textParts.push(chunk.text)
+                    yield* publishEvent(
+                      new EventStreamChunk({
+                        sessionId,
+                        branchId,
+                        chunk: chunk.text,
+                      }),
+                    )
+                  } else if (chunk._tag === "ToolCallChunk") {
+                    toolCalls.push(
+                      new ToolCallPart({
+                        type: "tool-call",
+                        toolCallId: chunk.toolCallId,
+                        toolName: chunk.toolName,
+                        input: chunk.input,
+                      }),
+                    )
+                  } else if (chunk._tag === "FinishChunk") {
+                    lastFinishChunk = chunk
+                  }
+                }),
+            )
+
+            yield* applyPendingSteerCommands(sessionId, branchId)
+            const interruptCmd = yield* Ref.get(interruptRef)
+            if (interruptCmd !== null) {
+              turnInterrupted = true
               yield* publishEvent(
                 new StreamEnded({
                   sessionId,
                   branchId,
-                  usage: lastFinishChunk?.usage,
+                  interrupted: true,
                 }),
               )
 
-              // Build assistant message
-              const assistantParts: Array<TextPart | ToolCallPart> = []
-              const fullText = textParts.join("")
-              if (fullText !== "") {
-                assistantParts.push(new TextPart({ type: "text", text: fullText }))
-              }
-              assistantParts.push(...toolCalls)
-
-              const assistantMessage = new Message({
-                id: Bun.randomUUIDv7(),
-                sessionId,
-                branchId,
-                role: "assistant",
-                parts: assistantParts,
-                createdAt: new Date(),
-              })
-
-              yield* storage.createMessage(assistantMessage)
-              appendCachedMessage(assistantMessage)
-              yield* publishEvent(
-                new MessageReceived({
-                  sessionId,
-                  branchId,
-                  messageId: assistantMessage.id,
-                  role: "assistant",
-                }),
-              )
-
-              // Execute tool calls if any
-              if (toolCalls.length > 0) {
-                const toolResults = yield* Effect.forEach(
-                  toolCalls,
-                  (toolCall) =>
-                    Effect.gen(function* () {
-                      yield* publishEvent(
-                        new ToolCallStarted({
-                          sessionId,
-                          branchId,
-                          toolCallId: toolCall.toolCallId,
-                          toolName: toolCall.toolName,
-                          input: toolCall.input,
-                        }),
-                      )
-
-                      const tool = yield* toolRegistry.get(toolCall.toolName)
-                      const ctx: ToolContext = {
-                        sessionId,
-                        branchId,
-                        toolCallId: toolCall.toolCallId,
-                        agentName: state.currentAgent,
-                      }
-                      const run = toolRunner.run(toolCall, ctx, { bypass })
-                      const result = yield* tool?.concurrency === "serial"
-                        ? serialSemaphore.withPermits(1)(run)
-                        : run
-
-                      const outputSummary = summarizeToolOutput(result)
-                      yield* publishEvent(
-                        new ToolCallCompleted({
-                          sessionId,
-                          branchId,
-                          toolCallId: toolCall.toolCallId,
-                          toolName: toolCall.toolName,
-                          isError: result.output.type === "error-json",
-                          summary: outputSummary,
-                          output: stringifyOutput(result.output.value),
-                        }),
-                      )
-
-                      return result
-                    }),
-                  { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
-                )
-
-                // Create tool result message
-                const toolResultMessage = new Message({
+              const partialText = textParts.join("")
+              let assistantCreatedAtMs: number | null = null
+              if (partialText !== "") {
+                const createdAt = new Date()
+                assistantCreatedAtMs = createdAt.getTime()
+                const assistantMessage = new Message({
                   id: Bun.randomUUIDv7(),
                   sessionId,
                   branchId,
-                  role: "tool",
-                  parts: toolResults,
-                  createdAt: new Date(),
+                  role: "assistant",
+                  parts: [new TextPart({ type: "text", text: partialText })],
+                  createdAt,
                 })
 
-                yield* storage.createMessage(toolResultMessage)
-                appendCachedMessage(toolResultMessage)
-
-                // Continue loop to process tool results
-                continueLoop = true
-              } else {
-                // No tool calls, loop ends
-                continueLoop = false
+                yield* storage.createMessage(assistantMessage)
+                appendCachedMessage(assistantMessage)
+                yield* publishEvent(
+                  new MessageReceived({
+                    sessionId,
+                    branchId,
+                    messageId: assistantMessage.id,
+                    role: "assistant",
+                  }),
+                )
               }
+
+              if (interruptCmd._tag === "Interject") {
+                const createdAt =
+                  assistantCreatedAtMs !== null ? new Date(assistantCreatedAtMs + 1) : new Date()
+                yield* enqueueInterject(interruptCmd.message, createdAt)
+              }
+
+              continueLoop = false
+              break
             }
 
-            // Update user message with turn duration and emit TurnCompleted
-            const turnEndTime = yield* DateTime.now
-            const turnDurationMs =
-              DateTime.toEpochMillis(turnEndTime) - DateTime.toEpochMillis(turnStartTime)
-            yield* storage.updateMessageTurnDuration(initialMessage.id, turnDurationMs)
             yield* publishEvent(
-              new TurnCompleted({
+              new StreamEnded({
                 sessionId,
                 branchId,
-                durationMs: Number(turnDurationMs),
-                ...(turnInterrupted ? { interrupted: true } : {}),
+                usage: lastFinishChunk?.usage,
               }),
             )
 
-            // Process follow-up queue
-            const finalState = yield* Ref.get(stateRef)
-            const nextMessage = finalState.followUpQueue[0]
-            if (nextMessage !== undefined) {
-              yield* Ref.update(stateRef, (s) => ({
-                ...s,
-                followUpQueue: s.followUpQueue.slice(1),
-              }))
-              yield* runLoop(sessionId, branchId, nextMessage, bypass)
+            // Build assistant message
+            const assistantParts: Array<TextPart | ToolCallPart> = []
+            const fullText = textParts.join("")
+            if (fullText !== "") {
+              assistantParts.push(new TextPart({ type: "text", text: fullText }))
             }
-          })
+            assistantParts.push(...toolCalls)
+
+            const assistantMessage = new Message({
+              id: Bun.randomUUIDv7(),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: assistantParts,
+              createdAt: new Date(),
+            })
+
+            yield* storage.createMessage(assistantMessage)
+            appendCachedMessage(assistantMessage)
+            yield* publishEvent(
+              new MessageReceived({
+                sessionId,
+                branchId,
+                messageId: assistantMessage.id,
+                role: "assistant",
+              }),
+            )
+
+            // Execute tool calls if any
+            if (toolCalls.length > 0) {
+              const toolResults = yield* Effect.forEach(
+                toolCalls,
+                (toolCall) =>
+                  Effect.gen(function* () {
+                    yield* publishEvent(
+                      new ToolCallStarted({
+                        sessionId,
+                        branchId,
+                        toolCallId: toolCall.toolCallId,
+                        toolName: toolCall.toolName,
+                        input: toolCall.input,
+                      }),
+                    )
+
+                    const tool = yield* toolRegistry.get(toolCall.toolName)
+                    const ctx: ToolContext = {
+                      sessionId,
+                      branchId,
+                      toolCallId: toolCall.toolCallId,
+                      agentName: state.currentAgent,
+                    }
+                    const run = toolRunner.run(toolCall, ctx, { bypass })
+                    const result = yield* tool?.concurrency === "serial"
+                      ? serialSemaphore.withPermits(1)(run)
+                      : run
+
+                    const outputSummary = summarizeToolOutput(result)
+                    yield* publishEvent(
+                      new ToolCallCompleted({
+                        sessionId,
+                        branchId,
+                        toolCallId: toolCall.toolCallId,
+                        toolName: toolCall.toolName,
+                        isError: result.output.type === "error-json",
+                        summary: outputSummary,
+                        output: stringifyOutput(result.output.value),
+                      }),
+                    )
+
+                    return result
+                  }),
+                { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
+              )
+
+              // Create tool result message
+              const toolResultMessage = new Message({
+                id: Bun.randomUUIDv7(),
+                sessionId,
+                branchId,
+                role: "tool",
+                parts: toolResults,
+                createdAt: new Date(),
+              })
+
+              yield* storage.createMessage(toolResultMessage)
+              appendCachedMessage(toolResultMessage)
+
+              // Continue loop to process tool results
+              continueLoop = true
+            } else {
+              // No tool calls, loop ends
+              continueLoop = false
+            }
+          }
+
+          interrupted = interrupted || turnInterrupted
+
+          // Update user message with turn duration and emit TurnCompleted
+          const turnEndTime = yield* DateTime.now
+          const turnDurationMs =
+            DateTime.toEpochMillis(turnEndTime) - DateTime.toEpochMillis(turnStartTime)
+          yield* storage.updateMessageTurnDuration(initialMessage.id, turnDurationMs)
+          yield* publishEvent(
+            new TurnCompleted({
+              sessionId,
+              branchId,
+              durationMs: Number(turnDurationMs),
+              ...(turnInterrupted ? { interrupted: true } : {}),
+            }),
+          )
+
+          // Process follow-up queue
+          const finalState = yield* Ref.get(stateRef)
+          const nextMessage = finalState.followUpQueue[0]
+          if (nextMessage !== undefined) {
+            yield* Ref.update(stateRef, (s) => ({
+              ...s,
+              followUpQueue: s.followUpQueue.slice(1),
+            }))
+            const nextInterrupted = yield* runLoop(sessionId, branchId, nextMessage, bypass)
+            interrupted = interrupted || nextInterrupted
+          }
+
+          return interrupted
+        })
+
+        const loopMachine = Machine.make({
+          state: AgentLoopState,
+          event: AgentLoopEvent,
+          initial: AgentLoopState.Idle,
+        })
+          .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ event }) =>
+            AgentLoopState.Running({ message: event.message, bypass: event.bypass ?? true }),
+          )
+          .on(AgentLoopState.Interrupted, AgentLoopEvent.Start, ({ event }) =>
+            AgentLoopState.Running({ message: event.message, bypass: event.bypass ?? true }),
+          )
+          .on(AgentLoopState.Running, AgentLoopEvent.Completed, ({ event }) =>
+            event.interrupted
+              ? AgentLoopState.Interrupted({
+                  sessionId: event.sessionId,
+                  branchId: event.branchId,
+                })
+              : AgentLoopState.Idle,
+          )
+          .on(AgentLoopState.Running, AgentLoopEvent.Failed, () => AgentLoopState.Idle)
+          .task(
+            AgentLoopState.Running,
+            ({ state }) =>
+              runLoop(
+                state.message.sessionId,
+                state.message.branchId,
+                state.message,
+                state.bypass,
+              ).pipe(
+                Effect.withSpan("AgentLoop.run"),
+                Effect.tapErrorCause((cause) =>
+                  publishEvent(
+                    new ErrorOccurred({
+                      sessionId: state.message.sessionId,
+                      branchId: state.message.branchId,
+                      error: Cause.pretty(cause),
+                    }),
+                  ).pipe(Effect.catchAll(() => Effect.void)),
+                ),
+              ),
+            {
+              onSuccess: (interrupted, ctx) =>
+                AgentLoopEvent.Completed({
+                  interrupted,
+                  sessionId: ctx.state.message.sessionId,
+                  branchId: ctx.state.message.branchId,
+                }),
+              onFailure: (cause) => AgentLoopEvent.Failed({ error: Cause.pretty(cause) }),
+            },
+          )
+
+        const loopActor = yield* Machine.spawn(loopMachine).pipe(Effect.orDie)
 
         const service: AgentLoopService = {
           run: Effect.fn("AgentLoop.run")(function* (
             message: Message,
             options?: { bypass?: boolean },
           ) {
-            const isRunning = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.running))
             const bypass = options?.bypass ?? true
+            const isRunning = yield* loopActor.matches("Running")
 
             if (isRunning) {
               // Queue as follow-up
@@ -594,26 +664,9 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               return
             }
 
-            yield* Ref.update(stateRef, (s) => ({ ...s, running: true }))
-
-            yield* (
-              runLoop(message.sessionId, message.branchId, message, bypass) as Effect.Effect<
-                void,
-                AgentLoopError | StorageError | ProviderError | EventStoreError
-              >
-            ).pipe(
-              Effect.withSpan("AgentLoop.run"),
-              Effect.catchAll((e) =>
-                publishEvent(
-                  new ErrorOccurred({
-                    sessionId: message.sessionId,
-                    branchId: message.branchId,
-                    error: "message" in e ? e.message : String(e),
-                  }),
-                ),
-              ),
-              Effect.ensuring(Ref.update(stateRef, (s) => ({ ...s, running: false }))),
-            )
+            yield* loopActor.send(AgentLoopEvent.Start({ message, bypass }))
+            yield* loopActor.waitFor((state) => state._tag === "Running")
+            yield* loopActor.waitFor((state) => state._tag !== "Running")
           }),
 
           steer: (command) => Queue.offer(steerQueue, command),
@@ -632,7 +685,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               }))
             }),
 
-          isRunning: () => Ref.get(stateRef).pipe(Effect.map((s) => s.running)),
+          isRunning: () => loopActor.matches("Running"),
         }
 
         return service

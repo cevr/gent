@@ -8,11 +8,12 @@ import {
   estimateTokens,
   DEFAULT_COMPACTION_CONFIG,
   AgentActor,
+  ActorSystemDefault,
   InProcessRunner,
   SubagentRunnerConfig,
   ToolRunner,
 } from "@gent/runtime"
-import { ProviderError, ToolCallChunk, FinishChunk } from "@gent/providers"
+import { Provider, ProviderError, ToolCallChunk, FinishChunk } from "@gent/providers"
 import {
   Message,
   TextPart,
@@ -22,6 +23,7 @@ import {
   Session,
   Branch,
   SubagentRunnerService,
+  SubagentError,
   defineTool,
   ToolRegistry,
   Permission,
@@ -130,7 +132,9 @@ describe("Compaction", () => {
 
 describe("Subagent Runner", () => {
   test("publishes spawn and complete events", async () => {
-    const layer = Layer.mergeAll(
+    const recorderLayer = SequenceRecorder.Live
+    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const deps = Layer.mergeAll(
       Storage.Test(),
       SubagentRunnerConfig.Live({
         systemPrompt: "",
@@ -139,8 +143,11 @@ describe("Subagent Runner", () => {
       Layer.succeed(AgentActor, {
         run: () => Effect.void,
       }),
-      InProcessRunner,
-    ).pipe(Layer.provideMerge(RecordingEventStore), Layer.provideMerge(SequenceRecorder.Live))
+      recorderLayer,
+      eventStoreLayer,
+    )
+    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -181,6 +188,194 @@ describe("Subagent Runner", () => {
       }).pipe(Effect.provide(layer)),
     )
   })
+
+  test("retries transient failures", async () => {
+    let attempts = 0
+
+    const recorderLayer = SequenceRecorder.Live
+    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      SubagentRunnerConfig.Live({
+        systemPrompt: "",
+        defaultModel: "openai/opus-4.5",
+        maxAttempts: 2,
+        retryInitialDelayMs: 1,
+        retryMaxDelayMs: 1,
+      }),
+      Layer.succeed(AgentActor, {
+        run: () =>
+          Effect.gen(function* () {
+            if (attempts++ === 0) {
+              return yield* Effect.fail(new SubagentError({ message: "transient" }))
+            }
+          }),
+      }),
+      recorderLayer,
+      eventStoreLayer,
+    )
+    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* SubagentRunnerService
+
+        const now = new Date()
+        const session = new Session({
+          id: "parent-session-retry",
+          name: "Parent",
+          bypass: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "parent-branch-retry",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        const result = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "retry test",
+          parentSessionId: session.id,
+          parentBranchId: branch.id,
+          cwd: process.cwd(),
+        })
+
+        expect(result._tag).toBe("success")
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(attempts).toBe(2)
+  })
+
+  test("fails with timeout", async () => {
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      SubagentRunnerConfig.Live({
+        systemPrompt: "",
+        defaultModel: "openai/opus-4.5",
+        maxAttempts: 1,
+        timeoutMs: 5,
+      }),
+      Layer.succeed(AgentActor, {
+        run: () => Effect.sleep("50 millis"),
+      }),
+      EventStore.Test(),
+    )
+    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* SubagentRunnerService
+
+        const now = new Date()
+        const session = new Session({
+          id: "parent-session-timeout",
+          name: "Parent",
+          bypass: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "parent-branch-timeout",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        return yield* runner.run({
+          agent: Agents.explore,
+          prompt: "timeout test",
+          parentSessionId: session.id,
+          parentBranchId: branch.id,
+          cwd: process.cwd(),
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result._tag).toBe("error")
+    expect(result.error).toContain("timed out")
+  })
+})
+
+describe("AgentActor", () => {
+  test("publishes machine inspection + task events", async () => {
+    const recorderLayer = SequenceRecorder.Live
+    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const toolDeps = Layer.mergeAll(
+      ToolRegistry.Live([]),
+      Permission.Test(),
+      PermissionHandler.Test(["allow"]),
+    )
+    const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
+      AgentRegistry.Live,
+      ActorSystemDefault,
+      recorderLayer,
+      eventStoreLayer,
+      toolDeps,
+      toolRunnerLayer,
+    )
+    const actorLayer = AgentActor.Live.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, actorLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const actor = yield* AgentActor
+        const recorder = yield* SequenceRecorder
+
+        const now = new Date()
+        const session = new Session({
+          id: "inspection-session",
+          name: "Inspection",
+          bypass: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "inspection-branch",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        yield* actor.run({
+          sessionId: session.id,
+          branchId: branch.id,
+          agentName: "default",
+          prompt: "inspect",
+          defaultModel: "test",
+          systemPrompt: "",
+          bypass: true,
+        })
+
+        yield* Effect.yieldNow()
+
+        const calls = yield* recorder.getCalls()
+        const tags = calls
+          .filter((call) => call.service === "EventStore" && call.method === "publish")
+          .map((call) => (call.args as { _tag: string } | undefined)?._tag)
+
+        expect(tags.includes("MachineInspected")).toBe(true)
+        expect(tags.includes("MachineTaskSucceeded")).toBe(true)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
 })
 
 describe("ToolRunner", () => {
@@ -193,12 +388,13 @@ describe("ToolRunner", () => {
       execute: () => Effect.fail(new Error("boom")),
     })
 
-    const layer = Layer.mergeAll(
+    const deps = Layer.mergeAll(
       ToolRegistry.Live([FailTool]),
       Permission.Test(),
       PermissionHandler.Test(["allow"]),
-      ToolRunner.Live,
     )
+    const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -264,7 +460,7 @@ describe("Tool concurrency", () => {
       [new FinishChunk({ finishReason: "stop" })],
     ]
 
-    const layer = Layer.mergeAll(
+    const deps = Layer.mergeAll(
       Storage.Test(),
       Provider.Test(providerResponses),
       ToolRegistry.Live([toolA, toolB]),
@@ -272,9 +468,12 @@ describe("Tool concurrency", () => {
       AgentRegistry.Live,
       Permission.Test(),
       PermissionHandler.Test(["allow"]),
-      ToolRunner.Live,
-      AgentActor.Live,
+      ActorSystemDefault,
     )
+    const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+    const actorDeps = Layer.mergeAll(deps, toolRunnerLayer)
+    const actorLayer = AgentActor.Live.pipe(Layer.provide(actorDeps))
+    const layer = Layer.mergeAll(actorDeps, actorLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {

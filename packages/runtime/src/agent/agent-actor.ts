@@ -1,10 +1,20 @@
-import { Cause, Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
-import { Event, Machine, Slot, State } from "effect-machine"
+import { Cause, Context, Effect, Exit, Layer, Runtime, Schema, Scope, Stream } from "effect"
+import {
+  ActorSystemService,
+  Event,
+  Machine,
+  State,
+  InspectorService,
+  makeInspector,
+} from "effect-machine"
 import {
   AgentName,
   AgentRegistry,
   EventStore,
   ErrorOccurred,
+  MachineInspected,
+  MachineTaskFailed,
+  MachineTaskSucceeded,
   Message,
   MessageReceived,
   StreamChunk as EventStreamChunk,
@@ -27,13 +37,6 @@ import { withRetry } from "../retry"
 import { buildSystemPrompt } from "./system-prompt"
 import { ToolRunner } from "./tool-runner"
 
-const AgentState = State({
-  Idle: {},
-  Running: {},
-  Completed: {},
-  Failed: { error: Schema.String },
-})
-
 const AgentRunInputFields = {
   sessionId: Schema.String,
   branchId: Schema.String,
@@ -48,32 +51,38 @@ const AgentRunInputSchema = Schema.Struct(AgentRunInputFields)
 
 export type AgentRunInput = typeof AgentRunInputSchema.Type
 
+const AgentState = State({
+  Idle: {},
+  Running: { input: AgentRunInputSchema },
+  Completed: {},
+  Failed: { error: Schema.String },
+})
+
 const AgentEvent = Event({
   Start: { input: AgentRunInputSchema },
+  Succeeded: {},
+  Failed: { error: Schema.String },
 })
 
-const AgentEffects = Slot.Effects({
-  run: AgentRunInputFields,
-})
-
-const AgentMachine = Machine.make({
-  state: AgentState,
-  event: AgentEvent,
-  effects: AgentEffects,
-  initial: AgentState.Idle,
-})
-  .on(AgentState.Idle, AgentEvent.Start, ({ event, effects }) =>
-    Effect.gen(function* () {
-      const exit = yield* effects.run(event.input).pipe(Effect.exit)
-      if (Exit.isFailure(exit)) {
-        const error = Cause.pretty(exit.cause)
-        return AgentState.Failed({ error })
-      }
-      return AgentState.Completed
-    }),
-  )
-  .final(AgentState.Completed)
-  .final(AgentState.Failed)
+const makeAgentMachine = (run: (input: AgentRunInput) => Effect.Effect<void, SubagentError>) =>
+  Machine.make({
+    state: AgentState,
+    event: AgentEvent,
+    initial: AgentState.Idle,
+  })
+    .on(AgentState.Idle, AgentEvent.Start, ({ event }) =>
+      AgentState.Running({ input: event.input }),
+    )
+    .on(AgentState.Running, AgentEvent.Succeeded, () => AgentState.Completed)
+    .on(AgentState.Running, AgentEvent.Failed, ({ event }) =>
+      AgentState.Failed({ error: event.error }),
+    )
+    .task(AgentState.Running, ({ state }) => run(state.input), {
+      onSuccess: () => AgentEvent.Succeeded,
+      onFailure: (cause) => AgentEvent.Failed({ error: Cause.pretty(cause) }),
+    })
+    .final(AgentState.Completed)
+    .final(AgentState.Failed)
 
 export interface AgentActorService {
   readonly run: (input: AgentRunInput) => Effect.Effect<void, SubagentError>
@@ -86,8 +95,8 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
   static Live: Layer.Layer<
     AgentActor,
     never,
-    Storage | Provider | ToolRegistry | EventStore | AgentRegistry | ToolRunner
-  > = Layer.effect(
+    Storage | Provider | ToolRegistry | EventStore | AgentRegistry | ToolRunner | ActorSystemService
+  > = Layer.scoped(
     AgentActor,
     Effect.gen(function* () {
       const storage = yield* Storage
@@ -96,9 +105,48 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
       const eventStore = yield* EventStore
       const agentRegistry = yield* AgentRegistry
       const toolRunner = yield* ToolRunner
+      const actorSystem = yield* ActorSystemService
       const serialSemaphore = yield* Effect.makeSemaphore(1)
+      const actorScope = yield* Scope.make()
 
-      const runEffect: (input: AgentRunInput) => Effect.Effect<void, never> = (input) =>
+      yield* Effect.addFinalizer(() => Scope.close(actorScope, Exit.void))
+
+      const actorIdFor = (input: AgentRunInput) => `agent-${input.sessionId}-${input.branchId}`
+
+      const publishMachineTaskSucceeded = Effect.fn("AgentActor.publishMachineTaskSucceeded")(
+        function* (input: AgentRunInput) {
+          yield* eventStore
+            .publish(
+              new MachineTaskSucceeded({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                actorId: actorIdFor(input),
+                stateTag: "Running",
+              }),
+            )
+            .pipe(Effect.catchAll(() => Effect.void))
+        },
+      )
+
+      const publishMachineTaskFailed = Effect.fn("AgentActor.publishMachineTaskFailed")(function* (
+        input: AgentRunInput,
+        cause: Cause.Cause<unknown>,
+      ) {
+        const error = Cause.pretty(cause)
+        yield* eventStore
+          .publish(
+            new MachineTaskFailed({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              actorId: actorIdFor(input),
+              stateTag: "Running",
+              error,
+            }),
+          )
+          .pipe(Effect.catchAll(() => Effect.void))
+      })
+
+      const runEffect = Effect.fn("AgentActor.runEffect")((input: AgentRunInput) =>
         Effect.gen(function* () {
           const agent = yield* agentRegistry.get(input.agentName)
           if (agent === undefined) {
@@ -288,45 +336,73 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-actor
             }
           }
         }).pipe(
-          Effect.catchAllCause((cause) =>
-            Effect.gen(function* () {
-              const error = Cause.pretty(cause)
-              yield* eventStore
-                .publish(
-                  new ErrorOccurred({
-                    sessionId: input.sessionId,
-                    branchId: input.branchId,
-                    error,
-                  }),
-                )
-                .pipe(Effect.catchAll(() => Effect.void))
-              return yield* Effect.die(new SubagentError({ message: error, cause }))
-            }),
+          Effect.tap(() => publishMachineTaskSucceeded(input)),
+          Effect.tapErrorCause((cause) =>
+            Cause.isInterruptedOnly(cause) ? Effect.void : publishMachineTaskFailed(input, cause),
           ),
-        )
+          Effect.tapErrorCause((cause) =>
+            Cause.isInterruptedOnly(cause)
+              ? Effect.void
+              : eventStore
+                  .publish(
+                    new ErrorOccurred({
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      error: Cause.pretty(cause),
+                    }),
+                  )
+                  .pipe(Effect.catchAll(() => Effect.void)),
+          ),
+          Effect.catchAllCause((cause) =>
+            Cause.isInterruptedOnly(cause)
+              ? Effect.interrupt
+              : Effect.fail(new SubagentError({ message: Cause.pretty(cause), cause })),
+          ),
+        ),
+      )
 
-      const run: AgentActorService["run"] = (input) =>
+      const run: AgentActorService["run"] = Effect.fn("AgentActor.run")((input) =>
         Effect.scoped(
           Effect.gen(function* () {
-            const actor = yield* Machine.spawn(
-              AgentMachine.provide({
-                run: runEffect,
-              }),
-              `agent-${input.sessionId}`,
+            const runtime = yield* Effect.runtime<never>()
+            const runFork = Runtime.runFork(runtime)
+            const inspector = makeInspector((event) => {
+              runFork(
+                eventStore
+                  .publish(
+                    new MachineInspected({
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      actorId: event.actorId,
+                      inspectionType: event.type,
+                      payload: event,
+                    }),
+                  )
+                  .pipe(Effect.catchAll(() => Effect.void)),
+              )
+            })
+
+            const actorId = actorIdFor(input)
+            const actor = yield* actorSystem.spawn(actorId, makeAgentMachine(runEffect)).pipe(
+              Effect.provideService(InspectorService, inspector),
+              Effect.provideService(Scope.Scope, actorScope),
+              Effect.mapError((error) =>
+                Schema.is(SubagentError)(error)
+                  ? error
+                  : new SubagentError({ message: String(error), cause: error }),
+              ),
             )
 
-            yield* actor.send(AgentEvent.Start({ input }))
+            const terminal = yield* actor.sendAndWait(AgentEvent.Start({ input }))
 
-            const terminal = yield* actor.changes.pipe(
-              Stream.takeUntil((state) => state._tag === "Completed" || state._tag === "Failed"),
-              Stream.runLast,
-            )
+            yield* actorSystem.stop(actorId)
 
-            if (Option.isSome(terminal) && terminal.value._tag === "Failed") {
-              return yield* new SubagentError({ message: terminal.value.error })
+            if (terminal._tag === "Failed") {
+              return yield* new SubagentError({ message: terminal.error })
             }
           }),
-        )
+        ),
+      )
 
       return AgentActor.of({ run })
     }),

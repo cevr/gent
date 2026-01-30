@@ -59,13 +59,18 @@ Message = { id, sessionId, branchId, role, parts[], createdAt }
 
 ### Agent Loop + Agents
 
-Single loop for primary agents. Subagents run via AgentActor (effect-machine):
+Primary agent loop is an effect-machine actor (Idle/Running/Interrupted). Subagents run via AgentActor (effect-machine + ActorSystem):
 
 ```typescript
 AgentLoop {
   run(message)      // Executes; tools can include plan
   steer(command)    // Interrupt mid-run
   followUp(message) // Queue for after completion
+}
+
+AgentActor {
+  task(run)         // State-scoped task; emits MachineTaskSucceeded/Failed
+  inspection        // @machine.* events into EventStore
 }
 ```
 
@@ -114,7 +119,8 @@ Allow-by-default + rules:
 
 ### Events + Hooks
 
-15+ typed events via EventStore (SQLite log + PubSub). Full lifecycle hooks.
+Typed events via EventStore (SQLite log + PubSub). Includes machine inspection
+(@machine.\*) + task success/failure for traceability.
 
 ### Session Branching
 
@@ -163,3 +169,9 @@ assertSequence(calls, [
 - **pi-mono**: Lazy LLM adaptation, dual-queue steering, transform pipeline
 - **opencode**: Named agent configs, file-based storage, permission rules
 - **repo**: Effect service + Layer composition, mock factories, @effect/cli
+
+## Actor Roadmap
+
+Potential future: map subagents to `@effect/cluster` Entity + Sharding for BEAM-like
+mailboxes, idle reaping, and defect retry policies. See `packages/cluster/src/Entity.ts`
+and `packages/cluster/src/ShardingConfig.ts` in Effect for the knobs we can mirror.

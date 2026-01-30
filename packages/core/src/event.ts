@@ -131,6 +131,45 @@ export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOcc
   error: Schema.String,
 }) {}
 
+export const MachineInspectionType = Schema.Literal(
+  "@machine.spawn",
+  "@machine.event",
+  "@machine.transition",
+  "@machine.effect",
+  "@machine.error",
+  "@machine.stop",
+)
+export type MachineInspectionType = typeof MachineInspectionType.Type
+
+export class MachineInspected extends Schema.TaggedClass<MachineInspected>()("MachineInspected", {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+  actorId: Schema.String,
+  inspectionType: MachineInspectionType,
+  payload: Schema.Unknown,
+}) {}
+
+export class MachineTaskSucceeded extends Schema.TaggedClass<MachineTaskSucceeded>()(
+  "MachineTaskSucceeded",
+  {
+    sessionId: Schema.String,
+    branchId: Schema.String,
+    actorId: Schema.String,
+    stateTag: Schema.String,
+  },
+) {}
+
+export class MachineTaskFailed extends Schema.TaggedClass<MachineTaskFailed>()(
+  "MachineTaskFailed",
+  {
+    sessionId: Schema.String,
+    branchId: Schema.String,
+    actorId: Schema.String,
+    stateTag: Schema.String,
+    error: Schema.String,
+  },
+) {}
+
 export class TodoUpdated extends Schema.TaggedClass<TodoUpdated>()("TodoUpdated", {
   sessionId: Schema.String,
   branchId: Schema.String,
@@ -242,6 +281,9 @@ export const AgentEvent = Schema.Union(
   CompactionStarted,
   CompactionCompleted,
   ErrorOccurred,
+  MachineInspected,
+  MachineTaskSucceeded,
+  MachineTaskFailed,
   TodoUpdated,
   QuestionsAsked,
   QuestionsAnswered,

@@ -64,6 +64,6 @@
     "@ai-sdk/google": "^3.0.13",
     "@ai-sdk/mistral": "^3.0.12",
     "vitest": "^3.2.4",
-    "effect-machine": "^0.1.0"
+    "effect-machine": "^0.2.1"
   }
 }
