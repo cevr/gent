@@ -1,50 +1,66 @@
-import { Context, Effect, Layer, Option, Ref, Schedule, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
-import type { ModelId, Provider, ProviderId } from "@gent/core"
-import { Model, SUPPORTED_PROVIDERS, DEFAULT_MODELS } from "@gent/core"
+import { Model } from "@gent/core"
+import type { ModelId, ModelPricing } from "@gent/core"
 
-// Cache file schema
+const MODELS_URL = "https://models.dev"
+const CACHE_RELATIVE = ".gent/models.json"
+const JsonSchema = Schema.parseJson(Schema.Unknown)
+const decodeJson = Schema.decodeUnknown(JsonSchema)
 
-const CacheFile = Schema.Struct({
-  models: Schema.Array(Model),
-  updatedAt: Schema.Number,
-})
+type JsonRecord = Record<string, unknown>
 
-// models.dev API response schema (subset of fields we need)
+const isRecord = (value: unknown): value is JsonRecord =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
 
-const ModelsDevModel = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  provider: Schema.String,
-  context_length: Schema.optional(Schema.Number),
-})
-
-const ModelsDevResponse = Schema.Array(ModelsDevModel)
-
-// Provider ID mapping from models.dev to our ProviderId
-
-const PROVIDER_MAP: Record<string, ProviderId | undefined> = {
-  anthropic: "anthropic",
-  "amazon-bedrock": "bedrock",
-  openai: "openai",
-  google: "google",
-  mistral: "mistral",
+const parsePricing = (value: unknown): ModelPricing | undefined => {
+  if (!isRecord(value)) return undefined
+  const input = value["input"]
+  const output = value["output"]
+  if (typeof input !== "number" || typeof output !== "number") return undefined
+  return { input, output }
 }
 
-// ModelRegistry Error
+const parseContextLength = (value: unknown): number | undefined => {
+  if (!isRecord(value)) return undefined
+  const context = value["context"]
+  return typeof context === "number" ? context : undefined
+}
 
-export class ModelRegistryError extends Schema.TaggedError<ModelRegistryError>()(
-  "ModelRegistryError",
-  { message: Schema.String },
-) {}
+const parseModelsDev = (data: unknown): readonly Model[] => {
+  if (!isRecord(data)) return []
 
-// ModelRegistry Service
+  const models: Model[] = []
+  for (const [providerId, providerValue] of Object.entries(data)) {
+    if (!isRecord(providerValue)) continue
+    const modelsValue = providerValue["models"]
+    if (!isRecord(modelsValue)) continue
+
+    for (const [modelKey, modelValue] of Object.entries(modelsValue)) {
+      if (!isRecord(modelValue)) continue
+      const name = typeof modelValue["name"] === "string" ? modelValue["name"] : modelKey
+      const pricing = parsePricing(modelValue["cost"])
+      const contextLength = parseContextLength(modelValue["limit"])
+      const id = `${providerId}/${modelKey}` as ModelId
+
+      models.push(
+        new Model({
+          id,
+          name,
+          provider: providerId,
+          ...(contextLength !== undefined ? { contextLength } : {}),
+          ...(pricing !== undefined ? { pricing } : {}),
+        }),
+      )
+    }
+  }
+
+  return models
+}
 
 export interface ModelRegistryService {
-  readonly getProviders: () => Effect.Effect<readonly Provider[]>
-  readonly getModels: (providerId: ProviderId) => Effect.Effect<readonly Model[]>
-  readonly getModel: (modelId: ModelId) => Effect.Effect<Option.Option<Model>>
-  readonly getAllModels: () => Effect.Effect<readonly Model[]>
+  readonly list: () => Effect.Effect<readonly Model[]>
+  readonly get: (modelId: ModelId) => Effect.Effect<Model | undefined>
   readonly refresh: () => Effect.Effect<void>
 }
 
@@ -52,137 +68,85 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
   ModelRegistry,
   ModelRegistryService
 >() {
-  static CACHE_PATH = ".cache/gent/models.json"
-  static REFRESH_INTERVAL = 60 * 60 * 1000 // 60 minutes
-
   static Live: Layer.Layer<ModelRegistry, never, FileSystem.FileSystem | Path.Path> = Layer.scoped(
     ModelRegistry,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-
       const home = process.env["HOME"] ?? "~"
-      const cachePath = path.join(home, ModelRegistry.CACHE_PATH)
+      const cachePath = path.join(home, CACHE_RELATIVE)
+      const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 
-      const CacheFileJson = Schema.parseJson(CacheFile)
-
-      // State: cached models
-      const modelsRef = yield* Ref.make<readonly Model[]>(DEFAULT_MODELS)
-
-      // Load cache from disk
-      const loadCache = Effect.gen(function* () {
+      const loadFromDisk = Effect.gen(function* () {
         const exists = yield* fs.exists(cachePath)
-        if (exists === false) return undefined
+        if (!exists) return [] as readonly Model[]
+        const content = yield* fs
+          .readFileString(cachePath)
+          .pipe(Effect.catchAll(() => Effect.succeed("")))
+        if (content.trim().length === 0) return [] as readonly Model[]
+        const decoded = yield* decodeJson(content).pipe(Effect.catchAll(() => Effect.succeed(null)))
+        return parseModelsDev(decoded)
+      }).pipe(Effect.catchAll(() => Effect.succeed([] as readonly Model[])))
 
-        const content = yield* fs.readFileString(cachePath)
-        const cache = yield* Schema.decodeUnknown(CacheFileJson)(content)
-
-        const age = Date.now() - cache.updatedAt
-        if (age < ModelRegistry.REFRESH_INTERVAL) {
-          return cache.models
-        }
-        return undefined
-      }).pipe(
-        Effect.flatMap((models) =>
-          models !== undefined ? Ref.set(modelsRef, models) : Effect.void,
-        ),
-        Effect.catchAll(() => Effect.void),
-      )
-
-      // Save cache to disk
-      const saveCache = (models: readonly Model[]) =>
-        Effect.gen(function* () {
-          const cacheDir = path.dirname(cachePath)
-          yield* fs.makeDirectory(cacheDir, { recursive: true })
-          const json = yield* Schema.encode(CacheFileJson)({
-            models: [...models],
-            updatedAt: Date.now(),
-          })
-          yield* fs.writeFileString(cachePath, json)
-        }).pipe(Effect.catchAll(() => Effect.void))
-
-      // Fetch from models.dev API
-      const fetchModels = Effect.gen(function* () {
-        const response = yield* Effect.tryPromise({
-          try: () => fetch("https://models.dev/api/models"),
-          catch: () => new ModelRegistryError({ message: "Fetch failed" }),
-        })
-
-        if (!response.ok) {
-          return yield* new ModelRegistryError({ message: `API error: ${response.status}` })
-        }
-
-        const json = yield* Effect.tryPromise({
-          try: () => response.json() as Promise<unknown>,
-          catch: () => new ModelRegistryError({ message: "JSON parse failed" }),
-        })
-
-        const apiModels = yield* Schema.decodeUnknown(ModelsDevResponse)(json).pipe(
-          Effect.mapError(() => new ModelRegistryError({ message: "Invalid API response" })),
-        )
-
-        const models: Model[] = []
-        for (const m of apiModels) {
-          const providerId = PROVIDER_MAP[m.provider]
-          if (providerId === undefined) continue
-
-          models.push(
-            new Model({
-              id: `${providerId}/${m.id}` as ModelId,
-              name: m.name,
-              provider: providerId,
-              contextLength: m.context_length,
+      const fetchRemote = Effect.gen(function* () {
+        const res = yield* Effect.tryPromise({
+          try: () =>
+            fetch(`${MODELS_URL}/api.json`, {
+              headers: { "User-Agent": "gent" },
+              signal: AbortSignal.timeout(10_000),
             }),
-          )
+          catch: () => undefined,
+        })
+        if (res === undefined || !res.ok) return [] as readonly Model[]
+        const text = yield* Effect.tryPromise({
+          try: () => res.text(),
+          catch: () => "",
+        })
+        if (text.length === 0) return [] as readonly Model[]
+        const decoded = yield* decodeJson(text).pipe(Effect.catchAll(() => Effect.succeed(null)))
+        const parsed = parseModelsDev(decoded)
+        if (parsed.length > 0) {
+          const dir = path.dirname(cachePath)
+          yield* fs.makeDirectory(dir, { recursive: true })
+          yield* fs.writeFileString(cachePath, text).pipe(Effect.catchAll(() => Effect.void))
         }
+        return parsed
+      }).pipe(Effect.catchAll(() => Effect.succeed([] as readonly Model[])))
 
-        return models
+      const load = Effect.gen(function* () {
+        const cached = yield* Ref.get(cacheRef)
+        if (cached !== null) return cached
+        const disk = yield* loadFromDisk
+        if (disk.length > 0) {
+          yield* Ref.set(cacheRef, disk)
+          return disk
+        }
+        const remote = yield* fetchRemote
+        yield* Ref.set(cacheRef, remote)
+        return remote
       })
 
-      // Refresh models from API
       const refresh = Effect.gen(function* () {
-        const models = yield* fetchModels.pipe(
-          Effect.catchAll(() => Effect.succeed(DEFAULT_MODELS as readonly Model[])),
-        )
-        yield* Ref.set(modelsRef, models)
-        yield* saveCache(models)
+        const remote = yield* fetchRemote
+        if (remote.length > 0) {
+          yield* Ref.set(cacheRef, remote)
+        }
       })
 
-      // Initial load: try cache, then background refresh
-      yield* loadCache
-      yield* Effect.forkDaemon(
-        refresh.pipe(Effect.repeat(Schedule.spaced(ModelRegistry.REFRESH_INTERVAL))),
-      )
+      yield* Effect.forkDaemon(refresh)
 
-      const service: ModelRegistryService = {
-        getProviders: () => Effect.succeed(SUPPORTED_PROVIDERS),
-
-        getModels: (providerId) =>
-          Ref.get(modelsRef).pipe(
-            Effect.map((models) => models.filter((m) => m.provider === providerId)),
-          ),
-
-        getModel: (modelId) =>
-          Ref.get(modelsRef).pipe(
-            Effect.map((models) => Option.fromNullable(models.find((m) => m.id === modelId))),
-          ),
-
-        getAllModels: () => Ref.get(modelsRef),
-
+      return ModelRegistry.of({
+        list: () => load,
+        get: (modelId) => load.pipe(Effect.map((models) => models.find((m) => m.id === modelId))),
         refresh: () => refresh,
-      }
-
-      return service
+      })
     }),
   )
 
-  static Test = (models: readonly Model[] = DEFAULT_MODELS): Layer.Layer<ModelRegistry> =>
+  static Test = (models: readonly Model[] = []): Layer.Layer<ModelRegistry> =>
     Layer.succeed(ModelRegistry, {
-      getProviders: () => Effect.succeed(SUPPORTED_PROVIDERS),
-      getModels: (providerId) => Effect.succeed(models.filter((m) => m.provider === providerId)),
-      getModel: (modelId) =>
-        Effect.succeed(Option.fromNullable(models.find((m) => m.id === modelId))),
-      getAllModels: () => Effect.succeed(models),
+      list: () => Effect.succeed(models),
+      get: (modelId) => Effect.succeed(models.find((m) => m.id === modelId)),
       refresh: () => Effect.void,
     })
 }

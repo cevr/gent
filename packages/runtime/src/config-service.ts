@@ -1,17 +1,11 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
-import { AgentName, ModelId, ProviderId, PermissionRule, CustomProviderConfig } from "@gent/core"
+import { PermissionRule } from "@gent/core"
 
 // User config schema - stored at ~/.gent/config.json
 
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
-  model: Schema.optional(ModelId),
-  provider: Schema.optional(ProviderId),
-  agent: Schema.optional(AgentName),
-  subprocessBinaryPath: Schema.optional(Schema.String),
   permissions: Schema.optional(Schema.Array(PermissionRule)),
-  /** Custom provider configurations keyed by provider name */
-  providers: Schema.optional(Schema.Record({ key: Schema.String, value: CustomProviderConfig })),
 }) {}
 
 // ConfigService
@@ -19,18 +13,10 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
 export interface ConfigServiceService {
   readonly get: () => Effect.Effect<UserConfig>
   readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
-  readonly getModel: () => Effect.Effect<ModelId | undefined>
-  readonly setModel: (modelId: ModelId) => Effect.Effect<void>
-  readonly getAgent: () => Effect.Effect<AgentName | undefined>
-  readonly setAgent: (agent: AgentName) => Effect.Effect<void>
-  readonly getSubprocessBinaryPath: () => Effect.Effect<string | undefined>
-  readonly setSubprocessBinaryPath: (path: string) => Effect.Effect<void>
   readonly getPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
   readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
   readonly removePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void>
-  readonly getCustomProviders: () => Effect.Effect<
-    Readonly<Record<string, CustomProviderConfig>> | undefined
-  >
+  readonly loadInstructions: (cwd: string) => Effect.Effect<string>
 }
 
 export class ConfigService extends Context.Tag("@gent/runtime/src/config-service/ConfigService")<
@@ -60,23 +46,8 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
       const projectConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
 
       const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
-        const projectRules = project.permissions ?? []
-        const userRules = user.permissions ?? []
-        const permissions = [...projectRules, ...userRules]
-
-        // Merge providers: project overrides user for same key
-        const userProviders = user.providers ?? {}
-        const projectProviders = project.providers ?? {}
-        const mergedProviders = { ...userProviders, ...projectProviders }
-
-        return new UserConfig({
-          model: project.model ?? user.model,
-          provider: project.provider ?? user.provider,
-          agent: project.agent ?? user.agent,
-          subprocessBinaryPath: project.subprocessBinaryPath ?? user.subprocessBinaryPath,
-          permissions: permissions.length > 0 ? permissions : undefined,
-          providers: Object.keys(mergedProviders).length > 0 ? mergedProviders : undefined,
-        })
+        const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
+        return new UserConfig({ permissions: permissions.length > 0 ? permissions : undefined })
       }
 
       const ensureUserConfig = Effect.gen(function* () {
@@ -94,14 +65,6 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
 
       // Load config from disk (merges project over user)
       const loadConfig = Effect.gen(function* () {
-        const normalizeAgent = (value: unknown) => (value === "default" ? "cowork" : value)
-        const normalizeUserConfig = (value: unknown) => {
-          if (value === null || typeof value !== "object" || Array.isArray(value)) return value
-          const obj = value as Record<string, unknown>
-          if (!("agent" in obj)) return obj
-          return { ...obj, agent: normalizeAgent(obj["agent"]) }
-        }
-
         const readConfig = (filePath: string) =>
           fs.exists(filePath).pipe(
             Effect.flatMap((exists) =>
@@ -113,7 +76,6 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
                 catch: () => ({}),
               }),
             ),
-            Effect.map(normalizeUserConfig),
             Effect.flatMap((data) => Schema.decodeUnknown(UserConfig)(data)),
             Effect.catchAll(() => Effect.succeed(new UserConfig({}))),
           )
@@ -156,39 +118,11 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
           Effect.gen(function* () {
             const current = yield* Ref.get(userConfigRef)
             const updated = new UserConfig({
-              model: partial.model ?? current.model,
-              provider: partial.provider ?? current.provider,
-              agent: partial.agent ?? current.agent,
-              subprocessBinaryPath: partial.subprocessBinaryPath ?? current.subprocessBinaryPath,
               permissions: partial.permissions ?? current.permissions,
-              providers: partial.providers ?? current.providers,
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
           }),
-
-        getModel: () => service.get().pipe(Effect.map((c) => c.model)),
-
-        setModel: (modelId) =>
-          Effect.gen(function* () {
-            // Extract provider from model ID (format: provider/model-name)
-            const parts = (modelId as string).split("/")
-            const providerId = parts[0] as ProviderId | undefined
-
-            yield* service.set({
-              model: modelId,
-              provider: providerId,
-            })
-          }),
-
-        getAgent: () => service.get().pipe(Effect.map((c) => c.agent)),
-
-        setAgent: (agent) => service.set({ agent }),
-
-        getSubprocessBinaryPath: () =>
-          service.get().pipe(Effect.map((c) => c.subprocessBinaryPath)),
-
-        setSubprocessBinaryPath: (pathValue) => service.set({ subprocessBinaryPath: pathValue }),
 
         getPermissionRules: () =>
           Effect.gen(function* () {
@@ -202,12 +136,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
             const current = yield* Ref.get(userConfigRef)
             const permissions = [...(current.permissions ?? []), rule]
             const updated = new UserConfig({
-              model: current.model,
-              provider: current.provider,
-              agent: current.agent,
-              subprocessBinaryPath: current.subprocessBinaryPath,
               permissions,
-              providers: current.providers,
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
@@ -220,23 +149,55 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
               (r) => !(r.tool === tool && r.pattern === pattern),
             )
             const updated = new UserConfig({
-              model: current.model,
-              provider: current.provider,
-              agent: current.agent,
-              subprocessBinaryPath: current.subprocessBinaryPath,
               permissions: permissions.length > 0 ? permissions : undefined,
-              providers: current.providers,
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
           }),
 
-        getCustomProviders: () =>
+        loadInstructions: (cwd) =>
           Effect.gen(function* () {
-            const user = yield* Ref.get(userConfigRef)
-            const project = yield* Ref.get(projectConfigRef)
-            const merged = mergeConfigs(user, project)
-            return merged.providers
+            const readIfExists = (filePath: string): Effect.Effect<string> =>
+              fs.exists(filePath).pipe(
+                Effect.flatMap((exists) =>
+                  exists ? fs.readFileString(filePath) : Effect.succeed(""),
+                ),
+                Effect.map((content) => content.trim()),
+                Effect.catchAll(() => Effect.succeed("")),
+              )
+
+            const readWithFallback = (primary: string, fallback: string): Effect.Effect<string> =>
+              readIfExists(primary).pipe(
+                Effect.flatMap((content) =>
+                  content.length > 0 ? Effect.succeed(content) : readIfExists(fallback),
+                ),
+              )
+
+            const locations = [
+              {
+                primary: path.join(home, ".gent", "AGENTS.md"),
+                fallback: path.join(home, ".gent", "CLAUDE.md"),
+              },
+              { primary: path.join(cwd, "AGENTS.md"), fallback: path.join(cwd, "CLAUDE.md") },
+              {
+                primary: path.join(cwd, ".gent", "AGENTS.md"),
+                fallback: path.join(cwd, ".gent", "CLAUDE.md"),
+              },
+            ]
+
+            const contents: string[] = []
+            for (const loc of locations) {
+              const content = yield* readWithFallback(loc.primary, loc.fallback)
+              if (content.length > 0) contents.push(content)
+            }
+
+            if (contents.length === 0) {
+              const globalFallback = path.join(home, ".claude", "CLAUDE.md")
+              const content = yield* readIfExists(globalFallback)
+              if (content.length > 0) contents.push(content)
+            }
+
+            return contents.join("\n---\n")
           }),
       }
 
@@ -250,17 +211,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
 
     const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
       const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
-      const userProviders = user.providers ?? {}
-      const projectProviders = project.providers ?? {}
-      const mergedProviders = { ...userProviders, ...projectProviders }
-      return new UserConfig({
-        model: project.model ?? user.model,
-        provider: project.provider ?? user.provider,
-        agent: project.agent ?? user.agent,
-        subprocessBinaryPath: project.subprocessBinaryPath ?? user.subprocessBinaryPath,
-        permissions: permissions.length > 0 ? permissions : undefined,
-        providers: Object.keys(mergedProviders).length > 0 ? mergedProviders : undefined,
-      })
+      return new UserConfig({ permissions: permissions.length > 0 ? permissions : undefined })
     }
 
     return Layer.succeed(ConfigService, {
@@ -275,49 +226,9 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
           userConfigRef,
           (current) =>
             new UserConfig({
-              model: partial.model ?? current.model,
-              provider: partial.provider ?? current.provider,
-              agent: partial.agent ?? current.agent,
-              subprocessBinaryPath: partial.subprocessBinaryPath ?? current.subprocessBinaryPath,
               permissions: partial.permissions ?? current.permissions,
-              providers: partial.providers ?? current.providers,
             }),
         ),
-      getModel: () =>
-        Effect.gen(function* () {
-          const user = yield* Ref.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
-          return mergeConfigs(user, project).model
-        }),
-      setModel: (modelId) => {
-        const parts = (modelId as string).split("/")
-        const providerId = parts[0] as ProviderId | undefined
-        return Ref.update(
-          userConfigRef,
-          () => new UserConfig({ model: modelId, provider: providerId }),
-        )
-      },
-      getAgent: () =>
-        Effect.gen(function* () {
-          const user = yield* Ref.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
-          return mergeConfigs(user, project).agent
-        }),
-      setAgent: (agent) =>
-        Ref.update(userConfigRef, (current) => new UserConfig({ ...current, agent })).pipe(
-          Effect.asVoid,
-        ),
-      getSubprocessBinaryPath: () =>
-        Effect.gen(function* () {
-          const user = yield* Ref.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
-          return mergeConfigs(user, project).subprocessBinaryPath
-        }),
-      setSubprocessBinaryPath: (pathValue) =>
-        Ref.update(
-          userConfigRef,
-          (current) => new UserConfig({ ...current, subprocessBinaryPath: pathValue }),
-        ).pipe(Effect.asVoid),
       getPermissionRules: () =>
         Effect.gen(function* () {
           const user = yield* Ref.get(userConfigRef)
@@ -328,10 +239,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
         Ref.update(userConfigRef, (current) => {
           const permissions = [...(current.permissions ?? []), rule]
           return new UserConfig({
-            model: current.model,
-            provider: current.provider,
             permissions,
-            providers: current.providers,
           })
         }).pipe(Effect.asVoid),
       removePermissionRule: (tool, pattern) =>
@@ -340,18 +248,10 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
             (r) => !(r.tool === tool && r.pattern === pattern),
           )
           return new UserConfig({
-            model: current.model,
-            provider: current.provider,
             permissions: permissions.length > 0 ? permissions : undefined,
-            providers: current.providers,
           })
         }).pipe(Effect.asVoid),
-      getCustomProviders: () =>
-        Effect.gen(function* () {
-          const user = yield* Ref.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
-          return mergeConfigs(user, project).providers
-        }),
+      loadInstructions: () => Effect.succeed(""),
     })
   }
 }

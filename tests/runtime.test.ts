@@ -138,7 +138,6 @@ describe("Subagent Runner", () => {
       Storage.Test(),
       SubagentRunnerConfig.Live({
         systemPrompt: "",
-        defaultModel: "openai/opus-4.5",
       }),
       Layer.succeed(AgentActor, {
         run: () => Effect.void,
@@ -198,7 +197,6 @@ describe("Subagent Runner", () => {
       Storage.Test(),
       SubagentRunnerConfig.Live({
         systemPrompt: "",
-        defaultModel: "openai/opus-4.5",
         maxAttempts: 2,
         retryInitialDelayMs: 1,
         retryMaxDelayMs: 1,
@@ -259,7 +257,6 @@ describe("Subagent Runner", () => {
       Storage.Test(),
       SubagentRunnerConfig.Live({
         systemPrompt: "",
-        defaultModel: "openai/opus-4.5",
         maxAttempts: 1,
         timeoutMs: 5,
       }),
@@ -359,7 +356,6 @@ describe("AgentActor", () => {
           branchId: branch.id,
           agentName: "cowork",
           prompt: "inspect",
-          defaultModel: "test",
           systemPrompt: "",
           bypass: true,
         })
@@ -502,7 +498,6 @@ describe("Tool concurrency", () => {
           branchId: branch.id,
           agentName: "cowork",
           prompt: "run serial tools",
-          defaultModel: "test",
           systemPrompt: "",
           bypass: true,
         })

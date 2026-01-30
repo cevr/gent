@@ -87,20 +87,12 @@ TUI (@opentui/solid) ←── HTTP ──→ Server (HttpApi)
 Data stored in `~/.gent/`:
 
 - `data.db` - SQLite database
-- `config.json` - User configuration
+- `config.json` - Permission rules
 - `plans/` - Plan files
 
 ## Model Support
 
-Uses Vercel AI SDK. Format: `provider/model`
-
-```bash
-# Anthropic (default)
-bun run --cwd apps/cli dev chat -m anthropic/claude-sonnet-4-20250514 "Hello"
-
-# OpenAI
-bun run --cwd apps/cli dev chat -m openai/gpt-4o "Hello"
-```
+Curated per mode. No user-facing model selection. Pricing metadata fetched from models.dev.
 
 ## Testing
 

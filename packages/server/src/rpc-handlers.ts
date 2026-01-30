@@ -4,8 +4,7 @@ import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
 import { Permission, PermissionHandler, PermissionRule, PlanHandler, AuthStorage } from "@gent/core"
-import { ActorProcess, ConfigService } from "@gent/runtime"
-import { ProviderFactory } from "@gent/providers"
+import { ActorProcess, ConfigService, ModelRegistry } from "@gent/runtime"
 import type { AuthProviderInfo } from "./rpcs"
 
 // Known providers for auth listing
@@ -30,8 +29,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const permission = yield* Permission
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
+    const modelRegistry = yield* ModelRegistry
     const authStorage = yield* AuthStorage
-    const providerFactory = yield* ProviderFactory
 
     return {
       createSession: (input) =>
@@ -74,12 +73,11 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(name !== undefined ? { name } : {}),
         }),
 
-      sendMessage: ({ sessionId, branchId, content, model }) =>
+      sendMessage: ({ sessionId, branchId, content }) =>
         core.sendMessage({
           sessionId,
           branchId,
           content,
-          ...(model !== undefined ? { model } : {}),
         }),
 
       listMessages: ({ branchId }) => core.listMessages(branchId),
@@ -137,6 +135,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           yield* permission.removeRule(tool, pattern)
         }),
 
+      listModels: () => modelRegistry.list(),
+
       listAuthProviders: () =>
         Effect.gen(function* () {
           const storedKeys = yield* authStorage
@@ -167,8 +167,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       deleteAuthKey: ({ provider }) =>
         authStorage.delete(provider).pipe(Effect.catchAll(() => Effect.void)),
-
-      listModels: () => providerFactory.listModels(),
 
       actorSendUserMessage: (input) => actorProcess.sendUserMessage(input),
 

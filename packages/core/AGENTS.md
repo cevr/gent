@@ -10,9 +10,3 @@
 
 - `Schema.Unknown` for dynamic JSON (`ToolCallPart.input`, `ToolResultPart.output.value`)
 - Decode with `Schema.decodeUnknownSync(schema)(value)` before use
-
-## Current Gen Models
-
-- `CURRENT_GEN_MODEL_IDS` - Auto-generated list of latest models per provider
-- Updated via `packages/providers/scripts/update-current-gen.ts`
-- Bedrock limited to Claude models only (alt Anthropic provider)

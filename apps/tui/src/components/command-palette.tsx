@@ -2,7 +2,6 @@ import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
-import type { ModelId } from "@gent/core"
 import { Agents } from "@gent/core"
 import { useCommand } from "../command/index"
 import { useTheme } from "../theme/index"
@@ -11,7 +10,6 @@ import { useRouter } from "../router/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useRuntime } from "../hooks/use-runtime"
 import type { SessionInfo } from "../client"
-import * as State from "../state"
 import { formatError } from "../utils/format-error"
 
 interface MenuItem {
@@ -38,7 +36,6 @@ export function CommandPalette() {
   const [selectedIndex, setSelectedIndex] = createSignal(0)
   const [sessions, setSessions] = createSignal<SessionInfo[]>([])
   const [searchQuery, setSearchQuery] = createSignal("")
-  const [showAllModels, setShowAllModels] = createSignal(false)
 
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
@@ -78,11 +75,6 @@ export function CommandPalette() {
         id: "agent",
         title: "Agent",
         onSelect: () => pushLevel(agentMenu()),
-      },
-      {
-        id: "model",
-        title: "Model",
-        onSelect: () => pushLevel(providerMenu()),
       },
     ],
   })
@@ -230,106 +222,6 @@ export function CommandPalette() {
     }
   }
 
-  // Provider submenu - lists providers with models, or direct model list when searching
-  const providerMenu = (): MenuLevel => ({
-    title: "Model",
-    items: () => {
-      const query = searchQuery().toLowerCase().trim()
-
-      // If searching, show flat model list filtered by query
-      if (query.length > 0) {
-        const allModels = showAllModels() ? State.models() : State.currentGenModels()
-        const filtered = allModels.filter(
-          (m) =>
-            m.name.toLowerCase().includes(query) ||
-            m.id.toLowerCase().includes(query) ||
-            m.provider.toLowerCase().includes(query),
-        )
-        const currentModelId = State.currentModel()
-
-        const items: MenuItem[] = filtered.map((m) => {
-          const isActive = m.id === currentModelId
-          const providerInfo = State.providers().find((p) => p.id === m.provider)
-          return {
-            id: `model.${m.id}`,
-            title: isActive
-              ? `${providerInfo?.name ?? m.provider}/${m.name} •`
-              : `${providerInfo?.name ?? m.provider}/${m.name}`,
-            onSelect: () => {
-              State.setModel(m.id as ModelId)
-              command.closePalette()
-            },
-          }
-        })
-
-        // Add "Show all models" toggle if not already showing all
-        if (!showAllModels() && items.length < 10) {
-          items.push({
-            id: "model.show-all",
-            title: "Show all models...",
-            onSelect: () => {
-              setShowAllModels(true)
-              setSelectedIndex(0)
-            },
-          })
-        }
-
-        return items
-      }
-
-      // No search - show provider list
-      return State.providers()
-        .filter((provider) => State.currentGenByProvider(provider.id).length > 0)
-        .map((provider) => ({
-          id: `provider.${provider.id}`,
-          title: provider.name,
-          onSelect: () => pushLevel(modelMenu(provider.id)),
-        }))
-    },
-    searchable: true,
-  })
-
-  // Model submenu for a specific provider (current gen only, unless showAll)
-  const modelMenu = (providerId: string): MenuLevel => {
-    const currentModelId = State.currentModel()
-    const providerInfo = State.providers().find((p) => p.id === providerId)
-    return {
-      title: providerInfo?.name ?? providerId,
-      items: () => {
-        const providerModels = showAllModels()
-          ? State.modelsByProvider(providerId)
-          : State.currentGenByProvider(providerId)
-
-        const items: MenuItem[] = providerModels.map((m) => {
-          const isActive = m.id === currentModelId
-          return {
-            id: `model.${m.id}`,
-            title: isActive ? `${m.name} •` : m.name,
-            onSelect: () => {
-              State.setModel(m.id as ModelId)
-              command.closePalette()
-            },
-          }
-        })
-
-        // Add "Show all models" toggle if not already showing all
-        if (!showAllModels()) {
-          items.push({
-            id: "model.show-all",
-            title: "Show all models...",
-            onSelect: () => {
-              setShowAllModels(true)
-              setSelectedIndex(0)
-            },
-          })
-        }
-
-        return items
-      },
-      searchable: true,
-    }
-  }
-
   const currentLevel = () => {
     const stack = levelStack()
     return stack.length > 0 ? (stack[stack.length - 1] ?? rootMenu()) : rootMenu()
@@ -348,7 +240,6 @@ export function CommandPalette() {
 
   const popLevel = () => {
     setSearchQuery("")
-    setShowAllModels(false)
     if (levelStack().length > 0) {
       setLevelStack((stack) => stack.slice(0, -1))
       setSelectedIndex(0)
@@ -370,7 +261,6 @@ export function CommandPalette() {
     setLevelStack([])
     setSelectedIndex(0)
     setSearchQuery("")
-    setShowAllModels(false)
   }
 
   useKeyboard((e) => {

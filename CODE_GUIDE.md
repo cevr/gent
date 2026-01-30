@@ -15,7 +15,7 @@ Start here. These files define the vocabulary everything else uses.
 This is ground zero. Everything flows from these types:
 
 - `Session` — top-level container (has name, cwd, timestamps)
-- `Branch` — tree node for forking conversations (parent refs, model override)
+- `Branch` — tree node for forking conversations (parent refs, summary)
 - `Message` — the atomic unit: id, role, parts[], timestamps
 - `MessagePart` — discriminated union of 5 part types
 
@@ -131,7 +131,7 @@ This is the heart. Study it carefully.
 
 **Core algorithm:** `runLoop` (line ~187) is a recursive generator:
 
-1. Check steer queue (Cancel, Interrupt, Interject, SwitchModel, SwitchAgent)
+1. Check steer queue (Cancel, Interrupt, Interject, SwitchAgent)
 2. Load messages (checkpoint-aware)
 3. Build provider request (system prompt + history + tools)
 4. Stream from provider, accumulate chunks
@@ -143,7 +143,6 @@ This is the heart. Study it carefully.
 
 - `Cancel` / `Interrupt` — hard stop, emit `StreamEnded(interrupted: true)`
 - `Interject` — queue message for immediate processing (no StreamEnded)
-- `SwitchModel` — change model mid-run
 - `SwitchAgent` — switch primary agent (cowork/deep)
 
 **Hint:** Tool execution happens at line ~125. Permission check → schema decode → run effect → wrap result.

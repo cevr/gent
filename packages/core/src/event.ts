@@ -234,12 +234,6 @@ export class BranchSummarized extends Schema.TaggedClass<BranchSummarized>()("Br
   summary: Schema.String,
 }) {}
 
-export class ModelChanged extends Schema.TaggedClass<ModelChanged>()("ModelChanged", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
-  model: Schema.String,
-}) {}
-
 export class AgentSwitched extends Schema.TaggedClass<AgentSwitched>()("AgentSwitched", {
   sessionId: Schema.String,
   branchId: Schema.String,
@@ -291,7 +285,6 @@ export const AgentEvent = Schema.Union(
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
-  ModelChanged,
   AgentSwitched,
   SubagentSpawned,
   SubagentCompleted,

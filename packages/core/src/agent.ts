@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
-import { ModelId } from "./model"
+import type { ModelId } from "./model"
 
 // Agent definitions
 
@@ -25,7 +25,6 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   systemPromptAddendum: Schema.optional(Schema.String),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
-  preferredModel: Schema.optional(ModelId),
   temperature: Schema.optional(Schema.Number),
   canDelegateToAgents: Schema.optional(Schema.Array(AgentName)),
 }) {}
@@ -66,7 +65,6 @@ export const Agents = {
     kind: "primary",
     canDelegateToAgents: ["explore", "architect"],
     systemPromptAddendum: COWORK_PROMPT,
-    preferredModel: "openai/opus-4.5" as ModelId,
   }),
 
   deep: defineAgent({
@@ -75,7 +73,6 @@ export const Agents = {
     kind: "primary",
     canDelegateToAgents: ["explore", "architect"],
     systemPromptAddendum: DEEP_PROMPT,
-    preferredModel: "openai/codex-5.2" as ModelId,
   }),
 
   explore: defineAgent({
@@ -84,7 +81,6 @@ export const Agents = {
     kind: "subagent",
     allowedTools: ["read", "grep", "glob", "bash"],
     systemPromptAddendum: EXPLORE_PROMPT,
-    preferredModel: "anthropic/claude-haiku-4" as ModelId,
   }),
 
   architect: defineAgent({
@@ -111,6 +107,19 @@ export const Agents = {
     temperature: 0.5,
   }),
 } as const
+
+// Curated model mapping (not user-configurable)
+
+export const AgentModels: Record<AgentName, ModelId> = {
+  cowork: "openai/opus-4.5" as ModelId,
+  deep: "openai/codex-5.2" as ModelId,
+  explore: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  architect: "openai/opus-4.5" as ModelId,
+  compaction: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  title: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+}
+
+export const resolveAgentModelId = (agent: AgentName): ModelId => AgentModels[agent]
 
 export type BuiltinAgentName = keyof typeof Agents
 

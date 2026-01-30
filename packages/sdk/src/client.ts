@@ -12,10 +12,10 @@ import type {
   TextPart,
   ToolCallPart,
   ToolResultPart,
+  Model,
   PermissionDecision,
   PlanDecision,
   PermissionRule,
-  Model,
 } from "@gent/core"
 
 export type { MessagePart, TextPart, ToolCallPart, ToolResultPart, PermissionRule }
@@ -134,7 +134,6 @@ export type SteerCommand =
   | { _tag: "Cancel" }
   | { _tag: "Interrupt" }
   | { _tag: "Interject"; message: string }
-  | { _tag: "SwitchModel"; model: string }
   | { _tag: "SwitchAgent"; agent: AgentName }
 
 // Session info (minimal for client)
@@ -156,7 +155,6 @@ export interface BranchInfo {
   parentBranchId?: string
   parentMessageId?: string
   name?: string
-  model?: string
   summary?: string
   createdAt: number
 }
@@ -178,7 +176,6 @@ export interface SessionState {
   lastEventId: number | null
   isStreaming: boolean
   agent: AgentName
-  model?: string
   bypass?: boolean
 }
 
@@ -199,7 +196,6 @@ export interface GentClient {
     sessionId: string
     branchId: string
     content: string
-    model?: string
   }) => Effect.Effect<void, GentRpcError>
 
   /** Create a new session */
@@ -220,6 +216,9 @@ export interface GentClient {
 
   /** List all sessions */
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
+
+  /** List available model metadata (pricing) */
+  listModels: () => Effect.Effect<readonly Model[], GentRpcError>
 
   /** List branches for a session */
   listBranches: (sessionId: string) => Effect.Effect<readonly BranchInfo[], GentRpcError>
@@ -303,9 +302,6 @@ export interface GentClient {
   /** Delete auth key for a provider */
   deleteAuthKey: (provider: string) => Effect.Effect<void, GentRpcError>
 
-  /** List all available models (built-in + custom) */
-  listModels: () => Effect.Effect<readonly Model[], GentRpcError>
-
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<unknown>
 }
@@ -337,6 +333,8 @@ export function createClient(
       rpcClient.getSessionState({ sessionId: input.sessionId, branchId: input.branchId }),
 
     listSessions: () => rpcClient.listSessions(),
+
+    listModels: () => rpcClient.listModels(),
 
     listBranches: (sessionId) => rpcClient.listBranches({ sessionId }),
 
@@ -411,8 +409,6 @@ export function createClient(
     setAuthKey: (provider, key) => rpcClient.setAuthKey({ provider, key }),
 
     deleteAuthKey: (provider) => rpcClient.deleteAuthKey({ provider }),
-
-    listModels: () => rpcClient.listModels(),
 
     runtime,
   }

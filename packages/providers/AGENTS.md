@@ -38,7 +38,3 @@ if (maxTokens) opts.maxOutputTokens = maxTokens
 ```
 
 ## Scripts
-
-- `scripts/update-current-gen.ts` - Fetches models.dev, uses haiku to identify latest gen per provider, writes `@gent/core/current-gen.ts`
-
-Run: `bun run --cwd packages/providers scripts/update-current-gen.ts`

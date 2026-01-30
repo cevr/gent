@@ -95,7 +95,7 @@ AgentProcess RPC + mailbox contract (local + cluster):
 SendUserMessage { sessionId, branchId, content, mode } -> { messageId, turnId }
 SendToolResult  { toolCallId, output, isError }      -> { ack: true }
 Interrupt       { kind: cancel|interrupt|interject, message? } -> { ack: true }
-GetState        {} -> { status, agent, model, queueDepth, lastError? }
+GetState        {} -> { status, agent, queueDepth, lastError? }
 GetMetrics      {} -> { tokens, cost, toolCalls, durations, retries }
 ```
 
@@ -134,7 +134,7 @@ Each tool has `Live` + `Test` layers.
 
 Vercel AI SDK. Format: `provider/model`
 
-Mid-session switching: `/model openai/gpt-4o`
+Model is derived from agent/mode. No user-facing model switching. Pricing metadata comes from models.dev.
 
 ### Storage
 
@@ -165,10 +165,6 @@ Fork at any message. Tree navigation. Independent compaction per branch.
 
 ```json
 {
-  "models": {
-    "default": "anthropic/claude-sonnet-4",
-    "deep": "anthropic/claude-sonnet-4"
-  },
   "permissions": []
 }
 ```

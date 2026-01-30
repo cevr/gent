@@ -40,12 +40,9 @@ export {
   estimateTokens,
   pruneToolOutputs,
 } from "./checkpoint.js"
-
-export { ModelRegistry, ModelRegistryError, type ModelRegistryService } from "./model-registry"
-
 export { ConfigService, UserConfig, type ConfigServiceService } from "./config-service.js"
 
-export { InstructionsLoader, type InstructionsLoaderService } from "./instructions-loader.js"
+export { ModelRegistry, type ModelRegistryService } from "./model-registry.js"
 
 export {
   RetryConfig,

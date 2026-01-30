@@ -1,7 +1,7 @@
 /**
  * Slash command handlers
  *
- * Commands: /agent, /model, /clear, /sessions, /compact, /branch, /tree, /fork, /bypass
+ * Commands: /agent, /clear, /sessions, /compact, /branch, /tree, /fork, /bypass
  */
 
 import { Effect } from "effect"
@@ -9,7 +9,6 @@ import { formatError, type UiError } from "../utils/format-error"
 
 export type SlashCommandId =
   | "agent"
-  | "model"
   | "clear"
   | "sessions"
   | "compact"
@@ -61,13 +60,6 @@ export const executeSlashCommand = (
 ): Effect.Effect<SlashCommandResult, UiError> => {
   switch (cmd.toLowerCase()) {
     case "agent":
-      return Effect.sync(() => {
-        ctx.openPalette()
-        return { handled: true }
-      })
-
-    case "model":
-      // Open command palette at model submenu
       return Effect.sync(() => {
         ctx.openPalette()
         return { handled: true }

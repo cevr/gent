@@ -1,5 +1,4 @@
-import { Switch, Match, onMount } from "solid-js"
-import type { ModelId } from "@gent/core"
+import { Switch, Match } from "solid-js"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/index"
@@ -10,24 +9,15 @@ import { Session } from "./routes/session"
 import { BranchPicker } from "./routes/branch-picker"
 import { Permissions } from "./routes/permissions"
 import { Auth } from "./routes/auth"
-import * as State from "./state"
 import type { BranchInfo } from "./client"
 
 export interface AppProps {
   initialPrompt?: string
-  initialModel?: ModelId
 }
 
 function AppContent(props: AppProps) {
   const router = useRouter()
   const client = useClient()
-
-  // Initialize model state on mount
-  onMount(() => {
-    if (props.initialModel !== undefined) {
-      State.initModelState(props.initialModel)
-    }
-  })
 
   return (
     <box flexDirection="column" width="100%" height="100%">

@@ -19,6 +19,7 @@ describe("createClient", () => {
       createSession: () =>
         Effect.succeed({ sessionId: "s1", branchId: "b1", name: "Test", bypass: false }),
       listSessions: () => Effect.succeed([]),
+      listModels: () => Effect.succeed([]),
       getSession: () => Effect.succeed(null),
       deleteSession: () => Effect.void,
       listBranches: () => Effect.succeed([]),
@@ -49,7 +50,6 @@ describe("createClient", () => {
       listAuthProviders: () => Effect.succeed([]),
       setAuthKey: () => Effect.void,
       deleteAuthKey: () => Effect.void,
-      listModels: () => Effect.succeed([]),
     } as unknown as GentRpcClient
 
     const runtime = Effect.runSync(Effect.runtime<never>()) as Runtime.Runtime<unknown>
@@ -58,6 +58,7 @@ describe("createClient", () => {
     // Verify all methods exist
     expect(typeof client.createSession).toBe("function")
     expect(typeof client.listSessions).toBe("function")
+    expect(typeof client.listModels).toBe("function")
     expect(typeof client.sendMessage).toBe("function")
     expect(typeof client.subscribeEvents).toBe("function")
     expect(typeof client.steer).toBe("function")
@@ -78,7 +79,6 @@ describe("createClient", () => {
     expect(typeof client.listAuthProviders).toBe("function")
     expect(typeof client.setAuthKey).toBe("function")
     expect(typeof client.deleteAuthKey).toBe("function")
-    expect(typeof client.listModels).toBe("function")
     expect(client.runtime).toBeDefined()
   })
 

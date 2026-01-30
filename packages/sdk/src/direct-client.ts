@@ -17,12 +17,11 @@ import {
   AuthStorage,
   type AgentName,
   type EventEnvelope,
+  type Model,
   type PermissionDecision,
   type PlanDecision,
-  type Model,
 } from "@gent/core"
-import { ConfigService, type SteerCommand } from "@gent/runtime"
-import { ProviderFactory } from "@gent/providers"
+import { ConfigService, ModelRegistry, type SteerCommand } from "@gent/runtime"
 
 // Known providers for auth listing
 const KNOWN_PROVIDERS = ["anthropic", "openai", "bedrock", "google", "mistral"] as const
@@ -68,7 +67,6 @@ export interface BranchInfo {
   parentBranchId?: string
   parentMessageId?: string
   name?: string
-  model?: string
   summary?: string
   createdAt: number
 }
@@ -90,7 +88,6 @@ export interface SessionState {
   lastEventId: number | null
   isStreaming: boolean
   agent: AgentName
-  model?: string
   bypass?: boolean
 }
 
@@ -113,6 +110,8 @@ export interface DirectClient {
   }) => Effect.Effect<CreateSessionResult, GentCoreError>
 
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentCoreError>
+
+  listModels: () => Effect.Effect<readonly Model[], GentCoreError>
 
   getSession: (sessionId: string) => Effect.Effect<SessionInfo | null, GentCoreError>
 
@@ -145,7 +144,6 @@ export interface DirectClient {
     sessionId: string
     branchId: string
     content: string
-    model?: string
   }) => Effect.Effect<void, GentCoreError>
 
   listMessages: (branchId: string) => Effect.Effect<readonly MessageInfoReadonly[], GentCoreError>
@@ -200,8 +198,6 @@ export interface DirectClient {
 
   deleteAuthKey: (provider: string) => Effect.Effect<void, GentCoreError>
 
-  listModels: () => Effect.Effect<readonly Model[], GentCoreError>
-
   runtime: Runtime.Runtime<unknown>
 }
 
@@ -215,8 +211,8 @@ export type DirectClientContext =
   | PlanHandler
   | Permission
   | ConfigService
+  | ModelRegistry
   | AuthStorage
-  | ProviderFactory
 
 /**
  * Creates a direct in-process client.
@@ -230,8 +226,8 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
     const planHandler = yield* PlanHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
+    const modelRegistry = yield* ModelRegistry
     const authStorage = yield* AuthStorage
-    const providerFactory = yield* ProviderFactory
     const runtime = yield* Effect.runtime<never>()
 
     return {
@@ -244,6 +240,8 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
         }),
 
       listSessions: () => core.listSessions(),
+
+      listModels: () => modelRegistry.list(),
 
       getSession: (sessionId) => core.getSession(sessionId),
 
@@ -280,7 +278,6 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
           sessionId: input.sessionId,
           branchId: input.branchId,
           content: input.content,
-          ...(input.model !== undefined ? { model: input.model } : {}),
         }),
 
       listMessages: (branchId) => core.listMessages(branchId),
@@ -358,8 +355,6 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
 
       deleteAuthKey: (provider) =>
         authStorage.delete(provider).pipe(Effect.catchAll(() => Effect.void)),
-
-      listModels: () => providerFactory.listModels(),
 
       runtime: runtime as Runtime.Runtime<unknown>,
     }

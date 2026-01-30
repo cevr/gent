@@ -74,7 +74,6 @@ interface SlashCommand {
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: "model", label: "/model", description: "Switch model" },
   { id: "agent", label: "/agent", description: "Switch agent" },
   { id: "clear", label: "/clear", description: "Clear messages" },
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },

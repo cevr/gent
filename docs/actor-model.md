@@ -26,13 +26,14 @@ BEAM-inspired, Effect-first, local-first with cluster support.
 - Subagents: `explore`, `architect`
 - System: `compaction`, `title`
 
-Model selection is per-mode. Mode semantics remain stable as models evolve.
+Model selection is per-mode only. No user-facing model switching.
+Pricing metadata is sourced from models.dev (registry).
 
 ## Actor Taxonomy
 
 SessionActor (state machine)
 
-- Owns: session+branch lifecycle, current agent/model, run queue
+- Owns: session+branch lifecycle, current agent, run queue
 - Receives: user messages, interrupts, tool results
 
 AgentActor (state machine)
@@ -65,7 +66,7 @@ SubagentActor (router)
 
 Requests
 
-- SendUserMessage { sessionId, branchId, content, mode?, model?, bypass? }
+- SendUserMessage { sessionId, branchId, content, mode?, bypass? }
 - SendToolResult { sessionId, branchId, toolCallId, toolName, output, isError? }
 - Interrupt { sessionId, branchId, kind: cancel|interrupt|interject, message? }
 - GetState { sessionId, branchId }
@@ -73,7 +74,7 @@ Requests
 
 Responses
 
-- GetState -> { status, agent?, model?, queueDepth, lastError? }
+- GetState -> { status, agent?, queueDepth, lastError? }
 - GetMetrics -> { turns, tokens, toolCalls, retries, durationMs }
 
 Same protocol for local and cluster.

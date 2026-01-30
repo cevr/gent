@@ -8,7 +8,7 @@
 - Plan tool -> PlannerActor
 - SubagentRunner -> SubagentActor (router)
 
-Refs: `packages/runtime/src/agent/agent-loop.ts`, `packages/runtime/src/agent/agent-actor.ts`, `packages/runtime/src/agent/tool-runner.ts`
+Refs: `packages/runtime/src/agent/agent-loop.ts`, `packages/runtime/src/agent/tool-runner.ts`
 
 ## Phase 0 - Interfaces (no behavior change)
 

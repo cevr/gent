@@ -16,7 +16,6 @@ import {
   createDependencies,
   SteerCommand,
 } from "@gent/server"
-import { DEFAULT_MODEL_ID } from "@gent/core"
 
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
@@ -75,7 +74,6 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 // Dependencies layer
 const DepsLive = createDependencies({
   cwd: process.cwd(),
-  defaultModel: DEFAULT_MODEL_ID,
   dbPath: ".gent/data.db",
 }).pipe(Layer.provide(PlatformLayer))
 

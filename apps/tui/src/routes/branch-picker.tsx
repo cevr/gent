@@ -83,7 +83,7 @@ export function BranchPicker(props: BranchPickerProps) {
     if (e.name === "return") {
       const branch = props.branches[selectedIndex()]
       if (branch !== undefined) {
-        client.switchSession(props.sessionId, branch.id, props.sessionName, branch.model)
+        client.switchSession(props.sessionId, branch.id, props.sessionName)
         router.navigateToSession(props.sessionId, branch.id, props.prompt)
       }
       return

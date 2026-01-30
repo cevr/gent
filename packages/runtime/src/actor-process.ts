@@ -36,7 +36,6 @@ export const SendUserMessagePayload = Schema.Struct({
   branchId: Schema.String,
   content: Schema.String,
   mode: Schema.optional(AgentName),
-  model: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
@@ -68,7 +67,6 @@ export type ActorProcessStatus = typeof ActorProcessStatus.Type
 export const ActorProcessState = Schema.Struct({
   status: ActorProcessStatus,
   agent: Schema.optional(AgentName),
-  model: Schema.optional(Schema.String),
   queueDepth: Schema.Number,
   lastError: Schema.optional(Schema.String),
 })
@@ -122,11 +120,6 @@ export const LocalActorProcessLive: Layer.Layer<
 
           if (input.mode !== undefined) {
             yield* agentLoop.steer({ _tag: "SwitchAgent", agent: input.mode })
-          }
-
-          if (input.model !== undefined && input.model !== "") {
-            yield* storage.updateBranchModel(input.branchId, input.model)
-            yield* agentLoop.steer({ _tag: "SwitchModel", model: input.model })
           }
 
           const message = new Message({
@@ -201,14 +194,12 @@ export const LocalActorProcessLive: Layer.Layer<
           yield* agentLoop.steer({ _tag: "Interrupt" })
         }).pipe(Effect.catchAllCause((cause) => Effect.fail(wrapError("interrupt failed", cause)))),
 
-      getState: (input) =>
+      getState: (_input) =>
         Effect.gen(function* () {
           const running = yield* agentLoop.isRunning()
-          const branch = yield* storage.getBranch(input.branchId)
           return {
             status: running ? "running" : "idle",
             agent: undefined,
-            model: branch?.model,
             queueDepth: 0,
             lastError: undefined,
           } satisfies ActorProcessState

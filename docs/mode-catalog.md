@@ -1,6 +1,6 @@
 # Mode Catalog
 
-Source: `packages/core/src/agent.ts`
+Source: `packages/core/src/agent.ts` (AgentDefinitions + AgentModels)
 
 ## cowork
 
@@ -8,7 +8,7 @@ Source: `packages/core/src/agent.ts`
 - Purpose: fast execution, minimal prose
 - Tools: full access
 - Delegates: explore, architect
-- Preferred model: openai/opus-4.5
+- Curated model: openai/opus-4.5
 
 ## deep
 
@@ -16,27 +16,28 @@ Source: `packages/core/src/agent.ts`
 - Purpose: thorough analysis and tradeoffs
 - Tools: full access
 - Delegates: explore, architect
-- Preferred model: openai/codex-5.2
+- Curated model: openai/codex-5.2
 
 ## explore
 
 - Kind: subagent
 - Purpose: rapid codebase scanning
 - Tools: read, grep, glob, bash
-- Preferred model: anthropic/claude-haiku-4
+- Curated model: anthropic/claude-3-5-haiku-20241022
 
 ## architect
 
 - Kind: subagent
 - Purpose: design approaches, no code changes
 - Tools: read, grep, glob, webfetch, websearch
-- Preferred model: unspecified (inherits default)
+- Curated model: openai/opus-4.5
 
 ## compaction
 
 - Kind: system
 - Hidden: true
 - Tools: none
+- Curated model: anthropic/claude-3-5-haiku-20241022
 
 ## title
 
@@ -44,3 +45,4 @@ Source: `packages/core/src/agent.ts`
 - Hidden: true
 - Tools: none
 - Temperature: 0.5
+- Curated model: anthropic/claude-3-5-haiku-20241022

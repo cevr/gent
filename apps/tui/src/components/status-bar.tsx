@@ -2,7 +2,6 @@ import { Show, type JSX } from "solid-js"
 import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"
 import { useClient } from "../client/index"
-import * as State from "../state"
 
 // ============================================================================
 // Helper functions
@@ -76,17 +75,7 @@ function Model() {
   const client = useClient()
 
   const display = () => {
-    const serverModel = client.model()
-    const nextInfo = State.currentModelInfo()
-    const nextLabel = shortenModel(nextInfo?.name ?? State.currentModel())
-
-    if (serverModel === undefined) return `next:${nextLabel}`
-
-    const serverInfo = State.models().find((m) => m.id === serverModel)
-    const serverLabel = shortenModel(serverInfo?.name ?? serverModel)
-
-    if (serverModel === State.currentModel()) return serverLabel
-    return `${serverLabel} next:${nextLabel}`
+    return shortenModel(client.model())
   }
 
   return <span style={{ fg: theme.textMuted }}>{display()}</span>

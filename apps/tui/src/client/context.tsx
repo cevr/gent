@@ -11,9 +11,11 @@ import { Effect, Stream, Runtime, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
   calculateCost,
+  resolveAgentModelId,
   type AgentEvent,
   type AgentName,
   type EventEnvelope,
+  type Model,
 } from "@gent/core"
 import type { GentRpcError } from "@gent/server"
 import { tuiLog, tuiEvent, tuiError, clearUnifiedLog } from "../utils/unified-tracer"
@@ -30,10 +32,12 @@ import {
   type SteerCommand,
   createClient,
 } from "@gent/sdk"
-import * as State from "../state"
 
 // Event listener type
 type EventListener = (event: AgentEvent) => void
+
+const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Model | undefined =>
+  models[resolveAgentModelId(agent)]
 
 // =============================================================================
 // Session State
@@ -43,7 +47,6 @@ export interface Session {
   sessionId: string
   branchId: string
   name: string
-  model: string | undefined
   bypass: boolean
 }
 
@@ -72,7 +75,6 @@ export interface AgentState {
   agent: AgentName
   status: AgentStatus
   cost: number
-  model: string | undefined
 }
 
 // =============================================================================
@@ -93,7 +95,7 @@ export interface ClientContextValue {
   agent: () => AgentName
   agentStatus: () => AgentStatus
   cost: () => number
-  model: () => string | undefined
+  model: () => string
   // Derived accessors
   isStreaming: () => boolean
   isError: () => boolean
@@ -103,15 +105,9 @@ export interface ClientContextValue {
   setError: (error: string | null) => void
 
   // Session actions (fire-and-forget, update state internally)
-  sendMessage: (content: string, model?: string) => void
+  sendMessage: (content: string) => void
   createSession: (firstMessage?: string) => void
-  switchSession: (
-    sessionId: string,
-    branchId: string,
-    name: string,
-    model?: string,
-    bypass?: boolean,
-  ) => void
+  switchSession: (sessionId: string, branchId: string, name: string, bypass?: boolean) => void
   clearSession: () => void
   updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
 
@@ -150,14 +146,13 @@ interface ClientProviderProps extends ParentProps {
   rpcClient: GentRpcClient | DirectClient
   runtime: Runtime.Runtime<unknown>
   initialSession: Session | undefined
-  initialAgent?: AgentName
 }
 
 export function ClientProvider(props: ClientProviderProps) {
   clearUnifiedLog()
   tuiLog("ClientProvider init")
 
-  const defaultAgent: AgentName = props.initialAgent ?? "cowork"
+  const defaultAgent: AgentName = "cowork"
 
   // DirectClient already has the right shape, use it directly
   // For GentRpcClient, wrap with createClient
@@ -173,9 +168,18 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   onMount(() => {
-    if (props.initialAgent !== undefined) {
-      cast(client.steer({ _tag: "SwitchAgent", agent: props.initialAgent }))
-    }
+    cast(
+      client.listModels().pipe(
+        Effect.tap((models) =>
+          Effect.sync(() => {
+            const modelsById: Record<string, Model> = {}
+            for (const model of models) modelsById[model.id] = model
+            setModelStore({ modelsById })
+          }),
+        ),
+        Effect.catchAll(() => Effect.void),
+      ),
+    )
   })
 
   // Session state
@@ -191,7 +195,12 @@ export function ClientProvider(props: ClientProviderProps) {
     agent: defaultAgent,
     status: AgentStatus.idle(),
     cost: 0,
-    model: props.initialSession?.model,
+  })
+
+  const [modelStore, setModelStore] = createStore<{
+    modelsById: Record<string, Model>
+  }>({
+    modelsById: {},
   })
 
   // Derived accessors
@@ -230,22 +239,10 @@ export function ClientProvider(props: ClientProviderProps) {
         yield* Effect.sync(() => {
           setAgentStore(
             produce((draft) => {
-              draft.agent = props.initialAgent ?? snapshot.agent ?? defaultAgent
+              draft.agent = snapshot.agent ?? defaultAgent
               draft.status = snapshot.isStreaming ? AgentStatus.streaming() : AgentStatus.idle()
-              if (snapshot.model !== undefined) {
-                draft.model = snapshot.model
-              }
             }),
           )
-          if (snapshot.model !== undefined) {
-            setSessionStore(
-              produce((draft) => {
-                if (draft.sessionState.status === "active") {
-                  draft.sessionState.session.model = snapshot.model
-                }
-              }),
-            )
-          }
           if (snapshot.bypass !== undefined) {
             setSessionStore(
               produce((draft) => {
@@ -284,16 +281,13 @@ export function ClientProvider(props: ClientProviderProps) {
               case "StreamEnded":
                 setAgentStore({ status: AgentStatus.idle() })
                 if (event.usage !== undefined) {
-                  const modelId = agentStore.model
-                  if (modelId !== undefined) {
-                    const modelInfo = State.models().find((m) => m.id === modelId)
-                    const turnCost = calculateCost(event.usage, modelInfo?.pricing)
-                    setAgentStore(
-                      produce((draft) => {
-                        draft.cost += turnCost
-                      }),
-                    )
-                  }
+                  const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
+                  const turnCost = calculateCost(event.usage, modelInfo?.pricing)
+                  setAgentStore(
+                    produce((draft) => {
+                      draft.cost += turnCost
+                    }),
+                  )
                 }
                 break
 
@@ -306,17 +300,6 @@ export function ClientProvider(props: ClientProviderProps) {
                 setAgentStore({
                   agent: Schema.is(AgentNameSchema)(event.toAgent) ? event.toAgent : defaultAgent,
                 })
-                break
-
-              case "ModelChanged":
-                setAgentStore({ model: event.model })
-                setSessionStore(
-                  produce((draft) => {
-                    if (draft.sessionState.status === "active") {
-                      draft.sessionState.session.model = event.model
-                    }
-                  }),
-                )
                 break
 
               case "MessageReceived":
@@ -389,7 +372,7 @@ export function ClientProvider(props: ClientProviderProps) {
     agent: () => agentStore.agent,
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
-    model: () => agentStore.model,
+    model: () => resolveAgentModelId(agentStore.agent),
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",
     isError: () => agentStore.status._tag === "error",
@@ -400,7 +383,7 @@ export function ClientProvider(props: ClientProviderProps) {
       setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
 
     // Fire-and-forget actions using cast
-    sendMessage: (content, model) => {
+    sendMessage: (content) => {
       const s = session()
 
       // Session required for sending messages
@@ -411,7 +394,6 @@ export function ClientProvider(props: ClientProviderProps) {
           sessionId: s.sessionId,
           branchId: s.branchId,
           content,
-          ...(model !== undefined ? { model } : {}),
         }),
       )
     },
@@ -430,7 +412,6 @@ export function ClientProvider(props: ClientProviderProps) {
                     sessionId: result.sessionId,
                     branchId: result.branchId,
                     name: result.name,
-                    model: undefined,
                     bypass: result.bypass,
                   },
                 },
@@ -448,7 +429,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    switchSession: (sessionId, branchId, name, model, bypass) => {
+    switchSession: (sessionId, branchId, name, bypass) => {
       const current = session()
       if (current !== null) {
         setSessionStore({
@@ -458,8 +439,8 @@ export function ClientProvider(props: ClientProviderProps) {
         setSessionStore({ sessionState: { status: "loading", creating: false } })
       }
 
-      // Switch to new session - reset agent state with new model
-      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0, model })
+      // Switch to new session - reset agent state
+      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
       setSessionStore({
         sessionState: {
           status: "active",
@@ -467,7 +448,6 @@ export function ClientProvider(props: ClientProviderProps) {
             sessionId,
             branchId,
             name,
-            model,
             bypass: bypass ?? true,
           },
         },
@@ -476,7 +456,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       setSessionStore({ sessionState: { status: "none" } })
-      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0, model: undefined })
+      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
     },
 
     // Return Effects for caller to run
@@ -591,25 +571,6 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
   }
-
-  // Fetch models on mount and update registry
-  onMount(() => {
-    cast(
-      client.listModels().pipe(
-        Effect.tap((models) =>
-          Effect.sync(() => {
-            State.initModelRegistry(models)
-          }),
-        ),
-        Effect.catchAll((err) =>
-          Effect.sync(() => {
-            // Non-fatal - will use default models
-            tuiError("listModels", err)
-          }),
-        ),
-      ),
-    )
-  })
 
   return <ClientContext.Provider value={value}>{props.children}</ClientContext.Provider>
 }

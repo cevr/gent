@@ -60,7 +60,7 @@ Ported from opencode. Key patterns:
 Providers wrap app in `main.tsx`:
 
 ```
-ThemeProvider → CommandProvider → ModelProvider → AgentStateProvider → RouterProvider → ClientProvider
+ThemeProvider → CommandProvider → AgentStateProvider → RouterProvider → ClientProvider
 ```
 
 | Provider             | Purpose                                          |
@@ -108,7 +108,7 @@ Special prefixes at input start trigger different modes:
 | `!`    | Shell mode - prompt changes to `$`, ESC exits   |
 | `$`    | Skills popup (scans ~/.claude/skills, etc.)     |
 | `@`    | File finder popup, supports `@file.ts#10-20`    |
-| `/`    | Command popup (/model, /clear, /sessions, etc.) |
+| `/`    | Command popup (/agent, /clear, /sessions, etc.) |
 
 ### Shell Mode
 
@@ -125,7 +125,7 @@ Special prefixes at input start trigger different modes:
 
 | Command     | Action                   |
 | ----------- | ------------------------ |
-| `/model`    | Open model picker        |
+| `/agent`    | Switch agent             |
 | `/clear`    | Clear messages           |
 | `/sessions` | Open sessions picker     |
 | `/compact`  | Compact history          |

@@ -10,4 +10,4 @@ export {
 } from "./provider.js"
 
 export type { ProviderFactoryService } from "./provider-factory"
-export { ProviderFactory, ProviderInfo, CustomProvidersConfig } from "./provider-factory.js"
+export { ProviderFactory, ProviderInfo } from "./provider-factory.js"

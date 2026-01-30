@@ -11,7 +11,6 @@ import {
   StreamEnded,
   StreamChunk,
   MessageReceived,
-  ModelChanged,
 } from "@gent/core"
 
 // Mock client for testing
@@ -53,10 +52,10 @@ function createMockClient() {
         lastEventId: null,
         isStreaming: false,
         agent: "cowork" as const,
-        model: undefined,
       }),
     ),
     listSessions: mock(() => Effect.succeed([])),
+    listModels: mock(() => Effect.succeed([])),
     listBranches: mock(() => Effect.succeed([])),
     createSession: mock(() => Effect.succeed({ sessionId: "s1", branchId: "b1", name: "Test" })),
     createBranch: mock(() => Effect.succeed("new-branch")),
@@ -105,19 +104,6 @@ describe("ClientProvider event handling", () => {
       branchId: "b1",
       messageId: "m1",
       role: "assistant",
-    })
-
-    client.pushEvent(event)
-
-    expect(client.events).toContainEqual(event)
-  })
-
-  test("ModelChanged event is emitted", () => {
-    const client = createMockClient()
-    const event = new ModelChanged({
-      sessionId: "s1",
-      branchId: "b1",
-      model: "claude-sonnet-4-20250514",
     })
 
     client.pushEvent(event)

@@ -61,7 +61,6 @@ export {
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
-  ModelChanged,
   AgentSwitched,
   SubagentSpawned,
   SubagentCompleted,
@@ -75,16 +74,6 @@ export { PermissionHandler, PlanHandler } from "./interaction-handlers"
 
 // Plan Handler
 
-// Config Types
-export {
-  GentConfig,
-  ModelConfig,
-  defaultConfig,
-  CustomModel,
-  CustomProviderConfig,
-  ProviderApi,
-} from "./config"
-
 // Model Types
 export {
   Model,
@@ -93,8 +82,6 @@ export {
   Provider,
   ProviderId,
   SUPPORTED_PROVIDERS,
-  DEFAULT_MODELS,
-  DEFAULT_MODEL_ID,
   calculateCost,
 } from "./model.js"
 
@@ -106,6 +93,8 @@ export {
   defineAgent,
   type AgentDefinitionInput,
   Agents,
+  AgentModels,
+  resolveAgentModelId,
   type BuiltinAgentName,
   AgentRegistry,
   SubagentRunnerService,
@@ -120,7 +109,6 @@ export {
 } from "./agent"
 
 // Current Gen (auto-generated)
-export { CURRENT_GEN_MODEL_IDS } from "./current-gen"
 
 // Todo Types
 export { TodoItem, TodoStatus, TodoPriority } from "./todo"

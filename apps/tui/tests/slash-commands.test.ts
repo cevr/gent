@@ -9,15 +9,18 @@ import { ClientError } from "../src/utils/format-error"
 
 describe("parseSlashCommand", () => {
   test("parses simple command", () => {
-    expect(parseSlashCommand("/model")).toEqual(["model", ""])
+    expect(parseSlashCommand("/agent")).toEqual(["agent", ""])
   })
 
   test("parses command with args", () => {
-    expect(parseSlashCommand("/model opus")).toEqual(["model", "opus"])
+    expect(parseSlashCommand("/branch feature-branch")).toEqual(["branch", "feature-branch"])
   })
 
   test("parses command with multiple args", () => {
-    expect(parseSlashCommand("/branch feature-branch")).toEqual(["branch", "feature-branch"])
+    expect(parseSlashCommand("/branch feature-branch extra")).toEqual([
+      "branch",
+      "feature-branch extra",
+    ])
   })
 
   test("trims whitespace", () => {
@@ -101,9 +104,9 @@ describe("executeSlashCommand", () => {
     return { ctx, calls }
   }
 
-  test("/model opens palette", async () => {
+  test("/agent opens palette", async () => {
     const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("model", "", ctx))
+    const result = await Effect.runPromise(executeSlashCommand("agent", "", ctx))
 
     expect(result.handled).toBe(true)
     expect(result.error).toBeUndefined()
@@ -178,7 +181,7 @@ describe("executeSlashCommand", () => {
 
   test("case insensitive commands", async () => {
     const { ctx: ctx1, calls: calls1 } = createMockContext()
-    await Effect.runPromise(executeSlashCommand("MODEL", "", ctx1))
+    await Effect.runPromise(executeSlashCommand("AGENT", "", ctx1))
     expect(calls1.openPalette).toBe(1)
 
     const { ctx: ctx2, calls: calls2 } = createMockContext()

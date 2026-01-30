@@ -14,7 +14,7 @@ import {
 } from "@gent/server"
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
 import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
-import { AgentName, DEFAULT_MODEL_ID } from "@gent/core"
+import { AgentName } from "@gent/core"
 import * as path from "node:path"
 
 import { render } from "@opentui/solid"
@@ -22,7 +22,6 @@ import { App } from "./app"
 import { ClientProvider, type Session } from "./client/index"
 import { RouterProvider, Route } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
-import * as State from "./state"
 
 // ============================================================================
 // Initial State - discriminated union for clarity
@@ -159,8 +158,8 @@ const resolveInitialState = (input: {
   })
 
 // Data directory
-const DATA_DIR = path.join(process.env["HOME"] ?? "~", ".gent")
-const DB_PATH = path.join(DATA_DIR, "data.db")
+const DATA_DIR = process.env["GENT_DATA_DIR"] ?? path.join(process.env["HOME"] ?? "~", ".gent")
+const DB_PATH = process.env["GENT_DB_PATH"] ?? path.join(DATA_DIR, "data.db")
 // Unified tracer logs to /tmp/gent-unified.log
 const ATOM_CACHE_MAX = 256
 
@@ -173,7 +172,6 @@ const TracerLayer = UnifiedTracerLive
 // Dependencies layer with tracing
 const ServerDepsLayer = createDependencies({
   cwd: process.cwd(),
-  defaultModel: DEFAULT_MODEL_ID,
   dbPath: DB_PATH,
 }).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
 
@@ -269,10 +267,6 @@ const main = Command.make(
       Args.withDescription("Prompt for headless mode"),
       Args.optional,
     ),
-    agent: Options.text("agent").pipe(
-      Options.withDescription("Default agent (cowork | deep)"),
-      Options.optional,
-    ),
     bypass: Options.boolean("bypass").pipe(
       Options.withDescription(
         "Auto-allow all tool calls (default: true, use --no-bypass to disable)",
@@ -280,22 +274,11 @@ const main = Command.make(
       Options.withDefault(true),
     ),
   },
-  ({ session, continue_, headless, prompt, promptArg, bypass, agent }) =>
+  ({ session, continue_, headless, prompt, promptArg, bypass }) =>
     Effect.gen(function* () {
       // Get core service for direct access (headless, session management)
       const core = yield* GentCore
       const cwd = process.cwd()
-
-      let initialAgent: AgentName | undefined
-      if (Option.isSome(agent)) {
-        initialAgent = yield* Schema.decodeUnknown(AgentName)(agent.value).pipe(
-          Effect.catchAll(() =>
-            Console.error(`Error: invalid agent ${agent.value}`).pipe(
-              Effect.flatMap(() => Effect.sync(() => process.exit(1))),
-            ),
-          ),
-        )
-      }
 
       // Resolve initial state (discriminated union)
       const state = yield* resolveInitialState({
@@ -309,12 +292,19 @@ const main = Command.make(
         bypass,
       })
 
-      if (initialAgent !== undefined) {
-        yield* core.steer({ _tag: "SwitchAgent", agent: initialAgent })
-      }
-
       // Handle headless mode
       if (state._tag === "headless") {
+        const internalAgent = process.env["GENT_INTERNAL_AGENT"]
+        if (internalAgent !== undefined && internalAgent !== "") {
+          yield* Schema.decodeUnknown(AgentName)(internalAgent).pipe(
+            Effect.flatMap((agent) => core.steer({ _tag: "SwitchAgent", agent })),
+            Effect.catchAll(() =>
+              Console.error(`Error: invalid internal agent ${internalAgent}`).pipe(
+                Effect.flatMap(() => Effect.sync(() => process.exit(1))),
+              ),
+            ),
+          )
+        }
         if (state.session.branchId === undefined) {
           yield* Console.error("Error: session has no branch")
           return process.exit(1)
@@ -330,9 +320,6 @@ const main = Command.make(
       const runtime = yield* serverRuntime.runtimeEffect
       const uiRuntime = runtime as Runtime.Runtime<unknown>
 
-      // Initialize global model state (UI selection - sent with messages)
-      State.initModelState(DEFAULT_MODEL_ID)
-
       // Derive initial session and route from state
       let initialSession: Session | undefined
       let initialRoute = Route.home()
@@ -343,7 +330,6 @@ const main = Command.make(
           sessionId: state.session.id,
           branchId: state.session.branchId,
           name: state.session.name ?? "Unnamed",
-          model: undefined, // Model loaded from branch on first message
           bypass: state.session.bypass ?? true,
         }
         initialRoute = Route.session(state.session.id, state.session.branchId)
@@ -368,10 +354,9 @@ const main = Command.make(
                 rpcClient={directClient}
                 runtime={uiRuntime}
                 initialSession={initialSession}
-                initialAgent={initialAgent}
               >
                 <RouterProvider initialRoute={initialRoute}>
-                  <App initialPrompt={initialPrompt} initialModel={DEFAULT_MODEL_ID} />
+                  <App initialPrompt={initialPrompt} />
                 </RouterProvider>
               </ClientProvider>
             </RegistryProvider>

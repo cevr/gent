@@ -4,10 +4,10 @@ import {
   AgentName,
   EventEnvelope,
   MessagePart,
+  Model,
   PermissionDecision,
   PlanDecision,
   PermissionRule,
-  Model,
 } from "@gent/core"
 import {
   ActorProcessMetrics,
@@ -58,7 +58,6 @@ export const BranchInfo = Schema.Struct({
   parentBranchId: Schema.optional(Schema.String),
   parentMessageId: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.String),
   summary: Schema.optional(Schema.String),
   createdAt: Schema.Number,
 })
@@ -126,7 +125,6 @@ export const SendMessagePayload = Schema.Struct({
   sessionId: Schema.String,
   branchId: Schema.String,
   content: Schema.String,
-  model: Schema.optional(Schema.String),
 })
 
 export const MessageInfo = Schema.Struct({
@@ -156,7 +154,6 @@ export const SessionState = Schema.Struct({
   lastEventId: Schema.NullOr(Schema.Number),
   isStreaming: Schema.Boolean,
   agent: AgentName,
-  model: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
 })
 
@@ -168,7 +165,6 @@ export const SteerPayload = Schema.Union(
   Schema.TaggedStruct("Cancel", {}),
   Schema.TaggedStruct("Interrupt", {}),
   Schema.TaggedStruct("Interject", { message: Schema.String }),
-  Schema.TaggedStruct("SwitchModel", { model: Schema.String }),
   Schema.TaggedStruct("SwitchAgent", { agent: AgentName }),
 )
 export type SteerPayload = typeof SteerPayload.Type
@@ -368,6 +364,12 @@ export class GentRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
 
+  // Models (pricing/metadata)
+  Rpc.make("listModels", {
+    success: Schema.Array(Model),
+    error: GentRpcError,
+  }),
+
   // Auth
   Rpc.make("listAuthProviders", {
     success: Schema.Array(AuthProviderInfo),
@@ -382,11 +384,6 @@ export class GentRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
 
-  // Models
-  Rpc.make("listModels", {
-    success: Schema.Array(Model),
-    error: GentRpcError,
-  }),
   Rpc.make("updateSessionBypass", {
     payload: UpdateSessionBypassPayload.fields,
     success: UpdateSessionBypassSuccess,

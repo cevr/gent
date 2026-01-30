@@ -3,33 +3,22 @@ import { Schema } from "effect"
 import { SendMessagePayload } from "@gent/server"
 
 describe("SendMessage API", () => {
-  test("SendMessagePayload accepts model parameter", () => {
-    const payload = {
-      sessionId: "s1",
-      branchId: "b1",
-      content: "Hello",
-      model: "openai/opus-4.5",
-    }
-    const decoded = Schema.decodeUnknownSync(SendMessagePayload)(payload)
-    expect(decoded.model).toBe("openai/opus-4.5")
-  })
-
-  test("SendMessagePayload model is optional", () => {
+  test("SendMessagePayload decodes required fields", () => {
     const payload = {
       sessionId: "s1",
       branchId: "b1",
       content: "Hello",
     }
     const decoded = Schema.decodeUnknownSync(SendMessagePayload)(payload)
-    expect(decoded.model).toBeUndefined()
+    expect(decoded.content).toBe("Hello")
+    expect(decoded.sessionId).toBe("s1")
+    expect(decoded.branchId).toBe("b1")
   })
 
-  test("SendMessagePayload rejects invalid model type", () => {
+  test("SendMessagePayload rejects missing content", () => {
     const payload = {
       sessionId: "s1",
       branchId: "b1",
-      content: "Hello",
-      model: 123,
     }
     expect(() => Schema.decodeUnknownSync(SendMessagePayload)(payload)).toThrow()
   })

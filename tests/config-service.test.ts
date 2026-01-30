@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "bun:test"
 import { Effect } from "effect"
-import { PermissionRule, type ModelId } from "@gent/core"
+import { PermissionRule } from "@gent/core"
 import { ConfigService, UserConfig } from "@gent/runtime"
 
 describe("ConfigService", () => {
@@ -17,15 +17,11 @@ describe("ConfigService", () => {
           Effect.provide(layer),
         ),
       )
-      expect(result.model).toBeUndefined()
-      expect(result.agent).toBeUndefined()
-      expect(result.subprocessBinaryPath).toBeUndefined()
       expect(result.permissions).toBeUndefined()
     })
 
     it("get returns initial config when provided", async () => {
       const initial = new UserConfig({
-        model: "anthropic/claude-sonnet-4-20250514" as ModelId,
         permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
       })
       const layer = ConfigService.Test(initial)
@@ -35,7 +31,6 @@ describe("ConfigService", () => {
           Effect.provide(layer),
         ),
       )
-      expect(result.model).toBe("anthropic/claude-sonnet-4-20250514" as ModelId)
       expect(result.permissions?.length).toBe(1)
       expect(result.permissions?.[0]?.tool).toBe("Bash")
     })
@@ -45,62 +40,12 @@ describe("ConfigService", () => {
       const result = await Effect.runPromise(
         Effect.gen(function* () {
           const cfg = yield* ConfigService
-          yield* cfg.set({ model: "anthropic/claude-haiku-4-5-20251001" as ModelId })
+          yield* cfg.set({ permissions: [new PermissionRule({ tool: "Read", action: "allow" })] })
           return yield* cfg.get()
         }).pipe(Effect.provide(layer)),
       )
-      expect(result.model).toBe("anthropic/claude-haiku-4-5-20251001" as ModelId)
-    })
-
-    it("getModel returns model from config", async () => {
-      const initial = new UserConfig({
-        model: "openai/gpt-4o" as ModelId,
-      })
-      const layer = ConfigService.Test(initial)
-      const result = await Effect.runPromise(
-        ConfigService.pipe(
-          Effect.flatMap((cfg) => cfg.getModel()),
-          Effect.provide(layer),
-        ),
-      )
-      expect(result).toBe("openai/gpt-4o" as ModelId)
-    })
-
-    it("setModel updates model and provider", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          yield* cfg.setModel("anthropic/claude-sonnet-4-20250514" as ModelId)
-          return yield* cfg.get()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.model).toBe("anthropic/claude-sonnet-4-20250514" as ModelId)
-      expect(result.provider).toBe("anthropic")
-    })
-
-    it("setAgent updates agent", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          yield* cfg.setAgent("deep")
-          return yield* cfg.get()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.agent).toBe("deep")
-    })
-
-    it("setSubprocessBinaryPath updates path", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          yield* cfg.setSubprocessBinaryPath("/usr/local/bin/gent")
-          return yield* cfg.get()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.subprocessBinaryPath).toBe("/usr/local/bin/gent")
+      expect(result.permissions?.length).toBe(1)
+      expect(result.permissions?.[0]?.tool).toBe("Read")
     })
   })
 

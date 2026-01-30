@@ -10,7 +10,6 @@ import {
   type EventStoreError,
   SessionNameUpdated,
   PlanConfirmed,
-  ModelChanged,
   CompactionStarted,
   CompactionCompleted,
   BranchCreated,
@@ -60,7 +59,6 @@ export interface SendMessageInput {
   sessionId: string
   branchId: string
   content: string
-  model?: string
 }
 
 export interface SubscribeEventsInput {
@@ -81,7 +79,6 @@ export interface SessionState {
   lastEventId: number | null
   isStreaming: boolean
   agent: AgentName
-  model: string | undefined
   bypass: boolean | undefined
 }
 
@@ -103,7 +100,6 @@ export interface BranchInfo {
   parentBranchId: string | undefined
   parentMessageId: string | undefined
   name: string | undefined
-  model: string | undefined
   summary: string | undefined
   createdAt: number
 }
@@ -604,19 +600,6 @@ ${conversation}`
           const session = yield* storage.getSession(input.sessionId)
           const bypass = session?.bypass ?? true
 
-          // Update branch model if specified
-          if (input.model !== undefined && input.model !== "") {
-            yield* storage.updateBranchModel(input.branchId, input.model)
-            yield* agentLoop.steer({ _tag: "SwitchModel", model: input.model })
-            yield* eventStore.publish(
-              new ModelChanged({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                model: input.model,
-              }),
-            )
-          }
-
           yield* Effect.forkDaemon(
             Effect.gen(function* () {
               if (session === undefined || session.name !== "New Chat") return
@@ -676,7 +659,6 @@ ${conversation}`
               parentBranchId: b.parentBranchId,
               parentMessageId: b.parentMessageId,
               name: b.name,
-              model: b.model,
               summary: b.summary,
               createdAt: b.createdAt.getTime(),
             }))
@@ -773,7 +755,6 @@ ${conversation}`
               lastEventId: lastEventId ?? null,
               isStreaming: streamTag === "StreamStarted",
               agent: currentAgent,
-              model: branch.model,
               bypass: session.bypass,
             }
           }),

@@ -33,8 +33,7 @@ import { formatError, type UiError } from "../utils/format-error"
 import { BranchTree } from "../components/branch-tree"
 import { MessagePicker } from "../components/message-picker"
 import type { SessionEvent } from "../components/session-event-indicator"
-import type { QuestionsAsked, PermissionRequested, PlanPresented, ModelId } from "@gent/core"
-import * as State from "../state"
+import type { QuestionsAsked, PermissionRequested, PlanPresented } from "@gent/core"
 
 export interface SessionProps {
   sessionId: string
@@ -59,9 +58,7 @@ export function Session(props: SessionProps) {
   const [treeNodes, setTreeNodes] = createSignal<BranchTreeNode[]>([])
   const [forkOpen, setForkOpen] = createSignal(false)
   const [compacting, setCompacting] = createSignal(false)
-  const [modelToast, setModelToast] = createSignal<string | null>(null)
   let initialPromptSent = false
-  let modelToastTimer: ReturnType<typeof setTimeout> | null = null
   let eventSeq = 0
 
   const COMPACTION_MIN_MS = 600
@@ -103,13 +100,6 @@ export function Session(props: SessionProps) {
     }, remainingMs)
   }
 
-  const resolveSendModel = () => {
-    const selected = State.currentModel()
-    const serverModel = client.model()
-    if (serverModel !== undefined && serverModel === selected) return undefined
-    return selected
-  }
-
   const items = (): SessionItem[] => {
     const combined: SessionItem[] = [...messages(), ...events()]
     return combined.sort((a, b) => {
@@ -122,39 +112,13 @@ export function Session(props: SessionProps) {
 
   onCleanup(() => {
     if (compactionTimer !== null) clearTimeout(compactionTimer)
-    if (modelToastTimer !== null) clearTimeout(modelToastTimer)
   })
-
-  // Cycle through current-gen models with Ctrl+P
-  const cycleModel = () => {
-    const currentGenModels = State.currentGenModels()
-    if (currentGenModels.length === 0) return
-
-    const currentId = State.currentModel()
-    const currentIdx = currentGenModels.findIndex((m) => m.id === currentId)
-    const nextIdx = (currentIdx + 1) % currentGenModels.length
-    const nextModel = currentGenModels[nextIdx]
-
-    if (nextModel !== undefined) {
-      State.setModel(nextModel.id as ModelId)
-
-      // Show toast notification
-      if (modelToastTimer !== null) clearTimeout(modelToastTimer)
-      setModelToast(`${nextModel.name}`)
-      modelToastTimer = setTimeout(() => {
-        setModelToast(null)
-        modelToastTimer = null
-      }, 2000)
-    }
-  }
 
   const indicator = (): Indicator | null => {
     const error = client.error()
     if (error !== null) return { _tag: "error", message: error }
     if (compacting()) return { _tag: "compacting" }
     if (client.isStreaming()) return { _tag: "thinking" }
-    const toast = modelToast()
-    if (toast !== null) return { _tag: "toast", message: `Model: ${toast}` }
     return null
   }
 
@@ -207,14 +171,12 @@ export function Session(props: SessionProps) {
   const sendInitialPrompt = () => {
     if (props.initialPrompt === undefined || props.initialPrompt === "" || initialPromptSent) return
     initialPromptSent = true
-    const model = resolveSendModel()
     cast(
       client.client
         .sendMessage({
           sessionId: props.sessionId,
           branchId: props.branchId,
           content: props.initialPrompt,
-          ...(model !== undefined ? { model } : {}),
         })
         .pipe(
           Effect.tapError((err) =>
@@ -465,12 +427,6 @@ export function Session(props: SessionProps) {
       setToolsExpanded((prev) => !prev)
       return
     }
-
-    // Ctrl+P: cycle through current-gen models (when not in command palette)
-    if (e.ctrl === true && e.name === "p" && command.paletteOpen() === false) {
-      cycleModel()
-      return
-    }
   })
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
@@ -479,7 +435,7 @@ export function Session(props: SessionProps) {
       return
     }
 
-    client.sendMessage(content, resolveSendModel())
+    client.sendMessage(content)
   }
 
   // Handle input state transitions

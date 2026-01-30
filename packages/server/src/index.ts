@@ -9,10 +9,11 @@ import {
   Skills,
   AuthStorage,
   AgentRegistry,
+  resolveAgentModelId,
 } from "@gent/core"
-import type { AgentName, SubagentRunnerService, EventStore } from "@gent/core"
+import type { SubagentRunnerService, EventStore } from "@gent/core"
 import { Storage } from "@gent/storage"
-import { Provider, ProviderFactory, CustomProvidersConfig } from "@gent/providers"
+import { Provider, ProviderFactory } from "@gent/providers"
 import {
   AgentLoop,
   SteerCommand,
@@ -20,10 +21,11 @@ import {
   LocalActorProcessLive,
   CheckpointService,
   ConfigService,
-  InstructionsLoader,
+  ModelRegistry,
   AgentActor,
   ActorSystemDefault,
   InProcessRunner,
+  SubprocessRunner,
   SubagentRunnerConfig,
   ToolRunner,
 } from "@gent/runtime"
@@ -128,11 +130,8 @@ export {
 
 export interface DependenciesConfig {
   cwd: string
-  defaultModel: string
-  defaultAgent?: AgentName
   subprocessBinaryPath?: string
   dbPath?: string
-  compactionModel?: string
   skillsDirs?: ReadonlyArray<string>
 }
 
@@ -152,7 +151,7 @@ export const createDependencies = (
   | Permission
   | Skills
   | ConfigService
-  | InstructionsLoader
+  | ModelRegistry
   | PermissionHandler
   | AgentLoop
   | ActorProcess
@@ -169,8 +168,6 @@ export const createDependencies = (
   const EventStoreLayer = Layer.provide(EventStoreLive, StorageLive)
 
   const ConfigServiceLive = ConfigService.Live
-  const InstructionsLoaderLive = InstructionsLoader.Live
-
   const home = process.env["HOME"] ?? "~"
   const globalSkillsDir = nodePath.join(home, ".gent", "skills")
   const claudeSkillsDir = nodePath.join(home, ".claude", "skills")
@@ -201,22 +198,12 @@ export const createDependencies = (
     EventStoreLayer,
     ActorSystemDefault,
     ConfigServiceLive,
-    InstructionsLoaderLive,
+    ModelRegistry.Live,
     SkillsLive,
   )
 
-  // ProviderFactory needs custom providers from config - must be after ConfigService
-  const ProviderFactoryLive = Layer.unwrapEffect(
-    Effect.gen(function* () {
-      const configService = yield* ConfigService
-      const customProviders = yield* configService.getCustomProviders()
-      const customProvidersLayer = CustomProvidersConfig.fromConfig(customProviders)
-      return Layer.merge(
-        customProvidersLayer,
-        Layer.provide(ProviderFactory.Live, Layer.merge(AuthStorageLive, customProvidersLayer)),
-      )
-    }),
-  )
+  // ProviderFactory uses built-in providers only
+  const ProviderFactoryLive = Layer.provide(ProviderFactory.Live, AuthStorageLive)
 
   // Provider depends on ProviderFactory
   const ProviderLive = Layer.provide(Provider.Live, ProviderFactoryLive)
@@ -246,21 +233,18 @@ export const createDependencies = (
   const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseWithPermission)
 
   // CheckpointService requires Storage and Provider
-  const CheckpointServiceLive = CheckpointService.Live(
-    config.compactionModel ?? "anthropic/claude-haiku-4-5-20251001",
-  )
+  const CheckpointServiceLive = CheckpointService.Live(resolveAgentModelId("compaction"))
   const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseWithPermission)
 
   // AgentLoop requires CheckpointService and FileSystem
   const AgentRuntimeLive = Layer.unwrapEffect(
     Effect.gen(function* () {
-      const instructions = yield* InstructionsLoader
       const skills = yield* Skills
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const configService = yield* ConfigService
 
-      const customInstructions = yield* instructions.load(config.cwd)
+      const customInstructions = yield* configService.loadInstructions(config.cwd)
       const skillsList = yield* skills.list()
       const isGitRepo = yield* fs.exists(path.join(config.cwd, ".git"))
 
@@ -272,30 +256,27 @@ export const createDependencies = (
         skills: skillsList,
       })
 
-      const configFromFile = yield* configService.get()
-      const defaultAgent = config.defaultAgent ?? configFromFile.agent
-      const subprocessBinaryPath =
-        config.subprocessBinaryPath ?? configFromFile.subprocessBinaryPath
+      const subprocessBinaryPath = config.subprocessBinaryPath
+      const dbPath = config.dbPath
 
       const agentActorLive = AgentActor.Live
       const subagentRunnerConfigLive = SubagentRunnerConfig.Live({
         systemPrompt,
-        defaultModel: config.defaultModel,
         ...(subprocessBinaryPath !== undefined && subprocessBinaryPath !== ""
           ? { subprocessBinaryPath }
           : {}),
+        ...(dbPath !== undefined && dbPath !== "" ? { dbPath } : {}),
       })
-      const subagentRunnerLive = InProcessRunner.pipe(
-        Layer.provideMerge(agentActorLive),
-        Layer.provideMerge(subagentRunnerConfigLive),
-      )
+      const subagentRunnerLive =
+        subprocessBinaryPath !== undefined && subprocessBinaryPath !== ""
+          ? SubprocessRunner.pipe(Layer.provideMerge(subagentRunnerConfigLive))
+          : InProcessRunner.pipe(
+              Layer.provideMerge(agentActorLive),
+              Layer.provideMerge(subagentRunnerConfigLive),
+            )
 
       return Layer.mergeAll(
-        AgentLoop.Live({
-          systemPrompt,
-          defaultModel: config.defaultModel,
-          ...(defaultAgent !== undefined ? { defaultAgent } : {}),
-        }),
+        AgentLoop.Live({ systemPrompt }),
         agentActorLive,
         subagentRunnerConfigLive,
         subagentRunnerLive,
