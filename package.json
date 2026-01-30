@@ -13,7 +13,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "test": "turbo run test",
-    "gate": "turbo run typecheck test && bun run lint && bun run fmt",
+    "gate": "concurrently -n type,lint,fmt,test -c blue,yellow,magenta,green \"bun run typecheck\" \"bun run lint\" \"bun run fmt\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
     "prepare": "lefthook install"
