@@ -12,6 +12,23 @@ export {
 } from "./agent"
 
 export {
+  ActorProcess,
+  ActorProcessError,
+  ActorProcessRpcs,
+  ActorTarget,
+  SendUserMessagePayload,
+  SendToolResultPayload,
+  InterruptPayload,
+  ActorProcessState,
+  ActorProcessMetrics,
+  LocalActorProcessLive,
+  SessionActorEntity,
+  SessionActorEntityLive,
+  SessionActorEntityLocalLive,
+  ClusterActorProcessLive,
+} from "./actor-process"
+
+export {
   CheckpointService,
   CheckpointError,
   type CheckpointServiceApi,
@@ -41,3 +58,22 @@ export {
 } from "./retry.js"
 
 export { makeDevTracer, DevTracerLive, DevTracer, DEFAULT_LOG_FILE, clearLog } from "./telemetry"
+
+export {
+  ClusterMemoryLive,
+  ClusterSingleLive,
+  ClusterHttpServerLive,
+  ClusterHttpClientLive,
+  ClusterHttpClientOnlyLive,
+  type ClusterStorage,
+} from "./cluster-layer"
+
+export {
+  SqlClientLive,
+  SqliteClientLive,
+  SqliteClientDefaultLive,
+  PostgresClientLive,
+  type SqlBackend,
+  type SqliteConfig,
+  type PostgresConfig,
+} from "./sql-client"

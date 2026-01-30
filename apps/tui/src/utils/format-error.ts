@@ -26,6 +26,8 @@ export const formatError = (error: UiError): string => {
       return `Events: ${error.message}`
     case "CheckpointError":
       return `Checkpoint: ${error.message}`
+    case "ActorProcessError":
+      return `Actor: ${error.message}`
     case "BadArgument":
       return `${error.module}.${error.method}: ${error.description ?? "bad argument"}`
     case "SystemError":
@@ -34,5 +36,7 @@ export const formatError = (error: UiError): string => {
           ? ` (${error.pathOrDescriptor})`
           : ""
       }`
+    default:
+      return "Unknown error"
   }
 }

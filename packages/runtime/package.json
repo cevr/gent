@@ -9,6 +9,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@effect/cluster": "catalog:",
+    "@effect/rpc": "catalog:",
+    "@effect/sql-pg": "catalog:",
+    "@effect/sql-sqlite-bun": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/providers": "workspace:*",
     "@gent/storage": "workspace:*",

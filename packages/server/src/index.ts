@@ -17,6 +17,7 @@ import {
   AgentLoop,
   SteerCommand,
   AgentLoopError,
+  LocalActorProcessLive,
   CheckpointService,
   ConfigService,
   InstructionsLoader,
@@ -26,6 +27,7 @@ import {
   SubagentRunnerConfig,
   ToolRunner,
 } from "@gent/runtime"
+import type { ActorProcess } from "@gent/runtime"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
@@ -153,6 +155,7 @@ export const createDependencies = (
   | InstructionsLoader
   | PermissionHandler
   | AgentLoop
+  | ActorProcess
   | CheckpointService
   | AskUserHandler
   | QuestionHandler
@@ -311,7 +314,13 @@ export const createDependencies = (
     PlanHandlerLive,
   )
 
-  return Layer.merge(AllDeps, Layer.provide(AgentRuntimeLive, AllDeps))
+  const AgentRuntimeDeps = Layer.provide(AgentRuntimeLive, AllDeps)
+  const ActorProcessLive = Layer.provide(
+    LocalActorProcessLive,
+    Layer.merge(AllDeps, AgentRuntimeDeps),
+  )
+
+  return Layer.mergeAll(AllDeps, AgentRuntimeDeps, ActorProcessLive)
 }
 
 // Re-export AskUserHandler for RPC handlers

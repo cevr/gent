@@ -4,7 +4,7 @@ import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
 import { Permission, PermissionHandler, PermissionRule, PlanHandler, AuthStorage } from "@gent/core"
-import { ConfigService } from "@gent/runtime"
+import { ActorProcess, ConfigService } from "@gent/runtime"
 import { ProviderFactory } from "@gent/providers"
 import type { AuthProviderInfo } from "./rpcs"
 
@@ -29,6 +29,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const planHandler = yield* PlanHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
+    const actorProcess = yield* ActorProcess
     const authStorage = yield* AuthStorage
     const providerFactory = yield* ProviderFactory
 
@@ -168,6 +169,17 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         authStorage.delete(provider).pipe(Effect.catchAll(() => Effect.void)),
 
       listModels: () => providerFactory.listModels(),
+
+      actorSendUserMessage: (input) => actorProcess.sendUserMessage(input),
+
+      actorSendToolResult: (input) => actorProcess.sendToolResult(input),
+
+      actorInterrupt: (input) => actorProcess.interrupt(input),
+
+      actorGetState: ({ sessionId, branchId }) => actorProcess.getState({ sessionId, branchId }),
+
+      actorGetMetrics: ({ sessionId, branchId }) =>
+        actorProcess.getMetrics({ sessionId, branchId }),
     }
   }),
 )

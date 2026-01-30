@@ -48,6 +48,10 @@ apps/
 
 ## Core Concepts
 
+## Actor Model Spec
+
+See `docs/actor-model.md`.
+
 ### Messages
 
 Discriminated union parts:

@@ -9,6 +9,13 @@ import {
   PermissionRule,
   Model,
 } from "@gent/core"
+import {
+  ActorProcessMetrics,
+  ActorProcessState,
+  InterruptPayload,
+  SendToolResultPayload,
+  SendUserMessagePayload,
+} from "@gent/runtime"
 import { GentRpcError } from "./errors.js"
 
 // ============================================================================
@@ -383,6 +390,30 @@ export class GentRpcs extends RpcGroup.make(
   Rpc.make("updateSessionBypass", {
     payload: UpdateSessionBypassPayload.fields,
     success: UpdateSessionBypassSuccess,
+    error: GentRpcError,
+  }),
+
+  // ActorProcess
+  Rpc.make("actorSendUserMessage", {
+    payload: SendUserMessagePayload.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("actorSendToolResult", {
+    payload: SendToolResultPayload.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("actorInterrupt", {
+    payload: InterruptPayload.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("actorGetState", {
+    payload: { sessionId: Schema.String, branchId: Schema.String },
+    success: ActorProcessState,
+    error: GentRpcError,
+  }),
+  Rpc.make("actorGetMetrics", {
+    payload: { sessionId: Schema.String, branchId: Schema.String },
+    success: ActorProcessMetrics,
     error: GentRpcError,
   }),
 ) {}
