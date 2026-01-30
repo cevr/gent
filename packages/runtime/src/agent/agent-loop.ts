@@ -124,7 +124,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
         const stateRef = yield* Ref.make<LoopContext>({
           model: config.defaultModel,
-          currentAgent: config.defaultAgent ?? "default",
+          currentAgent: config.defaultAgent ?? "cowork",
           followUpQueue: [],
         })
 

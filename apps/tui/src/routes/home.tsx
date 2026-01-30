@@ -80,9 +80,9 @@ export function Home(props: HomeProps) {
       return
     }
 
-    // Shift+Tab: toggle agent (default <-> deep)
+    // Shift+Tab: toggle agent (cowork <-> deep)
     if (e.shift === true && e.name === "tab") {
-      const nextAgent = client.agent() === "deep" ? "default" : "deep"
+      const nextAgent = client.agent() === "deep" ? "cowork" : "deep"
       client.steer({ _tag: "SwitchAgent", agent: nextAgent })
       return
     }

@@ -52,7 +52,7 @@ function createMockClient() {
         messages: [],
         lastEventId: null,
         isStreaming: false,
-        agent: "default" as const,
+        agent: "cowork" as const,
         model: undefined,
       }),
     ),

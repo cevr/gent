@@ -16,8 +16,17 @@ export { GlobTool, GlobParams, GlobResult, GlobError } from "./glob"
 // Grep Tool
 export { GrepTool, GrepParams, GrepResult, GrepMatch, GrepError } from "./grep"
 
-// AskUser Tool
-export { AskUserTool, AskUserParams, AskUserResult, AskUserHandler } from "./ask-user"
+// AskUser + Question Tools
+export {
+  AskUserTool,
+  AskUserParams,
+  AskUserResult,
+  AskUserHandler,
+  QuestionTool,
+  QuestionParams,
+  QuestionResult,
+  QuestionHandler,
+} from "./ask-user"
 
 // RepoExplorer Tool
 export {
@@ -38,9 +47,6 @@ export {
   TodoHandler,
 } from "./todo.js"
 
-// Question Tool
-export { QuestionTool, QuestionParams, QuestionResult, QuestionHandler } from "./question"
-
 // WebFetch Tool
 export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch"
 
@@ -58,10 +64,9 @@ import { EditTool } from "./edit"
 import { BashTool } from "./bash"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
-import { AskUserTool } from "./ask-user"
+import { AskUserTool, QuestionTool } from "./ask-user"
 import { RepoExplorerTool } from "./repo-explorer"
 import { TodoReadTool, TodoWriteTool } from "./todo"
-import { QuestionTool } from "./question"
 import { WebFetchTool } from "./webfetch"
 import { PlanTool } from "./plan"
 import { TaskTool } from "./task"

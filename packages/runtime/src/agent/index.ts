@@ -1,7 +1,6 @@
 export { AgentLoop, AgentLoopError, SteerCommand } from "./agent-loop"
 export { buildSystemPrompt } from "./system-prompt"
-export { SubagentRunnerConfig } from "./subagent-runner-config"
-export { InProcessRunner, SubprocessRunner } from "./subagent-runner"
+export { SubagentRunnerConfig, InProcessRunner, SubprocessRunner } from "./subagent-runner"
 export { AgentActor } from "./agent-actor"
 export { ToolRunner } from "./tool-runner"
 export { ActorSystemDefault, ActorSystemService } from "effect-machine"

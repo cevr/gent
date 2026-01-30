@@ -7,7 +7,7 @@ import {
   SendMessagePayload,
   MessageInfo,
   SteerPayload,
-} from "./operations.js"
+} from "./rpcs.js"
 
 // Re-export schemas under HTTP-friendly names for backward compatibility
 export const SendMessageRequest = SendMessagePayload

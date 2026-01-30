@@ -144,7 +144,7 @@ This is the heart. Study it carefully.
 - `Cancel` / `Interrupt` — hard stop, emit `StreamEnded(interrupted: true)`
 - `Interject` — queue message for immediate processing (no StreamEnded)
 - `SwitchModel` — change model mid-run
-- `SwitchAgent` — switch primary agent (default/deep)
+- `SwitchAgent` — switch primary agent (cowork/deep)
 
 **Hint:** Tool execution happens at line ~125. Permission check → schema decode → run effect → wrap result.
 

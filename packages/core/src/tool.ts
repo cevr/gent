@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, type Schema } from "effect"
-import type { AgentName } from "./agent/agent-definition"
+import type { AgentName } from "./agent"
 
 // Tool Definition
 

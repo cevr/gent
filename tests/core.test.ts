@@ -150,7 +150,7 @@ describe("Session State", () => {
           new AgentSwitched({
             sessionId: session.sessionId,
             branchId: session.branchId,
-            fromAgent: "default",
+            fromAgent: "cowork",
             toAgent: "deep",
           }),
         )

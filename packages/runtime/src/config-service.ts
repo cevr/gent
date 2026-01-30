@@ -94,12 +94,27 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
 
       // Load config from disk (merges project over user)
       const loadConfig = Effect.gen(function* () {
+        const normalizeAgent = (value: unknown) => (value === "default" ? "cowork" : value)
+        const normalizeUserConfig = (value: unknown) => {
+          if (value === null || typeof value !== "object" || Array.isArray(value)) return value
+          const obj = value as Record<string, unknown>
+          if (!("agent" in obj)) return obj
+          return { ...obj, agent: normalizeAgent(obj["agent"]) }
+        }
+
         const readConfig = (filePath: string) =>
           fs.exists(filePath).pipe(
             Effect.flatMap((exists) =>
               exists ? fs.readFileString(filePath) : Effect.succeed("{}"),
             ),
-            Effect.flatMap((content) => Schema.decodeUnknown(UserConfigJson)(content)),
+            Effect.flatMap((content) =>
+              Effect.try({
+                try: () => JSON.parse(content) as unknown,
+                catch: () => ({}),
+              }),
+            ),
+            Effect.map(normalizeUserConfig),
+            Effect.flatMap((data) => Schema.decodeUnknown(UserConfig)(data)),
             Effect.catchAll(() => Effect.succeed(new UserConfig({}))),
           )
 

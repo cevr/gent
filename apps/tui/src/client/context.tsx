@@ -157,7 +157,7 @@ export function ClientProvider(props: ClientProviderProps) {
   clearUnifiedLog()
   tuiLog("ClientProvider init")
 
-  const defaultAgent: AgentName = props.initialAgent ?? "default"
+  const defaultAgent: AgentName = props.initialAgent ?? "cowork"
 
   // DirectClient already has the right shape, use it directly
   // For GentRpcClient, wrap with createClient

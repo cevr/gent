@@ -357,7 +357,7 @@ describe("AgentActor", () => {
         yield* actor.run({
           sessionId: session.id,
           branchId: branch.id,
-          agentName: "default",
+          agentName: "cowork",
           prompt: "inspect",
           defaultModel: "test",
           systemPrompt: "",
@@ -401,7 +401,7 @@ describe("ToolRunner", () => {
         const runner = yield* ToolRunner
         return yield* runner.run(
           { toolCallId: "tc1", toolName: "fail", input: {} },
-          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "default" },
+          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
         )
       }).pipe(Effect.provide(layer)),
     )
@@ -500,7 +500,7 @@ describe("Tool concurrency", () => {
         yield* actor.run({
           sessionId: session.id,
           branchId: branch.id,
-          agentName: "default",
+          agentName: "cowork",
           prompt: "run serial tools",
           defaultModel: "test",
           systemPrompt: "",

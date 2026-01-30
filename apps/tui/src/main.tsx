@@ -270,7 +270,7 @@ const main = Command.make(
       Args.optional,
     ),
     agent: Options.text("agent").pipe(
-      Options.withDescription("Default agent (default | deep)"),
+      Options.withDescription("Default agent (cowork | deep)"),
       Options.optional,
     ),
     bypass: Options.boolean("bypass").pipe(

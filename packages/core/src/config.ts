@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { PermissionRule } from "./permission"
-import { AgentName } from "./agent/agent-definition"
+import { AgentName } from "./agent"
 
 // Model Configuration
 

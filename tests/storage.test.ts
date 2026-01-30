@@ -121,7 +121,7 @@ describe("Storage", () => {
             new AgentSwitched({
               sessionId: session.id,
               branchId: branch.id,
-              fromAgent: "default",
+              fromAgent: "cowork",
               toAgent: "deep",
             }),
           )
@@ -131,7 +131,7 @@ describe("Storage", () => {
               sessionId: session.id,
               branchId: branch.id,
               fromAgent: "deep",
-              toAgent: "default",
+              toAgent: "cowork",
             }),
           )
 
@@ -143,7 +143,7 @@ describe("Storage", () => {
 
           expect(latest?._tag).toBe("AgentSwitched")
           if (latest && latest._tag === "AgentSwitched") {
-            expect(latest.toAgent).toBe("default")
+            expect(latest.toAgent).toBe("cowork")
           }
         }),
       )

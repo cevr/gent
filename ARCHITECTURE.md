@@ -83,6 +83,35 @@ AgentActor {
 
 **AskUser tool:** Used frequently for clarifying intent, validating assumptions, getting preferences. Not for approval.
 
+### Actor Protocol (Draft)
+
+AgentProcess RPC + mailbox contract (local + cluster):
+
+```
+SendUserMessage { sessionId, branchId, content, mode } -> { messageId, turnId }
+SendToolResult  { toolCallId, output, isError }      -> { ack: true }
+Interrupt       { kind: cancel|interrupt|interject, message? } -> { ack: true }
+GetState        {} -> { status, agent, model, queueDepth, lastError? }
+GetMetrics      {} -> { tokens, cost, toolCalls, durations, retries }
+```
+
+Mailbox semantics:
+
+- FIFO per session/branch
+- Tool results must match toolCallId
+- Interrupt preempts current run; interject enqueues next message
+
+Cluster mapping: use @effect/cluster Entity + RpcGroup; same RPC surface, sharded by sessionId.
+
+### Supervision Policy (Draft)
+
+Per-mode policy (one-for-one):
+
+- cowork: retry provider errors with DEFAULT_RETRY_CONFIG (maxAttempts=3). No retry on tool errors, permission denies, or user interrupts.
+- deep: retry provider errors with extended backoff (maxAttempts=5, maxDelay=60s). Tool retries only if tool is marked safe/idempotent.
+
+See `/Users/cvr/Developer/personal/gent/packages/runtime/src/retry.ts` for current defaults.
+
 ### Tools as Effect Services
 
 ```typescript
@@ -145,7 +174,7 @@ Fork at any message. Tree navigation. Independent compaction per branch.
 - SQLite storage
 - All core tools enabled
 - Compaction at 100k tokens
-- Agent switching (default/deep)
+- Agent switching (cowork/deep)
 - Plans in `.gent/plans/`
 
 ## Testing

@@ -6,7 +6,7 @@ import { AskUserHandler } from "@gent/tools"
 import { Permission, PermissionHandler, PermissionRule, PlanHandler, AuthStorage } from "@gent/core"
 import { ConfigService } from "@gent/runtime"
 import { ProviderFactory } from "@gent/providers"
-import type { AuthProviderInfo } from "./operations"
+import type { AuthProviderInfo } from "./rpcs"
 
 // Known providers for auth listing
 const KNOWN_PROVIDERS = ["anthropic", "openai", "bedrock", "google", "mistral"] as const

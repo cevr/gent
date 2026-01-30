@@ -103,7 +103,7 @@ export {
   AuthProviderInfo,
   SetAuthKeyPayload,
   DeleteAuthKeyPayload,
-} from "./operations.js"
+} from "./rpcs"
 
 // RPC definitions
 export { GentRpcs, type GentRpcsClient } from "./rpcs"

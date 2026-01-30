@@ -764,7 +764,7 @@ ${conversation}`
             const currentAgent =
               latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
                 ? (latestAgentEvent.toAgent as AgentName)
-                : "default"
+                : "cowork"
 
             return {
               sessionId: input.sessionId,

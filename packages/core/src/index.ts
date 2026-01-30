@@ -71,10 +71,9 @@ export {
 export { Permission, PermissionRule, PermissionResult, PermissionDecision } from "./permission"
 
 // Permission Handler
-export { PermissionHandler } from "./permission-handler"
+export { PermissionHandler, PlanHandler } from "./interaction-handlers"
 
 // Plan Handler
-export { PlanHandler } from "./plan-handler"
 
 // Config Types
 export {
@@ -113,7 +112,7 @@ export {
   SubagentError,
   type SubagentRunner,
   type SubagentResult,
-  DEFAULT_PROMPT,
+  COWORK_PROMPT,
   DEEP_PROMPT,
   EXPLORE_PROMPT,
   ARCHITECT_PROMPT,
