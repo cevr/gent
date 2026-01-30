@@ -97,9 +97,14 @@ export type SteerCommand = typeof SteerCommand.Type
 
 // Agent Loop Context
 
+type FollowUpItem = {
+  message: Message
+  bypass: boolean
+}
+
 interface LoopContext {
-  currentAgent: AgentNameType
-  followUpQueue: Message[]
+  currentAgents: Map<string, AgentNameType>
+  followUpQueue: FollowUpItem[]
 }
 
 // Agent Loop Machine
@@ -160,8 +165,37 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
         const serialSemaphore = yield* Effect.makeSemaphore(1)
 
         const stateRef = yield* Ref.make<LoopContext>({
-          currentAgent: "cowork",
+          currentAgents: new Map<string, AgentNameType>(),
           followUpQueue: [],
+        })
+
+        const stateKey = (sessionId: string, branchId: string) => `${sessionId}:${branchId}`
+
+        const resolveCurrentAgent = Effect.fn("AgentLoop.resolveCurrentAgent")(function* (
+          sessionId: string,
+          branchId: string,
+        ) {
+          const key = stateKey(sessionId, branchId)
+          const state = yield* Ref.get(stateRef)
+          const existing = state.currentAgents.get(key)
+          if (existing !== undefined) return existing as AgentName
+
+          const latestAgentEvent = yield* storage
+            .getLatestEvent({ sessionId, branchId, tags: ["AgentSwitched"] })
+            .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+
+          const next =
+            latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
+              ? (latestAgentEvent.toAgent as AgentName)
+              : "cowork"
+
+          yield* Ref.update(stateRef, (s) => {
+            const updated = new Map(s.currentAgents)
+            updated.set(key, next)
+            return { ...s, currentAgents: updated }
+          })
+
+          return next
         })
 
         const steerQueue = yield* Queue.unbounded<SteerCommand>()
@@ -184,14 +218,14 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
         ) {
           if (cmd._tag !== "SwitchAgent") return
 
-          const previous = yield* Ref.get(stateRef).pipe(Effect.map((s) => s.currentAgent))
+          const previous = yield* resolveCurrentAgent(sessionId, branchId)
           const next = cmd.agent as AgentName
           const resolved = yield* agentRegistry.get(next)
           if (resolved === undefined) return
 
           yield* Ref.update(stateRef, (s) => ({
             ...s,
-            currentAgent: next,
+            currentAgents: new Map(s.currentAgents).set(stateKey(sessionId, branchId), next),
           }))
 
           yield* publishEvent(
@@ -243,7 +277,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
             })
             yield* Ref.update(stateRef, (s) => ({
               ...s,
-              followUpQueue: [interjectMsg, ...s.followUpQueue],
+              followUpQueue: [{ message: interjectMsg, bypass }, ...s.followUpQueue],
             }))
           })
 
@@ -312,7 +346,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               }
             }
 
-            const state = yield* Ref.get(stateRef)
+            const currentAgent = yield* resolveCurrentAgent(sessionId, branchId)
 
             // Checkpoint-aware message loading
             const checkpoint = yield* checkpointService.getLatestCheckpoint(branchId)
@@ -355,13 +389,13 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
             })
 
-            const agent = yield* agentRegistry.get(state.currentAgent)
+            const agent = yield* agentRegistry.get(currentAgent)
             if (agent === undefined) {
               yield* publishEvent(
                 new ErrorOccurred({
                   sessionId,
                   branchId,
-                  error: `Unknown agent: ${state.currentAgent}`,
+                  error: `Unknown agent: ${currentAgent}`,
                 }),
               )
               return interrupted
@@ -543,7 +577,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                       sessionId,
                       branchId,
                       toolCallId: toolCall.toolCallId,
-                      agentName: state.currentAgent,
+                      agentName: currentAgent,
                     }
                     const run = toolRunner.run(toolCall, ctx, { bypass })
                     const result = yield* tool?.concurrency === "serial"
@@ -607,13 +641,19 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
           // Process follow-up queue
           const finalState = yield* Ref.get(stateRef)
-          const nextMessage = finalState.followUpQueue[0]
-          if (nextMessage !== undefined) {
+          const nextItem = finalState.followUpQueue[0]
+          if (nextItem !== undefined) {
             yield* Ref.update(stateRef, (s) => ({
               ...s,
               followUpQueue: s.followUpQueue.slice(1),
             }))
-            const nextInterrupted = yield* runLoop(sessionId, branchId, nextMessage, bypass)
+            const nextMessage = nextItem.message
+            const nextInterrupted = yield* runLoop(
+              nextMessage.sessionId,
+              nextMessage.branchId,
+              nextMessage,
+              nextItem.bypass,
+            )
             interrupted = interrupted || nextInterrupted
           }
 
@@ -685,7 +725,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               // Queue as follow-up
               yield* Ref.update(stateRef, (s) => ({
                 ...s,
-                followUpQueue: [...s.followUpQueue, message],
+                followUpQueue: [...s.followUpQueue, { message, bypass }],
               }))
               return
             }
@@ -705,9 +745,13 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                   message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
                 })
               }
+              const session = yield* storage
+                .getSession(message.sessionId)
+                .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+              const bypass = session?.bypass ?? true
               yield* Ref.update(stateRef, (s) => ({
                 ...s,
-                followUpQueue: [...s.followUpQueue, message],
+                followUpQueue: [...s.followUpQueue, { message, bypass }],
               }))
             }),
 
