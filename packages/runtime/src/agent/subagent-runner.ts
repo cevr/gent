@@ -1,5 +1,6 @@
 import { Cause, Context, Duration, Effect, Layer, Schedule } from "effect"
 import {
+  AgentSwitched,
   Branch,
   EventStore,
   Session,
@@ -108,6 +109,22 @@ export const InProcessRunner: Layer.Layer<
                   childSessionId: sessionId,
                   agentName: params.agent.name,
                   prompt: params.prompt,
+                }),
+              )
+              yield* eventStore.publish(
+                new AgentSwitched({
+                  sessionId,
+                  branchId,
+                  fromAgent: "cowork",
+                  toAgent: params.agent.name,
+                }),
+              )
+              yield* eventStore.publish(
+                new AgentSwitched({
+                  sessionId,
+                  branchId,
+                  fromAgent: "cowork",
+                  toAgent: params.agent.name,
                 }),
               )
 
@@ -254,7 +271,6 @@ export const SubprocessRunner: Layer.Layer<
                 env: {
                   ...Bun.env,
                   ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
-                  GENT_INTERNAL_AGENT: params.agent.name,
                 },
               })
 

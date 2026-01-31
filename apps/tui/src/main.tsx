@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Config, Console, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Config, Console, Effect, Layer, Option, Stream } from "effect"
 import type { Runtime } from "effect"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
@@ -14,7 +14,7 @@ import {
 } from "@gent/server"
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
 import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
-import { AgentName, AuthGuard, PROVIDER_ENV_VARS, type ProviderId } from "@gent/core"
+import { AuthGuard, PROVIDER_ENV_VARS, type ProviderId } from "@gent/core"
 import * as path from "node:path"
 import * as os from "node:os"
 
@@ -330,28 +330,6 @@ const main = Command.make(
           if (branchId === undefined) {
             yield* Console.error("Error: session has no branch")
             return process.exit(1)
-          }
-          const internalAgentValue = Option.getOrUndefined(
-            yield* Config.option(Config.string("GENT_INTERNAL_AGENT")).pipe(
-              Effect.catchAll(() => Effect.succeed(Option.none())),
-            ),
-          )
-          if (internalAgentValue !== undefined && internalAgentValue !== "") {
-            yield* Schema.decodeUnknown(AgentName)(internalAgentValue).pipe(
-              Effect.flatMap((agent) =>
-                core.steer({
-                  _tag: "SwitchAgent",
-                  sessionId: state.session.id,
-                  branchId,
-                  agent,
-                }),
-              ),
-              Effect.catchAll(() =>
-                Console.error(`Error: invalid internal agent ${internalAgentValue}`).pipe(
-                  Effect.flatMap(() => Effect.sync(() => process.exit(1))),
-                ),
-              ),
-            )
           }
           yield* runHeadless(core, state.session.id, branchId, state.prompt)
           return
