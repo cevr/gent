@@ -32,14 +32,26 @@ export function CommandPalette() {
   const router = useRouter()
   const dimensions = useTerminalDimensions()
 
-  const [levelStack, setLevelStack] = createSignal<MenuLevel[]>([])
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
-  const [sessions, setSessions] = createSignal<SessionInfo[]>([])
-  const [searchQuery, setSearchQuery] = createSignal("")
+  type SearchState = { _tag: "idle" } | { _tag: "active"; query: string }
+  type PaletteState = {
+    _tag: "open"
+    levelStack: MenuLevel[]
+    selectedIndex: number
+    sessions: SessionInfo[]
+    search: SearchState
+  }
+
+  const [state, setState] = createSignal<PaletteState>({
+    _tag: "open",
+    levelStack: [],
+    selectedIndex: 0,
+    sessions: [],
+    search: { _tag: "idle" },
+  })
 
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
-  useScrollSync(() => `item-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(() => `item-${state().selectedIndex}`, { getRef: () => scrollRef })
 
   // Build root menu
   const rootMenu = (): MenuLevel => ({
@@ -53,8 +65,13 @@ export function CommandPalette() {
             client.listSessions().pipe(
               Effect.tap((list) =>
                 Effect.sync(() => {
-                  setSessions([...list])
-                  pushLevel(sessionsMenu())
+                  setState((current) => ({
+                    ...current,
+                    sessions: [...list],
+                    levelStack: [...current.levelStack, sessionsMenu()],
+                    selectedIndex: 0,
+                    search: { _tag: "idle" },
+                  }))
                 }),
               ),
               Effect.catchAll((error) =>
@@ -82,7 +99,7 @@ export function CommandPalette() {
   // Sessions submenu
   const sessionsMenu = (): MenuLevel => {
     const currentSession = client.session()
-    const sessionList = sessions()
+    const sessionList = state().sessions
 
     type SessionNode = {
       session: SessionInfo
@@ -223,7 +240,7 @@ export function CommandPalette() {
   }
 
   const currentLevel = () => {
-    const stack = levelStack()
+    const stack = state().levelStack
     return stack.length > 0 ? (stack[stack.length - 1] ?? rootMenu()) : rootMenu()
   }
 
@@ -233,16 +250,23 @@ export function CommandPalette() {
   const currentItems = () => levelItems(currentLevel())
 
   const pushLevel = (level: MenuLevel) => {
-    setLevelStack((stack) => [...stack, level])
-    setSelectedIndex(0)
-    setSearchQuery("")
+    setState((current) => ({
+      ...current,
+      levelStack: [...current.levelStack, level],
+      selectedIndex: 0,
+      search: { _tag: "idle" },
+    }))
   }
 
   const popLevel = () => {
-    setSearchQuery("")
-    if (levelStack().length > 0) {
-      setLevelStack((stack) => stack.slice(0, -1))
-      setSelectedIndex(0)
+    const stack = state().levelStack
+    if (stack.length > 0) {
+      setState((current) => ({
+        ...current,
+        levelStack: current.levelStack.slice(0, -1),
+        selectedIndex: 0,
+        search: { _tag: "idle" },
+      }))
     } else {
       command.closePalette()
     }
@@ -250,7 +274,7 @@ export function CommandPalette() {
 
   const handleSelect = () => {
     const items = currentItems()
-    const item = items[selectedIndex()]
+    const item = items[state().selectedIndex]
     if (item !== undefined) {
       item.onSelect()
     }
@@ -258,9 +282,12 @@ export function CommandPalette() {
 
   // Reset when palette opens
   const resetPalette = () => {
-    setLevelStack([])
-    setSelectedIndex(0)
-    setSearchQuery("")
+    setState((current) => ({
+      ...current,
+      levelStack: [],
+      selectedIndex: 0,
+      search: { _tag: "idle" },
+    }))
   }
 
   useKeyboard((e) => {
@@ -270,9 +297,12 @@ export function CommandPalette() {
 
     if (e.name === "escape") {
       // Clear search first, then pop level
-      if (searchQuery().length > 0) {
-        setSearchQuery("")
-        setSelectedIndex(0)
+      if (state().search._tag === "active") {
+        setState((current) => ({
+          ...current,
+          search: { _tag: "idle" },
+          selectedIndex: 0,
+        }))
         return
       }
       popLevel()
@@ -286,12 +316,17 @@ export function CommandPalette() {
 
     if (e.name === "backspace") {
       // Handle search query backspace
-      if (level.searchable === true && searchQuery().length > 0) {
-        setSearchQuery((q) => q.slice(0, -1))
-        setSelectedIndex(0)
+      const currentSearch = state().search
+      if (level.searchable === true && currentSearch._tag === "active") {
+        const next = currentSearch.query.slice(0, -1)
+        setState((current) => ({
+          ...current,
+          search: next.length > 0 ? { _tag: "active", query: next } : { _tag: "idle" },
+          selectedIndex: 0,
+        }))
         return
       }
-      if (levelStack().length > 0) {
+      if (state().levelStack.length > 0) {
         popLevel()
         return
       }
@@ -305,12 +340,18 @@ export function CommandPalette() {
 
     const items = levelItems(level)
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-      setSelectedIndex((i) => (i > 0 ? i - 1 : items.length - 1))
+      setState((current) => ({
+        ...current,
+        selectedIndex: current.selectedIndex > 0 ? current.selectedIndex - 1 : items.length - 1,
+      }))
       return
     }
 
     if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-      setSelectedIndex((i) => (i < items.length - 1 ? i + 1 : 0))
+      setState((current) => ({
+        ...current,
+        selectedIndex: current.selectedIndex < items.length - 1 ? current.selectedIndex + 1 : 0,
+      }))
       return
     }
 
@@ -319,8 +360,17 @@ export function CommandPalette() {
       const char = e.sequence
       // Only accept printable characters
       if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-        setSearchQuery((q) => q + char)
-        setSelectedIndex(0)
+        setState((current) => {
+          const query = current.search._tag === "active" ? current.search.query : ""
+          return {
+            ...current,
+            search: {
+              _tag: "active",
+              query: query + char,
+            },
+            selectedIndex: 0,
+          }
+        })
         return
       }
     }
@@ -340,9 +390,13 @@ export function CommandPalette() {
   const top = () => Math.floor((dimensions().height - paletteHeight()) / 2)
 
   const breadcrumb = () => {
-    const stack = levelStack()
+    const stack = state().levelStack
     if (stack.length === 0) return ""
     return stack.map((l) => l.title).join(" › ") + " ›"
+  }
+  const searchQuery = () => {
+    const current = state().search
+    return current._tag === "active" ? current.query : ""
   }
 
   return (
@@ -395,7 +449,7 @@ export function CommandPalette() {
         <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
           <For each={currentItems()}>
             {(item, index) => {
-              const isSelected = () => selectedIndex() === index()
+              const isSelected = () => state().selectedIndex === index()
               return (
                 <box
                   id={`item-${index()}`}
@@ -418,7 +472,7 @@ export function CommandPalette() {
         {/* Footer hint */}
         <box flexShrink={0} paddingLeft={1}>
           <text style={{ fg: theme.textMuted }}>
-            <Show when={levelStack().length > 0} fallback="↑↓ · →/Enter · Esc">
+            <Show when={state().levelStack.length > 0} fallback="↑↓ · →/Enter · Esc">
               ↑↓ · →/Enter · ←/Esc
             </Show>
           </text>

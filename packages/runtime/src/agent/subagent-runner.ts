@@ -119,14 +119,6 @@ export const InProcessRunner: Layer.Layer<
                   toAgent: params.agent.name,
                 }),
               )
-              yield* eventStore.publish(
-                new AgentSwitched({
-                  sessionId,
-                  branchId,
-                  fromAgent: "cowork",
-                  toAgent: params.agent.name,
-                }),
-              )
 
               const runSubagent = actor.run({
                 sessionId,

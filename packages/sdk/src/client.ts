@@ -7,6 +7,8 @@ import { GentRpcs, RpcHandlersLive, type GentRpcsClient, type GentRpcError } fro
 import { stringifyOutput, summarizeOutput } from "@gent/core"
 import type {
   AgentName,
+  AuthAuthorization,
+  AuthMethod,
   AuthProviderInfo,
   EventEnvelope,
   MessagePart,
@@ -26,6 +28,8 @@ export type {
   ToolResultPart,
   PermissionRule,
   AuthProviderInfo,
+  AuthAuthorization,
+  AuthMethod,
 }
 
 // Re-export RPC types
@@ -304,6 +308,25 @@ export interface GentClient {
   /** Delete auth key for a provider */
   deleteAuthKey: (provider: string) => Effect.Effect<void, GentRpcError>
 
+  /** List auth methods per provider */
+  listAuthMethods: () => Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>, GentRpcError>
+
+  /** Begin OAuth flow for provider + method */
+  authorizeAuth: (
+    sessionId: string,
+    provider: string,
+    method: number,
+  ) => Effect.Effect<AuthAuthorization | null, GentRpcError>
+
+  /** Complete OAuth flow */
+  callbackAuth: (
+    sessionId: string,
+    provider: string,
+    method: number,
+    authorizationId: string,
+    code?: string,
+  ) => Effect.Effect<void, GentRpcError>
+
   /** Get the runtime for this client */
   runtime: Runtime.Runtime<unknown>
 }
@@ -412,6 +435,20 @@ export function createClient(
 
     deleteAuthKey: (provider) => rpcClient.deleteAuthKey({ provider }),
 
+    listAuthMethods: () => rpcClient.listAuthMethods(),
+
+    authorizeAuth: (sessionId, provider, method) =>
+      rpcClient.authorizeAuth({ sessionId, provider, method }),
+
+    callbackAuth: (sessionId, provider, method, authorizationId, code) =>
+      rpcClient.callbackAuth({
+        sessionId,
+        provider,
+        method,
+        authorizationId,
+        ...(code !== undefined ? { code } : {}),
+      }),
+
     runtime,
   }
 }
@@ -464,8 +501,9 @@ export type RpcHandlersContext = Layer.Layer.Context<typeof RpcHandlersLive>
  * - PlanHandler
  * - Permission
  * - ConfigService
- * - AuthStorage
+ * - AuthStore
  * - ProviderFactory
+ * - ProviderAuth
  */
 export const makeInProcessRpcClient = <E, R>(
   handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,

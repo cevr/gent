@@ -95,27 +95,29 @@ export interface UseSkillsReturn {
 export function useSkills(): UseSkillsReturn {
   const registry = useRegistry()
 
+  type SkillsState = { _tag: "idle"; skills: Skill[] } | { _tag: "refreshing"; skills: Skill[] }
+
   const skillsAtom = atom((registry) => {
-    const [state, setState] = createSignal({ skills: [] as Skill[], isRefreshing: false })
+    const [state, setState] = createSignal<SkillsState>({ _tag: "idle", skills: [] })
     const [version, setVersion] = createSignal(0)
     let cancelRefresh: (() => void) | undefined
 
     const runRefresh = () => {
       const effect = Effect.gen(function* () {
         yield* Effect.sync(() => {
-          setState((prev) => ({ ...prev, isRefreshing: true }))
+          setState((prev) => ({ _tag: "refreshing", skills: prev.skills }))
         })
 
         const cached = yield* loadCache()
         if (cached !== null) {
           yield* Effect.sync(() => {
-            setState({ skills: cached, isRefreshing: true })
+            setState({ _tag: "refreshing", skills: cached })
           })
         }
 
         const fresh = yield* scanAllSkillDirs()
         yield* Effect.sync(() => {
-          setState({ skills: fresh, isRefreshing: false })
+          setState({ _tag: "idle", skills: fresh })
         })
         yield* saveCache(fresh)
       })
@@ -157,7 +159,7 @@ export function useSkills(): UseSkillsReturn {
   const state = useAtomValue(skillsAtom)
 
   const skills = () => state().skills
-  const isRefreshing = () => state().isRefreshing
+  const isRefreshing = () => state()._tag === "refreshing"
   const refresh = () => registry.refresh(skillsAtom)
 
   return { skills, isRefreshing, refresh }

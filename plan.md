@@ -1,39 +1,43 @@
-# Auth Storage Plan — Curated Startup
+# OAuth + Auth Discipline Plan
 
-## Phase 0 — Findings (current state)
+## Phase 0 — Audit Findings (sources)
 
-- [ ] Key storage: macOS-only Keychain shell via `security`; list uses `dump-keychain` (slow/brittle). File fallback is plaintext. Refs: `packages/core/src/auth-storage.ts`
-- [ ] Provider key resolution: env var → AuthStorage; no startup gating for required agents. Refs: `packages/providers/src/provider-factory.ts`, `apps/tui/src/routes/home.tsx`
-- [ ] Auth UI exists but manual `/auth` flow only; no onboarding prompt. Refs: `apps/tui/src/routes/auth.tsx`, `apps/tui/src/routes/home.tsx`
-- [ ] Provider list duplicated in SDK/server vs core SUPPORTED_PROVIDERS. Refs: `packages/sdk/src/direct-client.ts`, `packages/server/src/rpc-handlers.ts`, `packages/core/src/model.ts`
-- [ ] Required-provider list for active agents not centralized (cowork/deepwork models live in core). Refs: `packages/core/src/agent.ts`, `packages/runtime/src/model-registry.ts`
+- [ ] Duplicate AgentSwitched event in subagent run (double publish). Refs: `packages/runtime/src/agent/subagent-runner.ts:114`, `packages/runtime/src/agent/subagent-runner.ts:122`
+- [ ] ProviderAuth pending OAuth map not session-scoped (overwrites across sessions). Refs: `packages/providers/src/provider-auth.ts:170`, `packages/providers/src/provider-auth.ts:185`
+- [ ] OpenAI OAuth server/pending global; timeout does not stop server → leak. Refs: `packages/providers/src/oauth/openai-oauth.ts:182`, `packages/providers/src/oauth/openai-oauth.ts:249`
+- [ ] Anthropic OAuth tool-name rewrite is chunk regex → corrupt JSON on chunk splits. Refs: `packages/providers/src/oauth/anthropic-oauth.ts:243`, `packages/providers/src/oauth/anthropic-oauth.ts:254`
+- [ ] Env-based auth override still exists; violates curated, minimal config. Refs: `packages/core/src/auth-guard.ts:33`, `packages/providers/src/provider-factory.ts:76`, `packages/core/src/model.ts:58`, `apps/tui/src/main.tsx:121`, `ARCHITECTURE.md:162`
+- [ ] Effect Config usage pattern check. Refs: `/Users/cvr/.cache/repo/Effect-TS/effect/packages/effect/src/Config.ts`
 
-## Phase 1 — Decisions (need answers)
+## Phase 1 — Decisions (locked)
 
-- [ ] Storage backend policy (keychain-only vs hybrid vs encrypted file). Refs: `packages/core/src/auth-storage.ts`
-- [ ] Startup check entrypoint (TUI only vs server/core). Refs: `apps/tui/src/app.tsx`, `packages/server/src/index.ts`, `packages/runtime/src/*`
-- [ ] Prompt UX (single modal vs per-provider flow; allow skip?). Refs: `apps/tui/src/routes/auth.tsx`, `apps/tui/src/client/context.tsx`
-- [ ] Provider catalog source (core SUPPORTED_PROVIDERS vs registry). Refs: `packages/core/src/model.ts`, `packages/runtime/src/model-registry.ts`
+- [x] OAuth default + API key fallback for Anthropic/OpenAI
+- [x] OAuth UX: auto + code (auto default)
+- [x] AuthStore layered over AuthStorage
+- [x] Model gating for OpenAI OAuth (Codex only)
+- [x] Pending OAuth scoped by sessionId + authorizationId
+- [x] Stream-safe tool-name rewrite (no chunk regex)
+- [x] Remove env-auth override entirely
 
-## Phase 2 — Design
+## Phase 2 — Implementation
 
-- [ ] Add `AuthStorage.LiveSystem` (OS-aware keychain + optional encrypted file fallback). Refs: `packages/core/src/auth-storage.ts`, `/Users/cvr/.cache/repo/Effect-TS/effect/packages/platform/src/KeyValueStore.ts`
-- [ ] Add `AuthGuard` service to compute required providers from active agents/modes and assert keys present. Refs: `packages/core/src/agent.ts`, `packages/runtime/src/model-registry.ts`, `packages/providers/src/provider-factory.ts`
-- [ ] Normalize provider list for UI (derive from core SUPPORTED_PROVIDERS). Refs: `packages/core/src/model.ts`, `packages/sdk/src/direct-client.ts`, `packages/server/src/rpc-handlers.ts`
+- [x] Auth schemas: add `authorizationId` to AuthAuthorization; remove env-only shapes; update exports. Refs: `packages/core/src/auth-method.ts`, `packages/core/src/auth-guard.ts`, `packages/core/src/model.ts`, `packages/core/src/index.ts`
+- [x] ProviderAuth: session-scoped pending map keyed by sessionId+provider+method+authorizationId; require authId on callback. Refs: `packages/providers/src/provider-auth.ts`
+- [x] OpenAI OAuth: support concurrent pending states, stop server on timeout/empty; no globals leak. Refs: `packages/providers/src/oauth/openai-oauth.ts`
+- [x] Anthropic OAuth: stream-safe SSE JSON rewrite for tool names; avoid chunk regex. Refs: `packages/providers/src/oauth/anthropic-oauth.ts`
+- [x] ProviderFactory/AuthGuard: remove env fallback; rely on AuthStore only. Refs: `packages/providers/src/provider-factory.ts`, `packages/core/src/auth-guard.ts`
+- [x] RPC/SDK/Direct client: add listAuthMethods/authorizeAuth/callbackAuth, add authId threading. Refs: `packages/server/src/rpcs.ts`, `packages/server/src/rpc-handlers.ts`, `packages/sdk/src/client.ts`, `packages/sdk/src/direct-client.ts`, `packages/server/src/index.ts`
+- [x] TUI auth flow: method selection, auto/code UX, authId threading, no env hints. Refs: `apps/tui/src/routes/auth.tsx`, `apps/tui/src/main.tsx`
 
-## Phase 3 — Implementation
+## Phase 3 — Tests (regression + goals)
 
-- [ ] Implement AuthGuard service + layer wiring. Refs: `packages/runtime/src/*`, `packages/server/src/index.ts`, `packages/sdk/src/direct-client.ts`
-- [ ] TUI startup prompt flow: if missing keys, push `/auth` modal or inline prompt; store on submit. Refs: `apps/tui/src/app.tsx`, `apps/tui/src/routes/auth.tsx`, `apps/tui/src/client/context.tsx`
-- [ ] Replace hardcoded provider lists in SDK/server with core list. Refs: `packages/sdk/src/direct-client.ts`, `packages/server/src/rpc-handlers.ts`, `packages/core/src/model.ts`
-- [ ] Tighten key resolution to preferred storage ordering (per decision). Refs: `packages/providers/src/provider-factory.ts`, `packages/core/src/auth-storage.ts`
+- [x] AuthStore: api+oauth roundtrip + listInfo; AuthGuard uses stored only. Refs: `tests/auth.test.ts`, `tests/core.test.ts`
+- [x] ProviderAuth: pending map scoped by sessionId+authId; callback fails without matching authId. Refs: `tests/provider-auth.test.ts`
+- [ ] OpenAI OAuth: timeout stops server + pending cleanup (unit). Refs: `packages/providers/src/oauth/openai-oauth.ts`
+- [x] Anthropic OAuth: stream-safe rewrite (SSE lines split across chunks). Refs: `tests/provider-auth.test.ts`
 
-## Phase 4 — Tests
+## Phase 4 — Verify
 
-- [ ] AuthStorage LiveSystem: key set/get/list/delete (unit). Refs: `tests/auth.test.ts`
-- [ ] AuthGuard: missing key triggers prompt path; present key passes. Refs: `tests/runtime.test.ts` or new test in `tests/core.test.ts`
-- [ ] TUI onboarding: missing key routes to auth + stores key. Refs: `apps/tui/tests/e2e.test.ts`
-
-## Phase 5 — Docs
-
-- [ ] Update docs for key storage + onboarding flow. Refs: `docs/*`, `ARCHITECTURE.md`
+- [ ] `bun run typecheck`
+- [ ] `bun run lint`
+- [ ] `bun run test`

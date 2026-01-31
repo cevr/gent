@@ -81,7 +81,6 @@ export {
   ModelPricing,
   Provider,
   ProviderId,
-  PROVIDER_ENV_VARS,
   SUPPORTED_PROVIDERS,
   calculateCost,
   parseModelProvider,
@@ -120,6 +119,21 @@ export { Skill, Skills, formatSkillsForPrompt } from "./skills"
 
 // Auth Storage
 export { AuthStorage, AuthStorageError, type AuthStorageService } from "./auth-storage"
+export {
+  AuthStore,
+  AuthStoreError,
+  AuthApi,
+  AuthOauth,
+  AuthInfo,
+  AuthType,
+  type AuthStoreService,
+} from "./auth-store"
+export {
+  AuthMethod,
+  AuthMethodType,
+  AuthAuthorization,
+  AuthAuthorizationMethod,
+} from "./auth-method"
 export { AuthGuard, AuthProviderInfo, AuthSource } from "./auth-guard"
 
 // Defaults

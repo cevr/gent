@@ -2,7 +2,7 @@
  * Branch picker route - choose branch when resuming multi-branch session
  */
 
-import { createEffect, createSignal, For } from "solid-js"
+import { createEffect, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -20,6 +20,10 @@ export interface BranchPickerProps {
   branches: readonly BranchInfo[]
   prompt?: string
 }
+
+type BranchPickerState =
+  | { _tag: "loading"; error?: string }
+  | { _tag: "ready"; selectedIndex: number; messageCounts: Map<string, number>; error?: string }
 
 const truncate = (value: string, max: number): string =>
   value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
@@ -49,27 +53,48 @@ export function BranchPicker(props: BranchPickerProps) {
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime(client.client.runtime)
 
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
-  const [messageCounts, setMessageCounts] = createSignal<Map<string, number>>(new Map())
+  const [state, setState] = createSignal<BranchPickerState>({
+    _tag: "loading",
+  })
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
-  useScrollSync(() => `branch-picker-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(
+    () => {
+      const current = state()
+      return `branch-picker-${current._tag === "ready" ? current.selectedIndex : 0}`
+    },
+    { getRef: () => scrollRef },
+  )
 
   createEffect(() => {
     cast(
       client.client.getBranchTree(props.sessionId).pipe(
         Effect.tap((tree) =>
           Effect.sync(() => {
-            setMessageCounts(collectCounts(tree))
+            setState((current) => ({
+              _tag: "ready",
+              selectedIndex: current._tag === "ready" ? current.selectedIndex : 0,
+              messageCounts: collectCounts(tree),
+              error: undefined,
+            }))
           }),
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
-            client.setError(formatError(err))
+            setState((current) => ({ ...current, error: formatError(err) }))
           }),
         ),
       ),
     )
+  })
+
+  createEffect(() => {
+    const current = state()
+    if (current._tag !== "ready") return
+    if (props.branches.length === 0) return
+    if (current.selectedIndex >= props.branches.length) {
+      setState({ ...current, selectedIndex: props.branches.length - 1 })
+    }
   })
 
   useKeyboard((e) => {
@@ -78,10 +103,11 @@ export function BranchPicker(props: BranchPickerProps) {
       return
     }
 
-    if (props.branches.length === 0) return
+    const current = state()
+    if (current._tag !== "ready" || props.branches.length === 0) return
 
     if (e.name === "return") {
-      const branch = props.branches[selectedIndex()]
+      const branch = props.branches[current.selectedIndex]
       if (branch !== undefined) {
         client.switchSession(props.sessionId, branch.id, props.sessionName)
         router.navigateToSession(props.sessionId, branch.id, props.prompt)
@@ -90,12 +116,20 @@ export function BranchPicker(props: BranchPickerProps) {
     }
 
     if (e.name === "up") {
-      setSelectedIndex((i) => (i > 0 ? i - 1 : props.branches.length - 1))
+      setState((prev) => {
+        if (prev._tag !== "ready") return prev
+        const next = prev.selectedIndex > 0 ? prev.selectedIndex - 1 : props.branches.length - 1
+        return { ...prev, selectedIndex: next }
+      })
       return
     }
 
     if (e.name === "down") {
-      setSelectedIndex((i) => (i < props.branches.length - 1 ? i + 1 : 0))
+      setState((prev) => {
+        if (prev._tag !== "ready") return prev
+        const next = prev.selectedIndex < props.branches.length - 1 ? prev.selectedIndex + 1 : 0
+        return { ...prev, selectedIndex: next }
+      })
       return
     }
   })
@@ -104,6 +138,10 @@ export function BranchPicker(props: BranchPickerProps) {
   const panelHeight = () => Math.min(16, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
+  const readyState = () => {
+    const current = state()
+    return current._tag === "ready" ? current : null
+  }
 
   return (
     <box flexDirection="column" width="100%" height="100%">
@@ -137,11 +175,19 @@ export function BranchPicker(props: BranchPickerProps) {
           <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
         </box>
 
+        <Show when={state().error !== undefined}>
+          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+            <text style={{ fg: theme.error }}>{state().error}</text>
+          </box>
+        </Show>
+
         <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
           <For each={props.branches}>
             {(branch, index) => {
-              const isSelected = () => selectedIndex() === index()
-              const count = () => messageCounts().get(branch.id)
+              const current = readyState()
+              const isSelected = () => current !== null && current.selectedIndex === index()
+              const count = () =>
+                current !== null ? current.messageCounts.get(branch.id) : undefined
               const summary =
                 branch.summary !== undefined && branch.summary.length > 0
                   ? ` - ${branch.summary.replace(/\s+/g, " ")}`

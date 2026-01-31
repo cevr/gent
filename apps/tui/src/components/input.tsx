@@ -96,8 +96,22 @@ export function Input(props: InputProps) {
   let inputRef: InputRenderable | null = null
 
   // Internal state for uncontrolled mode (when inputState prop not provided)
-  const [internalMode, setInternalMode] = createSignal<"normal" | "shell">("normal")
-  const [autocomplete, setAutocomplete] = createSignal<AutocompleteState | null>(null)
+  type InternalState =
+    | { _tag: "normal"; autocomplete: AutocompleteState | null }
+    | { _tag: "shell" }
+  const [internalState, setInternalState] = createSignal<InternalState>({
+    _tag: "normal",
+    autocomplete: null,
+  })
+  const autocomplete = () => {
+    const current = internalState()
+    return current._tag === "normal" ? current.autocomplete : null
+  }
+  const setAutocomplete = (next: AutocompleteState | null) => {
+    setInternalState((current) =>
+      current._tag === "normal" ? { ...current, autocomplete: next } : current,
+    )
+  }
   let submitMode: "queue" | "interject" = "queue"
   let previousValue = ""
 
@@ -106,7 +120,7 @@ export function Input(props: InputProps) {
     if (props.inputState !== undefined) {
       return props.inputState._tag
     }
-    return internalMode()
+    return internalState()._tag
   }
 
   // Delete word backward
@@ -256,20 +270,20 @@ export function Input(props: InputProps) {
       effectiveMode() === "normal" &&
       autocomplete() === null
     ) {
-      setInternalMode("shell")
+      setInternalState({ _tag: "shell" })
       return
     }
 
     // Exit shell mode on ESC or backspace at position 0
     if (effectiveMode() === "shell") {
       if (e.name === "escape") {
-        setInternalMode("normal")
+        setInternalState({ _tag: "normal", autocomplete: null })
         if (inputRef !== null) inputRef.value = ""
         return
       }
       // Backspace at position 0 or 1 exits shell mode (like deleting the implicit !)
       if (e.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
-        setInternalMode("normal")
+        setInternalState({ _tag: "normal", autocomplete: null })
         return
       }
     }
@@ -321,7 +335,7 @@ export function Input(props: InputProps) {
           }),
           Effect.tap((userMessage) =>
             Effect.sync(() => {
-              setInternalMode("normal")
+              setInternalState({ _tag: "normal", autocomplete: null })
               clearInput()
               props.onSubmit(userMessage)
             }),

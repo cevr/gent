@@ -4,6 +4,8 @@ import {
   Skills,
   Skill,
   formatSkillsForPrompt,
+  AuthApi,
+  AuthStore,
   AuthStorage,
   calculateCost,
   EventStore,
@@ -63,40 +65,43 @@ describe("Skills System", () => {
   })
 })
 
-describe("Auth Storage", () => {
-  test("AuthStorage.Test stores and retrieves keys", async () => {
+describe("Auth Store", () => {
+  test("AuthStore stores and retrieves keys", async () => {
+    const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const auth = yield* AuthStorage
-        yield* auth.set("anthropic", "test-key-123")
+        const auth = yield* AuthStore
+        yield* auth.set("anthropic", new AuthApi({ type: "api", key: "test-key-123" }))
         return yield* auth.get("anthropic")
-      }).pipe(Effect.provide(AuthStorage.Test())),
+      }).pipe(Effect.provide(layer)),
     )
 
-    expect(result).toBe("test-key-123")
+    expect(result?.type).toBe("api")
   })
 
-  test("AuthStorage.Test deletes keys", async () => {
+  test("AuthStore deletes keys", async () => {
+    const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const auth = yield* AuthStorage
-        yield* auth.set("openai", "key")
-        yield* auth.delete("openai")
+        const auth = yield* AuthStore
+        yield* auth.set("openai", new AuthApi({ type: "api", key: "key" }))
+        yield* auth.remove("openai")
         return yield* auth.get("openai")
-      }).pipe(Effect.provide(AuthStorage.Test())),
+      }).pipe(Effect.provide(layer)),
     )
 
     expect(result).toBeUndefined()
   })
 
-  test("AuthStorage.Test lists providers", async () => {
+  test("AuthStore lists providers", async () => {
+    const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const auth = yield* AuthStorage
-        yield* auth.set("anthropic", "k1")
-        yield* auth.set("openai", "k2")
+        const auth = yield* AuthStore
+        yield* auth.set("anthropic", new AuthApi({ type: "api", key: "k1" }))
+        yield* auth.set("openai", new AuthApi({ type: "api", key: "k2" }))
         return yield* auth.list()
-      }).pipe(Effect.provide(AuthStorage.Test())),
+      }).pipe(Effect.provide(layer)),
     )
 
     expect(result).toContain("anthropic")

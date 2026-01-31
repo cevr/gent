@@ -5,10 +5,13 @@
  * send real keystrokes and test the full TUI flow.
  */
 import { describe, test, expect, afterEach } from "bun:test"
+import { BunContext, BunFileSystem } from "@effect/platform-bun"
+import { Effect, Layer } from "effect"
 import { spawn, type IPty } from "bun-pty"
 import * as path from "node:path"
 import * as fs from "node:fs"
 import * as os from "node:os"
+import { AuthApi, AuthStore, AuthStorage } from "@gent/core"
 
 // Test timeout
 const TEST_TIMEOUT = 30_000
@@ -29,9 +32,29 @@ interface TestContext {
 /**
  * Spawns the TUI in a real PTY with isolated data directory
  */
-function spawnTui(): TestContext {
+const seedAuth = async (tempDir: string): Promise<void> => {
+  const authFilePath = path.join(tempDir, "auth.json.enc")
+  const authKeyPath = path.join(tempDir, "auth.key")
+
+  const layer = AuthStore.Live.pipe(
+    Layer.provide(AuthStorage.LiveEncryptedFile(authFilePath, authKeyPath)),
+    Layer.provide(BunFileSystem.layer),
+    Layer.provide(BunContext.layer),
+  )
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const store = yield* AuthStore
+      yield* store.set("anthropic", new AuthApi({ type: "api", key: "sk-test-anthropic" }))
+      yield* store.set("openai", new AuthApi({ type: "api", key: "sk-test-openai" }))
+    }).pipe(Effect.provide(layer)),
+  )
+}
+
+async function spawnTui(): Promise<TestContext> {
   // Create isolated temp directory for test data
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
+  await seedAuth(tempDir)
 
   const tuiDir = path.resolve(import.meta.dir, "..")
   const mainPath = path.join(tuiDir, "src", "main.tsx")
@@ -53,8 +76,6 @@ function spawnTui(): TestContext {
     cwd: tuiDir,
     env: {
       ...Bun.env,
-      ANTHROPIC_API_KEY: "sk-test-anthropic",
-      OPENAI_API_KEY: "sk-test-openai",
       GENT_DATA_DIR: tempDir,
     },
   })
@@ -148,7 +169,7 @@ describe("E2E: TUI Basics", () => {
   test(
     "TUI starts and shows home view",
     async () => {
-      testContext = spawnTui()
+      testContext = await spawnTui()
       await waitForReady(testContext)
 
       // Should see the prompt symbol and some UI
@@ -163,7 +184,7 @@ describe("E2E: TUI Basics", () => {
   test(
     "shift+tab toggles agent label",
     async () => {
-      testContext = spawnTui()
+      testContext = await spawnTui()
       await waitForReady(testContext)
 
       await waitForOutput(
@@ -188,7 +209,7 @@ describe("E2E: TUI Basics", () => {
   test(
     "typing in input is reflected in output",
     async () => {
-      testContext = spawnTui()
+      testContext = await spawnTui()
       await waitForReady(testContext)
 
       const outputBefore = testContext.output.length
@@ -207,7 +228,7 @@ describe("E2E: TUI Basics", () => {
   test(
     "double ESC exits the application",
     async () => {
-      testContext = spawnTui()
+      testContext = await spawnTui()
       await waitForReady(testContext)
 
       const exitPromise = new Promise<{ exitCode: number; signal?: number | string }>((resolve) => {
@@ -238,7 +259,7 @@ describe("E2E: Home → Session Navigation", () => {
   test(
     "pressing Enter after typing triggers session creation",
     async () => {
-      testContext = spawnTui()
+      testContext = await spawnTui()
       await waitForReady(testContext)
 
       const outputBeforeTyping = testContext.output.length

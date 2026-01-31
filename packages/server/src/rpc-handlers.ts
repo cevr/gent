@@ -5,13 +5,16 @@ import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
 import {
   AuthGuard,
-  AuthStorage,
+  AuthApi,
+  AuthStore,
+  type ProviderId,
   Permission,
   PermissionHandler,
   PermissionRule,
   PlanHandler,
 } from "@gent/core"
 import { ActorProcess, ConfigService, ModelRegistry } from "@gent/runtime"
+import { ProviderAuth } from "@gent/providers"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -27,8 +30,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
     const modelRegistry = yield* ModelRegistry
-    const authStorage = yield* AuthStorage
+    const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
+    const providerAuth = yield* ProviderAuth
 
     return {
       createSession: (input) =>
@@ -138,10 +142,22 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       listAuthProviders: () => authGuard.listProviders(),
 
       setAuthKey: ({ provider, key }) =>
-        authStorage.set(provider, key).pipe(Effect.catchAll(() => Effect.void)),
+        authStore
+          .set(provider, new AuthApi({ type: "api", key }))
+          .pipe(Effect.catchAll(() => Effect.void)),
 
       deleteAuthKey: ({ provider }) =>
-        authStorage.delete(provider).pipe(Effect.catchAll(() => Effect.void)),
+        authStore.remove(provider).pipe(Effect.catchAll(() => Effect.void)),
+
+      listAuthMethods: () => providerAuth.listMethods(),
+
+      authorizeAuth: ({ sessionId, provider, method }) =>
+        providerAuth
+          .authorize(sessionId, provider as ProviderId, method)
+          .pipe(Effect.map((result) => result ?? null)),
+
+      callbackAuth: ({ sessionId, provider, method, authorizationId, code }) =>
+        providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
 
       actorSendUserMessage: (input) => actorProcess.sendUserMessage(input),
 

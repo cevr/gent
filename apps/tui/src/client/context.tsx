@@ -59,7 +59,8 @@ export interface Session {
 
 export type SessionState =
   | { status: "none" }
-  | { status: "loading"; creating: boolean }
+  | { status: "creating" }
+  | { status: "loading" }
   | { status: "active"; session: Session }
   | { status: "switching"; fromSession: Session; toSessionId: string }
 
@@ -218,7 +219,10 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const isActive = () => sessionStore.sessionState.status === "active"
-  const isLoading = () => sessionStore.sessionState.status === "loading"
+  const isLoading = () => {
+    const status = sessionStore.sessionState.status
+    return status === "loading" || status === "creating" || status === "switching"
+  }
 
   // External event listeners (for components like session.tsx)
   const eventListeners = new Set<EventListener>()
@@ -410,7 +414,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     createSession: (firstMessage) => {
-      setSessionStore({ sessionState: { status: "loading", creating: true } })
+      setSessionStore({ sessionState: { status: "creating" } })
       cast(
         client.createSession(firstMessage !== undefined ? { firstMessage } : undefined).pipe(
           Effect.tap((result) =>
@@ -459,7 +463,7 @@ export function ClientProvider(props: ClientProviderProps) {
           sessionState: { status: "switching", fromSession: current, toSessionId: sessionId },
         })
       } else {
-        setSessionStore({ sessionState: { status: "loading", creating: false } })
+        setSessionStore({ sessionState: { status: "loading" } })
       }
 
       // Switch to new session - reset agent state

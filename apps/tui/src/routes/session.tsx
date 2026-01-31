@@ -41,6 +41,8 @@ export interface SessionProps {
   initialPrompt?: string
 }
 
+type OverlayState = { _tag: "none" } | { _tag: "tree"; nodes: BranchTreeNode[] } | { _tag: "fork" }
+
 export function Session(props: SessionProps) {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
@@ -54,9 +56,7 @@ export function Session(props: SessionProps) {
   const [events, setEvents] = createSignal<SessionEvent[]>([])
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
-  const [treeOpen, setTreeOpen] = createSignal(false)
-  const [treeNodes, setTreeNodes] = createSignal<BranchTreeNode[]>([])
-  const [forkOpen, setForkOpen] = createSignal(false)
+  const [overlay, setOverlay] = createSignal<OverlayState>({ _tag: "none" })
   const [compacting, setCompacting] = createSignal(false)
   let initialPromptSent = false
   let eventSeq = 0
@@ -356,8 +356,7 @@ export function Session(props: SessionProps) {
       client.getBranchTree().pipe(
         Effect.tap((tree) =>
           Effect.sync(() => {
-            setTreeNodes([...tree])
-            setTreeOpen(true)
+            setOverlay({ _tag: "tree", nodes: [...tree] })
           }),
         ),
         Effect.catchAll((err) =>
@@ -374,7 +373,7 @@ export function Session(props: SessionProps) {
       client.setError("No messages to fork")
       return
     }
-    setForkOpen(true)
+    setOverlay({ _tag: "fork" })
   }
 
   // Track pending ESC for double-tap quit
@@ -385,7 +384,7 @@ export function Session(props: SessionProps) {
     // Let command system handle keybinds first
     if (command.handleKeybind(e)) return
 
-    if (treeOpen() || forkOpen()) return
+    if (overlay()._tag !== "none") return
 
     // ESC: cancel if streaming, double-tap to quit when idle
     if (e.name === "escape") {
@@ -522,12 +521,12 @@ export function Session(props: SessionProps) {
     )
 
   const handleBranchSelect = (branchId: string) => {
-    setTreeOpen(false)
+    setOverlay({ _tag: "none" })
     client.switchBranch(branchId)
   }
 
   const handleForkSelect = (messageId: string) => {
-    setForkOpen(false)
+    setOverlay({ _tag: "none" })
     cast(
       client.forkBranch(messageId).pipe(
         Effect.tap((branchId) =>
@@ -542,6 +541,11 @@ export function Session(props: SessionProps) {
         ),
       ),
     )
+  }
+
+  const overlayTree = () => {
+    const current = overlay()
+    return current._tag === "tree" ? current.nodes : []
   }
 
   return (
@@ -569,18 +573,18 @@ export function Session(props: SessionProps) {
       </Input>
 
       <BranchTree
-        open={treeOpen()}
-        tree={treeNodes()}
+        open={overlay()._tag === "tree"}
+        tree={overlayTree()}
         activeBranchId={client.session()?.branchId}
         onSelect={handleBranchSelect}
-        onClose={() => setTreeOpen(false)}
+        onClose={() => setOverlay({ _tag: "none" })}
       />
 
       <MessagePicker
-        open={forkOpen()}
+        open={overlay()._tag === "fork"}
         messages={messages()}
         onSelect={handleForkSelect}
-        onClose={() => setForkOpen(false)}
+        onClose={() => setOverlay({ _tag: "none" })}
       />
 
       {/* Separator line */}

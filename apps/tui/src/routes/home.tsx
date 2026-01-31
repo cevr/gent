@@ -20,6 +20,10 @@ export interface HomeProps {
   initialPrompt?: string
 }
 
+type HomeState =
+  | { _tag: "idle"; showWelcome: boolean; needsAuth: boolean }
+  | { _tag: "pending"; prompt: string; showWelcome: boolean; needsAuth: boolean }
+
 export function Home(props: HomeProps) {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
@@ -36,9 +40,19 @@ export function Home(props: HomeProps) {
   const ESC_DOUBLE_TAP_MS = 500
 
   // Track pending prompt while session is created
-  const [pendingPrompt, setPendingPrompt] = createSignal<string | null>(null)
-  const [showWelcome, setShowWelcome] = createSignal(false)
-  const [needsAuth, setNeedsAuth] = createSignal(false)
+  const [state, setState] = createSignal<HomeState>({
+    _tag: "idle",
+    showWelcome: false,
+    needsAuth: false,
+  })
+
+  const setFlags = (flags: { showWelcome?: boolean; needsAuth?: boolean }) => {
+    setState((prev) => ({
+      ...prev,
+      ...(flags.showWelcome !== undefined ? { showWelcome: flags.showWelcome } : {}),
+      ...(flags.needsAuth !== undefined ? { needsAuth: flags.needsAuth } : {}),
+    }))
+  }
 
   const exit = () => {
     renderer.destroy()
@@ -47,11 +61,12 @@ export function Home(props: HomeProps) {
 
   // Navigate when session becomes active after pending prompt
   createEffect(() => {
-    const prompt = pendingPrompt()
+    const current = state()
+    if (current._tag !== "pending") return
     const session = client.session()
-    if (prompt === null || session === null) return
-    setPendingPrompt(null)
-    router.navigateToSession(session.sessionId, session.branchId, prompt)
+    if (session === null) return
+    setState((prev) => (prev._tag === "pending" ? { ...prev, _tag: "idle" } : prev))
+    router.navigateToSession(session.sessionId, session.branchId, current.prompt)
   })
 
   useKeyboard((e) => {
@@ -83,14 +98,15 @@ export function Home(props: HomeProps) {
 
   const handleSubmit = (content: string, _mode?: "queue" | "interject") => {
     // Create session, navigate with pending prompt for session route to send
-    setPendingPrompt(content)
+    setState((prev) => ({ ...prev, _tag: "pending", prompt: content }))
     client.createSession()
   }
 
   // Handle initial prompt on mount
   onMount(() => {
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
-      setPendingPrompt(props.initialPrompt)
+      const prompt = props.initialPrompt
+      setState((prev) => ({ ...prev, _tag: "pending", prompt }))
       client.createSession()
     }
   })
@@ -101,8 +117,7 @@ export function Home(props: HomeProps) {
         const sessions = yield* client.listSessions()
         const firstRun = sessions.length === 0
         yield* Effect.sync(() => {
-          setShowWelcome(firstRun)
-          if (!firstRun) setNeedsAuth(false)
+          setFlags({ showWelcome: firstRun, needsAuth: firstRun ? undefined : false })
         })
         if (!firstRun) return
 
@@ -111,13 +126,12 @@ export function Home(props: HomeProps) {
           (provider) => provider.hasKey && provider.provider !== "bedrock",
         )
         yield* Effect.sync(() => {
-          setNeedsAuth(!hasKey)
+          setFlags({ needsAuth: !hasKey })
         })
       }).pipe(
         Effect.catchAll(() =>
           Effect.sync(() => {
-            setShowWelcome(false)
-            setNeedsAuth(false)
+            setFlags({ showWelcome: false, needsAuth: false })
           }),
         ),
       ),
@@ -129,12 +143,12 @@ export function Home(props: HomeProps) {
       {/* Logo */}
       <box flexGrow={1} justifyContent="center" alignItems="center" flexDirection="column">
         <text style={{ fg: theme.textMuted }}>{logo}</text>
-        <Show when={showWelcome()}>
+        <Show when={state().showWelcome}>
           <box paddingTop={1} flexDirection="column" alignItems="center">
             <text style={{ fg: theme.text }}>Welcome to gent</text>
             <text style={{ fg: theme.textMuted }}>Type a prompt to start.</text>
             <Show
-              when={needsAuth()}
+              when={state().needsAuth}
               fallback={
                 <text style={{ fg: theme.textMuted }}>
                   Use /auth for keys, /permissions for rules

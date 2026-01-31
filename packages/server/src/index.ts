@@ -9,12 +9,13 @@ import {
   Skills,
   AuthGuard,
   AuthStorage,
+  AuthStore,
   AgentRegistry,
   resolveAgentModelId,
 } from "@gent/core"
 import type { SubagentRunnerService, EventStore } from "@gent/core"
 import { Storage } from "@gent/storage"
-import { Provider, ProviderFactory } from "@gent/providers"
+import { Provider, ProviderAuth, ProviderFactory } from "@gent/providers"
 import {
   AgentLoop,
   SteerCommand,
@@ -109,6 +110,10 @@ export {
   AuthProviderInfo,
   SetAuthKeyPayload,
   DeleteAuthKeyPayload,
+  ListAuthMethodsSuccess,
+  AuthorizeAuthPayload,
+  AuthorizeAuthSuccess,
+  CallbackAuthPayload,
 } from "./rpcs"
 
 // RPC definitions
@@ -164,7 +169,9 @@ export const createDependencies = (
   | QuestionHandler
   | PlanHandler
   | AuthStorage
-  | AuthGuard,
+  | AuthStore
+  | AuthGuard
+  | ProviderAuth,
   PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
@@ -202,13 +209,17 @@ export const createDependencies = (
     ...(config.authFilePath !== undefined ? { filePath: config.authFilePath } : {}),
     ...(config.authKeyPath !== undefined ? { keyPath: config.authKeyPath } : {}),
   })
-  const AuthGuardLive = Layer.provide(AuthGuard.Live, AuthStorageLive)
+  const AuthStoreLive = Layer.provide(AuthStore.Live, AuthStorageLive)
+  const AuthGuardLive = Layer.provide(AuthGuard.Live, AuthStoreLive)
+  const ProviderAuthLive = Layer.provide(ProviderAuth.Live, AuthStoreLive)
 
   // Base services that don't depend on ConfigService
   const CoreServicesLive = Layer.mergeAll(
     StorageLive,
     AuthStorageLive,
+    AuthStoreLive,
     AuthGuardLive,
+    ProviderAuthLive,
     ToolRegistry.Live(AllTools),
     AgentRegistry.Live,
     EventStoreLayer,
@@ -219,7 +230,7 @@ export const createDependencies = (
   )
 
   // ProviderFactory uses built-in providers only
-  const ProviderFactoryLive = Layer.provide(ProviderFactory.Live, AuthStorageLive)
+  const ProviderFactoryLive = Layer.provide(ProviderFactory.Live, AuthStoreLive)
 
   // Provider depends on ProviderFactory
   const ProviderLive = Layer.provide(Provider.Live, ProviderFactoryLive)

@@ -24,6 +24,8 @@ export type {
   CreateSessionResult,
   SteerCommand,
   AuthProviderInfo,
+  AuthMethod,
+  AuthAuthorization,
 } from "./client.js"
 
 // Part types (re-exported from @gent/core)

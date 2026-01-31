@@ -14,7 +14,7 @@ import {
 } from "@gent/server"
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
 import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
-import { AuthGuard, PROVIDER_ENV_VARS, type ProviderId } from "@gent/core"
+import { AuthGuard, type ProviderId } from "@gent/core"
 import * as path from "node:path"
 import * as os from "node:os"
 
@@ -159,12 +159,7 @@ const resolveInitialState = (input: {
   })
 
 const formatMissingProviders = (providers: readonly ProviderId[]): string =>
-  providers
-    .map((provider) => {
-      const envVar = PROVIDER_ENV_VARS[provider]
-      return envVar !== undefined && envVar !== "" ? `${provider} (${envVar})` : provider
-    })
-    .join(", ")
+  providers.map((provider) => provider).join(", ")
 
 // Unified tracer logs to /tmp/gent-unified.log
 const ATOM_CACHE_MAX = 256

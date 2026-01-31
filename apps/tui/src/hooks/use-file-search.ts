@@ -135,6 +135,10 @@ export function fuzzyScore(query: string, target: string): number {
 }
 
 export function useFileSearch(options: UseFileSearchOptions): UseFileSearchReturn {
+  type FileSearchState =
+    | { _tag: "idle"; results: FileMatch[] }
+    | { _tag: "searching"; results: FileMatch[] }
+
   const { cwd, maxResults = 50, includeHidden = false } = options
 
   let gitignorePatterns: Set<string> | null = null
@@ -190,8 +194,10 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
   const queryAtom = state("")
 
   const fileSearchAtom = atom((registry) => {
-    const [results, setResults] = createSignal<FileMatch[]>([])
-    const [isSearching, setIsSearching] = createSignal(false)
+    const [state, setState] = createSignal<FileSearchState>({
+      _tag: "idle",
+      results: [],
+    })
     const query = () => registry.read(queryAtom)()
     let cancel: (() => void) | undefined
 
@@ -205,12 +211,11 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
       const value = query()
       cleanup()
       if (value.length === 0) {
-        setResults([])
-        setIsSearching(false)
+        setState({ _tag: "idle", results: [] })
         return
       }
 
-      setIsSearching(true)
+      setState((prev) => ({ _tag: "searching", results: prev.results }))
       const runtime = registry.runtime
       const effect = Effect.sleep(50).pipe(Effect.flatMap(() => searchEffect(value)))
       const fiber = Runtime.runFork(runtime)(effect)
@@ -219,19 +224,18 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
       }
 
       fiber.addObserver((exit) => {
-        setIsSearching(false)
         if (Exit.isSuccess(exit)) {
-          setResults(exit.value)
+          setState({ _tag: "idle", results: exit.value })
           return
         }
-        setResults([])
+        setState({ _tag: "idle", results: [] })
       })
 
       onCleanup(cleanup)
     })
 
     return {
-      get: () => ({ results: results(), isSearching: isSearching() }),
+      get: () => state(),
       dispose: cleanup,
     }
   })
@@ -240,7 +244,7 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
   const setQuery = useAtomSet(queryAtom)
 
   const results = () => stateValue().results
-  const isSearching = () => stateValue().isSearching
+  const isSearching = () => stateValue()._tag === "searching"
   const search = (filter: string) => setQuery(filter)
 
   return { results, isSearching, search }

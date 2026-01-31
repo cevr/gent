@@ -17,18 +17,26 @@ export interface PermissionsProps {
   client: GentClient
 }
 
+type PermissionsState =
+  | { _tag: "loading"; error?: string }
+  | { _tag: "ready"; rules: PermissionRule[]; selectedIndex: number; error?: string }
+
 export function Permissions(props: PermissionsProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime(props.client.runtime)
 
-  const [rules, setRules] = createSignal<PermissionRule[]>([])
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
-  const [error, setError] = createSignal<string | null>(null)
+  const [state, setState] = createSignal<PermissionsState>({ _tag: "loading" })
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
-  useScrollSync(() => `perm-rule-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(
+    () => {
+      const current = state()
+      return `perm-rule-${current._tag === "ready" ? current.selectedIndex : 0}`
+    },
+    { getRef: () => scrollRef },
+  )
 
   // Load rules on mount
   createEffect(() => {
@@ -36,41 +44,50 @@ export function Permissions(props: PermissionsProps) {
       props.client.getPermissionRules().pipe(
         Effect.tap((loaded) =>
           Effect.sync(() => {
-            setRules([...loaded])
+            setState((current) => {
+              const selectedIndex =
+                current._tag === "ready"
+                  ? Math.min(current.selectedIndex, Math.max(0, loaded.length - 1))
+                  : 0
+              return {
+                _tag: "ready",
+                rules: [...loaded],
+                selectedIndex,
+                error: undefined,
+              }
+            })
           }),
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
-            setError(formatError(err))
+            setState((current) => ({ ...current, error: formatError(err) }))
           }),
         ),
       ),
     )
   })
 
-  // Reset selection when rules change
-  createEffect(() => {
-    const list = rules()
-    if (selectedIndex() >= list.length) {
-      setSelectedIndex(Math.max(0, list.length - 1))
-    }
-  })
-
   const deleteSelected = () => {
-    const list = rules()
-    const rule = list[selectedIndex()]
+    const current = state()
+    if (current._tag !== "ready") return
+    const rule = current.rules[current.selectedIndex]
     if (rule === undefined) return
 
     cast(
       props.client.deletePermissionRule(rule.tool, rule.pattern).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
-            setRules((prev) => prev.filter((_, i) => i !== selectedIndex()))
+            setState((prev) => {
+              if (prev._tag !== "ready") return prev
+              const nextRules = prev.rules.filter((_, i) => i !== prev.selectedIndex)
+              const nextIndex = Math.min(prev.selectedIndex, Math.max(0, nextRules.length - 1))
+              return { ...prev, rules: nextRules, selectedIndex: nextIndex }
+            })
           }),
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
-            setError(formatError(err))
+            setState((currentState) => ({ ...currentState, error: formatError(err) }))
           }),
         ),
       ),
@@ -83,15 +100,24 @@ export function Permissions(props: PermissionsProps) {
       return
     }
 
-    if (rules().length === 0) return
+    const current = state()
+    if (current._tag !== "ready" || current.rules.length === 0) return
 
     if (e.name === "up") {
-      setSelectedIndex((i) => (i > 0 ? i - 1 : rules().length - 1))
+      setState((prev) => {
+        if (prev._tag !== "ready") return prev
+        const next = prev.selectedIndex > 0 ? prev.selectedIndex - 1 : prev.rules.length - 1
+        return { ...prev, selectedIndex: next }
+      })
       return
     }
 
     if (e.name === "down") {
-      setSelectedIndex((i) => (i < rules().length - 1 ? i + 1 : 0))
+      setState((prev) => {
+        if (prev._tag !== "ready") return prev
+        const next = prev.selectedIndex < prev.rules.length - 1 ? prev.selectedIndex + 1 : 0
+        return { ...prev, selectedIndex: next }
+      })
       return
     }
 
@@ -105,6 +131,14 @@ export function Permissions(props: PermissionsProps) {
   const panelHeight = () => Math.min(16, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
+  const readyState = () => {
+    const current = state()
+    return current._tag === "ready" ? current : null
+  }
+  const hasRules = () => {
+    const current = readyState()
+    return current !== null && current.rules.length > 0
+  }
 
   const formatRule = (rule: PermissionRule): string => {
     const action = rule.action === "allow" ? "Allow" : rule.action === "deny" ? "Deny" : "Ask"
@@ -145,24 +179,29 @@ export function Permissions(props: PermissionsProps) {
           <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
         </box>
 
-        <Show when={error() !== null}>
+        <Show when={state().error !== undefined}>
           <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-            <text style={{ fg: theme.error }}>{error()}</text>
+            <text style={{ fg: theme.error }}>{state().error}</text>
           </box>
         </Show>
 
         <Show
-          when={rules().length > 0}
+          when={hasRules()}
           fallback={
             <box paddingLeft={1} paddingRight={1} flexGrow={1}>
-              <text style={{ fg: theme.textMuted }}>No permission rules configured</text>
+              <text style={{ fg: theme.textMuted }}>
+                {state()._tag === "loading"
+                  ? "Loading permission rules..."
+                  : "No permission rules configured"}
+              </text>
             </box>
           }
         >
           <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
-            <For each={rules()}>
+            <For each={readyState()?.rules ?? []}>
               {(rule, index) => {
-                const isSelected = () => selectedIndex() === index()
+                const current = readyState()
+                const isSelected = () => current !== null && current.selectedIndex === index()
                 return (
                   <box
                     id={`perm-rule-${index()}`}

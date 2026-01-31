@@ -9,6 +9,8 @@ export {
   type BranchTreeNode,
   type SteerCommand,
   type AuthProviderInfo,
+  type AuthMethod,
+  type AuthAuthorization,
   type MessagePart,
   type TextPart,
   type ToolCallPart,

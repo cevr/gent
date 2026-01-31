@@ -10,12 +10,16 @@ import { Effect, type Stream, type Runtime } from "effect"
 import { GentCore, type GentCoreError } from "@gent/server"
 import { AskUserHandler } from "@gent/tools"
 import {
+  AuthApi,
   Permission,
   PermissionHandler,
   PermissionRule,
   PlanHandler,
-  AuthStorage,
+  AuthStore,
   AuthGuard,
+  type AuthAuthorization,
+  type AuthMethod,
+  type ProviderId,
   type AgentName,
   type AuthProviderInfo,
   type EventEnvelope,
@@ -24,6 +28,7 @@ import {
   type PlanDecision,
 } from "@gent/core"
 import { ConfigService, ModelRegistry, type SteerCommand } from "@gent/runtime"
+import { ProviderAuth } from "@gent/providers"
 
 export interface MessageInfoReadonly {
   readonly id: string
@@ -185,6 +190,22 @@ export interface DirectClient {
 
   deleteAuthKey: (provider: string) => Effect.Effect<void, GentCoreError>
 
+  listAuthMethods: () => Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>, GentCoreError>
+
+  authorizeAuth: (
+    sessionId: string,
+    provider: string,
+    method: number,
+  ) => Effect.Effect<AuthAuthorization | null, GentCoreError>
+
+  callbackAuth: (
+    sessionId: string,
+    provider: string,
+    method: number,
+    authorizationId: string,
+    code?: string,
+  ) => Effect.Effect<void, GentCoreError>
+
   runtime: Runtime.Runtime<unknown>
 }
 
@@ -199,8 +220,9 @@ export type DirectClientContext =
   | Permission
   | ConfigService
   | ModelRegistry
-  | AuthStorage
+  | AuthStore
   | AuthGuard
+  | ProviderAuth
 
 /**
  * Creates a direct in-process client.
@@ -215,8 +237,9 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
     const permission = yield* Permission
     const configService = yield* ConfigService
     const modelRegistry = yield* ModelRegistry
-    const authStorage = yield* AuthStorage
+    const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
+    const providerAuth = yield* ProviderAuth
     const runtime = yield* Effect.runtime<never>()
 
     return {
@@ -317,10 +340,22 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       listAuthProviders: () => authGuard.listProviders(),
 
       setAuthKey: (provider, key) =>
-        authStorage.set(provider, key).pipe(Effect.catchAll(() => Effect.void)),
+        authStore
+          .set(provider, new AuthApi({ type: "api", key }))
+          .pipe(Effect.catchAll(() => Effect.void)),
 
       deleteAuthKey: (provider) =>
-        authStorage.delete(provider).pipe(Effect.catchAll(() => Effect.void)),
+        authStore.remove(provider).pipe(Effect.catchAll(() => Effect.void)),
+
+      listAuthMethods: () => providerAuth.listMethods(),
+
+      authorizeAuth: (sessionId, provider, method) =>
+        providerAuth
+          .authorize(sessionId, provider as ProviderId, method)
+          .pipe(Effect.map((result) => result ?? null)),
+
+      callbackAuth: (sessionId, provider, method, authorizationId, code) =>
+        providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
 
       runtime: runtime as Runtime.Runtime<unknown>,
     }

@@ -19,7 +19,7 @@ import {
   type MessagePart,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
-import type { ProviderError } from "@gent/providers"
+import type { ProviderError, ProviderAuthError } from "@gent/providers"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
 import type { CheckpointError } from "@gent/runtime"
@@ -134,6 +134,7 @@ export type GentCoreError =
   | AgentLoopError
   | PlatformError
   | ProviderError
+  | ProviderAuthError
   | EventStoreError
   | CheckpointError
 

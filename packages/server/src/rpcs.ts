@@ -2,6 +2,8 @@ import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "@eff
 import { Schema } from "effect"
 import {
   AgentName,
+  AuthAuthorization,
+  AuthMethod,
   AuthProviderInfo,
   EventEnvelope,
   MessagePart,
@@ -246,6 +248,27 @@ export const DeleteAuthKeyPayload = Schema.Struct({
   provider: Schema.String,
 })
 
+export const ListAuthMethodsSuccess = Schema.Record({
+  key: Schema.String,
+  value: Schema.Array(AuthMethod),
+})
+
+export const AuthorizeAuthPayload = Schema.Struct({
+  sessionId: Schema.String,
+  provider: Schema.String,
+  method: Schema.Number,
+})
+
+export const AuthorizeAuthSuccess = Schema.NullOr(AuthAuthorization)
+
+export const CallbackAuthPayload = Schema.Struct({
+  sessionId: Schema.String,
+  provider: Schema.String,
+  method: Schema.Number,
+  authorizationId: Schema.String,
+  code: Schema.optional(Schema.String),
+})
+
 export { AuthProviderInfo }
 
 export { EventEnvelope }
@@ -382,6 +405,19 @@ export class GentRpcs extends RpcGroup.make(
   }),
   Rpc.make("deleteAuthKey", {
     payload: DeleteAuthKeyPayload.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("listAuthMethods", {
+    success: ListAuthMethodsSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("authorizeAuth", {
+    payload: AuthorizeAuthPayload.fields,
+    success: AuthorizeAuthSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("callbackAuth", {
+    payload: CallbackAuthPayload.fields,
     error: GentRpcError,
   }),
 
