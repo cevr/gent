@@ -15,4 +15,4 @@ export { ProviderFactory, ProviderInfo } from "./provider-factory.js"
 export type { ProviderAuthService, ProviderAuthProvider } from "./provider-auth"
 export { ProviderAuth, ProviderAuthError } from "./provider-auth.js"
 
-export { rewriteAnthropicSseLine } from "./oauth/anthropic-oauth.js"
+export { OPENAI_OAUTH_ALLOWED_MODELS } from "./oauth/openai-oauth.js"

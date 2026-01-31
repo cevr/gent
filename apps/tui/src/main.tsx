@@ -14,7 +14,7 @@ import {
 } from "@gent/server"
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
 import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
-import { AuthGuard, type ProviderId } from "@gent/core"
+import { AuthGuard, LinkOpener, OsService, type ProviderId } from "@gent/core"
 import * as path from "node:path"
 import * as os from "node:os"
 
@@ -170,6 +170,8 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 // Unified tracer layer - logs both Effect spans and TUI events
 const TracerLayer = UnifiedTracerLive
 
+const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
+
 const CoreLayer = Layer.unwrapEffect(
   Effect.gen(function* () {
     const cwd = process.cwd()
@@ -197,7 +199,7 @@ const CoreLayer = Layer.unwrapEffect(
       ...(authKeyPath !== undefined ? { authKeyPath } : {}),
     }).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
     const coreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
-    return Layer.mergeAll(coreLive, serverDeps, PlatformLayer)
+    return Layer.mergeAll(coreLive, serverDeps, PlatformLayer, OsService.Live, LinkLayer)
   }),
 )
 

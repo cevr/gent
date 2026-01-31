@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { AuthStore, AuthType, type AuthInfo } from "./auth-store"
+import { AuthStore, AuthType } from "./auth-store"
 import { AgentModels } from "./agent"
 import { ProviderId, SUPPORTED_PROVIDERS, parseModelProvider } from "./model"
 
@@ -41,14 +41,12 @@ export class AuthGuard extends Context.Tag("@gent/core/src/auth-guard/AuthGuard"
       const requiredSet = new Set(REQUIRED_PROVIDERS)
 
       const listProviders = Effect.fn("AuthGuard.listProviders")(function* () {
-        const storedInfo = yield* authStore
-          .listInfo()
-          .pipe(Effect.catchAll(() => Effect.succeed({} as Record<string, AuthInfo>)))
-        const storedSet = new Set(Object.keys(storedInfo))
-
         const providers: AuthProviderInfo[] = []
         for (const provider of SUPPORTED_PROVIDERS) {
-          const hasStored = storedSet.has(provider.id)
+          const storedInfo = yield* authStore
+            .get(provider.id)
+            .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+          const hasStored = storedInfo !== undefined
           const required = requiredSet.has(provider.id)
 
           if (hasStored) {
@@ -56,7 +54,7 @@ export class AuthGuard extends Context.Tag("@gent/core/src/auth-guard/AuthGuard"
               provider: provider.id,
               hasKey: true,
               source: "stored" as const,
-              authType: storedInfo[provider.id]?.type as AuthType | undefined,
+              authType: storedInfo?.type as AuthType | undefined,
               required,
             })
             continue

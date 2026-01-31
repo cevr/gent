@@ -13,6 +13,8 @@ import { useRouter } from "../router/index"
 import { StatusBar } from "../components/status-bar"
 import { Input } from "../components/input"
 import { useRuntime } from "../hooks/use-runtime"
+import { executeSlashCommand } from "../commands/slash-commands"
+import { ClientError, type UiError } from "../utils/format-error"
 
 const LOGOS = getLogos()
 
@@ -96,6 +98,29 @@ export function Home(props: HomeProps) {
     }
   })
 
+  const handleSlashCommand = (cmd: string, args: string): Effect.Effect<void, UiError> =>
+    executeSlashCommand(cmd, args, {
+      openPalette: () => command.openPalette(),
+      clearMessages: () => {},
+      navigateToSessions: () => command.openPalette(),
+      compactHistory: Effect.fail(ClientError("No active session")),
+      createBranch: Effect.fail(ClientError("No active session")),
+      openTree: () => {},
+      openFork: () => {},
+      toggleBypass: Effect.fail(ClientError("No active session")),
+      openPermissions: () => {},
+      openAuth: () => router.navigateToAuth(),
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          if (result.error !== undefined) {
+            client.setError(result.error)
+          }
+        }),
+      ),
+      Effect.asVoid,
+    )
+
   const handleSubmit = (content: string, _mode?: "queue" | "interject") => {
     // Create session, navigate with pending prompt for session route to send
     setState((prev) => ({ ...prev, _tag: "pending", prompt: content }))
@@ -162,7 +187,7 @@ export function Home(props: HomeProps) {
       </box>
 
       {/* Input with autocomplete above separator */}
-      <Input onSubmit={handleSubmit}>
+      <Input onSubmit={handleSubmit} onSlashCommand={handleSlashCommand}>
         <Input.Autocomplete />
         {/* Separator line */}
         <box flexShrink={0}>

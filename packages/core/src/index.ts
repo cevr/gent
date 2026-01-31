@@ -135,6 +135,8 @@ export {
   AuthAuthorizationMethod,
 } from "./auth-method"
 export { AuthGuard, AuthProviderInfo, AuthSource } from "./auth-guard"
+export { LinkOpener, LinkOpenerError, type LinkOpenerService } from "./link-opener"
+export { OsService, type OsPlatform } from "./os-service"
 
 // Defaults
 export { DEFAULTS, type Defaults } from "./defaults"

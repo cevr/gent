@@ -2,9 +2,10 @@
  * Effect runtime hook for Solid
  * Provides call (tracked) and cast (fire-and-forget) for Effect execution
  */
-import { Effect, Runtime, Exit, Fiber } from "effect"
+import { Effect, Runtime, Exit, Fiber, Cause } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "@gent/atom-solid"
+import { tuiError } from "../utils/unified-tracer"
 
 export interface UseRuntimeReturn<R> {
   /** Run Effect, track result in signal. Returns [result accessor, cancel fn] */
@@ -44,7 +45,12 @@ export function useRuntime<R>(runtime: Runtime.Runtime<R>): UseRuntimeReturn<R> 
   }
 
   const cast = <A, E>(effect: Effect.Effect<A, E, R>): void => {
-    Runtime.runFork(runtime)(effect)
+    const fiber = Runtime.runFork(runtime)(effect)
+    fiber.addObserver((exit) => {
+      if (Exit.isFailure(exit)) {
+        tuiError("cast", Cause.pretty(exit.cause))
+      }
+    })
   }
 
   return { call, cast }

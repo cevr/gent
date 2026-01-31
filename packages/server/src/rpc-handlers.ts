@@ -7,6 +7,7 @@ import {
   AuthGuard,
   AuthApi,
   AuthStore,
+  Model,
   type ProviderId,
   Permission,
   PermissionHandler,
@@ -14,7 +15,7 @@ import {
   PlanHandler,
 } from "@gent/core"
 import { ActorProcess, ConfigService, ModelRegistry } from "@gent/runtime"
-import { ProviderAuth } from "@gent/providers"
+import { OPENAI_OAUTH_ALLOWED_MODELS, ProviderAuth } from "@gent/providers"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -137,7 +138,33 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           yield* permission.removeRule(tool, pattern)
         }),
 
-      listModels: () => modelRegistry.list(),
+      listModels: () =>
+        Effect.gen(function* () {
+          const models = yield* modelRegistry.list()
+          const authInfo = yield* authStore
+            .get("openai")
+            .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+          if (authInfo?.type !== "oauth") return models
+
+          return models
+            .filter((model) => {
+              if (model.provider !== "openai") return true
+              const [, modelName] = String(model.id).split("/", 2)
+              return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
+            })
+            .map((model) => {
+              if (model.provider !== "openai") return model
+              return new Model({
+                id: model.id,
+                name: model.name,
+                provider: model.provider,
+                ...(model.contextLength !== undefined
+                  ? { contextLength: model.contextLength }
+                  : {}),
+                pricing: { input: 0, output: 0 },
+              })
+            })
+        }),
 
       listAuthProviders: () => authGuard.listProviders(),
 

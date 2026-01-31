@@ -76,7 +76,10 @@ describe("AuthStore", () => {
 
 describe("AuthGuard", () => {
   it("requiredProviders include cowork + deepwork providers", async () => {
-    const layer = Layer.mergeAll(AuthStorage.Test(), AuthStore.Live, AuthGuard.Live)
+    const layer = AuthGuard.Live.pipe(
+      Layer.provide(AuthStore.Live),
+      Layer.provide(AuthStorage.Test()),
+    )
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const guard = yield* AuthGuard
@@ -88,7 +91,10 @@ describe("AuthGuard", () => {
   })
 
   it("missingRequiredProviders returns missing when no keys", async () => {
-    const layer = Layer.mergeAll(AuthStorage.Test(), AuthStore.Live, AuthGuard.Live)
+    const layer = AuthGuard.Live.pipe(
+      Layer.provide(AuthStore.Live),
+      Layer.provide(AuthStorage.Test()),
+    )
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const guard = yield* AuthGuard
@@ -100,10 +106,9 @@ describe("AuthGuard", () => {
   })
 
   it("missingRequiredProviders clears when keys are present", async () => {
-    const layer = Layer.mergeAll(
-      AuthStorage.Test({ openai: "sk-openai", anthropic: "sk-anthropic" }),
-      AuthStore.Live,
-      AuthGuard.Live,
+    const layer = AuthGuard.Live.pipe(
+      Layer.provide(AuthStore.Live),
+      Layer.provide(AuthStorage.Test({ openai: "sk-openai", anthropic: "sk-anthropic" })),
     )
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -112,5 +117,34 @@ describe("AuthGuard", () => {
       }).pipe(Effect.provide(layer)),
     )
     expect(result).toEqual([])
+  })
+
+  it("listProviders uses get even when listInfo fails", async () => {
+    const layer = AuthGuard.Live.pipe(
+      Layer.provide(
+        Layer.succeed(AuthStore, {
+          get: (provider: string) =>
+            provider === "anthropic"
+              ? Effect.succeed(new AuthApi({ type: "api", key: "sk-test" }))
+              : Effect.succeed(undefined),
+          set: () => Effect.void,
+          remove: () => Effect.void,
+          list: () => Effect.fail(new Error("list failed")),
+          listInfo: () => Effect.fail(new Error("listInfo failed")),
+        }),
+      ),
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const guard = yield* AuthGuard
+        return yield* guard.listProviders()
+      }).pipe(Effect.provide(layer)),
+    )
+
+    const anthropic = result.find((p) => p.provider === "anthropic")
+    const openai = result.find((p) => p.provider === "openai")
+    expect(anthropic?.hasKey).toBe(true)
+    expect(openai?.hasKey).toBe(false)
   })
 })

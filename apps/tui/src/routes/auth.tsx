@@ -4,14 +4,16 @@
 
 import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
+import { LinkOpener } from "@gent/core"
 import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { AuthAuthorization, AuthMethod, AuthProviderInfo, GentClient } from "../client"
-import { formatError } from "../utils/format-error"
+import { ClientError, formatError } from "../utils/format-error"
+import { tuiEvent, tuiError } from "../utils/unified-tracer"
 
 export interface AuthProps {
   client: GentClient
@@ -30,6 +32,7 @@ type AuthState =
       method: AuthMethod
       authorization: AuthAuthorization
       code: string
+      phase: "idle" | "waiting"
       error?: string
     }
 
@@ -56,10 +59,12 @@ export function Auth(props: AuthProps) {
   })
 
   const loadAuth = () => {
+    tuiEvent("auth:load-start")
     cast(
       Effect.all([props.client.listAuthProviders(), props.client.listAuthMethods()]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
+            tuiEvent("auth:load-complete", { providers: loadedProviders.length })
             setProviders([...loadedProviders])
             setMethodsByProvider(loadedMethods)
             setState((current) =>
@@ -69,12 +74,30 @@ export function Auth(props: AuthProps) {
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
+            tuiError("auth:load", err)
             setState((current) => ({ ...current, error: formatError(err) }))
           }),
         ),
       ),
     )
   }
+
+  const openAuthorization = (authorization: AuthAuthorization) =>
+    Effect.gen(function* () {
+      tuiEvent("auth:open-authorization", { url: authorization.url })
+      const opener = yield* LinkOpener
+      yield* opener.open(authorization.url)
+    }).pipe(
+      Effect.catchAll((err) =>
+        Effect.sync(() => {
+          setState((currentState) =>
+            currentState._tag === "oauth"
+              ? { ...currentState, error: formatError(ClientError(err.message)) }
+              : currentState,
+          )
+        }),
+      ),
+    )
 
   // Reset selection when providers change
   createEffect(() => {
@@ -157,6 +180,7 @@ export function Auth(props: AuthProps) {
     const provider = providers()[current.providerIndex]
     const key = current.value.trim()
     if (provider === undefined || key.length === 0) return
+    tuiEvent("auth:submit-key", { provider: provider.provider })
 
     cast(
       props.client.setAuthKey(provider.provider, key).pipe(
@@ -182,6 +206,40 @@ export function Auth(props: AuthProps) {
     const methods = provider !== undefined ? (methodsByProvider()[provider.provider] ?? []) : []
     const method = methods[current.methodIndex]
     if (provider === undefined || method === undefined) return
+    tuiEvent("auth:start-method", { provider: provider.provider, method: method.type })
+
+    const startAuto = (
+      authorization: AuthAuthorization,
+      providerIndex: number,
+      methodIndex: number,
+    ) => {
+      cast(
+        props.client
+          .callbackAuth(
+            authSessionId,
+            provider.provider,
+            methodIndex,
+            authorization.authorizationId,
+          )
+          .pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                setState({ _tag: "list", providerIndex })
+                loadAuth()
+              }),
+            ),
+            Effect.catchAll((err) =>
+              Effect.sync(() => {
+                setState((currentState) =>
+                  currentState._tag === "oauth"
+                    ? { ...currentState, phase: "idle", error: formatError(err) }
+                    : currentState,
+                )
+              }),
+            ),
+          ),
+      )
+    }
 
     if (method.type === "api") {
       setState({ _tag: "key", providerIndex: current.providerIndex, value: "" })
@@ -207,8 +265,19 @@ export function Auth(props: AuthProps) {
               method,
               authorization,
               code: "",
+              phase: authorization.method === "auto" ? "waiting" : "idle",
             })
           }),
+        ),
+        Effect.tap((authorization) =>
+          authorization === null ? Effect.void : openAuthorization(authorization),
+        ),
+        Effect.tap((authorization) =>
+          authorization !== null && authorization.method === "auto"
+            ? Effect.sync(() =>
+                startAuto(authorization, current.providerIndex, current.methodIndex),
+              )
+            : Effect.void,
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
@@ -222,11 +291,17 @@ export function Auth(props: AuthProps) {
   const submitOauth = () => {
     const current = state()
     if (current._tag !== "oauth") return
+    if (current.phase === "waiting") return
     const provider = providers()[current.providerIndex]
     if (provider === undefined) return
+    tuiEvent("auth:submit-oauth", {
+      provider: provider.provider,
+      method: current.authorization.method,
+    })
     const needsCode = current.authorization.method === "code"
-    const code = needsCode ? current.code.trim() : undefined
-    if (needsCode && (code === undefined || code.length === 0)) return
+    const trimmed = current.code.trim()
+    const code = trimmed.length > 0 ? trimmed : undefined
+    if (needsCode && code === undefined) return
 
     cast(
       props.client
@@ -283,10 +358,6 @@ export function Auth(props: AuthProps) {
     if (current._tag === "oauth") {
       if (e.name === "escape") {
         setState({ _tag: "list", providerIndex: current.providerIndex })
-        return
-      }
-      if (current.authorization.method === "auto") {
-        if (e.name === "return") submitOauth()
         return
       }
       if (e.name === "return") {
@@ -360,6 +431,21 @@ export function Auth(props: AuthProps) {
     if (e.name === "d") {
       deleteSelected()
       return
+    }
+  })
+
+  usePaste((event) => {
+    const current = state()
+    const cleaned = event.text.replace(/\r?\n/g, "").trim()
+    if (cleaned.length === 0) return
+
+    if (current._tag === "key") {
+      setState({ ...current, value: current.value + cleaned })
+      return
+    }
+
+    if (current._tag === "oauth") {
+      setState({ ...current, code: current.code + cleaned })
     }
   })
 
@@ -438,15 +524,23 @@ export function Auth(props: AuthProps) {
                 {current().authorization.instructions ?? "Open the URL below:"}
               </text>
               <text style={{ fg: theme.text }}>{current().authorization.url}</text>
-              <Show when={current().authorization.method === "code"}>
-                <text style={{ fg: theme.text }}>Paste code:</text>
+              <box flexDirection="column">
                 <text style={{ fg: theme.text }}>
-                  {current().code.length > 0 ? current().code : "(type code)"}
+                  {current().authorization.method === "code"
+                    ? "Paste code:"
+                    : "Paste code (optional):"}
                 </text>
-              </Show>
+                <text style={{ fg: theme.text }}>
+                  {current().code.length > 0
+                    ? current().code
+                    : current().phase === "waiting"
+                      ? "(waiting for browser...)"
+                      : "(type code)"}
+                </text>
+              </box>
               <Show when={current().authorization.method === "auto"}>
                 <text style={{ fg: theme.textMuted }}>
-                  Press Enter after completing in browser.
+                  Waiting for browser callback. Paste code if it fails.
                 </text>
               </Show>
             </box>

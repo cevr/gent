@@ -30,6 +30,7 @@ import { executeShell } from "../utils/shell"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeSlashCommand, parseSlashCommand } from "../commands/slash-commands"
 import { ClientError, formatError, type UiError } from "../utils/format-error"
+import { tuiEvent } from "../utils/unified-tracer"
 import type { InputState, InputEvent, InputEffect } from "./input-state"
 
 interface InputContextValue {
@@ -355,6 +356,7 @@ export function Input(props: InputProps) {
     const parsed = parseSlashCommand(text)
     if (parsed !== null) {
       const [cmd, args] = parsed
+      tuiEvent("slash-command", { cmd, hasCustomHandler: props.onSlashCommand !== undefined })
       clearInput()
 
       const commandEffect =

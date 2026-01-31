@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AuthMethod, AuthStore, AuthStorage, type AuthApi } from "@gent/core"
-import { ProviderAuth, type ProviderAuthProvider, rewriteAnthropicSseLine } from "@gent/providers"
+import { ProviderAuth, type ProviderAuthProvider } from "@gent/providers"
 
 const oauthProvider: ProviderAuthProvider = {
   methods: [new AuthMethod({ type: "oauth", label: "OAuth" })],
@@ -66,19 +66,5 @@ describe("ProviderAuth", () => {
     expect(result.stored?.type).toBe("api")
     expect((result.stored as AuthApi | undefined)?.key).toBe("sk-1")
     expect(result.mismatch._tag).toBe("Left")
-  })
-})
-
-describe("Anthropic OAuth SSE rewrite", () => {
-  it("strips mcp_ prefix from tool_use names", () => {
-    const line =
-      'data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"mcp_read"}}'
-    const rewritten = rewriteAnthropicSseLine(line)
-    expect(rewritten).toContain('"name":"read"')
-  })
-
-  it("passes through non-data lines", () => {
-    const line = "event: message_start"
-    expect(rewriteAnthropicSseLine(line)).toBe(line)
   })
 })

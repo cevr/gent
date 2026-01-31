@@ -11,7 +11,6 @@ import {
   type ProviderId,
 } from "@gent/core"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
-import { authorizeAnthropicCreateApiKey, authorizeAnthropicMax } from "./oauth/anthropic-oauth"
 
 export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
   "ProviderAuthError",
@@ -47,62 +46,13 @@ export interface ProviderAuthProvider {
 const buildProviders = (): Record<ProviderId, ProviderAuthProvider> => {
   const methodsDefault = [new AuthMethod({ type: "api", label: "Manually enter API key" })]
 
-  const anthropicMethods = [
-    new AuthMethod({ type: "oauth", label: "Claude Pro/Max" }),
-    new AuthMethod({ type: "oauth", label: "Create API Key" }),
-    new AuthMethod({ type: "api", label: "Manually enter API key" }),
-  ]
-
   const openaiMethods = [
     new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
     new AuthMethod({ type: "api", label: "Manually enter API key" }),
   ]
 
   return {
-    anthropic: {
-      methods: anthropicMethods,
-      authorize: (index) =>
-        Effect.tryPromise({
-          try: async () => {
-            if (index === 0) {
-              const { authorization, callback } = await authorizeAnthropicMax()
-              return {
-                authorization,
-                callback: (code?: string) =>
-                  Effect.tryPromise({
-                    try: async () => callback(code),
-                    catch: (e) =>
-                      new ProviderAuthError({
-                        message: "Anthropic OAuth callback failed",
-                        cause: e,
-                      }),
-                  }),
-              }
-            }
-            if (index === 1) {
-              const { authorization, callback } = await authorizeAnthropicCreateApiKey()
-              return {
-                authorization,
-                callback: (code?: string) =>
-                  Effect.tryPromise({
-                    try: async () => callback(code),
-                    catch: (e) =>
-                      new ProviderAuthError({
-                        message: "Anthropic OAuth callback failed",
-                        cause: e,
-                      }),
-                  }),
-              }
-            }
-            return undefined
-          },
-          catch: (e) =>
-            new ProviderAuthError({
-              message: "Anthropic OAuth authorize failed",
-              cause: e,
-            }),
-        }),
-    },
+    anthropic: { methods: methodsDefault, authorize: () => Effect.succeed(undefined) },
     openai: {
       methods: openaiMethods,
       authorize: (index) =>
@@ -112,9 +62,9 @@ const buildProviders = (): Record<ProviderId, ProviderAuthProvider> => {
             const { authorization, callback } = await authorizeOpenAI()
             return {
               authorization,
-              callback: () =>
+              callback: (code?: string) =>
                 Effect.tryPromise({
-                  try: async () => callback(),
+                  try: async () => callback(code),
                   catch: (e) =>
                     new ProviderAuthError({
                       message: "OpenAI OAuth callback failed",

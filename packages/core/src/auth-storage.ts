@@ -52,7 +52,29 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
     Layer.effect(
       AuthStorage,
       Effect.sync(() => {
-        const exec = (cmd: string) =>
+        const execSecurity = (args: string[]) =>
+          Effect.tryPromise({
+            try: async () => {
+              const proc = Bun.spawn(["security", ...args], {
+                stdout: "pipe",
+                stderr: "pipe",
+              })
+              const text = await new Response(proc.stdout).text()
+              const code = await proc.exited
+              if (code !== 0) {
+                const err = await new Response(proc.stderr).text()
+                throw new Error(err || `Exit code ${code}`)
+              }
+              return text.trim()
+            },
+            catch: (e) =>
+              new AuthStorageError({
+                message: `Keychain command failed: ${e instanceof Error ? e.message : String(e)}`,
+                cause: e,
+              }),
+          })
+
+        const execShell = (cmd: string) =>
           Effect.tryPromise({
             try: async () => {
               const proc = Bun.spawn(["sh", "-c", cmd], {
@@ -76,28 +98,36 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
 
         return {
           get: (provider) =>
-            exec(
-              `security find-generic-password -s "${serviceName}" -a "${provider}" -w 2>/dev/null`,
-            ).pipe(
+            execSecurity(["find-generic-password", "-s", serviceName, "-a", provider, "-w"]).pipe(
               Effect.map((key) => (key.length > 0 ? key : undefined)),
               Effect.catchAll(() => Effect.succeed(undefined)),
             ),
 
           set: (provider, key) =>
-            exec(
-              `security delete-generic-password -s "${serviceName}" -a "${provider}" 2>/dev/null; security add-generic-password -s "${serviceName}" -a "${provider}" -w "${key}"`,
-            ).pipe(Effect.asVoid),
+            execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
+              Effect.catchAll(() => Effect.void),
+              Effect.flatMap(() =>
+                execSecurity([
+                  "add-generic-password",
+                  "-s",
+                  serviceName,
+                  "-a",
+                  provider,
+                  "-w",
+                  key,
+                ]),
+              ),
+              Effect.asVoid,
+            ),
 
           delete: (provider) =>
-            exec(
-              `security delete-generic-password -s "${serviceName}" -a "${provider}" 2>/dev/null`,
-            ).pipe(
+            execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
               Effect.asVoid,
               Effect.catchAll(() => Effect.void),
             ),
 
           list: () =>
-            exec(
+            execShell(
               `security dump-keychain | grep -A4 '"svce"<blob>="${serviceName}"' | grep '"acct"<blob>=' | sed 's/.*="\\([^"]*\\)".*/\\1/'`,
             ).pipe(
               Effect.map((output) =>
