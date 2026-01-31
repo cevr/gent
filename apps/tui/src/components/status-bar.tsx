@@ -14,13 +14,6 @@ function formatCost(cost: number): string {
   }).format(cost)
 }
 
-function shortenModel(model: string): string {
-  const parts = model.split("/")
-  const name = parts[parts.length - 1] ?? model
-  const match = name.match(/^(claude-[a-z0-9-]+)-\d+$/)
-  return match?.[1] ?? name
-}
-
 function relativePath(cwd: string, gitRoot: string | null): string {
   if (gitRoot !== null) {
     const repoParts = gitRoot.split("/")
@@ -68,17 +61,6 @@ function Agent() {
   const client = useClient()
 
   return <span style={{ fg: theme.primary }}>{client.agent()}</span>
-}
-
-function Model() {
-  const { theme } = useTheme()
-  const client = useClient()
-
-  const display = () => {
-    return shortenModel(client.model())
-  }
-
-  return <span style={{ fg: theme.textMuted }}>{display()}</span>
 }
 
 function Status() {
@@ -170,7 +152,6 @@ export const StatusBar = {
   Row,
   ErrorRow,
   Agent,
-  Model,
   Status,
   Cwd,
   Git,

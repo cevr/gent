@@ -81,8 +81,10 @@ export {
   ModelPricing,
   Provider,
   ProviderId,
+  PROVIDER_ENV_VARS,
   SUPPORTED_PROVIDERS,
   calculateCost,
+  parseModelProvider,
 } from "./model.js"
 
 // Agent Types
@@ -102,7 +104,7 @@ export {
   type SubagentRunner,
   type SubagentResult,
   COWORK_PROMPT,
-  DEEP_PROMPT,
+  DEEPWORK_PROMPT,
   EXPLORE_PROMPT,
   ARCHITECT_PROMPT,
   COMPACTION_PROMPT,
@@ -118,6 +120,7 @@ export { Skill, Skills, formatSkillsForPrompt } from "./skills"
 
 // Auth Storage
 export { AuthStorage, AuthStorageError, type AuthStorageService } from "./auth-storage"
+export { AuthGuard, AuthProviderInfo, AuthSource } from "./auth-guard"
 
 // Defaults
 export { DEFAULTS, type Defaults } from "./defaults"

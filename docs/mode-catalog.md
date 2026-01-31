@@ -8,15 +8,15 @@ Source: `packages/core/src/agent.ts` (AgentDefinitions + AgentModels)
 - Purpose: fast execution, minimal prose
 - Tools: full access
 - Delegates: explore, architect
-- Curated model: openai/opus-4.5
+- Curated model: anthropic/claude-opus-4-5
 
-## deep
+## deepwork
 
 - Kind: primary
 - Purpose: thorough analysis and tradeoffs
 - Tools: full access
 - Delegates: explore, architect
-- Curated model: openai/codex-5.2
+- Curated model: openai/gpt-5.2-codex
 
 ## explore
 
@@ -30,7 +30,7 @@ Source: `packages/core/src/agent.ts` (AgentDefinitions + AgentModels)
 - Kind: subagent
 - Purpose: design approaches, no code changes
 - Tools: read, grep, glob, webfetch, websearch
-- Curated model: openai/opus-4.5
+- Curated model: anthropic/claude-opus-4-5
 
 ## compaction
 

@@ -1,7 +1,8 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Config, Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
 import { Model } from "@gent/core"
 import type { ModelId, ModelPricing } from "@gent/core"
+import * as os from "node:os"
 
 const MODELS_URL = "https://models.dev"
 const CACHE_RELATIVE = ".gent/models.json"
@@ -73,7 +74,10 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const home = process.env["HOME"] ?? "~"
+      const home = yield* Config.option(Config.string("HOME")).pipe(
+        Effect.catchAll(() => Effect.succeed(Option.none())),
+        Effect.map(Option.getOrElse(() => os.homedir())),
+      )
       const cachePath = path.join(home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 

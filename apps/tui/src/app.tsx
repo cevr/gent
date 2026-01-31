@@ -1,4 +1,4 @@
-import { Switch, Match } from "solid-js"
+import { Switch, Match, createEffect, createSignal } from "solid-js"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/index"
@@ -13,11 +13,21 @@ import type { BranchInfo } from "./client"
 
 export interface AppProps {
   initialPrompt?: string
+  missingAuthProviders?: readonly string[]
 }
 
 function AppContent(props: AppProps) {
   const router = useRouter()
   const client = useClient()
+  const [authGateActive, setAuthGateActive] = createSignal(
+    (props.missingAuthProviders?.length ?? 0) > 0,
+  )
+
+  createEffect(() => {
+    if (authGateActive() && !isRoute.auth(router.route())) {
+      router.navigateToAuth()
+    }
+  })
 
   return (
     <box flexDirection="column" width="100%" height="100%">
@@ -60,7 +70,11 @@ function AppContent(props: AppProps) {
           <Permissions client={client.client} />
         </Match>
         <Match when={isRoute.auth(router.route())}>
-          <Auth client={client.client} />
+          <Auth
+            client={client.client}
+            enforceAuth={authGateActive()}
+            onResolved={() => setAuthGateActive(false)}
+          />
         </Match>
       </Switch>
 

@@ -151,7 +151,7 @@ describe("Session State", () => {
             sessionId: session.sessionId,
             branchId: session.branchId,
             fromAgent: "cowork",
-            toAgent: "deep",
+            toAgent: "deepwork",
           }),
         )
 
@@ -162,6 +162,6 @@ describe("Session State", () => {
       }).pipe(Effect.provide(testLayer)),
     )
 
-    expect(result.agent).toBe("deep")
+    expect(result.agent).toBe("deepwork")
   })
 })

@@ -112,7 +112,7 @@ Cluster mapping: use @effect/cluster Entity + RpcGroup; same RPC surface, sharde
 Per-mode policy (one-for-one):
 
 - cowork: retry provider errors with DEFAULT_RETRY_CONFIG (maxAttempts=3). No retry on tool errors, permission denies, or user interrupts.
-- deep: retry provider errors with extended backoff (maxAttempts=5, maxDelay=60s). Tool retries only if tool is marked safe/idempotent.
+- deepwork: retry provider errors with extended backoff (maxAttempts=5, maxDelay=60s). Tool retries only if tool is marked safe/idempotent.
 
 See `/Users/cvr/Developer/personal/gent/packages/runtime/src/retry.ts` for current defaults.
 
@@ -174,7 +174,7 @@ Fork at any message. Tree navigation. Independent compaction per branch.
 - SQLite storage
 - All core tools enabled
 - Compaction at 100k tokens
-- Agent switching (cowork/deep)
+- Agent switching (cowork/deepwork)
 - Plans in `.gent/plans/`
 
 ## Testing

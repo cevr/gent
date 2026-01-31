@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   createEffect,
+  createSignal,
   onMount,
   onCleanup,
   type ParentProps,
@@ -202,6 +203,7 @@ export function ClientProvider(props: ClientProviderProps) {
     status: AgentStatus.idle(),
     cost: 0,
   })
+  const [preferredAgent, setPreferredAgent] = createSignal<AgentName>(defaultAgent)
 
   const [modelStore, setModelStore] = createStore<{
     modelsById: Record<string, Model>
@@ -303,9 +305,12 @@ export function ClientProvider(props: ClientProviderProps) {
                 break
 
               case "AgentSwitched":
-                setAgentStore({
-                  agent: Schema.is(AgentNameSchema)(event.toAgent) ? event.toAgent : defaultAgent,
-                })
+                if (Schema.is(AgentNameSchema)(event.toAgent)) {
+                  setPreferredAgent(event.toAgent)
+                  setAgentStore({ agent: event.toAgent })
+                } else {
+                  setAgentStore({ agent: defaultAgent })
+                }
                 break
 
               case "MessageReceived":
@@ -422,6 +427,18 @@ export function ClientProvider(props: ClientProviderProps) {
                   },
                 },
               })
+              const preferred = preferredAgent()
+              if (preferred !== defaultAgent) {
+                setAgentStore({ agent: preferred })
+                cast(
+                  client.steer({
+                    _tag: "SwitchAgent",
+                    sessionId: result.sessionId,
+                    branchId: result.branchId,
+                    agent: preferred,
+                  }),
+                )
+              }
             }),
           ),
           Effect.catchAll((err) =>
@@ -462,7 +479,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       setSessionStore({ sessionState: { status: "none" } })
-      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
+      setAgentStore({ agent: preferredAgent(), status: AgentStatus.idle(), cost: 0 })
     },
 
     // Return Effects for caller to run
@@ -548,8 +565,16 @@ export function ClientProvider(props: ClientProviderProps) {
 
     // Fire-and-forget steering
     steer: (command) => {
+      if (command._tag === "SwitchAgent") {
+        setPreferredAgent(command.agent)
+      }
       const s = session()
-      if (s === null) return
+      if (s === null) {
+        if (command._tag === "SwitchAgent") {
+          setAgentStore({ agent: command.agent })
+        }
+        return
+      }
       const fullCommand: SteerCommand = {
         ...command,
         sessionId: s.sessionId,

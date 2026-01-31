@@ -252,7 +252,7 @@ export const SubprocessRunner: Layer.Layer<
                 stdout: "pipe",
                 stderr: "pipe",
                 env: {
-                  ...process.env,
+                  ...Bun.env,
                   ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
                   GENT_INTERNAL_AGENT: params.agent.name,
                 },

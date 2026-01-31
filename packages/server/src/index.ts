@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Config, Effect, Layer, Option } from "effect"
 import { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
 import {
@@ -7,6 +7,7 @@ import {
   PermissionHandler,
   PlanHandler,
   Skills,
+  AuthGuard,
   AuthStorage,
   AgentRegistry,
   resolveAgentModelId,
@@ -34,6 +35,7 @@ import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
 import * as nodePath from "node:path"
+import * as os from "node:os"
 import {
   GentCore,
   type GentCoreService,
@@ -132,6 +134,8 @@ export interface DependenciesConfig {
   cwd: string
   subprocessBinaryPath?: string
   dbPath?: string
+  authFilePath?: string
+  authKeyPath?: string
   skillsDirs?: ReadonlyArray<string>
 }
 
@@ -159,7 +163,8 @@ export const createDependencies = (
   | AskUserHandler
   | QuestionHandler
   | PlanHandler
-  | AuthStorage,
+  | AuthStorage
+  | AuthGuard,
   PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
@@ -168,7 +173,12 @@ export const createDependencies = (
   const EventStoreLayer = Layer.provide(EventStoreLive, StorageLive)
 
   const ConfigServiceLive = ConfigService.Live
-  const home = process.env["HOME"] ?? "~"
+  const home = Effect.runSync(
+    Config.option(Config.string("HOME")).pipe(
+      Effect.catchAll(() => Effect.succeed(Option.none())),
+      Effect.map(Option.getOrElse(() => os.homedir())),
+    ),
+  )
   const globalSkillsDir = nodePath.join(home, ".gent", "skills")
   const claudeSkillsDir = nodePath.join(home, ".claude", "skills")
 
@@ -187,12 +197,18 @@ export const createDependencies = (
     }),
   )
 
-  const AuthStorageLive = AuthStorage.LiveKeychain("gent")
+  const AuthStorageLive = AuthStorage.LiveSystem({
+    serviceName: "gent",
+    ...(config.authFilePath !== undefined ? { filePath: config.authFilePath } : {}),
+    ...(config.authKeyPath !== undefined ? { keyPath: config.authKeyPath } : {}),
+  })
+  const AuthGuardLive = Layer.provide(AuthGuard.Live, AuthStorageLive)
 
   // Base services that don't depend on ConfigService
   const CoreServicesLive = Layer.mergeAll(
     StorageLive,
     AuthStorageLive,
+    AuthGuardLive,
     ToolRegistry.Live(AllTools),
     AgentRegistry.Live,
     EventStoreLayer,

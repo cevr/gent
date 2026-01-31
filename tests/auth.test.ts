@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from "bun:test"
-import { Effect } from "effect"
-import { AuthStorage } from "@gent/core"
+import { AuthGuard, AuthStorage } from "@gent/core"
+import { ConfigProvider, Effect, Layer } from "effect"
 
 describe("AuthStorage", () => {
   describe("Test implementation", () => {
@@ -138,5 +138,51 @@ describe("AuthStorage", () => {
       expect(result.length).toBe(1)
       expect(result).toContain("openai")
     })
+  })
+})
+
+describe("AuthGuard", () => {
+  it("requiredProviders include cowork + deepwork providers", async () => {
+    const configLayer = Layer.setConfigProvider(ConfigProvider.fromMap(new Map()))
+    const layer = Layer.mergeAll(AuthStorage.Test(), AuthGuard.Live, configLayer)
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const guard = yield* AuthGuard
+        return yield* guard.requiredProviders()
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result).toContain("anthropic")
+    expect(result).toContain("openai")
+  })
+
+  it("missingRequiredProviders returns missing when no keys", async () => {
+    const configLayer = Layer.setConfigProvider(ConfigProvider.fromMap(new Map()))
+    const layer = Layer.mergeAll(AuthStorage.Test(), AuthGuard.Live, configLayer)
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const guard = yield* AuthGuard
+        return yield* guard.missingRequiredProviders()
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result).toContain("anthropic")
+    expect(result).toContain("openai")
+  })
+
+  it("missingRequiredProviders clears when keys are present", async () => {
+    const configLayer = Layer.setConfigProvider(
+      ConfigProvider.fromMap(new Map([["ANTHROPIC_API_KEY", "sk-anthropic"]])),
+    )
+    const layer = Layer.mergeAll(
+      AuthStorage.Test({ openai: "sk-openai" }),
+      AuthGuard.Live,
+      configLayer,
+    )
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const guard = yield* AuthGuard
+        return yield* guard.missingRequiredProviders()
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result).toEqual([])
   })
 })

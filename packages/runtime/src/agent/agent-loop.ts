@@ -56,7 +56,7 @@ import {
 } from "@gent/core"
 import type { StorageError } from "@gent/storage"
 import { Storage } from "@gent/storage"
-import type { ProviderError, FinishChunk } from "@gent/providers"
+import type { ProviderError, FinishChunk, ProviderRequest } from "@gent/providers"
 import { Provider } from "@gent/providers"
 import { withRetry } from "../retry"
 import { CheckpointService } from "../checkpoint"
@@ -79,6 +79,26 @@ const buildSystemPrompt = (
   }
 
   return parts.join("")
+}
+
+const providerIdFromModelId = (modelId: string): string | undefined => {
+  const slashIndex = modelId.indexOf("/")
+  if (slashIndex <= 0 || slashIndex === modelId.length - 1) return undefined
+  return modelId.slice(0, slashIndex)
+}
+
+const buildProviderOptions = (
+  modelId: string,
+  agent: AgentDefinition,
+): ProviderRequest["providerOptions"] | undefined => {
+  if (agent.reasoningEffort === undefined) return undefined
+  const providerId = providerIdFromModelId(modelId)
+  if (providerId === undefined) return undefined
+  return {
+    [providerId]: {
+      reasoningEffort: agent.reasoningEffort,
+    },
+  }
 }
 
 export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
@@ -418,13 +438,16 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                 // Start streaming
                 yield* publishEvent(new StreamStarted({ sessionId, branchId }))
 
+                const modelId = resolveAgentModelId(agent.name)
+                const providerOptions = buildProviderOptions(modelId, agent)
                 const streamEffect = yield* withRetry(
                   provider.stream({
-                    model: resolveAgentModelId(agent.name),
+                    model: modelId,
                     messages: [...messages],
                     tools: [...tools],
                     systemPrompt,
                     ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
+                    ...(providerOptions !== undefined ? { providerOptions } : {}),
                   }),
                 ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
 
@@ -972,13 +995,16 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
               new StreamStarted({ sessionId: input.sessionId, branchId: input.branchId }),
             )
 
+            const modelId = resolveAgentModelId(agent.name)
+            const providerOptions = buildProviderOptions(modelId, agent)
             const streamEffect = yield* withRetry(
               provider.stream({
-                model: resolveAgentModelId(agent.name),
+                model: modelId,
                 messages: [...messages],
                 tools: [...tools],
                 systemPrompt: basePrompt,
                 ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
+                ...(providerOptions !== undefined ? { providerOptions } : {}),
               }),
             ).pipe(Effect.withSpan("AgentActor.provider.stream"))
 

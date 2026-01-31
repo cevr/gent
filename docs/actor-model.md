@@ -22,7 +22,7 @@ BEAM-inspired, Effect-first, local-first with cluster support.
 
 ## Stable Surface (Modes + Agents)
 
-- Primary: `cowork`, `deep`
+- Primary: `cowork`, `deepwork`
 - Subagents: `explore`, `architect`
 - System: `compaction`, `title`
 
@@ -87,7 +87,7 @@ cowork
 - Tool errors: no retry
 - User interrupts: no retry
 
-deep
+deepwork
 
 - Provider errors: extended backoff
 - Tool retries only if tool is safe/idempotent

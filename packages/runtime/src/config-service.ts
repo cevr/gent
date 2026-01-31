@@ -1,6 +1,7 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Config, Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
 import { PermissionRule } from "@gent/core"
+import * as os from "node:os"
 
 // User config schema - stored at ~/.gent/config.json
 
@@ -34,7 +35,10 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
 
-      const home = process.env["HOME"] ?? "~"
+      const home = yield* Config.option(Config.string("HOME")).pipe(
+        Effect.catchAll(() => Effect.succeed(Option.none())),
+        Effect.map(Option.getOrElse(() => os.homedir())),
+      )
       const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
       const projectConfigPath = path.join(process.cwd(), ConfigService.PROJECT_CONFIG_RELATIVE)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Options, Args } from "@effect/cli"
 import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
-import { Console, Effect, Layer, ManagedRuntime, Option, Schema, Stream } from "effect"
+import { Config, Console, Effect, Layer, Option, Schema, Stream } from "effect"
 import type { Runtime } from "effect"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
@@ -14,8 +14,9 @@ import {
 } from "@gent/server"
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
 import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
-import { AgentName } from "@gent/core"
+import { AgentName, AuthGuard, PROVIDER_ENV_VARS, type ProviderId } from "@gent/core"
 import * as path from "node:path"
+import * as os from "node:os"
 
 import { render } from "@opentui/solid"
 import { App } from "./app"
@@ -157,9 +158,14 @@ const resolveInitialState = (input: {
     return { _tag: "home" as const }
   })
 
-// Data directory
-const DATA_DIR = process.env["GENT_DATA_DIR"] ?? path.join(process.env["HOME"] ?? "~", ".gent")
-const DB_PATH = process.env["GENT_DB_PATH"] ?? path.join(DATA_DIR, "data.db")
+const formatMissingProviders = (providers: readonly ProviderId[]): string =>
+  providers
+    .map((provider) => {
+      const envVar = PROVIDER_ENV_VARS[provider]
+      return envVar !== undefined && envVar !== "" ? `${provider} (${envVar})` : provider
+    })
+    .join(", ")
+
 // Unified tracer logs to /tmp/gent-unified.log
 const ATOM_CACHE_MAX = 256
 
@@ -169,27 +175,39 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 // Unified tracer layer - logs both Effect spans and TUI events
 const TracerLayer = UnifiedTracerLive
 
-// Dependencies layer with tracing
-const ServerDepsLayer = createDependencies({
-  cwd: process.cwd(),
-  dbPath: DB_PATH,
-}).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
+const CoreLayer = Layer.unwrapEffect(
+  Effect.gen(function* () {
+    const cwd = process.cwd()
+    const home = yield* Config.option(Config.string("HOME")).pipe(
+      Effect.catchAll(() => Effect.succeed(Option.none())),
+      Effect.map(Option.getOrElse(() => os.homedir())),
+    )
+    const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR")).pipe(
+      Effect.catchAll(() => Effect.succeed(Option.none())),
+    )
+    const dataDir = Option.getOrElse(dataDirOpt, () => path.join(home, ".gent"))
+    const dbPath = Option.getOrElse(
+      yield* Config.option(Config.string("GENT_DB_PATH")).pipe(
+        Effect.catchAll(() => Effect.succeed(Option.none())),
+      ),
+      () => path.join(dataDir, "data.db"),
+    )
+    const authFilePath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.json.enc") : undefined
+    const authKeyPath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.key") : undefined
 
-// GentCore layer on top of dependencies
-const GentCoreLive = GentCore.Live.pipe(Layer.provide(ServerDepsLayer))
-
-// Combined layer with GentCore + dependencies
-const CoreWithDeps = Layer.merge(GentCoreLive, ServerDepsLayer)
-
-// Full layer stack - includes all services needed by DirectClient
-// Include PlatformLayer for CommandExecutor (needed by workspace git commands)
-const FullLayer = Layer.mergeAll(CoreWithDeps, PlatformLayer)
+    const serverDeps = createDependencies({
+      cwd,
+      dbPath,
+      ...(authFilePath !== undefined ? { authFilePath } : {}),
+      ...(authKeyPath !== undefined ? { authKeyPath } : {}),
+    }).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
+    const coreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
+    return Layer.mergeAll(coreLive, serverDeps, PlatformLayer)
+  }),
+)
 
 // Clear trace log on startup
 clearUnifiedLog()
-
-// Create managed runtime - scope stays alive for TUI lifetime
-const serverRuntime = ManagedRuntime.make(FullLayer)
 
 // Headless runner - streams events to stdout
 const runHeadless = (
@@ -277,104 +295,129 @@ const main = Command.make(
   ({ session, continue_, headless, prompt, promptArg, bypass }) =>
     Effect.gen(function* () {
       // Get core service for direct access (headless, session management)
-      const core = yield* GentCore
       const cwd = process.cwd()
 
-      // Resolve initial state (discriminated union)
-      const state = yield* resolveInitialState({
-        core,
-        cwd,
-        session,
-        continue_,
-        headless,
-        prompt,
-        promptArg,
-        bypass,
-      })
+      const program = Effect.gen(function* () {
+        const core = yield* GentCore
+        const authGuard = yield* AuthGuard
 
-      // Handle headless mode
-      if (state._tag === "headless") {
-        const branchId = state.session.branchId
-        if (branchId === undefined) {
-          yield* Console.error("Error: session has no branch")
+        const authProviders = yield* authGuard.listProviders()
+        const missingProviders = authProviders
+          .filter((p) => p.required && !p.hasKey)
+          .map((p) => p.provider)
+
+        if (missingProviders.length > 0 && headless) {
+          const hint = formatMissingProviders(missingProviders)
+          yield* Console.error(`Error: missing required API keys: ${hint}`)
           return process.exit(1)
         }
-        const internalAgent = process.env["GENT_INTERNAL_AGENT"]
-        if (internalAgent !== undefined && internalAgent !== "") {
-          yield* Schema.decodeUnknown(AgentName)(internalAgent).pipe(
-            Effect.flatMap((agent) =>
-              core.steer({
-                _tag: "SwitchAgent",
-                sessionId: state.session.id,
-                branchId,
-                agent,
-              }),
-            ),
-            Effect.catchAll(() =>
-              Console.error(`Error: invalid internal agent ${internalAgent}`).pipe(
-                Effect.flatMap(() => Effect.sync(() => process.exit(1))),
-              ),
+
+        // Resolve initial state (discriminated union)
+        const state = yield* resolveInitialState({
+          core,
+          cwd,
+          session,
+          continue_,
+          headless,
+          prompt,
+          promptArg,
+          bypass,
+        })
+
+        // Handle headless mode
+        if (state._tag === "headless") {
+          const branchId = state.session.branchId
+          if (branchId === undefined) {
+            yield* Console.error("Error: session has no branch")
+            return process.exit(1)
+          }
+          const internalAgentValue = Option.getOrUndefined(
+            yield* Config.option(Config.string("GENT_INTERNAL_AGENT")).pipe(
+              Effect.catchAll(() => Effect.succeed(Option.none())),
             ),
           )
+          if (internalAgentValue !== undefined && internalAgentValue !== "") {
+            yield* Schema.decodeUnknown(AgentName)(internalAgentValue).pipe(
+              Effect.flatMap((agent) =>
+                core.steer({
+                  _tag: "SwitchAgent",
+                  sessionId: state.session.id,
+                  branchId,
+                  agent,
+                }),
+              ),
+              Effect.catchAll(() =>
+                Console.error(`Error: invalid internal agent ${internalAgentValue}`).pipe(
+                  Effect.flatMap(() => Effect.sync(() => process.exit(1))),
+                ),
+              ),
+            )
+          }
+          yield* runHeadless(core, state.session.id, branchId, state.prompt)
+          return
         }
-        yield* runHeadless(core, state.session.id, branchId, state.prompt)
-        return
-      }
 
-      // Create direct client for TUI (no RPC layer, avoids scope issues)
-      const directClient: DirectClient = yield* makeDirectClient
+        // Create direct client for TUI (no RPC layer, avoids scope issues)
+        const directClient: DirectClient = yield* makeDirectClient
 
-      // Get runtime for client
-      const runtime = yield* serverRuntime.runtimeEffect
-      const uiRuntime = runtime as Runtime.Runtime<unknown>
+        // Get runtime for client
+        const uiRuntime = (yield* Effect.runtime<never>()) as Runtime.Runtime<unknown>
 
-      // Derive initial session and route from state
-      let initialSession: Session | undefined
-      let initialRoute = Route.home()
-      let initialPrompt: string | undefined
+        // Derive initial session and route from state
+        let initialSession: Session | undefined
+        let initialRoute = Route.home()
+        let initialPrompt: string | undefined
+        const missingAuthProviders =
+          missingProviders.length > 0 ? (missingProviders as readonly ProviderId[]) : undefined
 
-      if (state._tag === "session" && state.session.branchId !== undefined) {
-        initialSession = {
-          sessionId: state.session.id,
-          branchId: state.session.branchId,
-          name: state.session.name ?? "Unnamed",
-          bypass: state.session.bypass ?? true,
+        if (state._tag === "session" && state.session.branchId !== undefined) {
+          initialSession = {
+            sessionId: state.session.id,
+            branchId: state.session.branchId,
+            name: state.session.name ?? "Unnamed",
+            bypass: state.session.bypass ?? true,
+          }
+          initialRoute = Route.session(state.session.id, state.session.branchId)
+          initialPrompt = state.prompt
         }
-        initialRoute = Route.session(state.session.id, state.session.branchId)
-        initialPrompt = state.prompt
-      }
 
-      if (state._tag === "branchPicker") {
-        initialRoute = Route.branchPicker(
-          state.session.id,
-          state.session.name ?? "Unnamed",
-          state.branches,
-          state.prompt,
+        if (state._tag === "branchPicker") {
+          initialRoute = Route.branchPicker(
+            state.session.id,
+            state.session.name ?? "Unnamed",
+            state.branches,
+            state.prompt,
+          )
+        }
+
+        // Launch TUI with providers
+        yield* Effect.promise(() =>
+          render(() => (
+            <WorkspaceProvider cwd={cwd} runtime={uiRuntime}>
+              <RegistryProvider runtime={uiRuntime} maxEntries={ATOM_CACHE_MAX}>
+                <ClientProvider
+                  rpcClient={directClient}
+                  runtime={uiRuntime}
+                  initialSession={initialSession}
+                >
+                  <RouterProvider initialRoute={initialRoute}>
+                    <App
+                      initialPrompt={initialPrompt}
+                      missingAuthProviders={missingAuthProviders}
+                    />
+                  </RouterProvider>
+                </ClientProvider>
+              </RegistryProvider>
+            </WorkspaceProvider>
+          )),
         )
-      }
 
-      // Launch TUI with providers
-      yield* Effect.promise(() =>
-        render(() => (
-          <WorkspaceProvider cwd={cwd} runtime={uiRuntime}>
-            <RegistryProvider runtime={uiRuntime} maxEntries={ATOM_CACHE_MAX}>
-              <ClientProvider
-                rpcClient={directClient}
-                runtime={uiRuntime}
-                initialSession={initialSession}
-              >
-                <RouterProvider initialRoute={initialRoute}>
-                  <App initialPrompt={initialPrompt} />
-                </RouterProvider>
-              </ClientProvider>
-            </RegistryProvider>
-          </WorkspaceProvider>
-        )),
-      )
+        // Keep process alive until TUI exits
+        return yield* Effect.never
+      }).pipe(Effect.scoped)
 
-      // Keep process alive until TUI exits
-      return yield* Effect.never
-    }).pipe(Effect.scoped),
+      return yield* program
+    }),
 )
 
 // Sessions subcommand
@@ -408,9 +451,12 @@ const cli = Command.run(command, {
   version: "0.0.0",
 })
 
-// Full runtime layer for CLI
-const CliLayer = Layer.mergeAll(FullLayer, BunContext.layer, TracerLayer)
-const CliRuntime = ManagedRuntime.make(CliLayer)
+// Base runtime layer for CLI
+const CliLayer = CoreLayer
 
-// Run with all layers
-cli(process.argv).pipe(Effect.provide(CliRuntime), BunRuntime.runMain)
+// Run with base layers; command handlers provide core layers as needed
+const MainLayer = Layer.scopedDiscard(Effect.suspend(() => cli(process.argv))).pipe(
+  Layer.provide(CliLayer),
+)
+
+BunRuntime.runMain(Layer.launch(MainLayer))

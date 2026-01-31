@@ -15,28 +15,15 @@ import {
   PermissionRule,
   PlanHandler,
   AuthStorage,
+  AuthGuard,
   type AgentName,
+  type AuthProviderInfo,
   type EventEnvelope,
   type Model,
   type PermissionDecision,
   type PlanDecision,
 } from "@gent/core"
 import { ConfigService, ModelRegistry, type SteerCommand } from "@gent/runtime"
-
-// Known providers for auth listing
-const KNOWN_PROVIDERS = ["anthropic", "openai", "bedrock", "google", "mistral"] as const
-const PROVIDER_ENV_VARS: Record<string, string> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-  google: "GOOGLE_GENERATIVE_AI_API_KEY",
-  mistral: "MISTRAL_API_KEY",
-}
-
-export interface AuthProviderInfo {
-  provider: string
-  hasKey: boolean
-  source?: "env" | "stored"
-}
 
 export interface MessageInfoReadonly {
   readonly id: string
@@ -213,6 +200,7 @@ export type DirectClientContext =
   | ConfigService
   | ModelRegistry
   | AuthStorage
+  | AuthGuard
 
 /**
  * Creates a direct in-process client.
@@ -228,6 +216,7 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
     const configService = yield* ConfigService
     const modelRegistry = yield* ModelRegistry
     const authStorage = yield* AuthStorage
+    const authGuard = yield* AuthGuard
     const runtime = yield* Effect.runtime<never>()
 
     return {
@@ -325,30 +314,7 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
           yield* permission.removeRule(tool, pattern)
         }),
 
-      listAuthProviders: () =>
-        Effect.gen(function* () {
-          const storedKeys = yield* authStorage
-            .list()
-            .pipe(Effect.catchAll(() => Effect.succeed([] as readonly string[])))
-          const storedSet = new Set(storedKeys)
-
-          const providers: AuthProviderInfo[] = KNOWN_PROVIDERS.map((provider) => {
-            const envVar = PROVIDER_ENV_VARS[provider]
-            const hasEnv =
-              envVar !== undefined && envVar !== "" ? process.env[envVar] !== undefined : false
-            const hasStored = storedSet.has(provider)
-
-            if (hasEnv) {
-              return { provider, hasKey: true, source: "env" as const }
-            }
-            if (hasStored) {
-              return { provider, hasKey: true, source: "stored" as const }
-            }
-            return { provider, hasKey: false }
-          })
-
-          return providers
-        }),
+      listAuthProviders: () => authGuard.listProviders(),
 
       setAuthKey: (provider, key) =>
         authStorage.set(provider, key).pipe(Effect.catchAll(() => Effect.void)),

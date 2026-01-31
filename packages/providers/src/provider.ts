@@ -14,6 +14,7 @@ import { ProviderFactory } from "./provider-factory"
 
 type StreamTextResult = ReturnType<typeof streamText>
 type FullStreamPart = StreamTextResult extends { fullStream: AsyncIterable<infer A> } ? A : never
+type ProviderOptions = Parameters<typeof streamText>[0]["providerOptions"]
 
 // Provider Error
 
@@ -61,6 +62,7 @@ export interface ProviderRequest {
   readonly systemPrompt?: string
   readonly maxTokens?: number
   readonly temperature?: number
+  readonly providerOptions?: ProviderOptions
 }
 
 // Simple generate request (no tools, no streaming)
@@ -111,6 +113,9 @@ export class Provider extends Context.Tag("@gent/providers/src/provider")<
           }
           if (request.temperature !== undefined) {
             opts.temperature = request.temperature
+          }
+          if (request.providerOptions !== undefined) {
+            opts.providerOptions = request.providerOptions
           }
 
           const result = yield* Effect.try({

@@ -26,6 +26,6 @@
 
 ## Notes
 
-- Primary agents: default (opus 4.5), deep (codex 5.2)
+- Primary agents: cowork (claude opus 4.5), deepwork (gpt-5.2-codex)
 - Plan UI should render markdown inline (OpenTUI `<markdown>`)
 - Subprocess runner uses config `subprocessBinaryPath` (fallback only for now)

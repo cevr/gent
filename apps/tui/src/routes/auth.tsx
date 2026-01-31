@@ -15,6 +15,8 @@ import { formatError } from "../utils/format-error"
 
 export interface AuthProps {
   client: GentClient
+  enforceAuth?: boolean
+  onResolved?: () => void
 }
 
 type InputMode = "list" | "add"
@@ -30,6 +32,7 @@ export function Auth(props: AuthProps) {
   const [error, setError] = createSignal<string | null>(null)
   const [mode, setMode] = createSignal<InputMode>("list")
   const [keyInput, setKeyInput] = createSignal("")
+  const [autoPrompted, setAutoPrompted] = createSignal(false)
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
   useScrollSync(() => `auth-provider-${selectedIndex()}`, { getRef: () => scrollRef })
@@ -61,6 +64,36 @@ export function Auth(props: AuthProps) {
     const list = providers()
     if (selectedIndex() >= list.length) {
       setSelectedIndex(Math.max(0, list.length - 1))
+    }
+  })
+
+  const missingRequired = () =>
+    providers()
+      .filter((p) => p.required && !p.hasKey)
+      .map((p) => p.provider)
+
+  createEffect(() => {
+    const list = providers()
+    if (list.length === 0) return
+
+    if (props.enforceAuth === true) {
+      const missing = missingRequired()
+      if (missing.length === 0) {
+        props.onResolved?.()
+        router.back()
+        return
+      }
+    }
+
+    if (autoPrompted()) return
+    const missing = missingRequired()
+    if (missing.length === 0) return
+
+    const index = list.findIndex((p) => missing.includes(p.provider))
+    if (index >= 0) {
+      setSelectedIndex(index)
+      setMode("add")
+      setAutoPrompted(true)
     }
   })
 
@@ -166,6 +199,7 @@ export function Auth(props: AuthProps) {
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
 
   const getStatusColor = (p: AuthProviderInfo) => {
+    if (!p.hasKey && p.required) return theme.error
     if (!p.hasKey) return theme.textMuted
     if (p.source === "env") return theme.success
     return theme.primary
@@ -260,6 +294,7 @@ export function Auth(props: AuthProps) {
                             ? "[env]"
                             : "[stored]"
                           : "[none]"}
+                        {provider.required ? " [required]" : ""}
                       </text>
                     </box>
                   )

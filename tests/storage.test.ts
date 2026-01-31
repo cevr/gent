@@ -174,7 +174,7 @@ describe("Storage", () => {
               sessionId: session.id,
               branchId: branch.id,
               fromAgent: "cowork",
-              toAgent: "deep",
+              toAgent: "deepwork",
             }),
           )
 
@@ -182,7 +182,7 @@ describe("Storage", () => {
             new AgentSwitched({
               sessionId: session.id,
               branchId: branch.id,
-              fromAgent: "deep",
+              fromAgent: "deepwork",
               toAgent: "cowork",
             }),
           )

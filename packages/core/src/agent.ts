@@ -9,13 +9,16 @@ export type AgentKind = typeof AgentKind.Type
 
 export const AgentName = Schema.Literal(
   "cowork",
-  "deep",
+  "deepwork",
   "explore",
   "architect",
   "compaction",
   "title",
 )
 export type AgentName = typeof AgentName.Type
+
+export const ReasoningEffort = Schema.Literal("minimal", "low", "medium", "high")
+export type ReasoningEffort = typeof ReasoningEffort.Type
 
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
@@ -26,6 +29,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
   temperature: Schema.optional(Schema.Number),
+  reasoningEffort: Schema.optional(ReasoningEffort),
   canDelegateToAgents: Schema.optional(Schema.Array(AgentName)),
 }) {}
 
@@ -40,8 +44,8 @@ export const COWORK_PROMPT = `
 Cowork agent. Fast, practical, execute changes. Minimal prose. Ask only when blocked. Use tools freely.
 `.trim()
 
-export const DEEP_PROMPT = `
-Deep agent. Thorough analysis, careful tradeoffs, explicit assumptions. Prefer correctness over speed. Ask clarifying questions when needed. Still execute when confident.
+export const DEEPWORK_PROMPT = `
+Deepwork agent. Thorough analysis, careful tradeoffs, explicit assumptions. Prefer correctness over speed. Ask clarifying questions when needed. Still execute when confident.
 `.trim()
 
 export const EXPLORE_PROMPT = `
@@ -67,12 +71,13 @@ export const Agents = {
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
-  deep: defineAgent({
-    name: "deep",
+  deepwork: defineAgent({
+    name: "deepwork",
     description: "Deep reasoning mode - thorough analysis, slower/longer answers",
     kind: "primary",
     canDelegateToAgents: ["explore", "architect"],
-    systemPromptAddendum: DEEP_PROMPT,
+    systemPromptAddendum: DEEPWORK_PROMPT,
+    reasoningEffort: "high",
   }),
 
   explore: defineAgent({
@@ -111,10 +116,10 @@ export const Agents = {
 // Curated model mapping (not user-configurable)
 
 export const AgentModels: Record<AgentName, ModelId> = {
-  cowork: "openai/opus-4.5" as ModelId,
-  deep: "openai/codex-5.2" as ModelId,
+  cowork: "anthropic/claude-opus-4-5" as ModelId,
+  deepwork: "openai/gpt-5.2-codex" as ModelId,
   explore: "anthropic/claude-3-5-haiku-20241022" as ModelId,
-  architect: "openai/opus-4.5" as ModelId,
+  architect: "anthropic/claude-opus-4-5" as ModelId,
   compaction: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   title: "anthropic/claude-3-5-haiku-20241022" as ModelId,
 }

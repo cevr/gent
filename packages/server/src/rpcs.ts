@@ -2,6 +2,7 @@ import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "@eff
 import { Schema } from "effect"
 import {
   AgentName,
+  AuthProviderInfo,
   EventEnvelope,
   MessagePart,
   Model,
@@ -236,13 +237,6 @@ export const DeletePermissionRulePayload = Schema.Struct({
 // Auth Operations
 // ============================================================================
 
-export const AuthProviderInfo = Schema.Struct({
-  provider: Schema.String,
-  hasKey: Schema.Boolean,
-  source: Schema.optional(Schema.Literal("env", "stored")),
-})
-export type AuthProviderInfo = typeof AuthProviderInfo.Type
-
 export const SetAuthKeyPayload = Schema.Struct({
   provider: Schema.String,
   key: Schema.String,
@@ -251,6 +245,8 @@ export const SetAuthKeyPayload = Schema.Struct({
 export const DeleteAuthKeyPayload = Schema.Struct({
   provider: Schema.String,
 })
+
+export { AuthProviderInfo }
 
 export { EventEnvelope }
 

@@ -17,6 +17,7 @@ const TEST_TIMEOUT = 30_000
 const ENTER = "\r"
 const ESC = "\x1b"
 const CTRL_C = "\x03"
+const SHIFT_TAB = "\x1b[Z"
 
 interface TestContext {
   pty: IPty
@@ -51,12 +52,10 @@ function spawnTui(): TestContext {
     rows: 24,
     cwd: tuiDir,
     env: {
-      ...process.env,
-      // Override home to use temp directory for .gent data
-      HOME: tempDir,
-      // Force terminal settings
-      TERM: "xterm-256color",
-      FORCE_COLOR: "1",
+      ...Bun.env,
+      ANTHROPIC_API_KEY: "sk-test-anthropic",
+      OPENAI_API_KEY: "sk-test-openai",
+      GENT_DATA_DIR: tempDir,
     },
   })
 
@@ -155,6 +154,31 @@ describe("E2E: TUI Basics", () => {
       // Should see the prompt symbol and some UI
       expect(testContext.output.length).toBeGreaterThan(100)
       expect(stripAnsi(testContext.output)).toContain("❯")
+
+      testContext.pty.write(CTRL_C)
+    },
+    TEST_TIMEOUT,
+  )
+
+  test(
+    "shift+tab toggles agent label",
+    async () => {
+      testContext = spawnTui()
+      await waitForReady(testContext)
+
+      await waitForOutput(
+        () => stripAnsi(testContext!.output),
+        (o) => o.includes("cowork"),
+        5000,
+      )
+
+      testContext.pty.write(SHIFT_TAB)
+
+      await waitForOutput(
+        () => stripAnsi(testContext!.output),
+        (o) => o.includes("deepwork"),
+        5000,
+      )
 
       testContext.pty.write(CTRL_C)
     },

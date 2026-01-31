@@ -216,6 +216,16 @@ export function Input(props: InputProps) {
   }
 
   useKeyboard((e) => {
+    const isShiftTab =
+      (e.name === "tab" && e.shift === true) ||
+      e.name === "backtab" ||
+      e.sequence === "\x1b[Z" ||
+      e.sequence === "\x1b[1;2Z"
+    if (isShiftTab) {
+      const nextAgent = client.agent() === "deepwork" ? "cowork" : "deepwork"
+      client.steer({ _tag: "SwitchAgent", agent: nextAgent })
+      return
+    }
     if (
       e.name === "return" &&
       effectiveMode() !== "prompt" &&

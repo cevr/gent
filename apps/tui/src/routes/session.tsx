@@ -415,13 +415,6 @@ export function Session(props: SessionProps) {
       return
     }
 
-    // Shift+Tab: toggle agent (cowork <-> deep)
-    if (e.shift === true && e.name === "tab") {
-      const nextAgent = client.agent() === "deep" ? "cowork" : "deep"
-      client.steer({ _tag: "SwitchAgent", agent: nextAgent })
-      return
-    }
-
     // Ctrl+O: toggle tool output expansion
     if (e.ctrl === true && e.name === "o") {
       setToolsExpanded((prev) => !prev)
@@ -600,8 +593,6 @@ export function Session(props: SessionProps) {
         <StatusBar.ErrorRow />
         <StatusBar.Row>
           <StatusBar.Agent />
-          <StatusBar.Separator />
-          <StatusBar.Model />
         </StatusBar.Row>
         <StatusBar.Row>
           <StatusBar.Cwd />

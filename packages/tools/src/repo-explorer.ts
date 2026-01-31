@@ -1,8 +1,9 @@
-import { Effect, Schema } from "effect"
+import { Config, Effect, Option, Schema } from "effect"
 import { defineTool } from "@gent/core"
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
 import { $ } from "bun"
+import * as os from "node:os"
 
 // RepoExplorer Tool Error
 
@@ -47,9 +48,6 @@ export const RepoExplorerResult = Schema.Struct({
   message: Schema.optional(Schema.String),
 })
 
-// Cache directory
-const CACHE_DIR = path.join(process.env["HOME"] ?? "~", ".cache", "repo")
-
 // Parse spec into type and parts
 interface ParsedSpec {
   type: "github" | "npm" | "pypi" | "crates"
@@ -91,17 +89,17 @@ function parseSpec(spec: string): ParsedSpec {
 }
 
 // Get cache path for spec
-function getCachePath(spec: string): string {
+function getCachePath(cacheDir: string, spec: string): string {
   const parsed = parseSpec(spec)
   switch (parsed.type) {
     case "github":
-      return path.join(CACHE_DIR, ...parsed.name.split("/"))
+      return path.join(cacheDir, ...parsed.name.split("/"))
     case "npm":
-      return path.join(CACHE_DIR, "npm", parsed.name, parsed.version ?? "latest")
+      return path.join(cacheDir, "npm", parsed.name, parsed.version ?? "latest")
     case "pypi":
-      return path.join(CACHE_DIR, "pypi", parsed.name, parsed.version ?? "latest")
+      return path.join(cacheDir, "pypi", parsed.name, parsed.version ?? "latest")
     case "crates":
-      return path.join(CACHE_DIR, "crates", parsed.name, parsed.version ?? "latest")
+      return path.join(cacheDir, "crates", parsed.name, parsed.version ?? "latest")
   }
 }
 
@@ -114,7 +112,12 @@ export const RepoExplorerTool = defineTool({
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, get paths.",
   params: RepoExplorerParams,
   execute: Effect.fn("RepoExplorerTool.execute")(function* (params) {
-    const cachePath = getCachePath(params.spec)
+    const home = yield* Config.option(Config.string("HOME")).pipe(
+      Effect.catchAll(() => Effect.succeed(Option.none())),
+      Effect.map(Option.getOrElse(() => os.homedir())),
+    )
+    const cacheDir = path.join(home, ".cache", "repo")
+    const cachePath = getCachePath(cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
     switch (params.action) {

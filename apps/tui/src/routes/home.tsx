@@ -79,13 +79,6 @@ export function Home(props: HomeProps) {
       exit()
       return
     }
-
-    // Shift+Tab: toggle agent (cowork <-> deep)
-    if (e.shift === true && e.name === "tab") {
-      const nextAgent = client.agent() === "deep" ? "cowork" : "deep"
-      client.steer({ _tag: "SwitchAgent", agent: nextAgent })
-      return
-    }
   })
 
   const handleSubmit = (content: string, _mode?: "queue" | "interject") => {
@@ -172,8 +165,6 @@ export function Home(props: HomeProps) {
       <StatusBar.Root>
         <StatusBar.Row>
           <StatusBar.Agent />
-          <StatusBar.Separator />
-          <StatusBar.Model />
         </StatusBar.Row>
         <StatusBar.Row>
           <StatusBar.Cwd />

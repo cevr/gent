@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Config, Context, Effect, Layer, Option, Schema } from "effect"
 import type { LanguageModel } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
@@ -6,7 +6,12 @@ import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createMistral } from "@ai-sdk/mistral"
 import { fromIni } from "@aws-sdk/credential-providers"
-import { AuthStorage, type AuthStorageService, SUPPORTED_PROVIDERS } from "@gent/core"
+import {
+  AuthStorage,
+  PROVIDER_ENV_VARS,
+  type AuthStorageService,
+  SUPPORTED_PROVIDERS,
+} from "@gent/core"
 import { ProviderError } from "./provider"
 
 type ProviderApi =
@@ -59,27 +64,24 @@ export class ProviderFactory extends Context.Tag(
   )
 }
 
-// Env var names for built-in providers
-const PROVIDER_ENV_VARS: Record<string, string> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-  google: "GOOGLE_GENERATIVE_AI_API_KEY",
-  mistral: "MISTRAL_API_KEY",
-}
-
 // Resolve API key: env var → AuthStorage
 const resolveApiKey = (
   providerName: string,
   auth: AuthStorageService,
-): Effect.Effect<string | undefined> => {
-  const defaultEnvVar = PROVIDER_ENV_VARS[providerName]
-  if (defaultEnvVar !== undefined && defaultEnvVar !== "") {
-    const envKey = process.env[defaultEnvVar]
-    if (envKey !== undefined && envKey !== "") return Effect.succeed(envKey)
-  }
+): Effect.Effect<string | undefined> =>
+  Effect.gen(function* () {
+    const defaultEnvVar = PROVIDER_ENV_VARS[providerName as keyof typeof PROVIDER_ENV_VARS]
+    if (defaultEnvVar !== undefined && defaultEnvVar !== "") {
+      const envKey = Option.getOrUndefined(
+        yield* Config.option(Config.string(defaultEnvVar)).pipe(
+          Effect.catchAll(() => Effect.succeed(Option.none())),
+        ),
+      )
+      if (envKey !== undefined && envKey !== "") return envKey
+    }
 
-  return auth.get(providerName).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
-}
+    return yield* auth.get(providerName).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+  })
 
 type ProviderClient = (modelName: string) => LanguageModel
 
@@ -88,6 +90,7 @@ const createProviderClient = (
   api: ProviderApi,
   apiKey: string | undefined,
   baseUrl: string | undefined,
+  region: string | undefined,
 ): ProviderClient | undefined => {
   const resolvedApiKey = apiKey !== undefined && apiKey !== "" ? { apiKey } : undefined
   switch (api) {
@@ -109,7 +112,7 @@ const createProviderClient = (
       })
     case "bedrock":
       return createAmazonBedrock({
-        region: process.env["AWS_REGION"] ?? "us-east-1",
+        region: region ?? "us-east-1",
         credentialProvider: async () => {
           const creds = await fromIni()()
           return {
@@ -173,7 +176,16 @@ function makeProviderFactory(auth: AuthStorageService): ProviderFactoryService {
       }
 
       const apiKey = yield* resolveApiKey(providerName, auth)
-      const client = createProviderClient(api, apiKey, undefined)
+      const region =
+        api === "bedrock"
+          ? Option.getOrElse(
+              yield* Config.option(Config.string("AWS_REGION")).pipe(
+                Effect.catchAll(() => Effect.succeed(Option.none())),
+              ),
+              () => "us-east-1",
+            )
+          : undefined
+      const client = createProviderClient(api, apiKey, undefined, region)
       if (client === undefined) {
         return yield* new ProviderError({
           message: "Provider client unavailable",

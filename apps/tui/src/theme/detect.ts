@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process"
+import { Config, Effect, Option } from "effect"
 
 /**
  * Detect if terminal is using dark or light mode.
@@ -10,7 +11,12 @@ import { execSync } from "node:child_process"
 export function detectColorScheme(): "dark" | "light" {
   // Check COLORFGBG env (set by some terminals like rxvt, xterm, some terminal emulators)
   // Format: "fg;bg" where higher bg number = light theme
-  const colorFgBg = process.env["COLORFGBG"]
+  const colorFgBg = Effect.runSync(
+    Config.option(Config.string("COLORFGBG")).pipe(
+      Effect.catchAll(() => Effect.succeed(Option.none())),
+      Effect.map(Option.getOrUndefined),
+    ),
+  )
   if (colorFgBg !== undefined && colorFgBg.length > 0) {
     const parts = colorFgBg.split(";")
     const bg = parseInt(parts[parts.length - 1] ?? "0", 10)

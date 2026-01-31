@@ -54,3 +54,19 @@ export const SUPPORTED_PROVIDERS: readonly Provider[] = [
   new Provider({ id: "google", name: "Google" }),
   new Provider({ id: "mistral", name: "Mistral" }),
 ]
+
+export const PROVIDER_ENV_VARS: Partial<Record<ProviderId, string>> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GOOGLE_GENERATIVE_AI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+}
+
+const PROVIDER_ID_SET = new Set<ProviderId>(["anthropic", "bedrock", "openai", "google", "mistral"])
+
+export const parseModelProvider = (modelId: string): ProviderId | undefined => {
+  const slash = modelId.indexOf("/")
+  if (slash <= 0 || slash === modelId.length - 1) return undefined
+  const provider = modelId.slice(0, slash) as ProviderId
+  return PROVIDER_ID_SET.has(provider) ? provider : undefined
+}

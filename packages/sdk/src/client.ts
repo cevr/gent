@@ -7,6 +7,7 @@ import { GentRpcs, RpcHandlersLive, type GentRpcsClient, type GentRpcError } fro
 import { stringifyOutput, summarizeOutput } from "@gent/core"
 import type {
   AgentName,
+  AuthProviderInfo,
   EventEnvelope,
   MessagePart,
   TextPart,
@@ -18,7 +19,14 @@ import type {
   PermissionRule,
 } from "@gent/core"
 
-export type { MessagePart, TextPart, ToolCallPart, ToolResultPart, PermissionRule }
+export type {
+  MessagePart,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+  PermissionRule,
+  AuthProviderInfo,
+}
 
 // Re-export RPC types
 export type { GentRpcsClient, GentRpcError }
@@ -27,12 +35,6 @@ export type { GentRpcsClient, GentRpcError }
 export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 
 // Auth provider info
-export interface AuthProviderInfo {
-  provider: string
-  hasKey: boolean
-  source?: "env" | "stored"
-}
-
 export function extractText(parts: readonly MessagePart[]): string {
   const textPart = parts.find((p): p is TextPart => p.type === "text")
   return textPart?.text ?? ""
