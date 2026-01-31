@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { AuthOauth, type AuthStoreService } from "@gent/core"
 import { Buffer } from "node:buffer"
+import * as os from "node:os"
 
 export const OPENAI_OAUTH_ALLOWED_MODELS = new Set([
   "gpt-5.1-codex-max",
@@ -115,6 +116,36 @@ const buildAuthorizeUrl = (redirectUri: string, pkce: PkceCodes, state: string):
     originator: "gent",
   })
   return `${ISSUER}/oauth/authorize?${params.toString()}`
+}
+
+const parseAuthorizationInput = (input: string): { code?: string; state?: string } => {
+  const value = input.trim()
+  if (value.length === 0) return {}
+
+  try {
+    const url = new URL(value)
+    return {
+      code: url.searchParams.get("code") ?? undefined,
+      state: url.searchParams.get("state") ?? undefined,
+    }
+  } catch {
+    // not a URL
+  }
+
+  if (value.includes("#")) {
+    const [code, state] = value.split("#", 2)
+    return { code, state }
+  }
+
+  if (value.includes("code=")) {
+    const params = new URLSearchParams(value)
+    return {
+      code: params.get("code") ?? undefined,
+      state: params.get("state") ?? undefined,
+    }
+  }
+
+  return { code: value }
 }
 
 const exchangeCodeForTokens = async (
@@ -257,48 +288,93 @@ const stopOAuthServer = () => {
   }
 }
 
-const waitForOAuthCallback = (pkce: PkceCodes, state: string): Promise<TokenResponse> =>
-  new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => {
-        if (pendingOAuth.has(state)) {
-          pendingOAuth.delete(state)
-          if (pendingOAuth.size === 0) stopOAuthServer()
-          reject(new Error("OAuth callback timeout"))
-        }
-      },
-      5 * 60 * 1000,
-    )
-
-    pendingOAuth.set(state, {
-      pkce,
-      state,
-      resolve: (tokens) => {
-        clearTimeout(timeout)
-        resolve(tokens)
-      },
-      reject: (error) => {
-        clearTimeout(timeout)
-        reject(error)
-      },
-    })
+const waitForOAuthCallback = (
+  pkce: PkceCodes,
+  state: string,
+): { promise: Promise<TokenResponse>; cancel: (reason: string) => void } => {
+  let resolveFn: (tokens: TokenResponse) => void
+  let rejectFn: (error: Error) => void
+  const promise = new Promise<TokenResponse>((resolve, reject) => {
+    resolveFn = resolve
+    rejectFn = reject
   })
+
+  const timeout = setTimeout(
+    () => {
+      if (pendingOAuth.has(state)) {
+        pendingOAuth.delete(state)
+        if (pendingOAuth.size === 0) stopOAuthServer()
+        rejectFn(new Error("OAuth callback timeout"))
+      }
+    },
+    5 * 60 * 1000,
+  )
+
+  pendingOAuth.set(state, {
+    pkce,
+    state,
+    resolve: (tokens) => {
+      clearTimeout(timeout)
+      resolveFn(tokens)
+    },
+    reject: (error) => {
+      clearTimeout(timeout)
+      rejectFn(error)
+    },
+  })
+
+  const cancel = (reason: string) => {
+    if (pendingOAuth.has(state)) {
+      pendingOAuth.delete(state)
+      if (pendingOAuth.size === 0) stopOAuthServer()
+    }
+    clearTimeout(timeout)
+    rejectFn(new Error(reason))
+  }
+
+  return { promise, cancel }
+}
 
 export const authorizeOpenAI = async () => {
   const { redirectUri } = await startOAuthServer()
   const pkce = await generatePKCE()
   const state = generateState()
   const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
-  const callbackPromise = waitForOAuthCallback(pkce, state)
+  const pending = waitForOAuthCallback(pkce, state)
 
   return {
     authorization: {
       url: authUrl,
       method: "auto" as const,
-      instructions: "Complete authorization in your browser.",
+      instructions: "Complete authorization in your browser. Paste the code if needed.",
     },
-    callback: async () => {
-      const tokens = await callbackPromise
+    callback: async (manualInput?: string) => {
+      if (manualInput !== undefined && manualInput.trim().length > 0) {
+        const parsed = parseAuthorizationInput(manualInput)
+        if (parsed.state !== undefined && parsed.state !== state) {
+          pending.cancel("State mismatch")
+          void pending.promise.catch(() => {})
+          throw new Error("State mismatch")
+        }
+        if (parsed.code === undefined || parsed.code.length === 0) {
+          pending.cancel("Missing authorization code")
+          void pending.promise.catch(() => {})
+          throw new Error("Missing authorization code")
+        }
+        pending.cancel("Manual authorization code provided")
+        void pending.promise.catch(() => {})
+        const tokens = await exchangeCodeForTokens(parsed.code, redirectUri, pkce)
+        const accountId = extractAccountId(tokens)
+        return {
+          type: "oauth" as const,
+          access: tokens.access_token,
+          refresh: tokens.refresh_token,
+          expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+          ...(accountId !== undefined && accountId.length > 0 ? { accountId } : {}),
+        }
+      }
+
+      const tokens = await pending.promise
       const accountId = extractAccountId(tokens)
       return {
         type: "oauth" as const,
@@ -352,21 +428,64 @@ export const createOpenAIOAuthFetch = (authStore: AuthStoreService): typeof fetc
       }
     }
 
-    headers.delete("authorization")
-    headers.delete("Authorization")
-    headers.set("authorization", `Bearer ${auth.access}`)
-    if (auth.accountId !== undefined && auth.accountId.length > 0) {
-      headers.set("ChatGPT-Account-Id", auth.accountId)
-    }
-
     const parsed =
       input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url)
     const shouldRewrite =
       parsed.pathname.includes("/responses") || parsed.pathname.includes("/chat/completions")
     const url = shouldRewrite ? new URL(CODEX_API_ENDPOINT) : parsed
 
+    headers.delete("authorization")
+    headers.delete("Authorization")
+    headers.set("authorization", `Bearer ${auth.access}`)
+    if (auth.accountId !== undefined && auth.accountId.length > 0) {
+      headers.set("ChatGPT-Account-Id", auth.accountId)
+    }
+    if (!headers.has("originator")) {
+      headers.set("originator", "gent")
+    }
+    if (!headers.has("User-Agent")) {
+      headers.set("User-Agent", `gent (${os.platform()} ${os.release()}; ${os.arch()})`)
+    }
+    if (shouldRewrite && !headers.has("OpenAI-Beta")) {
+      headers.set("OpenAI-Beta", "responses=experimental")
+    }
+
+    // For codex endpoint: transform request body
+    // Move developer/system messages from input[] to top-level instructions
+    let body = init?.body
+    if (shouldRewrite && typeof body === "string") {
+      try {
+        const parsed_body = JSON.parse(body)
+        if (Array.isArray(parsed_body.input)) {
+          const instructions: string[] = []
+          const filteredInput: unknown[] = []
+          for (const item of parsed_body.input) {
+            if (
+              item !== null &&
+              typeof item === "object" &&
+              (item.role === "developer" || item.role === "system")
+            ) {
+              if (typeof item.content === "string") instructions.push(item.content)
+            } else {
+              filteredInput.push(item)
+            }
+          }
+          if (instructions.length > 0) {
+            parsed_body.instructions = instructions.join("\n\n")
+            parsed_body.input = filteredInput
+          }
+          // Codex requires store: false
+          parsed_body.store = false
+        }
+        body = JSON.stringify(parsed_body)
+      } catch {
+        // leave body unchanged
+      }
+    }
+
     return fetch(url, {
       ...init,
+      body,
       headers,
     })
   }

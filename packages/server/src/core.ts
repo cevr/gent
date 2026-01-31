@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Stream } from "effect"
 import type { PlatformError } from "@effect/platform/Error"
 import {
   Session,
@@ -8,6 +8,7 @@ import {
   type EventEnvelope,
   EventStore,
   type EventStoreError,
+  ErrorOccurred,
   SessionNameUpdated,
   PlanConfirmed,
   CompactionStarted,
@@ -361,7 +362,17 @@ ${conversation}`
               yield* Effect.forkDaemon(
                 agentLoop.run(message, { bypass }).pipe(
                   Effect.withSpan("AgentLoop.firstMessage"),
-                  Effect.catchAllCause(() => Effect.void),
+                  Effect.catchAllCause((cause) =>
+                    eventStore
+                      .publish(
+                        new ErrorOccurred({
+                          sessionId,
+                          branchId,
+                          error: Cause.pretty(cause),
+                        }),
+                      )
+                      .pipe(Effect.catchAll(() => Effect.void)),
+                  ),
                 ),
               )
             }
@@ -624,7 +635,17 @@ ${conversation}`
           yield* Effect.forkDaemon(
             agentLoop.run(message, { bypass }).pipe(
               Effect.withSpan("AgentLoop.background"),
-              Effect.catchAllCause(() => Effect.void),
+              Effect.catchAllCause((cause) =>
+                eventStore
+                  .publish(
+                    new ErrorOccurred({
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      error: Cause.pretty(cause),
+                    }),
+                  )
+                  .pipe(Effect.catchAll(() => Effect.void)),
+              ),
             ),
           )
         }),

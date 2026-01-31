@@ -9,7 +9,6 @@ import { fromIni } from "@aws-sdk/credential-providers"
 import { AuthStore, SUPPORTED_PROVIDERS, type AuthInfo, type AuthStoreService } from "@gent/core"
 import { ProviderError } from "./provider"
 import { OPENAI_OAUTH_ALLOWED_MODELS, createOpenAIOAuthFetch } from "./oauth/openai-oauth"
-import { createAnthropicOAuthFetch } from "./oauth/anthropic-oauth"
 
 type ProviderApi =
   | "anthropic"
@@ -83,26 +82,18 @@ const createProviderClient = (
   const resolvedApiKey = apiKey !== undefined && apiKey !== "" ? { apiKey } : undefined
   switch (api) {
     case "anthropic":
-      if (auth?.type === "oauth") {
-        return createAnthropic({
-          authToken: "oauth",
-          fetch: createAnthropicOAuthFetch(authStore),
-          headers: {
-            "anthropic-beta":
-              "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
-          },
-        })
-      }
       return createAnthropic(resolvedApiKey)
     case "openai":
       if (auth?.type === "oauth") {
-        return createOpenAI({
+        const oauthClient = createOpenAI({
           apiKey: "oauth",
           fetch: createOpenAIOAuthFetch(authStore),
           headers: {
             originator: "gent",
           },
         })
+        // Codex models use the Responses API, not chat completions
+        return (modelName: string) => oauthClient.responses(modelName)
       }
       return createOpenAI(resolvedApiKey)
     case "openai-compatible":

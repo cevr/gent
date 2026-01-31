@@ -11,6 +11,7 @@
         "@effect/experimental": "^0.58.0",
         "@effect/rpc": "^0.73.0",
         "@effect/sql": "^0.49.0",
+        "effect-machine": "^0.2.4",
         "msgpackr": "^1.11.8",
         "multipasta": "^0.2.7",
       },
@@ -217,7 +218,7 @@
     "@effect/vitest": "^0.21.5",
     "ai": "^6.0.49",
     "effect": "^3.19.14",
-    "effect-machine": "^0.2.1",
+    "effect-machine": "^0.2.3",
     "msgpackr": "^1.11.4",
     "multipasta": "^0.2.7",
     "vitest": "^3.2.4",
@@ -891,7 +892,7 @@
 
     "effect": ["effect@3.19.15", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-vzMmgfZKLcojmUjBdlQx+uaKryO7yULlRxjpDnHdnvcp1NPHxJyoM6IOXBLlzz2I/uPtZpGKavt5hBv7IvGZkA=="],
 
-    "effect-machine": ["effect-machine@0.2.1", "", { "dependencies": { "effect": "^3.19.15" }, "peerDependencies": { "@effect/cluster": "^0.56.0", "@effect/rpc": "^0.73.0" }, "optionalPeers": ["@effect/cluster", "@effect/rpc"] }, "sha512-0HTzzJnVVznJvgP/6LeeKC/pgi9NFzKe9m//XDko3VOWaQUfH0CRcAb8eyEYZd6MdBxtpSQT0u2BtWsw43HFaA=="],
+    "effect-machine": ["effect-machine@0.2.4", "", { "dependencies": { "effect": "^3.19.15" }, "peerDependencies": { "@effect/cluster": "^0.56.0", "@effect/rpc": "^0.73.0" }, "optionalPeers": ["@effect/cluster", "@effect/rpc"] }, "sha512-B3f55qn86jPRaPeH72Af5Vgeo3lEzvbRI6GuIk6ye9957QEhR9RvSDXR6JD1kc0771Sl0cMLv2hE+BIZicIZDw=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.267", "", {}, "sha512-0Drusm6MVRXSOJpGbaSVgcQsuB4hEkMpHXaVstcPmhu5LIedxs1xNK/nIxmQIU/RPC0+1/o0AVZfBTkTNJOdUw=="],
 

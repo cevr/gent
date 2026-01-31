@@ -2,6 +2,7 @@ import {
   Cause,
   Context,
   DateTime,
+  Deferred,
   Effect,
   Exit,
   Layer,
@@ -777,14 +778,26 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
             const isRunning = yield* loop.actor.matches("Running")
 
             if (isRunning) {
-              // Queue as follow-up
               yield* Ref.update(loop.followUpQueue, (queue) => [...queue, { message, bypass }])
               return
             }
 
+            // Use sync subscribe to avoid SubscriptionRef semaphore deadlock.
+            // Subscribe BEFORE sending Start so we can't miss fast transitions.
+            const done = yield* Deferred.make<void>()
+            const runtime = yield* Effect.runtime<never>()
+            let sawRunning = false
+            const unsubscribe = loop.actor.subscribe((state) => {
+              if (state._tag === "Running") {
+                sawRunning = true
+              } else if (sawRunning) {
+                Runtime.runFork(runtime)(Deferred.succeed(done, void 0))
+              }
+            })
+
             yield* loop.actor.send(AgentLoopEvent.Start({ message, bypass }))
-            yield* loop.actor.waitFor((state) => state._tag === "Running")
-            yield* loop.actor.waitFor((state) => state._tag !== "Running")
+            yield* Deferred.await(done)
+            unsubscribe()
           }),
 
           steer: (command) =>
@@ -1162,21 +1175,23 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
           Effect.gen(function* () {
             const runtime = yield* Effect.runtime<never>()
             const runFork = Runtime.runFork(runtime)
-            const inspector = makeInspector((event) => {
-              runFork(
-                eventStore
-                  .publish(
-                    new MachineInspected({
-                      sessionId: input.sessionId,
-                      branchId: input.branchId,
-                      actorId: event.actorId,
-                      inspectionType: event.type,
-                      payload: event,
-                    }),
-                  )
-                  .pipe(Effect.catchAll(() => Effect.void)),
-              )
-            })
+            const inspector = makeInspector<typeof AgentActorState, typeof AgentActorEvent>(
+              (event) => {
+                runFork(
+                  eventStore
+                    .publish(
+                      new MachineInspected({
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                        actorId: event.actorId,
+                        inspectionType: event.type,
+                        payload: event,
+                      }),
+                    )
+                    .pipe(Effect.catchAll(() => Effect.void)),
+                )
+              },
+            )
 
             const actorId = actorIdFor(input)
             const actor = yield* actorSystem.spawn(actorId, makeAgentMachine(runEffect)).pipe(
