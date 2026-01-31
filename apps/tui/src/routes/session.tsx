@@ -2,7 +2,7 @@
  * Session route - message list, input, streaming
  */
 
-import { createSignal, createEffect, onCleanup } from "solid-js"
+import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import {
@@ -18,7 +18,7 @@ import { StatusBar } from "../components/status-bar"
 import { MessageList, type Message, type SessionItem } from "../components/message-list"
 import { Indicators, type Indicator } from "../components/indicators"
 import { Input } from "../components/input"
-import { useTheme } from "../theme/index"
+import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { useCommand } from "../command/index"
 import { useRouter } from "../router/index"
 import { executeSlashCommand } from "../commands/slash-commands"
@@ -51,6 +51,8 @@ export function Session(props: SessionProps) {
   const client = useClient()
   const router = useRouter()
   const { cast } = useRuntime(client.client.runtime)
+
+  const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
   const [messages, setMessages] = createSignal<Message[]>([])
   const [events, setEvents] = createSignal<SessionEvent[]>([])
@@ -551,7 +553,12 @@ export function Session(props: SessionProps) {
   return (
     <box flexDirection="column" flexGrow={1}>
       {/* Messages */}
-      <MessageList items={items()} toolsExpanded={toolsExpanded()} />
+      <MessageList
+        items={items()}
+        toolsExpanded={toolsExpanded()}
+        syntaxStyle={syntaxStyle}
+        streaming={client.isStreaming()}
+      />
 
       {/* Thinking indicator */}
       <Indicators indicator={indicator()} />

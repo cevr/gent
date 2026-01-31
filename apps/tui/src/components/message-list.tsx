@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js"
+import type { SyntaxStyle } from "@opentui/core"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
 import { getSpinnerFrames, formatToolInput } from "./message-list-utils"
@@ -64,6 +65,8 @@ function AssistantMessage(props: {
   images: ImageInfo[]
   toolCalls: ToolCall[] | undefined
   expanded: boolean
+  syntaxStyle: () => SyntaxStyle
+  streaming: boolean
 }) {
   const { theme } = useTheme()
   const hasContent = () =>
@@ -98,7 +101,12 @@ function AssistantMessage(props: {
         </box>
       </Show>
       <Show when={props.content.length > 0}>
-        <text style={{ fg: theme.text }}>{props.content}</text>
+        <markdown
+          content={props.content}
+          syntaxStyle={props.syntaxStyle()}
+          streaming={props.streaming}
+          conceal
+        />
       </Show>
     </box>
   )
@@ -155,13 +163,15 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
 interface MessageListProps {
   items: SessionItem[]
   toolsExpanded: boolean
+  syntaxStyle: () => SyntaxStyle
+  streaming: boolean
 }
 
 export function MessageList(props: MessageListProps) {
   return (
     <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
       <For each={props.items}>
-        {(item) =>
+        {(item, index) =>
           item._tag === "event" ? (
             <SessionEventIndicator event={item} />
           ) : (
@@ -173,6 +183,8 @@ export function MessageList(props: MessageListProps) {
                   images={item.images}
                   toolCalls={item.toolCalls}
                   expanded={props.toolsExpanded}
+                  syntaxStyle={props.syntaxStyle}
+                  streaming={props.streaming && index() === props.items.length - 1}
                 />
               }
             >
