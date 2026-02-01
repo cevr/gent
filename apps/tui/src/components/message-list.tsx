@@ -102,9 +102,9 @@ function AssistantMessage(props: {
       </Show>
       <Show when={props.content.length > 0}>
         <markdown
-          content={props.content}
           syntaxStyle={props.syntaxStyle()}
           streaming={props.streaming}
+          content={props.content}
           conceal
         />
       </Show>

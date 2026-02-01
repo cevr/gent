@@ -22,7 +22,7 @@ import {
   type Model,
 } from "@gent/core"
 import type { GentRpcError } from "@gent/server"
-import { tuiLog, tuiEvent, tuiError, clearUnifiedLog } from "../utils/unified-tracer"
+import { tuiError } from "../utils/unified-tracer"
 import { formatError } from "../utils/format-error"
 import { useMachine } from "../hooks/use-machine"
 
@@ -183,9 +183,6 @@ interface ClientProviderProps extends ParentProps {
 }
 
 export function ClientProvider(props: ClientProviderProps) {
-  clearUnifiedLog()
-  tuiLog("ClientProvider init")
-
   const defaultAgent: AgentName = "cowork"
 
   // DirectClient already has the right shape, use it directly
@@ -277,20 +274,81 @@ export function ClientProvider(props: ClientProviderProps) {
       const sep = key.indexOf(":")
       const sessionId = key.slice(0, sep)
       const branchId = key.slice(sep + 1)
-      tuiLog(`event subscription: ${sessionId}`)
       let cancelled = false
       eventBuffer.length = 0
 
+      const processEvent = (envelope: EventEnvelope): void => {
+        if (cancelled) return
+
+        eventBuffer.push(envelope)
+        if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
+          eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
+        }
+
+        const event = envelope.event
+
+        // Update agent state based on events
+        switch (event._tag) {
+          case "StreamStarted":
+            setAgentStore({ status: AgentStatus.streaming() })
+            break
+
+          case "StreamEnded":
+            setAgentStore({ status: AgentStatus.idle() })
+            if (event.usage !== undefined) {
+              const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
+              const turnCost = calculateCost(event.usage, modelInfo?.pricing)
+              setAgentStore(
+                produce((draft) => {
+                  draft.cost += turnCost
+                }),
+              )
+            }
+            break
+
+          case "ErrorOccurred":
+            setAgentStore({ status: AgentStatus.error(event.error) })
+            break
+
+          case "AgentSwitched":
+            if (Schema.is(AgentNameSchema)(event.toAgent)) {
+              setPreferredAgent(event.toAgent)
+              setAgentStore({ agent: event.toAgent })
+            } else {
+              setAgentStore({ agent: defaultAgent })
+            }
+            break
+
+          case "MessageReceived":
+            if (event.role === "user") {
+              setAgentStore({ status: AgentStatus.streaming() })
+            } else if (event.role === "assistant") {
+              setAgentStore({ status: AgentStatus.idle() })
+            }
+            break
+
+          case "SessionNameUpdated":
+            if (event.sessionId === sessionId) {
+              sendMachine(SessionMachineEvent.UpdateName({ name: event.name }))
+            }
+            break
+
+          case "BranchSwitched":
+            if (event.sessionId === sessionId) {
+              sendMachine(SessionMachineEvent.UpdateBranch({ branchId: event.toBranchId }))
+            }
+            break
+        }
+
+        // Notify external listeners
+        for (const listener of eventListeners) {
+          listener(event)
+        }
+      }
+
       cast(
         Effect.gen(function* () {
-          tuiLog("event sub: getSessionState...")
-          const snapshot = yield* client.getSessionState({
-            sessionId,
-            branchId,
-          })
-          tuiLog(
-            `event sub: snapshot isStreaming=${snapshot.isStreaming} bypass=${snapshot.bypass}`,
-          )
+          const snapshot = yield* client.getSessionState({ sessionId, branchId })
 
           yield* Effect.sync(() => {
             setAgentStore(
@@ -304,105 +362,28 @@ export function ClientProvider(props: ClientProviderProps) {
             }
           })
 
-          tuiLog(`event sub: subscribing after=${snapshot.lastEventId}`)
           const events = client.subscribeEvents({
             sessionId,
             branchId,
             ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
           })
 
-          tuiLog("event sub: starting stream consumption")
-          const traced = events.pipe(
-            Stream.ensuring(Effect.sync(() => tuiLog("event sub: STREAM FINALIZED"))),
-            Stream.tap((envelope) =>
-              Effect.sync(() =>
-                tuiLog(`event sub: stream tap ${envelope.event._tag} id=${envelope.id}`),
-              ),
-            ),
-          )
-          yield* Stream.runForEach(traced, (envelope: EventEnvelope) =>
+          yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
             Effect.sync(() => {
-              if (cancelled) {
-                tuiLog(`event sub: CANCELLED, dropping ${envelope.event._tag}`)
-                return
-              }
-
-              eventBuffer.push(envelope)
-              if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
-                eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
-              }
-
-              const event = envelope.event
-              tuiEvent(`event: ${event._tag}`)
-
-              // Update agent state based on events
-              switch (event._tag) {
-                case "StreamStarted":
-                  setAgentStore({ status: AgentStatus.streaming() })
-                  break
-
-                case "StreamEnded":
-                  setAgentStore({ status: AgentStatus.idle() })
-                  if (event.usage !== undefined) {
-                    const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
-                    const turnCost = calculateCost(event.usage, modelInfo?.pricing)
-                    setAgentStore(
-                      produce((draft) => {
-                        draft.cost += turnCost
-                      }),
-                    )
-                  }
-                  break
-
-                case "ErrorOccurred":
-                  tuiError("ErrorOccurred", event.error)
-                  setAgentStore({ status: AgentStatus.error(event.error) })
-                  break
-
-                case "AgentSwitched":
-                  if (Schema.is(AgentNameSchema)(event.toAgent)) {
-                    setPreferredAgent(event.toAgent)
-                    setAgentStore({ agent: event.toAgent })
-                  } else {
-                    setAgentStore({ agent: defaultAgent })
-                  }
-                  break
-
-                case "MessageReceived":
-                  if (event.role === "user") {
-                    setAgentStore({ status: AgentStatus.streaming() })
-                  } else if (event.role === "assistant") {
-                    setAgentStore({ status: AgentStatus.idle() })
-                  }
-                  break
-
-                case "SessionNameUpdated":
-                  if (event.sessionId === sessionId) {
-                    sendMachine(SessionMachineEvent.UpdateName({ name: event.name }))
-                  }
-                  break
-
-                case "BranchSwitched":
-                  if (event.sessionId === sessionId) {
-                    sendMachine(SessionMachineEvent.UpdateBranch({ branchId: event.toBranchId }))
-                  }
-                  break
-              }
-
-              // Notify external listeners
-              for (const listener of eventListeners) {
-                listener(event)
+              try {
+                processEvent(envelope)
+              } catch (err) {
+                // Guard against rendering errors killing the event stream fiber.
+                // @opentui/core MarkdownRenderable can crash if props are applied
+                // in wrong order (content before syntaxStyle). Catch and continue.
+                tuiError("event processing error", err instanceof Error ? err.message : String(err))
               }
             }),
           )
-          tuiLog("event sub: stream consumption ended normally")
         }).pipe(
-          // Catch stream errors and surface them to UI
           Effect.catchAll((err) =>
             Effect.sync(() => {
-              tuiLog(`event sub: stream error cancelled=${cancelled}`)
               if (!cancelled) {
-                tuiError("stream error", formatError(err))
                 setAgentStore({ status: AgentStatus.error(formatError(err)) })
               }
             }),
@@ -411,7 +392,6 @@ export function ClientProvider(props: ClientProviderProps) {
       )
 
       onCleanup(() => {
-        tuiLog("event sub: onCleanup")
         cancelled = true
       })
     }),
@@ -460,7 +440,6 @@ export function ClientProvider(props: ClientProviderProps) {
         client.createSession(firstMessage !== undefined ? { firstMessage } : undefined).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
-              tuiLog(`createSession success: ${result.sessionId}`)
               sendMachine(
                 SessionMachineEvent.CreateSucceeded({
                   session: {

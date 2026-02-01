@@ -603,7 +603,7 @@ function PromptUI(props: PromptUIProps) {
       <Show when={props.question.markdown} keyed>
         {(markdown) => (
           <box marginTop={1} paddingRight={1}>
-            <markdown content={markdown} syntaxStyle={markdownSyntaxStyle} />
+            <markdown syntaxStyle={markdownSyntaxStyle} content={markdown} />
           </box>
         )}
       </Show>
