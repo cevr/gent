@@ -342,10 +342,12 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       setAuthKey: (provider, key) =>
         authStore
           .set(provider, new AuthApi({ type: "api", key }))
-          .pipe(Effect.catchAll(() => Effect.void)),
+          .pipe(Effect.catchAll((e) => Effect.logWarning("setAuthKey failed", e))),
 
       deleteAuthKey: (provider) =>
-        authStore.remove(provider).pipe(Effect.catchAll(() => Effect.void)),
+        authStore
+          .remove(provider)
+          .pipe(Effect.catchAll((e) => Effect.logWarning("deleteAuthKey failed", e))),
 
       listAuthMethods: () => providerAuth.listMethods(),
 

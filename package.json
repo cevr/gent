@@ -55,7 +55,7 @@
     "@effect/sql-sqlite-bun": "^0.50.0",
     "@effect/experimental": "^0.58.0",
     "@effect/rpc": "^0.73.0",
-    "@effect/cluster": "^0.56.0",
+    "@effect/cluster": "^0.56.1",
     "@effect/cli": "^0.73.1",
     "@effect/vitest": "^0.27.0",
     "msgpackr": "^1.11.4",

@@ -34,7 +34,6 @@ import { formatError, type UiError } from "../utils/format-error"
 import { BranchTree } from "../components/branch-tree"
 import { MessagePicker } from "../components/message-picker"
 import type { SessionEvent } from "../components/session-event-indicator"
-import type { QuestionsAsked, PermissionRequested, PlanPresented } from "@gent/core"
 
 export interface SessionProps {
   sessionId: string
@@ -313,15 +312,11 @@ export function Session(props: SessionProps) {
           }),
         )
       } else if (event._tag === "QuestionsAsked") {
-        // Handle agent asking questions - transition to prompt state
-        handleInputEvent({ _tag: "QuestionsAsked", event: event as typeof QuestionsAsked.Type })
+        handleInputEvent({ _tag: "QuestionsAsked", event })
       } else if (event._tag === "PermissionRequested") {
-        handleInputEvent({
-          _tag: "PermissionRequested",
-          event: event as typeof PermissionRequested.Type,
-        })
+        handleInputEvent({ _tag: "PermissionRequested", event })
       } else if (event._tag === "PlanPresented") {
-        handleInputEvent({ _tag: "PlanPresented", event: event as typeof PlanPresented.Type })
+        handleInputEvent({ _tag: "PlanPresented", event })
       }
       // Note: agent state (status, cost, error) is updated by ClientProvider
     })

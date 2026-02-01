@@ -81,7 +81,20 @@ export function BranchPicker(props: BranchPickerProps) {
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
-            setState((current) => ({ ...current, error: formatError(err) }))
+            setState((current) => {
+              const error = formatError(err)
+              switch (current._tag) {
+                case "loading":
+                  return { _tag: "loading", error }
+                case "ready":
+                  return {
+                    _tag: "ready",
+                    selectedIndex: current.selectedIndex,
+                    messageCounts: current.messageCounts,
+                    error,
+                  }
+              }
+            })
           }),
         ),
       ),
@@ -93,7 +106,12 @@ export function BranchPicker(props: BranchPickerProps) {
     if (current._tag !== "ready") return
     if (props.branches.length === 0) return
     if (current.selectedIndex >= props.branches.length) {
-      setState({ ...current, selectedIndex: props.branches.length - 1 })
+      setState({
+        _tag: "ready",
+        selectedIndex: props.branches.length - 1,
+        messageCounts: current.messageCounts,
+        error: current.error,
+      })
     }
   })
 
@@ -119,7 +137,12 @@ export function BranchPicker(props: BranchPickerProps) {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
         const next = prev.selectedIndex > 0 ? prev.selectedIndex - 1 : props.branches.length - 1
-        return { ...prev, selectedIndex: next }
+        return {
+          _tag: "ready",
+          selectedIndex: next,
+          messageCounts: prev.messageCounts,
+          error: prev.error,
+        }
       })
       return
     }
@@ -128,7 +151,12 @@ export function BranchPicker(props: BranchPickerProps) {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
         const next = prev.selectedIndex < props.branches.length - 1 ? prev.selectedIndex + 1 : 0
-        return { ...prev, selectedIndex: next }
+        return {
+          _tag: "ready",
+          selectedIndex: next,
+          messageCounts: prev.messageCounts,
+          error: prev.error,
+        }
       })
       return
     }

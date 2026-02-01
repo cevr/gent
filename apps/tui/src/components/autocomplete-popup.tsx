@@ -2,7 +2,7 @@
  * Autocomplete popup for prefix triggers ($, @, /)
  */
 
-import { createSignal, createEffect, For, Show } from "solid-js"
+import { createSignal, createEffect, createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/solid"
 import { useTheme } from "../theme/index"
@@ -98,18 +98,16 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const { skills } = useSkills()
   const fileSearch = useFileSearch({ cwd: workspace.cwd })
 
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
+  const [rawSelectedIndex, setSelectedIndex] = createSignal(0)
 
   let scrollRef: ScrollBoxRenderable | undefined = undefined
-  useScrollSync(() => `ac-item-${selectedIndex()}`, { getRef: () => scrollRef })
 
-  // Get items based on type
-  const items = (): AutocompleteItem[] => {
+  // Memoize filtered items to avoid recomputation on each access
+  const items = createMemo((): AutocompleteItem[] => {
     const filter = props.state.filter.toLowerCase()
 
     switch (props.state.type) {
       case "$": {
-        // Skills
         return skills()
           .filter((s) => s.name.toLowerCase().includes(filter))
           .map((s) => ({
@@ -120,7 +118,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       }
 
       case "@": {
-        // Files - show tag + name, truncated path
         return fileSearch.results().map((f) => {
           const tag = getFileTag(f.path)
           return {
@@ -132,7 +129,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       }
 
       case "/": {
-        // Slash commands
         return SLASH_COMMANDS.filter((c) => c.id.includes(filter) || c.label.includes(filter)).map(
           (c) => ({
             id: c.id,
@@ -142,20 +138,21 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         )
       }
     }
-  }
+  })
+
+  // Clamp index reactively instead of via createEffect
+  const selectedIndex = createMemo(() => {
+    const list = items()
+    const idx = rawSelectedIndex()
+    return idx >= list.length ? Math.max(0, list.length - 1) : idx
+  })
+
+  useScrollSync(() => `ac-item-${selectedIndex()}`, { getRef: () => scrollRef })
 
   // Update file search when filter changes
   createEffect(() => {
     if (props.state.type === "@") {
       fileSearch.search(props.state.filter)
-    }
-  })
-
-  // Reset selection when items change
-  createEffect(() => {
-    const list = items()
-    if (selectedIndex() >= list.length) {
-      setSelectedIndex(Math.max(0, list.length - 1))
     }
   })
 

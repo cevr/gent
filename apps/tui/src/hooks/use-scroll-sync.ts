@@ -6,7 +6,7 @@
  */
 
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { createEffect, type Accessor } from "solid-js"
+import { createEffect, onCleanup, type Accessor } from "solid-js"
 
 interface ScrollSyncOptions {
   /** The scrollbox ref getter */
@@ -43,16 +43,20 @@ export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncO
     return true
   }
 
-  const syncScrollWithRetry = (id: string, remainingRetries: number = retries) => {
-    if (syncScroll(id)) return
-    if (remainingRetries > 0) {
-      setTimeout(() => syncScrollWithRetry(id, remainingRetries - 1), retryDelay)
-    }
-  }
-
   createEffect(() => {
     const id = selectedId()
-    // Small delay to let render complete
-    setTimeout(() => syncScrollWithRetry(id), 10)
+    let cancelled = false
+
+    const syncWithRetry = (remaining: number) => {
+      if (cancelled || syncScroll(id)) return
+      if (remaining > 0) {
+        setTimeout(() => syncWithRetry(remaining - 1), retryDelay)
+      }
+    }
+
+    setTimeout(() => syncWithRetry(retries), 10)
+    onCleanup(() => {
+      cancelled = true
+    })
   })
 }

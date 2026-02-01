@@ -60,7 +60,20 @@ export function Permissions(props: PermissionsProps) {
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
-            setState((current) => ({ ...current, error: formatError(err) }))
+            setState((current) => {
+              const error = formatError(err)
+              switch (current._tag) {
+                case "loading":
+                  return { _tag: "loading", error }
+                case "ready":
+                  return {
+                    _tag: "ready",
+                    rules: current.rules,
+                    selectedIndex: current.selectedIndex,
+                    error,
+                  }
+              }
+            })
           }),
         ),
       ),
@@ -81,13 +94,31 @@ export function Permissions(props: PermissionsProps) {
               if (prev._tag !== "ready") return prev
               const nextRules = prev.rules.filter((_, i) => i !== prev.selectedIndex)
               const nextIndex = Math.min(prev.selectedIndex, Math.max(0, nextRules.length - 1))
-              return { ...prev, rules: nextRules, selectedIndex: nextIndex }
+              return {
+                _tag: "ready",
+                rules: nextRules,
+                selectedIndex: nextIndex,
+                error: prev.error,
+              }
             })
           }),
         ),
         Effect.catchAll((err) =>
           Effect.sync(() => {
-            setState((currentState) => ({ ...currentState, error: formatError(err) }))
+            setState((prev) => {
+              const error = formatError(err)
+              switch (prev._tag) {
+                case "loading":
+                  return { _tag: "loading", error }
+                case "ready":
+                  return {
+                    _tag: "ready",
+                    rules: prev.rules,
+                    selectedIndex: prev.selectedIndex,
+                    error,
+                  }
+              }
+            })
           }),
         ),
       ),
@@ -107,7 +138,7 @@ export function Permissions(props: PermissionsProps) {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
         const next = prev.selectedIndex > 0 ? prev.selectedIndex - 1 : prev.rules.length - 1
-        return { ...prev, selectedIndex: next }
+        return { _tag: "ready", rules: prev.rules, selectedIndex: next, error: prev.error }
       })
       return
     }
@@ -116,7 +147,7 @@ export function Permissions(props: PermissionsProps) {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
         const next = prev.selectedIndex < prev.rules.length - 1 ? prev.selectedIndex + 1 : 0
-        return { ...prev, selectedIndex: next }
+        return { _tag: "ready", rules: prev.rules, selectedIndex: next, error: prev.error }
       })
       return
     }

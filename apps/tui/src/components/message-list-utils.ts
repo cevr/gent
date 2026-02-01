@@ -54,6 +54,10 @@ export function getSpinnerFrames(toolName: string): readonly string[] {
   return TOOL_SPINNERS[name] ?? TOOL_SPINNERS["default"] ?? [" | "]
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object"
+}
+
 /**
  * Format tool input for display in parenthesis
  */
@@ -62,8 +66,8 @@ export function formatToolInput(
   input: unknown,
   cwd: string = process.cwd(),
 ): string {
-  if (input === null || input === undefined || typeof input !== "object") return ""
-  const obj = input as Record<string, unknown>
+  if (!isRecord(input)) return ""
+  const obj = input
 
   switch (toolName.toLowerCase()) {
     case "bash":

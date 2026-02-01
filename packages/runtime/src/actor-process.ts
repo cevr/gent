@@ -6,6 +6,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import type * as Cause from "effect/Cause"
 import {
   AgentName,
+  ErrorOccurred,
   EventStore,
   Message,
   TextPart,
@@ -138,7 +139,20 @@ export const LocalActorProcessLive: Layer.Layer<
           })
 
           yield* Effect.forkDaemon(
-            agentLoop.run(message, { bypass }).pipe(Effect.catchAllCause(() => Effect.void)),
+            agentLoop.run(message, { bypass }).pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.gen(function* () {
+                  yield* eventStore.publish(
+                    new ErrorOccurred({
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      error: `Agent loop failed: ${cause}`,
+                    }),
+                  )
+                  yield* Effect.logWarning("agent loop failed", cause)
+                }).pipe(Effect.catchAll(() => Effect.void)),
+              ),
+            ),
           )
         }).pipe(
           Effect.catchAllCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),

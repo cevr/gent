@@ -6,6 +6,7 @@ import {
   Message,
   TextPart,
   type EventEnvelope,
+  EventId,
   EventStore,
   type EventStoreError,
   ErrorOccurred,
@@ -805,7 +806,7 @@ ${conversation}`
           eventStore.subscribe({
             sessionId: input.sessionId,
             ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
-            ...(input.after !== undefined ? { after: input.after as EventEnvelope["id"] } : {}),
+            ...(input.after !== undefined ? { after: EventId.make(input.after) } : {}),
           }),
       }
 

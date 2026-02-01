@@ -57,7 +57,14 @@ export function Home(props: HomeProps) {
   })
 
   const setShowWelcome = (showWelcome: boolean) => {
-    setState((prev) => ({ ...prev, showWelcome }))
+    setState((prev) => {
+      switch (prev._tag) {
+        case "idle":
+          return { _tag: "idle", showWelcome }
+        case "pending":
+          return { _tag: "pending", prompt: prev.prompt, showWelcome }
+      }
+    })
   }
 
   const exit = () => {
@@ -71,7 +78,9 @@ export function Home(props: HomeProps) {
     if (current._tag !== "pending") return
     const session = client.session()
     if (session === null) return
-    setState((prev) => (prev._tag === "pending" ? { ...prev, _tag: "idle" } : prev))
+    setState((prev) =>
+      prev._tag === "pending" ? { _tag: "idle", showWelcome: prev.showWelcome } : prev,
+    )
     router.navigateToSession(session.sessionId, session.branchId, current.prompt)
   })
 
@@ -127,7 +136,7 @@ export function Home(props: HomeProps) {
 
   const handleSubmit = (content: string, _mode?: "queue" | "interject") => {
     // Create session, navigate with pending prompt for session route to send
-    setState((prev) => ({ ...prev, _tag: "pending", prompt: content }))
+    setState((prev) => ({ _tag: "pending", prompt: content, showWelcome: prev.showWelcome }))
     client.createSession()
   }
 
@@ -135,7 +144,7 @@ export function Home(props: HomeProps) {
   onMount(() => {
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
       const prompt = props.initialPrompt
-      setState((prev) => ({ ...prev, _tag: "pending", prompt }))
+      setState((prev) => ({ _tag: "pending", prompt, showWelcome: prev.showWelcome }))
       client.createSession()
     }
   })

@@ -36,5 +36,3 @@ const opts: Parameters<typeof generateText>[0] = { model, prompt }
 if (systemPrompt) opts.system = systemPrompt
 if (maxTokens) opts.maxOutputTokens = maxTokens
 ```
-
-## Scripts

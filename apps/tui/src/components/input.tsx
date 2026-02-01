@@ -7,6 +7,7 @@ import {
   createContext,
   useContext,
   onMount,
+  onCleanup,
   Show,
   For,
   type JSX,
@@ -421,6 +422,10 @@ export function Input(props: InputProps) {
   // Focus input on mount
   onMount(() => {
     inputRef?.focus()
+  })
+
+  onCleanup(() => {
+    pasteStore.clear()
   })
 
   // Prompt symbol based on input mode
