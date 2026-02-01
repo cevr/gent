@@ -41,22 +41,11 @@ export function useMachine<
 ): UseMachineReturn<S, E> {
   const tag = label ?? "machine"
   const [state, setState] = createSignal<S>(initial)
-  let actorRef: ActorRef<S, E> | undefined = undefined
-  const pending: E[] = []
+  const actorRef: ActorRef<S, E> = Effect.runSync(spawn)
 
   tuiLog(`[${tag}] init, initial=${initial._tag}`)
 
   onMount(() => {
-    tuiLog(`[${tag}] onMount`)
-    actorRef = Effect.runSync(spawn.pipe(Effect.orDie))
-    tuiLog(`[${tag}] spawned, flushing ${pending.length} pending events`)
-
-    for (const event of pending) {
-      tuiLog(`[${tag}] flush: ${event._tag}`)
-      Effect.runFork(actorRef.send(event))
-    }
-    pending.length = 0
-
     const unsubscribe = actorRef.subscribe((s) => {
       tuiLog(`[${tag}] state: ${s._tag}`)
       setState(() => s)
@@ -65,18 +54,13 @@ export function useMachine<
     onCleanup(() => {
       tuiLog(`[${tag}] cleanup`)
       unsubscribe()
-      if (actorRef !== undefined) Effect.runFork(actorRef.stop)
+      actorRef.stopSync()
     })
   })
 
   const send = (event: E) => {
-    if (actorRef === undefined) {
-      tuiLog(`[${tag}] send (queued, no actor): ${event._tag}`)
-      pending.push(event)
-      return
-    }
     tuiLog(`[${tag}] send: ${event._tag}`)
-    Effect.runFork(actorRef.send(event))
+    actorRef.sendSync(event)
   }
 
   return { state, send, actor: () => actorRef }
