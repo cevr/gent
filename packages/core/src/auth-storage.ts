@@ -105,7 +105,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
 
           set: (provider, key) =>
             execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
-              Effect.catchAll(() => Effect.void),
+              Effect.catchAll(() => Effect.void), // Expected to fail if no existing entry
               Effect.flatMap(() =>
                 execSecurity([
                   "add-generic-password",
@@ -123,7 +123,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
           delete: (provider) =>
             execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
               Effect.asVoid,
-              Effect.catchAll(() => Effect.void),
+              Effect.catchAll((e) => Effect.logWarning("failed to delete keychain entry", e)),
             ),
 
           list: () =>

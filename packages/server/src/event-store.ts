@@ -1,8 +1,17 @@
-import { Effect, Layer, PubSub, Stream } from "effect"
+import { Effect, Layer, PubSub, Queue, Stream } from "effect"
 import { EventStore, EventStoreError } from "@gent/core"
 import type { EventEnvelope } from "@gent/core"
 import type { StorageError } from "@gent/storage"
 import { Storage } from "@gent/storage"
+import { appendFileSync } from "node:fs"
+
+const esLog = (msg: string) => {
+  try {
+    const d = new Date()
+    const ts = `[${d.toTimeString().slice(0, 8)}.${String(d.getMilliseconds()).padStart(3, "0")}]`
+    appendFileSync("/tmp/gent-unified.log", `${ts} [eventstore] ${msg}\n`)
+  } catch {}
+}
 
 const toEventStoreError =
   (message: string) =>
@@ -35,6 +44,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.sco
         const envelope = yield* storage
           .appendEvent(event)
           .pipe(Effect.mapError(toEventStoreError("Failed to append event")))
+        esLog(`publish: ${event._tag} id=${envelope.id}`)
         yield* PubSub.publish(pubsub, envelope)
       }),
 
@@ -47,11 +57,23 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.sco
               .getLatestEventId({ sessionId, branchId })
               .pipe(Effect.mapError(toEventStoreError("Failed to load latest event id")))
             const maxId = Math.max(afterId, latestId ?? afterId)
+            esLog(`subscribe: afterId=${afterId} latestId=${latestId} maxId=${maxId}`)
             const buffered = yield* storage
               .listEvents({ sessionId, branchId, afterId })
               .pipe(Effect.mapError(toEventStoreError("Failed to load buffered events")))
             const initial = buffered.filter((env) => env.id <= maxId)
+            esLog(`subscribe: initial=${initial.length} buffered=${buffered.length}`)
             const live = Stream.fromQueue(queue).pipe(
+              Stream.tap((env) =>
+                Effect.gen(function* () {
+                  const size = yield* Queue.size(queue)
+                  const shutdown = yield* Queue.isShutdown(queue)
+                  const matches = env.id > maxId && matchesEventFilter(env, sessionId, branchId)
+                  esLog(
+                    `live queue: ${env.event._tag} id=${env.id} matches=${matches} qSize=${size} shutdown=${shutdown}`,
+                  )
+                }),
+              ),
               Stream.filter(
                 (env) => env.id > maxId && matchesEventFilter(env, sessionId, branchId),
               ),

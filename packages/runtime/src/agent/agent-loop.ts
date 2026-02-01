@@ -714,7 +714,11 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                           branchId,
                           error: Cause.pretty(cause),
                         }),
-                      ).pipe(Effect.catchAll(() => Effect.void)),
+                      ).pipe(
+                        Effect.catchAll((e) =>
+                          Effect.logWarning("failed to publish ErrorOccurred event", e),
+                        ),
+                      ),
                     ),
                   ),
                 {
@@ -932,7 +936,11 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
                 stateTag: "Running",
               }),
             )
-            .pipe(Effect.catchAll(() => Effect.void))
+            .pipe(
+              Effect.catchAll((e) =>
+                Effect.logWarning("failed to publish MachineTaskSucceeded", e),
+              ),
+            )
         },
       )
 
@@ -951,7 +959,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
               error,
             }),
           )
-          .pipe(Effect.catchAll(() => Effect.void))
+          .pipe(Effect.catchAll((e) => Effect.logWarning("failed to publish MachineTaskFailed", e)))
       })
 
       const runEffect = Effect.fn("AgentActor.runEffect")((input: AgentRunInput) =>
@@ -1160,7 +1168,11 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
                       error: Cause.pretty(cause),
                     }),
                   )
-                  .pipe(Effect.catchAll(() => Effect.void)),
+                  .pipe(
+                    Effect.catchAll((e) =>
+                      Effect.logWarning("failed to publish ErrorOccurred event", e),
+                    ),
+                  ),
           ),
           Effect.catchAllCause((cause) =>
             Cause.isInterruptedOnly(cause)
@@ -1188,7 +1200,11 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
                         payload: event,
                       }),
                     )
-                    .pipe(Effect.catchAll(() => Effect.void)),
+                    .pipe(
+                      Effect.catchAll((e) =>
+                        Effect.logWarning("failed to publish MachineInspected", e),
+                      ),
+                    ),
                 )
               },
             )

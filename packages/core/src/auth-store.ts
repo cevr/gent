@@ -91,7 +91,10 @@ export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore"
             ),
           ),
 
-        remove: (provider) => storage.delete(provider).pipe(Effect.catchAll(() => Effect.void)),
+        remove: (provider) =>
+          storage
+            .delete(provider)
+            .pipe(Effect.catchAll((e) => Effect.logWarning("failed to remove auth key", e))),
 
         list: () => storage.list().pipe(Effect.catchAll(() => Effect.succeed([]))),
 

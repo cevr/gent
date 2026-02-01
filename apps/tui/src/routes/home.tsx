@@ -2,7 +2,7 @@
  * Home route - displays logo, handles first message
  */
 
-import { createEffect, createSignal, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, onMount, Show } from "solid-js"
 import { useRenderer, useTerminalDimensions, useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import { getLogos } from "../logo.macro.js" with { type: "macro" }
@@ -23,8 +23,8 @@ export interface HomeProps {
 }
 
 type HomeState =
-  | { _tag: "idle"; showWelcome: boolean; needsAuth: boolean }
-  | { _tag: "pending"; prompt: string; showWelcome: boolean; needsAuth: boolean }
+  | { _tag: "idle"; showWelcome: boolean }
+  | { _tag: "pending"; prompt: string; showWelcome: boolean }
 
 export function Home(props: HomeProps) {
   const renderer = useRenderer()
@@ -45,15 +45,19 @@ export function Home(props: HomeProps) {
   const [state, setState] = createSignal<HomeState>({
     _tag: "idle",
     showWelcome: false,
-    needsAuth: false,
+  })
+  const [authProviders, setAuthProviders] = createSignal<
+    { hasKey: boolean; provider: string; required: boolean }[]
+  >([])
+
+  const needsAuth = createMemo(() => {
+    const providers = authProviders()
+    if (providers.length === 0) return false
+    return !providers.some((p) => p.hasKey && p.provider !== "bedrock")
   })
 
-  const setFlags = (flags: { showWelcome?: boolean; needsAuth?: boolean }) => {
-    setState((prev) => ({
-      ...prev,
-      ...(flags.showWelcome !== undefined ? { showWelcome: flags.showWelcome } : {}),
-      ...(flags.needsAuth !== undefined ? { needsAuth: flags.needsAuth } : {}),
-    }))
+  const setShowWelcome = (showWelcome: boolean) => {
+    setState((prev) => ({ ...prev, showWelcome }))
   }
 
   const exit = () => {
@@ -142,21 +146,24 @@ export function Home(props: HomeProps) {
         const sessions = yield* client.listSessions()
         const firstRun = sessions.length === 0
         yield* Effect.sync(() => {
-          setFlags({ showWelcome: firstRun, needsAuth: firstRun ? undefined : false })
+          setShowWelcome(firstRun)
         })
         if (!firstRun) return
 
         const providers = yield* client.client.listAuthProviders()
-        const hasKey = providers.some(
-          (provider) => provider.hasKey && provider.provider !== "bedrock",
-        )
         yield* Effect.sync(() => {
-          setFlags({ needsAuth: !hasKey })
+          setAuthProviders(
+            providers.map((p) => ({
+              hasKey: p.hasKey,
+              provider: p.provider,
+              required: p.required,
+            })),
+          )
         })
       }).pipe(
         Effect.catchAll(() =>
           Effect.sync(() => {
-            setFlags({ showWelcome: false, needsAuth: false })
+            setShowWelcome(false)
           }),
         ),
       ),
@@ -173,7 +180,7 @@ export function Home(props: HomeProps) {
             <text style={{ fg: theme.text }}>Welcome to gent</text>
             <text style={{ fg: theme.textMuted }}>Type a prompt to start.</text>
             <Show
-              when={state().needsAuth}
+              when={needsAuth()}
               fallback={
                 <text style={{ fg: theme.textMuted }}>
                   Use /auth for keys, /permissions for rules

@@ -196,7 +196,11 @@ export const InProcessRunner: Layer.Layer<
                         success: false,
                       }),
                     )
-                    .pipe(Effect.catchAll(() => Effect.void))
+                    .pipe(
+                      Effect.catchAll((e) =>
+                        Effect.logWarning("failed to publish subagent event", e),
+                      ),
+                    )
 
                   return {
                     _tag: "error" as const,
@@ -294,7 +298,11 @@ export const SubprocessRunner: Layer.Layer<
                       success: false,
                     }),
                   )
-                  .pipe(Effect.catchAll(() => Effect.void))
+                  .pipe(
+                    Effect.catchAll((e) =>
+                      Effect.logWarning("failed to publish subagent event", e),
+                    ),
+                  )
 
                 return {
                   _tag: "error" as const,
@@ -342,7 +350,11 @@ export const SubprocessRunner: Layer.Layer<
                         success: false,
                       }),
                     )
-                    .pipe(Effect.catchAll(() => Effect.void))
+                    .pipe(
+                      Effect.catchAll((e) =>
+                        Effect.logWarning("failed to publish subagent event", e),
+                      ),
+                    )
 
                   return {
                     _tag: "error" as const,

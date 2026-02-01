@@ -2,13 +2,16 @@ import {
   createContext,
   useContext,
   createEffect,
+  createMemo,
   createSignal,
+  on,
   onMount,
   onCleanup,
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Effect, Stream, Runtime, Schema } from "effect"
+import { Machine } from "effect-machine"
 import {
   AgentName as AgentNameSchema,
   calculateCost,
@@ -21,6 +24,7 @@ import {
 import type { GentRpcError } from "@gent/server"
 import { tuiLog, tuiEvent, tuiError, clearUnifiedLog } from "../utils/unified-tracer"
 import { formatError } from "../utils/format-error"
+import { useMachine } from "../hooks/use-machine"
 
 import {
   type GentClient,
@@ -33,6 +37,8 @@ import {
   type SteerCommand,
   createClient,
 } from "@gent/sdk"
+
+import { SessionMachineState, SessionMachineEvent, sessionMachine } from "./session-machine"
 
 // Event listener type
 type EventListener = (event: AgentEvent) => void
@@ -147,6 +153,26 @@ export function useClient(): ClientContextValue {
 }
 
 // =============================================================================
+// Helpers
+// =============================================================================
+
+/** Convert machine state to public SessionState */
+const toSessionState = (ms: typeof SessionMachineState.Type): SessionState => {
+  switch (ms._tag) {
+    case "None":
+      return { status: "none" }
+    case "Creating":
+      return { status: "creating" }
+    case "Loading":
+      return { status: "loading" }
+    case "Active":
+      return { status: "active", session: ms.session }
+    case "Switching":
+      return { status: "switching", fromSession: ms.fromSession, toSessionId: ms.toSessionId }
+  }
+}
+
+// =============================================================================
 // Provider
 // =============================================================================
 
@@ -175,6 +201,29 @@ export function ClientProvider(props: ClientProviderProps) {
     Runtime.runFork(client.runtime)(effect)
   }
 
+  // ── Session machine ──
+  const initialMachineState =
+    props.initialSession !== undefined
+      ? SessionMachineState.Active({ session: props.initialSession })
+      : SessionMachineState.None
+
+  const { state: machineState, send: sendMachine } = useMachine<
+    typeof SessionMachineState.Type,
+    typeof SessionMachineEvent.Type
+  >(Machine.spawn(sessionMachine), initialMachineState, "session")
+
+  // Derived: convert machine state to public SessionState
+  const sessionState = (): SessionState => toSessionState(machineState())
+  const session = (): Session | null => {
+    const ms = machineState()
+    return ms._tag === "Active" ? ms.session : null
+  }
+  const isActive = () => machineState()._tag === "Active"
+  const isLoading = () => {
+    const tag = machineState()._tag
+    return tag === "Loading" || tag === "Creating" || tag === "Switching"
+  }
+
   onMount(() => {
     cast(
       client.listModels().pipe(
@@ -188,14 +237,6 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.catchAll(() => Effect.void),
       ),
     )
-  })
-
-  // Session state
-  const [sessionStore, setSessionStore] = createStore<{ sessionState: SessionState }>({
-    sessionState:
-      props.initialSession !== undefined
-        ? { status: "active", session: props.initialSession }
-        : { status: "none" },
   })
 
   // Agent state (derived from events)
@@ -212,173 +253,175 @@ export function ClientProvider(props: ClientProviderProps) {
     modelsById: {},
   })
 
-  // Derived accessors
-  const session = () => {
-    const s = sessionStore.sessionState
-    return s.status === "active" ? s.session : null
-  }
-
-  const isActive = () => sessionStore.sessionState.status === "active"
-  const isLoading = () => {
-    const status = sessionStore.sessionState.status
-    return status === "loading" || status === "creating" || status === "switching"
-  }
-
   // External event listeners (for components like session.tsx)
   const eventListeners = new Set<EventListener>()
   const eventBuffer: EventEnvelope[] = []
   const EVENT_BUFFER_LIMIT = 1000
 
+  // Stable session key — only changes when sessionId:branchId actually changes
+  const sessionKey = createMemo<string | null>(() => {
+    const ms = machineState()
+    if (ms._tag !== "Active") return null
+    return `${ms.session.sessionId}:${ms.session.branchId}`
+  })
+
   // Subscribe to events when session becomes active - SINGLE shared subscription
-  createEffect(() => {
-    const s = session()
-    if (s === null) {
+  // Uses on() to explicitly track only sessionKey, not other signals read inside
+  createEffect(
+    on(sessionKey, (key) => {
+      if (key === null) {
+        eventBuffer.length = 0
+        return
+      }
+
+      const sep = key.indexOf(":")
+      const sessionId = key.slice(0, sep)
+      const branchId = key.slice(sep + 1)
+      tuiLog(`event subscription: ${sessionId}`)
+      let cancelled = false
       eventBuffer.length = 0
-      return
-    }
 
-    tuiLog(`event subscription: ${s.sessionId}`)
-    let cancelled = false
-    eventBuffer.length = 0
-
-    cast(
-      Effect.gen(function* () {
-        const snapshot = yield* client.getSessionState({
-          sessionId: s.sessionId,
-          branchId: s.branchId,
-        })
-
-        yield* Effect.sync(() => {
-          setAgentStore(
-            produce((draft) => {
-              draft.agent = snapshot.agent ?? defaultAgent
-              draft.status = snapshot.isStreaming ? AgentStatus.streaming() : AgentStatus.idle()
-            }),
+      cast(
+        Effect.gen(function* () {
+          tuiLog("event sub: getSessionState...")
+          const snapshot = yield* client.getSessionState({
+            sessionId,
+            branchId,
+          })
+          tuiLog(
+            `event sub: snapshot isStreaming=${snapshot.isStreaming} bypass=${snapshot.bypass}`,
           )
-          if (snapshot.bypass !== undefined) {
-            setSessionStore(
+
+          yield* Effect.sync(() => {
+            setAgentStore(
               produce((draft) => {
-                if (draft.sessionState.status === "active") {
-                  draft.sessionState.session.bypass = snapshot.bypass ?? true
-                }
+                draft.agent = snapshot.agent ?? defaultAgent
+                draft.status = snapshot.isStreaming ? AgentStatus.streaming() : AgentStatus.idle()
               }),
             )
-          }
-        })
-
-        const events = client.subscribeEvents({
-          sessionId: s.sessionId,
-          branchId: s.branchId,
-          ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
-        })
-
-        yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
-          Effect.sync(() => {
-            if (cancelled) return
-
-            eventBuffer.push(envelope)
-            if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
-              eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
+            if (snapshot.bypass !== undefined) {
+              sendMachine(SessionMachineEvent.UpdateBypass({ bypass: snapshot.bypass ?? true }))
             }
+          })
 
-            const event = envelope.event
-            tuiEvent(`event: ${event._tag}`)
+          tuiLog(`event sub: subscribing after=${snapshot.lastEventId}`)
+          const events = client.subscribeEvents({
+            sessionId,
+            branchId,
+            ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+          })
 
-            // Update agent state based on events
-            switch (event._tag) {
-              case "StreamStarted":
-                setAgentStore({ status: AgentStatus.streaming() })
-                break
+          tuiLog("event sub: starting stream consumption")
+          const traced = events.pipe(
+            Stream.ensuring(Effect.sync(() => tuiLog("event sub: STREAM FINALIZED"))),
+            Stream.tap((envelope) =>
+              Effect.sync(() =>
+                tuiLog(`event sub: stream tap ${envelope.event._tag} id=${envelope.id}`),
+              ),
+            ),
+          )
+          yield* Stream.runForEach(traced, (envelope: EventEnvelope) =>
+            Effect.sync(() => {
+              if (cancelled) {
+                tuiLog(`event sub: CANCELLED, dropping ${envelope.event._tag}`)
+                return
+              }
 
-              case "StreamEnded":
-                setAgentStore({ status: AgentStatus.idle() })
-                if (event.usage !== undefined) {
-                  const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
-                  const turnCost = calculateCost(event.usage, modelInfo?.pricing)
-                  setAgentStore(
-                    produce((draft) => {
-                      draft.cost += turnCost
-                    }),
-                  )
-                }
-                break
+              eventBuffer.push(envelope)
+              if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
+                eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
+              }
 
-              case "ErrorOccurred":
-                tuiError("ErrorOccurred", event.error)
-                setAgentStore({ status: AgentStatus.error(event.error) })
-                break
+              const event = envelope.event
+              tuiEvent(`event: ${event._tag}`)
 
-              case "AgentSwitched":
-                if (Schema.is(AgentNameSchema)(event.toAgent)) {
-                  setPreferredAgent(event.toAgent)
-                  setAgentStore({ agent: event.toAgent })
-                } else {
-                  setAgentStore({ agent: defaultAgent })
-                }
-                break
-
-              case "MessageReceived":
-                if (event.role === "user") {
+              // Update agent state based on events
+              switch (event._tag) {
+                case "StreamStarted":
                   setAgentStore({ status: AgentStatus.streaming() })
-                } else if (event.role === "assistant") {
+                  break
+
+                case "StreamEnded":
                   setAgentStore({ status: AgentStatus.idle() })
-                }
-                break
+                  if (event.usage !== undefined) {
+                    const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
+                    const turnCost = calculateCost(event.usage, modelInfo?.pricing)
+                    setAgentStore(
+                      produce((draft) => {
+                        draft.cost += turnCost
+                      }),
+                    )
+                  }
+                  break
 
-              case "SessionNameUpdated":
-                if (event.sessionId === s.sessionId) {
-                  setSessionStore(
-                    produce((draft) => {
-                      if (draft.sessionState.status === "active") {
-                        draft.sessionState.session.name = event.name
-                      }
-                    }),
-                  )
-                }
-                break
+                case "ErrorOccurred":
+                  tuiError("ErrorOccurred", event.error)
+                  setAgentStore({ status: AgentStatus.error(event.error) })
+                  break
 
-              case "BranchSwitched":
-                if (event.sessionId === s.sessionId) {
-                  setSessionStore(
-                    produce((draft) => {
-                      if (draft.sessionState.status === "active") {
-                        draft.sessionState.session.branchId = event.toBranchId
-                      }
-                    }),
-                  )
-                }
-                break
-            }
+                case "AgentSwitched":
+                  if (Schema.is(AgentNameSchema)(event.toAgent)) {
+                    setPreferredAgent(event.toAgent)
+                    setAgentStore({ agent: event.toAgent })
+                  } else {
+                    setAgentStore({ agent: defaultAgent })
+                  }
+                  break
 
-            // Notify external listeners
-            for (const listener of eventListeners) {
-              listener(event)
-            }
-          }),
-        )
-      }).pipe(
-        // Catch stream errors and surface them to UI
-        Effect.catchAll((err) =>
-          Effect.sync(() => {
-            if (!cancelled) {
-              tuiError("stream error", formatError(err))
-              setAgentStore({ status: AgentStatus.error(formatError(err)) })
-            }
-          }),
+                case "MessageReceived":
+                  if (event.role === "user") {
+                    setAgentStore({ status: AgentStatus.streaming() })
+                  } else if (event.role === "assistant") {
+                    setAgentStore({ status: AgentStatus.idle() })
+                  }
+                  break
+
+                case "SessionNameUpdated":
+                  if (event.sessionId === sessionId) {
+                    sendMachine(SessionMachineEvent.UpdateName({ name: event.name }))
+                  }
+                  break
+
+                case "BranchSwitched":
+                  if (event.sessionId === sessionId) {
+                    sendMachine(SessionMachineEvent.UpdateBranch({ branchId: event.toBranchId }))
+                  }
+                  break
+              }
+
+              // Notify external listeners
+              for (const listener of eventListeners) {
+                listener(event)
+              }
+            }),
+          )
+          tuiLog("event sub: stream consumption ended normally")
+        }).pipe(
+          // Catch stream errors and surface them to UI
+          Effect.catchAll((err) =>
+            Effect.sync(() => {
+              tuiLog(`event sub: stream error cancelled=${cancelled}`)
+              if (!cancelled) {
+                tuiError("stream error", formatError(err))
+                setAgentStore({ status: AgentStatus.error(formatError(err)) })
+              }
+            }),
+          ),
         ),
-      ),
-    )
+      )
 
-    onCleanup(() => {
-      cancelled = true
-    })
-  })
+      onCleanup(() => {
+        tuiLog("event sub: onCleanup")
+        cancelled = true
+      })
+    }),
+  )
 
   const value: ClientContextValue = {
     client,
 
     // Session state
-    sessionState: () => sessionStore.sessionState,
+    sessionState,
     session,
     isActive,
     isLoading,
@@ -397,11 +440,9 @@ export function ClientProvider(props: ClientProviderProps) {
     setError: (error) =>
       setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
 
-    // Fire-and-forget actions using cast
+    // Fire-and-forget actions
     sendMessage: (content) => {
       const s = session()
-
-      // Session required for sending messages
       if (s === null) return
 
       cast(
@@ -414,23 +455,22 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     createSession: (firstMessage) => {
-      setSessionStore({ sessionState: { status: "creating" } })
+      sendMachine(SessionMachineEvent.CreateRequested)
       cast(
         client.createSession(firstMessage !== undefined ? { firstMessage } : undefined).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               tuiLog(`createSession success: ${result.sessionId}`)
-              setSessionStore({
-                sessionState: {
-                  status: "active",
+              sendMachine(
+                SessionMachineEvent.CreateSucceeded({
                   session: {
                     sessionId: result.sessionId,
                     branchId: result.branchId,
                     name: result.name,
                     bypass: result.bypass,
                   },
-                },
-              })
+                }),
+              )
               const preferred = preferredAgent()
               if (preferred !== defaultAgent) {
                 setAgentStore({ agent: preferred })
@@ -448,7 +488,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.catchAll((err) =>
             Effect.sync(() => {
               tuiError("createSession", err)
-              setSessionStore({ sessionState: { status: "none" } })
+              sendMachine(SessionMachineEvent.CreateFailed)
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }),
           ),
@@ -459,30 +499,27 @@ export function ClientProvider(props: ClientProviderProps) {
     switchSession: (sessionId, branchId, name, bypass) => {
       const current = session()
       if (current !== null) {
-        setSessionStore({
-          sessionState: { status: "switching", fromSession: current, toSessionId: sessionId },
-        })
+        sendMachine(
+          SessionMachineEvent.SwitchFromActive({
+            fromSession: current,
+            toSessionId: sessionId,
+          }),
+        )
       } else {
-        setSessionStore({ sessionState: { status: "loading" } })
+        sendMachine(SessionMachineEvent.LoadRequested)
       }
 
-      // Switch to new session - reset agent state
+      // Reset agent state and activate new session
       setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
-      setSessionStore({
-        sessionState: {
-          status: "active",
-          session: {
-            sessionId,
-            branchId,
-            name,
-            bypass: bypass ?? true,
-          },
-        },
-      })
+      sendMachine(
+        SessionMachineEvent.Activated({
+          session: { sessionId, branchId, name, bypass: bypass ?? true },
+        }),
+      )
     },
 
     clearSession: () => {
-      setSessionStore({ sessionState: { status: "none" } })
+      sendMachine(SessionMachineEvent.Clear)
       setAgentStore({ agent: preferredAgent(), status: AgentStatus.idle(), cost: 0 })
     },
 
@@ -507,13 +544,7 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.updateSessionBypass(s.sessionId, bypass).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            setSessionStore(
-              produce((draft) => {
-                if (draft.sessionState.status === "active") {
-                  draft.sessionState.session.bypass = result.bypass
-                }
-              }),
-            )
+            sendMachine(SessionMachineEvent.UpdateBypass({ bypass: result.bypass }))
           }),
         ),
         Effect.asVoid,

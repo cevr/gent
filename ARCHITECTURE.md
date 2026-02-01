@@ -38,7 +38,6 @@ packages/
 ├── tools/          # Effect services
 ├── providers/      # Vercel AI SDK adapters
 ├── runtime/        # AgentLoop, AgentActor, EventStore, Hooks
-├── api/            # HttpApi definitions
 └── test-utils/     # Mock layers, sequence recording
 
 apps/
@@ -48,9 +47,7 @@ apps/
 
 ## Core Concepts
 
-## Actor Model Spec
-
-See `docs/actor-model.md`.
+## Actor Model
 
 ### Messages
 

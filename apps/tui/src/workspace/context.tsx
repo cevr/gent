@@ -118,16 +118,46 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     // Initial fetch
     refreshGitInfo()
 
-    // Poll every 2 seconds
-    const interval = setInterval(() => {
-      refreshGitInfo()
-    }, 2000)
+    // Watch .git/index and .git/HEAD for changes (debounced)
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    const DEBOUNCE_MS = 200
+    const debouncedRefresh = () => {
+      if (debounceTimer !== null) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        refreshGitInfo()
+      }, DEBOUNCE_MS)
+    }
+
+    const fsWatchers: { close: () => void }[] = []
+    let fallbackInterval: ReturnType<typeof setInterval> | null = null
+
+    try {
+      const { watch } = require("node:fs")
+      const gitDir = `${props.cwd}/.git`
+      // Watch .git directory for index/HEAD changes
+      const watcher = watch(
+        gitDir,
+        { persistent: false },
+        (_eventType: string, filename: string | null) => {
+          if (filename === "index" || filename === "HEAD" || filename === "MERGE_HEAD") {
+            debouncedRefresh()
+          }
+        },
+      )
+      fsWatchers.push(watcher)
+    } catch {
+      // Fallback to polling if watch fails (not a git repo, etc.)
+      fallbackInterval = setInterval(refreshGitInfo, 2000)
+    }
 
     onCleanup(() => {
       if (currentFiber !== null) {
         Runtime.runFork(runtime)(Fiber.interruptFork(currentFiber))
       }
-      clearInterval(interval)
+      if (debounceTimer !== null) clearTimeout(debounceTimer)
+      for (const w of fsWatchers) w.close()
+      if (fallbackInterval !== null) clearInterval(fallbackInterval)
     })
   })
 

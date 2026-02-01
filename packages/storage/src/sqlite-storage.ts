@@ -60,6 +60,9 @@ export interface StorageService {
     summary: string,
   ) => Effect.Effect<void, StorageError>
   readonly countMessages: (branchId: string) => Effect.Effect<number, StorageError>
+  readonly countMessagesByBranches: (
+    branchIds: readonly string[],
+  ) => Effect.Effect<ReadonlyMap<string, number>, StorageError>
 
   // Messages
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
@@ -565,6 +568,29 @@ const makeStorage = (db: Database): StorageService => {
         catch: (e) =>
           new StorageError({
             message: "Failed to count messages",
+            cause: e,
+          }),
+      }),
+
+    countMessagesByBranches: (branchIds) =>
+      Effect.try({
+        try: () => {
+          if (branchIds.length === 0) return new Map<string, number>()
+          const placeholders = branchIds.map(() => "?").join(",")
+          const rows = db
+            .query(
+              `SELECT branch_id, COUNT(*) as count FROM messages WHERE branch_id IN (${placeholders}) GROUP BY branch_id`,
+            )
+            .all(...branchIds) as { branch_id: string; count: number }[]
+          const result = new Map<string, number>()
+          for (const row of rows) {
+            result.set(row.branch_id, row.count)
+          }
+          return result
+        },
+        catch: (e) =>
+          new StorageError({
+            message: "Failed to count messages by branches",
             cause: e,
           }),
       }),

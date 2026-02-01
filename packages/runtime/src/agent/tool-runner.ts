@@ -43,9 +43,7 @@ export class ToolRunner extends Context.Tag("@gent/runtime/src/agent/tool-runner
 
         return ToolRunner.of({
           run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, options) {
-            const tool = (yield* toolRegistry.get(toolCall.toolName)) as
-              | AnyToolDefinition
-              | undefined
+            const tool: AnyToolDefinition | undefined = yield* toolRegistry.get(toolCall.toolName)
             if (tool === undefined) {
               return errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`)
             }

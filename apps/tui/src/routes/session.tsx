@@ -3,6 +3,7 @@
  */
 
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
+import { createStore, produce } from "solid-js/store"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import {
@@ -41,7 +42,7 @@ export interface SessionProps {
   initialPrompt?: string
 }
 
-type OverlayState = { _tag: "none" } | { _tag: "tree"; nodes: BranchTreeNode[] } | { _tag: "fork" }
+type OverlayState = null | { _tag: "tree"; nodes: BranchTreeNode[] } | { _tag: "fork" }
 
 export function Session(props: SessionProps) {
   const renderer = useRenderer()
@@ -54,11 +55,13 @@ export function Session(props: SessionProps) {
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
-  const [messages, setMessages] = createSignal<Message[]>([])
-  const [events, setEvents] = createSignal<SessionEvent[]>([])
+  const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
+    messages: [],
+    events: [],
+  })
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
-  const [overlay, setOverlay] = createSignal<OverlayState>({ _tag: "none" })
+  const [overlay, setOverlay] = createSignal<OverlayState>(null)
   const [compacting, setCompacting] = createSignal(false)
   let initialPromptSent = false
   let eventSeq = 0
@@ -102,15 +105,15 @@ export function Session(props: SessionProps) {
     }, remainingMs)
   }
 
-  const items = (): SessionItem[] => {
-    const combined: SessionItem[] = [...messages(), ...events()]
+  const items = createMemo((): SessionItem[] => {
+    const combined: SessionItem[] = [...store.messages, ...store.events]
     return combined.sort((a, b) => {
       if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
       if (a._tag === "event" && b._tag === "event") return a.seq - b.seq
       if (a._tag === b._tag) return 0
       return a._tag === "message" ? -1 : 1
     })
-  }
+  })
 
   onCleanup(() => {
     if (compactionTimer !== null) clearTimeout(compactionTimer)
@@ -151,7 +154,7 @@ export function Session(props: SessionProps) {
         Effect.map((msgs) => buildMessages(msgs)),
         Effect.tap((msgs) =>
           Effect.sync(() => {
-            setMessages(msgs)
+            setStore("messages", msgs)
           }),
         ),
         Effect.catchAll((err) =>
@@ -199,130 +202,116 @@ export function Session(props: SessionProps) {
         loadMessages(props.branchId)
       } else if (event._tag === "BranchSwitched") {
         if (event.toBranchId !== props.branchId) {
-          setMessages([])
-          setEvents([])
+          setStore({ messages: [], events: [] })
           router.navigateToSession(event.sessionId, event.toBranchId)
         }
       } else if (event._tag === "StreamStarted") {
-        setMessages((prev) => [
-          ...prev,
-          {
-            _tag: "message",
-            id: crypto.randomUUID(),
-            role: "assistant",
-            kind: "regular",
-            content: "",
-            images: [],
-            createdAt: Date.now(),
-            toolCalls: undefined,
-          },
-        ])
-      } else if (event._tag === "StreamChunk") {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1]
-          if (last !== undefined && last.role === "assistant") {
-            return [...prev.slice(0, -1), { ...last, content: last.content + event.chunk }]
-          }
-          return [
-            ...prev,
-            {
+        setStore(
+          produce((draft) => {
+            draft.messages.push({
               _tag: "message",
               id: crypto.randomUUID(),
               role: "assistant",
               kind: "regular",
-              content: event.chunk,
+              content: "",
               images: [],
               createdAt: Date.now(),
               toolCalls: undefined,
-            },
-          ]
-        })
+            })
+          }),
+        )
+      } else if (event._tag === "StreamChunk") {
+        setStore(
+          produce((draft) => {
+            const last = draft.messages[draft.messages.length - 1]
+            if (last !== undefined && last.role === "assistant") {
+              last.content += event.chunk
+            } else {
+              draft.messages.push({
+                _tag: "message",
+                id: crypto.randomUUID(),
+                role: "assistant",
+                kind: "regular",
+                content: event.chunk,
+                images: [],
+                createdAt: Date.now(),
+                toolCalls: undefined,
+              })
+            }
+          }),
+        )
       } else if (event._tag === "TurnCompleted") {
         // Server is source of truth for turn completion/interruption
         const durationSeconds = Math.round(event.durationMs / 1000)
         if (event.interrupted === true) {
-          setEvents((prev) => [
-            ...prev,
-            {
-              _tag: "event",
-              kind: "interruption",
-              createdAt: Date.now(),
-              seq: eventSeq++,
-            },
-          ])
+          setStore(
+            produce((draft) => {
+              draft.events.push({
+                _tag: "event",
+                kind: "interruption",
+                createdAt: Date.now(),
+                seq: eventSeq++,
+              })
+            }),
+          )
         } else if (durationSeconds > 0) {
-          setEvents((prev) => [
-            ...prev,
-            {
-              _tag: "event",
-              kind: "turn-ended",
-              durationSeconds,
-              createdAt: Date.now(),
-              seq: eventSeq++,
-            },
-          ])
+          setStore(
+            produce((draft) => {
+              draft.events.push({
+                _tag: "event",
+                kind: "turn-ended",
+                durationSeconds,
+                createdAt: Date.now(),
+                seq: eventSeq++,
+              })
+            }),
+          )
         }
       } else if (event._tag === "ToolCallStarted") {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1]
-          if (last !== undefined && last.role === "assistant") {
-            const toolCalls = last.toolCalls ?? []
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...last,
-                toolCalls: [
-                  ...toolCalls,
-                  {
-                    id: event.toolCallId,
-                    toolName: event.toolName,
-                    status: "running" as const,
-                    input: event.input,
-                    summary: undefined,
-                    output: undefined,
-                  },
-                ],
-              },
-            ]
-          }
-          return prev
-        })
+        setStore(
+          produce((draft) => {
+            const last = draft.messages[draft.messages.length - 1]
+            if (last !== undefined && last.role === "assistant") {
+              if (last.toolCalls === undefined) last.toolCalls = []
+              last.toolCalls.push({
+                id: event.toolCallId,
+                toolName: event.toolName,
+                status: "running" as const,
+                input: event.input,
+                summary: undefined,
+                output: undefined,
+              })
+            }
+          }),
+        )
       } else if (event._tag === "ToolCallCompleted") {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1]
-          if (last !== undefined && last.role === "assistant" && last.toolCalls !== undefined) {
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...last,
-                toolCalls: last.toolCalls.map((tc) =>
-                  tc.id === event.toolCallId
-                    ? {
-                        ...tc,
-                        status: event.isError ? ("error" as const) : ("completed" as const),
-                        summary: event.summary,
-                        output: event.output,
-                      }
-                    : tc,
-                ),
-              },
-            ]
-          }
-          return prev
-        })
+        setStore(
+          produce((draft) => {
+            const last = draft.messages[draft.messages.length - 1]
+            if (last !== undefined && last.role === "assistant" && last.toolCalls !== undefined) {
+              const tc = last.toolCalls.find((t) => t.id === event.toolCallId)
+              if (tc !== undefined) {
+                tc.status = event.isError ? "error" : "completed"
+                tc.summary = event.summary
+                tc.output = event.output
+              }
+            }
+          }),
+        )
       } else if (event._tag === "CompactionStarted") {
         startCompaction()
       } else if (event._tag === "CompactionCompleted") {
         stopCompaction()
-        setEvents((prev) => [
-          ...prev,
-          {
-            _tag: "event",
-            kind: "compaction",
-            createdAt: Date.now(),
-            seq: eventSeq++,
-          },
-        ])
+        setStore(
+          produce((draft) => {
+            draft.events.push({
+              _tag: "event",
+              kind: "compaction",
+              createdAt: Date.now(),
+              seq: eventSeq++,
+            })
+          }),
+        )
       } else if (event._tag === "QuestionsAsked") {
         // Handle agent asking questions - transition to prompt state
         handleInputEvent({ _tag: "QuestionsAsked", event: event as typeof QuestionsAsked.Type })
@@ -349,8 +338,7 @@ export function Session(props: SessionProps) {
 
   // Clear messages handler for /clear command
   const clearMessages = () => {
-    setMessages([])
-    setEvents([])
+    setStore({ messages: [], events: [] })
   }
 
   const openBranchTree = () => {
@@ -371,7 +359,7 @@ export function Session(props: SessionProps) {
   }
 
   const openForkPicker = () => {
-    if (messages().length === 0) {
+    if (store.messages.length === 0) {
       client.setError("No messages to fork")
       return
     }
@@ -386,7 +374,7 @@ export function Session(props: SessionProps) {
     // Let command system handle keybinds first
     if (command.handleKeybind(e)) return
 
-    if (overlay()._tag !== "none") return
+    if (overlay() !== null) return
 
     // ESC: cancel if streaming, double-tap to quit when idle
     if (e.name === "escape") {
@@ -523,12 +511,12 @@ export function Session(props: SessionProps) {
     )
 
   const handleBranchSelect = (branchId: string) => {
-    setOverlay({ _tag: "none" })
+    setOverlay(null)
     client.switchBranch(branchId)
   }
 
   const handleForkSelect = (messageId: string) => {
-    setOverlay({ _tag: "none" })
+    setOverlay(null)
     cast(
       client.forkBranch(messageId).pipe(
         Effect.tap((branchId) =>
@@ -547,7 +535,7 @@ export function Session(props: SessionProps) {
 
   const overlayTree = () => {
     const current = overlay()
-    return current._tag === "tree" ? current.nodes : []
+    return current?._tag === "tree" ? current.nodes : []
   }
 
   return (
@@ -580,18 +568,18 @@ export function Session(props: SessionProps) {
       </Input>
 
       <BranchTree
-        open={overlay()._tag === "tree"}
+        open={overlay()?._tag === "tree"}
         tree={overlayTree()}
         activeBranchId={client.session()?.branchId}
         onSelect={handleBranchSelect}
-        onClose={() => setOverlay({ _tag: "none" })}
+        onClose={() => setOverlay(null)}
       />
 
       <MessagePicker
-        open={overlay()._tag === "fork"}
-        messages={messages()}
+        open={overlay()?._tag === "fork"}
+        messages={store.messages}
         onSelect={handleForkSelect}
-        onClose={() => setOverlay({ _tag: "none" })}
+        onClose={() => setOverlay(null)}
       />
 
       {/* Separator line */}

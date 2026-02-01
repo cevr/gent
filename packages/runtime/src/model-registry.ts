@@ -112,7 +112,9 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
         if (parsed.length > 0) {
           const dir = path.dirname(cachePath)
           yield* fs.makeDirectory(dir, { recursive: true })
-          yield* fs.writeFileString(cachePath, text).pipe(Effect.catchAll(() => Effect.void))
+          yield* fs
+            .writeFileString(cachePath, text)
+            .pipe(Effect.catchAll((e) => Effect.logWarning("failed to write model cache", e)))
         }
         return parsed
       }).pipe(Effect.catchAll(() => Effect.succeed([] as readonly Model[])))

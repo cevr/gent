@@ -347,7 +347,9 @@ ${conversation}`
                   yield* eventStore.publish(
                     new SessionNameUpdated({ sessionId, name: generatedName }),
                   )
-                }).pipe(Effect.catchAll(() => Effect.void)),
+                }).pipe(
+                  Effect.catchAll((e) => Effect.logWarning("session name generation failed", e)),
+                ),
               )
 
               // Fork sending the first message (non-blocking, starts agent loop)
@@ -371,7 +373,11 @@ ${conversation}`
                           error: Cause.pretty(cause),
                         }),
                       )
-                      .pipe(Effect.catchAll(() => Effect.void)),
+                      .pipe(
+                        Effect.catchAll((e) =>
+                          Effect.logWarning("failed to publish ErrorOccurred event", e),
+                        ),
+                      ),
                   ),
                 ),
               )
@@ -464,10 +470,12 @@ ${conversation}`
         getBranchTree: (sessionId) =>
           Effect.gen(function* () {
             const branches = yield* storage.listBranches(sessionId)
+            const branchIds = branches.map((b) => b.id)
+            const messageCounts = yield* storage.countMessagesByBranches(branchIds)
             const nodes = new Map<string, MutableBranchTreeNode>()
 
             for (const branch of branches) {
-              const messageCount = yield* storage.countMessages(branch.id)
+              const messageCount = messageCounts.get(branch.id) ?? 0
               nodes.set(branch.id, {
                 id: branch.id,
                 name: branch.name,
@@ -618,7 +626,7 @@ ${conversation}`
               yield* eventStore.publish(
                 new SessionNameUpdated({ sessionId: input.sessionId, name: generatedName }),
               )
-            }).pipe(Effect.catchAll(() => Effect.void)),
+            }).pipe(Effect.catchAll((e) => Effect.logWarning("session name generation failed", e))),
           )
 
           const message = new Message({
@@ -644,7 +652,11 @@ ${conversation}`
                       error: Cause.pretty(cause),
                     }),
                   )
-                  .pipe(Effect.catchAll(() => Effect.void)),
+                  .pipe(
+                    Effect.catchAll((e) =>
+                      Effect.logWarning("failed to publish ErrorOccurred event", e),
+                    ),
+                  ),
               ),
             ),
           )
