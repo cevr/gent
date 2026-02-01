@@ -60,7 +60,7 @@ Message = { id, sessionId, branchId, role, parts[], createdAt }
 
 ### Agent Loop + Agents
 
-Primary agent loop is an effect-machine actor (Idle/Running/Interrupted). Subagents run via AgentActor (effect-machine + ActorSystem):
+Primary agent loop is an effect-machine actor (Idle/Running/Interrupted). Subagents run via AgentActor (effect-machine Machine.spawn):
 
 ```typescript
 AgentLoop {

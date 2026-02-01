@@ -103,7 +103,7 @@ All tool calls are mailboxed for consistent cancellation and metrics.
 
 ## Local Execution (A)
 
-- In-process ActorSystem (effect-machine)
+- In-process actors via Machine.spawn (effect-machine)
 - ToolActor backed by ToolRunner
 - Subagents: in-process default, subprocess optional
 

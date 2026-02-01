@@ -125,3 +125,4 @@ export const sessionMachine = Machine.make({
   .on(SessionMachineState.Switching, SessionMachineEvent.Activated, ({ event }) =>
     SessionMachineState.Active({ session: event.session }),
   )
+  .build()

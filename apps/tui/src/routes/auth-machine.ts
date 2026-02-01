@@ -250,3 +250,4 @@ export const authMachine = Machine.make({
   .on(AuthState.OAuth, AuthEvent.OAuthAutoFailed, ({ state, event }) =>
     AuthState.OAuth({ ...state, phase: "idle", error: event.error }),
   )
+  .build()

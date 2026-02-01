@@ -4,18 +4,15 @@ import {
   DateTime,
   Deferred,
   Effect,
-  Exit,
   Layer,
   Queue,
   Ref,
   Runtime,
   Schema,
-  Scope,
   Stream,
 } from "effect"
 import {
   type ActorRef,
-  ActorSystemService,
   Event,
   InspectorService,
   Machine,
@@ -189,7 +186,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
     | FileSystem.FileSystem
     | ToolRunner
   > =>
-    Layer.scoped(
+    Layer.effect(
       AgentLoop,
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -201,9 +198,6 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
         const fs = yield* FileSystem.FileSystem
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
-        const loopScope = yield* Scope.make()
-
-        yield* Effect.addFinalizer(() => Scope.close(loopScope, Exit.void))
 
         const stateKey = (sessionId: string, branchId: string) => `${sessionId}:${branchId}`
         const publishEvent = (event: AgentEvent) =>
@@ -731,11 +725,9 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                   onFailure: (cause) => AgentLoopEvent.Failed({ error: Cause.pretty(cause) }),
                 },
               )
+              .build()
 
-            const loopActor = yield* Machine.spawn(loopMachine).pipe(
-              Effect.provideService(Scope.Scope, loopScope),
-              Effect.orDie,
-            )
+            const loopActor = yield* Machine.spawn(loopMachine)
 
             return {
               actor: loopActor,
@@ -895,6 +887,7 @@ const makeAgentMachine = (run: (input: AgentRunInput) => Effect.Effect<void, Sub
     })
     .final(AgentActorState.Completed)
     .final(AgentActorState.Failed)
+    .build()
 
 export interface AgentActorService {
   readonly run: (input: AgentRunInput) => Effect.Effect<void, SubagentError>
@@ -907,8 +900,8 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
   static Live: Layer.Layer<
     AgentActor,
     never,
-    Storage | Provider | ToolRegistry | EventStore | AgentRegistry | ToolRunner | ActorSystemService
-  > = Layer.scoped(
+    Storage | Provider | ToolRegistry | EventStore | AgentRegistry | ToolRunner
+  > = Layer.effect(
     AgentActor,
     Effect.gen(function* () {
       const storage = yield* Storage
@@ -917,11 +910,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
       const eventStore = yield* EventStore
       const agentRegistry = yield* AgentRegistry
       const toolRunner = yield* ToolRunner
-      const actorSystem = yield* ActorSystemService
       const serialSemaphore = yield* Effect.makeSemaphore(1)
-      const actorScope = yield* Scope.make()
-
-      yield* Effect.addFinalizer(() => Scope.close(actorScope, Exit.void))
 
       const actorIdFor = (input: AgentRunInput) => `agent-${input.sessionId}-${input.branchId}`
 
@@ -1183,52 +1172,49 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
       )
 
       const run: AgentActorService["run"] = Effect.fn("AgentActor.run")((input) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const runtime = yield* Effect.runtime<never>()
-            const runFork = Runtime.runFork(runtime)
-            const inspector = makeInspector<typeof AgentActorState, typeof AgentActorEvent>(
-              (event) => {
-                runFork(
-                  eventStore
-                    .publish(
-                      new MachineInspected({
-                        sessionId: input.sessionId,
-                        branchId: input.branchId,
-                        actorId: event.actorId,
-                        inspectionType: event.type,
-                        payload: event,
-                      }),
-                    )
-                    .pipe(
-                      Effect.catchAll((e) =>
-                        Effect.logWarning("failed to publish MachineInspected", e),
-                      ),
+        Effect.gen(function* () {
+          const runtime = yield* Effect.runtime<never>()
+          const runFork = Runtime.runFork(runtime)
+          const inspector = makeInspector<typeof AgentActorState, typeof AgentActorEvent>(
+            (event) => {
+              runFork(
+                eventStore
+                  .publish(
+                    new MachineInspected({
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      actorId: event.actorId,
+                      inspectionType: event.type,
+                      payload: event,
+                    }),
+                  )
+                  .pipe(
+                    Effect.catchAll((e) =>
+                      Effect.logWarning("failed to publish MachineInspected", e),
                     ),
-                )
-              },
-            )
+                  ),
+              )
+            },
+          )
 
-            const actorId = actorIdFor(input)
-            const actor = yield* actorSystem.spawn(actorId, makeAgentMachine(runEffect)).pipe(
-              Effect.provideService(InspectorService, inspector),
-              Effect.provideService(Scope.Scope, actorScope),
-              Effect.mapError((error) =>
-                Schema.is(SubagentError)(error)
-                  ? error
-                  : new SubagentError({ message: String(error), cause: error }),
-              ),
-            )
+          const actorId = actorIdFor(input)
+          const actor = yield* Machine.spawn(makeAgentMachine(runEffect), actorId).pipe(
+            Effect.provideService(InspectorService, inspector),
+            Effect.mapError((error) =>
+              Schema.is(SubagentError)(error)
+                ? error
+                : new SubagentError({ message: String(error), cause: error }),
+            ),
+          )
 
-            const terminal = yield* actor.sendAndWait(AgentActorEvent.Start({ input }))
+          const terminal = yield* actor.sendAndWait(AgentActorEvent.Start({ input }))
 
-            yield* actorSystem.stop(actorId)
+          yield* actor.stop
 
-            if (terminal._tag === "Failed") {
-              return yield* new SubagentError({ message: terminal.error })
-            }
-          }),
-        ),
+          if (terminal._tag === "Failed") {
+            return yield* new SubagentError({ message: terminal.error })
+          }
+        }),
       )
 
       return AgentActor.of({ run })

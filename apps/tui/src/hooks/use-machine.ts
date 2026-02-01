@@ -7,7 +7,7 @@
 
 import { createSignal, onCleanup, onMount, type Accessor } from "solid-js"
 import { Effect, Exit, Scope } from "effect"
-import { type ActorRef, type UnprovidedSlotsError } from "effect-machine"
+import { type ActorRef } from "effect-machine"
 import { tuiLog } from "../utils/unified-tracer"
 
 interface UseMachineReturn<
@@ -23,7 +23,7 @@ interface UseMachineReturn<
  * Spawn an effect-machine actor and bind it to Solid reactivity.
  *
  * Takes a pre-bound spawn effect (from Machine.spawn) to preserve types.
- * Actor lifecycle tied to component mount/cleanup.
+ * Actor lifecycle tied to component mount/cleanup via scope detection.
  *
  * @example
  * const { state, send } = useMachine(
@@ -35,7 +35,7 @@ export function useMachine<
   S extends { readonly _tag: string },
   E extends { readonly _tag: string },
 >(
-  spawn: Effect.Effect<ActorRef<S, E>, UnprovidedSlotsError, Scope.Scope>,
+  spawn: Effect.Effect<ActorRef<S, E>>,
   initial: NoInfer<S>,
   label?: string,
 ): UseMachineReturn<S, E> {
@@ -48,6 +48,7 @@ export function useMachine<
 
   onMount(() => {
     tuiLog(`[${tag}] onMount`)
+    // Create a scope so the actor auto-cleans up on component unmount
     const scope = Effect.runSync(Scope.make())
     const spawned = Effect.runSync(
       spawn.pipe(Effect.provideService(Scope.Scope, scope), Effect.orDie),

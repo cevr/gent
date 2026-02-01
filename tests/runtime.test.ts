@@ -9,7 +9,6 @@ import {
   DEFAULT_COMPACTION_CONFIG,
   AgentLoop,
   AgentActor,
-  ActorSystemDefault,
   InProcessRunner,
   SubagentRunnerConfig,
   ToolRunner,
@@ -440,7 +439,6 @@ describe("AgentActor", () => {
       Storage.Test(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
       AgentRegistry.Live,
-      ActorSystemDefault,
       recorderLayer,
       eventStoreLayer,
       toolDeps,
@@ -585,7 +583,6 @@ describe("Tool concurrency", () => {
       AgentRegistry.Live,
       Permission.Test(),
       PermissionHandler.Test(["allow"]),
-      ActorSystemDefault,
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const actorDeps = Layer.mergeAll(deps, toolRunnerLayer)
