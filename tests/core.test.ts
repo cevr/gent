@@ -136,14 +136,14 @@ describe("Cost Calculation", () => {
 
 describe("Session State", () => {
   test("getSessionState returns latest agent switch", async () => {
-    const testLayer = Layer.mergeAll(
+    const deps = Layer.mergeAll(
       Storage.Test(),
       Provider.Test([]),
       EventStore.Test(),
       AgentLoop.Test(),
       CheckpointService.Test(),
-      GentCore.Live,
     )
+    const testLayer = Layer.provideMerge(GentCore.Live, deps)
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {

@@ -318,8 +318,8 @@ describe("AgentLoop actor model", () => {
       createdAt: new Date(),
     })
 
-  const makeLayer = (providerLayer: Layer.Layer<Provider>) =>
-    Layer.mergeAll(
+  const makeLayer = (providerLayer: Layer.Layer<Provider>) => {
+    const deps = Layer.mergeAll(
       Storage.Test(),
       providerLayer,
       ToolRegistry.Test(),
@@ -327,8 +327,10 @@ describe("AgentLoop actor model", () => {
       EventStore.Test(),
       CheckpointService.Test(),
       ToolRunner.Test(),
-      AgentLoop.Live({ systemPrompt: "" }),
-    ).pipe(Layer.provide(BunContext.layer))
+      BunContext.layer,
+    )
+    return Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
+  }
 
   test("runs sessions concurrently", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
@@ -363,7 +365,7 @@ describe("AgentLoop actor model", () => {
           yield* Effect.sleep("10 millis")
           const fiberB = yield* Effect.fork(agentLoop.run(messageB))
 
-          const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeout("200 millis"))
+          const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
           expect(Option.isSome(finishedB)).toBe(true)
 
           const statusA = yield* Fiber.poll(fiberA)
@@ -410,7 +412,7 @@ describe("AgentLoop actor model", () => {
           yield* Effect.sleep("10 millis")
           yield* agentLoop.steer({ _tag: "Interrupt", sessionId: "s1", branchId: "b1" })
 
-          const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeout("200 millis"))
+          const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeoutOption("200 millis"))
           expect(Option.isSome(finishedA)).toBe(true)
 
           const statusB = yield* Fiber.poll(fiberB)

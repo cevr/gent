@@ -4,7 +4,7 @@
 
 import { describe, test, expect } from "bun:test"
 import type { MessagePart } from "@gent/core"
-import type { MessageInfoReadonly } from "../src/client"
+import type { MessageInfoReadonly } from "@gent/sdk"
 
 // Test message data
 const testMessages: MessageInfoReadonly[] = [
@@ -30,7 +30,7 @@ const testMessages: MessageInfoReadonly[] = [
 
 describe("Session message handling", () => {
   test("buildMessages extracts text from parts", async () => {
-    const { extractText } = await import("../src/client")
+    const { extractText } = await import("@gent/sdk")
 
     // Test extractText
     const text = extractText(testMessages[0]!.parts)
@@ -42,7 +42,7 @@ describe("Session message handling", () => {
   })
 
   test("buildMessages handles empty parts", async () => {
-    const { extractText } = await import("../src/client")
+    const { extractText } = await import("@gent/sdk")
 
     const emptyMessage: MessageInfoReadonly = {
       id: "m3",

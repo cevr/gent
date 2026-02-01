@@ -31,7 +31,8 @@ const providers = {
 
 describe("ProviderAuth", () => {
   it("scopes pending OAuth by session + auth id", async () => {
-    const layer = Layer.mergeAll(AuthStorage.Test(), AuthStore.Live, ProviderAuth.Test(providers))
+    const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
+    const layer = Layer.provideMerge(ProviderAuth.Test(providers), authStoreLayer)
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
