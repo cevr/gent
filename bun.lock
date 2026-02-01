@@ -11,7 +11,7 @@
         "@effect/experimental": "^0.58.0",
         "@effect/rpc": "^0.73.0",
         "@effect/sql": "^0.49.0",
-        "effect-machine": "^0.3.0",
+        "effect-machine": "0.3.1",
         "msgpackr": "^1.11.8",
         "multipasta": "^0.2.7",
       },
@@ -891,7 +891,7 @@
 
     "effect": ["effect@3.19.15", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-vzMmgfZKLcojmUjBdlQx+uaKryO7yULlRxjpDnHdnvcp1NPHxJyoM6IOXBLlzz2I/uPtZpGKavt5hBv7IvGZkA=="],
 
-    "effect-machine": ["effect-machine@0.3.0", "", { "dependencies": { "effect": "^3.19.15" }, "peerDependencies": { "@effect/cluster": "^0.56.0", "@effect/rpc": "^0.73.0" }, "optionalPeers": ["@effect/cluster", "@effect/rpc"] }, "sha512-CEh/bdMcF38f/AISQnWzqzuELQE/RNEaTnjLwW/LNplCeu5g09VIyaUjBReNgXVXtW7JaLYGQbe0whWafI7DdQ=="],
+    "effect-machine": ["effect-machine@0.3.1", "", { "dependencies": { "effect": "^3.19.15" }, "peerDependencies": { "@effect/cluster": "^0.56.0", "@effect/rpc": "^0.73.0" }, "optionalPeers": ["@effect/cluster", "@effect/rpc"] }, "sha512-4BmglH/ufCT2x+KGmcv3EE9w2WzDR2slk499vBiOIrON/mpBI338tteNFfrc+I/xmt/jm47RDBnDuCRI5EExlA=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.267", "", {}, "sha512-0Drusm6MVRXSOJpGbaSVgcQsuB4hEkMpHXaVstcPmhu5LIedxs1xNK/nIxmQIU/RPC0+1/o0AVZfBTkTNJOdUw=="],
 
@@ -1286,6 +1286,8 @@
     "@aws-crypto/util/@aws-sdk/types": ["@aws-sdk/types@3.969.0", "", { "dependencies": { "@smithy/types": "^4.12.0", "tslib": "^2.6.2" } }, "sha512-7IIzM5TdiXn+VtgPdVLjmE6uUBUtnga0f4RiSEI1WW10RPuNvZ9U+pL3SwDiRDAdoGrOF9tSLJOFZmfuwYuVYQ=="],
 
     "@aws-crypto/util/@smithy/util-utf8": ["@smithy/util-utf8@2.3.0", "", { "dependencies": { "@smithy/util-buffer-from": "^2.2.0", "tslib": "^2.6.2" } }, "sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A=="],
+
+    "@gent/runtime/effect-machine": ["effect-machine@0.3.0", "", { "dependencies": { "effect": "^3.19.15" }, "peerDependencies": { "@effect/cluster": "^0.56.0", "@effect/rpc": "^0.73.0" }, "optionalPeers": ["@effect/cluster", "@effect/rpc"] }, "sha512-CEh/bdMcF38f/AISQnWzqzuELQE/RNEaTnjLwW/LNplCeu5g09VIyaUjBReNgXVXtW7JaLYGQbe0whWafI7DdQ=="],
 
     "@opentui/core/diff": ["diff@8.0.2", "", {}, "sha512-sSuxWU5j5SR9QQji/o2qMvqRNYRDOcBTgsJ/DeCf4iSN4gW+gNMXM7wFIP+fdXZxoNiAnHUTGjCr+TSWXdRDKg=="],
 
