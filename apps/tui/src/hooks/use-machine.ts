@@ -16,7 +16,7 @@ interface UseMachineReturn<
 > {
   state: Accessor<S>
   send: (event: E) => void
-  actor: () => ActorRef<S, E> | undefined
+  actor: () => ActorRef<S, E>
 }
 
 /**
