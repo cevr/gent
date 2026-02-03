@@ -1,11 +1,11 @@
+/**
+ * @deprecated Use `GentLogger` from `./logger` instead.
+ * This file is kept for backwards compatibility. All exports are deprecated.
+ */
+
 import type { Context, Option } from "effect"
 import { Exit, Layer, Tracer, Cause } from "effect"
 
-// Note: Tracer.Span interface requires synchronous methods (end, event, attribute).
-// We use node:fs sync APIs here because:
-// 1. Bun.write is async (returns Promise)
-// 2. Span callbacks execute outside Effect context
-// 3. Sync writes ensure trace ordering is preserved
 import { appendFileSync, writeFileSync } from "node:fs"
 
 // DevSpan - logs span lifecycle to file
@@ -116,7 +116,7 @@ function randomHex(length: number): string {
   return result
 }
 
-// Create a dev tracer that logs to a file
+/** @deprecated Use `GentLogger` from `./logger` instead. */
 export function makeDevTracer(logFile: string): Tracer.Tracer {
   return Tracer.make({
     span: (name, parent, context, links, startTime, kind) =>
@@ -125,17 +125,17 @@ export function makeDevTracer(logFile: string): Tracer.Tracer {
   })
 }
 
-// Layer that provides the dev tracer
+/** @deprecated Use `GentLogger` from `./logger` instead. */
 export const DevTracerLive = (logFile: string): Layer.Layer<never> =>
   Layer.setTracer(makeDevTracer(logFile))
 
-// Default log file location
+/** @deprecated Use `GentLogger` from `./logger` instead. */
 export const DEFAULT_LOG_FILE = "/tmp/gent-trace.log"
 
-// Convenience layer with default log file
+/** @deprecated Use `GentLogger` from `./logger` instead. */
 export const DevTracer = DevTracerLive(DEFAULT_LOG_FILE)
 
-// Helper to clear the log file (sync, for use before starting trace)
+/** @deprecated Use `GentLogger` from `./logger` instead. */
 export function clearLog(logFile: string = DEFAULT_LOG_FILE): void {
   try {
     writeFileSync(logFile, "")

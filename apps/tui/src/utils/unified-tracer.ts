@@ -1,8 +1,7 @@
 /**
- * Unified tracer for TUI debugging
- *
- * Combines Effect spans with TUI-level events in a single log file.
- * This allows tracing the full flow from UI interaction -> Effect RPC -> response.
+ * @deprecated Use `GentLogger` from `@gent/runtime` instead.
+ * The Effect span tracer is replaced by the structured Logger system.
+ * tuiLog/tuiEvent/tuiError helpers are still active for non-Effect TUI logging.
  */
 
 import { appendFileSync, writeFileSync } from "node:fs"
@@ -144,7 +143,7 @@ class UnifiedSpan implements Tracer.Span {
   }
 }
 
-// Create unified tracer
+/** @deprecated Use `GentLogger` from `@gent/runtime` instead. */
 export function makeUnifiedTracer(): Tracer.Tracer {
   return Tracer.make({
     span: (name, parent, context, links, startTime, kind) =>
@@ -153,5 +152,5 @@ export function makeUnifiedTracer(): Tracer.Tracer {
   })
 }
 
-// Layer that provides the unified tracer
+/** @deprecated Use `GentLogger` from `@gent/runtime` instead. */
 export const UnifiedTracerLive: Layer.Layer<never> = Layer.setTracer(makeUnifiedTracer())

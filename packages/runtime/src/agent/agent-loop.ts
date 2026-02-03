@@ -308,6 +308,8 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                 }),
               )
 
+              yield* Effect.logInfo("turn.start")
+
               // Track turn start time and interruption state
               const turnStartTime = yield* DateTime.now
               let turnInterrupted = false
@@ -432,6 +434,12 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
                 // Start streaming
                 yield* publishEvent(new StreamStarted({ sessionId, branchId }))
+                yield* Effect.logInfo("stream.start").pipe(
+                  Effect.annotateLogs({
+                    agent: currentAgent,
+                    model: resolveAgentModelId(agent.name),
+                  }),
+                )
 
                 const modelId = resolveAgentModelId(agent.name)
                 const providerOptions = buildProviderOptions(modelId, agent)
@@ -552,6 +560,13 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                     usage: lastFinishChunk?.usage,
                   }),
                 )
+                yield* Effect.logInfo("stream.end").pipe(
+                  Effect.annotateLogs({
+                    inputTokens: lastFinishChunk?.usage?.inputTokens ?? 0,
+                    outputTokens: lastFinishChunk?.usage?.outputTokens ?? 0,
+                    toolCallCount: toolCalls.length,
+                  }),
+                )
 
                 // Build assistant message
                 const assistantParts: Array<TextPart | ToolCallPart> = []
@@ -610,15 +625,23 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                           : run
 
                         const outputSummary = summarizeToolOutput(result)
+                        const isError = result.output.type === "error-json"
                         yield* publishEvent(
                           new ToolCallCompleted({
                             sessionId,
                             branchId,
                             toolCallId: toolCall.toolCallId,
                             toolName: toolCall.toolName,
-                            isError: result.output.type === "error-json",
+                            isError,
                             summary: outputSummary,
                             output: stringifyOutput(result.output.value),
+                          }),
+                        )
+                        yield* Effect.logInfo("tool.completed").pipe(
+                          Effect.annotateLogs({
+                            toolName: toolCall.toolName,
+                            toolCallId: toolCall.toolCallId,
+                            isError,
                           }),
                         )
 
@@ -663,6 +686,12 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                   ...(turnInterrupted ? { interrupted: true } : {}),
                 }),
               )
+              yield* Effect.logInfo("turn.completed").pipe(
+                Effect.annotateLogs({
+                  durationMs: Number(turnDurationMs),
+                  interrupted: turnInterrupted,
+                }),
+              )
 
               // Process follow-up queue
               const queue = yield* Ref.get(followUpQueue)
@@ -700,6 +729,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                 AgentLoopState.Running,
                 ({ state }) =>
                   runLoop(state.message, state.bypass).pipe(
+                    Effect.annotateLogs({ sessionId, branchId }),
                     Effect.withSpan("AgentLoop.run"),
                     Effect.tapErrorCause((cause) =>
                       publishEvent(

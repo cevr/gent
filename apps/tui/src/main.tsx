@@ -13,7 +13,8 @@ import {
   type BranchInfo,
 } from "@gent/server"
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
-import { UnifiedTracerLive, clearUnifiedLog } from "./utils/unified-tracer"
+import { GentLogger } from "@gent/runtime"
+import { UnifiedTracerLive } from "./utils/unified-tracer"
 import { AuthGuard, LinkOpener, OsService, type ProviderId } from "@gent/core"
 import * as path from "node:path"
 import * as os from "node:os"
@@ -161,13 +162,15 @@ const resolveInitialState = (input: {
 const formatMissingProviders = (providers: readonly ProviderId[]): string =>
   providers.map((provider) => provider).join(", ")
 
-// Unified tracer logs to /tmp/gent-unified.log
 const ATOM_CACHE_MAX = 256
 
 // Platform layer
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
 
-// Unified tracer layer - logs both Effect spans and TUI events
+// Logger layer — pretty (stderr) + JSON (/tmp/gent.log)
+const LoggerLayer = GentLogger
+
+// Tracer layer — span tracing to /tmp/gent-unified.log
 const TracerLayer = UnifiedTracerLive
 
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
@@ -197,14 +200,11 @@ const CoreLayer = Layer.unwrapEffect(
       dbPath,
       ...(authFilePath !== undefined ? { authFilePath } : {}),
       ...(authKeyPath !== undefined ? { authKeyPath } : {}),
-    }).pipe(Layer.provide(PlatformLayer), Layer.provide(TracerLayer))
+    }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))
     const coreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
     return Layer.mergeAll(coreLive, serverDeps, PlatformLayer, OsService.Live, LinkLayer)
   }),
 )
-
-// Clear trace log on startup
-clearUnifiedLog()
 
 // Headless runner - streams events to stdout
 const runHeadless = (
@@ -218,7 +218,9 @@ const runHeadless = (
     const events = core.subscribeEvents({ sessionId, branchId })
 
     // Send the message
-    yield* core.sendMessage({ sessionId, branchId, content: promptText })
+    yield* core
+      .sendMessage({ sessionId, branchId, content: promptText })
+      .pipe(Effect.withSpan("Headless.sendMessage"))
 
     // Stream events until complete
     yield* events.pipe(
@@ -426,12 +428,14 @@ const cli = Command.run(command, {
   version: "0.0.0",
 })
 
-// Base runtime layer for CLI
-const CliLayer = CoreLayer
+// Base runtime layer for CLI — CoreLayer + logger replacement
+const CliLayer = Layer.provide(CoreLayer, LoggerLayer)
 
 // Run with base layers; command handlers provide core layers as needed
 const MainLayer = Layer.scopedDiscard(Effect.suspend(() => cli(process.argv))).pipe(
   Layer.provide(CliLayer),
 )
 
-BunRuntime.runMain(Layer.launch(MainLayer))
+BunRuntime.runMain(Layer.launch(MainLayer).pipe(Effect.provide(LoggerLayer)), {
+  disablePrettyLogger: true,
+})

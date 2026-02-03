@@ -54,6 +54,10 @@ export {
 
 export { makeDevTracer, DevTracerLive, DevTracer, DEFAULT_LOG_FILE, clearLog } from "./telemetry"
 
+export { GentLogger, GentLoggerJson, GentLoggerPretty, GentLogLevel } from "./logger"
+
+export { WideEvent, TurnWideEvent, type WideEventService } from "./wide-event"
+
 export {
   ClusterMemoryLive,
   ClusterSingleLive,
