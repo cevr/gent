@@ -96,11 +96,9 @@ export function CommandPalette() {
     ],
   })
 
-  // Sessions submenu
+  // Sessions submenu — items is a thunk so state().sessions is read at render time,
+  // not at menu-push time (when the setState hasn't committed yet)
   const sessionsMenu = (): MenuLevel => {
-    const currentSession = client.session()
-    const sessionList = state().sessions
-
     type SessionNode = {
       session: SessionInfo
       children: SessionNode[]
@@ -140,6 +138,7 @@ export function CommandPalette() {
 
       for (const node of nodes) {
         const session = node.session
+        const currentSession = client.session()
         const isActive = currentSession?.sessionId === session.id
         const title = isActive
           ? `${prefix}${session.name ?? "Unnamed"} •`
@@ -165,22 +164,21 @@ export function CommandPalette() {
       return items
     }
 
-    const items: MenuItem[] = [
-      {
-        id: "session.new",
-        title: "+ New Session",
-        onSelect: () => {
-          client.clearSession()
-          router.navigateToHome()
-          command.closePalette()
-        },
-      },
-      ...flattenSessionTree(buildSessionTree(sessionList)),
-    ]
-
     return {
       title: "Sessions",
-      items,
+      items: () => [
+        {
+          id: "session.new",
+          title: "+ New Session",
+          onSelect: () => {
+            client.clearSession()
+            router.navigateToHome()
+            command.closePalette()
+          },
+        },
+        ...flattenSessionTree(buildSessionTree(state().sessions)),
+      ],
+      searchable: true,
     }
   }
 

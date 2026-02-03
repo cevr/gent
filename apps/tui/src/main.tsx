@@ -329,7 +329,7 @@ const main = Command.make(
             return process.exit(1)
           }
           yield* runHeadless(core, state.session.id, branchId, state.prompt)
-          return
+          return process.exit(0)
         }
 
         // Create direct client for TUI (no RPC layer, avoids scope issues)
