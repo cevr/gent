@@ -1,4 +1,5 @@
 import { Cause, Context, Effect, Layer, Stream } from "effect"
+import { identity } from "effect/Function"
 import type { PlatformError } from "@effect/platform/Error"
 import {
   Session,
@@ -333,6 +334,11 @@ ${conversation}`
 
             const firstMessage = input.firstMessage
             if (firstMessage !== undefined) {
+              // Capture caller's span so daemons inherit the traceId
+              const parentSpan = yield* Effect.currentParentSpan.pipe(
+                Effect.orElseSucceed(() => undefined),
+              )
+
               // Fork name generation (non-blocking)
               yield* Effect.forkDaemon(
                 Effect.gen(function* () {
@@ -350,6 +356,7 @@ ${conversation}`
                   )
                 }).pipe(
                   Effect.catchAll((e) => Effect.logWarning("session name generation failed", e)),
+                  parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
                 ),
               )
 
@@ -380,6 +387,7 @@ ${conversation}`
                         ),
                       ),
                   ),
+                  parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
                 ),
               )
             }
@@ -614,6 +622,11 @@ ${conversation}`
           const session = yield* storage.getSession(input.sessionId)
           const bypass = session?.bypass ?? true
 
+          // Capture caller's span so daemons inherit the traceId
+          const parentSpan = yield* Effect.currentParentSpan.pipe(
+            Effect.orElseSucceed(() => undefined),
+          )
+
           yield* Effect.forkDaemon(
             Effect.gen(function* () {
               if (session === undefined || session.name !== "New Chat") return
@@ -627,7 +640,10 @@ ${conversation}`
               yield* eventStore.publish(
                 new SessionNameUpdated({ sessionId: input.sessionId, name: generatedName }),
               )
-            }).pipe(Effect.catchAll((e) => Effect.logWarning("session name generation failed", e))),
+            }).pipe(
+              Effect.catchAll((e) => Effect.logWarning("session name generation failed", e)),
+              parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
+            ),
           )
 
           const message = new Message({
@@ -659,6 +675,7 @@ ${conversation}`
                     ),
                   ),
               ),
+              parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
             ),
           )
         }),

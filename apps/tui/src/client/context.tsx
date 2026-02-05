@@ -426,11 +426,13 @@ export function ClientProvider(props: ClientProviderProps) {
       if (s === null) return
 
       cast(
-        client.sendMessage({
-          sessionId: s.sessionId,
-          branchId: s.branchId,
-          content,
-        }),
+        client
+          .sendMessage({
+            sessionId: s.sessionId,
+            branchId: s.branchId,
+            content,
+          })
+          .pipe(Effect.withSpan("TUI.sendMessage")),
       )
     },
 
@@ -471,6 +473,7 @@ export function ClientProvider(props: ClientProviderProps) {
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }),
           ),
+          Effect.withSpan("TUI.createSession"),
         ),
       )
     },

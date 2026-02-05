@@ -298,6 +298,7 @@ export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")(
   id: EventId,
   event: AgentEvent,
   createdAt: Schema.Number,
+  traceId: Schema.optional(Schema.String),
 }) {}
 
 export class EventStoreError extends Schema.TaggedError<EventStoreError>()("EventStoreError", {
@@ -345,10 +346,14 @@ export class EventStore extends Context.Tag("@gent/core/src/event/EventStore")<
       return {
         publish: Effect.fn("EventStore.publish")(function* (event) {
           const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
+          const currentSpan = yield* Effect.currentParentSpan.pipe(
+            Effect.orElseSucceed(() => undefined),
+          )
           const envelope = new EventEnvelope({
             id: id as EventId,
             event,
             createdAt: Date.now(),
+            ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
           })
           yield* Ref.update(eventsRef, (events) => [...events, envelope])
           yield* PubSub.publish(pubsub, envelope)
