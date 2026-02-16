@@ -19,6 +19,8 @@ import {
   AuthGuard,
   type AuthAuthorization,
   type AuthMethod,
+  type BranchId,
+  type MessageId,
   type ProviderId,
   type AgentName,
   type AuthProviderInfo,
@@ -26,6 +28,7 @@ import {
   type Model,
   type PermissionDecision,
   type PlanDecision,
+  type SessionId,
 } from "@gent/core"
 import { ConfigService, ModelRegistry, type SteerCommand } from "@gent/runtime"
 import { ProviderAuth } from "@gent/providers"
@@ -42,21 +45,21 @@ export interface MessageInfoReadonly {
 }
 
 export interface SessionInfo {
-  id: string
+  id: SessionId
   name?: string
   cwd?: string
   bypass?: boolean
-  branchId?: string
-  parentSessionId?: string
-  parentBranchId?: string
+  branchId?: BranchId
+  parentSessionId?: SessionId
+  parentBranchId?: BranchId
   createdAt: number
   updatedAt: number
 }
 
 export interface BranchInfo {
-  id: string
-  sessionId: string
-  parentBranchId?: string
+  id: BranchId
+  sessionId: SessionId
+  parentBranchId?: BranchId
   parentMessageId?: string
   name?: string
   summary?: string
@@ -64,18 +67,18 @@ export interface BranchInfo {
 }
 
 export interface BranchTreeNode {
-  id: string
+  id: BranchId
   name?: string
   summary?: string
-  parentMessageId?: string
+  parentMessageId?: MessageId
   messageCount: number
   createdAt: number
   children: readonly BranchTreeNode[]
 }
 
 export interface SessionState {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   messages: readonly MessageInfoReadonly[]
   lastEventId: number | null
   isStreaming: boolean
@@ -84,8 +87,8 @@ export interface SessionState {
 }
 
 export interface CreateSessionResult {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   name: string
   bypass: boolean
 }
@@ -105,51 +108,51 @@ export interface DirectClient {
 
   listModels: () => Effect.Effect<readonly Model[], GentCoreError>
 
-  getSession: (sessionId: string) => Effect.Effect<SessionInfo | null, GentCoreError>
+  getSession: (sessionId: SessionId) => Effect.Effect<SessionInfo | null, GentCoreError>
 
-  deleteSession: (sessionId: string) => Effect.Effect<void, GentCoreError>
+  deleteSession: (sessionId: SessionId) => Effect.Effect<void, GentCoreError>
 
-  listBranches: (sessionId: string) => Effect.Effect<readonly BranchInfo[], GentCoreError>
+  listBranches: (sessionId: SessionId) => Effect.Effect<readonly BranchInfo[], GentCoreError>
 
   createBranch: (
-    sessionId: string,
+    sessionId: SessionId,
     name?: string,
-  ) => Effect.Effect<{ branchId: string }, GentCoreError>
+  ) => Effect.Effect<{ branchId: BranchId }, GentCoreError>
 
-  getBranchTree: (sessionId: string) => Effect.Effect<readonly BranchTreeNode[], GentCoreError>
+  getBranchTree: (sessionId: SessionId) => Effect.Effect<readonly BranchTreeNode[], GentCoreError>
 
   switchBranch: (input: {
-    sessionId: string
-    fromBranchId: string
-    toBranchId: string
+    sessionId: SessionId
+    fromBranchId: BranchId
+    toBranchId: BranchId
     summarize?: boolean
   }) => Effect.Effect<void, GentCoreError>
 
   forkBranch: (input: {
-    sessionId: string
-    fromBranchId: string
-    atMessageId: string
+    sessionId: SessionId
+    fromBranchId: BranchId
+    atMessageId: MessageId
     name?: string
   }) => Effect.Effect<{ branchId: string }, GentCoreError>
 
   sendMessage: (input: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
     content: string
   }) => Effect.Effect<void, GentCoreError>
 
-  listMessages: (branchId: string) => Effect.Effect<readonly MessageInfoReadonly[], GentCoreError>
+  listMessages: (branchId: BranchId) => Effect.Effect<readonly MessageInfoReadonly[], GentCoreError>
 
   getSessionState: (input: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
   }) => Effect.Effect<SessionState, GentCoreError>
 
   steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
   subscribeEvents: (input: {
-    sessionId: string
-    branchId?: string
+    sessionId: SessionId
+    branchId?: BranchId
     after?: number
   }) => Stream.Stream<EventEnvelope, GentCoreError>
 
@@ -171,12 +174,12 @@ export interface DirectClient {
   ) => Effect.Effect<void, GentCoreError>
 
   compactBranch: (input: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
   }) => Effect.Effect<void, GentCoreError>
 
   updateSessionBypass: (
-    sessionId: string,
+    sessionId: SessionId,
     bypass: boolean,
   ) => Effect.Effect<{ bypass: boolean }, GentCoreError>
 

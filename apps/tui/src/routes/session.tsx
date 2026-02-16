@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import {
   extractText,
@@ -15,6 +15,7 @@ import {
   type BranchTreeNode,
   useClient,
 } from "../client/index"
+import type { BranchId, MessageId, SessionId } from "@gent/core"
 import { StatusBar } from "../components/status-bar"
 import { MessageList, type Message, type SessionItem } from "../components/message-list"
 import { Indicators, type Indicator } from "../components/indicators"
@@ -31,26 +32,27 @@ import {
   type InputEffect,
 } from "../components/input-state"
 import { formatError, type UiError } from "../utils/format-error"
+import { useExit } from "../hooks/use-exit"
 import { BranchTree } from "../components/branch-tree"
 import { MessagePicker } from "../components/message-picker"
 import type { SessionEvent } from "../components/session-event-indicator"
 
 export interface SessionProps {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   initialPrompt?: string
 }
 
 type OverlayState = null | { _tag: "tree"; nodes: BranchTreeNode[] } | { _tag: "fork" }
 
 export function Session(props: SessionProps) {
-  const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
   const { cast } = useRuntime(client.client.runtime)
+  const { exit, handleEsc } = useExit()
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
@@ -147,7 +149,7 @@ export function Session(props: SessionProps) {
     })
   }
 
-  const loadMessages = (branchId: string) => {
+  const loadMessages = (branchId: BranchId) => {
     cast(
       client.client.listMessages(branchId).pipe(
         Effect.map((msgs) => buildMessages(msgs)),
@@ -332,11 +334,6 @@ export function Session(props: SessionProps) {
     onCleanup(unsubscribe)
   })
 
-  const exit = () => {
-    renderer.destroy()
-    process.exit(0)
-  }
-
   // Clear messages handler for /clear command
   const clearMessages = () => {
     setStore({ messages: [], events: [] })
@@ -367,10 +364,6 @@ export function Session(props: SessionProps) {
     setOverlay({ _tag: "fork" })
   }
 
-  // Track pending ESC for double-tap quit
-  let lastEscTime = 0
-  const ESC_DOUBLE_TAP_MS = 500
-
   useKeyboard((e) => {
     // Let command system handle keybinds first
     if (command.handleKeybind(e)) return
@@ -386,16 +379,10 @@ export function Session(props: SessionProps) {
 
       if (client.isStreaming()) {
         client.steer({ _tag: "Cancel" })
-        // Status will be set to "idle" when StreamEnded event arrives
         return
       }
 
-      const now = Date.now()
-      if (now - lastEscTime < ESC_DOUBLE_TAP_MS) {
-        exit()
-      } else {
-        lastEscTime = now
-      }
+      handleEsc()
       return
     }
 
@@ -511,12 +498,12 @@ export function Session(props: SessionProps) {
       Effect.asVoid,
     )
 
-  const handleBranchSelect = (branchId: string) => {
+  const handleBranchSelect = (branchId: BranchId) => {
     setOverlay(null)
     client.switchBranch(branchId)
   }
 
-  const handleForkSelect = (messageId: string) => {
+  const handleForkSelect = (messageId: MessageId) => {
     setOverlay(null)
     cast(
       client.forkBranch(messageId).pipe(

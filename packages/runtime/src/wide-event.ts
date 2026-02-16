@@ -7,7 +7,7 @@
  */
 
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
-import type { EventStoreError } from "@gent/core"
+import type { EventStoreError, SessionId } from "@gent/core"
 import { EventStore } from "@gent/core"
 
 // =============================================================================
@@ -114,7 +114,7 @@ const finalizeAccumulator = (acc: TurnAccumulator, durationMs: number): TurnWide
 // =============================================================================
 
 export interface WideEventService {
-  readonly subscribe: (sessionId: string) => Stream.Stream<TurnWideEvent, EventStoreError>
+  readonly subscribe: (sessionId: SessionId) => Stream.Stream<TurnWideEvent, EventStoreError>
 }
 
 export class WideEvent extends Context.Tag("@gent/runtime/WideEvent")<

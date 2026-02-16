@@ -8,6 +8,7 @@ import {
   PlanRejected,
   type PlanDecision,
 } from "./event"
+import type { BranchId, SessionId } from "./ids"
 import type { ToolContext } from "./tool"
 import type { PermissionDecision } from "./permission"
 
@@ -21,8 +22,8 @@ export interface PermissionHandlerService {
     decision: PermissionDecision,
   ) => Effect.Effect<
     | {
-        sessionId: string
-        branchId: string
+        sessionId: SessionId
+        branchId: BranchId
         toolCallId: string
         toolName: string
         input: unknown
@@ -42,8 +43,8 @@ export class PermissionHandler extends Context.Tag(
         string,
         {
           deferred: Deferred.Deferred<PermissionDecision>
-          sessionId: string
-          branchId: string
+          sessionId: SessionId
+          branchId: BranchId
           toolCallId: string
           toolName: string
           input: unknown
@@ -109,8 +110,8 @@ export class PermissionHandler extends Context.Tag(
 
 export interface PlanHandlerService {
   readonly present: (params: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
     planPath?: string
     prompt?: string
   }) => Effect.Effect<PlanDecision, EventStoreError>
@@ -120,8 +121,8 @@ export interface PlanHandlerService {
     reason?: string,
   ) => Effect.Effect<
     | {
-        sessionId: string
-        branchId: string
+        sessionId: SessionId
+        branchId: BranchId
         planPath?: string
       }
     | undefined,
@@ -141,8 +142,8 @@ export class PlanHandler extends Context.Tag("@gent/core/src/interaction-handler
         string,
         {
           deferred: Deferred.Deferred<PlanDecision>
-          sessionId: string
-          branchId: string
+          sessionId: SessionId
+          branchId: BranchId
           planPath?: string
           prompt?: string
         }

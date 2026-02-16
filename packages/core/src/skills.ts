@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
 
@@ -35,7 +35,7 @@ export class Skills extends Context.Tag("@gent/core/src/skills")<Skills, SkillsS
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
 
-        let skills: Skill[] = []
+        const skillsRef = yield* Ref.make<Skill[]>([])
 
         const loadSkillsFromDir = (dir: string): Effect.Effect<Skill[], PlatformError> =>
           Effect.gen(function* () {
@@ -112,20 +112,13 @@ export class Skills extends Context.Tag("@gent/core/src/skills")<Skills, SkillsS
         })
 
         // Initial load
-        skills = yield* loadAllSkills
+        yield* Ref.set(skillsRef, yield* loadAllSkills)
 
         return {
-          list: () => Effect.succeed(skills),
-          get: (name) => Effect.succeed(skills.find((s) => s.name === name)),
-          reload: () =>
-            loadAllSkills.pipe(
-              Effect.tap((loaded) =>
-                Effect.sync(() => {
-                  skills = loaded
-                }),
-              ),
-              Effect.asVoid,
-            ),
+          list: () => Ref.get(skillsRef),
+          get: (name) =>
+            Ref.get(skillsRef).pipe(Effect.map((skills) => skills.find((s) => s.name === name))),
+          reload: () => loadAllSkills.pipe(Effect.flatMap((loaded) => Ref.set(skillsRef, loaded))),
         }
       }),
     )

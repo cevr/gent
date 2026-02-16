@@ -90,7 +90,10 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
         if (content.trim().length === 0) return [] as readonly Model[]
         const decoded = yield* decodeJson(content).pipe(Effect.catchAll(() => Effect.succeed(null)))
         return parseModelsDev(decoded)
-      }).pipe(Effect.catchAll(() => Effect.succeed([] as readonly Model[])))
+      }).pipe(
+        Effect.catchAll(() => Effect.succeed([] as readonly Model[])),
+        Effect.withSpan("ModelRegistry.loadFromDisk"),
+      )
 
       const fetchRemote = Effect.gen(function* () {
         const res = yield* Effect.tryPromise({
@@ -117,7 +120,10 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
             .pipe(Effect.catchAll((e) => Effect.logWarning("failed to write model cache", e)))
         }
         return parsed
-      }).pipe(Effect.catchAll(() => Effect.succeed([] as readonly Model[])))
+      }).pipe(
+        Effect.catchAll(() => Effect.succeed([] as readonly Model[])),
+        Effect.withSpan("ModelRegistry.fetchRemote"),
+      )
 
       const load = Effect.gen(function* () {
         const cached = yield* Ref.get(cacheRef)
@@ -130,14 +136,14 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
         const remote = yield* fetchRemote
         yield* Ref.set(cacheRef, remote)
         return remote
-      })
+      }).pipe(Effect.withSpan("ModelRegistry.load"))
 
       const refresh = Effect.gen(function* () {
         const remote = yield* fetchRemote
         if (remote.length > 0) {
           yield* Ref.set(cacheRef, remote)
         }
-      })
+      }).pipe(Effect.withSpan("ModelRegistry.refresh"))
 
       yield* Effect.forkScoped(refresh)
 

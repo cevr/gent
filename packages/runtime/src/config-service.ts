@@ -116,7 +116,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
             const user = yield* Ref.get(userConfigRef)
             const project = yield* Ref.get(projectConfigRef)
             return mergeConfigs(user, project)
-          }),
+          }).pipe(Effect.withSpan("ConfigService.get")),
 
         set: (partial) =>
           Effect.gen(function* () {
@@ -126,14 +126,14 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
-          }),
+          }).pipe(Effect.withSpan("ConfigService.set")),
 
         getPermissionRules: () =>
           Effect.gen(function* () {
             const user = yield* Ref.get(userConfigRef)
             const project = yield* Ref.get(projectConfigRef)
             return [...(project.permissions ?? []), ...(user.permissions ?? [])]
-          }),
+          }).pipe(Effect.withSpan("ConfigService.getPermissionRules")),
 
         addPermissionRule: (rule) =>
           Effect.gen(function* () {
@@ -144,7 +144,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
-          }),
+          }).pipe(Effect.withSpan("ConfigService.addPermissionRule")),
 
         removePermissionRule: (tool, pattern) =>
           Effect.gen(function* () {
@@ -157,7 +157,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
-          }),
+          }).pipe(Effect.withSpan("ConfigService.removePermissionRule")),
 
         loadInstructions: (cwd) =>
           Effect.gen(function* () {
@@ -202,7 +202,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
             }
 
             return contents.join("\n---\n")
-          }),
+          }).pipe(Effect.withSpan("ConfigService.loadInstructions")),
       }
 
       return service

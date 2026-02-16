@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { SessionId, BranchId, MessageId } from "./ids"
 
 // Message Part Types - matching AI SDK v6 shape
 
@@ -53,9 +54,9 @@ export type MessageRole = typeof MessageRole.Type
 // Message
 
 export class Message extends Schema.Class<Message>("Message")({
-  id: Schema.String,
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  id: MessageId,
+  sessionId: SessionId,
+  branchId: BranchId,
   kind: Schema.optional(Schema.Literal("regular", "interjection")),
   role: MessageRole,
   parts: Schema.Array(MessagePart),
@@ -66,12 +67,12 @@ export class Message extends Schema.Class<Message>("Message")({
 // Session
 
 export class Session extends Schema.Class<Session>("Session")({
-  id: Schema.String,
+  id: SessionId,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
-  parentSessionId: Schema.optional(Schema.String),
-  parentBranchId: Schema.optional(Schema.String),
+  parentSessionId: Schema.optional(SessionId),
+  parentBranchId: Schema.optional(BranchId),
   createdAt: Schema.DateFromNumber,
   updatedAt: Schema.DateFromNumber,
 }) {}
@@ -79,10 +80,10 @@ export class Session extends Schema.Class<Session>("Session")({
 // Branch
 
 export class Branch extends Schema.Class<Branch>("Branch")({
-  id: Schema.String,
-  sessionId: Schema.String,
-  parentBranchId: Schema.optional(Schema.String),
-  parentMessageId: Schema.optional(Schema.String),
+  id: BranchId,
+  sessionId: SessionId,
+  parentBranchId: Schema.optional(BranchId),
+  parentMessageId: Schema.optional(MessageId),
   name: Schema.optional(Schema.String),
   summary: Schema.optional(Schema.String),
   createdAt: Schema.DateFromNumber,
@@ -92,7 +93,7 @@ export class Branch extends Schema.Class<Branch>("Branch")({
 
 const CheckpointBase = {
   id: Schema.String,
-  branchId: Schema.String,
+  branchId: BranchId,
   messageCount: Schema.Number,
   tokenCount: Schema.Number,
   createdAt: Schema.DateFromNumber,
@@ -104,7 +105,7 @@ export class CompactionCheckpoint extends Schema.TaggedClass<CompactionCheckpoin
   {
     ...CheckpointBase,
     summary: Schema.String,
-    firstKeptMessageId: Schema.String,
+    firstKeptMessageId: MessageId,
   },
 ) {}
 

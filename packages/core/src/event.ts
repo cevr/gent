@@ -1,31 +1,33 @@
 import { Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
+import { BranchId, MessageId, SessionId } from "./ids"
+
 // Event Types
 
 export class SessionStarted extends Schema.TaggedClass<SessionStarted>()("SessionStarted", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 }) {}
 
 export class SessionEnded extends Schema.TaggedClass<SessionEnded>()("SessionEnded", {
-  sessionId: Schema.String,
+  sessionId: SessionId,
 }) {}
 
 export class MessageReceived extends Schema.TaggedClass<MessageReceived>()("MessageReceived", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
-  messageId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
+  messageId: MessageId,
   role: Schema.Literal("user", "assistant", "system", "tool"),
 }) {}
 
 export class StreamStarted extends Schema.TaggedClass<StreamStarted>()("StreamStarted", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 }) {}
 
 export class StreamChunk extends Schema.TaggedClass<StreamChunk>()("StreamChunk", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   chunk: Schema.String,
 }) {}
 
@@ -36,22 +38,22 @@ export const UsageSchema = Schema.Struct({
 export type Usage = typeof UsageSchema.Type
 
 export class StreamEnded extends Schema.TaggedClass<StreamEnded>()("StreamEnded", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   usage: Schema.optional(UsageSchema),
   interrupted: Schema.optional(Schema.Boolean),
 }) {}
 
 export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnCompleted", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   durationMs: Schema.Number,
   interrupted: Schema.optional(Schema.Boolean),
 }) {}
 
 export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("ToolCallStarted", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   toolCallId: Schema.String,
   toolName: Schema.String,
   input: Schema.optional(Schema.Unknown),
@@ -61,8 +63,8 @@ export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("Tool
 export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
   "ToolCallCompleted",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
     toolCallId: Schema.String,
     toolName: Schema.String,
     isError: Schema.Boolean,
@@ -74,8 +76,8 @@ export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
 export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
   "ToolCallSucceeded",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
     toolCallId: Schema.String,
     toolName: Schema.String,
     summary: Schema.optional(Schema.String),
@@ -84,8 +86,8 @@ export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
 ) {}
 
 export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCallFailed", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   toolCallId: Schema.String,
   toolName: Schema.String,
   summary: Schema.optional(Schema.String),
@@ -95,8 +97,8 @@ export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCa
 export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>()(
   "PermissionRequested",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
     requestId: Schema.String,
     toolCallId: Schema.String,
     toolName: Schema.String,
@@ -105,23 +107,23 @@ export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>
 ) {}
 
 export class PlanPresented extends Schema.TaggedClass<PlanPresented>()("PlanPresented", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   requestId: Schema.String,
   planPath: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
 }) {}
 
 export class PlanConfirmed extends Schema.TaggedClass<PlanConfirmed>()("PlanConfirmed", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   requestId: Schema.String,
   planPath: Schema.optional(Schema.String),
 }) {}
 
 export class PlanRejected extends Schema.TaggedClass<PlanRejected>()("PlanRejected", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   requestId: Schema.String,
   planPath: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
@@ -133,23 +135,23 @@ export type PlanDecision = typeof PlanDecision.Type
 export class CompactionStarted extends Schema.TaggedClass<CompactionStarted>()(
   "CompactionStarted",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
   },
 ) {}
 
 export class CompactionCompleted extends Schema.TaggedClass<CompactionCompleted>()(
   "CompactionCompleted",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
     compactionId: Schema.String,
   },
 ) {}
 
 export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOccurred", {
-  sessionId: Schema.String,
-  branchId: Schema.optional(Schema.String),
+  sessionId: SessionId,
+  branchId: Schema.optional(BranchId),
   error: Schema.String,
 }) {}
 
@@ -164,8 +166,8 @@ export const MachineInspectionType = Schema.Literal(
 export type MachineInspectionType = typeof MachineInspectionType.Type
 
 export class MachineInspected extends Schema.TaggedClass<MachineInspected>()("MachineInspected", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   actorId: Schema.String,
   inspectionType: MachineInspectionType,
   payload: Schema.Unknown,
@@ -174,8 +176,8 @@ export class MachineInspected extends Schema.TaggedClass<MachineInspected>()("Ma
 export class MachineTaskSucceeded extends Schema.TaggedClass<MachineTaskSucceeded>()(
   "MachineTaskSucceeded",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
     actorId: Schema.String,
     stateTag: Schema.String,
   },
@@ -184,8 +186,8 @@ export class MachineTaskSucceeded extends Schema.TaggedClass<MachineTaskSucceede
 export class MachineTaskFailed extends Schema.TaggedClass<MachineTaskFailed>()(
   "MachineTaskFailed",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
     actorId: Schema.String,
     stateTag: Schema.String,
     error: Schema.String,
@@ -193,8 +195,8 @@ export class MachineTaskFailed extends Schema.TaggedClass<MachineTaskFailed>()(
 ) {}
 
 export class TodoUpdated extends Schema.TaggedClass<TodoUpdated>()("TodoUpdated", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 }) {}
 
 export const QuestionOptionSchema = Schema.Struct({
@@ -213,8 +215,8 @@ export const QuestionSchema = Schema.Struct({
 export type Question = typeof QuestionSchema.Type
 
 export class QuestionsAsked extends Schema.TaggedClass<QuestionsAsked>()("QuestionsAsked", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   requestId: Schema.String,
   questions: Schema.Array(QuestionSchema),
 }) {}
@@ -222,8 +224,8 @@ export class QuestionsAsked extends Schema.TaggedClass<QuestionsAsked>()("Questi
 export class QuestionsAnswered extends Schema.TaggedClass<QuestionsAnswered>()(
   "QuestionsAnswered",
   {
-    sessionId: Schema.String,
-    branchId: Schema.String,
+    sessionId: SessionId,
+    branchId: BranchId,
     requestId: Schema.String,
     answers: Schema.Array(Schema.Array(Schema.String)),
   },
@@ -232,40 +234,40 @@ export class QuestionsAnswered extends Schema.TaggedClass<QuestionsAnswered>()(
 export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()(
   "SessionNameUpdated",
   {
-    sessionId: Schema.String,
+    sessionId: SessionId,
     name: Schema.String,
   },
 ) {}
 
 export class BranchCreated extends Schema.TaggedClass<BranchCreated>()("BranchCreated", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
-  parentBranchId: Schema.optional(Schema.String),
-  parentMessageId: Schema.optional(Schema.String),
+  sessionId: SessionId,
+  branchId: BranchId,
+  parentBranchId: Schema.optional(BranchId),
+  parentMessageId: Schema.optional(MessageId),
 }) {}
 
 export class BranchSwitched extends Schema.TaggedClass<BranchSwitched>()("BranchSwitched", {
-  sessionId: Schema.String,
-  fromBranchId: Schema.String,
-  toBranchId: Schema.String,
+  sessionId: SessionId,
+  fromBranchId: BranchId,
+  toBranchId: BranchId,
 }) {}
 
 export class BranchSummarized extends Schema.TaggedClass<BranchSummarized>()("BranchSummarized", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   summary: Schema.String,
 }) {}
 
 export class AgentSwitched extends Schema.TaggedClass<AgentSwitched>()("AgentSwitched", {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   fromAgent: Schema.String,
   toAgent: Schema.String,
 }) {}
 
 export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("SubagentSpawned", {
-  parentSessionId: Schema.String,
-  childSessionId: Schema.String,
+  parentSessionId: SessionId,
+  childSessionId: SessionId,
   agentName: Schema.String,
   prompt: Schema.String,
 }) {}
@@ -274,8 +276,8 @@ export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("Suba
 export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
   "SubagentCompleted",
   {
-    parentSessionId: Schema.String,
-    childSessionId: Schema.String,
+    parentSessionId: SessionId,
+    childSessionId: SessionId,
     agentName: Schema.String,
     success: Schema.Boolean,
   },
@@ -284,15 +286,15 @@ export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
 export class SubagentSucceeded extends Schema.TaggedClass<SubagentSucceeded>()(
   "SubagentSucceeded",
   {
-    parentSessionId: Schema.String,
-    childSessionId: Schema.String,
+    parentSessionId: SessionId,
+    childSessionId: SessionId,
     agentName: Schema.String,
   },
 ) {}
 
 export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("SubagentFailed", {
-  parentSessionId: Schema.String,
-  childSessionId: Schema.String,
+  parentSessionId: SessionId,
+  childSessionId: SessionId,
   agentName: Schema.String,
 }) {}
 
@@ -351,28 +353,28 @@ export class EventStoreError extends Schema.TaggedError<EventStoreError>()("Even
 export interface EventStoreService {
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
   readonly subscribe: (params: {
-    sessionId: string
-    branchId?: string
+    sessionId: SessionId
+    branchId?: BranchId
     after?: EventId
   }) => Stream.Stream<EventEnvelope, EventStoreError>
 }
 
-export const getEventSessionId = (event: AgentEvent): string | undefined => {
-  if ("sessionId" in event) return event.sessionId as string
-  if ("parentSessionId" in event) return event.parentSessionId as string
+export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
+  if ("sessionId" in event) return event.sessionId as SessionId
+  if ("parentSessionId" in event) return event.parentSessionId as SessionId
   return undefined
 }
 
 export const matchesEventFilter = (
   env: EventEnvelope,
-  sessionId: string,
-  branchId?: string,
+  sessionId: SessionId,
+  branchId?: BranchId,
 ): boolean => {
   const eventSessionId = getEventSessionId(env.event)
   if (eventSessionId === undefined || eventSessionId !== sessionId) return false
   if (branchId === undefined) return true
   const eventBranchId =
-    "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
+    "branchId" in env.event ? (env.event.branchId as BranchId | undefined) : undefined
   return eventBranchId === branchId || eventBranchId === undefined
 }
 

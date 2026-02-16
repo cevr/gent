@@ -3,7 +3,7 @@
  */
 
 import { createEffect, createMemo, createSignal, onMount, Show } from "solid-js"
-import { useRenderer, useTerminalDimensions, useKeyboard } from "@opentui/solid"
+import { useTerminalDimensions, useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import { getLogos } from "../logo.macro.js" with { type: "macro" }
 import { useTheme } from "../theme/index"
@@ -13,6 +13,7 @@ import { useRouter } from "../router/index"
 import { StatusBar } from "../components/status-bar"
 import { Input } from "../components/input"
 import { useRuntime } from "../hooks/use-runtime"
+import { useExit } from "../hooks/use-exit"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { ClientError, type UiError } from "../utils/format-error"
 
@@ -27,19 +28,15 @@ type HomeState =
   | { _tag: "pending"; prompt: string; showWelcome: boolean }
 
 export function Home(props: HomeProps) {
-  const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
   const { cast } = useRuntime(client.client.runtime)
+  const { exit, handleEsc } = useExit()
 
   const logo = LOGOS[Math.floor(Math.random() * LOGOS.length)]
-
-  // Track pending ESC for double-tap quit
-  let lastEscTime = 0
-  const ESC_DOUBLE_TAP_MS = 500
 
   // Track pending prompt while session is created
   const [state, setState] = createSignal<HomeState>({
@@ -67,11 +64,6 @@ export function Home(props: HomeProps) {
     })
   }
 
-  const exit = () => {
-    renderer.destroy()
-    process.exit(0)
-  }
-
   // Navigate when session becomes active after pending prompt
   createEffect(() => {
     const current = state()
@@ -95,12 +87,7 @@ export function Home(props: HomeProps) {
         return
       }
 
-      const now = Date.now()
-      if (now - lastEscTime < ESC_DOUBLE_TAP_MS) {
-        exit()
-      } else {
-        lastEscTime = now
-      }
+      handleEsc()
       return
     }
 

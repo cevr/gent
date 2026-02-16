@@ -4,6 +4,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { BranchTreeNode } from "../client"
+import type { BranchId } from "@gent/core"
 import { truncate } from "../utils/truncate"
 
 interface FlatNode {
@@ -17,14 +18,14 @@ interface FlatNode {
 export interface BranchTreeProps {
   open: boolean
   tree: readonly BranchTreeNode[]
-  activeBranchId?: string
-  onSelect: (branchId: string) => void
+  activeBranchId?: BranchId
+  onSelect: (branchId: BranchId) => void
   onClose: () => void
 }
 
 const flattenTree = (
   nodes: readonly BranchTreeNode[],
-  activeBranchId: string | undefined,
+  activeBranchId: BranchId | undefined,
   depth = 0,
   acc: FlatNode[] = [],
 ): FlatNode[] => {
@@ -80,7 +81,8 @@ export function BranchTree(props: BranchTreeProps) {
     if (e.name === "return") {
       const item = list[selectedIndex()]
       if (item !== undefined) {
-        props.onSelect(item.id)
+        // SAFETY: FlatNode.id originates from BranchTreeNode.id which is a BranchId
+        props.onSelect(item.id as BranchId)
       }
       return
     }

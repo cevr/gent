@@ -7,14 +7,15 @@
 
 import { Schema } from "effect"
 import { Event, Machine, State } from "effect-machine"
+import { SessionId, BranchId } from "@gent/core"
 
 // ============================================================================
 // Schemas
 // ============================================================================
 
 const SessionSchema = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   name: Schema.String,
   bypass: Schema.Boolean,
 })
@@ -54,7 +55,7 @@ export const SessionMachineEvent = Event({
 
   // In-flight updates (from event stream)
   UpdateName: { name: Schema.String },
-  UpdateBranch: { branchId: Schema.String },
+  UpdateBranch: { branchId: BranchId },
   UpdateBypass: { bypass: Schema.Boolean },
 })
 

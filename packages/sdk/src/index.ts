@@ -35,6 +35,9 @@ export type {
   ToolCallPart,
   ToolResultPart,
   PermissionRule,
+  SessionId,
+  BranchId,
+  MessageId,
 } from "./client.js"
 
 // Utility functions

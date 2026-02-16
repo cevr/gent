@@ -4,6 +4,7 @@
 
 import { createContext, createSignal, onCleanup, useContext, type ParentProps } from "solid-js"
 import { type AppRoute, Route } from "./types"
+import type { BranchId, SessionId } from "@gent/core"
 import type { BranchInfo } from "../client"
 import { createAppRouter, type AppRouter } from "./router"
 
@@ -11,9 +12,9 @@ export interface RouterContextValue {
   route: () => AppRoute
   navigate: (route: AppRoute) => void
   navigateToHome: () => void
-  navigateToSession: (sessionId: string, branchId: string, prompt?: string) => void
+  navigateToSession: (sessionId: SessionId, branchId: BranchId, prompt?: string) => void
   navigateToBranchPicker: (
-    sessionId: string,
+    sessionId: SessionId,
     sessionName: string,
     branches: readonly BranchInfo[],
     prompt?: string,
@@ -51,7 +52,7 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
     route,
     navigate: router.navigate,
     navigateToHome: () => router.navigate(Route.home()),
-    navigateToSession: (sessionId: string, branchId: string, prompt?: string) =>
+    navigateToSession: (sessionId: SessionId, branchId: BranchId, prompt?: string) =>
       router.navigate(Route.session(sessionId, branchId, prompt)),
     navigateToBranchPicker: (sessionId, sessionName, branches, prompt) =>
       router.navigate(Route.branchPicker(sessionId, sessionName, branches, prompt)),

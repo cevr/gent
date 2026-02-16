@@ -18,8 +18,11 @@ import {
   resolveAgentModelId,
   type AgentEvent,
   type AgentName,
+  type BranchId,
   type EventEnvelope,
+  type MessageId,
   type Model,
+  type SessionId,
 } from "@gent/core"
 import { tuiError } from "../utils/unified-tracer"
 import { formatError } from "../utils/format-error"
@@ -57,8 +60,8 @@ const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Mode
 // =============================================================================
 
 export interface Session {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   name: string
   bypass: boolean
 }
@@ -121,7 +124,7 @@ export interface ClientContextValue {
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string) => void
   createSession: (firstMessage?: string) => void
-  switchSession: (sessionId: string, branchId: string, name: string, bypass?: boolean) => void
+  switchSession: (sessionId: SessionId, branchId: BranchId, name: string, bypass?: boolean) => void
   clearSession: () => void
   updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
 
@@ -129,13 +132,13 @@ export interface ClientContextValue {
   listMessages: () => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
   listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
-  createBranch: (name?: string) => Effect.Effect<string, GentRpcError>
+  createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
   getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
-  forkBranch: (messageId: string, name?: string) => Effect.Effect<string, GentRpcError>
+  forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentRpcError>
   compactBranch: () => Effect.Effect<void, GentRpcError>
 
   // Branch navigation (fire-and-forget)
-  switchBranch: (branchId: string, summarize?: boolean) => void
+  switchBranch: (branchId: BranchId, summarize?: boolean) => void
 
   // Event subscription (for message updates - agent state handled internally)
   subscribeEvents: (onEvent: (event: AgentEvent) => void) => () => void
@@ -272,8 +275,8 @@ export function ClientProvider(props: ClientProviderProps) {
       }
 
       const sep = key.indexOf(":")
-      const sessionId = key.slice(0, sep)
-      const branchId = key.slice(sep + 1)
+      const sessionId = key.slice(0, sep) as SessionId
+      const branchId = key.slice(sep + 1) as BranchId
       let cancelled = false
       eventBuffer.length = 0
 
@@ -535,7 +538,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     createBranch: (name) => {
       const s = session()
-      if (s === null) return Effect.succeed("" as string)
+      if (s === null) return Effect.succeed("" as BranchId)
       return client.createBranch(s.sessionId, name)
     },
 
@@ -547,7 +550,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     forkBranch: (messageId, name) => {
       const s = session()
-      if (s === null) return Effect.succeed("" as string)
+      if (s === null) return Effect.succeed("" as BranchId)
       return client
         .forkBranch({
           sessionId: s.sessionId,
@@ -555,7 +558,7 @@ export function ClientProvider(props: ClientProviderProps) {
           atMessageId: messageId,
           ...(name !== undefined ? { name } : {}),
         })
-        .pipe(Effect.map((result) => result.branchId))
+        .pipe(Effect.map((result) => result.branchId as BranchId))
     },
 
     compactBranch: () => {

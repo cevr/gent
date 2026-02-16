@@ -19,13 +19,6 @@ import {
   State,
   makeInspector,
 } from "effect-machine"
-import type {
-  AgentDefinition,
-  AgentEvent,
-  EventStoreError,
-  ToolContext,
-  AgentName as AgentNameType,
-} from "@gent/core"
 import {
   AgentName,
   AgentRegistry,
@@ -52,6 +45,14 @@ import {
   DEFAULTS,
   summarizeToolOutput,
   stringifyOutput,
+  SessionId,
+  BranchId,
+  type AgentDefinition,
+  type AgentEvent,
+  type EventStoreError,
+  type ToolContext,
+  type AgentName as AgentNameType,
+  type MessageId,
 } from "@gent/core"
 import type { StorageError } from "@gent/storage"
 import { Storage } from "@gent/storage"
@@ -108,8 +109,8 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
 // Steer Command
 
 const SteerTargetFields = {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 }
 
 export const SteerCommand = Schema.Union(
@@ -148,12 +149,12 @@ type LoopHandle = {
 const AgentLoopState = State({
   Idle: {},
   Running: { message: Message, bypass: Schema.Boolean },
-  Interrupted: { sessionId: Schema.String, branchId: Schema.String },
+  Interrupted: { sessionId: SessionId, branchId: BranchId },
 })
 
 const AgentLoopEvent = Event({
   Start: { message: Message, bypass: Schema.UndefinedOr(Schema.Boolean) },
-  Completed: { interrupted: Schema.Boolean, sessionId: Schema.String, branchId: Schema.String },
+  Completed: { interrupted: Schema.Boolean, sessionId: SessionId, branchId: BranchId },
   Failed: { error: Schema.String },
 })
 
@@ -166,7 +167,10 @@ export interface AgentLoopService {
   ) => Effect.Effect<void, AgentLoopError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void>
   readonly followUp: (message: Message) => Effect.Effect<void, AgentLoopError>
-  readonly isRunning: (input: { sessionId: string; branchId: string }) => Effect.Effect<boolean>
+  readonly isRunning: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<boolean>
 }
 
 export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/AgentLoop")<
@@ -200,7 +204,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
 
-        const stateKey = (sessionId: string, branchId: string) => `${sessionId}:${branchId}`
+        const stateKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
         const publishEvent = (event: AgentEvent) =>
           eventStore.publish(event).pipe(
             Effect.mapError(
@@ -212,7 +216,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
             ),
           )
 
-        const makeLoop = (sessionId: string, branchId: string) =>
+        const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
             const serialSemaphore = yield* Effect.makeSemaphore(1)
             const steerQueue = yield* Queue.unbounded<SteerCommand>()
@@ -285,7 +289,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                 createdAt?: Date,
               ) {
                 const interjectMsg = new Message({
-                  id: Bun.randomUUIDv7(),
+                  id: Bun.randomUUIDv7() as MessageId,
                   sessionId,
                   branchId,
                   kind: "interjection",
@@ -523,7 +527,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                     const createdAt = new Date()
                     assistantCreatedAtMs = createdAt.getTime()
                     const assistantMessage = new Message({
-                      id: Bun.randomUUIDv7(),
+                      id: Bun.randomUUIDv7() as MessageId,
                       sessionId,
                       branchId,
                       role: "assistant",
@@ -579,7 +583,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                 assistantParts.push(...toolCalls)
 
                 const assistantMessage = new Message({
-                  id: Bun.randomUUIDv7(),
+                  id: Bun.randomUUIDv7() as MessageId,
                   sessionId,
                   branchId,
                   role: "assistant",
@@ -656,7 +660,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
                   // Create tool result message
                   const toolResultMessage = new Message({
-                    id: Bun.randomUUIDv7(),
+                    id: Bun.randomUUIDv7() as MessageId,
                     sessionId,
                     branchId,
                     role: "tool",
@@ -774,8 +778,8 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
           })
 
         const getLoop = Effect.fn("AgentLoop.getLoop")(function* (
-          sessionId: string,
-          branchId: string,
+          sessionId: SessionId,
+          branchId: BranchId,
         ) {
           const key = stateKey(sessionId, branchId)
           const existing = (yield* Ref.get(loopsRef)).get(key)
@@ -790,8 +794,8 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
         })
 
         const findLoop = Effect.fn("AgentLoop.findLoop")(function* (
-          sessionId: string,
-          branchId: string,
+          sessionId: SessionId,
+          branchId: BranchId,
         ) {
           const key = stateKey(sessionId, branchId)
           const loops = yield* Ref.get(loopsRef)
@@ -877,8 +881,8 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 // ============================================================================
 
 const AgentRunInputFields = {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   agentName: AgentName,
   prompt: Schema.String,
   systemPrompt: Schema.String,
@@ -1002,7 +1006,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
           const basePrompt = buildSystemPrompt(input.systemPrompt, agent)
 
           const userMessage = new Message({
-            id: Bun.randomUUIDv7(),
+            id: Bun.randomUUIDv7() as MessageId,
             sessionId: input.sessionId,
             branchId: input.branchId,
             role: "user",
@@ -1097,7 +1101,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
             assistantParts.push(...toolCalls)
 
             const assistantMessage = new Message({
-              id: Bun.randomUUIDv7(),
+              id: Bun.randomUUIDv7() as MessageId,
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "assistant",
@@ -1131,7 +1135,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
                     )
 
                     const tool = yield* toolRegistry.get(toolCall.toolName)
-                    const ctx = {
+                    const ctx: ToolContext = {
                       sessionId: input.sessionId,
                       branchId: input.branchId,
                       toolCallId: toolCall.toolCallId,
@@ -1164,7 +1168,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
               )
 
               const toolResultMessage = new Message({
-                id: Bun.randomUUIDv7(),
+                id: Bun.randomUUIDv7() as MessageId,
                 sessionId: input.sessionId,
                 branchId: input.branchId,
                 role: "tool",

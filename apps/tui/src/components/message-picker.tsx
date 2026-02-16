@@ -4,6 +4,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
+import type { MessageId } from "@gent/core"
 import { truncate } from "../utils/truncate"
 
 interface PickerItem {
@@ -14,7 +15,7 @@ interface PickerItem {
 export interface MessagePickerProps {
   open: boolean
   messages: readonly Message[]
-  onSelect: (messageId: string) => void
+  onSelect: (messageId: MessageId) => void
   onClose: () => void
 }
 
@@ -60,7 +61,8 @@ export function MessagePicker(props: MessagePickerProps) {
 
     if (e.name === "return") {
       const item = list[selectedIndex()]
-      if (item !== undefined) props.onSelect(item.id)
+      // SAFETY: PickerItem.id originates from MessageInfoReadonly.id which is a MessageId
+      if (item !== undefined) props.onSelect(item.id as MessageId)
       return
     }
 

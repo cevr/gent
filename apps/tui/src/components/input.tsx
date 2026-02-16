@@ -45,34 +45,41 @@ const InputContext = createContext<InputContextValue>()
 // Paste placeholder management
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
-let pasteIdCounter = 0
-const pasteStore = new Map<string, string>()
 const markdownSyntaxStyle = SyntaxStyle.create()
 
 function countLines(text: string): number {
   return text.split("\n").length
 }
 
-function createPastePlaceholder(text: string): string {
-  const id = `paste-${++pasteIdCounter}`
-  pasteStore.set(id, text)
-  const lines = countLines(text)
-  return `[Pasted ~${lines} lines #${id}]`
-}
-
-function expandPastePlaceholders(text: string): string {
-  return text.replace(/\[Pasted ~\d+ lines #(paste-\d+)\]/g, (_, id) => {
-    const content = pasteStore.get(id)
-    if (content !== undefined) {
-      pasteStore.delete(id)
-      return content
-    }
-    return _
-  })
-}
-
 function isLargePaste(inserted: string): boolean {
   return countLines(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
+}
+
+function createPasteManager() {
+  let idCounter = 0
+  const store = new Map<string, string>()
+
+  return {
+    createPlaceholder(text: string): string {
+      const id = `paste-${++idCounter}`
+      store.set(id, text)
+      const lines = countLines(text)
+      return `[Pasted ~${lines} lines #${id}]`
+    },
+    expandPlaceholders(text: string): string {
+      return text.replace(/\[Pasted ~\d+ lines #(paste-\d+)\]/g, (match, id) => {
+        const content = store.get(id)
+        if (content !== undefined) {
+          store.delete(id)
+          return content
+        }
+        return match
+      })
+    },
+    clear() {
+      store.clear()
+    },
+  }
 }
 
 export interface InputProps {
@@ -94,6 +101,7 @@ export function Input(props: InputProps) {
   const command = useCommand()
   const client = useClient()
   const { cast } = useRuntime(client.client.runtime)
+  const paste = createPasteManager()
 
   let inputRef: InputRenderable | null = null
 
@@ -191,7 +199,7 @@ export function Input(props: InputProps) {
       const inserted = value.slice(previousValue.length)
       if (isLargePaste(inserted)) {
         // Replace the pasted content with a placeholder
-        const placeholder = createPastePlaceholder(inserted)
+        const placeholder = paste.createPlaceholder(inserted)
         const newValue = previousValue + placeholder
         inputRef.value = newValue
         inputRef.cursorOffset = newValue.length
@@ -317,7 +325,7 @@ export function Input(props: InputProps) {
   const handleSubmit = () => {
     const value = inputRef?.value ?? ""
     // Expand paste placeholders before processing
-    const expanded = expandPastePlaceholders(value)
+    const expanded = paste.expandPlaceholders(value)
     const text = expanded.trim()
     if (text.length === 0) return
 
@@ -425,7 +433,7 @@ export function Input(props: InputProps) {
   })
 
   onCleanup(() => {
-    pasteStore.clear()
+    paste.clear()
   })
 
   // Prompt symbol based on input mode

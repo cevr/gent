@@ -5,16 +5,20 @@ import {
   AuthAuthorization,
   AuthMethod,
   AuthProviderInfo,
+  BranchId,
   EventEnvelope,
+  MessageId,
   MessagePart,
   Model,
   PermissionDecision,
   PlanDecision,
   PermissionRule,
+  SessionId,
 } from "@gent/core"
 import {
   ActorProcessMetrics,
   ActorProcessState,
+  ActorTarget,
   InterruptPayload,
   SendToolResultPayload,
   SendUserMessagePayload,
@@ -33,20 +37,20 @@ export const CreateSessionPayload = Schema.Struct({
 })
 
 export const CreateSessionSuccess = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   name: Schema.String,
   bypass: Schema.Boolean,
 })
 
 export const SessionInfo = Schema.Struct({
-  id: Schema.String,
+  id: SessionId,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
-  branchId: Schema.optional(Schema.String),
-  parentSessionId: Schema.optional(Schema.String),
-  parentBranchId: Schema.optional(Schema.String),
+  branchId: Schema.optional(BranchId),
+  parentSessionId: Schema.optional(SessionId),
+  parentBranchId: Schema.optional(BranchId),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 })
@@ -56,68 +60,79 @@ export const SessionInfo = Schema.Struct({
 // ============================================================================
 
 export const BranchInfo = Schema.Struct({
-  id: Schema.String,
-  sessionId: Schema.String,
-  parentBranchId: Schema.optional(Schema.String),
-  parentMessageId: Schema.optional(Schema.String),
+  id: BranchId,
+  sessionId: SessionId,
+  parentBranchId: Schema.optional(BranchId),
+  parentMessageId: Schema.optional(MessageId),
   name: Schema.optional(Schema.String),
   summary: Schema.optional(Schema.String),
   createdAt: Schema.Number,
 })
 
 export const ListBranchesPayload = Schema.Struct({
-  sessionId: Schema.String,
+  sessionId: SessionId,
 })
 
 export const CreateBranchPayload = Schema.Struct({
-  sessionId: Schema.String,
+  sessionId: SessionId,
   name: Schema.optional(Schema.String),
 })
 
 export const CreateBranchSuccess = Schema.Struct({
-  branchId: Schema.String,
+  branchId: BranchId,
 })
 
 export interface BranchTreeNode {
+  id: BranchId
+  name?: string
+  summary?: string
+  parentMessageId?: MessageId
+  messageCount: number
+  createdAt: number
+  children: readonly BranchTreeNode[]
+}
+
+interface BranchTreeNodeEncoded {
   id: string
   name?: string
   summary?: string
   parentMessageId?: string
   messageCount: number
   createdAt: number
-  children: readonly BranchTreeNode[]
+  children: readonly BranchTreeNodeEncoded[]
 }
 
-export const BranchTreeNodeSchema: Schema.Schema<BranchTreeNode> = Schema.Struct({
-  id: Schema.String,
-  name: Schema.optional(Schema.String),
-  summary: Schema.optional(Schema.String),
-  parentMessageId: Schema.optional(Schema.String),
-  messageCount: Schema.Number,
-  createdAt: Schema.Number,
-  children: Schema.Array(Schema.suspend(() => BranchTreeNodeSchema)),
-})
+export const BranchTreeNodeSchema: Schema.Schema<BranchTreeNode, BranchTreeNodeEncoded> =
+  Schema.Struct({
+    id: BranchId,
+    name: Schema.optional(Schema.String),
+    summary: Schema.optional(Schema.String),
+    parentMessageId: Schema.optional(MessageId),
+    messageCount: Schema.Number,
+    createdAt: Schema.Number,
+    children: Schema.Array(Schema.suspend(() => BranchTreeNodeSchema)),
+  })
 
 export const GetBranchTreePayload = Schema.Struct({
-  sessionId: Schema.String,
+  sessionId: SessionId,
 })
 
 export const SwitchBranchPayload = Schema.Struct({
-  sessionId: Schema.String,
-  fromBranchId: Schema.String,
-  toBranchId: Schema.String,
+  sessionId: SessionId,
+  fromBranchId: BranchId,
+  toBranchId: BranchId,
   summarize: Schema.optional(Schema.Boolean),
 })
 
 export const ForkBranchPayload = Schema.Struct({
-  sessionId: Schema.String,
-  fromBranchId: Schema.String,
-  atMessageId: Schema.String,
+  sessionId: SessionId,
+  fromBranchId: BranchId,
+  atMessageId: MessageId,
   name: Schema.optional(Schema.String),
 })
 
 export const ForkBranchSuccess = Schema.Struct({
-  branchId: Schema.String,
+  branchId: BranchId,
 })
 
 // ============================================================================
@@ -125,15 +140,15 @@ export const ForkBranchSuccess = Schema.Struct({
 // ============================================================================
 
 export const SendMessagePayload = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   content: Schema.String,
 })
 
 export const MessageInfo = Schema.Struct({
-  id: Schema.String,
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  id: MessageId,
+  sessionId: SessionId,
+  branchId: BranchId,
   kind: Schema.optional(Schema.Literal("regular", "interjection")),
   role: Schema.Literal("user", "assistant", "system", "tool"),
   parts: Schema.Array(MessagePart),
@@ -142,17 +157,17 @@ export const MessageInfo = Schema.Struct({
 })
 
 export const ListMessagesPayload = Schema.Struct({
-  branchId: Schema.String,
+  branchId: BranchId,
 })
 
 export const GetSessionStatePayload = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 })
 
 export const SessionState = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   messages: Schema.Array(MessageInfo),
   lastEventId: Schema.NullOr(Schema.Number),
   isStreaming: Schema.Boolean,
@@ -165,8 +180,8 @@ export const SessionState = Schema.Struct({
 // ============================================================================
 
 const SteerTargetFields = {
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 }
 
 export const SteerPayload = Schema.Union(
@@ -182,8 +197,8 @@ export type SteerPayload = typeof SteerPayload.Type
 // ============================================================================
 
 export const SubscribeEventsPayload = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.optional(Schema.String),
+  sessionId: SessionId,
+  branchId: Schema.optional(BranchId),
   after: Schema.optional(Schema.Number),
 })
 
@@ -203,7 +218,7 @@ export const RespondPermissionPayload = Schema.Struct({
 })
 
 export const UpdateSessionBypassPayload = Schema.Struct({
-  sessionId: Schema.String,
+  sessionId: SessionId,
   bypass: Schema.Boolean,
 })
 
@@ -222,8 +237,8 @@ export const RespondPlanPayload = Schema.Struct({
 // ============================================================================
 
 export const CompactBranchPayload = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 })
 
 // ============================================================================
@@ -289,12 +304,12 @@ export class GentRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("getSession", {
-    payload: { sessionId: Schema.String },
+    payload: { sessionId: SessionId },
     success: Schema.NullOr(SessionInfo),
     error: GentRpcError,
   }),
   Rpc.make("deleteSession", {
-    payload: { sessionId: Schema.String },
+    payload: { sessionId: SessionId },
     error: GentRpcError,
   }),
 
@@ -441,12 +456,12 @@ export class GentRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("actorGetState", {
-    payload: { sessionId: Schema.String, branchId: Schema.String },
+    payload: ActorTarget.fields,
     success: ActorProcessState,
     error: GentRpcError,
   }),
   Rpc.make("actorGetMetrics", {
-    payload: { sessionId: Schema.String, branchId: Schema.String },
+    payload: ActorTarget.fields,
     success: ActorProcessMetrics,
     error: GentRpcError,
   }),

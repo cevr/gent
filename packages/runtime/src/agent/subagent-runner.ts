@@ -9,6 +9,8 @@ import {
   SubagentError,
   SubagentRunnerService,
   SubagentSpawned,
+  type SessionId,
+  type BranchId,
 } from "@gent/core"
 import { Storage, type StorageService } from "@gent/storage"
 import { AgentActor } from "./agent-loop"
@@ -52,14 +54,14 @@ const createSubagentSession = (
   params: {
     agent: { name: string }
     prompt: string
-    parentSessionId: string
-    parentBranchId: string
+    parentSessionId: SessionId
+    parentBranchId: BranchId
     cwd: string
   },
 ) =>
   Effect.gen(function* () {
-    const sessionId = Bun.randomUUIDv7()
-    const branchId = Bun.randomUUIDv7()
+    const sessionId = Bun.randomUUIDv7() as SessionId
+    const branchId = Bun.randomUUIDv7() as BranchId
     const now = new Date()
     const parentSession = yield* storage.getSession(params.parentSessionId)
     const bypass = parentSession?.bypass ?? true

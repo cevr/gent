@@ -6,6 +6,7 @@ import type { Result } from "@gent/atom-solid"
 
 // Global cache for Effect results
 const cache = new Map<string, Accessor<Result<unknown, unknown>>>()
+const cancels = new Map<string, () => void>()
 
 /**
  * Get or create a cached result accessor
@@ -20,18 +21,23 @@ export function cached<A, E>(
     return cache.get(key) as Accessor<Result<A, E>>
   }
 
-  const [result] = run()
+  const [result, cancel] = run()
   cache.set(key, result as Accessor<Result<unknown, unknown>>)
+  cancels.set(key, cancel)
   return result
 }
 
 /** Invalidate a single cache entry */
 export function invalidate(key: string): void {
+  cancels.get(key)?.()
+  cancels.delete(key)
   cache.delete(key)
 }
 
 /** Invalidate all cache entries */
 export function invalidateAll(): void {
+  for (const cancel of cancels.values()) cancel()
+  cancels.clear()
   cache.clear()
 }
 

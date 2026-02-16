@@ -20,6 +20,9 @@ import {
   BranchSummarized,
   AgentName,
   type MessagePart,
+  type SessionId,
+  type BranchId,
+  type MessageId,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import type { ProviderError, ProviderAuthError } from "@gent/providers"
@@ -45,41 +48,41 @@ export interface CreateSessionInput {
 }
 
 export interface CreateSessionOutput {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   name: string
   bypass: boolean
 }
 
 export interface CreateBranchInput {
-  sessionId: string
+  sessionId: SessionId
   name?: string
 }
 
 export interface CreateBranchOutput {
-  branchId: string
+  branchId: BranchId
 }
 
 export interface SendMessageInput {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   content: string
 }
 
 export interface SubscribeEventsInput {
-  sessionId: string
-  branchId?: string
+  sessionId: SessionId
+  branchId?: BranchId
   after?: number
 }
 
 export interface GetSessionStateInput {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
 }
 
 export interface SessionState {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   messages: MessageInfo[]
   lastEventId: number | null
   isStreaming: boolean
@@ -88,32 +91,32 @@ export interface SessionState {
 }
 
 export interface SessionInfo {
-  id: string
+  id: SessionId
   name: string | undefined
   cwd: string | undefined
   bypass: boolean | undefined
-  branchId: string | undefined
-  parentSessionId: string | undefined
-  parentBranchId: string | undefined
+  branchId: BranchId | undefined
+  parentSessionId: SessionId | undefined
+  parentBranchId: BranchId | undefined
   createdAt: number
   updatedAt: number
 }
 
 export interface BranchInfo {
-  id: string
-  sessionId: string
-  parentBranchId: string | undefined
-  parentMessageId: string | undefined
+  id: BranchId
+  sessionId: SessionId
+  parentBranchId: BranchId | undefined
+  parentMessageId: MessageId | undefined
   name: string | undefined
   summary: string | undefined
   createdAt: number
 }
 
 export interface BranchTreeNode {
-  id: string
+  id: BranchId
   name: string | undefined
   summary: string | undefined
-  parentMessageId: string | undefined
+  parentMessageId: MessageId | undefined
   messageCount: number
   createdAt: number
   children: readonly BranchTreeNode[]
@@ -124,9 +127,9 @@ type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
 }
 
 export interface MessageInfo {
-  id: string
-  sessionId: string
-  branchId: string
+  id: MessageId
+  sessionId: SessionId
+  branchId: BranchId
   kind: "regular" | "interjection" | undefined
   role: "user" | "assistant" | "system" | "tool"
   parts: readonly MessagePart[]
@@ -149,8 +152,8 @@ export type GentCoreError =
 // ============================================================================
 
 export interface ApprovePlanInput {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   planPath: string
   requestId?: string
   emitEvent?: boolean
@@ -163,41 +166,41 @@ export interface GentCoreService {
 
   readonly listSessions: () => Effect.Effect<SessionInfo[], GentCoreError>
 
-  readonly getSession: (sessionId: string) => Effect.Effect<SessionInfo | null, GentCoreError>
+  readonly getSession: (sessionId: SessionId) => Effect.Effect<SessionInfo | null, GentCoreError>
 
   readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<SessionInfo | null, GentCoreError>
 
-  readonly deleteSession: (sessionId: string) => Effect.Effect<void, GentCoreError>
+  readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, GentCoreError>
 
   readonly createBranch: (
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchOutput, GentCoreError>
 
-  readonly getBranchTree: (sessionId: string) => Effect.Effect<BranchTreeNode[], GentCoreError>
+  readonly getBranchTree: (sessionId: SessionId) => Effect.Effect<BranchTreeNode[], GentCoreError>
 
   readonly switchBranch: (input: {
-    sessionId: string
-    fromBranchId: string
-    toBranchId: string
+    sessionId: SessionId
+    fromBranchId: BranchId
+    toBranchId: BranchId
     summarize?: boolean
   }) => Effect.Effect<void, GentCoreError>
 
   readonly forkBranch: (input: {
-    sessionId: string
-    fromBranchId: string
-    atMessageId: string
+    sessionId: SessionId
+    fromBranchId: BranchId
+    atMessageId: MessageId
     name?: string
-  }) => Effect.Effect<{ branchId: string }, GentCoreError>
+  }) => Effect.Effect<{ branchId: BranchId }, GentCoreError>
 
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentCoreError>
 
-  readonly listMessages: (branchId: string) => Effect.Effect<MessageInfo[], GentCoreError>
+  readonly listMessages: (branchId: BranchId) => Effect.Effect<MessageInfo[], GentCoreError>
 
-  readonly listBranches: (sessionId: string) => Effect.Effect<BranchInfo[], GentCoreError>
+  readonly listBranches: (sessionId: SessionId) => Effect.Effect<BranchInfo[], GentCoreError>
 
   readonly compactBranch: (input: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
   }) => Effect.Effect<void, GentCoreError>
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
@@ -213,7 +216,7 @@ export interface GentCoreService {
   ) => Stream.Stream<EventEnvelope, EventStoreError>
 
   readonly updateSessionBypass: (input: {
-    sessionId: string
+    sessionId: SessionId
     bypass: boolean
   }) => Effect.Effect<{ bypass: boolean }, GentCoreError>
 }
@@ -254,7 +257,7 @@ export class GentCore extends Context.Tag("@gent/server/src/core/GentCore")<
       const provider = yield* Provider
       const checkpointService = yield* CheckpointService
 
-      const summarizeBranch = Effect.fn("GentCore.summarizeBranch")(function* (branchId: string) {
+      const summarizeBranch = Effect.fn("GentCore.summarizeBranch")(function* (branchId: BranchId) {
         const messages = yield* storage.listMessages(branchId)
         if (messages.length === 0) return ""
         const firstMessage = messages[0]
@@ -280,7 +283,7 @@ Branch conversation (recent):
 ${conversation}`
 
         const summaryMessage = new Message({
-          id: Bun.randomUUIDv7(),
+          id: Bun.randomUUIDv7() as MessageId,
           sessionId: firstMessage.sessionId,
           branchId,
           role: "user",
@@ -309,8 +312,9 @@ ${conversation}`
       const service: GentCoreService = {
         createSession: (input) =>
           Effect.gen(function* () {
-            const sessionId = Bun.randomUUIDv7()
-            const branchId = Bun.randomUUIDv7()
+            const sessionId = Bun.randomUUIDv7() as SessionId
+
+            const branchId = Bun.randomUUIDv7() as BranchId
             const now = new Date()
 
             // Start with placeholder name
@@ -365,7 +369,7 @@ ${conversation}`
 
               // Fork sending the first message (non-blocking, starts agent loop)
               const message = new Message({
-                id: Bun.randomUUIDv7(),
+                id: Bun.randomUUIDv7() as MessageId,
                 sessionId,
                 branchId,
                 role: "user",
@@ -397,7 +401,7 @@ ${conversation}`
             }
 
             return { sessionId, branchId, name: placeholderName, bypass }
-          }),
+          }).pipe(Effect.withSpan("GentCore.createSession")),
 
         listSessions: () =>
           Effect.gen(function* () {
@@ -415,7 +419,7 @@ ${conversation}`
               createdAt: s.createdAt.getTime(),
               updatedAt: s.updatedAt.getTime(),
             }))
-          }),
+          }).pipe(Effect.withSpan("GentCore.listSessions")),
 
         getSession: (sessionId) =>
           Effect.gen(function* () {
@@ -433,7 +437,7 @@ ${conversation}`
               createdAt: session.createdAt.getTime(),
               updatedAt: session.updatedAt.getTime(),
             }
-          }),
+          }).pipe(Effect.withSpan("GentCore.getSession")),
 
         getLastSessionByCwd: (cwd) =>
           Effect.gen(function* () {
@@ -451,13 +455,13 @@ ${conversation}`
               createdAt: session.createdAt.getTime(),
               updatedAt: session.updatedAt.getTime(),
             }
-          }),
+          }).pipe(Effect.withSpan("GentCore.getLastSessionByCwd")),
 
         deleteSession: (sessionId) => storage.deleteSession(sessionId),
 
         createBranch: (input) =>
           Effect.gen(function* () {
-            const branchId = Bun.randomUUIDv7()
+            const branchId = Bun.randomUUIDv7() as BranchId
             const branch = new Branch({
               id: branchId,
               sessionId: input.sessionId,
@@ -478,14 +482,14 @@ ${conversation}`
               }),
             )
             return { branchId }
-          }),
+          }).pipe(Effect.withSpan("GentCore.createBranch")),
 
         getBranchTree: (sessionId) =>
           Effect.gen(function* () {
             const branches = yield* storage.listBranches(sessionId)
             const branchIds = branches.map((b) => b.id)
             const messageCounts = yield* storage.countMessagesByBranches(branchIds)
-            const nodes = new Map<string, MutableBranchTreeNode>()
+            const nodes = new Map<BranchId, MutableBranchTreeNode>()
 
             for (const branch of branches) {
               const messageCount = messageCounts.get(branch.id) ?? 0
@@ -525,7 +529,7 @@ ${conversation}`
             sortNodes(roots)
 
             return roots
-          }),
+          }).pipe(Effect.withSpan("GentCore.getBranchTree")),
 
         switchBranch: (input) =>
           Effect.gen(function* () {
@@ -565,7 +569,7 @@ ${conversation}`
                 toBranchId: input.toBranchId,
               }),
             )
-          }),
+          }).pipe(Effect.withSpan("GentCore.switchBranch")),
 
         forkBranch: (input) =>
           Effect.gen(function* () {
@@ -583,7 +587,7 @@ ${conversation}`
               })
             }
 
-            const branchId = Bun.randomUUIDv7()
+            const branchId = Bun.randomUUIDv7() as BranchId
             const now = new Date()
             const branch = new Branch({
               id: branchId,
@@ -599,7 +603,7 @@ ${conversation}`
             for (const message of messagesToCopy) {
               yield* storage.createMessage(
                 new Message({
-                  id: Bun.randomUUIDv7(),
+                  id: Bun.randomUUIDv7() as MessageId,
                   sessionId: message.sessionId,
                   branchId,
                   role: message.role,
@@ -626,7 +630,7 @@ ${conversation}`
             )
 
             return { branchId }
-          }),
+          }).pipe(Effect.withSpan("GentCore.forkBranch")),
 
         sendMessage: Effect.fn("GentCore.sendMessage")(function* (input) {
           const session = yield* storage.getSession(input.sessionId)
@@ -657,7 +661,7 @@ ${conversation}`
           )
 
           const message = new Message({
-            id: Bun.randomUUIDv7(),
+            id: Bun.randomUUIDv7() as MessageId,
             sessionId: input.sessionId,
             branchId: input.branchId,
             kind: "regular",
@@ -704,7 +708,7 @@ ${conversation}`
               createdAt: m.createdAt.getTime(),
               turnDurationMs: m.turnDurationMs,
             }))
-          }),
+          }).pipe(Effect.withSpan("GentCore.listMessages")),
 
         listBranches: (sessionId) =>
           Effect.gen(function* () {
@@ -718,7 +722,7 @@ ${conversation}`
               summary: b.summary,
               createdAt: b.createdAt.getTime(),
             }))
-          }),
+          }).pipe(Effect.withSpan("GentCore.listBranches")),
 
         compactBranch: (input) =>
           Effect.gen(function* () {
@@ -738,7 +742,7 @@ ${conversation}`
                 compactionId: checkpoint.id,
               }),
             )
-          }),
+          }).pipe(Effect.withSpan("GentCore.compactBranch")),
 
         steer: (command) => agentLoop.steer(command),
 
@@ -758,7 +762,7 @@ ${conversation}`
                 }),
               )
             }
-          }),
+          }).pipe(Effect.withSpan("GentCore.approvePlan")),
 
         getSessionState: (input) =>
           Effect.gen(function* () {
@@ -814,7 +818,7 @@ ${conversation}`
               agent: currentAgent,
               bypass: session.bypass,
             }
-          }),
+          }).pipe(Effect.withSpan("GentCore.getSessionState")),
 
         updateSessionBypass: (input) =>
           Effect.gen(function* () {
@@ -829,7 +833,7 @@ ${conversation}`
             })
             yield* storage.updateSession(updated)
             return { bypass: input.bypass }
-          }),
+          }).pipe(Effect.withSpan("GentCore.updateSessionBypass")),
 
         subscribeEvents: (input) =>
           eventStore.subscribe({

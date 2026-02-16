@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
+import type { BranchId, SessionId } from "./ids"
 import type { ModelId } from "./model"
 
 // Agent definitions
@@ -171,14 +172,14 @@ export type SubagentResult =
   | {
       _tag: "success"
       text: string
-      sessionId: string
+      sessionId: SessionId
       agentName: AgentName
       usage?: { input: number; output: number; cost: number }
     }
   | {
       _tag: "error"
       error: string
-      sessionId?: string
+      sessionId?: SessionId
       agentName?: AgentName
     }
 
@@ -191,8 +192,8 @@ export interface SubagentRunner {
   readonly run: (params: {
     agent: AgentDefinition
     prompt: string
-    parentSessionId: string
-    parentBranchId: string
+    parentSessionId: SessionId
+    parentBranchId: BranchId
     cwd: string
   }) => EffectNs.Effect<SubagentResult, SubagentError>
 }

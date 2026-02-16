@@ -8,6 +8,7 @@ import {
   MessageInfo,
   SteerPayload,
 } from "./rpcs.js"
+import { SessionId, BranchId } from "@gent/core"
 
 // Re-export schemas under HTTP-friendly names for backward compatibility
 export const SendMessageRequest = SendMessagePayload
@@ -28,12 +29,12 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
   .add(HttpApiEndpoint.get("list", "/sessions").addSuccess(Schema.Array(SessionResponse)))
   .add(
     HttpApiEndpoint.get("get", "/sessions/:sessionId")
-      .setPath(Schema.Struct({ sessionId: Schema.String }))
+      .setPath(Schema.Struct({ sessionId: SessionId }))
       .addSuccess(SessionResponse),
   )
   .add(
     HttpApiEndpoint.del("delete", "/sessions/:sessionId")
-      .setPath(Schema.Struct({ sessionId: Schema.String }))
+      .setPath(Schema.Struct({ sessionId: SessionId }))
       .addSuccess(Schema.Void),
   ) {}
 
@@ -45,7 +46,7 @@ export class MessagesApi extends HttpApiGroup.make("messages")
   )
   .add(
     HttpApiEndpoint.get("list", "/sessions/:sessionId/branches/:branchId/messages")
-      .setPath(Schema.Struct({ sessionId: Schema.String, branchId: Schema.String }))
+      .setPath(Schema.Struct({ sessionId: SessionId, branchId: BranchId }))
       .addSuccess(Schema.Array(MessageResponse)),
   )
   .add(HttpApiEndpoint.post("steer", "/steer").setPayload(SteerRequest).addSuccess(Schema.Void)) {}
@@ -53,7 +54,7 @@ export class MessagesApi extends HttpApiGroup.make("messages")
 // EventsApi deprecated - use RPC streaming via /rpc endpoint instead
 export class EventsApi extends HttpApiGroup.make("events").add(
   HttpApiEndpoint.get("subscribe", "/events/:sessionId")
-    .setPath(Schema.Struct({ sessionId: Schema.String }))
+    .setPath(Schema.Struct({ sessionId: SessionId }))
     .addSuccess(Schema.String), // SSE stream (deprecated)
 ) {}
 

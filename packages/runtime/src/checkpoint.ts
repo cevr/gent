@@ -7,6 +7,8 @@ import {
   ToolResultPart,
   type MessagePart,
   type Checkpoint,
+  type BranchId,
+  type MessageId,
 } from "@gent/core"
 import { Storage, type StorageError } from "@gent/storage"
 import { Provider, type ProviderError } from "@gent/providers"
@@ -163,16 +165,16 @@ export const pruneToolOutputs = (
 // Checkpoint Service
 
 export interface CheckpointServiceApi {
-  readonly shouldCompact: (branchId: string) => Effect.Effect<boolean, StorageError>
+  readonly shouldCompact: (branchId: BranchId) => Effect.Effect<boolean, StorageError>
   readonly createCompactionCheckpoint: (
-    branchId: string,
+    branchId: BranchId,
   ) => Effect.Effect<CompactionCheckpoint, StorageError | ProviderError | CheckpointError>
   readonly createPlanCheckpoint: (
-    branchId: string,
+    branchId: BranchId,
     planPath: string,
   ) => Effect.Effect<PlanCheckpoint, StorageError>
   readonly getLatestCheckpoint: (
-    branchId: string,
+    branchId: BranchId,
   ) => Effect.Effect<Checkpoint | undefined, StorageError>
   readonly prune: (messages: ReadonlyArray<Message>) => Effect.Effect<Message[]>
   readonly estimateTokens: (messages: ReadonlyArray<Message>) => Effect.Effect<number>
@@ -192,14 +194,16 @@ export class CheckpointService extends Context.Tag(
         const provider = yield* Provider
 
         const service: CheckpointServiceApi = {
-          shouldCompact: Effect.fn("CheckpointService.shouldCompact")(function* (branchId: string) {
+          shouldCompact: Effect.fn("CheckpointService.shouldCompact")(function* (
+            branchId: BranchId,
+          ) {
             const messages = yield* storage.listMessages(branchId)
             const tokens = estimateTokens(messages)
             return tokens >= config.threshold
           }),
 
           createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(
-            function* (branchId: string) {
+            function* (branchId: BranchId) {
               const messages = yield* storage.listMessages(branchId)
 
               // No messages = nothing to compact
@@ -258,7 +262,7 @@ ${messagesToSummarize
   .join("\n\n")}`
 
               const summaryMessage = new Message({
-                id: Bun.randomUUIDv7(),
+                id: Bun.randomUUIDv7() as MessageId,
                 sessionId,
                 branchId,
                 role: "user",
@@ -300,7 +304,7 @@ ${messagesToSummarize
           ),
 
           createPlanCheckpoint: Effect.fn("CheckpointService.createPlanCheckpoint")(function* (
-            branchId: string,
+            branchId: BranchId,
             planPath: string,
           ) {
             const messages = yield* storage.listMessages(branchId)
@@ -340,7 +344,7 @@ ${messagesToSummarize
             id: "test",
             branchId,
             summary: "Test summary",
-            firstKeptMessageId: "test-msg",
+            firstKeptMessageId: "test-msg" as MessageId,
             messageCount: 0,
             tokenCount: 0,
             createdAt: new Date(),

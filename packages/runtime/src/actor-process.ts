@@ -5,15 +5,18 @@ import * as RpcGroup from "@effect/rpc/RpcGroup"
 import { Cause, Context, Effect, Layer, Schema } from "effect"
 import {
   AgentName,
+  BranchId,
   ErrorOccurred,
   EventStore,
   Message,
+  SessionId,
   TextPart,
   ToolCallSucceeded,
   ToolCallFailed,
   ToolResultPart,
   summarizeToolOutput,
   stringifyOutput,
+  type MessageId,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { AgentLoop } from "./agent"
@@ -27,14 +30,14 @@ export class ActorProcessError extends Schema.TaggedError<ActorProcessError>()(
 ) {}
 
 export const ActorTarget = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
 })
 export type ActorTarget = typeof ActorTarget.Type
 
 export const SendUserMessagePayload = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   content: Schema.String,
   mode: Schema.optional(AgentName),
   bypass: Schema.optional(Schema.Boolean),
@@ -42,8 +45,8 @@ export const SendUserMessagePayload = Schema.Struct({
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
 export const SendToolResultPayload = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   toolCallId: Schema.String,
   toolName: Schema.String,
   output: Schema.Unknown,
@@ -55,8 +58,8 @@ export const InterruptKind = Schema.Literal("cancel", "interrupt", "interject")
 export type InterruptKind = typeof InterruptKind.Type
 
 export const InterruptPayload = Schema.Struct({
-  sessionId: Schema.String,
-  branchId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   kind: InterruptKind,
   message: Schema.optional(Schema.String),
 })
@@ -139,7 +142,7 @@ export const LocalActorProcessLive: Layer.Layer<
           }
 
           const message = new Message({
-            id: Bun.randomUUIDv7(),
+            id: Bun.randomUUIDv7() as MessageId,
             sessionId: input.sessionId,
             branchId: input.branchId,
             kind: "regular",
@@ -180,7 +183,7 @@ export const LocalActorProcessLive: Layer.Layer<
           })
 
           const message = new Message({
-            id: Bun.randomUUIDv7(),
+            id: Bun.randomUUIDv7() as MessageId,
             sessionId: input.sessionId,
             branchId: input.branchId,
             role: "tool",

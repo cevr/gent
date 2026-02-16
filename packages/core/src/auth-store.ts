@@ -79,6 +79,7 @@ export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore"
             Effect.flatMap((raw) =>
               raw !== undefined && raw.length > 0 ? decode(raw) : Effect.succeed(undefined),
             ),
+            Effect.withSpan("AuthStore.get"),
           ),
 
         set: (provider, info) =>
@@ -89,14 +90,20 @@ export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore"
                 ? e
                 : new AuthStoreError({ message: "Failed to persist auth info", cause: e }),
             ),
+            Effect.withSpan("AuthStore.set"),
           ),
 
         remove: (provider) =>
-          storage
-            .delete(provider)
-            .pipe(Effect.catchAll((e) => Effect.logWarning("failed to remove auth key", e))),
+          storage.delete(provider).pipe(
+            Effect.catchAll((e) => Effect.logWarning("failed to remove auth key", e)),
+            Effect.withSpan("AuthStore.remove"),
+          ),
 
-        list: () => storage.list().pipe(Effect.catchAll(() => Effect.succeed([]))),
+        list: () =>
+          storage.list().pipe(
+            Effect.catchAll(() => Effect.succeed([])),
+            Effect.withSpan("AuthStore.list"),
+          ),
 
         listInfo: () =>
           storage.list().pipe(
@@ -125,6 +132,7 @@ export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore"
                 {} as Record<string, AuthInfo>,
               ),
             ),
+            Effect.withSpan("AuthStore.listInfo"),
           ),
       })
     }),

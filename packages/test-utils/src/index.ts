@@ -11,6 +11,8 @@ import {
   CompactionCheckpoint,
   PlanCheckpoint,
   matchesEventFilter,
+  type BranchId,
+  type MessageId,
   type Checkpoint,
   type AnyToolDefinition,
   type PermissionDecision,
@@ -187,7 +189,7 @@ export const RecordingCheckpointService = (
       const checkpointRef = yield* Ref.make<Checkpoint | undefined>(config.latestCheckpoint)
 
       return {
-        shouldCompact: Effect.fn("CheckpointService.shouldCompact")(function* (branchId: string) {
+        shouldCompact: Effect.fn("CheckpointService.shouldCompact")(function* (branchId: BranchId) {
           yield* recorder.record({
             service: "CheckpointService",
             method: "shouldCompact",
@@ -197,12 +199,12 @@ export const RecordingCheckpointService = (
         }),
 
         createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(
-          function* (branchId: string) {
+          function* (branchId: BranchId) {
             const checkpoint = new CompactionCheckpoint({
               id: Bun.randomUUIDv7(),
               branchId,
               summary: "Test compaction summary",
-              firstKeptMessageId: "test-kept-msg",
+              firstKeptMessageId: "test-kept-msg" as MessageId,
               messageCount: 10,
               tokenCount: 5000,
               createdAt: new Date(),
@@ -220,7 +222,7 @@ export const RecordingCheckpointService = (
         ),
 
         createPlanCheckpoint: Effect.fn("CheckpointService.createPlanCheckpoint")(function* (
-          branchId: string,
+          branchId: BranchId,
           planPath: string,
         ) {
           const checkpoint = new PlanCheckpoint({
@@ -243,7 +245,7 @@ export const RecordingCheckpointService = (
         }),
 
         getLatestCheckpoint: Effect.fn("CheckpointService.getLatestCheckpoint")(function* (
-          branchId: string,
+          branchId: BranchId,
         ) {
           yield* recorder.record({
             service: "CheckpointService",

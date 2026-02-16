@@ -15,7 +15,14 @@ import {
 import { makeDirectClient, type DirectClient } from "@gent/sdk"
 import { GentLogger } from "@gent/runtime"
 import { UnifiedTracerLive } from "./utils/unified-tracer"
-import { AuthGuard, LinkOpener, OsService, type ProviderId } from "@gent/core"
+import {
+  AuthGuard,
+  LinkOpener,
+  OsService,
+  type ProviderId,
+  type SessionId,
+  type BranchId,
+} from "@gent/core"
 import * as path from "node:path"
 import * as os from "node:os"
 
@@ -63,7 +70,7 @@ const resolveInitialState = (input: {
       }
       // Get or create session
       if (Option.isSome(session)) {
-        const sess = yield* core.getSession(session.value)
+        const sess = yield* core.getSession(session.value as SessionId)
         if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
           return process.exit(1)
@@ -88,7 +95,7 @@ const resolveInitialState = (input: {
 
     // 2. Explicit session ID
     if (Option.isSome(session)) {
-      const sess = yield* core.getSession(session.value)
+      const sess = yield* core.getSession(session.value as SessionId)
       if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
         return process.exit(1)
@@ -209,8 +216,8 @@ const CoreLayer = Layer.unwrapEffect(
 // Headless runner - streams events to stdout
 const runHeadless = (
   core: GentCoreService,
-  sessionId: string,
-  branchId: string,
+  sessionId: SessionId,
+  branchId: BranchId,
   promptText: string,
 ): Effect.Effect<void, GentCoreError, never> =>
   Effect.gen(function* () {

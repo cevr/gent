@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, type Schema } from "effect"
 import type { AgentName } from "./agent"
+import type { BranchId, SessionId } from "./ids"
 
 // Tool Definition
 
@@ -22,8 +23,8 @@ export interface ToolDefinition<
 }
 
 export interface ToolContext {
-  readonly sessionId: string
-  readonly branchId: string
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
   readonly toolCallId: string
   readonly agentName?: AgentName
 }

@@ -10,7 +10,9 @@ import type {
   AuthAuthorization,
   AuthMethod,
   AuthProviderInfo,
+  BranchId,
   EventEnvelope,
+  MessageId,
   MessagePart,
   TextPart,
   ToolCallPart,
@@ -19,6 +21,7 @@ import type {
   PermissionDecision,
   PlanDecision,
   PermissionRule,
+  SessionId,
 } from "@gent/core"
 
 export type {
@@ -30,6 +33,9 @@ export type {
   AuthProviderInfo,
   AuthAuthorization,
   AuthMethod,
+  SessionId,
+  BranchId,
+  MessageId,
 }
 
 // Re-export RPC types
@@ -125,9 +131,9 @@ export function extractToolCallsWithResults(
 
 // Message type returned from RPC (readonly)
 export interface MessageInfoReadonly {
-  readonly id: string
-  readonly sessionId: string
-  readonly branchId: string
+  readonly id: MessageId
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
   readonly kind?: "regular" | "interjection"
   readonly role: "user" | "assistant" | "system" | "tool"
   readonly parts: readonly MessagePart[]
@@ -137,47 +143,47 @@ export interface MessageInfoReadonly {
 
 // Steer command types
 export type SteerCommand =
-  | { _tag: "Cancel"; sessionId: string; branchId: string }
-  | { _tag: "Interrupt"; sessionId: string; branchId: string }
-  | { _tag: "Interject"; sessionId: string; branchId: string; message: string }
-  | { _tag: "SwitchAgent"; sessionId: string; branchId: string; agent: AgentName }
+  | { _tag: "Cancel"; sessionId: SessionId; branchId: BranchId }
+  | { _tag: "Interrupt"; sessionId: SessionId; branchId: BranchId }
+  | { _tag: "Interject"; sessionId: SessionId; branchId: BranchId; message: string }
+  | { _tag: "SwitchAgent"; sessionId: SessionId; branchId: BranchId; agent: AgentName }
 
 // Session info (minimal for client)
 export interface SessionInfo {
-  id: string
+  id: SessionId
   name?: string
   cwd?: string
   bypass?: boolean
-  branchId?: string
-  parentSessionId?: string
-  parentBranchId?: string
+  branchId?: BranchId
+  parentSessionId?: SessionId
+  parentBranchId?: BranchId
   createdAt: number
   updatedAt: number
 }
 
 export interface BranchInfo {
-  id: string
-  sessionId: string
-  parentBranchId?: string
-  parentMessageId?: string
+  id: BranchId
+  sessionId: SessionId
+  parentBranchId?: BranchId
+  parentMessageId?: MessageId
   name?: string
   summary?: string
   createdAt: number
 }
 
 export interface BranchTreeNode {
-  id: string
+  id: BranchId
   name?: string
   summary?: string
-  parentMessageId?: string
+  parentMessageId?: MessageId
   messageCount: number
   createdAt: number
   children: readonly BranchTreeNode[]
 }
 
 export interface SessionState {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   messages: readonly MessageInfoReadonly[]
   lastEventId: number | null
   isStreaming: boolean
@@ -186,8 +192,8 @@ export interface SessionState {
 }
 
 export interface CreateSessionResult {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   name: string
   bypass: boolean
 }
@@ -199,8 +205,8 @@ export interface CreateSessionResult {
 export interface GentClient {
   /** Send a message to active session */
   sendMessage: (input: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
     content: string
   }) => Effect.Effect<void, GentRpcError>
 
@@ -212,12 +218,12 @@ export interface GentClient {
   }) => Effect.Effect<CreateSessionResult, GentRpcError>
 
   /** List messages for a branch */
-  listMessages: (branchId: string) => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
+  listMessages: (branchId: BranchId) => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
 
   /** Get session state snapshot */
   getSessionState: (input: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
   }) => Effect.Effect<SessionState, GentRpcError>
 
   /** List all sessions */
@@ -227,40 +233,40 @@ export interface GentClient {
   listModels: () => Effect.Effect<readonly Model[], GentRpcError>
 
   /** List branches for a session */
-  listBranches: (sessionId: string) => Effect.Effect<readonly BranchInfo[], GentRpcError>
+  listBranches: (sessionId: SessionId) => Effect.Effect<readonly BranchInfo[], GentRpcError>
 
   /** Get branch tree for a session */
-  getBranchTree: (sessionId: string) => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
+  getBranchTree: (sessionId: SessionId) => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
 
   /** Create a new branch */
-  createBranch: (sessionId: string, name?: string) => Effect.Effect<string, GentRpcError>
+  createBranch: (sessionId: SessionId, name?: string) => Effect.Effect<BranchId, GentRpcError>
 
   /** Switch branches within a session */
   switchBranch: (input: {
-    sessionId: string
-    fromBranchId: string
-    toBranchId: string
+    sessionId: SessionId
+    fromBranchId: BranchId
+    toBranchId: BranchId
     summarize?: boolean
   }) => Effect.Effect<void, GentRpcError>
 
   /** Fork a new branch from a message */
   forkBranch: (input: {
-    sessionId: string
-    fromBranchId: string
-    atMessageId: string
+    sessionId: SessionId
+    fromBranchId: BranchId
+    atMessageId: MessageId
     name?: string
   }) => Effect.Effect<{ branchId: string }, GentRpcError>
 
   /** Compact a branch */
   compactBranch: (input: {
-    sessionId: string
-    branchId: string
+    sessionId: SessionId
+    branchId: BranchId
   }) => Effect.Effect<void, GentRpcError>
 
   /** Subscribe to events - returns Stream */
   subscribeEvents: (input: {
-    sessionId: string
-    branchId?: string
+    sessionId: SessionId
+    branchId?: BranchId
     after?: number
   }) => Stream.Stream<EventEnvelope, GentRpcError>
 
@@ -289,7 +295,7 @@ export interface GentClient {
 
   /** Update session bypass */
   updateSessionBypass: (
-    sessionId: string,
+    sessionId: SessionId,
     bypass: boolean,
   ) => Effect.Effect<{ bypass: boolean }, GentRpcError>
 

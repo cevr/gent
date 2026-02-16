@@ -12,11 +12,12 @@ import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { BranchInfo, BranchTreeNode } from "../client"
+import type { SessionId } from "@gent/core"
 import { formatError } from "../utils/format-error"
 import { truncate } from "../utils/truncate"
 
 export interface BranchPickerProps {
-  sessionId: string
+  sessionId: SessionId
   sessionName: string
   branches: readonly BranchInfo[]
   prompt?: string

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, ParseResult } from "effect"
+import { Context, Effect, Layer, Ref, Schema, ParseResult } from "effect"
 
 // Valid Regex Pattern - validates regex at decode time using ParseResult.try
 const ValidRegexPattern = Schema.transformOrFail(Schema.String, Schema.String, {
@@ -56,48 +56,49 @@ export class Permission extends Context.Tag("@gent/core/src/permission")<
     initialRules: ReadonlyArray<PermissionRule> = [],
     defaultAction: PermissionRule["action"] = "allow",
   ): Layer.Layer<Permission> =>
-    Layer.sync(Permission, () => {
-      type StoredRule = { rule: PermissionRule; regex?: RegExp }
-      const toStored = (rule: PermissionRule): StoredRule => ({
-        rule,
-        regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
-      })
-      let rules = initialRules.map(toStored)
-      const defaultResult =
-        defaultAction === "allow"
-          ? ("allowed" as const)
-          : defaultAction === "deny"
-            ? ("denied" as const)
-            : ("ask" as const)
-      return {
-        check: (tool, args) =>
-          Effect.sync(() => {
-            const argsStr = JSON.stringify(args)
-            for (const entry of rules) {
-              const rule = entry.rule
-              if (rule.tool !== tool && rule.tool !== "*") continue
-              if (entry.regex !== undefined && !entry.regex.test(argsStr)) continue
-              // Map rule action to result
-              if (rule.action === "allow") return "allowed" as const
-              if (rule.action === "deny") return "denied" as const
-              return "ask" as const
-            }
-            return defaultResult
-          }),
-        addRule: (rule) =>
-          Effect.sync(() => {
-            rules.push(toStored(rule))
-          }),
-        removeRule: (tool, pattern) =>
-          Effect.sync(() => {
-            const idx = rules.findIndex(
-              (entry) => entry.rule.tool === tool && entry.rule.pattern === pattern,
-            )
-            if (idx !== -1) rules.splice(idx, 1)
-          }),
-        getRules: () => Effect.succeed(rules.map((entry) => entry.rule)),
-      }
-    })
+    Layer.effect(
+      Permission,
+      Effect.gen(function* () {
+        type StoredRule = { rule: PermissionRule; regex?: RegExp }
+        const toStored = (rule: PermissionRule): StoredRule => ({
+          rule,
+          regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
+        })
+        const rulesRef = yield* Ref.make<StoredRule[]>([...initialRules.map(toStored)])
+        const defaultResult =
+          defaultAction === "allow"
+            ? ("allowed" as const)
+            : defaultAction === "deny"
+              ? ("denied" as const)
+              : ("ask" as const)
+        return Permission.of({
+          check: (tool, args) =>
+            Ref.get(rulesRef).pipe(
+              Effect.map((rules) => {
+                const argsStr = JSON.stringify(args)
+                for (const entry of rules) {
+                  const rule = entry.rule
+                  if (rule.tool !== tool && rule.tool !== "*") continue
+                  if (entry.regex !== undefined && !entry.regex.test(argsStr)) continue
+                  if (rule.action === "allow") return "allowed" as const
+                  if (rule.action === "deny") return "denied" as const
+                  return "ask" as const
+                }
+                return defaultResult
+              }),
+            ),
+          addRule: (rule) => Ref.update(rulesRef, (rules) => [...rules, toStored(rule)]),
+          removeRule: (tool, pattern) =>
+            Ref.update(rulesRef, (rules) =>
+              rules.filter(
+                (entry) => !(entry.rule.tool === tool && entry.rule.pattern === pattern),
+              ),
+            ),
+          getRules: () =>
+            Ref.get(rulesRef).pipe(Effect.map((rules) => rules.map((entry) => entry.rule))),
+        })
+      }),
+    )
 
   static Test = (): Layer.Layer<Permission> =>
     Layer.succeed(Permission, {
