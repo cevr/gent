@@ -79,4 +79,12 @@ export class AuthGuard extends Context.Tag("@gent/core/src/auth-guard/AuthGuard"
       })
     }),
   )
+
+  static Test = (providers: readonly AuthProviderInfo[] = []): Layer.Layer<AuthGuard> =>
+    Layer.succeed(AuthGuard, {
+      requiredProviders: () => Effect.succeed(REQUIRED_PROVIDERS),
+      listProviders: () => Effect.succeed(providers),
+      missingRequiredProviders: () =>
+        Effect.succeed(providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)),
+    })
 }

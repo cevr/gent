@@ -95,7 +95,17 @@ export interface ActorProcessService {
 export class ActorProcess extends Context.Tag("@gent/runtime/src/actor-process/ActorProcess")<
   ActorProcess,
   ActorProcessService
->() {}
+>() {
+  static Test = (): Layer.Layer<ActorProcess> =>
+    Layer.succeed(ActorProcess, {
+      sendUserMessage: () => Effect.void,
+      sendToolResult: () => Effect.void,
+      interrupt: () => Effect.void,
+      getState: () => Effect.succeed({ status: "idle" as const, queueDepth: 0 }),
+      getMetrics: () =>
+        Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+    })
+}
 
 const toEntityId = (input: ActorTarget) => `${input.sessionId}:${input.branchId}`
 
