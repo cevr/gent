@@ -205,6 +205,17 @@ export class WideEvent extends Context.Tag("@gent/runtime/WideEvent")<
                   return Option.none()
                 }
 
+                case "ToolCallSucceeded":
+                case "ToolCallFailed": {
+                  const acc = getOrCreate(branchId)
+                  const tc = acc.toolCalls.find((t) => t.toolCallId === event.toolCallId)
+                  if (tc !== undefined) {
+                    tc.isError = event._tag === "ToolCallFailed"
+                    tc.durationMs = envelope.createdAt - tc.startedAt
+                  }
+                  return Option.none()
+                }
+
                 case "ErrorOccurred": {
                   const acc = getOrCreate(branchId)
                   acc.error = event.error
@@ -221,7 +232,30 @@ export class WideEvent extends Context.Tag("@gent/runtime/WideEvent")<
                   return Option.some(wide)
                 }
 
-                default:
+                // Explicitly ignored events — no accumulator impact
+                case "SessionStarted":
+                case "SessionEnded":
+                case "StreamChunk":
+                case "PermissionRequested":
+                case "PlanPresented":
+                case "PlanConfirmed":
+                case "PlanRejected":
+                case "CompactionStarted":
+                case "CompactionCompleted":
+                case "MachineInspected":
+                case "MachineTaskSucceeded":
+                case "MachineTaskFailed":
+                case "TodoUpdated":
+                case "QuestionsAsked":
+                case "QuestionsAnswered":
+                case "SessionNameUpdated":
+                case "BranchCreated":
+                case "BranchSwitched":
+                case "BranchSummarized":
+                case "SubagentSpawned":
+                case "SubagentCompleted":
+                case "SubagentSucceeded":
+                case "SubagentFailed":
                   return Option.none()
               }
             }),

@@ -5,7 +5,7 @@
  * Side effects (RPC calls) handled in component; machine handles pure transitions.
  */
 
-import { createSignal, createEffect, For, Show } from "solid-js"
+import { createSignal, createEffect, onMount, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -45,9 +45,7 @@ export function Auth(props: AuthProps) {
   useScrollSync(() => `auth-provider-${state().providerIndex}`, { getRef: () => scrollRef })
 
   // Initial load
-  createEffect(() => {
-    loadAuth()
-  })
+  onMount(() => loadAuth())
 
   // ── Side effects ──
 

@@ -63,29 +63,6 @@ function Agent() {
   return <span style={{ fg: theme.primary }}>{client.agent()}</span>
 }
 
-function Status() {
-  const { theme } = useTheme()
-  const client = useClient()
-
-  const indicator = () => {
-    const status = client.agentStatus()
-    switch (status._tag) {
-      case "streaming":
-        return { text: "", color: theme.textMuted }
-      case "error":
-        return { text: "error", color: theme.error }
-      case "idle":
-        return { text: "", color: theme.textMuted }
-    }
-  }
-
-  return (
-    <Show when={indicator().text.length > 0}>
-      <span style={{ fg: indicator().color }}>{indicator().text}</span>
-    </Show>
-  )
-}
-
 function Cwd() {
   const { theme } = useTheme()
   const workspace = useWorkspace()
@@ -152,7 +129,6 @@ export const StatusBar = {
   Row,
   ErrorRow,
   Agent,
-  Status,
   Cwd,
   Git,
   Cost,

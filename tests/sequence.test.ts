@@ -81,7 +81,8 @@ describe("Sequence Recording", () => {
           const calls = yield* recorder.getCalls()
           const eventCalls = calls.filter((c) => c.service === "EventStore")
           expect(eventCalls.length).toBe(1)
-          expect((eventCalls[0]?.args as any)?._tag).toBe("StreamStarted")
+          const args = eventCalls[0]?.args as { _tag?: string } | undefined
+          expect(args?._tag).toBe("StreamStarted")
         }).pipe(Effect.provide(TestLayer)),
       )
     })

@@ -57,6 +57,7 @@ export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("Tool
   input: Schema.optional(Schema.Unknown),
 }) {}
 
+/** @deprecated Use ToolCallSucceeded or ToolCallFailed instead */
 export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
   "ToolCallCompleted",
   {
@@ -69,6 +70,27 @@ export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
     output: Schema.optional(Schema.String),
   },
 ) {}
+
+export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
+  "ToolCallSucceeded",
+  {
+    sessionId: Schema.String,
+    branchId: Schema.String,
+    toolCallId: Schema.String,
+    toolName: Schema.String,
+    summary: Schema.optional(Schema.String),
+    output: Schema.optional(Schema.String),
+  },
+) {}
+
+export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCallFailed", {
+  sessionId: Schema.String,
+  branchId: Schema.String,
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+  summary: Schema.optional(Schema.String),
+  output: Schema.optional(Schema.String),
+}) {}
 
 export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>()(
   "PermissionRequested",
@@ -248,6 +270,7 @@ export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("Suba
   prompt: Schema.String,
 }) {}
 
+/** @deprecated Use SubagentSucceeded or SubagentFailed instead */
 export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
   "SubagentCompleted",
   {
@@ -257,6 +280,21 @@ export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
     success: Schema.Boolean,
   },
 ) {}
+
+export class SubagentSucceeded extends Schema.TaggedClass<SubagentSucceeded>()(
+  "SubagentSucceeded",
+  {
+    parentSessionId: Schema.String,
+    childSessionId: Schema.String,
+    agentName: Schema.String,
+  },
+) {}
+
+export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("SubagentFailed", {
+  parentSessionId: Schema.String,
+  childSessionId: Schema.String,
+  agentName: Schema.String,
+}) {}
 
 export const AgentEvent = Schema.Union(
   SessionStarted,
@@ -268,6 +306,8 @@ export const AgentEvent = Schema.Union(
   TurnCompleted,
   ToolCallStarted,
   ToolCallCompleted,
+  ToolCallSucceeded,
+  ToolCallFailed,
   PermissionRequested,
   PlanPresented,
   PlanConfirmed,
@@ -288,6 +328,8 @@ export const AgentEvent = Schema.Union(
   AgentSwitched,
   SubagentSpawned,
   SubagentCompleted,
+  SubagentSucceeded,
+  SubagentFailed,
 )
 export type AgentEvent = typeof AgentEvent.Type
 
@@ -315,13 +357,17 @@ export interface EventStoreService {
   }) => Stream.Stream<EventEnvelope, EventStoreError>
 }
 
-const getEventSessionId = (event: AgentEvent): string | undefined => {
+export const getEventSessionId = (event: AgentEvent): string | undefined => {
   if ("sessionId" in event) return event.sessionId as string
   if ("parentSessionId" in event) return event.parentSessionId as string
   return undefined
 }
 
-const matchesEventFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
+export const matchesEventFilter = (
+  env: EventEnvelope,
+  sessionId: string,
+  branchId?: string,
+): boolean => {
   const eventSessionId = getEventSessionId(env.event)
   if (eventSessionId === undefined || eventSessionId !== sessionId) return false
   if (branchId === undefined) return true

@@ -40,7 +40,8 @@ import {
   StreamEnded,
   TurnCompleted,
   ToolCallStarted,
-  ToolCallCompleted,
+  ToolCallSucceeded,
+  ToolCallFailed,
   MessageReceived,
   ToolRegistry,
   ErrorOccurred,
@@ -101,7 +102,7 @@ const buildProviderOptions = (
 
 export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
+  cause: Schema.optional(Schema.Defect),
 }) {}
 
 // Steer Command
@@ -221,16 +222,17 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
             const resolveCurrentAgent = Effect.fn("AgentLoop.resolveCurrentAgent")(function* () {
               const existing = yield* Ref.get(currentAgentRef)
-              if (existing !== undefined) return existing as AgentName
+              if (existing !== undefined) return existing
 
               const latestAgentEvent = yield* storage
                 .getLatestEvent({ sessionId, branchId, tags: ["AgentSwitched"] })
                 .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
 
-              const next =
+              const raw =
                 latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
-                  ? (latestAgentEvent.toAgent as AgentName)
-                  : "cowork"
+                  ? latestAgentEvent.toAgent
+                  : undefined
+              const next: AgentNameType = Schema.is(AgentName)(raw) ? raw : "cowork"
 
               yield* Ref.set(currentAgentRef, next)
               return next
@@ -242,7 +244,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               if (cmd._tag !== "SwitchAgent") return
 
               const previous = yield* resolveCurrentAgent()
-              const next = cmd.agent as AgentName
+              const next: AgentNameType = Schema.is(AgentName)(cmd.agent) ? cmd.agent : "cowork"
               const resolved = yield* agentRegistry.get(next)
               if (resolved === undefined) return
 
@@ -626,16 +628,18 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
                         const outputSummary = summarizeToolOutput(result)
                         const isError = result.output.type === "error-json"
+                        const toolCallFields = {
+                          sessionId,
+                          branchId,
+                          toolCallId: toolCall.toolCallId,
+                          toolName: toolCall.toolName,
+                          summary: outputSummary,
+                          output: stringifyOutput(result.output.value),
+                        }
                         yield* publishEvent(
-                          new ToolCallCompleted({
-                            sessionId,
-                            branchId,
-                            toolCallId: toolCall.toolCallId,
-                            toolName: toolCall.toolName,
-                            isError,
-                            summary: outputSummary,
-                            output: stringifyOutput(result.output.value),
-                          }),
+                          isError
+                            ? new ToolCallFailed(toolCallFields)
+                            : new ToolCallSucceeded(toolCallFields),
                         )
                         yield* Effect.logInfo("tool.completed").pipe(
                           Effect.annotateLogs({
@@ -1139,16 +1143,19 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
                       : run
 
                     const outputSummary = summarizeToolOutput(result)
+                    const isError = result.output.type === "error-json"
+                    const toolCallFields = {
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      toolCallId: toolCall.toolCallId,
+                      toolName: toolCall.toolName,
+                      summary: outputSummary,
+                      output: stringifyOutput(result.output.value),
+                    }
                     yield* eventStore.publish(
-                      new ToolCallCompleted({
-                        sessionId: input.sessionId,
-                        branchId: input.branchId,
-                        toolCallId: toolCall.toolCallId,
-                        toolName: toolCall.toolName,
-                        isError: result.output.type === "error-json",
-                        summary: outputSummary,
-                        output: stringifyOutput(result.output.value),
-                      }),
+                      isError
+                        ? new ToolCallFailed(toolCallFields)
+                        : new ToolCallSucceeded(toolCallFields),
                     )
 
                     return result

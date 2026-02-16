@@ -1,6 +1,7 @@
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { formatThinkTime } from "./message-list-utils"
+import { truncate } from "../utils/truncate"
 
 export type SessionEvent =
   | {
@@ -39,9 +40,6 @@ const getLabel = (event: SessionEvent): string => {
       return "Compaction complete"
   }
 }
-
-const truncate = (value: string, max: number): string =>
-  value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
 
 export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()

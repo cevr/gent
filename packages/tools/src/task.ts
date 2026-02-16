@@ -48,7 +48,7 @@ export const TaskTool = defineTool({
 
     const ensureAllowed = (agentName: string) => {
       if (caller === undefined || caller.canDelegateToAgents === undefined) return true
-      return caller.canDelegateToAgents.includes(agentName as AgentName)
+      return Schema.is(AgentName)(agentName) && caller.canDelegateToAgents.includes(agentName)
     }
 
     const resolveAgent = (agentName: string) =>

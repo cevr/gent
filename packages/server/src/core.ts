@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Schema, Stream } from "effect"
 import { identity } from "effect/Function"
 import type { PlatformError } from "@effect/platform/Error"
 import {
@@ -18,7 +18,7 @@ import {
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
-  type AgentName,
+  AgentName,
   type MessagePart,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
@@ -26,10 +26,12 @@ import type { ProviderError, ProviderAuthError } from "@gent/providers"
 import { Provider } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
 import type { CheckpointError } from "@gent/runtime"
+import { NotFoundError } from "./errors"
 
 // Re-export for consumers
 export { SteerCommand, AgentLoopError }
 export { StorageError }
+export { NotFoundError }
 
 // ============================================================================
 // Types
@@ -140,6 +142,7 @@ export type GentCoreError =
   | ProviderAuthError
   | EventStoreError
   | CheckpointError
+  | NotFoundError
 
 // ============================================================================
 // GentCore Service
@@ -372,8 +375,9 @@ ${conversation}`
               yield* Effect.forkDaemon(
                 agentLoop.run(message, { bypass }).pipe(
                   Effect.withSpan("AgentLoop.firstMessage"),
-                  Effect.catchAllCause((cause) =>
-                    eventStore
+                  Effect.catchAllCause((cause) => {
+                    if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+                    return eventStore
                       .publish(
                         new ErrorOccurred({
                           sessionId,
@@ -385,8 +389,8 @@ ${conversation}`
                         Effect.catchAll((e) =>
                           Effect.logWarning("failed to publish ErrorOccurred event", e),
                         ),
-                      ),
-                  ),
+                      )
+                  }),
                   parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
                 ),
               )
@@ -527,11 +531,14 @@ ${conversation}`
           Effect.gen(function* () {
             const fromBranch = yield* storage.getBranch(input.fromBranchId)
             if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-              return yield* new StorageError({ message: "From branch not found" })
+              return yield* new NotFoundError({
+                message: "From branch not found",
+                entity: "branch",
+              })
             }
             const toBranch = yield* storage.getBranch(input.toBranchId)
             if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
-              return yield* new StorageError({ message: "To branch not found" })
+              return yield* new NotFoundError({ message: "To branch not found", entity: "branch" })
             }
 
             const shouldSummarize = input.summarize !== false
@@ -564,13 +571,16 @@ ${conversation}`
           Effect.gen(function* () {
             const fromBranch = yield* storage.getBranch(input.fromBranchId)
             if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-              return yield* new StorageError({ message: "Branch not found" })
+              return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
             }
 
             const messages = yield* storage.listMessages(input.fromBranchId)
             const targetIndex = messages.findIndex((m) => m.id === input.atMessageId)
             if (targetIndex === -1) {
-              return yield* new StorageError({ message: "Message not found in branch" })
+              return yield* new NotFoundError({
+                message: "Message not found in branch",
+                entity: "message",
+              })
             }
 
             const branchId = Bun.randomUUIDv7()
@@ -660,8 +670,9 @@ ${conversation}`
           yield* Effect.forkDaemon(
             agentLoop.run(message, { bypass }).pipe(
               Effect.withSpan("AgentLoop.background"),
-              Effect.catchAllCause((cause) =>
-                eventStore
+              Effect.catchAllCause((cause) => {
+                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+                return eventStore
                   .publish(
                     new ErrorOccurred({
                       sessionId: input.sessionId,
@@ -673,8 +684,8 @@ ${conversation}`
                     Effect.catchAll((e) =>
                       Effect.logWarning("failed to publish ErrorOccurred event", e),
                     ),
-                  ),
-              ),
+                  )
+              }),
               parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
             ),
           )
@@ -713,7 +724,7 @@ ${conversation}`
           Effect.gen(function* () {
             const branch = yield* storage.getBranch(input.branchId)
             if (branch === undefined || branch.sessionId !== input.sessionId) {
-              return yield* new StorageError({ message: "Branch not found" })
+              return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
             }
 
             yield* eventStore.publish(
@@ -753,11 +764,11 @@ ${conversation}`
           Effect.gen(function* () {
             const session = yield* storage.getSession(input.sessionId)
             if (session === undefined) {
-              return yield* new StorageError({ message: "Session not found" })
+              return yield* new NotFoundError({ message: "Session not found", entity: "session" })
             }
             const branch = yield* storage.getBranch(input.branchId)
             if (branch === undefined || branch.sessionId !== input.sessionId) {
-              return yield* new StorageError({ message: "Branch not found" })
+              return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
             }
 
             const messages = yield* storage.listMessages(input.branchId)
@@ -788,10 +799,11 @@ ${conversation}`
               branchId: input.branchId,
               tags: ["AgentSwitched"],
             })
-            const currentAgent =
+            const raw =
               latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
-                ? (latestAgentEvent.toAgent as AgentName)
-                : "cowork"
+                ? latestAgentEvent.toAgent
+                : undefined
+            const currentAgent: AgentName = Schema.is(AgentName)(raw) ? raw : "cowork"
 
             return {
               sessionId: input.sessionId,
@@ -808,7 +820,7 @@ ${conversation}`
           Effect.gen(function* () {
             const session = yield* storage.getSession(input.sessionId)
             if (session === undefined) {
-              return yield* new StorageError({ message: "Session not found" })
+              return yield* new NotFoundError({ message: "Session not found", entity: "session" })
             }
             const updated = new Session({
               ...session,

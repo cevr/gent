@@ -4,7 +4,8 @@ import {
   Branch,
   EventStore,
   Session,
-  SubagentCompleted,
+  SubagentSucceeded,
+  SubagentFailed,
   SubagentError,
   SubagentRunnerService,
   SubagentSpawned,
@@ -172,11 +173,10 @@ export const InProcessRunner: Layer.Layer<
               }
 
               yield* eventStore.publish(
-                new SubagentCompleted({
+                new SubagentSucceeded({
                   parentSessionId: params.parentSessionId,
                   childSessionId: sessionId,
                   agentName: params.agent.name,
-                  success: true,
                 }),
               )
 
@@ -184,16 +184,16 @@ export const InProcessRunner: Layer.Layer<
             })
 
             return run.pipe(
-              Effect.catchAllCause((cause) =>
-                Effect.gen(function* () {
+              Effect.catchAllCause((cause) => {
+                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+                return Effect.gen(function* () {
                   const error = Cause.pretty(cause)
                   yield* eventStore
                     .publish(
-                      new SubagentCompleted({
+                      new SubagentFailed({
                         parentSessionId: params.parentSessionId,
                         childSessionId: sessionId,
                         agentName: params.agent.name,
-                        success: false,
                       }),
                     )
                     .pipe(
@@ -208,17 +208,18 @@ export const InProcessRunner: Layer.Layer<
                     sessionId,
                     agentName: params.agent.name,
                   }
-                }),
-              ),
+                })
+              }),
             )
           }),
-          Effect.catchAllCause((cause) =>
-            Effect.succeed({
+          Effect.catchAllCause((cause) => {
+            if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+            return Effect.succeed({
               _tag: "error" as const,
               error: Cause.pretty(cause),
               agentName: params.agent.name,
-            }),
-          ),
+            })
+          }),
         ),
     }
   }),
@@ -291,11 +292,10 @@ export const SubprocessRunner: Layer.Layer<
               if (exitCode !== 0) {
                 yield* eventStore
                   .publish(
-                    new SubagentCompleted({
+                    new SubagentFailed({
                       parentSessionId: params.parentSessionId,
                       childSessionId: sessionId,
                       agentName: params.agent.name,
-                      success: false,
                     }),
                   )
                   .pipe(
@@ -326,11 +326,10 @@ export const SubprocessRunner: Layer.Layer<
               }
 
               yield* eventStore.publish(
-                new SubagentCompleted({
+                new SubagentSucceeded({
                   parentSessionId: params.parentSessionId,
                   childSessionId: sessionId,
                   agentName: params.agent.name,
-                  success: true,
                 }),
               )
 
@@ -338,16 +337,16 @@ export const SubprocessRunner: Layer.Layer<
             })
 
             return run.pipe(
-              Effect.catchAllCause((cause) =>
-                Effect.gen(function* () {
+              Effect.catchAllCause((cause) => {
+                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+                return Effect.gen(function* () {
                   const error = Cause.pretty(cause)
                   yield* eventStore
                     .publish(
-                      new SubagentCompleted({
+                      new SubagentFailed({
                         parentSessionId: params.parentSessionId,
                         childSessionId: sessionId,
                         agentName: params.agent.name,
-                        success: false,
                       }),
                     )
                     .pipe(
@@ -362,17 +361,18 @@ export const SubprocessRunner: Layer.Layer<
                     sessionId,
                     agentName: params.agent.name,
                   }
-                }),
-              ),
+                })
+              }),
             )
           }),
-          Effect.catchAllCause((cause) =>
-            Effect.succeed({
+          Effect.catchAllCause((cause) => {
+            if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+            return Effect.succeed({
               _tag: "error" as const,
               error: Cause.pretty(cause),
               agentName: params.agent.name,
-            }),
-          ),
+            })
+          }),
         ),
     }
   }),

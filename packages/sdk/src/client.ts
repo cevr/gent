@@ -475,8 +475,8 @@ export const makeClient: Effect.Effect<GentClient, never, RpcClient.Protocol | S
   Effect.gen(function* () {
     const rpcClient = yield* RpcClient.make(GentRpcs)
     const runtime = yield* Effect.runtime<never>()
-    // RpcClient.make returns a client with RpcClientError in error types,
-    // but we want the specific GentRpcError. Cast to expected type.
+    // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
+    // defines GentRpcError as the error schema. The cast narrows to our specific error type.
     return createClient(rpcClient as unknown as GentRpcClient, runtime as Runtime.Runtime<unknown>)
   })
 
@@ -512,8 +512,8 @@ export const makeInProcessRpcClient = <E, R>(
     Effect.gen(function* () {
       const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
       const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
-      // RpcTest.makeClient types include RpcClientError, but in-process testing
-      // eliminates that possibility. Cast to the expected type.
+      // SAFETY: RpcTest.makeClient types include RpcClientError, but in-process
+      // transport eliminates network errors. Cast narrows to GentRpcError.
       return client as unknown as GentRpcClient
     }),
   )

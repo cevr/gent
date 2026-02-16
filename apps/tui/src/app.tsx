@@ -1,15 +1,17 @@
-import { Switch, Match, createEffect, createSignal } from "solid-js"
+import { Switch, Match, ErrorBoundary, createEffect, createSignal } from "solid-js"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/index"
-import { useRouter, isRoute } from "./router/index"
+import { useRouter, isRoute, type AppRoute } from "./router/index"
 import { useClient } from "./client/index"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
 import { BranchPicker } from "./routes/branch-picker"
 import { Permissions } from "./routes/permissions"
 import { Auth } from "./routes/auth"
-import type { BranchInfo } from "./client"
+
+type SessionRoute = Extract<AppRoute, { _tag: "session" }>
+type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
 
 export interface AppProps {
   initialPrompt?: string
@@ -35,9 +37,9 @@ function AppContent(props: AppProps) {
         <Match when={isRoute.home(router.route())}>
           <Home initialPrompt={props.initialPrompt} />
         </Match>
-        <Match when={isRoute.session(router.route()) ? router.route() : false}>
+        <Match when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}>
           {(r) => {
-            const route = r() as { sessionId: string; branchId: string; prompt?: string }
+            const route = r()
             const prompt = route.prompt ?? props.initialPrompt
             return (
               <Session
@@ -48,14 +50,13 @@ function AppContent(props: AppProps) {
             )
           }}
         </Match>
-        <Match when={isRoute.branchPicker(router.route()) ? router.route() : false}>
+        <Match
+          when={
+            isRoute.branchPicker(router.route()) ? (router.route() as BranchPickerRoute) : false
+          }
+        >
           {(r) => {
-            const route = r() as {
-              sessionId: string
-              sessionName: string
-              branches: readonly BranchInfo[]
-              prompt?: string
-            }
+            const route = r()
             return (
               <BranchPicker
                 sessionId={route.sessionId}
@@ -86,10 +87,21 @@ function AppContent(props: AppProps) {
 
 export function App(props: AppProps) {
   return (
-    <ThemeProvider mode={undefined}>
-      <CommandProvider>
-        <AppContent {...props} />
-      </CommandProvider>
-    </ThemeProvider>
+    <ErrorBoundary
+      fallback={(err) => (
+        <box flexDirection="column" paddingLeft={1} paddingTop={1}>
+          <text>
+            <span style={{ fg: "red", bold: true }}>Fatal error</span>
+          </text>
+          <text>{err instanceof Error ? err.message : String(err)}</text>
+        </box>
+      )}
+    >
+      <ThemeProvider mode={undefined}>
+        <CommandProvider>
+          <AppContent {...props} />
+        </CommandProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   )
 }

@@ -5,6 +5,11 @@ import { ProviderError, ProviderAuthError } from "@gent/providers"
 import { ActorProcessError, AgentLoopError, CheckpointError } from "@gent/runtime"
 import { StorageError } from "@gent/storage"
 
+export class NotFoundError extends Schema.TaggedError<NotFoundError>()("NotFoundError", {
+  message: Schema.String,
+  entity: Schema.Literal("session", "branch", "message"),
+}) {}
+
 export type GentRpcError =
   | StorageError
   | ActorProcessError
@@ -14,6 +19,7 @@ export type GentRpcError =
   | PlatformError
   | EventStoreError
   | CheckpointError
+  | NotFoundError
 
 export const GentRpcError = Schema.Union(
   StorageError,
@@ -24,4 +30,5 @@ export const GentRpcError = Schema.Union(
   PlatformErrorSchema,
   EventStoreError,
   CheckpointError,
+  NotFoundError,
 )

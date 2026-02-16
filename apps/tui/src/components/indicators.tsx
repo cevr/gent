@@ -1,6 +1,7 @@
-import { Show, createSignal, onCleanup, onMount } from "solid-js"
+import { Show, createEffect, createSignal, onCleanup } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
+import { truncate } from "../utils/truncate"
 
 const DOTS_FRAMES = ["", ".", "..", "..."]
 
@@ -32,19 +33,13 @@ export function Indicators(props: IndicatorsProps) {
   const dimensions = useTerminalDimensions()
   const [frame, setFrame] = createSignal(0)
 
-  onMount(() => {
-    const interval = setInterval(() => {
-      if (props.indicator !== null && props.indicator._tag !== "error") {
-        setFrame((f) => (f + 1) % DOTS_FRAMES.length)
-      }
-    }, 500)
+  createEffect(() => {
+    if (props.indicator === null || props.indicator._tag === "error") return
+    const interval = setInterval(() => setFrame((f) => (f + 1) % DOTS_FRAMES.length), 500)
     onCleanup(() => clearInterval(interval))
   })
 
   const dots = () => DOTS_FRAMES[frame()] ?? DOTS_FRAMES[0]
-
-  const truncate = (value: string, max: number): string =>
-    value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
 
   const oneLine = (value: string): string => value.replace(/\s+/g, " ").trim()
 

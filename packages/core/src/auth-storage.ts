@@ -8,7 +8,7 @@ import * as os from "node:os"
 
 export class AuthStorageError extends Schema.TaggedError<AuthStorageError>()("AuthStorageError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
+  cause: Schema.optional(Schema.Defect),
 }) {}
 
 // Auth Storage Service Interface

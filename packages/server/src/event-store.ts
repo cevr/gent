@@ -1,5 +1,5 @@
 import { Effect, Layer, PubSub, Stream } from "effect"
-import { EventStore, EventStoreError } from "@gent/core"
+import { EventStore, EventStoreError, matchesEventFilter } from "@gent/core"
 import type { EventEnvelope } from "@gent/core"
 import type { StorageError } from "@gent/storage"
 import { Storage } from "@gent/storage"
@@ -8,21 +8,6 @@ const toEventStoreError =
   (message: string) =>
   (error: StorageError): EventStoreError =>
     new EventStoreError({ message, cause: error })
-
-const getEventSessionId = (event: EventEnvelope["event"]): string | undefined => {
-  if ("sessionId" in event) return event.sessionId as string
-  if ("parentSessionId" in event) return event.parentSessionId as string
-  return undefined
-}
-
-const matchesEventFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
-  const eventSessionId = getEventSessionId(env.event)
-  if (eventSessionId === undefined || eventSessionId !== sessionId) return false
-  if (branchId === undefined) return true
-  const eventBranchId =
-    "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
-  return eventBranchId === branchId || eventBranchId === undefined
-}
 
 export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.scoped(
   EventStore,

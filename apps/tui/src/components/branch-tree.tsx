@@ -4,6 +4,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { BranchTreeNode } from "../client"
+import { truncate } from "../utils/truncate"
 
 interface FlatNode {
   id: string
@@ -20,9 +21,6 @@ export interface BranchTreeProps {
   onSelect: (branchId: string) => void
   onClose: () => void
 }
-
-const truncate = (value: string, max: number): string =>
-  value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
 
 const flattenTree = (
   nodes: readonly BranchTreeNode[],

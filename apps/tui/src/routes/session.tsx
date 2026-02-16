@@ -283,14 +283,20 @@ export function Session(props: SessionProps) {
             }
           }),
         )
-      } else if (event._tag === "ToolCallCompleted") {
+      } else if (
+        event._tag === "ToolCallCompleted" ||
+        event._tag === "ToolCallSucceeded" ||
+        event._tag === "ToolCallFailed"
+      ) {
+        const isError =
+          event._tag === "ToolCallFailed" || (event._tag === "ToolCallCompleted" && event.isError)
         setStore(
           produce((draft) => {
             const last = draft.messages[draft.messages.length - 1]
             if (last !== undefined && last.role === "assistant" && last.toolCalls !== undefined) {
               const tc = last.toolCalls.find((t) => t.id === event.toolCallId)
               if (tc !== undefined) {
-                tc.status = event.isError ? "error" : "completed"
+                tc.status = isError ? "error" : "completed"
                 tc.summary = event.summary
                 tc.output = event.output
               }

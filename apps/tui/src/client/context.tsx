@@ -21,7 +21,6 @@ import {
   type EventEnvelope,
   type Model,
 } from "@gent/core"
-import type { GentRpcError } from "@gent/server"
 import { tuiError } from "../utils/unified-tracer"
 import { formatError } from "../utils/format-error"
 import { useMachine } from "../hooks/use-machine"
@@ -29,6 +28,7 @@ import { useMachine } from "../hooks/use-machine"
 import {
   type GentClient,
   type GentRpcClient,
+  type GentRpcError,
   type DirectClient,
   type MessageInfoReadonly,
   type SessionInfo,

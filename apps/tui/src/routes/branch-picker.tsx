@@ -13,6 +13,7 @@ import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { BranchInfo, BranchTreeNode } from "../client"
 import { formatError } from "../utils/format-error"
+import { truncate } from "../utils/truncate"
 
 export interface BranchPickerProps {
   sessionId: string
@@ -24,9 +25,6 @@ export interface BranchPickerProps {
 type BranchPickerState =
   | { _tag: "loading"; error?: string }
   | { _tag: "ready"; selectedIndex: number; messageCounts: Map<string, number>; error?: string }
-
-const truncate = (value: string, max: number): string =>
-  value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
 
 const formatBranchLabel = (branch: BranchInfo, messageCount?: number): string => {
   const name = branch.name ?? branch.id.slice(0, 8)
@@ -212,15 +210,19 @@ export function BranchPicker(props: BranchPickerProps) {
         <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
           <For each={props.branches}>
             {(branch, index) => {
-              const current = readyState()
-              const isSelected = () => current !== null && current.selectedIndex === index()
-              const count = () =>
-                current !== null ? current.messageCounts.get(branch.id) : undefined
-              const summary =
+              const isSelected = () => {
+                const current = readyState()
+                return current !== null && current.selectedIndex === index()
+              }
+              const count = () => {
+                const current = readyState()
+                return current !== null ? current.messageCounts.get(branch.id) : undefined
+              }
+              const summary = () =>
                 branch.summary !== undefined && branch.summary.length > 0
                   ? ` - ${branch.summary.replace(/\s+/g, " ")}`
                   : ""
-              const line = `${formatBranchLabel(branch, count())}${summary}`
+              const line = () => `${formatBranchLabel(branch, count())}${summary()}`
               return (
                 <box
                   id={`branch-picker-${index()}`}
@@ -232,7 +234,7 @@ export function BranchPicker(props: BranchPickerProps) {
                       fg: isSelected() ? theme.selectedListItemText : theme.text,
                     }}
                   >
-                    {truncate(line, panelWidth() - 4)}
+                    {truncate(line(), panelWidth() - 4)}
                   </text>
                 </box>
               )

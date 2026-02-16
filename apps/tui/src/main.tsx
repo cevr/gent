@@ -239,6 +239,12 @@ const runHeadless = (
                 `[tool done: ${event.toolName}${event.isError ? " (error)" : ""}]\n`,
               )
               break
+            case "ToolCallSucceeded":
+              process.stdout.write(`[tool done: ${event.toolName}]\n`)
+              break
+            case "ToolCallFailed":
+              process.stdout.write(`[tool done: ${event.toolName} (error)]\n`)
+              break
             case "StreamEnded":
               process.stdout.write("\n")
               break

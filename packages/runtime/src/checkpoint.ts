@@ -60,6 +60,12 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
         case "tool-result":
           chars += JSON.stringify(part.output).length
           break
+        case "image":
+          chars += 1000 // ~250 tokens estimate for image references
+          break
+        case "reasoning":
+          chars += part.text.length
+          break
       }
     }
   }
@@ -76,8 +82,10 @@ const estimatePartTokens = (part: MessagePart): number => {
       return Math.ceil(JSON.stringify(part.input).length / 4)
     case "tool-result":
       return Math.ceil(JSON.stringify(part.output).length / 4)
-    default:
-      return 0
+    case "image":
+      return 250
+    case "reasoning":
+      return Math.ceil(part.text.length / 4)
   }
 }
 

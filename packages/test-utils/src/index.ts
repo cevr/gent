@@ -10,6 +10,7 @@ import {
   PlanHandler,
   CompactionCheckpoint,
   PlanCheckpoint,
+  matchesEventFilter,
   type Checkpoint,
   type AnyToolDefinition,
   type PermissionDecision,
@@ -100,21 +101,6 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
     const events: EventEnvelope[] = []
     let nextId = 0
 
-    const getEventSessionId = (event: EventEnvelope["event"]): string | undefined => {
-      if ("sessionId" in event) return event.sessionId as string
-      if ("parentSessionId" in event) return event.parentSessionId as string
-      return undefined
-    }
-
-    const matchesFilter = (env: EventEnvelope, sessionId: string, branchId?: string): boolean => {
-      const eventSessionId = getEventSessionId(env.event)
-      if (eventSessionId === undefined || eventSessionId !== sessionId) return false
-      if (branchId === undefined) return true
-      const eventBranchId =
-        "branchId" in env.event ? (env.event.branchId as string | undefined) : undefined
-      return eventBranchId === branchId || eventBranchId === undefined
-    }
-
     return {
       publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
         nextId += 1
@@ -133,7 +119,9 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
       }),
       subscribe: ({ sessionId, branchId, after }) =>
         Stream.fromIterable(
-          events.filter((env) => matchesFilter(env, sessionId, branchId) && env.id > (after ?? 0)),
+          events.filter(
+            (env) => matchesEventFilter(env, sessionId, branchId) && env.id > (after ?? 0),
+          ),
         ),
     }
   }),

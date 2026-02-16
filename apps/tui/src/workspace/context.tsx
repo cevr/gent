@@ -146,8 +146,9 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
         },
       )
       fsWatchers.push(watcher)
-    } catch {
+    } catch (e) {
       // Fallback to polling if watch fails (not a git repo, etc.)
+      console.debug("[workspace] git watch failed, falling back to polling:", e)
       fallbackInterval = setInterval(refreshGitInfo, 2000)
     }
 

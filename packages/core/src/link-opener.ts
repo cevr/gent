@@ -3,7 +3,7 @@ import { OsService } from "./os-service"
 
 export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("LinkOpenerError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
+  cause: Schema.optional(Schema.Defect),
 }) {}
 
 export interface LinkOpenerService {

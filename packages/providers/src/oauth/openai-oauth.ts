@@ -478,8 +478,9 @@ export const createOpenAIOAuthFetch = (authStore: AuthStoreService): typeof fetc
           parsed_body.store = false
         }
         body = JSON.stringify(parsed_body)
-      } catch {
-        // leave body unchanged
+      } catch (e) {
+        // Body rewrite failed — leave unchanged, log for debugging
+        console.debug("[openai-oauth] body rewrite failed:", e)
       }
     }
 

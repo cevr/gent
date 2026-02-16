@@ -60,31 +60,19 @@ export function buildSystemPrompt(options: {
 
   const date = new Date().toISOString().split("T")[0]
 
-  let prompt = DEFAULT_SYSTEM_PROMPT
-
-  prompt += `
-
-# Environment
-
-Working directory: ${cwd}
-Platform: ${platform}
-Git repository: ${isGitRepo ? "yes" : "no"}
-Date: ${date}`
+  const parts = [
+    DEFAULT_SYSTEM_PROMPT,
+    `\n\n# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platform}\nGit repository: ${isGitRepo ? "yes" : "no"}\nDate: ${date}`,
+  ]
 
   if (customInstructions !== undefined && customInstructions !== "") {
-    prompt += `
-
-# Project Instructions
-
-${customInstructions}`
+    parts.push(`\n\n# Project Instructions\n\n${customInstructions}`)
   }
 
   const skillsBlock = skills !== undefined ? formatSkillsForPrompt(skills) : ""
   if (skillsBlock !== "") {
-    prompt += `
-
-${skillsBlock}`
+    parts.push(`\n\n${skillsBlock}`)
   }
 
-  return prompt
+  return parts.join("")
 }

@@ -2,15 +2,15 @@ import * as Entity from "@effect/cluster/Entity"
 import type * as Sharding from "@effect/cluster/Sharding"
 import * as Rpc from "@effect/rpc/Rpc"
 import * as RpcGroup from "@effect/rpc/RpcGroup"
-import { Context, Effect, Layer, Schema } from "effect"
-import type * as Cause from "effect/Cause"
+import { Cause, Context, Effect, Layer, Schema } from "effect"
 import {
   AgentName,
   ErrorOccurred,
   EventStore,
   Message,
   TextPart,
-  ToolCallCompleted,
+  ToolCallSucceeded,
+  ToolCallFailed,
   ToolResultPart,
   summarizeToolOutput,
   stringifyOutput,
@@ -22,7 +22,7 @@ export class ActorProcessError extends Schema.TaggedError<ActorProcessError>()(
   "ActorProcessError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
+    cause: Schema.optional(Schema.Defect),
   },
 ) {}
 
@@ -140,8 +140,9 @@ export const LocalActorProcessLive: Layer.Layer<
 
           yield* Effect.forkDaemon(
             agentLoop.run(message, { bypass }).pipe(
-              Effect.catchAllCause((cause) =>
-                Effect.gen(function* () {
+              Effect.catchAllCause((cause) => {
+                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+                return Effect.gen(function* () {
                   yield* eventStore.publish(
                     new ErrorOccurred({
                       sessionId: input.sessionId,
@@ -150,8 +151,8 @@ export const LocalActorProcessLive: Layer.Layer<
                     }),
                   )
                   yield* Effect.logWarning("agent loop failed", cause)
-                }).pipe(Effect.catchAll(() => Effect.void)),
-              ),
+                }).pipe(Effect.catchAll(() => Effect.void))
+              }),
             ),
           )
         }).pipe(
@@ -178,16 +179,17 @@ export const LocalActorProcessLive: Layer.Layer<
           })
 
           yield* storage.createMessage(message)
+          const isError = input.isError ?? false
+          const toolCallFields = {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            toolCallId: input.toolCallId,
+            toolName: input.toolName,
+            summary: summarizeToolOutput(part),
+            output: stringifyOutput(part.output.value),
+          }
           yield* eventStore.publish(
-            new ToolCallCompleted({
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              toolCallId: input.toolCallId,
-              toolName: input.toolName,
-              isError: input.isError ?? false,
-              summary: summarizeToolOutput(part),
-              output: stringifyOutput(part.output.value),
-            }),
+            isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
           )
         }).pipe(
           Effect.catchAllCause((cause) => Effect.fail(wrapError("sendToolResult failed", cause))),

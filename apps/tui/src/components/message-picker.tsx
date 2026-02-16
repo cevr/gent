@@ -4,6 +4,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
+import { truncate } from "../utils/truncate"
 
 interface PickerItem {
   id: string
@@ -16,9 +17,6 @@ export interface MessagePickerProps {
   onSelect: (messageId: string) => void
   onClose: () => void
 }
-
-const truncate = (value: string, max: number): string =>
-  value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
 
 const buildItems = (messages: readonly Message[]): PickerItem[] =>
   messages.map((m) => {

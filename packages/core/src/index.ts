@@ -38,6 +38,8 @@ export {
   type Usage,
   ToolCallStarted,
   ToolCallCompleted,
+  ToolCallSucceeded,
+  ToolCallFailed,
   PermissionRequested,
   PlanPresented,
   PlanConfirmed,
@@ -64,6 +66,10 @@ export {
   AgentSwitched,
   SubagentSpawned,
   SubagentCompleted,
+  SubagentSucceeded,
+  SubagentFailed,
+  getEventSessionId,
+  matchesEventFilter,
 } from "./event.js"
 
 // Permission Types

@@ -231,8 +231,10 @@ export function Permissions(props: PermissionsProps) {
           <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
             <For each={readyState()?.rules ?? []}>
               {(rule, index) => {
-                const current = readyState()
-                const isSelected = () => current !== null && current.selectedIndex === index()
+                const isSelected = () => {
+                  const current = readyState()
+                  return current !== null && current.selectedIndex === index()
+                }
                 return (
                   <box
                     id={`perm-rule-${index()}`}

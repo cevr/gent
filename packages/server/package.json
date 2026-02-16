@@ -9,8 +9,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@effect/platform": "catalog:",
-    "@effect/rpc": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/providers": "workspace:*",
     "@gent/runtime": "workspace:*",
@@ -18,6 +16,8 @@
     "@gent/tools": "workspace:*"
   },
   "peerDependencies": {
+    "@effect/platform": "catalog:",
+    "@effect/rpc": "catalog:",
     "effect": "catalog:"
   }
 }

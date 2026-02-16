@@ -26,7 +26,7 @@ export type AuthType = typeof AuthType.Type
 
 export class AuthStoreError extends Schema.TaggedError<AuthStoreError>()("AuthStoreError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
+  cause: Schema.optional(Schema.Defect),
 }) {}
 
 // Auth store service

@@ -21,7 +21,7 @@ type ProviderOptions = Parameters<typeof streamText>[0]["providerOptions"]
 export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
   message: Schema.String,
   model: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
+  cause: Schema.optional(Schema.Defect),
 }) {}
 
 // Stream Chunk Types
@@ -158,12 +158,12 @@ export class Provider extends Context.Tag("@gent/providers/src/provider")<
                   }),
                 )
               case "error": {
-                const err = part.error as Error
+                const err = part.error instanceof Error ? part.error : new Error(String(part.error))
                 return Effect.fail(
                   new ProviderError({
-                    message: `API error: ${err?.message ?? String(part.error)}`,
+                    message: `API error: ${err.message}`,
                     model: request.model,
-                    cause: part.error,
+                    cause: err,
                   }),
                 )
               }
@@ -255,7 +255,8 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
               type: "tool-result",
               toolCallId: p.toolCallId,
               toolName: p.toolName,
-              // AI SDK v6 ToolResultOutput - cast to match expected type
+              // SAFETY: Our ToolResultOutput shape matches AI SDK v6's ToolResultOutput.
+              // The cast bridges the external type boundary.
               output: (p.output.type === "json"
                 ? { type: "json" as const, value: p.output.value }
                 : {

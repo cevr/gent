@@ -1,4 +1,4 @@
-import type { GentRpcError } from "@gent/server"
+import type { GentRpcError } from "@gent/sdk"
 
 export interface ClientError {
   readonly _tag: "ClientError"
@@ -26,6 +26,8 @@ export const formatError = (error: UiError): string => {
       return `Events: ${error.message}`
     case "CheckpointError":
       return `Checkpoint: ${error.message}`
+    case "NotFoundError":
+      return `Not found: ${error.message}`
     case "ActorProcessError":
       return `Actor: ${error.message}`
     case "BadArgument":

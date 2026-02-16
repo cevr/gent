@@ -10,6 +10,7 @@ import {
   TodoItem,
   AgentEvent,
   EventEnvelope,
+  getEventSessionId,
 } from "@gent/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
@@ -24,17 +25,11 @@ const decodeTodoItem = Schema.decodeUnknown(TodoItem)
 const EventJson = Schema.parseJson(AgentEvent)
 const decodeEvent = Schema.decodeUnknown(EventJson)
 const encodeEvent = Schema.encode(EventJson)
-const getEventSessionId = (event: AgentEvent): string | undefined => {
-  if ("sessionId" in event) return event.sessionId as string
-  if ("parentSessionId" in event) return event.parentSessionId as string
-  return undefined
-}
-
 // Storage Error
 
 export class StorageError extends Schema.TaggedError<StorageError>()("StorageError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
+  cause: Schema.optional(Schema.Defect),
 }) {}
 
 // Storage Service Interface

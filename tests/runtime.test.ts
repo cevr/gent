@@ -184,7 +184,7 @@ describe("Subagent Runner", () => {
         const calls = yield* recorder.getCalls()
         assertSequence(calls, [
           { service: "EventStore", method: "publish", match: { _tag: "SubagentSpawned" } },
-          { service: "EventStore", method: "publish", match: { _tag: "SubagentCompleted" } },
+          { service: "EventStore", method: "publish", match: { _tag: "SubagentSucceeded" } },
         ])
       }).pipe(Effect.provide(layer)),
     )

@@ -87,6 +87,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       getSessionState: ({ sessionId, branchId }) => core.getSessionState({ sessionId, branchId }),
 
+      // SAFETY: SteerPayload and SteerCommand are structurally identical Schema.Union types
       steer: ({ command }) => core.steer(command as SteerCommand),
 
       subscribeEvents: ({ sessionId, branchId, after }) =>
@@ -180,11 +181,13 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       listAuthMethods: () => providerAuth.listMethods(),
 
+      // SAFETY: provider is validated as ProviderId by the RPC schema layer
       authorizeAuth: ({ sessionId, provider, method }) =>
         providerAuth
           .authorize(sessionId, provider as ProviderId, method)
           .pipe(Effect.map((result) => result ?? null)),
 
+      // SAFETY: provider is validated as ProviderId by the RPC schema layer
       callbackAuth: ({ sessionId, provider, method, authorizationId, code }) =>
         providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
 
