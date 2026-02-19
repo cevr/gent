@@ -9,7 +9,7 @@ import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import { Glob } from "bun"
 import { readFile, access } from "fs/promises"
 import { join, dirname } from "path"
-import { Effect, Exit, Fiber, Runtime } from "effect"
+import { Effect, Exit, Fiber } from "effect"
 import { atom, state, useAtomSet, useAtomValue } from "@gent/atom-solid"
 
 const FILE_GLOB = new Glob("**/*")
@@ -17,11 +17,13 @@ const MAX_PARENT_TRAVERSAL = 10
 
 const exists = (path: string): Effect.Effect<boolean> =>
   Effect.tryPromise(() => access(path).then(() => true)).pipe(
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catchEager(() => Effect.succeed(false)),
   )
 
 const readFileIfExists = (path: string): Effect.Effect<string | null> =>
-  Effect.tryPromise(() => readFile(path, "utf-8")).pipe(Effect.catchAll(() => Effect.succeed(null)))
+  Effect.tryPromise(() => readFile(path, "utf-8")).pipe(
+    Effect.catchEager(() => Effect.succeed(null)),
+  )
 
 const loadGitignorePatterns = (cwd: string): Effect.Effect<Set<string>> =>
   Effect.gen(function* () {
@@ -147,9 +149,11 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
     Effect.suspend(() => {
       if (gitignorePatterns !== null) return Effect.succeed(gitignorePatterns)
       return loadGitignorePatterns(cwd).pipe(
-        Effect.tap((patterns) => {
-          gitignorePatterns = patterns
-        }),
+        Effect.tap((patterns) =>
+          Effect.sync(() => {
+            gitignorePatterns = patterns
+          }),
+        ),
       )
     })
 
@@ -161,7 +165,7 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
 
       while (true) {
         const next = yield* Effect.tryPromise(() => iterator.next()).pipe(
-          Effect.catchAll(() =>
+          Effect.catchEager(() =>
             Effect.succeed({ done: true, value: undefined } as IteratorResult<string>),
           ),
         )
@@ -216,11 +220,11 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchRetur
       }
 
       setState((prev) => ({ _tag: "searching", results: prev.results }))
-      const runtime = registry.runtime
+      const services = registry.services
       const effect = Effect.sleep(50).pipe(Effect.flatMap(() => searchEffect(value)))
-      const fiber = Runtime.runFork(runtime)(effect)
+      const fiber = Effect.runForkWith(services)(effect)
       cancel = () => {
-        Runtime.runFork(runtime)(Fiber.interruptFork(fiber))
+        Effect.runFork(Fiber.interrupt(fiber))
       }
 
       fiber.addObserver((exit) => {

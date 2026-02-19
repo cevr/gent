@@ -1,10 +1,9 @@
-import { Effect, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "@gent/core"
 
 // Read Tool Error
 
-export class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
+export class ReadError extends Schema.TaggedErrorClass<ReadError>()("ReadError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -13,16 +12,16 @@ export class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
 // Read Tool Params
 
 export const ReadParams = Schema.Struct({
-  path: Schema.String.annotations({
+  path: Schema.String.annotate({
     description: "Absolute path to file to read",
   }),
   offset: Schema.optional(
-    Schema.Number.annotations({
+    Schema.Number.annotate({
       description: "Line number to start reading from (1-indexed)",
     }),
   ),
   limit: Schema.optional(
-    Schema.Number.annotations({
+    Schema.Number.annotate({
       description: "Maximum number of lines to read",
     }),
   ),

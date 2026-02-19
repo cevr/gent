@@ -1,15 +1,15 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { executeShell } from "../src/utils/shell"
 import { Effect, Layer } from "effect"
-import { BunContext, BunFileSystem } from "@effect/platform-bun"
+import { BunServices, BunFileSystem } from "@effect/platform-bun"
 import { mkdtemp, rm, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import { join } from "path"
 
 describe("executeShell", () => {
   let testDir: string
-  const platformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
-  const run = <A, E>(effect: Effect.Effect<A, E, BunContext.BunContext>) =>
+  const platformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
+  const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
     Effect.runPromise(effect.pipe(Effect.provide(platformLayer)))
 
   beforeAll(async () => {

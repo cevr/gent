@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { AuthStore, AuthType } from "./auth-store"
 import { AgentModels } from "./agent"
 import { ProviderId, SUPPORTED_PROVIDERS, parseModelProvider } from "./model"
@@ -30,10 +30,9 @@ const REQUIRED_PROVIDERS: readonly ProviderId[] = (() => {
   return [...providers]
 })()
 
-export class AuthGuard extends Context.Tag("@gent/core/src/auth-guard/AuthGuard")<
-  AuthGuard,
-  AuthGuardService
->() {
+export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()(
+  "@gent/core/src/auth-guard/AuthGuard",
+) {
   static Live: Layer.Layer<AuthGuard, never, AuthStore> = Layer.effect(
     AuthGuard,
     Effect.gen(function* () {
@@ -45,7 +44,7 @@ export class AuthGuard extends Context.Tag("@gent/core/src/auth-guard/AuthGuard"
         for (const provider of SUPPORTED_PROVIDERS) {
           const storedInfo = yield* authStore
             .get(provider.id)
-            .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
           const hasStored = storedInfo !== undefined
           const required = requiredSet.has(provider.id)
 

@@ -27,7 +27,7 @@ const AuthMethodSchema = Schema.Struct({
 
 const AuthorizationSchema = Schema.Struct({
   url: Schema.String,
-  method: Schema.Literal("auto", "code"),
+  method: Schema.Literals(["auto", "code"]),
   authorizationId: Schema.String,
   instructions: Schema.optional(Schema.String),
 })
@@ -39,33 +39,33 @@ const AuthorizationSchema = Schema.Struct({
 export const AuthState = State({
   List: {
     providers: Schema.Array(ProviderInfoSchema),
-    methods: Schema.Record({ key: Schema.String, value: Schema.Array(AuthMethodSchema) }),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethodSchema)),
     providerIndex: Schema.Number,
     error: Schema.optional(Schema.String),
   },
   Method: {
     providers: Schema.Array(ProviderInfoSchema),
-    methods: Schema.Record({ key: Schema.String, value: Schema.Array(AuthMethodSchema) }),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethodSchema)),
     providerIndex: Schema.Number,
     methodIndex: Schema.Number,
     error: Schema.optional(Schema.String),
   },
   Key: {
     providers: Schema.Array(ProviderInfoSchema),
-    methods: Schema.Record({ key: Schema.String, value: Schema.Array(AuthMethodSchema) }),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethodSchema)),
     providerIndex: Schema.Number,
     value: Schema.String,
     error: Schema.optional(Schema.String),
   },
   OAuth: {
     providers: Schema.Array(ProviderInfoSchema),
-    methods: Schema.Record({ key: Schema.String, value: Schema.Array(AuthMethodSchema) }),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethodSchema)),
     providerIndex: Schema.Number,
     methodIndex: Schema.Number,
     method: AuthMethodSchema,
     authorization: AuthorizationSchema,
     code: Schema.String,
-    phase: Schema.Literal("idle", "waiting"),
+    phase: Schema.Literals(["idle", "waiting"]),
     error: Schema.optional(Schema.String),
   },
 })
@@ -74,7 +74,7 @@ export const AuthEvent = Event({
   // Data
   Loaded: {
     providers: Schema.Array(ProviderInfoSchema),
-    methods: Schema.Record({ key: Schema.String, value: Schema.Array(AuthMethodSchema) }),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethodSchema)),
   },
   LoadFailed: { error: Schema.String },
 

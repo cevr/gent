@@ -1,7 +1,7 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { OsService } from "./os-service"
 
-export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("LinkOpenerError", {
+export class LinkOpenerError extends Schema.TaggedErrorClass<LinkOpenerError>()("LinkOpenerError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
 }) {}
@@ -33,10 +33,9 @@ const makeOpener = (command: string, argsForUrl: (url: string) => string[]): Lin
   ),
 })
 
-export class LinkOpener extends Context.Tag("@gent/core/src/link-opener/LinkOpener")<
-  LinkOpener,
-  LinkOpenerService
->() {
+export class LinkOpener extends ServiceMap.Service<LinkOpener, LinkOpenerService>()(
+  "@gent/core/src/link-opener/LinkOpener",
+) {
   static LiveDarwin: Layer.Layer<LinkOpener> = Layer.succeed(
     LinkOpener,
     makeOpener("open", (url) => [url]),
@@ -61,7 +60,7 @@ export class LinkOpener extends Context.Tag("@gent/core/src/link-opener/LinkOpen
       ),
   })
 
-  static Live: Layer.Layer<LinkOpener, never, OsService> = Layer.unwrapEffect(
+  static Live: Layer.Layer<LinkOpener, never, OsService> = Layer.unwrap(
     Effect.gen(function* () {
       const os = yield* OsService
       if (os.platform === "darwin") return LinkOpener.LiveDarwin

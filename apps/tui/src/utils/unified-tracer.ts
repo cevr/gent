@@ -5,7 +5,8 @@
  */
 
 import { appendFileSync, writeFileSync } from "node:fs"
-import { Layer, Tracer, Exit, Cause, type Context, type Option } from "effect"
+import type { ServiceMap } from "effect"
+import { Layer, Tracer, Exit, Cause } from "effect"
 
 const LOG_PATH = "/tmp/gent-unified.log"
 
@@ -56,7 +57,12 @@ class UnifiedSpan implements Tracer.Span {
   readonly _tag = "Span" as const
   readonly spanId: string
   readonly traceId: string
-  readonly sampled = true
+  readonly sampled: boolean
+
+  readonly name: string
+  readonly parent: Tracer.AnySpan | undefined
+  readonly annotations: ServiceMap.ServiceMap<never>
+  readonly kind: Tracer.SpanKind
 
   status: Tracer.SpanStatus
   attributes: Map<string, unknown>
@@ -65,19 +71,25 @@ class UnifiedSpan implements Tracer.Span {
 
   private depth: number
 
-  constructor(
-    readonly name: string,
-    readonly parent: Option.Option<Tracer.AnySpan>,
-    readonly context: Context.Context<never>,
-    links: Iterable<Tracer.SpanLink>,
-    readonly startTime: bigint,
-    readonly kind: Tracer.SpanKind,
-  ) {
-    this.status = { _tag: "Started", startTime }
+  constructor(options: {
+    readonly name: string
+    readonly parent: Tracer.AnySpan | undefined
+    readonly annotations: ServiceMap.ServiceMap<never>
+    readonly links: Array<Tracer.SpanLink>
+    readonly startTime: bigint
+    readonly kind: Tracer.SpanKind
+    readonly sampled: boolean
+  }) {
+    this.name = options.name
+    this.parent = options.parent
+    this.annotations = options.annotations
+    this.kind = options.kind
+    this.status = { _tag: "Started", startTime: options.startTime }
     this.attributes = new Map()
-    this.traceId = parent._tag === "Some" ? parent.value.traceId : randomHex(32)
+    this.traceId = options.parent?.traceId ?? randomHex(32)
     this.spanId = randomHex(16)
-    this.links = Array.from(links)
+    this.links = Array.from(options.links)
+    this.sampled = options.sampled
     this.depth = this.calculateDepth()
 
     this.log("START", this.name)
@@ -85,11 +97,11 @@ class UnifiedSpan implements Tracer.Span {
 
   private calculateDepth(): number {
     let depth = 0
-    let current = this.parent
-    while (current._tag === "Some") {
+    let current: Tracer.AnySpan | undefined = this.parent
+    while (current !== undefined) {
       depth++
-      if (current.value._tag === "Span") {
-        current = current.value.parent
+      if (current._tag === "Span") {
+        current = current.parent
       } else {
         break
       }
@@ -122,7 +134,7 @@ class UnifiedSpan implements Tracer.Span {
       this.log("END", this.name, `(${durationStr})`)
     } else {
       const cause = exit.cause
-      const message = Cause.isInterruptedOnly(cause)
+      const message = Cause.hasInterruptsOnly(cause)
         ? "interrupted"
         : (Cause.pretty(cause).split("\n")[0] ?? "unknown error")
       this.log("ERROR", this.name, `(${durationStr}) - ${message}`)
@@ -146,11 +158,12 @@ class UnifiedSpan implements Tracer.Span {
 /** @deprecated Use `GentLogger` from `@gent/runtime` instead. */
 export function makeUnifiedTracer(): Tracer.Tracer {
   return Tracer.make({
-    span: (name, parent, context, links, startTime, kind) =>
-      new UnifiedSpan(name, parent, context, links, startTime, kind),
-    context: (f) => f(),
+    span: (options) => new UnifiedSpan(options),
   })
 }
 
 /** @deprecated Use `GentLogger` from `@gent/runtime` instead. */
-export const UnifiedTracerLive: Layer.Layer<never> = Layer.setTracer(makeUnifiedTracer())
+export const UnifiedTracerLive: Layer.Layer<never> = Layer.succeed(
+  Tracer.Tracer,
+  makeUnifiedTracer(),
+)

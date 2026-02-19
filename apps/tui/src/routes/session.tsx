@@ -51,7 +51,7 @@ export function Session(props: SessionProps) {
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
-  const { cast } = useRuntime(client.client.runtime)
+  const { cast } = useRuntime(client.client.services)
   const { exit, handleEsc } = useExit()
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
@@ -158,7 +158,7 @@ export function Session(props: SessionProps) {
             setStore("messages", msgs)
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => {
             client.setError(formatError(err))
           }),
@@ -347,7 +347,7 @@ export function Session(props: SessionProps) {
             setOverlay({ _tag: "tree", nodes: [...tree] })
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => {
             client.setError(formatError(err))
           }),
@@ -512,7 +512,7 @@ export function Session(props: SessionProps) {
             client.switchBranch(branchId)
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => {
             client.setError(formatError(err))
           }),

@@ -10,7 +10,8 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { Effect, Stream, Runtime, Schema } from "effect"
+import type { ServiceMap } from "effect"
+import { Effect, Stream, Schema } from "effect"
 import { Machine } from "effect-machine"
 import {
   AgentName as AgentNameSchema,
@@ -181,7 +182,7 @@ const toSessionState = (ms: typeof SessionMachineState.Type): SessionState => {
 
 interface ClientProviderProps extends ParentProps {
   rpcClient: GentRpcClient | DirectClient
-  runtime: Runtime.Runtime<unknown>
+  services: ServiceMap.ServiceMap<unknown>
   initialSession: Session | undefined
 }
 
@@ -191,14 +192,14 @@ export function ClientProvider(props: ClientProviderProps) {
   // DirectClient already has the right shape, use it directly
   // For GentRpcClient, wrap with createClient
   const client: GentClient =
-    "runtime" in props.rpcClient &&
+    "services" in props.rpcClient &&
     typeof (props.rpcClient as DirectClient).createSession === "function"
       ? (props.rpcClient as unknown as GentClient)
-      : createClient(props.rpcClient as GentRpcClient, props.runtime)
+      : createClient(props.rpcClient as GentRpcClient, props.services)
 
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
-    Runtime.runFork(client.runtime)(effect)
+    Effect.runForkWith(client.services)(effect)
   }
 
   // ── Session machine ──
@@ -234,7 +235,7 @@ export function ClientProvider(props: ClientProviderProps) {
             setModelStore({ modelsById })
           }),
         ),
-        Effect.catchAll(() => Effect.void),
+        Effect.catchEager(() => Effect.void),
       ),
     )
   })
@@ -384,7 +385,7 @@ export function ClientProvider(props: ClientProviderProps) {
             }),
           )
         }).pipe(
-          Effect.catchAll((err) =>
+          Effect.catchEager((err) =>
             Effect.sync(() => {
               if (!cancelled) {
                 setAgentStore({ status: AgentStatus.error(formatError(err)) })
@@ -469,7 +470,7 @@ export function ClientProvider(props: ClientProviderProps) {
               }
             }),
           ),
-          Effect.catchAll((err) =>
+          Effect.catchEager((err) =>
             Effect.sync(() => {
               tuiError("createSession", err)
               sendMachine(SessionMachineEvent.CreateFailed)

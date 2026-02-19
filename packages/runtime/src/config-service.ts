@@ -1,5 +1,4 @@
-import { Config, Context, Effect, Layer, Option, Ref, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 import { PermissionRule } from "@gent/core"
 import * as os from "node:os"
 
@@ -20,29 +19,25 @@ export interface ConfigServiceService {
   readonly loadInstructions: (cwd: string) => Effect.Effect<string>
 }
 
-export class ConfigService extends Context.Tag("@gent/runtime/src/config-service/ConfigService")<
-  ConfigService,
-  ConfigServiceService
->() {
+export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServiceService>()(
+  "@gent/runtime/src/config-service/ConfigService",
+) {
   /** Relative path from $HOME for user config */
   static USER_CONFIG_RELATIVE = ".gent/config.json"
   /** Relative path from project root for project config */
   static PROJECT_CONFIG_RELATIVE = ".gent/config.json"
 
-  static Live: Layer.Layer<ConfigService, never, FileSystem.FileSystem | Path.Path> = Layer.scoped(
+  static Live: Layer.Layer<ConfigService, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
     ConfigService,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
 
-      const home = yield* Config.option(Config.string("HOME")).pipe(
-        Effect.catchAll(() => Effect.succeed(Option.none())),
-        Effect.map(Option.getOrElse(() => os.homedir())),
-      )
+      const home = os.homedir()
       const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
       const projectConfigPath = path.join(process.cwd(), ConfigService.PROJECT_CONFIG_RELATIVE)
 
-      const UserConfigJson = Schema.parseJson(UserConfig)
+      const UserConfigJson = Schema.fromJsonString(UserConfig)
       const defaultUserConfig = new UserConfig({ permissions: [] })
 
       // State: user + project configs
@@ -59,10 +54,10 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
         if (exists) return
         const configDir = path.dirname(userConfigPath)
         yield* fs.makeDirectory(configDir, { recursive: true })
-        const json = yield* Schema.encode(UserConfigJson)(defaultUserConfig)
+        const json = yield* Schema.encodeEffect(UserConfigJson)(defaultUserConfig)
         yield* fs.writeFileString(userConfigPath, json)
       }).pipe(
-        Effect.catchAll((e) =>
+        Effect.catchEager((e) =>
           Effect.logWarning("Config init failed").pipe(Effect.annotateLogs({ error: String(e) })),
         ),
       )
@@ -80,8 +75,8 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
                 catch: () => ({}),
               }),
             ),
-            Effect.flatMap((data) => Schema.decodeUnknown(UserConfig)(data)),
-            Effect.catchAll(() => Effect.succeed(new UserConfig({}))),
+            Effect.flatMap((data) => Schema.decodeUnknownEffect(UserConfig)(data)),
+            Effect.catchEager(() => Effect.succeed(new UserConfig({}))),
           )
 
         const userConfig = yield* readConfig(userConfigPath)
@@ -98,10 +93,10 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
         Effect.gen(function* () {
           const configDir = path.dirname(userConfigPath)
           yield* fs.makeDirectory(configDir, { recursive: true })
-          const json = yield* Schema.encode(UserConfigJson)(config)
+          const json = yield* Schema.encodeEffect(UserConfigJson)(config)
           yield* fs.writeFileString(userConfigPath, json)
         }).pipe(
-          Effect.catchAll((e) =>
+          Effect.catchEager((e) =>
             Effect.logWarning("Config save failed").pipe(Effect.annotateLogs({ error: String(e) })),
           ),
         )
@@ -167,7 +162,7 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
                   exists ? fs.readFileString(filePath) : Effect.succeed(""),
                 ),
                 Effect.map((content) => content.trim()),
-                Effect.catchAll(() => Effect.succeed("")),
+                Effect.catchEager(() => Effect.succeed("")),
               )
 
             const readWithFallback = (primary: string, fallback: string): Effect.Effect<string> =>
@@ -210,8 +205,8 @@ export class ConfigService extends Context.Tag("@gent/runtime/src/config-service
   )
 
   static Test = (initialConfig: UserConfig = new UserConfig({})): Layer.Layer<ConfigService> => {
-    const userConfigRef = Ref.unsafeMake(initialConfig)
-    const projectConfigRef = Ref.unsafeMake(new UserConfig({}))
+    const userConfigRef = Ref.makeUnsafe(initialConfig)
+    const projectConfigRef = Ref.makeUnsafe(new UserConfig({}))
 
     const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
       const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]

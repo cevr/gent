@@ -1,12 +1,7 @@
-import { BunHttpServer, BunRuntime, BunFileSystem, BunContext } from "@effect/platform-bun"
-import {
-  HttpApiBuilder,
-  HttpApiScalar,
-  HttpLayerRouter,
-  HttpServerResponse,
-  OpenApi,
-} from "@effect/platform"
-import { RpcServer, RpcSerialization } from "@effect/rpc"
+import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
+import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
+import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
 import { Effect, Layer, Schema } from "effect"
 import {
   GentApi,
@@ -32,15 +27,15 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
           .pipe(Effect.orDie),
       )
       .handle("list", () => core.listSessions().pipe(Effect.orDie))
-      .handle("get", ({ path }) =>
-        core.getSession(path.sessionId).pipe(
+      .handle("get", ({ params }) =>
+        core.getSession(params.sessionId).pipe(
           Effect.flatMap((s) =>
             s !== null ? Effect.succeed(s) : Effect.die(new Error("Session not found")),
           ),
           Effect.orDie,
         ),
       )
-      .handle("delete", ({ path }) => core.deleteSession(path.sessionId).pipe(Effect.orDie))
+      .handle("delete", ({ params }) => core.deleteSession(params.sessionId).pipe(Effect.orDie))
   }),
 )
 
@@ -58,10 +53,10 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
           })
           .pipe(Effect.orDie),
       )
-      .handle("list", ({ path }) => core.listMessages(path.branchId).pipe(Effect.orDie))
+      .handle("list", ({ params }) => core.listMessages(params.branchId).pipe(Effect.orDie))
       .handle("steer", ({ payload }) =>
         Effect.gen(function* () {
-          const command = yield* Schema.decode(SteerCommand)(payload)
+          const command = yield* Schema.decodeEffect(SteerCommand)(payload)
           yield* core.steer(command)
         }).pipe(Effect.orDie),
       )
@@ -69,7 +64,7 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
 )
 
 // Platform layer for Storage
-const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
+const PlatformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
 
 // Dependencies layer
 const DepsLive = createDependencies({
@@ -84,7 +79,7 @@ const GentCoreLive = GentCore.Live.pipe(Layer.provide(DepsLive))
 const CoreWithDeps = Layer.merge(GentCoreLive, DepsLive)
 
 // RPC-over-HTTP routes with ndjson for streaming
-const RpcRoutes = RpcServer.layerHttpRouter({
+const RpcRoutes = RpcServer.layerHttp({
   group: GentRpcs,
   path: "/rpc",
   protocol: "http",
@@ -100,28 +95,27 @@ const HttpGroupsLive = Layer.provideMerge(SessionsApiLive, MessagesApiLive).pipe
 )
 
 // API Routes
-const HttpApiRoutes = HttpLayerRouter.addHttpApi(GentApi).pipe(Layer.provide(HttpGroupsLive))
+const HttpApiRoutes = HttpApiBuilder.layer(GentApi).pipe(Layer.provide(HttpGroupsLive))
 
 // Swagger docs at /docs
-const DocsRoute = HttpApiScalar.layerHttpLayerRouter({
-  api: GentApi,
+const DocsRoute = HttpApiScalar.layer(GentApi, {
   path: "/docs",
 })
 
 // OpenAPI JSON
-const OpenApiJsonRoute = HttpLayerRouter.add(
+const OpenApiJsonRoute = HttpRouter.add(
   "GET",
   "/docs/openapi.json",
   HttpServerResponse.json(OpenApi.fromApi(GentApi)),
-).pipe(Layer.provide(HttpLayerRouter.layer))
+)
 
 // Merge all routes (REST API + RPC + docs)
 const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
-  Layer.provide(HttpLayerRouter.cors()),
+  Layer.provide(HttpRouter.cors()),
 )
 
 // Server
-const HttpServerLive = HttpLayerRouter.serve(AllRoutes).pipe(
+const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
   Layer.provide(GentCoreLive),
 )

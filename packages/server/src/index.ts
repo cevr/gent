@@ -1,6 +1,5 @@
-import { Config, Effect, Layer, Option } from "effect"
-import { FileSystem, Path } from "@effect/platform"
-import type { PlatformError } from "@effect/platform/Error"
+import type { PlatformError } from "effect"
+import { Config, Effect, Layer, Option, FileSystem, Path } from "effect"
 import {
   ToolRegistry,
   Permission,
@@ -171,7 +170,7 @@ export const createDependencies = (
   | AuthStore
   | AuthGuard
   | ProviderAuth,
-  PlatformError,
+  PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
   const StorageLive = Storage.Live(config.dbPath ?? ".gent/data.db")
@@ -180,10 +179,10 @@ export const createDependencies = (
 
   const ConfigServiceLive = ConfigService.Live
   const home = Effect.runSync(
-    Config.option(Config.string("HOME")).pipe(
-      Effect.catchAll(() => Effect.succeed(Option.none())),
-      Effect.map(Option.getOrElse(() => os.homedir())),
-    ),
+    Effect.gen(function* () {
+      const maybeHome = yield* Config.option(Config.string("HOME"))
+      return Option.getOrElse(maybeHome, () => os.homedir())
+    }).pipe(Effect.catchEager(() => Effect.succeed(os.homedir()))),
   )
   const globalSkillsDir = nodePath.join(home, ".gent", "skills")
   const claudeSkillsDir = nodePath.join(home, ".claude", "skills")
@@ -195,7 +194,7 @@ export const createDependencies = (
     extraDirs: config.skillsDirs,
   })
 
-  const PermissionLive = Layer.unwrapEffect(
+  const PermissionLive = Layer.unwrap(
     Effect.gen(function* () {
       const configService = yield* ConfigService
       const rules = yield* configService.getPermissionRules()
@@ -262,7 +261,7 @@ export const createDependencies = (
   const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseWithPermission)
 
   // AgentLoop requires CheckpointService and FileSystem
-  const AgentRuntimeLive = Layer.unwrapEffect(
+  const AgentRuntimeLive = Layer.unwrap(
     Effect.gen(function* () {
       const skills = yield* Skills
       const fs = yield* FileSystem.FileSystem

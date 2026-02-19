@@ -1,21 +1,20 @@
-import { Effect, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool, PlanHandler } from "@gent/core"
 
 export const PlanParams = Schema.Struct({
-  plan: Schema.String.annotations({
+  plan: Schema.String.annotate({
     description: "The plan to present (markdown supported)",
   }),
-  title: Schema.optional(Schema.String).annotations({
+  title: Schema.optional(Schema.String).annotate({
     description: "Optional title for the plan",
   }),
-  path: Schema.optional(Schema.String).annotations({
+  path: Schema.optional(Schema.String).annotate({
     description: "Optional path to save the plan markdown",
   }),
 })
 
 export const PlanResult = Schema.Struct({
-  decision: Schema.Literal("confirm", "reject"),
+  decision: Schema.Literals(["confirm", "reject"]),
   planPath: Schema.String,
 })
 

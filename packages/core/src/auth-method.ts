@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-export const AuthMethodType = Schema.Literal("oauth", "api")
+export const AuthMethodType = Schema.Literals(["oauth", "api"])
 export type AuthMethodType = typeof AuthMethodType.Type
 
 export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
@@ -8,7 +8,7 @@ export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
   label: Schema.String,
 }) {}
 
-export const AuthAuthorizationMethod = Schema.Literal("auto", "code")
+export const AuthAuthorizationMethod = Schema.Literals(["auto", "code"])
 export type AuthAuthorizationMethod = typeof AuthAuthorizationMethod.Type
 
 export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuthorization")({

@@ -1,42 +1,38 @@
-import { Context, Effect, Layer, Ref, Schema, ParseResult } from "effect"
+import { ServiceMap, Effect, Layer, Ref, Schema } from "effect"
 
-// Valid Regex Pattern - validates regex at decode time using ParseResult.try
-const ValidRegexPattern = Schema.transformOrFail(Schema.String, Schema.String, {
-  strict: true,
-  decode: (s, _, ast) =>
-    ParseResult.try({
-      try: () => {
-        // Validate regex syntax by attempting construction
-        // eslint-disable-next-line no-new -- validation requires construction
-        new RegExp(s)
-        return s
+// Valid Regex Pattern - validates regex at decode time
+const ValidRegexPattern = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter<string>(
+      (s) => {
+        try {
+          new RegExp(s) // eslint-disable-line no-new
+          return undefined
+        } catch (e) {
+          return `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`
+        }
       },
-      catch: (e) =>
-        new ParseResult.Type(
-          ast,
-          s,
-          `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-    }),
-  encode: ParseResult.succeed,
-})
+      { expected: "a valid regex pattern" },
+    ),
+  ),
+)
 
 // Permission Rule
 
 export class PermissionRule extends Schema.Class<PermissionRule>("PermissionRule")({
   tool: Schema.String,
   pattern: Schema.optional(ValidRegexPattern),
-  action: Schema.Literal("allow", "deny", "ask"),
+  action: Schema.Literals(["allow", "deny", "ask"]),
 }) {}
 
 // Permission Check Result
 
-export const PermissionResult = Schema.Literal("allowed", "denied", "ask")
+export const PermissionResult = Schema.Literals(["allowed", "denied", "ask"])
 export type PermissionResult = typeof PermissionResult.Type
 
 // Permission Decision (user response)
 
-export const PermissionDecision = Schema.Literal("allow", "deny")
+export const PermissionDecision = Schema.Literals(["allow", "deny"])
 export type PermissionDecision = typeof PermissionDecision.Type
 
 // Permission Service
@@ -48,10 +44,9 @@ export interface PermissionService {
   readonly getRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 }
 
-export class Permission extends Context.Tag("@gent/core/src/permission")<
-  Permission,
-  PermissionService
->() {
+export class Permission extends ServiceMap.Service<Permission, PermissionService>()(
+  "@gent/core/src/permission",
+) {
   static Live = (
     initialRules: ReadonlyArray<PermissionRule> = [],
     defaultAction: PermissionRule["action"] = "allow",

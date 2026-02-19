@@ -1,4 +1,4 @@
-import { Config, Effect, Option, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { defineTool } from "@gent/core"
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
@@ -7,7 +7,7 @@ import * as os from "node:os"
 
 // RepoExplorer Tool Error
 
-export class RepoExplorerError extends Schema.TaggedError<RepoExplorerError>()(
+export class RepoExplorerError extends Schema.TaggedErrorClass<RepoExplorerError>()(
   "RepoExplorerError",
   {
     message: Schema.String,
@@ -19,21 +19,21 @@ export class RepoExplorerError extends Schema.TaggedError<RepoExplorerError>()(
 // RepoExplorer Tool Params
 
 export const RepoExplorerParams = Schema.Struct({
-  spec: Schema.String.annotations({
+  spec: Schema.String.annotate({
     description:
       "Repository spec: owner/repo, owner/repo@tag, npm:package, pypi:package, crates:crate",
   }),
-  action: Schema.Literal("fetch", "path", "search", "info").annotations({
+  action: Schema.Literals(["fetch", "path", "search", "info"]).annotate({
     description:
       "Action: fetch (clone/download), path (get local path), search (grep), info (metadata)",
   }),
   query: Schema.optional(
-    Schema.String.annotations({
+    Schema.String.annotate({
       description: "Search query (for search action)",
     }),
   ),
   update: Schema.optional(
-    Schema.Boolean.annotations({
+    Schema.Boolean.annotate({
       description: "Update existing repo (for fetch action)",
     }),
   ),
@@ -112,10 +112,7 @@ export const RepoExplorerTool = defineTool({
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, get paths.",
   params: RepoExplorerParams,
   execute: Effect.fn("RepoExplorerTool.execute")(function* (params) {
-    const home = yield* Config.option(Config.string("HOME")).pipe(
-      Effect.catchAll(() => Effect.succeed(Option.none())),
-      Effect.map(Option.getOrElse(() => os.homedir())),
-    )
+    const home = os.homedir()
     const cacheDir = path.join(home, ".cache", "repo")
     const cachePath = getCachePath(cacheDir, params.spec)
     const parsed = parseSpec(params.spec)

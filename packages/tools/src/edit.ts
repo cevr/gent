@@ -1,10 +1,9 @@
-import { Effect, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "@gent/core"
 
 // Edit Tool Error
 
-export class EditError extends Schema.TaggedError<EditError>()("EditError", {
+export class EditError extends Schema.TaggedErrorClass<EditError>()("EditError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -13,17 +12,17 @@ export class EditError extends Schema.TaggedError<EditError>()("EditError", {
 // Edit Tool Params
 
 export const EditParams = Schema.Struct({
-  path: Schema.String.annotations({
+  path: Schema.String.annotate({
     description: "Absolute path to file to edit",
   }),
-  oldString: Schema.String.annotations({
+  oldString: Schema.String.annotate({
     description: "Exact string to replace",
   }),
-  newString: Schema.String.annotations({
+  newString: Schema.String.annotate({
     description: "Replacement string",
   }),
   replaceAll: Schema.optional(
-    Schema.Boolean.annotations({
+    Schema.Boolean.annotate({
       description: "Replace all occurrences (default: false)",
     }),
   ),

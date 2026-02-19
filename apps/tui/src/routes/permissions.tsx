@@ -25,7 +25,7 @@ export function Permissions(props: PermissionsProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.client.runtime)
+  const { cast } = useRuntime(props.client.services)
 
   const [state, setState] = createSignal<PermissionsState>({ _tag: "loading" })
   let scrollRef: ScrollBoxRenderable | undefined = undefined
@@ -58,7 +58,7 @@ export function Permissions(props: PermissionsProps) {
             })
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => {
             setState((current) => {
               const error = formatError(err)
@@ -103,7 +103,7 @@ export function Permissions(props: PermissionsProps) {
             })
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => {
             setState((prev) => {
               const error = formatError(err)

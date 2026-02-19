@@ -33,7 +33,7 @@ export function Home(props: HomeProps) {
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
-  const { cast } = useRuntime(client.client.runtime)
+  const { cast } = useRuntime(client.client.services)
   const { exit, handleEsc } = useExit()
 
   const logo = LOGOS[Math.floor(Math.random() * LOGOS.length)]
@@ -157,7 +157,7 @@ export function Home(props: HomeProps) {
           )
         })
       }).pipe(
-        Effect.catchAll(() =>
+        Effect.catchEager(() =>
           Effect.sync(() => {
             setShowWelcome(false)
           }),

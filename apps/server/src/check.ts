@@ -1,2 +1,2 @@
-import { HttpLayerRouter } from "@effect/platform"
-console.log("HttpLayerRouter exports:", Object.keys(HttpLayerRouter).join(", "))
+import { HttpRouter } from "effect/unstable/http"
+console.log("HttpRouter exports:", Object.keys(HttpRouter).join(", "))

@@ -50,7 +50,7 @@ export function BranchPicker(props: BranchPickerProps) {
   const client = useClient()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(client.client.runtime)
+  const { cast } = useRuntime(client.client.services)
 
   const [state, setState] = createSignal<BranchPickerState>({
     _tag: "loading",
@@ -78,7 +78,7 @@ export function BranchPicker(props: BranchPickerProps) {
             }))
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => {
             setState((current) => {
               const error = formatError(err)

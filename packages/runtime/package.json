@@ -15,9 +15,6 @@
     "effect-machine": "catalog:"
   },
   "peerDependencies": {
-    "@effect/cluster": "catalog:",
-    "@effect/platform": "catalog:",
-    "@effect/rpc": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "effect": "catalog:"

@@ -14,8 +14,6 @@
     "@gent/server": "workspace:*"
   },
   "peerDependencies": {
-    "@effect/platform": "catalog:",
-    "@effect/rpc": "catalog:",
     "effect": "catalog:"
   }
 }

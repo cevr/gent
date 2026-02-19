@@ -9,7 +9,7 @@ const toEventStoreError =
   (error: StorageError): EventStoreError =>
     new EventStoreError({ message, cause: error })
 
-export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.scoped(
+export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.effect(
   EventStore,
   Effect.gen(function* () {
     const storage = yield* Storage
@@ -24,9 +24,8 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.sco
       }),
 
       subscribe: ({ sessionId, branchId, after }) =>
-        Stream.unwrapScoped(
+        Stream.unwrap(
           Effect.gen(function* () {
-            const queue = yield* PubSub.subscribe(pubsub)
             const afterId = after ?? 0
             const latestId = yield* storage
               .getLatestEventId({ sessionId, branchId })
@@ -35,10 +34,11 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.sco
             const buffered = yield* storage
               .listEvents({ sessionId, branchId, afterId })
               .pipe(Effect.mapError(toEventStoreError("Failed to load buffered events")))
-            const initial = buffered.filter((env) => env.id <= maxId)
-            const live = Stream.fromQueue(queue).pipe(
+            const initial = buffered.filter((env: EventEnvelope) => env.id <= maxId)
+            const live = Stream.fromPubSub(pubsub).pipe(
               Stream.filter(
-                (env) => env.id > maxId && matchesEventFilter(env, sessionId, branchId),
+                (env: EventEnvelope) =>
+                  env.id > maxId && matchesEventFilter(env, sessionId, branchId),
               ),
             )
             return Stream.concat(Stream.fromIterable(initial), live)

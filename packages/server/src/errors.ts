@@ -1,14 +1,22 @@
 import { Schema } from "effect"
-import { PlatformError as PlatformErrorSchema, type PlatformError } from "@effect/platform/Error"
 import { EventStoreError } from "@gent/core"
 import { ProviderError, ProviderAuthError } from "@gent/providers"
 import { ActorProcessError, AgentLoopError, CheckpointError } from "@gent/runtime"
 import { StorageError } from "@gent/storage"
 
-export class NotFoundError extends Schema.TaggedError<NotFoundError>()("NotFoundError", {
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("NotFoundError", {
   message: Schema.String,
-  entity: Schema.Literal("session", "branch", "message"),
+  entity: Schema.Literals(["session", "branch", "message"]),
 }) {}
+
+// Schema-compatible wrapper for PlatformError (Data.TaggedError, not Schema-based)
+export class PlatformErrorSchema extends Schema.TaggedErrorClass<PlatformErrorSchema>()(
+  "PlatformError",
+  {
+    message: Schema.String,
+    reason: Schema.String,
+  },
+) {}
 
 export type GentRpcError =
   | StorageError
@@ -16,12 +24,12 @@ export type GentRpcError =
   | AgentLoopError
   | ProviderError
   | ProviderAuthError
-  | PlatformError
+  | PlatformErrorSchema
   | EventStoreError
   | CheckpointError
   | NotFoundError
 
-export const GentRpcError = Schema.Union(
+export const GentRpcError = Schema.Union([
   StorageError,
   ActorProcessError,
   AgentLoopError,
@@ -31,4 +39,4 @@ export const GentRpcError = Schema.Union(
   EventStoreError,
   CheckpointError,
   NotFoundError,
-)
+])

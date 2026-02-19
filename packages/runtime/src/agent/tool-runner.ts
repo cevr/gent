@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import {
   ToolRegistry,
   ToolResultPart,
@@ -29,10 +29,9 @@ const errorResult = (toolCall: { toolCallId: string; toolName: string }, message
     },
   })
 
-export class ToolRunner extends Context.Tag("@gent/runtime/src/agent/tool-runner/ToolRunner")<
-  ToolRunner,
-  ToolRunnerService
->() {
+export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService>()(
+  "@gent/runtime/src/agent/tool-runner/ToolRunner",
+) {
   static Live: Layer.Layer<ToolRunner, never, ToolRegistry | Permission | PermissionHandler> =
     Layer.effect(
       ToolRunner,
@@ -63,7 +62,7 @@ export class ToolRunner extends Context.Tag("@gent/runtime/src/agent/tool-runner
                   },
                   ctx,
                 )
-                .pipe(Effect.catchAll(() => Effect.succeed<PermissionDecision>("deny")))
+                .pipe(Effect.catchEager(() => Effect.succeed<PermissionDecision>("deny")))
               if (decision === "deny") {
                 return errorResult(toolCall, "Permission denied")
               }
@@ -73,30 +72,31 @@ export class ToolRunner extends Context.Tag("@gent/runtime/src/agent/tool-runner
 
             const toolDefinition = tool as ToolDefinition<
               string,
-              Schema.Schema.AnyNoContext,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              Schema.Decoder<any, never>,
               unknown,
               unknown,
               never
             >
-            const decodedInput = yield* Schema.decodeUnknown(toolDefinition.params)(
+            const decodedInput = yield* Schema.decodeUnknownEffect(toolDefinition.params)(
               toolCall.input,
-            ).pipe(Effect.either)
-            if (decodedInput._tag === "Left") {
-              return errorResult(toolCall, `Invalid tool input: ${String(decodedInput.left)}`)
+            ).pipe(Effect.result)
+            if (decodedInput._tag === "Failure") {
+              return errorResult(toolCall, `Invalid tool input: ${String(decodedInput.failure)}`)
             }
             const result = yield* toolDefinition
-              .execute(decodedInput.right, ctx)
-              .pipe(Effect.either)
+              .execute(decodedInput.success, ctx)
+              .pipe(Effect.result)
 
-            if (result._tag === "Left") {
-              return errorResult(toolCall, `Tool failed: ${String(result.left)}`)
+            if (result._tag === "Failure") {
+              return errorResult(toolCall, `Tool failed: ${String(result.failure)}`)
             }
 
             return new ToolResultPart({
               type: "tool-result",
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
-              output: { type: "json", value: result.right },
+              output: { type: "json", value: result.success },
             })
           }),
         })

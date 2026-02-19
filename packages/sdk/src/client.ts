@@ -1,8 +1,8 @@
 import { Effect, Layer } from "effect"
-import type { Stream, Runtime, Scope } from "effect"
-import { RpcClient, RpcTest, RpcSerialization } from "@effect/rpc"
-import type { RpcGroup } from "@effect/rpc"
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "@effect/platform"
+import type { Stream, ServiceMap, Scope } from "effect"
+import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
+import type { RpcGroup } from "effect/unstable/rpc"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { GentRpcs, RpcHandlersLive, type GentRpcsClient, type GentRpcError } from "@gent/server"
 import { stringifyOutput, summarizeOutput } from "@gent/core"
 import type {
@@ -333,8 +333,8 @@ export interface GentClient {
     code?: string,
   ) => Effect.Effect<void, GentRpcError>
 
-  /** Get the runtime for this client */
-  runtime: Runtime.Runtime<unknown>
+  /** Get the services for this client */
+  services: ServiceMap.ServiceMap<unknown>
 }
 
 /**
@@ -343,7 +343,7 @@ export interface GentClient {
  */
 export function createClient(
   rpcClient: GentRpcClient,
-  runtime: Runtime.Runtime<unknown>,
+  services: ServiceMap.ServiceMap<unknown>,
 ): GentClient {
   return {
     sendMessage: (input) => rpcClient.sendMessage(input),
@@ -455,7 +455,7 @@ export function createClient(
         ...(code !== undefined ? { code } : {}),
       }),
 
-    runtime,
+    services,
   }
 }
 
@@ -480,10 +480,13 @@ export function createClient(
 export const makeClient: Effect.Effect<GentClient, never, RpcClient.Protocol | Scope.Scope> =
   Effect.gen(function* () {
     const rpcClient = yield* RpcClient.make(GentRpcs)
-    const runtime = yield* Effect.runtime<never>()
+    const services = yield* Effect.services<never>()
     // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
     // defines GentRpcError as the error schema. The cast narrows to our specific error type.
-    return createClient(rpcClient as unknown as GentRpcClient, runtime as Runtime.Runtime<unknown>)
+    return createClient(
+      rpcClient as unknown as GentRpcClient,
+      services as ServiceMap.ServiceMap<unknown>,
+    )
   })
 
 // =============================================================================
@@ -494,7 +497,9 @@ export const makeClient: Effect.Effect<GentClient, never, RpcClient.Protocol | S
  * Context required by RpcHandlersLive.
  * Layer must provide these services for the RPC handlers to work.
  */
-export type RpcHandlersContext = Layer.Layer.Context<typeof RpcHandlersLive>
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
+export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
 
 /**
  * Creates an in-process RPC client for testing or embedded use.
@@ -533,8 +538,8 @@ export const makeInProcessClient = <E, R>(
 ): Effect.Effect<GentClient, E, R> =>
   Effect.gen(function* () {
     const rpcClient = yield* makeInProcessRpcClient(handlersLayer)
-    const runtime = yield* Effect.runtime<never>()
-    return createClient(rpcClient, runtime as Runtime.Runtime<unknown>)
+    const services = yield* Effect.services<never>()
+    return createClient(rpcClient, services as ServiceMap.ServiceMap<unknown>)
   })
 
 // =============================================================================
@@ -558,9 +563,10 @@ export const HttpTransport = (config: HttpTransportConfig): Layer.Layer<RpcClien
     headers !== undefined
       ? Layer.effect(
           HttpClient.HttpClient,
-          Effect.map(HttpClient.HttpClient, (client) =>
-            client.pipe(HttpClient.mapRequest(HttpClientRequest.setHeaders(headers))),
-          ),
+          Effect.gen(function* () {
+            const client = yield* HttpClient.HttpClient
+            return client.pipe(HttpClient.mapRequest(HttpClientRequest.setHeaders(headers)))
+          }),
         ).pipe(Layer.provide(FetchHttpClient.layer))
       : FetchHttpClient.layer
 

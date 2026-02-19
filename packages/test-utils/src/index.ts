@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Stream } from "effect"
+import { ServiceMap, Effect, Layer, Ref, Stream } from "effect"
 import { Storage } from "@gent/storage"
 import { Provider, FinishChunk, TextChunk, ToolCallChunk, type StreamChunk } from "@gent/providers"
 import {
@@ -42,10 +42,10 @@ export interface SequenceRecorderService {
   readonly clear: () => Effect.Effect<void>
 }
 
-export class SequenceRecorder extends Context.Tag("@gent/test-utils/src/index/SequenceRecorder")<
+export class SequenceRecorder extends ServiceMap.Service<
   SequenceRecorder,
   SequenceRecorderService
->() {
+>()("@gent/test-utils/src/index/SequenceRecorder") {
   static Live: Layer.Layer<SequenceRecorder> = Layer.effect(
     SequenceRecorder,
     Effect.gen(function* () {

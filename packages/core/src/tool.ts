@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, type Schema } from "effect"
+import { ServiceMap, Effect, Layer, type Schema } from "effect"
 import type { AgentName } from "./agent"
 import type { BranchId, SessionId } from "./ids"
 
@@ -7,7 +7,8 @@ import type { BranchId, SessionId } from "./ids"
 // Params must have no context requirement (never) for sync decoding
 export interface ToolDefinition<
   Name extends string = string,
-  Params extends Schema.Schema.AnyNoContext = Schema.Schema.AnyNoContext,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Params extends Schema.Decoder<any, never> = Schema.Decoder<any, never>,
   Result = unknown,
   Error = never,
   Deps = never,
@@ -33,7 +34,8 @@ export interface ToolContext {
 
 export const defineTool = <
   Name extends string,
-  Params extends Schema.Schema.AnyNoContext,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Params extends Schema.Decoder<any, never>,
   Result,
   Error,
   Deps,
@@ -53,10 +55,9 @@ export interface ToolRegistryService {
   readonly register: (tool: AnyToolDefinition) => Effect.Effect<void>
 }
 
-export class ToolRegistry extends Context.Tag("@gent/core/src/tool/ToolRegistry")<
-  ToolRegistry,
-  ToolRegistryService
->() {
+export class ToolRegistry extends ServiceMap.Service<ToolRegistry, ToolRegistryService>()(
+  "@gent/core/src/tool/ToolRegistry",
+) {
   static Live = (tools: ReadonlyArray<AnyToolDefinition>): Layer.Layer<ToolRegistry> =>
     Layer.succeed(
       ToolRegistry,

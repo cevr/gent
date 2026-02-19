@@ -1,11 +1,10 @@
-import { Effect, Option, Schema, Stream } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Effect, Option, Schema, Stream, FileSystem, Path } from "effect"
 import { defineTool } from "@gent/core"
 import { Glob } from "bun"
 
 // Glob Tool Error
 
-export class GlobError extends Schema.TaggedError<GlobError>()("GlobError", {
+export class GlobError extends Schema.TaggedErrorClass<GlobError>()("GlobError", {
   message: Schema.String,
   pattern: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -14,16 +13,16 @@ export class GlobError extends Schema.TaggedError<GlobError>()("GlobError", {
 // Glob Tool Params
 
 export const GlobParams = Schema.Struct({
-  pattern: Schema.String.annotations({
+  pattern: Schema.String.annotate({
     description: "Glob pattern (e.g., **/*.ts, src/**/*.tsx)",
   }),
   path: Schema.optional(
-    Schema.String.annotations({
+    Schema.String.annotate({
       description: "Directory to search in (default: cwd)",
     }),
   ),
   limit: Schema.optional(
-    Schema.Number.annotations({
+    Schema.Number.annotate({
       description: "Maximum number of results (default: 100)",
     }),
   ),
@@ -70,7 +69,7 @@ export const GlobTool = defineTool({
     for (const file of files) {
       const statResult = yield* fs.stat(file).pipe(Effect.option)
       if (Option.isSome(statResult)) {
-        const mtime = Option.getOrElse(statResult.value.mtime, () => new Date(0))
+        const mtime = statResult.value.mtime ?? new Date(0)
         matches.push({ path: file, mtime: mtime.getTime() })
       }
     }

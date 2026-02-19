@@ -28,7 +28,7 @@ export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
   const client = useClient()
-  const { cast } = useRuntime(client.client.runtime)
+  const { cast } = useRuntime(client.client.services)
   const router = useRouter()
   const dimensions = useTerminalDimensions()
 
@@ -74,7 +74,7 @@ export function CommandPalette() {
                   }))
                 }),
               ),
-              Effect.catchAll((error) =>
+              Effect.catchEager((error) =>
                 Effect.sync(() => {
                   client.setError(formatError(error))
                 }),

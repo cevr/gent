@@ -1,5 +1,13 @@
-import { Schema } from "effect"
+import { Schema, SchemaGetter as Getter } from "effect"
 import { SessionId, BranchId, MessageId } from "./ids"
+
+// v4: DateFromNumber was removed — define locally
+export const DateFromNumber = Schema.Number.pipe(
+  Schema.decodeTo(Schema.DateValid, {
+    decode: Getter.transform((n: number) => new Date(n)),
+    encode: Getter.transform((d: Date) => d.getTime()),
+  }),
+)
 
 // Message Part Types - matching AI SDK v6 shape
 
@@ -27,7 +35,7 @@ export class ToolResultPart extends Schema.Class<ToolResultPart>("ToolResultPart
   toolCallId: Schema.String,
   toolName: Schema.String,
   output: Schema.Struct({
-    type: Schema.Literal("json", "error-json"),
+    type: Schema.Literals(["json", "error-json"]),
     value: Schema.Unknown,
   }),
 }) {}
@@ -37,18 +45,18 @@ export class ReasoningPart extends Schema.Class<ReasoningPart>("ReasoningPart")(
   text: Schema.String,
 }) {}
 
-export const MessagePart = Schema.Union(
+export const MessagePart = Schema.Union([
   TextPart,
   ImagePart,
   ToolCallPart,
   ToolResultPart,
   ReasoningPart,
-)
+])
 export type MessagePart = typeof MessagePart.Type
 
 // Message Role
 
-export const MessageRole = Schema.Literal("user", "assistant", "system", "tool")
+export const MessageRole = Schema.Literals(["user", "assistant", "system", "tool"])
 export type MessageRole = typeof MessageRole.Type
 
 // Message
@@ -57,10 +65,10 @@ export class Message extends Schema.Class<Message>("Message")({
   id: MessageId,
   sessionId: SessionId,
   branchId: BranchId,
-  kind: Schema.optional(Schema.Literal("regular", "interjection")),
+  kind: Schema.optional(Schema.Literals(["regular", "interjection"])),
   role: MessageRole,
   parts: Schema.Array(MessagePart),
-  createdAt: Schema.DateFromNumber,
+  createdAt: DateFromNumber,
   turnDurationMs: Schema.optional(Schema.Number),
 }) {}
 
@@ -73,8 +81,8 @@ export class Session extends Schema.Class<Session>("Session")({
   bypass: Schema.optional(Schema.Boolean),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
-  createdAt: Schema.DateFromNumber,
-  updatedAt: Schema.DateFromNumber,
+  createdAt: DateFromNumber,
+  updatedAt: DateFromNumber,
 }) {}
 
 // Branch
@@ -86,7 +94,7 @@ export class Branch extends Schema.Class<Branch>("Branch")({
   parentMessageId: Schema.optional(MessageId),
   name: Schema.optional(Schema.String),
   summary: Schema.optional(Schema.String),
-  createdAt: Schema.DateFromNumber,
+  createdAt: DateFromNumber,
 }) {}
 
 // Checkpoint - discriminated union for context management
@@ -96,7 +104,7 @@ const CheckpointBase = {
   branchId: BranchId,
   messageCount: Schema.Number,
   tokenCount: Schema.Number,
-  createdAt: Schema.DateFromNumber,
+  createdAt: DateFromNumber,
 }
 
 // Compaction checkpoint: summarizes history, keeps recent messages
@@ -115,5 +123,5 @@ export class PlanCheckpoint extends Schema.TaggedClass<PlanCheckpoint>()("PlanCh
   planPath: Schema.String,
 }) {}
 
-export const Checkpoint = Schema.Union(CompactionCheckpoint, PlanCheckpoint)
+export const Checkpoint = Schema.Union([CompactionCheckpoint, PlanCheckpoint])
 export type Checkpoint = typeof Checkpoint.Type

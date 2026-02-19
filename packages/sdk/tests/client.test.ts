@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
+import type { ServiceMap } from "effect"
 import { Effect, Layer } from "effect"
-import type { Runtime } from "effect"
 import {
   createClient,
   HttpTransport,
@@ -52,8 +52,8 @@ describe("createClient", () => {
       deleteAuthKey: () => Effect.void,
     } as unknown as GentRpcClient
 
-    const runtime = Effect.runSync(Effect.runtime<never>()) as Runtime.Runtime<unknown>
-    const client = createClient(mockRpcClient, runtime)
+    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
+    const client = createClient(mockRpcClient, services)
 
     // Verify all methods exist
     expect(typeof client.createSession).toBe("function")
@@ -79,7 +79,7 @@ describe("createClient", () => {
     expect(typeof client.listAuthProviders).toBe("function")
     expect(typeof client.setAuthKey).toBe("function")
     expect(typeof client.deleteAuthKey).toBe("function")
-    expect(client.runtime).toBeDefined()
+    expect(client.services).toBeDefined()
   })
 
   test("createSession returns mapped result", async () => {
@@ -93,8 +93,8 @@ describe("createClient", () => {
         }),
     } as unknown as GentRpcClient
 
-    const runtime = Effect.runSync(Effect.runtime<never>()) as Runtime.Runtime<unknown>
-    const client = createClient(mockRpcClient, runtime)
+    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
+    const client = createClient(mockRpcClient, services)
 
     const result = await Effect.runPromise(client.createSession())
     expect(result.sessionId).toBe("session-123")
@@ -108,8 +108,8 @@ describe("createClient", () => {
       createBranch: () => Effect.succeed({ branchId: "new-branch-id" }),
     } as unknown as GentRpcClient
 
-    const runtime = Effect.runSync(Effect.runtime<never>()) as Runtime.Runtime<unknown>
-    const client = createClient(mockRpcClient, runtime)
+    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
+    const client = createClient(mockRpcClient, services)
 
     const branchId = await Effect.runPromise(client.createBranch("session-1", "feature"))
     expect(branchId).toBe("new-branch-id")
@@ -120,8 +120,8 @@ describe("createClient", () => {
       forkBranch: () => Effect.succeed({ branchId: "forked-branch" }),
     } as unknown as GentRpcClient
 
-    const runtime = Effect.runSync(Effect.runtime<never>()) as Runtime.Runtime<unknown>
-    const client = createClient(mockRpcClient, runtime)
+    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
+    const client = createClient(mockRpcClient, services)
 
     const result = await Effect.runPromise(
       client.forkBranch({

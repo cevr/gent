@@ -3,8 +3,7 @@
  * Supports @path/to/file.ts#10-20 syntax
  */
 
-import { FileSystem } from "@effect/platform"
-import { Effect } from "effect"
+import { FileSystem, Effect } from "effect"
 import { resolve, relative } from "path"
 
 export interface FileRef {
@@ -90,7 +89,7 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     // Build code block
     const codeBlock = `\`\`\`${rangeLabel}\n${content}\n\`\`\``
     return { matchStr, codeBlock }
-  }).pipe(Effect.catchAll(() => Effect.succeed(null)))
+  }).pipe(Effect.catchEager(() => Effect.succeed(null)))
 }
 
 /**

@@ -47,7 +47,7 @@ describe("ProviderAuth", () => {
         yield* auth.callback("s1", "openai", 0, first.authorizationId, "sk-1")
         const stored = yield* store.get("openai")
 
-        const mismatch = yield* Effect.either(
+        const mismatch = yield* Effect.result(
           auth.callback("s2", "openai", 0, first.authorizationId, "sk-2"),
         )
 
@@ -66,6 +66,6 @@ describe("ProviderAuth", () => {
     expect(result.firstId).not.toBe(result.secondId)
     expect(result.stored?.type).toBe("api")
     expect((result.stored as AuthApi | undefined)?.key).toBe("sk-1")
-    expect(result.mismatch._tag).toBe("Left")
+    expect(result.mismatch._tag).toBe("Failure")
   })
 })

@@ -1,6 +1,5 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
-import type { PlatformError } from "@effect/platform/Error"
+import type { PlatformError } from "effect"
+import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 
 // Skill Schema
 
@@ -16,20 +15,20 @@ export class Skill extends Schema.Class<Skill>("Skill")({
 export interface SkillsService {
   readonly list: () => Effect.Effect<ReadonlyArray<Skill>>
   readonly get: (name: string) => Effect.Effect<Skill | undefined>
-  readonly reload: () => Effect.Effect<void, PlatformError>
+  readonly reload: () => Effect.Effect<void, PlatformError.PlatformError>
 }
 
 // Skills Service Tag
 
-export class Skills extends Context.Tag("@gent/core/src/skills")<Skills, SkillsService>() {
+export class Skills extends ServiceMap.Service<Skills, SkillsService>()("@gent/core/src/skills") {
   static Live = (options: {
     cwd: string
     globalDir: string
     claudeSkillsDir?: string
     extraDirs?: ReadonlyArray<string>
     ignored?: ReadonlyArray<string>
-  }): Layer.Layer<Skills, PlatformError, FileSystem.FileSystem | Path.Path> =>
-    Layer.scoped(
+  }): Layer.Layer<Skills, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+    Layer.effect(
       Skills,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -37,7 +36,9 @@ export class Skills extends Context.Tag("@gent/core/src/skills")<Skills, SkillsS
 
         const skillsRef = yield* Ref.make<Skill[]>([])
 
-        const loadSkillsFromDir = (dir: string): Effect.Effect<Skill[], PlatformError> =>
+        const loadSkillsFromDir = (
+          dir: string,
+        ): Effect.Effect<Skill[], PlatformError.PlatformError> =>
           Effect.gen(function* () {
             const exists = yield* fs.exists(dir)
             if (!exists) return []
@@ -127,7 +128,7 @@ export class Skills extends Context.Tag("@gent/core/src/skills")<Skills, SkillsS
     Layer.succeed(Skills, {
       list: () => Effect.succeed(testSkills),
       get: (name) => Effect.succeed(testSkills.find((s) => s.name === name)),
-      reload: () => Effect.void as Effect.Effect<void, PlatformError>,
+      reload: () => Effect.void as Effect.Effect<void, PlatformError.PlatformError>,
     })
 }
 

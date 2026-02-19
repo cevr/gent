@@ -12,10 +12,10 @@ export function detectColorScheme(): "dark" | "light" {
   // Check COLORFGBG env (set by some terminals like rxvt, xterm, some terminal emulators)
   // Format: "fg;bg" where higher bg number = light theme
   const colorFgBg = Effect.runSync(
-    Config.option(Config.string("COLORFGBG")).pipe(
-      Effect.catchAll(() => Effect.succeed(Option.none())),
-      Effect.map(Option.getOrUndefined),
-    ),
+    Effect.gen(function* () {
+      const opt = yield* Config.option(Config.string("COLORFGBG"))
+      return Option.getOrUndefined(opt)
+    }),
   )
   if (colorFgBg !== undefined && colorFgBg.length > 0) {
     const parts = colorFgBg.split(";")

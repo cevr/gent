@@ -9,7 +9,7 @@ import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import { readdir, readFile, mkdir, writeFile } from "fs/promises"
 import { homedir } from "os"
 import { join, basename } from "path"
-import { Effect, Fiber, Runtime } from "effect"
+import { Effect, Fiber } from "effect"
 import { atom, useAtomValue, useRegistry } from "@gent/atom-solid"
 
 export interface Skill {
@@ -44,7 +44,7 @@ const loadCache = (): Effect.Effect<Skill[] | null> =>
         return null
       }
     }),
-    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.catchEager(() => Effect.succeed(null)),
   )
 
 const saveCache = (skills: Skill[]): Effect.Effect<void> =>
@@ -59,7 +59,7 @@ const saveCache = (skills: Skill[]): Effect.Effect<void> =>
       try: () => writeFile(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8"),
       catch: () => undefined,
     })
-  }).pipe(Effect.catchAll(() => Effect.void))
+  }).pipe(Effect.catchEager(() => Effect.void))
 
 const scanSkillDir = (dir: string, source: Skill["source"]): Effect.Effect<Skill[]> =>
   Effect.tryPromise(() => readdir(dir, { withFileTypes: true })).pipe(
@@ -78,7 +78,7 @@ const scanSkillDir = (dir: string, source: Skill["source"]): Effect.Effect<Skill
       }
       return skills
     }),
-    Effect.catchAll(() => Effect.succeed([])),
+    Effect.catchEager(() => Effect.succeed([])),
   )
 
 const scanAllSkillDirs = (): Effect.Effect<Skill[]> =>
@@ -122,10 +122,10 @@ export function useSkills(): UseSkillsReturn {
         yield* saveCache(fresh)
       })
 
-      const runtime = registry.runtime
-      const fiber = Runtime.runFork(runtime)(effect)
+      const services = registry.services
+      const fiber = Effect.runForkWith(services)(effect)
       return () => {
-        Runtime.runFork(runtime)(Fiber.interruptFork(fiber))
+        Effect.runFork(Fiber.interrupt(fiber))
       }
     }
 

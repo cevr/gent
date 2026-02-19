@@ -1,15 +1,17 @@
-import { Config, Context, Effect, Layer, Option, Ref, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
-import type { PlatformError } from "@effect/platform/Error"
+import type { PlatformError } from "effect"
+import { ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
 
 // Auth Storage Error
 
-export class AuthStorageError extends Schema.TaggedError<AuthStorageError>()("AuthStorageError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
-}) {}
+export class AuthStorageError extends Schema.TaggedErrorClass<AuthStorageError>()(
+  "AuthStorageError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
 
 // Auth Storage Service Interface
 
@@ -22,25 +24,25 @@ export interface AuthStorageService {
 
 // Auth Storage Service Tag
 
-export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthStorage")<
-  AuthStorage,
-  AuthStorageService
->() {
+export class AuthStorage extends ServiceMap.Service<AuthStorage, AuthStorageService>()(
+  "@gent/core/src/auth-storage/AuthStorage",
+) {
   static LiveSystem = (
     options: {
       serviceName?: string
       filePath?: string
       keyPath?: string
     } = {},
-  ): Layer.Layer<AuthStorage, PlatformError, FileSystem.FileSystem | Path.Path> =>
+  ): Layer.Layer<AuthStorage, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
     process.platform === "darwin" && options.filePath === undefined && options.keyPath === undefined
-      ? AuthStorage.LiveKeychain(options.serviceName ?? "gent")
-      : Layer.unwrapEffect(
-          Effect.gen(function* () {
-            const home = yield* Config.option(Config.string("HOME")).pipe(
-              Effect.catchAll(() => Effect.succeed(Option.none())),
-              Effect.map(Option.getOrElse(() => os.homedir())),
-            )
+      ? (AuthStorage.LiveKeychain(options.serviceName ?? "gent") as Layer.Layer<
+          AuthStorage,
+          PlatformError.PlatformError,
+          FileSystem.FileSystem | Path.Path
+        >)
+      : Layer.unwrap(
+          Effect.sync(() => {
+            const home = os.homedir()
             const filePath = options.filePath ?? `${home}/.gent/auth.json.enc`
             const keyPath = options.keyPath ?? `${home}/.gent/auth.key`
             return AuthStorage.LiveEncryptedFile(filePath, keyPath)
@@ -100,12 +102,12 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
           get: (provider) =>
             execSecurity(["find-generic-password", "-s", serviceName, "-a", provider, "-w"]).pipe(
               Effect.map((key) => (key.length > 0 ? key : undefined)),
-              Effect.catchAll(() => Effect.succeed(undefined)),
+              Effect.catchEager(() => Effect.succeed(undefined)),
             ),
 
           set: (provider, key) =>
             execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
-              Effect.catchAll(() => Effect.void), // Expected to fail if no existing entry
+              Effect.catchEager(() => Effect.void), // Expected to fail if no existing entry
               Effect.flatMap(() =>
                 execSecurity([
                   "add-generic-password",
@@ -123,7 +125,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
           delete: (provider) =>
             execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
               Effect.asVoid,
-              Effect.catchAll((e) => Effect.logWarning("failed to delete keychain entry", e)),
+              Effect.catchEager((e) => Effect.logWarning("failed to delete keychain entry", e)),
             ),
 
           list: () =>
@@ -136,7 +138,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
                   .map((s) => s.trim())
                   .filter((s) => s.length > 0),
               ),
-              Effect.catchAll(() => Effect.succeed([])),
+              Effect.catchEager(() => Effect.succeed([])),
             ),
         }
       }),
@@ -145,8 +147,8 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
   // File-based implementation (fallback)
   static LiveFile = (
     filePath: string,
-  ): Layer.Layer<AuthStorage, PlatformError, FileSystem.FileSystem | Path.Path> =>
-    Layer.scoped(
+  ): Layer.Layer<AuthStorage, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+    Layer.effect(
       AuthStorage,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -155,9 +157,9 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
 
         yield* fs.makeDirectory(dir, { recursive: true })
 
-        const AuthData = Schema.Record({ key: Schema.String, value: Schema.String })
+        const AuthData = Schema.Record(Schema.String, Schema.String)
         type AuthData = typeof AuthData.Type
-        const AuthDataJson = Schema.parseJson(AuthData)
+        const AuthDataJson = Schema.fromJsonString(AuthData)
 
         const readData = (): Effect.Effect<AuthData, AuthStorageError> =>
           fs.exists(filePath).pipe(
@@ -166,7 +168,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
               return fs.readFileString(filePath)
             }),
             Effect.flatMap((content) =>
-              Schema.decodeUnknown(AuthDataJson)(content).pipe(
+              Schema.decodeUnknownEffect(AuthDataJson)(content).pipe(
                 Effect.mapError(
                   (e) =>
                     new AuthStorageError({
@@ -176,11 +178,11 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
                 ),
               ),
             ),
-            Effect.catchAll(() => Effect.succeed({} as AuthData)),
+            Effect.catchEager(() => Effect.succeed({} as AuthData)),
           )
 
         const writeData = (data: AuthData): Effect.Effect<void, AuthStorageError> =>
-          Schema.encode(AuthDataJson)(data).pipe(
+          Schema.encodeEffect(AuthDataJson)(data).pipe(
             Effect.flatMap((json) => fs.writeFileString(filePath, json)),
             Effect.mapError(
               (e) =>
@@ -215,8 +217,8 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
   static LiveEncryptedFile = (
     filePath: string,
     keyPath: string,
-  ): Layer.Layer<AuthStorage, PlatformError, FileSystem.FileSystem | Path.Path> =>
-    Layer.scoped(
+  ): Layer.Layer<AuthStorage, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+    Layer.effect(
       AuthStorage,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -227,9 +229,9 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
         yield* fs.makeDirectory(dir, { recursive: true })
         yield* fs.makeDirectory(keyDir, { recursive: true })
 
-        const AuthData = Schema.Record({ key: Schema.String, value: Schema.String })
+        const AuthData = Schema.Record(Schema.String, Schema.String)
         type AuthData = typeof AuthData.Type
-        const AuthDataJson = Schema.parseJson(AuthData)
+        const AuthDataJson = Schema.fromJsonString(AuthData)
 
         const EncryptedAuthFile = Schema.Struct({
           v: Schema.Number,
@@ -237,7 +239,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
           data: Schema.String,
         })
         type EncryptedAuthFile = typeof EncryptedAuthFile.Type
-        const EncryptedAuthFileJson = Schema.parseJson(EncryptedAuthFile)
+        const EncryptedAuthFileJson = Schema.fromJsonString(EncryptedAuthFile)
 
         const textEncoder = new TextEncoder()
         const textDecoder = new TextDecoder()
@@ -321,7 +323,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
           key: CryptoKey,
           content: string,
         ): Effect.Effect<AuthData, AuthStorageError> =>
-          Schema.decodeUnknown(EncryptedAuthFileJson)(content).pipe(
+          Schema.decodeUnknownEffect(EncryptedAuthFileJson)(content).pipe(
             Effect.mapError(
               (e) =>
                 new AuthStorageError({
@@ -350,7 +352,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
               }),
             ),
             Effect.flatMap((decoded) =>
-              Schema.decodeUnknown(AuthDataJson)(decoded).pipe(
+              Schema.decodeUnknownEffect(AuthDataJson)(decoded).pipe(
                 Effect.mapError(
                   (e) =>
                     new AuthStorageError({
@@ -360,7 +362,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
                 ),
               ),
             ),
-            Effect.catchAll(() => Effect.succeed({} as AuthData)),
+            Effect.catchEager(() => Effect.succeed({} as AuthData)),
           )
 
         const readData = (key: CryptoKey): Effect.Effect<AuthData, AuthStorageError> =>
@@ -374,7 +376,7 @@ export class AuthStorage extends Context.Tag("@gent/core/src/auth-storage/AuthSt
                 return Effect.succeed({} as AuthData)
               return decrypt(key, content)
             }),
-            Effect.catchAll(() => Effect.succeed({} as AuthData)),
+            Effect.catchEager(() => Effect.succeed({} as AuthData)),
           )
 
         const writeData = (key: CryptoKey, data: AuthData): Effect.Effect<void, AuthStorageError> =>

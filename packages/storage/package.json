@@ -12,8 +12,6 @@
     "@gent/core": "workspace:*"
   },
   "peerDependencies": {
-    "@effect/platform": "catalog:",
-    "@effect/sql": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "effect": "catalog:"
   }

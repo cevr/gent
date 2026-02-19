@@ -1,4 +1,4 @@
-import { Cause, Context, Duration, Effect, Layer, Schedule } from "effect"
+import { Cause, ServiceMap, Duration, Effect, Layer, Schedule } from "effect"
 import {
   AgentSwitched,
   Branch,
@@ -15,9 +15,7 @@ import {
 import { Storage, type StorageService } from "@gent/storage"
 import { AgentActor } from "./agent-loop"
 
-export class SubagentRunnerConfig extends Context.Tag(
-  "@gent/runtime/src/agent/subagent-runner/SubagentRunnerConfig",
-)<
+export class SubagentRunnerConfig extends ServiceMap.Service<
   SubagentRunnerConfig,
   {
     readonly subprocessBinaryPath?: string
@@ -28,7 +26,7 @@ export class SubagentRunnerConfig extends Context.Tag(
     readonly retryMaxDelayMs: number
     readonly timeoutMs?: number
   }
->() {
+>()("@gent/runtime/src/agent/subagent-runner/SubagentRunnerConfig") {
   static Live = (config: {
     subprocessBinaryPath?: string
     dbPath?: string
@@ -135,13 +133,18 @@ export const InProcessRunner: Layer.Layer<
               const retrySchedule =
                 runnerConfig.maxAttempts > 1
                   ? Schedule.modifyDelay(
-                      Schedule.intersect(
+                      Schedule.both(
                         Schedule.recurs(runnerConfig.maxAttempts - 1),
                         Schedule.exponential(Duration.millis(runnerConfig.retryInitialDelayMs)),
                       ),
                       (_out, duration) =>
-                        Duration.millis(
-                          Math.min(Duration.toMillis(duration), runnerConfig.retryMaxDelayMs),
+                        Effect.succeed(
+                          Duration.millis(
+                            Math.min(
+                              Duration.toMillis(duration as Duration.Duration),
+                              runnerConfig.retryMaxDelayMs,
+                            ),
+                          ),
                         ),
                     )
                   : null
@@ -153,12 +156,14 @@ export const InProcessRunner: Layer.Layer<
                 runnerConfig.timeoutMs === undefined
                   ? runWithRetry
                   : runWithRetry.pipe(
-                      Effect.timeoutFail({
+                      Effect.timeoutOrElse({
                         duration: Duration.millis(runnerConfig.timeoutMs),
                         onTimeout: () =>
-                          new SubagentError({
-                            message: `Subagent timed out after ${runnerConfig.timeoutMs}ms`,
-                          }),
+                          Effect.fail(
+                            new SubagentError({
+                              message: `Subagent timed out after ${runnerConfig.timeoutMs}ms`,
+                            }),
+                          ),
                       }),
                     )
 
@@ -186,8 +191,8 @@ export const InProcessRunner: Layer.Layer<
             })
 
             return run.pipe(
-              Effect.catchAllCause((cause) => {
-                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return Effect.gen(function* () {
                   const error = Cause.pretty(cause)
                   yield* eventStore
@@ -199,7 +204,7 @@ export const InProcessRunner: Layer.Layer<
                       }),
                     )
                     .pipe(
-                      Effect.catchAll((e) =>
+                      Effect.catchEager((e) =>
                         Effect.logWarning("failed to publish subagent event", e),
                       ),
                     )
@@ -214,8 +219,8 @@ export const InProcessRunner: Layer.Layer<
               }),
             )
           }),
-          Effect.catchAllCause((cause) => {
-            if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
             return Effect.succeed({
               _tag: "error" as const,
               error: Cause.pretty(cause),
@@ -301,7 +306,7 @@ export const SubprocessRunner: Layer.Layer<
                     }),
                   )
                   .pipe(
-                    Effect.catchAll((e) =>
+                    Effect.catchEager((e) =>
                       Effect.logWarning("failed to publish subagent event", e),
                     ),
                   )
@@ -339,8 +344,8 @@ export const SubprocessRunner: Layer.Layer<
             })
 
             return run.pipe(
-              Effect.catchAllCause((cause) => {
-                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return Effect.gen(function* () {
                   const error = Cause.pretty(cause)
                   yield* eventStore
@@ -352,7 +357,7 @@ export const SubprocessRunner: Layer.Layer<
                       }),
                     )
                     .pipe(
-                      Effect.catchAll((e) =>
+                      Effect.catchEager((e) =>
                         Effect.logWarning("failed to publish subagent event", e),
                       ),
                     )
@@ -367,8 +372,8 @@ export const SubprocessRunner: Layer.Layer<
               }),
             )
           }),
-          Effect.catchAllCause((cause) => {
-            if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
             return Effect.succeed({
               _tag: "error" as const,
               error: Cause.pretty(cause),

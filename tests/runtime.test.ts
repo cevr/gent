@@ -33,7 +33,7 @@ import {
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/test-utils"
-import { BunContext } from "@effect/platform-bun"
+import { BunServices } from "@effect/platform-bun"
 
 describe("Retry Logic", () => {
   test("isRetryable detects rate limits", () => {
@@ -327,7 +327,7 @@ describe("AgentLoop actor model", () => {
       EventStore.Test(),
       CheckpointService.Test(),
       ToolRunner.Test(),
-      BunContext.layer,
+      BunServices.layer,
     )
     return Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
   }
@@ -361,9 +361,9 @@ describe("AgentLoop actor model", () => {
           const messageA = makeMessage("s1", "b1", "hello")
           const messageB = makeMessage("s2", "b2", "world")
 
-          const fiberA = yield* Effect.fork(agentLoop.run(messageA))
+          const fiberA = yield* Effect.forkChild(agentLoop.run(messageA))
           yield* Effect.sleep("10 millis")
-          const fiberB = yield* Effect.fork(agentLoop.run(messageB))
+          const fiberB = yield* Effect.forkChild(agentLoop.run(messageB))
 
           const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
           expect(Option.isSome(finishedB)).toBe(true)
@@ -406,8 +406,8 @@ describe("AgentLoop actor model", () => {
           const messageA = makeMessage("s1", "b1", "alpha")
           const messageB = makeMessage("s2", "b2", "beta")
 
-          const fiberA = yield* Effect.fork(agentLoop.run(messageA))
-          const fiberB = yield* Effect.fork(agentLoop.run(messageB))
+          const fiberA = yield* Effect.forkChild(agentLoop.run(messageA))
+          const fiberB = yield* Effect.forkChild(agentLoop.run(messageB))
 
           yield* Effect.sleep("10 millis")
           yield* agentLoop.steer({ _tag: "Interrupt", sessionId: "s1", branchId: "b1" })
@@ -481,7 +481,7 @@ describe("AgentActor", () => {
           bypass: true,
         })
 
-        yield* Effect.yieldNow()
+        yield* Effect.yieldNow
 
         const calls = yield* recorder.getCalls()
         const tags = calls

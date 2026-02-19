@@ -156,7 +156,7 @@ export const refreshAnthropicOauth = async (refreshToken: string) => {
 export const createAnthropicOAuthFetch = (authStore: AuthStoreService): typeof fetch => {
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
     const current = await Effect.runPromise(
-      authStore.get("anthropic").pipe(Effect.catchAll(() => Effect.succeed(undefined))),
+      authStore.get("anthropic").pipe(Effect.catchEager(() => Effect.succeed(undefined))),
     )
     if (current === undefined || current.type !== "oauth") {
       throw new Error("Anthropic OAuth credentials missing")

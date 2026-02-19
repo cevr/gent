@@ -1,7 +1,8 @@
 import { createContext, useContext, onMount, onCleanup, createSignal } from "solid-js"
 import type { JSX } from "solid-js"
-import { Command } from "@effect/platform"
-import { Effect, Fiber, Runtime } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { Effect, Fiber, ServiceMap } from "effect"
 
 export interface GitStatus {
   branch: string
@@ -29,7 +30,7 @@ export function useWorkspace(): WorkspaceContextValue {
 interface WorkspaceProviderProps {
   cwd: string
   children: JSX.Element
-  runtime?: Runtime.Runtime<unknown>
+  services?: ServiceMap.ServiceMap<unknown>
 }
 
 interface GitInfo {
@@ -38,26 +39,26 @@ interface GitInfo {
 }
 
 const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
-  Command.make("git", ...args).pipe(
-    Command.workingDirectory(cwd),
-    Command.string,
-    Effect.map((text) => text.trim()),
+  ChildProcess.make("git", [...args]).pipe(
+    ChildProcess.setCwd(cwd),
+    ChildProcess.string,
+    Effect.map((text: string) => text.trim()),
   )
 
-const getGitInfo = (cwd: string) =>
+const getGitInfo = (cwd: string): Effect.Effect<GitInfo | null, never, ChildProcessSpawner> =>
   Effect.gen(function* () {
     const root = yield* gitCommand(cwd, ["rev-parse", "--show-toplevel"]).pipe(
-      Effect.catchAll(() => Effect.succeed("")),
+      Effect.catchEager(() => Effect.succeed("")),
     )
     if (root.length === 0) return null
 
     const branch = yield* gitCommand(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
-      Effect.catchAll(() => Effect.succeed("")),
+      Effect.catchEager(() => Effect.succeed("")),
     )
     if (branch.length === 0) return null
 
     const diffText = yield* gitCommand(cwd, ["diff", "--stat", "HEAD"]).pipe(
-      Effect.catchAll(() => Effect.succeed("")),
+      Effect.catchEager(() => Effect.succeed("")),
     )
 
     let files = 0
@@ -96,14 +97,15 @@ function deriveProjectName(cwd: string, gitRoot: string | null): string {
 
 export function WorkspaceProvider(props: WorkspaceProviderProps) {
   const [gitInfo, setGitInfo] = createSignal<GitInfo | null>(null)
-  const runtime = props.runtime ?? (Runtime.defaultRuntime as Runtime.Runtime<unknown>)
-  let currentFiber: Fiber.RuntimeFiber<GitInfo | null, never> | null = null
+  const services = props.services ?? ServiceMap.empty()
+  let currentFiber: Fiber.Fiber<GitInfo | null, never> | null = null
 
   const refreshGitInfo = () => {
     if (currentFiber !== null) {
-      Runtime.runFork(runtime)(Fiber.interruptFork(currentFiber))
+      Effect.runFork(Fiber.interrupt(currentFiber))
     }
-    currentFiber = Runtime.runFork(runtime)(
+    const gitServices = services as ServiceMap.ServiceMap<ChildProcessSpawner>
+    currentFiber = Effect.runForkWith(gitServices)(
       getGitInfo(props.cwd).pipe(
         Effect.tap((info) =>
           Effect.sync(() => {
@@ -154,7 +156,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
 
     onCleanup(() => {
       if (currentFiber !== null) {
-        Runtime.runFork(runtime)(Fiber.interruptFork(currentFiber))
+        Effect.runFork(Fiber.interrupt(currentFiber))
       }
       if (debounceTimer !== null) clearTimeout(debounceTimer)
       for (const w of fsWatchers) w.close()

@@ -1,11 +1,10 @@
-import { Effect, Option, Schema, Stream } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Effect, Option, Schema, Stream, FileSystem, Path } from "effect"
 import { defineTool } from "@gent/core"
 import { Glob } from "bun"
 
 // Grep Tool Error
 
-export class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
+export class GrepError extends Schema.TaggedErrorClass<GrepError>()("GrepError", {
   message: Schema.String,
   pattern: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -14,31 +13,31 @@ export class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
 // Grep Tool Params
 
 export const GrepParams = Schema.Struct({
-  pattern: Schema.String.annotations({
+  pattern: Schema.String.annotate({
     description: "Regex pattern to search for",
   }),
   path: Schema.optional(
-    Schema.String.annotations({
+    Schema.String.annotate({
       description: "File or directory to search (default: cwd)",
     }),
   ),
   glob: Schema.optional(
-    Schema.String.annotations({
+    Schema.String.annotate({
       description: "Glob pattern to filter files (e.g., *.ts)",
     }),
   ),
   caseSensitive: Schema.optional(
-    Schema.Boolean.annotations({
+    Schema.Boolean.annotate({
       description: "Case sensitive search (default: true)",
     }),
   ),
   context: Schema.optional(
-    Schema.Number.annotations({
+    Schema.Number.annotate({
       description: "Lines of context around matches",
     }),
   ),
   limit: Schema.optional(
-    Schema.Number.annotations({
+    Schema.Number.annotate({
       description: "Maximum number of matches (default: 100)",
     }),
   ),

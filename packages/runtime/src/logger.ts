@@ -8,8 +8,9 @@
  * Uses Effect.withLogSpan for timing data.
  */
 
-import { Cause, HashMap, List, Logger, LogLevel } from "effect"
-import type { Layer } from "effect"
+import { Cause, Effect, Layer, Logger, ServiceMap } from "effect"
+import type { LogLevel } from "effect/LogLevel"
+import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
 import { appendFileSync, writeFileSync } from "node:fs"
 
 // =============================================================================
@@ -24,15 +25,15 @@ const formatTime = (date: Date): string => {
   return `${h}:${m}:${s}.${ms}`
 }
 
-const levelLabel = (level: LogLevel.LogLevel): string => {
-  switch (level._tag) {
+const levelLabel = (level: LogLevel): string => {
+  switch (level) {
     case "Trace":
       return "TRACE"
     case "Debug":
       return "DEBUG"
     case "Info":
       return "INFO "
-    case "Warning":
+    case "Warn":
       return "WARN "
     case "Error":
       return "ERROR"
@@ -43,15 +44,15 @@ const levelLabel = (level: LogLevel.LogLevel): string => {
   }
 }
 
-const levelColor = (level: LogLevel.LogLevel): string => {
-  switch (level._tag) {
+const levelColor = (level: LogLevel): string => {
+  switch (level) {
     case "Trace":
       return "\x1b[90m" // gray
     case "Debug":
       return "\x1b[34m" // blue
     case "Info":
       return "\x1b[32m" // green
-    case "Warning":
+    case "Warn":
       return "\x1b[33m" // yellow
     case "Error":
       return "\x1b[31m" // red
@@ -75,26 +76,22 @@ const extractMessage = (message: unknown): string => {
 }
 
 const collectAnnotations = (
-  annotations: HashMap.HashMap<string, unknown>,
+  annotations: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> => {
   const result: Record<string, unknown> = {}
-  if (HashMap.size(annotations) > 0) {
-    for (const [k, v] of annotations) {
-      result[k] = v
-    }
+  for (const [k, v] of Object.entries(annotations)) {
+    result[k] = v
   }
   return result
 }
 
 const collectSpans = (
-  spans: List.List<{ label: string; startTime: number }>,
+  spans: ReadonlyArray<[label: string, timestamp: number]>,
   now: number,
 ): Record<string, number> => {
   const result: Record<string, number> = {}
-  if (List.isCons(spans)) {
-    for (const span of spans) {
-      result[span.label] = now - span.startTime
-    }
+  for (const [label, startTime] of spans) {
+    result[label] = now - startTime
   }
   return result
 }
@@ -104,8 +101,10 @@ const collectSpans = (
 // =============================================================================
 
 const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
-  ({ logLevel, message, annotations, spans, date, cause }) => {
+  ({ logLevel, message, fiber, date, cause }) => {
     const msg = extractMessage(message)
+    const annotations = fiber.getRef(CurrentLogAnnotations)
+    const spans = fiber.getRef(CurrentLogSpans)
     const annots = collectAnnotations(annotations)
     const entries = Object.entries(annots)
     const color = levelColor(logLevel)
@@ -115,7 +114,7 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
     let output = `${DIM}[${formatTime(date)}]${RESET} ${color}${label}${RESET}  ${BOLD}${msg}${RESET}`
 
     // Cause
-    if (!Cause.isEmpty(cause)) {
+    if (cause.reasons.length > 0) {
       output += `\n  ${"\x1b[31m"}${Cause.pretty(cause).split("\n")[0] ?? "unknown error"}${RESET}`
     }
 
@@ -123,7 +122,7 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
     if (entries.length > 0) {
       for (const [i, [key, value]] of entries.entries()) {
         const isLast = i === entries.length - 1
-        const prefix = isLast ? "└─" : "├─"
+        const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500"
         const formatted = typeof value === "string" ? value : JSON.stringify(value)
         output += `\n  ${DIM}${prefix}${RESET} ${key}: ${formatted}`
       }
@@ -135,7 +134,7 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
     if (spanEntries.length > 0 && entries.length === 0) {
       for (const [i, [key, ms]] of spanEntries.entries()) {
         const isLast = i === spanEntries.length - 1
-        const prefix = isLast ? "└─" : "├─"
+        const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500"
         output += `\n  ${DIM}${prefix}${RESET} ${key}: ${ms}ms`
       }
     }
@@ -149,15 +148,17 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
 // =============================================================================
 
 const makeJsonFileLogger = (path: string): Logger.Logger<unknown, void> =>
-  Logger.make(({ logLevel, message, annotations, spans, date, cause }) => {
+  Logger.make(({ logLevel, message, fiber, date, cause }) => {
     const msg = extractMessage(message)
+    const annotations = fiber.getRef(CurrentLogAnnotations)
+    const spans = fiber.getRef(CurrentLogSpans)
     const annots = collectAnnotations(annotations)
     const now = date.getTime()
     const spanEntries = collectSpans(spans, now)
 
     const entry: Record<string, unknown> = {
       ts: date.toISOString(),
-      level: logLevel.label,
+      level: logLevel,
       msg,
       ...annots,
     }
@@ -166,7 +167,7 @@ const makeJsonFileLogger = (path: string): Logger.Logger<unknown, void> =>
       entry["spans"] = spanEntries
     }
 
-    if (!Cause.isEmpty(cause)) {
+    if (cause.reasons.length > 0) {
       entry["cause"] = Cause.pretty(cause).split("\n")[0] ?? "unknown error"
     }
 
@@ -210,46 +211,45 @@ export const GentLogger: Layer.Layer<never> = (() => {
   const logFile = getLogFile()
 
   if (format === "pretty") {
-    return Logger.replace(Logger.defaultLogger, prettyLogger)
+    return Logger.layer([prettyLogger])
   }
 
   if (format === "json") {
     clearLogFile(logFile)
-    return Logger.replace(Logger.defaultLogger, makeJsonFileLogger(logFile))
+    return Logger.layer([makeJsonFileLogger(logFile)])
   }
 
   // both
   clearLogFile(logFile)
-  const combined = Logger.zip(prettyLogger, makeJsonFileLogger(logFile))
-  return Logger.replace(Logger.defaultLogger, combined)
+  return Logger.layer([prettyLogger, makeJsonFileLogger(logFile)])
 })()
 
 /** JSON-only logger layer (for headless/prod). */
 export const GentLoggerJson: Layer.Layer<never> = (() => {
   const logFile = getLogFile()
   clearLogFile(logFile)
-  return Logger.replace(Logger.defaultLogger, makeJsonFileLogger(logFile))
+  return Logger.layer([makeJsonFileLogger(logFile)])
 })()
 
 /** Pretty-only logger layer (for testing/debugging). */
-export const GentLoggerPretty: Layer.Layer<never> = Logger.replace(
-  Logger.defaultLogger,
-  prettyLogger,
-)
+export const GentLoggerPretty: Layer.Layer<never> = Logger.layer([prettyLogger])
 
 /** Minimum log level — filters out Trace/Debug in non-dev. */
 export const GentLogLevel: Layer.Layer<never> = (() => {
   const env = Bun.env["GENT_LOG_LEVEL"]
-  switch (env) {
-    case "trace":
-      return Logger.minimumLogLevel(LogLevel.Trace)
-    case "debug":
-      return Logger.minimumLogLevel(LogLevel.Debug)
-    case "warning":
-      return Logger.minimumLogLevel(LogLevel.Warning)
-    case "error":
-      return Logger.minimumLogLevel(LogLevel.Error)
-    default:
-      return Logger.minimumLogLevel(LogLevel.Info)
-  }
+  const level: LogLevel = (() => {
+    switch (env) {
+      case "trace":
+        return "Trace"
+      case "debug":
+        return "Debug"
+      case "warning":
+        return "Warn"
+      case "error":
+        return "Error"
+      default:
+        return "Info"
+    }
+  })()
+  return Layer.effectServices(Effect.succeed(ServiceMap.make(MinimumLogLevel, level)))
 })()

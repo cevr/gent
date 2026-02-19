@@ -1,13 +1,12 @@
-import { Cause, Context, Effect, Layer, Schema, Stream } from "effect"
+import { Cause, ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import { identity } from "effect/Function"
-import type { PlatformError } from "@effect/platform/Error"
 import {
   Session,
   Branch,
   Message,
   TextPart,
+  type EventId,
   type EventEnvelope,
-  EventId,
   EventStore,
   type EventStoreError,
   ErrorOccurred,
@@ -25,10 +24,15 @@ import {
   type MessageId,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
-import type { ProviderError, ProviderAuthError } from "@gent/providers"
-import { Provider } from "@gent/providers"
+import {
+  Provider,
+  type ProviderError,
+  type ProviderAuthError,
+  type ProviderService,
+} from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
 import type { CheckpointError } from "@gent/runtime"
+import type { PlatformErrorSchema } from "./errors"
 import { NotFoundError } from "./errors"
 
 // Re-export for consumers
@@ -140,7 +144,7 @@ export interface MessageInfo {
 export type GentCoreError =
   | StorageError
   | AgentLoopError
-  | PlatformError
+  | PlatformErrorSchema
   | ProviderError
   | ProviderAuthError
   | EventStoreError
@@ -226,7 +230,7 @@ const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
 
 // Generate session name from first message (fire-and-forget)
 const generateSessionName = Effect.fn("generateSessionName")(function* (
-  provider: Provider["Type"],
+  provider: ProviderService,
   firstMessage: string,
 ) {
   const prompt = `Generate a 2-4 word title for a chat starting with: "${firstMessage.slice(0, 200)}". Reply with just the title, no quotes or punctuation.`
@@ -236,14 +240,13 @@ const generateSessionName = Effect.fn("generateSessionName")(function* (
       prompt,
       maxTokens: 20,
     })
-    .pipe(Effect.catchAll(() => Effect.succeed("")))
+    .pipe(Effect.catchEager(() => Effect.succeed("")))
   return result.trim() || "New Chat"
 })
 
-export class GentCore extends Context.Tag("@gent/server/src/core/GentCore")<
-  GentCore,
-  GentCoreService
->() {
+export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
+  "@gent/server/src/core/GentCore",
+) {
   static Live: Layer.Layer<
     GentCore,
     never,
@@ -347,7 +350,7 @@ ${conversation}`
               )
 
               // Fork name generation (non-blocking)
-              yield* Effect.forkDaemon(
+              yield* Effect.forkDetach(
                 Effect.gen(function* () {
                   const generatedName = yield* generateSessionName(provider, firstMessage)
                   // Update session with generated name
@@ -362,7 +365,7 @@ ${conversation}`
                     new SessionNameUpdated({ sessionId, name: generatedName }),
                   )
                 }).pipe(
-                  Effect.catchAll((e) => Effect.logWarning("session name generation failed", e)),
+                  Effect.catchEager((e) => Effect.logWarning("session name generation failed", e)),
                   parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
                 ),
               )
@@ -376,11 +379,11 @@ ${conversation}`
                 parts: [new TextPart({ type: "text", text: firstMessage })],
                 createdAt: now,
               })
-              yield* Effect.forkDaemon(
+              yield* Effect.forkDetach(
                 agentLoop.run(message, { bypass }).pipe(
                   Effect.withSpan("AgentLoop.firstMessage"),
-                  Effect.catchAllCause((cause) => {
-                    if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+                  Effect.catchCause((cause) => {
+                    if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                     return eventStore
                       .publish(
                         new ErrorOccurred({
@@ -390,7 +393,7 @@ ${conversation}`
                         }),
                       )
                       .pipe(
-                        Effect.catchAll((e) =>
+                        Effect.catchEager((e) =>
                           Effect.logWarning("failed to publish ErrorOccurred event", e),
                         ),
                       )
@@ -548,7 +551,7 @@ ${conversation}`
             const shouldSummarize = input.summarize !== false
             if (shouldSummarize && input.fromBranchId !== input.toBranchId) {
               const summary = yield* summarizeBranch(input.fromBranchId).pipe(
-                Effect.catchAll(() => Effect.succeed("")),
+                Effect.catchEager(() => Effect.succeed("")),
               )
               if (summary !== "") {
                 yield* storage.updateBranchSummary(input.fromBranchId, summary)
@@ -641,7 +644,7 @@ ${conversation}`
             Effect.orElseSucceed(() => undefined),
           )
 
-          yield* Effect.forkDaemon(
+          yield* Effect.forkDetach(
             Effect.gen(function* () {
               if (session === undefined || session.name !== "New Chat") return
               const generatedName = yield* generateSessionName(provider, input.content)
@@ -655,7 +658,7 @@ ${conversation}`
                 new SessionNameUpdated({ sessionId: input.sessionId, name: generatedName }),
               )
             }).pipe(
-              Effect.catchAll((e) => Effect.logWarning("session name generation failed", e)),
+              Effect.catchEager((e) => Effect.logWarning("session name generation failed", e)),
               parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
             ),
           )
@@ -671,11 +674,11 @@ ${conversation}`
           })
 
           // Run agent loop in background - don't wait for completion
-          yield* Effect.forkDaemon(
+          yield* Effect.forkDetach(
             agentLoop.run(message, { bypass }).pipe(
               Effect.withSpan("AgentLoop.background"),
-              Effect.catchAllCause((cause) => {
-                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return eventStore
                   .publish(
                     new ErrorOccurred({
@@ -685,7 +688,7 @@ ${conversation}`
                     }),
                   )
                   .pipe(
-                    Effect.catchAll((e) =>
+                    Effect.catchEager((e) =>
                       Effect.logWarning("failed to publish ErrorOccurred event", e),
                     ),
                   )
@@ -839,7 +842,7 @@ ${conversation}`
           eventStore.subscribe({
             sessionId: input.sessionId,
             ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
-            ...(input.after !== undefined ? { after: EventId.make(input.after) } : {}),
+            ...(input.after !== undefined ? { after: input.after as EventId } : {}),
           }),
       }
 

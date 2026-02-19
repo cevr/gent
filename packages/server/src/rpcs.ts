@@ -1,4 +1,4 @@
-import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "@effect/rpc"
+import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "effect/unstable/rpc"
 import { Schema } from "effect"
 import {
   AgentName,
@@ -102,7 +102,7 @@ interface BranchTreeNodeEncoded {
   children: readonly BranchTreeNodeEncoded[]
 }
 
-export const BranchTreeNodeSchema: Schema.Schema<BranchTreeNode, BranchTreeNodeEncoded> =
+export const BranchTreeNodeSchema: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> =
   Schema.Struct({
     id: BranchId,
     name: Schema.optional(Schema.String),
@@ -149,8 +149,8 @@ export const MessageInfo = Schema.Struct({
   id: MessageId,
   sessionId: SessionId,
   branchId: BranchId,
-  kind: Schema.optional(Schema.Literal("regular", "interjection")),
-  role: Schema.Literal("user", "assistant", "system", "tool"),
+  kind: Schema.optional(Schema.Literals(["regular", "interjection"])),
+  role: Schema.Literals(["user", "assistant", "system", "tool"]),
   parts: Schema.Array(MessagePart),
   createdAt: Schema.Number,
   turnDurationMs: Schema.optional(Schema.Number),
@@ -184,12 +184,12 @@ const SteerTargetFields = {
   branchId: BranchId,
 }
 
-export const SteerPayload = Schema.Union(
+export const SteerPayload = Schema.Union([
   Schema.TaggedStruct("Cancel", SteerTargetFields),
   Schema.TaggedStruct("Interrupt", SteerTargetFields),
   Schema.TaggedStruct("Interject", { ...SteerTargetFields, message: Schema.String }),
   Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
-)
+])
 export type SteerPayload = typeof SteerPayload.Type
 
 // ============================================================================
@@ -263,10 +263,7 @@ export const DeleteAuthKeyPayload = Schema.Struct({
   provider: Schema.String,
 })
 
-export const ListAuthMethodsSuccess = Schema.Record({
-  key: Schema.String,
-  value: Schema.Array(AuthMethod),
-})
+export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
 export const AuthorizeAuthPayload = Schema.Struct({
   sessionId: Schema.String,

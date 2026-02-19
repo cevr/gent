@@ -144,7 +144,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           const models = yield* modelRegistry.list()
           const authInfo = yield* authStore
             .get("openai")
-            .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
           if (authInfo?.type !== "oauth") return models
 
           return models
@@ -172,12 +172,12 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       setAuthKey: ({ provider, key }) =>
         authStore
           .set(provider, new AuthApi({ type: "api", key }))
-          .pipe(Effect.catchAll((e) => Effect.logWarning("failed to set auth key", e))),
+          .pipe(Effect.catchEager((e) => Effect.logWarning("failed to set auth key", e))),
 
       deleteAuthKey: ({ provider }) =>
         authStore
           .remove(provider)
-          .pipe(Effect.catchAll((e) => Effect.logWarning("failed to delete auth key", e))),
+          .pipe(Effect.catchEager((e) => Effect.logWarning("failed to delete auth key", e))),
 
       listAuthMethods: () => providerAuth.listMethods(),
 

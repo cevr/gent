@@ -3,7 +3,7 @@ import { defineTool } from "@gent/core"
 
 // Bash Tool Error
 
-export class BashError extends Schema.TaggedError<BashError>()("BashError", {
+export class BashError extends Schema.TaggedErrorClass<BashError>()("BashError", {
   message: Schema.String,
   command: Schema.String,
   exitCode: Schema.optional(Schema.Number),
@@ -13,16 +13,16 @@ export class BashError extends Schema.TaggedError<BashError>()("BashError", {
 // Bash Tool Params
 
 export const BashParams = Schema.Struct({
-  command: Schema.String.annotations({
+  command: Schema.String.annotate({
     description: "Shell command to execute",
   }),
   timeout: Schema.optional(
-    Schema.Number.annotations({
+    Schema.Number.annotate({
       description: "Timeout in milliseconds (default: 120000, max: 600000)",
     }),
   ),
   cwd: Schema.optional(
-    Schema.String.annotations({
+    Schema.String.annotate({
       description: "Working directory for command execution",
     }),
   ),

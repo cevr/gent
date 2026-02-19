@@ -1,8 +1,8 @@
 /**
- * Effect runtime hook for Solid
+ * Effect services hook for Solid
  * Provides call (tracked) and cast (fire-and-forget) for Effect execution
  */
-import { Effect, Runtime, Exit, Fiber, Cause } from "effect"
+import { Effect, Exit, Fiber, Cause, type ServiceMap } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "@gent/atom-solid"
 import { tuiError } from "../utils/unified-tracer"
@@ -15,15 +15,15 @@ export interface UseRuntimeReturn<R> {
 }
 
 /**
- * Hook to run Effects with a runtime
- * @param runtime - Effect runtime with required services
+ * Hook to run Effects with a service map
+ * @param services - ServiceMap with required services
  */
-export function useRuntime<R>(runtime: Runtime.Runtime<R>): UseRuntimeReturn<R> {
+export function useRuntime<R>(services: ServiceMap.ServiceMap<R>): UseRuntimeReturn<R> {
   const call = <A, E>(effect: Effect.Effect<A, E, R>): [Accessor<Result<A, E>>, () => void] => {
     const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))
 
     let cancelled = false
-    const fiber = Runtime.runFork(runtime)(effect)
+    const fiber = Effect.runForkWith(services)(effect)
 
     fiber.addObserver((exit) => {
       if (cancelled) return
@@ -36,7 +36,7 @@ export function useRuntime<R>(runtime: Runtime.Runtime<R>): UseRuntimeReturn<R> 
 
     const cancel = () => {
       cancelled = true
-      Effect.runFork(Fiber.interruptFork(fiber))
+      Effect.runFork(Fiber.interrupt(fiber))
     }
 
     onCleanup(cancel)
@@ -45,7 +45,7 @@ export function useRuntime<R>(runtime: Runtime.Runtime<R>): UseRuntimeReturn<R> 
   }
 
   const cast = <A, E>(effect: Effect.Effect<A, E, R>): void => {
-    const fiber = Runtime.runFork(runtime)(effect)
+    const fiber = Effect.runForkWith(services)(effect)
     fiber.addObserver((exit) => {
       if (Exit.isFailure(exit)) {
         tuiError("cast", Cause.pretty(exit.cause))

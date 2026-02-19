@@ -6,7 +6,7 @@
  * are in the same process.
  */
 
-import { Effect, type Stream, type Runtime } from "effect"
+import { Effect, type Stream, type ServiceMap } from "effect"
 import { GentCore, type GentCoreError } from "@gent/server"
 import { AskUserHandler } from "@gent/tools"
 import {
@@ -209,7 +209,7 @@ export interface DirectClient {
     code?: string,
   ) => Effect.Effect<void, GentCoreError>
 
-  runtime: Runtime.Runtime<unknown>
+  services: ServiceMap.ServiceMap<unknown>
 }
 
 /**
@@ -243,7 +243,7 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
     const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
-    const runtime = yield* Effect.runtime<never>()
+    const services = yield* Effect.services<never>()
 
     return {
       createSession: (input) =>
@@ -345,12 +345,12 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       setAuthKey: (provider, key) =>
         authStore
           .set(provider, new AuthApi({ type: "api", key }))
-          .pipe(Effect.catchAll((e) => Effect.logWarning("setAuthKey failed", e))),
+          .pipe(Effect.catchEager((e) => Effect.logWarning("setAuthKey failed", e))),
 
       deleteAuthKey: (provider) =>
         authStore
           .remove(provider)
-          .pipe(Effect.catchAll((e) => Effect.logWarning("deleteAuthKey failed", e))),
+          .pipe(Effect.catchEager((e) => Effect.logWarning("deleteAuthKey failed", e))),
 
       listAuthMethods: () => providerAuth.listMethods(),
 
@@ -362,7 +362,7 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       callbackAuth: (sessionId, provider, method, authorizationId, code) =>
         providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
 
-      runtime: runtime as Runtime.Runtime<unknown>,
+      services: services as ServiceMap.ServiceMap<unknown>,
     }
   },
 )

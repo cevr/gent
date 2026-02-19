@@ -4,16 +4,16 @@ import { ProviderError } from "@gent/providers"
 // Retry Config Schema
 
 export const RetryConfig = Schema.Struct({
-  initialDelay: Schema.Number.pipe(Schema.int(), Schema.positive()).annotations({
+  initialDelay: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Initial delay in milliseconds",
   }),
-  maxDelay: Schema.Number.pipe(Schema.int(), Schema.positive()).annotations({
+  maxDelay: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Maximum delay in milliseconds",
   }),
-  backoffFactor: Schema.Number.pipe(Schema.positive()).annotations({
+  backoffFactor: Schema.Number.check(Schema.isGreaterThan(0)).annotate({
     description: "Multiplier for exponential backoff",
   }),
-  maxAttempts: Schema.Number.pipe(Schema.int(), Schema.positive()).annotations({
+  maxAttempts: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Maximum retry attempts",
   }),
 })
@@ -104,20 +104,19 @@ export const getRetryDelay = (
   // Check retry-after header first
   const retryAfter = getRetryAfter(error)
   if (retryAfter !== undefined) {
-    return Math.min(retryAfter, config.maxDelay)
+    return Math.min(retryAfter, config["maxDelay"])
   }
 
   // Exponential backoff
-  const delay = config.initialDelay * Math.pow(config.backoffFactor, attempt)
-  return Math.min(delay, config.maxDelay)
+  const delay = config["initialDelay"] * Math.pow(config["backoffFactor"], attempt)
+  return Math.min(delay, config["maxDelay"])
 }
 
 // Create retry schedule for Effect
 
 export const makeRetrySchedule = (config: RetryConfig = DEFAULT_RETRY_CONFIG) =>
-  Schedule.exponential(Duration.millis(config.initialDelay), config.backoffFactor).pipe(
-    Schedule.whileInput<ProviderError>(isRetryable),
-    Schedule.intersect(Schedule.recurs(config.maxAttempts - 1)),
+  Schedule.exponential(Duration.millis(config["initialDelay"]), config["backoffFactor"]).pipe(
+    Schedule.both(Schedule.recurs(config["maxAttempts"] - 1)),
   )
 
 // Retry wrapper for provider calls
@@ -126,4 +125,10 @@ export const withRetry = <A, R>(
   effect: Effect.Effect<A, ProviderError, R>,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
 ): Effect.Effect<A, ProviderError, R> =>
-  effect.pipe(Effect.retry(makeRetrySchedule(config)), Effect.withSpan("withRetry"))
+  effect.pipe(
+    Effect.retry({
+      schedule: makeRetrySchedule(config),
+      while: isRetryable,
+    }),
+    Effect.withSpan("withRetry"),
+  )

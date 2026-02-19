@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
+import { ServiceMap, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
 import { BranchId, MessageId, SessionId } from "./ids"
 
@@ -17,7 +17,7 @@ export class MessageReceived extends Schema.TaggedClass<MessageReceived>()("Mess
   sessionId: SessionId,
   branchId: BranchId,
   messageId: MessageId,
-  role: Schema.Literal("user", "assistant", "system", "tool"),
+  role: Schema.Literals(["user", "assistant", "system", "tool"]),
 }) {}
 
 export class StreamStarted extends Schema.TaggedClass<StreamStarted>()("StreamStarted", {
@@ -129,7 +129,7 @@ export class PlanRejected extends Schema.TaggedClass<PlanRejected>()("PlanReject
   reason: Schema.optional(Schema.String),
 }) {}
 
-export const PlanDecision = Schema.Literal("confirm", "reject")
+export const PlanDecision = Schema.Literals(["confirm", "reject"])
 export type PlanDecision = typeof PlanDecision.Type
 
 export class CompactionStarted extends Schema.TaggedClass<CompactionStarted>()(
@@ -155,14 +155,14 @@ export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOcc
   error: Schema.String,
 }) {}
 
-export const MachineInspectionType = Schema.Literal(
+export const MachineInspectionType = Schema.Literals([
   "@machine.spawn",
   "@machine.event",
   "@machine.transition",
   "@machine.effect",
   "@machine.error",
   "@machine.stop",
-)
+])
 export type MachineInspectionType = typeof MachineInspectionType.Type
 
 export class MachineInspected extends Schema.TaggedClass<MachineInspected>()("MachineInspected", {
@@ -298,7 +298,7 @@ export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("Subage
   agentName: Schema.String,
 }) {}
 
-export const AgentEvent = Schema.Union(
+export const AgentEvent = Schema.Union([
   SessionStarted,
   SessionEnded,
   MessageReceived,
@@ -332,7 +332,7 @@ export const AgentEvent = Schema.Union(
   SubagentCompleted,
   SubagentSucceeded,
   SubagentFailed,
-)
+])
 export type AgentEvent = typeof AgentEvent.Type
 
 export const EventId = Schema.Number.pipe(Schema.brand("EventId"))
@@ -345,7 +345,7 @@ export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")(
   traceId: Schema.optional(Schema.String),
 }) {}
 
-export class EventStoreError extends Schema.TaggedError<EventStoreError>()("EventStoreError", {
+export class EventStoreError extends Schema.TaggedErrorClass<EventStoreError>()("EventStoreError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
 }) {}
@@ -380,11 +380,10 @@ export const matchesEventFilter = (
 
 // EventStore Service
 
-export class EventStore extends Context.Tag("@gent/core/src/event/EventStore")<
-  EventStore,
-  EventStoreService
->() {
-  static Live: Layer.Layer<EventStore> = Layer.scoped(
+export class EventStore extends ServiceMap.Service<EventStore, EventStoreService>()(
+  "@gent/core/src/event/EventStore",
+) {
+  static Live: Layer.Layer<EventStore> = Layer.effect(
     EventStore,
     Effect.gen(function* () {
       const pubsub = yield* PubSub.unbounded<EventEnvelope>()
@@ -408,7 +407,7 @@ export class EventStore extends Context.Tag("@gent/core/src/event/EventStore")<
         }),
 
         subscribe: ({ sessionId, branchId, after }) =>
-          Stream.unwrapScoped(
+          Stream.unwrap(
             Effect.gen(function* () {
               const queue = yield* PubSub.subscribe(pubsub)
               const afterId = after ?? (0 as EventId)
@@ -419,7 +418,7 @@ export class EventStore extends Context.Tag("@gent/core/src/event/EventStore")<
                   env.id <= latestId &&
                   matchesEventFilter(env, sessionId, branchId),
               )
-              const live = Stream.fromQueue(queue).pipe(
+              const live = Stream.fromSubscription(queue).pipe(
                 Stream.filter(
                   (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
                 ),

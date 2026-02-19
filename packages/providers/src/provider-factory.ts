@@ -1,4 +1,4 @@
-import { Config, Context, Effect, Layer, Option, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import type { LanguageModel } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
@@ -45,9 +45,9 @@ const testAuthStorage: AuthStoreService = {
 }
 
 // Service tag
-export class ProviderFactory extends Context.Tag(
+export class ProviderFactory extends ServiceMap.Service<ProviderFactory, ProviderFactoryService>()(
   "@gent/providers/src/provider-factory/ProviderFactory",
-)<ProviderFactory, ProviderFactoryService>() {
+) {
   static Live: Layer.Layer<ProviderFactory, never, AuthStore> = Layer.effect(
     ProviderFactory,
     Effect.gen(function* () {
@@ -67,7 +67,7 @@ const resolveAuth = (
   providerName: string,
   auth: AuthStoreService,
 ): Effect.Effect<AuthInfo | undefined> =>
-  auth.get(providerName).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+  auth.get(providerName).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
 
 type ProviderClient = (modelName: string) => LanguageModel
 
@@ -191,15 +191,8 @@ function makeProviderFactory(auth: AuthStoreService): ProviderFactoryService {
           })
         }
       }
-      const region =
-        api === "bedrock"
-          ? Option.getOrElse(
-              yield* Config.option(Config.string("AWS_REGION")).pipe(
-                Effect.catchAll(() => Effect.succeed(Option.none())),
-              ),
-              () => "us-east-1",
-            )
-          : undefined
+      // eslint-disable-next-line no-process-env
+      const region = api === "bedrock" ? (process.env["AWS_REGION"] ?? "us-east-1") : undefined
       const client = createProviderClient(api, auth, authInfo, apiKey, undefined, region)
       if (client === undefined) {
         return yield* new ProviderError({

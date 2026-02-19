@@ -42,7 +42,7 @@ const runCommandEffect = (
 ): Effect.Effect<SlashCommandResult, UiError> =>
   effect.pipe(
     Effect.as({ handled: true } satisfies SlashCommandResult),
-    Effect.catchAll((error) =>
+    Effect.catchEager((error) =>
       Effect.succeed({
         handled: true,
         error: formatError(error),

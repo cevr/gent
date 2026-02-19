@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer } from "effect"
+import { ServiceMap, Deferred, Effect, Layer } from "effect"
 import {
   EventStore,
   PermissionRequested,
@@ -32,9 +32,10 @@ export interface PermissionHandlerService {
   >
 }
 
-export class PermissionHandler extends Context.Tag(
-  "@gent/core/src/interaction-handlers/PermissionHandler",
-)<PermissionHandler, PermissionHandlerService>() {
+export class PermissionHandler extends ServiceMap.Service<
+  PermissionHandler,
+  PermissionHandlerService
+>()("@gent/core/src/interaction-handlers/PermissionHandler") {
   static Live: Layer.Layer<PermissionHandler, never, EventStore> = Layer.effect(
     PermissionHandler,
     Effect.gen(function* () {
@@ -130,10 +131,9 @@ export interface PlanHandlerService {
   >
 }
 
-export class PlanHandler extends Context.Tag("@gent/core/src/interaction-handlers/PlanHandler")<
-  PlanHandler,
-  PlanHandlerService
->() {
+export class PlanHandler extends ServiceMap.Service<PlanHandler, PlanHandlerService>()(
+  "@gent/core/src/interaction-handlers/PlanHandler",
+) {
   static Live: Layer.Layer<PlanHandler, never, EventStore> = Layer.effect(
     PlanHandler,
     Effect.gen(function* () {

@@ -5,7 +5,7 @@
  * send real keystrokes and test the full TUI flow.
  */
 import { describe, test, expect, afterEach } from "bun:test"
-import { BunContext, BunFileSystem } from "@effect/platform-bun"
+import { BunServices, BunFileSystem } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import { spawn, type IPty } from "bun-pty"
 import * as path from "node:path"
@@ -39,7 +39,7 @@ const seedAuth = async (tempDir: string): Promise<void> => {
   const layer = AuthStore.Live.pipe(
     Layer.provide(AuthStorage.LiveEncryptedFile(authFilePath, authKeyPath)),
     Layer.provide(BunFileSystem.layer),
-    Layer.provide(BunContext.layer),
+    Layer.provide(BunServices.layer),
   )
 
   await Effect.runPromise(

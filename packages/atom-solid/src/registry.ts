@@ -1,10 +1,11 @@
 import { createRoot, getOwner, runWithOwner } from "solid-js"
 import type { Accessor, Owner } from "solid-js"
-import * as Runtime from "effect/Runtime"
+import * as ServiceMap from "effect/ServiceMap"
 import type { Atom, AtomInstance, Writable, WritableInstance } from "./atom"
 
 export interface Registry {
-  readonly runtime: Runtime.Runtime<unknown>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly services: ServiceMap.ServiceMap<any>
   readonly read: <A>(atom: Atom<A>) => Accessor<A>
   readonly get: <A>(atom: Atom<A>) => A
   readonly set: <R, W>(atom: Writable<R, W>, value: W | ((value: R) => W)) => void
@@ -14,18 +15,21 @@ export interface Registry {
 }
 
 export interface RegistryOptions {
-  readonly runtime?: Runtime.Runtime<unknown>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly services?: ServiceMap.ServiceMap<any>
   readonly maxEntries?: number
 }
 
 export const make = (options?: RegistryOptions): Registry =>
   new RegistryImpl(
-    options?.runtime ?? (Runtime.defaultRuntime as Runtime.Runtime<unknown>),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    options?.services ?? (ServiceMap.empty() as ServiceMap.ServiceMap<any>),
     options?.maxEntries,
   )
 
 class RegistryImpl implements Registry {
-  readonly runtime: Runtime.Runtime<unknown>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly services: ServiceMap.ServiceMap<any>
   private readonly instances = new Map<Atom<unknown>, AtomInstance<unknown>>()
   private readonly refCounts = new Map<Atom<unknown>, number>()
   private readonly maxEntries: number | undefined
@@ -33,8 +37,9 @@ class RegistryImpl implements Registry {
   private readonly owner: Owner
   private readonly disposeRoot: () => void
 
-  constructor(runtime: Runtime.Runtime<unknown>, maxEntries?: number) {
-    this.runtime = runtime
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  constructor(services: ServiceMap.ServiceMap<any>, maxEntries?: number) {
+    this.services = services
     this.maxEntries = maxEntries
     this.shouldEvict = maxEntries !== undefined && maxEntries > 0
     let owner: Owner | null = null

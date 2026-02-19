@@ -7,7 +7,7 @@ export type ModelId = typeof ModelId.Type
 
 // Provider - supported AI provider
 
-export const ProviderId = Schema.Literal("anthropic", "bedrock", "openai", "google", "mistral")
+export const ProviderId = Schema.Literals(["anthropic", "bedrock", "openai", "google", "mistral"])
 export type ProviderId = typeof ProviderId.Type
 
 export class Provider extends Schema.Class<Provider>("Provider")({

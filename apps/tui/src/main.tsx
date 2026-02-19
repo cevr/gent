@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-import { Command, Options, Args } from "@effect/cli"
-import { BunContext, BunRuntime, BunFileSystem } from "@effect/platform-bun"
+import { Command, Flag, Argument } from "effect/unstable/cli"
+import { BunServices, BunRuntime } from "@effect/platform-bun"
 import { Config, Console, Effect, Layer, Option, Stream } from "effect"
-import type { Runtime } from "effect"
+import type { ServiceMap } from "effect"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
   createDependencies,
@@ -172,7 +172,7 @@ const formatMissingProviders = (providers: readonly ProviderId[]): string =>
 const ATOM_CACHE_MAX = 256
 
 // Platform layer
-const PlatformLayer = Layer.merge(BunFileSystem.layer, BunContext.layer)
+const PlatformLayer = BunServices.layer
 
 // Logger layer — pretty (stderr) + JSON (/tmp/gent.log)
 const LoggerLayer = GentLogger
@@ -182,23 +182,15 @@ const TracerLayer = UnifiedTracerLive
 
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 
-const CoreLayer = Layer.unwrapEffect(
+const CoreLayer = Layer.unwrap(
   Effect.gen(function* () {
     const cwd = process.cwd()
-    const home = yield* Config.option(Config.string("HOME")).pipe(
-      Effect.catchAll(() => Effect.succeed(Option.none())),
-      Effect.map(Option.getOrElse(() => os.homedir())),
-    )
-    const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR")).pipe(
-      Effect.catchAll(() => Effect.succeed(Option.none())),
-    )
+    const homeOpt = yield* Config.option(Config.string("HOME"))
+    const home = Option.getOrElse(homeOpt, () => os.homedir())
+    const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
     const dataDir = Option.getOrElse(dataDirOpt, () => path.join(home, ".gent"))
-    const dbPath = Option.getOrElse(
-      yield* Config.option(Config.string("GENT_DB_PATH")).pipe(
-        Effect.catchAll(() => Effect.succeed(Option.none())),
-      ),
-      () => path.join(dataDir, "data.db"),
-    )
+    const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
+    const dbPath = Option.getOrElse(dbPathOpt, () => path.join(dataDir, "data.db"))
     const authFilePath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.json.enc") : undefined
     const authKeyPath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.key") : undefined
 
@@ -273,35 +265,33 @@ const runHeadless = (
 const main = Command.make(
   "gent",
   {
-    session: Options.text("session").pipe(
-      Options.withAlias("s"),
-      Options.withDescription("Session ID to continue"),
-      Options.optional,
+    session: Flag.string("session").pipe(
+      Flag.withAlias("s"),
+      Flag.withDescription("Session ID to continue"),
+      Flag.optional,
     ),
-    continue_: Options.boolean("continue").pipe(
-      Options.withAlias("c"),
-      Options.withDescription("Continue last session from current directory"),
-      Options.withDefault(false),
+    continue_: Flag.boolean("continue").pipe(
+      Flag.withAlias("c"),
+      Flag.withDescription("Continue last session from current directory"),
+      Flag.withDefault(false),
     ),
-    headless: Options.boolean("headless").pipe(
-      Options.withAlias("H"),
-      Options.withDescription("Run in headless mode (no TUI, streams to stdout)"),
-      Options.withDefault(false),
+    headless: Flag.boolean("headless").pipe(
+      Flag.withAlias("H"),
+      Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
+      Flag.withDefault(false),
     ),
-    prompt: Options.text("prompt").pipe(
-      Options.withAlias("p"),
-      Options.withDescription("Initial prompt (TUI mode)"),
-      Options.optional,
+    prompt: Flag.string("prompt").pipe(
+      Flag.withAlias("p"),
+      Flag.withDescription("Initial prompt (TUI mode)"),
+      Flag.optional,
     ),
-    promptArg: Args.text({ name: "prompt" }).pipe(
-      Args.withDescription("Prompt for headless mode"),
-      Args.optional,
+    promptArg: Argument.string("prompt").pipe(
+      Argument.withDescription("Prompt for headless mode"),
+      Argument.optional,
     ),
-    bypass: Options.boolean("bypass").pipe(
-      Options.withDescription(
-        "Auto-allow all tool calls (default: true, use --no-bypass to disable)",
-      ),
-      Options.withDefault(true),
+    bypass: Flag.boolean("bypass").pipe(
+      Flag.withDescription("Auto-allow all tool calls (default: true, use --no-bypass to disable)"),
+      Flag.withDefault(true),
     ),
   },
   ({ session, continue_, headless, prompt, promptArg, bypass }) =>
@@ -351,7 +341,7 @@ const main = Command.make(
         const directClient: DirectClient = yield* makeDirectClient
 
         // Get runtime for client
-        const uiRuntime = (yield* Effect.runtime<never>()) as Runtime.Runtime<unknown>
+        const uiServices = (yield* Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
 
         // Derive initial session and route from state
         let initialSession: Session | undefined
@@ -383,11 +373,11 @@ const main = Command.make(
         // Launch TUI with providers
         yield* Effect.promise(() =>
           render(() => (
-            <WorkspaceProvider cwd={cwd} runtime={uiRuntime}>
-              <RegistryProvider runtime={uiRuntime} maxEntries={ATOM_CACHE_MAX}>
+            <WorkspaceProvider cwd={cwd} services={uiServices}>
+              <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
                 <ClientProvider
                   rpcClient={directClient}
-                  runtime={uiRuntime}
+                  services={uiServices}
                   initialSession={initialSession}
                 >
                   <RouterProvider initialRoute={initialRoute}>
@@ -437,7 +427,6 @@ const command = main.pipe(
 
 // CLI
 const cli = Command.run(command, {
-  name: "gent",
   version: "0.0.0",
 })
 
@@ -445,10 +434,6 @@ const cli = Command.run(command, {
 const CliLayer = Layer.provide(CoreLayer, LoggerLayer)
 
 // Run with base layers; command handlers provide core layers as needed
-const MainLayer = Layer.scopedDiscard(Effect.suspend(() => cli(process.argv))).pipe(
-  Layer.provide(CliLayer),
-)
+const MainLayer = Layer.effectDiscard(cli).pipe(Layer.provide(CliLayer))
 
-BunRuntime.runMain(Layer.launch(MainLayer).pipe(Effect.provide(LoggerLayer)), {
-  disablePrettyLogger: true,
-})
+BunRuntime.runMain(Layer.launch(MainLayer).pipe(Effect.provide(LoggerLayer)))

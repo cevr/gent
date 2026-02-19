@@ -1,9 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import type { Scope } from "effect"
-import { Effect, Layer, pipe } from "effect"
-import type { Path } from "@effect/platform"
-import { FileSystem } from "@effect/platform"
-import { BunContext } from "@effect/platform-bun"
+import { Effect, FileSystem, Layer, pipe, type Path, type Scope } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import {
   ReadTool,
   GlobTool,
@@ -26,7 +23,7 @@ const ctx: ToolContext = {
 }
 
 // Layer providing FileSystem and Path from @effect/platform-bun
-const PlatformLayer = BunContext.layer
+const PlatformLayer = BunServices.layer
 
 // Helper to run scoped effects with platform layer
 const runScoped = <A, E>(
@@ -51,10 +48,10 @@ describe("Tools", () => {
     test("returns error for non-existent file", () =>
       runScoped(
         Effect.gen(function* () {
-          const result = yield* Effect.either(
+          const result = yield* Effect.result(
             ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx),
           )
-          expect(result._tag).toBe("Left")
+          expect(result._tag).toBe("Failure")
         }),
       ))
 
@@ -64,10 +61,10 @@ describe("Tools", () => {
           const fs = yield* FileSystem.FileSystem
           const tmpDir = yield* fs.makeTempDirectoryScoped()
 
-          const result = yield* Effect.either(ReadTool.execute({ path: tmpDir }, ctx))
-          expect(result._tag).toBe("Left")
-          if (result._tag === "Left") {
-            expect(result.left.message).toContain("Cannot read directory")
+          const result = yield* Effect.result(ReadTool.execute({ path: tmpDir }, ctx))
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure") {
+            expect(result.failure.message).toContain("Cannot read directory")
           }
         }),
       ))

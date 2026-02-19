@@ -100,7 +100,7 @@ export function Input(props: InputProps) {
   const workspace = useWorkspace()
   const command = useCommand()
   const client = useClient()
-  const { cast } = useRuntime(client.client.runtime)
+  const { cast } = useRuntime(client.client.services)
   const paste = createPasteManager()
 
   let inputRef: InputRenderable | null = null
@@ -350,9 +350,13 @@ export function Input(props: InputProps) {
               props.onSubmit(userMessage)
             }),
           ),
-          Effect.catchAll((error) =>
+          Effect.catchEager((error: unknown) =>
             Effect.sync(() => {
-              client.setError(formatError(error))
+              const msg =
+                error !== null && typeof error === "object" && "message" in error
+                  ? String((error as { message: unknown }).message)
+                  : String(error)
+              client.setError(msg)
             }),
           ),
         ),
@@ -395,7 +399,7 @@ export function Input(props: InputProps) {
 
       cast(
         commandEffect.pipe(
-          Effect.catchAll((error) =>
+          Effect.catchEager((error) =>
             Effect.sync(() => {
               client.setError(formatError(error))
             }),

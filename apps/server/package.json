@@ -7,7 +7,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@effect/platform": "catalog:",
     "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/server": "workspace:*",

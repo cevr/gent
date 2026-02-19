@@ -30,14 +30,10 @@ export const formatError = (error: UiError): string => {
       return `Not found: ${error.message}`
     case "ActorProcessError":
       return `Actor: ${error.message}`
-    case "BadArgument":
-      return `${error.module}.${error.method}: ${error.description ?? "bad argument"}`
-    case "SystemError":
-      return `${error.module}.${error.method}: ${error.reason}${
-        error.pathOrDescriptor !== undefined && error.pathOrDescriptor !== null
-          ? ` (${error.pathOrDescriptor})`
-          : ""
-      }`
+    case "PlatformError":
+      return `Platform: ${error.message}`
+    case "ProviderAuthError":
+      return `Auth: ${error.message}`
     default:
       return "Unknown error"
   }

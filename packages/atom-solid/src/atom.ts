@@ -1,9 +1,9 @@
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import type { Accessor } from "solid-js"
-import type * as Effect from "effect/Effect"
+import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
-import * as Runtime from "effect/Runtime"
+import type * as ServiceMap from "effect/ServiceMap"
 import type { Registry } from "./registry"
 import * as Result from "./result"
 import type { Result as AtomResult } from "./result"
@@ -69,17 +69,16 @@ export const effect = <A, E, R>(
     const get = <T>(atom: Atom<T>) => registry.read(atom)()
 
     const runEffect = (eff: Effect.Effect<A, E, R>) => {
-      const runtime = registry.runtime as Runtime.Runtime<R>
+      const services = registry.services as ServiceMap.ServiceMap<R>
       let cancelled = false
-      const fiber = Runtime.runFork(runtime)(eff)
+      const fiber = Effect.runForkWith(services)(eff)
       fiber.addObserver((exit) => {
         if (cancelled) return
         setResult(Exit.isSuccess(exit) ? Result.success(exit.value) : Result.failure(exit.cause))
       })
       return () => {
         cancelled = true
-        const interrupt = Fiber.interruptFork(fiber)
-        Runtime.runFork(runtime)(interrupt)
+        Effect.runFork(Fiber.interrupt(fiber))
       }
     }
 

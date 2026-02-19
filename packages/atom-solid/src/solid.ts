@@ -7,15 +7,19 @@ import {
   useContext,
 } from "solid-js"
 import type { Accessor, ParentProps } from "solid-js"
-import { globalValue } from "effect/GlobalValue"
-import * as Runtime from "effect/Runtime"
+import * as ServiceMap from "effect/ServiceMap"
 import type { Atom, Writable } from "./atom"
 import * as Registry from "./registry"
 import type { Result } from "./result"
 
-const defaultRegistry = globalValue("@gent/atom-solid/defaultRegistry", () =>
-  Registry.make({ runtime: Runtime.defaultRuntime as Runtime.Runtime<unknown> }),
-)
+let _defaultRegistry: Registry.Registry | undefined
+const defaultRegistry = (() => {
+  if (_defaultRegistry === undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    _defaultRegistry = Registry.make({ services: ServiceMap.empty() as ServiceMap.ServiceMap<any> })
+  }
+  return _defaultRegistry
+})()
 
 export const RegistryContext = createContext<Registry.Registry>(defaultRegistry)
 
@@ -33,13 +37,14 @@ const toWritableAccessor = <R, W>(atom: WritableInput<R, W>): Accessor<Writable<
 
 export interface RegistryProviderProps extends ParentProps {
   readonly registry?: Registry.Registry
-  readonly runtime?: Runtime.Runtime<unknown>
+  readonly services?: ServiceMap.ServiceMap<unknown>
   readonly maxEntries?: number
 }
 
 export const RegistryProvider = (props: RegistryProviderProps) => {
-  const runtime = props.runtime ?? (Runtime.defaultRuntime as Runtime.Runtime<unknown>)
-  const registry = props.registry ?? Registry.make({ runtime, maxEntries: props.maxEntries })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const services = props.services ?? (ServiceMap.empty() as ServiceMap.ServiceMap<any>)
+  const registry = props.registry ?? Registry.make({ services, maxEntries: props.maxEntries })
   const shouldDispose = props.registry === undefined
 
   onCleanup(() => {

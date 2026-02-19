@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Stream, JSONSchema } from "effect"
+import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import type { Message, AnyToolDefinition, TextPart, ToolResultPart } from "@gent/core"
 import {
   streamText,
@@ -18,7 +18,7 @@ type ProviderOptions = Parameters<typeof streamText>[0]["providerOptions"]
 
 // Provider Error
 
-export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
+export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("ProviderError", {
   message: Schema.String,
   model: Schema.String,
   cause: Schema.optional(Schema.Defect),
@@ -50,7 +50,7 @@ export class FinishChunk extends Schema.TaggedClass<FinishChunk>()("FinishChunk"
   ),
 }) {}
 
-export const StreamChunk = Schema.Union(TextChunk, ToolCallChunk, ReasoningChunk, FinishChunk)
+export const StreamChunk = Schema.Union([TextChunk, ToolCallChunk, ReasoningChunk, FinishChunk])
 export type StreamChunk = typeof StreamChunk.Type
 
 // Provider Request
@@ -84,10 +84,9 @@ export interface ProviderService {
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
 
-export class Provider extends Context.Tag("@gent/providers/src/provider")<
-  Provider,
-  ProviderService
->() {
+export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
+  "@gent/providers/src/provider",
+) {
   static Live: Layer.Layer<Provider, never, ProviderFactory> = Layer.effect(
     Provider,
     Effect.gen(function* () {
@@ -327,10 +326,14 @@ function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
       result[t.name] = cached
       continue
     }
-    const effectJsonSchema = JSONSchema.make(t.params as Schema.Schema<unknown, unknown, never>)
+    const doc = Schema.toJsonSchemaDocument(t.params as Schema.Schema<unknown>)
+    const flatJsonSchema =
+      Object.keys(doc.definitions).length > 0
+        ? { ...doc.schema, $defs: doc.definitions }
+        : doc.schema
     const wrapped = tool({
       description: t.description,
-      inputSchema: jsonSchema(effectJsonSchema),
+      inputSchema: jsonSchema(flatJsonSchema),
     }) as ToolSet[string]
     toolCache.set(t, wrapped)
     result[t.name] = wrapped

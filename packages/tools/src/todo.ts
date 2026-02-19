@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { defineTool, TodoStatus, TodoPriority, TodoItem } from "@gent/core"
 
 // Todo Handler Service - provides storage access
@@ -8,10 +8,9 @@ export interface TodoHandlerService {
   readonly replace: (todos: ReadonlyArray<TodoItem>) => Effect.Effect<void>
 }
 
-export class TodoHandler extends Context.Tag("@gent/tools/src/todo/TodoHandler")<
-  TodoHandler,
-  TodoHandlerService
->() {
+export class TodoHandler extends ServiceMap.Service<TodoHandler, TodoHandlerService>()(
+  "@gent/tools/src/todo/TodoHandler",
+) {
   static Test = (initialTodos: ReadonlyArray<TodoItem> = []): Layer.Layer<TodoHandler> => {
     let todos = [...initialTodos]
     return Layer.succeed(TodoHandler, {
@@ -66,21 +65,21 @@ export const TodoReadTool = defineTool({
 // TodoWrite Params & Result
 
 const TodoInputSchema = Schema.Struct({
-  content: Schema.String.annotations({
+  content: Schema.String.annotate({
     description: "Task description",
   }),
-  status: TodoStatus.annotations({
+  status: TodoStatus.annotate({
     description: "Task status: pending, in_progress, or completed",
   }),
   priority: Schema.optional(
-    TodoPriority.annotations({
+    TodoPriority.annotate({
       description: "Optional priority: high, medium, or low",
     }),
   ),
 })
 
 export const TodoWriteParams = Schema.Struct({
-  todos: Schema.Array(TodoInputSchema).annotations({
+  todos: Schema.Array(TodoInputSchema).annotate({
     description: "Complete todo list (replaces existing)",
   }),
 })

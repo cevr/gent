@@ -1,4 +1,4 @@
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "@effect/platform"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Schema } from "effect"
 import {
   CreateSessionPayload,
@@ -22,40 +22,55 @@ export const SteerRequest = SteerPayload
 
 export class SessionsApi extends HttpApiGroup.make("sessions")
   .add(
-    HttpApiEndpoint.post("create", "/sessions")
-      .setPayload(CreateSessionRequest)
-      .addSuccess(CreateSessionResponse),
-  )
-  .add(HttpApiEndpoint.get("list", "/sessions").addSuccess(Schema.Array(SessionResponse)))
-  .add(
-    HttpApiEndpoint.get("get", "/sessions/:sessionId")
-      .setPath(Schema.Struct({ sessionId: SessionId }))
-      .addSuccess(SessionResponse),
+    HttpApiEndpoint.post("create", "/sessions", {
+      payload: CreateSessionRequest,
+      success: CreateSessionResponse,
+    }),
   )
   .add(
-    HttpApiEndpoint.del("delete", "/sessions/:sessionId")
-      .setPath(Schema.Struct({ sessionId: SessionId }))
-      .addSuccess(Schema.Void),
+    HttpApiEndpoint.get("list", "/sessions", {
+      success: Schema.Array(SessionResponse),
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("get", "/sessions/:sessionId", {
+      params: { sessionId: SessionId },
+      success: SessionResponse,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.delete("delete", "/sessions/:sessionId", {
+      params: { sessionId: SessionId },
+      success: Schema.Void,
+    }),
   ) {}
 
 export class MessagesApi extends HttpApiGroup.make("messages")
   .add(
-    HttpApiEndpoint.post("send", "/messages")
-      .setPayload(SendMessageRequest)
-      .addSuccess(Schema.Void),
+    HttpApiEndpoint.post("send", "/messages", {
+      payload: SendMessageRequest,
+      success: Schema.Void,
+    }),
   )
   .add(
-    HttpApiEndpoint.get("list", "/sessions/:sessionId/branches/:branchId/messages")
-      .setPath(Schema.Struct({ sessionId: SessionId, branchId: BranchId }))
-      .addSuccess(Schema.Array(MessageResponse)),
+    HttpApiEndpoint.get("list", "/sessions/:sessionId/branches/:branchId/messages", {
+      params: { sessionId: SessionId, branchId: BranchId },
+      success: Schema.Array(MessageResponse),
+    }),
   )
-  .add(HttpApiEndpoint.post("steer", "/steer").setPayload(SteerRequest).addSuccess(Schema.Void)) {}
+  .add(
+    HttpApiEndpoint.post("steer", "/steer", {
+      payload: SteerRequest,
+      success: Schema.Void,
+    }),
+  ) {}
 
 // EventsApi deprecated - use RPC streaming via /rpc endpoint instead
 export class EventsApi extends HttpApiGroup.make("events").add(
-  HttpApiEndpoint.get("subscribe", "/events/:sessionId")
-    .setPath(Schema.Struct({ sessionId: SessionId }))
-    .addSuccess(Schema.String), // SSE stream (deprecated)
+  HttpApiEndpoint.get("subscribe", "/events/:sessionId", {
+    params: { sessionId: SessionId },
+    success: Schema.String, // SSE stream (deprecated)
+  }),
 ) {}
 
 // Full API (REST endpoints - use /rpc for streaming)

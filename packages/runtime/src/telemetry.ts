@@ -3,8 +3,7 @@
  * This file is kept for backwards compatibility. All exports are deprecated.
  */
 
-import type { Context, Option } from "effect"
-import { Exit, Layer, Tracer, Cause } from "effect"
+import { Effect, Exit, Layer, ServiceMap, Tracer, Cause } from "effect"
 
 import { appendFileSync, writeFileSync } from "node:fs"
 
@@ -13,31 +12,46 @@ class DevSpan implements Tracer.Span {
   readonly _tag = "Span" as const
   readonly spanId: string
   readonly traceId: string
-  readonly sampled = true
+  readonly sampled: boolean
+
+  readonly name: string
+  readonly parent: Tracer.AnySpan | undefined
+  readonly annotations: ServiceMap.ServiceMap<never>
+  readonly links: Array<Tracer.SpanLink>
+  readonly startTime: bigint
+  readonly kind: Tracer.SpanKind
 
   status: Tracer.SpanStatus
   attributes: Map<string, unknown>
   events: Array<[name: string, startTime: bigint, attributes: Record<string, unknown>]> = []
-  links: Array<Tracer.SpanLink>
 
   private depth: number
   private logFile: string
 
   constructor(
-    readonly name: string,
-    readonly parent: Option.Option<Tracer.AnySpan>,
-    readonly context: Context.Context<never>,
-    links: Iterable<Tracer.SpanLink>,
-    readonly startTime: bigint,
-    readonly kind: Tracer.SpanKind,
+    options: {
+      readonly name: string
+      readonly parent: Tracer.AnySpan | undefined
+      readonly annotations: ServiceMap.ServiceMap<never>
+      readonly links: Array<Tracer.SpanLink>
+      readonly startTime: bigint
+      readonly kind: Tracer.SpanKind
+      readonly sampled: boolean
+    },
     logFile: string,
   ) {
+    this.name = options.name
+    this.parent = options.parent
+    this.annotations = options.annotations
+    this.links = Array.from(options.links)
+    this.startTime = options.startTime
+    this.kind = options.kind
+    this.sampled = options.sampled
     this.logFile = logFile
-    this.status = { _tag: "Started", startTime }
+    this.status = { _tag: "Started", startTime: options.startTime }
     this.attributes = new Map()
-    this.traceId = parent._tag === "Some" ? parent.value.traceId : randomHex(32)
+    this.traceId = options.parent?.traceId ?? randomHex(32)
     this.spanId = randomHex(16)
-    this.links = Array.from(links)
     this.depth = this.calculateDepth()
 
     this.log("START", `${this.name}`)
@@ -45,11 +59,11 @@ class DevSpan implements Tracer.Span {
 
   private calculateDepth(): number {
     let depth = 0
-    let current = this.parent
-    while (current._tag === "Some") {
+    let current: Tracer.AnySpan | undefined = this.parent
+    while (current !== undefined) {
       depth++
-      if (current.value._tag === "Span") {
-        current = current.value.parent
+      if (current._tag === "Span") {
+        current = current.parent
       } else {
         break
       }
@@ -86,7 +100,7 @@ class DevSpan implements Tracer.Span {
       this.log("END", `${this.name}`, `(${durationStr})`)
     } else {
       const cause = exit.cause
-      const message = Cause.isInterruptedOnly(cause)
+      const message = Cause.hasInterruptsOnly(cause)
         ? "interrupted"
         : (Cause.pretty(cause).split("\n")[0] ?? "unknown error")
       this.log("ERROR", `${this.name}`, `(${durationStr}) - ${message}`)
@@ -119,15 +133,13 @@ function randomHex(length: number): string {
 /** @deprecated Use `GentLogger` from `./logger` instead. */
 export function makeDevTracer(logFile: string): Tracer.Tracer {
   return Tracer.make({
-    span: (name, parent, context, links, startTime, kind) =>
-      new DevSpan(name, parent, context, links, startTime, kind, logFile),
-    context: (f) => f(),
+    span: (options) => new DevSpan(options, logFile),
   })
 }
 
 /** @deprecated Use `GentLogger` from `./logger` instead. */
 export const DevTracerLive = (logFile: string): Layer.Layer<never> =>
-  Layer.setTracer(makeDevTracer(logFile))
+  Layer.effectServices(Effect.succeed(ServiceMap.make(Tracer.Tracer, makeDevTracer(logFile))))
 
 /** @deprecated Use `GentLogger` from `./logger` instead. */
 export const DEFAULT_LOG_FILE = "/tmp/gent-trace.log"

@@ -1,8 +1,7 @@
-import * as Entity from "@effect/cluster/Entity"
-import type * as Sharding from "@effect/cluster/Sharding"
-import * as Rpc from "@effect/rpc/Rpc"
-import * as RpcGroup from "@effect/rpc/RpcGroup"
-import { Cause, Context, Effect, Layer, Schema } from "effect"
+import type { Sharding } from "effect/unstable/cluster"
+import { Entity } from "effect/unstable/cluster"
+import { Rpc, RpcGroup } from "effect/unstable/rpc"
+import { Cause, ServiceMap, Effect, Layer, Schema } from "effect"
 import {
   AgentName,
   BranchId,
@@ -21,7 +20,7 @@ import {
 import { Storage } from "@gent/storage"
 import { AgentLoop } from "./agent"
 
-export class ActorProcessError extends Schema.TaggedError<ActorProcessError>()(
+export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
   "ActorProcessError",
   {
     message: Schema.String,
@@ -54,7 +53,7 @@ export const SendToolResultPayload = Schema.Struct({
 })
 export type SendToolResultPayload = typeof SendToolResultPayload.Type
 
-export const InterruptKind = Schema.Literal("cancel", "interrupt", "interject")
+export const InterruptKind = Schema.Literals(["cancel", "interrupt", "interject"])
 export type InterruptKind = typeof InterruptKind.Type
 
 export const InterruptPayload = Schema.Struct({
@@ -65,7 +64,7 @@ export const InterruptPayload = Schema.Struct({
 })
 export type InterruptPayload = typeof InterruptPayload.Type
 
-export const ActorProcessStatus = Schema.Literal("idle", "running", "interrupted")
+export const ActorProcessStatus = Schema.Literals(["idle", "running", "interrupted"])
 export type ActorProcessStatus = typeof ActorProcessStatus.Type
 
 export const ActorProcessState = Schema.Struct({
@@ -95,10 +94,9 @@ export interface ActorProcessService {
   readonly getMetrics: (input: ActorTarget) => Effect.Effect<ActorProcessMetrics, ActorProcessError>
 }
 
-export class ActorProcess extends Context.Tag("@gent/runtime/src/actor-process/ActorProcess")<
-  ActorProcess,
-  ActorProcessService
->() {
+export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessService>()(
+  "@gent/runtime/src/actor-process/ActorProcess",
+) {
   static Test = (): Layer.Layer<ActorProcess> =>
     Layer.succeed(ActorProcess, {
       sendUserMessage: () => Effect.void,
@@ -151,10 +149,10 @@ export const LocalActorProcessLive: Layer.Layer<
             createdAt: new Date(),
           })
 
-          yield* Effect.forkDaemon(
+          yield* Effect.forkDetach(
             agentLoop.run(message, { bypass }).pipe(
-              Effect.catchAllCause((cause) => {
-                if (Cause.isInterruptedOnly(cause)) return Effect.interrupt
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return Effect.gen(function* () {
                   yield* eventStore.publish(
                     new ErrorOccurred({
@@ -164,12 +162,12 @@ export const LocalActorProcessLive: Layer.Layer<
                     }),
                   )
                   yield* Effect.logWarning("agent loop failed", cause)
-                }).pipe(Effect.catchAll(() => Effect.void))
+                }).pipe(Effect.catchEager(() => Effect.void))
               }),
             ),
           )
         }).pipe(
-          Effect.catchAllCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
+          Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
         ),
 
       sendToolResult: (input) =>
@@ -205,7 +203,7 @@ export const LocalActorProcessLive: Layer.Layer<
             isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
           )
         }).pipe(
-          Effect.catchAllCause((cause) => Effect.fail(wrapError("sendToolResult failed", cause))),
+          Effect.catchCause((cause) => Effect.fail(wrapError("sendToolResult failed", cause))),
         ),
 
       interrupt: (input) =>
@@ -239,7 +237,7 @@ export const LocalActorProcessLive: Layer.Layer<
             sessionId: input.sessionId,
             branchId: input.branchId,
           })
-        }).pipe(Effect.catchAllCause((cause) => Effect.fail(wrapError("interrupt failed", cause)))),
+        }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("interrupt failed", cause)))),
 
       getState: (_input) =>
         Effect.gen(function* () {
@@ -250,7 +248,7 @@ export const LocalActorProcessLive: Layer.Layer<
             queueDepth: 0,
             lastError: undefined,
           } satisfies ActorProcessState
-        }).pipe(Effect.catchAllCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
+        }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
       getMetrics: () =>
         Effect.succeed({
@@ -264,71 +262,53 @@ export const LocalActorProcessLive: Layer.Layer<
   }),
 )
 
-export class ActorProcessRpcs extends RpcGroup.make(
-  Rpc.make("SendUserMessage", {
-    payload: SendUserMessagePayload.fields,
-    success: Schema.Void,
-    error: ActorProcessError,
-  }),
-  Rpc.make("SendToolResult", {
-    payload: SendToolResultPayload.fields,
-    success: Schema.Void,
-    error: ActorProcessError,
-  }),
-  Rpc.make("Interrupt", {
-    payload: InterruptPayload.fields,
-    success: Schema.Void,
-    error: ActorProcessError,
-  }),
-  Rpc.make("GetState", {
-    payload: ActorTarget.fields,
-    success: ActorProcessState,
-    error: ActorProcessError,
-  }),
-  Rpc.make("GetMetrics", {
-    payload: ActorTarget.fields,
-    success: ActorProcessMetrics,
-    error: ActorProcessError,
-  }),
-) {}
+const SendUserMessageRpc = Rpc.make("SendUserMessage", {
+  payload: SendUserMessagePayload.fields,
+  success: Schema.Void,
+  error: ActorProcessError,
+})
+const SendToolResultRpc = Rpc.make("SendToolResult", {
+  payload: SendToolResultPayload.fields,
+  success: Schema.Void,
+  error: ActorProcessError,
+})
+const InterruptRpc = Rpc.make("Interrupt", {
+  payload: InterruptPayload.fields,
+  success: Schema.Void,
+  error: ActorProcessError,
+})
+const GetStateRpc = Rpc.make("GetState", {
+  payload: ActorTarget.fields,
+  success: ActorProcessState,
+  error: ActorProcessError,
+})
+const GetMetricsRpc = Rpc.make("GetMetrics", {
+  payload: ActorTarget.fields,
+  success: ActorProcessMetrics,
+  error: ActorProcessError,
+})
 
-export const SessionActorEntity = Entity.make("SessionActor", [
-  Rpc.make("SendUserMessage", {
-    payload: SendUserMessagePayload.fields,
-    success: Schema.Void,
-    error: ActorProcessError,
-  }),
-  Rpc.make("SendToolResult", {
-    payload: SendToolResultPayload.fields,
-    success: Schema.Void,
-    error: ActorProcessError,
-  }),
-  Rpc.make("Interrupt", {
-    payload: InterruptPayload.fields,
-    success: Schema.Void,
-    error: ActorProcessError,
-  }),
-  Rpc.make("GetState", {
-    payload: ActorTarget.fields,
-    success: ActorProcessState,
-    error: ActorProcessError,
-  }),
-  Rpc.make("GetMetrics", {
-    payload: ActorTarget.fields,
-    success: ActorProcessMetrics,
-    error: ActorProcessError,
-  }),
-])
+const actorProcessRpcGroup = RpcGroup.make(
+  SendUserMessageRpc,
+  SendToolResultRpc,
+  InterruptRpc,
+  GetStateRpc,
+  GetMetricsRpc,
+)
+
+export class ActorProcessRpcs extends actorProcessRpcGroup {}
+
+export const SessionActorEntity = Entity.fromRpcGroup("SessionActor", actorProcessRpcGroup)
 
 export const SessionActorEntityLive = SessionActorEntity.toLayer(
   Effect.gen(function* () {
     const actorProcess = yield* ActorProcess
     return SessionActorEntity.of({
-      SendUserMessage: (request) => actorProcess.sendUserMessage(request.payload),
-      SendToolResult: (request) => actorProcess.sendToolResult(request.payload),
-      Interrupt: (request) => actorProcess.interrupt(request.payload),
-      GetState: (request) => actorProcess.getState(request.payload),
-      GetMetrics: (request) => actorProcess.getMetrics(request.payload),
+      SendUserMessage: (envelope) => actorProcess.sendUserMessage(envelope.payload),
+      SendToolResult: (envelope) => actorProcess.sendToolResult(envelope.payload),
+      Interrupt: (envelope) => actorProcess.interrupt(envelope.payload),
+      GetState: (envelope) => actorProcess.getState(envelope.payload),
+      GetMetrics: (envelope) => actorProcess.getMetrics(envelope.payload),
     })
   }),
 )
@@ -347,29 +327,28 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
 
       return ActorProcess.of({
         sendUserMessage: (input) =>
-          (client(input).SendUserMessage(input) as Effect.Effect<void, ActorProcessError>).pipe(
-            Effect.catchAllCause((cause) =>
-              Effect.fail(wrapError("SendUserMessage failed", cause)),
-            ),
+          (client(input)["SendUserMessage"](input) as Effect.Effect<void, ActorProcessError>).pipe(
+            Effect.catchCause((cause) => Effect.fail(wrapError("SendUserMessage failed", cause))),
           ),
         sendToolResult: (input) =>
-          (client(input).SendToolResult(input) as Effect.Effect<void, ActorProcessError>).pipe(
-            Effect.catchAllCause((cause) => Effect.fail(wrapError("SendToolResult failed", cause))),
+          (client(input)["SendToolResult"](input) as Effect.Effect<void, ActorProcessError>).pipe(
+            Effect.catchCause((cause) => Effect.fail(wrapError("SendToolResult failed", cause))),
           ),
         interrupt: (input) =>
-          (client(input).Interrupt(input) as Effect.Effect<void, ActorProcessError>).pipe(
-            Effect.catchAllCause((cause) => Effect.fail(wrapError("Interrupt failed", cause))),
+          (client(input)["Interrupt"](input) as Effect.Effect<void, ActorProcessError>).pipe(
+            Effect.catchCause((cause) => Effect.fail(wrapError("Interrupt failed", cause))),
           ),
         getState: (input) =>
           (
-            client(input).GetState(input) as Effect.Effect<ActorProcessState, ActorProcessError>
-          ).pipe(Effect.catchAllCause((cause) => Effect.fail(wrapError("GetState failed", cause)))),
+            client(input)["GetState"](input) as Effect.Effect<ActorProcessState, ActorProcessError>
+          ).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("GetState failed", cause)))),
         getMetrics: (input) =>
           (
-            client(input).GetMetrics(input) as Effect.Effect<ActorProcessMetrics, ActorProcessError>
-          ).pipe(
-            Effect.catchAllCause((cause) => Effect.fail(wrapError("GetMetrics failed", cause))),
-          ),
+            client(input)["GetMetrics"](input) as Effect.Effect<
+              ActorProcessMetrics,
+              ActorProcessError
+            >
+          ).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("GetMetrics failed", cause)))),
       })
     }),
   )

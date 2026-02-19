@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Ref, Schema } from "effect"
 import {
   AuthApi,
   AuthAuthorization,
@@ -13,7 +13,7 @@ import {
 import { authorizeOpenAI } from "./oauth/openai-oauth"
 import { authorizeAnthropic } from "./oauth/anthropic-oauth"
 
-export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
+export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError>()(
   "ProviderAuthError",
   {
     message: Schema.String,
@@ -134,10 +134,9 @@ export interface ProviderAuthService {
   ) => Effect.Effect<void, ProviderAuthError>
 }
 
-export class ProviderAuth extends Context.Tag("@gent/providers/src/provider-auth/ProviderAuth")<
-  ProviderAuth,
-  ProviderAuthService
->() {
+export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthService>()(
+  "@gent/providers/src/provider-auth/ProviderAuth",
+) {
   static Live: Layer.Layer<ProviderAuth, never, AuthStore> = Layer.effect(
     ProviderAuth,
     Effect.gen(function* () {

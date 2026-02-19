@@ -1,24 +1,24 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId } from "./ids"
 import type { ModelId } from "./model"
 
 // Agent definitions
 
-export const AgentKind = Schema.Literal("primary", "subagent", "system")
+export const AgentKind = Schema.Literals(["primary", "subagent", "system"])
 export type AgentKind = typeof AgentKind.Type
 
-export const AgentName = Schema.Literal(
+export const AgentName = Schema.Literals([
   "cowork",
   "deepwork",
   "explore",
   "architect",
   "compaction",
   "title",
-)
+])
 export type AgentName = typeof AgentName.Type
 
-export const ReasoningEffort = Schema.Literal("minimal", "low", "medium", "high")
+export const ReasoningEffort = Schema.Literals(["minimal", "low", "medium", "high"])
 export type ReasoningEffort = typeof ReasoningEffort.Type
 
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
@@ -139,10 +139,9 @@ export interface AgentRegistryService {
   readonly register: (agent: AgentDefinition) => Effect.Effect<void>
 }
 
-export class AgentRegistry extends Context.Tag("@gent/core/src/agent/AgentRegistry")<
-  AgentRegistry,
-  AgentRegistryService
->() {
+export class AgentRegistry extends ServiceMap.Service<AgentRegistry, AgentRegistryService>()(
+  "@gent/core/src/agent/AgentRegistry",
+) {
   static Live = Layer.effect(
     AgentRegistry,
     Effect.sync(() => {
@@ -183,7 +182,7 @@ export type SubagentResult =
       agentName?: AgentName
     }
 
-export class SubagentError extends Schema.TaggedError<SubagentError>()("SubagentError", {
+export class SubagentError extends Schema.TaggedErrorClass<SubagentError>()("SubagentError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -198,6 +197,7 @@ export interface SubagentRunner {
   }) => EffectNs.Effect<SubagentResult, SubagentError>
 }
 
-export class SubagentRunnerService extends Context.Tag(
-  "@gent/core/src/agent/SubagentRunnerService",
-)<SubagentRunnerService, SubagentRunner>() {}
+export class SubagentRunnerService extends ServiceMap.Service<
+  SubagentRunnerService,
+  SubagentRunner
+>()("@gent/core/src/agent/SubagentRunnerService") {}

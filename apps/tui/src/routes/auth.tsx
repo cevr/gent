@@ -31,7 +31,7 @@ export function Auth(props: AuthProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.client.runtime)
+  const { cast } = useRuntime(props.client.services)
 
   const { state, send } = useMachine(
     Machine.spawn(authMachine),
@@ -64,7 +64,7 @@ export function Auth(props: AuthProps) {
             )
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => {
             tuiError("auth:load", err)
             send(AuthEvent.LoadFailed({ error: formatError(err) }))
@@ -80,7 +80,7 @@ export function Auth(props: AuthProps) {
       const opener = yield* LinkOpener
       yield* opener.open(url)
     }).pipe(
-      Effect.catchAll((err) =>
+      Effect.catchEager((err) =>
         Effect.sync(() => {
           send(AuthEvent.ActionFailed({ error: formatError(ClientError(err.message)) }))
         }),
@@ -128,7 +128,7 @@ export function Auth(props: AuthProps) {
             loadAuth()
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
         ),
       ),
@@ -151,7 +151,7 @@ export function Auth(props: AuthProps) {
             loadAuth()
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
         ),
       ),
@@ -210,7 +210,7 @@ export function Auth(props: AuthProps) {
           }
           return Effect.void
         }),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
         ),
       ),
@@ -231,7 +231,7 @@ export function Auth(props: AuthProps) {
             loadAuth()
           }),
         ),
-        Effect.catchAll((err) =>
+        Effect.catchEager((err) =>
           Effect.sync(() => send(AuthEvent.OAuthAutoFailed({ error: formatError(err) }))),
         ),
       ),
@@ -269,7 +269,7 @@ export function Auth(props: AuthProps) {
               loadAuth()
             }),
           ),
-          Effect.catchAll((err) =>
+          Effect.catchEager((err) =>
             Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
           ),
         ),

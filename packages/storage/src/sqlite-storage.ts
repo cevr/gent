@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import type { PlatformError } from "effect"
+import { ServiceMap, Effect, Layer, Schema, FileSystem, Path } from "effect"
 import {
   Message,
   Session,
@@ -15,22 +16,20 @@ import {
   type BranchId,
   type MessageId,
 } from "@gent/core"
-import { FileSystem, Path } from "@effect/platform"
-import type { PlatformError } from "@effect/platform/Error"
-import * as SqlClient from "@effect/sql/SqlClient"
+import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 
 // Schema decoders - Effect-based (no sync throws)
-const MessagePartsJson = Schema.parseJson(Schema.Array(MessagePart))
-const decodeMessageParts = Schema.decodeUnknown(MessagePartsJson)
-const encodeMessageParts = Schema.encode(MessagePartsJson)
-const decodeTodoItem = Schema.decodeUnknown(TodoItem)
-const EventJson = Schema.parseJson(AgentEvent)
-const decodeEvent = Schema.decodeUnknown(EventJson)
-const encodeEvent = Schema.encode(EventJson)
+const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
+const decodeMessageParts = Schema.decodeUnknownEffect(MessagePartsJson)
+const encodeMessageParts = Schema.encodeEffect(MessagePartsJson)
+const decodeTodoItem = Schema.decodeUnknownEffect(TodoItem)
+const EventJson = Schema.fromJsonString(AgentEvent)
+const decodeEvent = Schema.decodeUnknownEffect(EventJson)
+const encodeEvent = Schema.encodeEffect(EventJson)
 // Storage Error
 
-export class StorageError extends Schema.TaggedError<StorageError>()("StorageError", {
+export class StorageError extends Schema.TaggedErrorClass<StorageError>()("StorageError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
 }) {}
@@ -752,14 +751,13 @@ const makeStorage = Effect.gen(function* () {
   } satisfies StorageService
 })
 
-export class Storage extends Context.Tag("@gent/storage/src/sqlite-storage/Storage")<
-  Storage,
-  StorageService
->() {
+export class Storage extends ServiceMap.Service<Storage, StorageService>()(
+  "@gent/storage/src/sqlite-storage/Storage",
+) {
   static Live = (
     dbPath: string,
-  ): Layer.Layer<Storage, PlatformError, FileSystem.FileSystem | Path.Path> =>
-    Layer.scoped(
+  ): Layer.Layer<Storage, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+    Layer.effect(
       Storage,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -771,7 +769,7 @@ export class Storage extends Context.Tag("@gent/storage/src/sqlite-storage/Stora
     ).pipe(Layer.provide(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
 
   static Test = (): Layer.Layer<Storage> =>
-    Layer.scoped(Storage, makeStorage).pipe(
+    Layer.effect(Storage, makeStorage).pipe(
       Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
     )
 }

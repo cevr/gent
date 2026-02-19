@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { AuthStorage } from "./auth-storage"
 
 // Auth info
@@ -16,15 +16,15 @@ export class AuthOauth extends Schema.TaggedClass<AuthOauth>()("AuthOauth", {
   accountId: Schema.optional(Schema.String),
 }) {}
 
-export const AuthInfo = Schema.Union(AuthApi, AuthOauth)
+export const AuthInfo = Schema.Union([AuthApi, AuthOauth])
 export type AuthInfo = typeof AuthInfo.Type
 
-export const AuthType = Schema.Literal("api", "oauth")
+export const AuthType = Schema.Literals(["api", "oauth"])
 export type AuthType = typeof AuthType.Type
 
 // Auth store error
 
-export class AuthStoreError extends Schema.TaggedError<AuthStoreError>()("AuthStoreError", {
+export class AuthStoreError extends Schema.TaggedErrorClass<AuthStoreError>()("AuthStoreError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
 }) {}
@@ -39,19 +39,20 @@ export interface AuthStoreService {
   readonly listInfo: () => Effect.Effect<Record<string, AuthInfo>, AuthStoreError>
 }
 
-export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore")<
-  AuthStore,
-  AuthStoreService
->() {
+export class AuthStore extends ServiceMap.Service<AuthStore, AuthStoreService>()(
+  "@gent/core/src/auth-store/AuthStore",
+) {
   static Live: Layer.Layer<AuthStore, never, AuthStorage> = Layer.effect(
     AuthStore,
     Effect.gen(function* () {
       const storage = yield* AuthStorage
-      const AuthInfoJson = Schema.parseJson(AuthInfo)
+      const AuthInfoJson = Schema.fromJsonString(AuthInfo)
 
       const decode = (raw: string): Effect.Effect<AuthInfo, AuthStoreError> =>
-        Schema.decodeUnknown(AuthInfoJson)(raw).pipe(
-          Effect.catchAll(() => Effect.succeed(new AuthApi({ type: "api", key: raw }) as AuthInfo)),
+        Schema.decodeUnknownEffect(AuthInfoJson)(raw).pipe(
+          Effect.catchEager(() =>
+            Effect.succeed(new AuthApi({ type: "api", key: raw }) as AuthInfo),
+          ),
           Effect.mapError(
             (e) =>
               new AuthStoreError({
@@ -62,7 +63,7 @@ export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore"
         )
 
       const encode = (info: AuthInfo): Effect.Effect<string, AuthStoreError> =>
-        Schema.encode(AuthInfoJson)(info).pipe(
+        Schema.encodeEffect(AuthInfoJson)(info).pipe(
           Effect.mapError(
             (e) =>
               new AuthStoreError({
@@ -75,7 +76,7 @@ export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore"
       return AuthStore.of({
         get: (provider) =>
           storage.get(provider).pipe(
-            Effect.catchAll(() => Effect.succeed(undefined)),
+            Effect.catchEager(() => Effect.succeed(undefined)),
             Effect.flatMap((raw) =>
               raw !== undefined && raw.length > 0 ? decode(raw) : Effect.succeed(undefined),
             ),
@@ -95,25 +96,25 @@ export class AuthStore extends Context.Tag("@gent/core/src/auth-store/AuthStore"
 
         remove: (provider) =>
           storage.delete(provider).pipe(
-            Effect.catchAll((e) => Effect.logWarning("failed to remove auth key", e)),
+            Effect.catchEager((e) => Effect.logWarning("failed to remove auth key", e)),
             Effect.withSpan("AuthStore.remove"),
           ),
 
         list: () =>
           storage.list().pipe(
-            Effect.catchAll(() => Effect.succeed([])),
+            Effect.catchEager(() => Effect.succeed([])),
             Effect.withSpan("AuthStore.list"),
           ),
 
         listInfo: () =>
           storage.list().pipe(
-            Effect.catchAll(() => Effect.succeed([] as readonly string[])),
+            Effect.catchEager(() => Effect.succeed([] as readonly string[])),
             Effect.flatMap((providers) =>
               Effect.forEach(
                 providers,
                 (provider) =>
                   storage.get(provider).pipe(
-                    Effect.catchAll(() => Effect.succeed(undefined)),
+                    Effect.catchEager(() => Effect.succeed(undefined)),
                     Effect.flatMap((raw) =>
                       raw !== undefined && raw.length > 0
                         ? decode(raw).pipe(Effect.map((info) => [provider, info] as const))

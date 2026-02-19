@@ -1,4 +1,4 @@
-import { Context, Layer } from "effect"
+import { ServiceMap, Layer } from "effect"
 
 export type OsPlatform = "darwin" | "win32" | "linux" | "other"
 
@@ -13,10 +13,9 @@ export interface OsServiceShape {
   readonly platform: OsPlatform
 }
 
-export class OsService extends Context.Tag("@gent/core/src/os-service/OsService")<
-  OsService,
-  OsServiceShape
->() {
+export class OsService extends ServiceMap.Service<OsService, OsServiceShape>()(
+  "@gent/core/src/os-service/OsService",
+) {
   static Live: Layer.Layer<OsService> = Layer.succeed(OsService, {
     platform: resolvePlatform(process.platform),
   })

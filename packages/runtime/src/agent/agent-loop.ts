@@ -1,13 +1,13 @@
 import {
   Cause,
-  Context,
+  ServiceMap,
   DateTime,
   Deferred,
   Effect,
+  FileSystem,
   Layer,
   Queue,
   Ref,
-  Runtime,
   Schema,
   Stream,
 } from "effect"
@@ -60,7 +60,6 @@ import type { ProviderError, FinishChunk, ProviderRequest } from "@gent/provider
 import { Provider } from "@gent/providers"
 import { withRetry } from "../retry"
 import { CheckpointService } from "../checkpoint"
-import { FileSystem } from "@effect/platform"
 import { ToolRunner } from "./tool-runner"
 
 // Agent Loop Error
@@ -101,7 +100,7 @@ const buildProviderOptions = (
   }
 }
 
-export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
+export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("AgentLoopError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
 }) {}
@@ -113,12 +112,12 @@ const SteerTargetFields = {
   branchId: BranchId,
 }
 
-export const SteerCommand = Schema.Union(
+export const SteerCommand = Schema.Union([
   Schema.TaggedStruct("Cancel", SteerTargetFields),
   Schema.TaggedStruct("Interrupt", SteerTargetFields),
   Schema.TaggedStruct("Interject", { ...SteerTargetFields, message: Schema.String }),
   Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
-)
+])
 export type SteerCommand = typeof SteerCommand.Type
 
 // Agent Loop Context
@@ -173,10 +172,9 @@ export interface AgentLoopService {
   }) => Effect.Effect<boolean>
 }
 
-export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/AgentLoop")<
-  AgentLoop,
-  AgentLoopService
->() {
+export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()(
+  "@gent/runtime/src/agent/agent-loop/AgentLoop",
+) {
   static Live = (config: {
     systemPrompt: string
   }): Layer.Layer<
@@ -230,7 +228,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
 
               const latestAgentEvent = yield* storage
                 .getLatestEvent({ sessionId, branchId, tags: ["AgentSwitched"] })
-                .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
 
               const raw =
                 latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
@@ -392,7 +390,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                   if (checkpoint._tag === "PlanCheckpoint") {
                     const planContent = yield* fs
                       .readFileString(checkpoint.planPath)
-                      .pipe(Effect.catchAll(() => Effect.succeed("")))
+                      .pipe(Effect.catchEager(() => Effect.succeed("")))
                     const loaded = yield* storage.listMessagesSince(branchId, checkpoint.createdAt)
                     cachedMessages = [...loaded]
                     cachedContextPrefix =
@@ -739,7 +737,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                   runLoop(state.message, state.bypass).pipe(
                     Effect.annotateLogs({ sessionId, branchId }),
                     Effect.withSpan("AgentLoop.run"),
-                    Effect.tapErrorCause((cause) =>
+                    Effect.tapCause((cause) =>
                       publishEvent(
                         new ErrorOccurred({
                           sessionId,
@@ -747,14 +745,14 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
                           error: Cause.pretty(cause),
                         }),
                       ).pipe(
-                        Effect.catchAll((e) =>
+                        Effect.catchEager((e) =>
                           Effect.logWarning("failed to publish ErrorOccurred event", e),
                         ),
                       ),
                     ),
                   ),
                 {
-                  onSuccess: (interrupted) =>
+                  onSuccess: (interrupted: boolean) =>
                     AgentLoopEvent.Completed({
                       interrupted,
                       sessionId,
@@ -819,13 +817,13 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
             // Use sync subscribe to avoid SubscriptionRef semaphore deadlock.
             // Subscribe BEFORE sending Start so we can't miss fast transitions.
             const done = yield* Deferred.make<void>()
-            const runtime = yield* Effect.runtime<never>()
+            const services = yield* Effect.services<never>()
             let sawRunning = false
             const unsubscribe = loop.actor.subscribe((state) => {
               if (state._tag === "Running") {
                 sawRunning = true
               } else if (sawRunning) {
-                Runtime.runFork(runtime)(Deferred.succeed(done, void 0))
+                Effect.runForkWith(services)(Deferred.succeed(done, void 0))
               }
             })
 
@@ -850,7 +848,7 @@ export class AgentLoop extends Context.Tag("@gent/runtime/src/agent/agent-loop/A
               }
               const session = yield* storage
                 .getSession(message.sessionId)
-                .pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
               const bypass = session?.bypass ?? true
               yield* Ref.update(loop.followUpQueue, (items) => [...items, { message, bypass }])
             }),
@@ -931,10 +929,9 @@ export interface AgentActorService {
   readonly run: (input: AgentRunInput) => Effect.Effect<void, SubagentError>
 }
 
-export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/AgentActor")<
-  AgentActor,
-  AgentActorService
->() {
+export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService>()(
+  "@gent/runtime/src/agent/agent-loop/AgentActor",
+) {
   static Live: Layer.Layer<
     AgentActor,
     never,
@@ -964,7 +961,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
               }),
             )
             .pipe(
-              Effect.catchAll((e) =>
+              Effect.catchEager((e) =>
                 Effect.logWarning("failed to publish MachineTaskSucceeded", e),
               ),
             )
@@ -986,10 +983,14 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
               error,
             }),
           )
-          .pipe(Effect.catchAll((e) => Effect.logWarning("failed to publish MachineTaskFailed", e)))
+          .pipe(
+            Effect.catchEager((e) => Effect.logWarning("failed to publish MachineTaskFailed", e)),
+          )
       })
 
-      const runEffect = Effect.fn("AgentActor.runEffect")((input: AgentRunInput) =>
+      const runEffect: (input: AgentRunInput) => Effect.Effect<void, SubagentError> = Effect.fn(
+        "AgentActor.runEffect",
+      )((input: AgentRunInput) =>
         Effect.gen(function* () {
           const agent = yield* agentRegistry.get(input.agentName)
           if (agent === undefined) {
@@ -1184,11 +1185,11 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
           }
         }).pipe(
           Effect.tap(() => publishMachineTaskSucceeded(input)),
-          Effect.tapErrorCause((cause) =>
-            Cause.isInterruptedOnly(cause) ? Effect.void : publishMachineTaskFailed(input, cause),
+          Effect.tapCause((cause) =>
+            Cause.hasInterruptsOnly(cause) ? Effect.void : publishMachineTaskFailed(input, cause),
           ),
-          Effect.tapErrorCause((cause) =>
-            Cause.isInterruptedOnly(cause)
+          Effect.tapCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
               ? Effect.void
               : eventStore
                   .publish(
@@ -1199,13 +1200,13 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
                     }),
                   )
                   .pipe(
-                    Effect.catchAll((e) =>
+                    Effect.catchEager((e) =>
                       Effect.logWarning("failed to publish ErrorOccurred event", e),
                     ),
                   ),
           ),
-          Effect.catchAllCause((cause) =>
-            Cause.isInterruptedOnly(cause)
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
               ? Effect.interrupt
               : Effect.fail(new SubagentError({ message: Cause.pretty(cause), cause })),
           ),
@@ -1214,8 +1215,8 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
 
       const run: AgentActorService["run"] = Effect.fn("AgentActor.run")((input) =>
         Effect.gen(function* () {
-          const runtime = yield* Effect.runtime<never>()
-          const runFork = Runtime.runFork(runtime)
+          const services = yield* Effect.services<never>()
+          const runFork = Effect.runForkWith(services)
           const inspector = makeInspector<typeof AgentActorState, typeof AgentActorEvent>(
             (event) => {
               runFork(
@@ -1230,7 +1231,7 @@ export class AgentActor extends Context.Tag("@gent/runtime/src/agent/agent-loop/
                     }),
                   )
                   .pipe(
-                    Effect.catchAll((e) =>
+                    Effect.catchEager((e) =>
                       Effect.logWarning("failed to publish MachineInspected", e),
                     ),
                   ),

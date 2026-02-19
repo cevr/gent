@@ -1,10 +1,9 @@
-import { Effect, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "@gent/core"
 
 // Write Tool Error
 
-export class WriteError extends Schema.TaggedError<WriteError>()("WriteError", {
+export class WriteError extends Schema.TaggedErrorClass<WriteError>()("WriteError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -13,10 +12,10 @@ export class WriteError extends Schema.TaggedError<WriteError>()("WriteError", {
 // Write Tool Params
 
 export const WriteParams = Schema.Struct({
-  path: Schema.String.annotations({
+  path: Schema.String.annotate({
     description: "Absolute path to file to write",
   }),
-  content: Schema.String.annotations({
+  content: Schema.String.annotate({
     description: "Content to write to file",
   }),
 })

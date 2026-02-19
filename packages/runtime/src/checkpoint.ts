@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import {
   CompactionCheckpoint,
   PlanCheckpoint,
@@ -15,7 +15,7 @@ import { Provider, type ProviderError } from "@gent/providers"
 
 // Checkpoint Error
 
-export class CheckpointError extends Schema.TaggedError<CheckpointError>()("CheckpointError", {
+export class CheckpointError extends Schema.TaggedErrorClass<CheckpointError>()("CheckpointError", {
   message: Schema.String,
 }) {}
 
@@ -28,13 +28,13 @@ export const PRUNE_MINIMUM = 20_000 // Only prune if this much to remove
 // Compaction Config Schema
 
 export const CompactionConfig = Schema.Struct({
-  threshold: Schema.Number.pipe(Schema.int(), Schema.positive()).annotations({
+  threshold: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Token threshold to trigger compaction",
   }),
-  pruneProtect: Schema.Number.pipe(Schema.int(), Schema.positive()).annotations({
+  pruneProtect: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Tokens of tool outputs to preserve",
   }),
-  pruneMinimum: Schema.Number.pipe(Schema.int(), Schema.positive()).annotations({
+  pruneMinimum: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Minimum tokens to remove during pruning",
   }),
 })
@@ -108,7 +108,7 @@ export const pruneToolOutputs = (
   }
 
   // Only prune if we have enough to remove
-  if (toolOutputTokens - config.pruneProtect < config.pruneMinimum) {
+  if (toolOutputTokens - config["pruneProtect"] < config["pruneMinimum"]) {
     return [...messages]
   }
 
@@ -124,7 +124,7 @@ export const pruneToolOutputs = (
     for (const part of msg.parts) {
       if (part.type === "tool-result") {
         const partTokens = estimatePartTokens(part)
-        if (protectedTokens + partTokens <= config.pruneProtect) {
+        if (protectedTokens + partTokens <= config["pruneProtect"]) {
           protectedTokens += partTokens
           newParts.push(part)
         } else {
@@ -180,9 +180,10 @@ export interface CheckpointServiceApi {
   readonly estimateTokens: (messages: ReadonlyArray<Message>) => Effect.Effect<number>
 }
 
-export class CheckpointService extends Context.Tag(
-  "@gent/runtime/src/checkpoint/CheckpointService",
-)<CheckpointService, CheckpointServiceApi>() {
+export class CheckpointService extends ServiceMap.Service<
+  CheckpointService,
+  CheckpointServiceApi
+>()("@gent/runtime/src/checkpoint/CheckpointService") {
   static Live = (
     model: string,
     config: CompactionConfig = DEFAULT_COMPACTION_CONFIG,
@@ -199,7 +200,7 @@ export class CheckpointService extends Context.Tag(
           ) {
             const messages = yield* storage.listMessages(branchId)
             const tokens = estimateTokens(messages)
-            return tokens >= config.threshold
+            return tokens >= config["threshold"]
           }),
 
           createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(

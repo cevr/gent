@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Deferred, Effect, Layer, Schema } from "effect"
 import {
   defineTool,
   EventStore,
@@ -11,26 +11,26 @@ import {
 // AskUser Tool Params
 
 const QuestionOptionParamsSchema = Schema.Struct({
-  label: Schema.String.annotations({ description: "Option label shown to user" }),
-  description: Schema.optional(Schema.String.annotations({ description: "Optional description" })),
+  label: Schema.String.annotate({ description: "Option label shown to user" }),
+  description: Schema.optional(Schema.String.annotate({ description: "Optional description" })),
 })
 
 export const AskUserParams = Schema.Struct({
-  question: Schema.String.annotations({
+  question: Schema.String.annotate({
     description: "Question to ask the user",
   }),
   header: Schema.optional(
-    Schema.String.annotations({
+    Schema.String.annotate({
       description: "Short header label (max 12 chars)",
     }),
   ),
   options: Schema.optional(
-    Schema.Array(QuestionOptionParamsSchema).annotations({
+    Schema.Array(QuestionOptionParamsSchema).annotate({
       description: "Options for user to choose from (label + optional description)",
     }),
   ),
   multiple: Schema.optional(
-    Schema.Boolean.annotations({
+    Schema.Boolean.annotate({
       description: "Allow multiple selections (checkbox) vs single (radio)",
     }),
   ),
@@ -59,10 +59,9 @@ export interface AskUserHandlerService {
   ) => Effect.Effect<void>
 }
 
-export class AskUserHandler extends Context.Tag("@gent/tools/src/ask-user/AskUserHandler")<
-  AskUserHandler,
-  AskUserHandlerService
->() {
+export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
+  "@gent/tools/src/ask-user/AskUserHandler",
+) {
   static Live: Layer.Layer<AskUserHandler, never, EventStore> = Layer.effect(
     AskUserHandler,
     Effect.gen(function* () {
@@ -145,25 +144,27 @@ export const AskUserTool = defineTool({
 // ============================================================================
 
 const QuestionOption = Schema.Struct({
-  label: Schema.String.annotations({
+  label: Schema.String.annotate({
     description: "Short display text for the option",
   }),
-  description: Schema.String.annotations({
+  description: Schema.String.annotate({
     description: "Explanation of what this option means",
   }),
 })
 
 const QuestionInput = Schema.Struct({
-  question: Schema.String.annotations({
+  question: Schema.String.annotate({
     description: "The question to ask",
   }),
-  header: Schema.String.pipe(Schema.maxLength(30)).annotations({
+  header: Schema.String.check(Schema.isMaxLength(30)).annotate({
     description: "Short label for the question (max 30 chars)",
   }),
-  options: Schema.Array(QuestionOption).pipe(Schema.minItems(2), Schema.maxItems(4)).annotations({
-    description: "2-4 choices for the user",
-  }),
-  multiple: Schema.optional(Schema.Boolean).annotations({
+  options: Schema.Array(QuestionOption)
+    .check(Schema.isMinLength(2), Schema.isMaxLength(4))
+    .annotate({
+      description: "2-4 choices for the user",
+    }),
+  multiple: Schema.optional(Schema.Boolean).annotate({
     description: "Allow selecting multiple options",
   }),
 })
@@ -175,10 +176,9 @@ export interface QuestionHandlerService {
   ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>, EventStoreError>
 }
 
-export class QuestionHandler extends Context.Tag("@gent/tools/src/ask-user/QuestionHandler")<
-  QuestionHandler,
-  QuestionHandlerService
->() {
+export class QuestionHandler extends ServiceMap.Service<QuestionHandler, QuestionHandlerService>()(
+  "@gent/tools/src/ask-user/QuestionHandler",
+) {
   static Live: Layer.Layer<QuestionHandler, never, AskUserHandler> = Layer.effect(
     QuestionHandler,
     Effect.gen(function* () {
@@ -201,13 +201,15 @@ export class QuestionHandler extends Context.Tag("@gent/tools/src/ask-user/Quest
 }
 
 export const QuestionParams = Schema.Struct({
-  questions: Schema.Array(QuestionInput).pipe(Schema.minItems(1), Schema.maxItems(5)).annotations({
-    description: "1-5 questions to ask the user",
-  }),
+  questions: Schema.Array(QuestionInput)
+    .check(Schema.isMinLength(1), Schema.isMaxLength(5))
+    .annotate({
+      description: "1-5 questions to ask the user",
+    }),
 })
 
 export const QuestionResult = Schema.Struct({
-  answers: Schema.Array(Schema.Array(Schema.String)).annotations({
+  answers: Schema.Array(Schema.Array(Schema.String)).annotate({
     description: "Selected labels for each question",
   }),
 })

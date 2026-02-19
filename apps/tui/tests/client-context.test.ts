@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect, mock } from "bun:test"
-import { Effect, Stream, Runtime } from "effect"
+import { Effect, Stream, ServiceMap } from "effect"
 import type { AgentEvent, EventEnvelope } from "@gent/core"
 import {
   EventEnvelope as EventEnvelopeClass,
@@ -60,7 +60,7 @@ function createMockClient() {
     createSession: mock(() => Effect.succeed({ sessionId: "s1", branchId: "b1", name: "Test" })),
     createBranch: mock(() => Effect.succeed("new-branch")),
     steer: mock(() => Effect.void),
-    runtime: Runtime.defaultRuntime,
+    services: ServiceMap.empty(),
   }
 }
 

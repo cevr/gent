@@ -1,13 +1,12 @@
-import { Config, Context, Effect, Layer, Option, Ref, Schema } from "effect"
-import { FileSystem, Path } from "@effect/platform"
+import { Config, ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { Model } from "@gent/core"
 import type { ModelId, ModelPricing } from "@gent/core"
 import * as os from "node:os"
 
 const MODELS_URL = "https://models.dev"
 const CACHE_RELATIVE = ".gent/models.json"
-const JsonSchema = Schema.parseJson(Schema.Unknown)
-const decodeJson = Schema.decodeUnknown(JsonSchema)
+const JsonSchema = Schema.fromJsonString(Schema.Unknown)
+const decodeJson = Schema.decodeUnknownEffect(JsonSchema)
 
 type JsonRecord = Record<string, unknown>
 
@@ -65,19 +64,18 @@ export interface ModelRegistryService {
   readonly refresh: () => Effect.Effect<void>
 }
 
-export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry/ModelRegistry")<
-  ModelRegistry,
-  ModelRegistryService
->() {
-  static Live: Layer.Layer<ModelRegistry, never, FileSystem.FileSystem | Path.Path> = Layer.scoped(
+export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegistryService>()(
+  "@gent/runtime/src/model-registry/ModelRegistry",
+) {
+  static Live: Layer.Layer<ModelRegistry, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const home = yield* Config.option(Config.string("HOME")).pipe(
-        Effect.catchAll(() => Effect.succeed(Option.none())),
-        Effect.map(Option.getOrElse(() => os.homedir())),
-      )
+      const homeOption = yield* Effect.gen(function* () {
+        return yield* Config.option(Config.string("HOME"))
+      }).pipe(Effect.catchEager(() => Effect.succeed(Option.none())))
+      const home = Option.getOrElse(homeOption, () => os.homedir())
       const cachePath = path.join(home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 
@@ -86,12 +84,14 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
         if (!exists) return [] as readonly Model[]
         const content = yield* fs
           .readFileString(cachePath)
-          .pipe(Effect.catchAll(() => Effect.succeed("")))
+          .pipe(Effect.catchEager(() => Effect.succeed("")))
         if (content.trim().length === 0) return [] as readonly Model[]
-        const decoded = yield* decodeJson(content).pipe(Effect.catchAll(() => Effect.succeed(null)))
+        const decoded = yield* decodeJson(content).pipe(
+          Effect.catchEager(() => Effect.succeed(null)),
+        )
         return parseModelsDev(decoded)
       }).pipe(
-        Effect.catchAll(() => Effect.succeed([] as readonly Model[])),
+        Effect.catchEager(() => Effect.succeed([] as readonly Model[])),
         Effect.withSpan("ModelRegistry.loadFromDisk"),
       )
 
@@ -110,18 +110,18 @@ export class ModelRegistry extends Context.Tag("@gent/runtime/src/model-registry
           catch: () => "",
         })
         if (text.length === 0) return [] as readonly Model[]
-        const decoded = yield* decodeJson(text).pipe(Effect.catchAll(() => Effect.succeed(null)))
+        const decoded = yield* decodeJson(text).pipe(Effect.catchEager(() => Effect.succeed(null)))
         const parsed = parseModelsDev(decoded)
         if (parsed.length > 0) {
           const dir = path.dirname(cachePath)
           yield* fs.makeDirectory(dir, { recursive: true })
           yield* fs
             .writeFileString(cachePath, text)
-            .pipe(Effect.catchAll((e) => Effect.logWarning("failed to write model cache", e)))
+            .pipe(Effect.catchEager((e) => Effect.logWarning("failed to write model cache", e)))
         }
         return parsed
       }).pipe(
-        Effect.catchAll(() => Effect.succeed([] as readonly Model[])),
+        Effect.catchEager(() => Effect.succeed([] as readonly Model[])),
         Effect.withSpan("ModelRegistry.fetchRemote"),
       )
 

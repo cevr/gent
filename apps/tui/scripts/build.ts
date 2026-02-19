@@ -41,7 +41,7 @@ console.log(`✅ Binary built: ${join(binDir, "gent")}`)
 // Symlink to global bun bin
 const home = Effect.runSync(
   Config.option(Config.string("HOME")).pipe(
-    Effect.catchAll(() => Effect.succeed(Option.none())),
+    Effect.catchEager(() => Effect.succeed(Option.none())),
     Effect.map(Option.getOrElse(() => os.homedir())),
   ),
 )
