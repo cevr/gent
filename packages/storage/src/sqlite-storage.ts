@@ -226,10 +226,10 @@ const initSchema = Effect.gen(function* () {
   `)
 
   // Migrations
-  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN cwd TEXT`).pipe(Effect.ignore)
-  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN bypass INTEGER`).pipe(Effect.ignore)
-  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`).pipe(Effect.ignore)
-  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN parent_branch_id TEXT`).pipe(Effect.ignore)
+  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN cwd TEXT`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN bypass INTEGER`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN parent_branch_id TEXT`).pipe(Effect.ignoreCause)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS branches (
@@ -244,7 +244,7 @@ const initSchema = Effect.gen(function* () {
     )
   `)
 
-  yield* sql.unsafe(`ALTER TABLE branches ADD COLUMN summary TEXT`).pipe(Effect.ignore)
+  yield* sql.unsafe(`ALTER TABLE branches ADD COLUMN summary TEXT`).pipe(Effect.ignoreCause)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -260,7 +260,7 @@ const initSchema = Effect.gen(function* () {
     )
   `)
 
-  yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN kind TEXT`).pipe(Effect.ignore)
+  yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN kind TEXT`).pipe(Effect.ignoreCause)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS events (

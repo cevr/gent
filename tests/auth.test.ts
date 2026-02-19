@@ -12,10 +12,7 @@ describe("AuthStore", () => {
 
   it("get returns undefined for missing key", async () => {
     const result = await Effect.runPromise(
-      AuthStore.pipe(
-        Effect.flatMap((auth) => auth.get("anthropic")),
-        Effect.provide(storeLayer()),
-      ),
+      AuthStore.use((auth) => auth.get("anthropic")).pipe(Effect.provide(storeLayer())),
     )
     expect(result).toBeUndefined()
   })
@@ -23,10 +20,7 @@ describe("AuthStore", () => {
   it("get returns stored api auth", async () => {
     const layer = storeLayer({ anthropic: "sk-test-key" })
     const result = await Effect.runPromise(
-      AuthStore.pipe(
-        Effect.flatMap((auth) => auth.get("anthropic")),
-        Effect.provide(layer),
-      ),
+      AuthStore.use((auth) => auth.get("anthropic")).pipe(Effect.provide(layer)),
     )
     expect(result?.type).toBe("api")
   })
@@ -64,10 +58,7 @@ describe("AuthStore", () => {
   it("listInfo returns auth info for all providers", async () => {
     const layer = storeLayer({ anthropic: "key1", openai: "key2" })
     const result = await Effect.runPromise(
-      AuthStore.pipe(
-        Effect.flatMap((auth) => auth.listInfo()),
-        Effect.provide(layer),
-      ),
+      AuthStore.use((auth) => auth.listInfo()).pipe(Effect.provide(layer)),
     )
     expect(Object.keys(result)).toContain("anthropic")
     expect(Object.keys(result)).toContain("openai")

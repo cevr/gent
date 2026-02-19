@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import {
   isRetryable,
   getRetryDelay,
@@ -366,10 +366,10 @@ describe("AgentLoop actor model", () => {
           const fiberB = yield* Effect.forkChild(agentLoop.run(messageB))
 
           const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
-          expect(Option.isSome(finishedB)).toBe(true)
+          expect(finishedB._tag).toBe("Some")
 
-          const statusA = yield* Fiber.poll(fiberA)
-          expect(Option.isNone(statusA)).toBe(true)
+          const statusA = fiberA.pollUnsafe()
+          expect(statusA).toBeUndefined()
 
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiberA)
@@ -413,10 +413,10 @@ describe("AgentLoop actor model", () => {
           yield* agentLoop.steer({ _tag: "Interrupt", sessionId: "s1", branchId: "b1" })
 
           const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeoutOption("200 millis"))
-          expect(Option.isSome(finishedA)).toBe(true)
+          expect(finishedA._tag).toBe("Some")
 
-          const statusB = yield* Fiber.poll(fiberB)
-          expect(Option.isNone(statusB)).toBe(true)
+          const statusB = fiberB.pollUnsafe()
+          expect(statusB).toBeUndefined()
 
           yield* Deferred.succeed(gateA, undefined)
           yield* Deferred.succeed(gateB, undefined)

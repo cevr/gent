@@ -12,10 +12,7 @@ describe("ConfigService", () => {
     it("get returns empty config initially", async () => {
       const layer = ConfigService.Test()
       const result = await Effect.runPromise(
-        ConfigService.pipe(
-          Effect.flatMap((cfg) => cfg.get()),
-          Effect.provide(layer),
-        ),
+        ConfigService.use((cfg) => cfg.get()).pipe(Effect.provide(layer)),
       )
       expect(result.permissions).toBeUndefined()
     })
@@ -26,10 +23,7 @@ describe("ConfigService", () => {
       })
       const layer = ConfigService.Test(initial)
       const result = await Effect.runPromise(
-        ConfigService.pipe(
-          Effect.flatMap((cfg) => cfg.get()),
-          Effect.provide(layer),
-        ),
+        ConfigService.use((cfg) => cfg.get()).pipe(Effect.provide(layer)),
       )
       expect(result.permissions?.length).toBe(1)
       expect(result.permissions?.[0]?.tool).toBe("Bash")
@@ -53,10 +47,7 @@ describe("ConfigService", () => {
     it("getPermissionRules returns empty array initially", async () => {
       const layer = ConfigService.Test()
       const result = await Effect.runPromise(
-        ConfigService.pipe(
-          Effect.flatMap((cfg) => cfg.getPermissionRules()),
-          Effect.provide(layer),
-        ),
+        ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(Effect.provide(layer)),
       )
       expect(result).toEqual([])
     })
@@ -70,10 +61,7 @@ describe("ConfigService", () => {
       })
       const layer = ConfigService.Test(initial)
       const result = await Effect.runPromise(
-        ConfigService.pipe(
-          Effect.flatMap((cfg) => cfg.getPermissionRules()),
-          Effect.provide(layer),
-        ),
+        ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(Effect.provide(layer)),
       )
       expect(result.length).toBe(2)
     })
@@ -162,8 +150,7 @@ describe("ConfigService", () => {
       const layer = ConfigService.Test()
       // Should not throw
       await Effect.runPromise(
-        ConfigService.pipe(
-          Effect.flatMap((cfg) => cfg.removePermissionRule("NonExistent", undefined)),
+        ConfigService.use((cfg) => cfg.removePermissionRule("NonExistent", undefined)).pipe(
           Effect.provide(layer),
         ),
       )

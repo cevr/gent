@@ -11,10 +11,7 @@ describe("Permission", () => {
     it("returns 'allowed' when no rules match and default is allow", async () => {
       const layer = Permission.Live([], "allow")
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("TestTool", {})),
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.check("TestTool", {})).pipe(Effect.provide(layer)),
       )
       expect(result).toBe("allowed")
     })
@@ -22,10 +19,7 @@ describe("Permission", () => {
     it("returns 'ask' when no rules match and default is ask", async () => {
       const layer = Permission.Live([], "ask")
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("TestTool", {})),
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.check("TestTool", {})).pipe(Effect.provide(layer)),
       )
       expect(result).toBe("ask")
     })
@@ -33,10 +27,7 @@ describe("Permission", () => {
     it("returns 'denied' when no rules match and default is deny", async () => {
       const layer = Permission.Live([], "deny")
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("TestTool", {})),
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.check("TestTool", {})).pipe(Effect.provide(layer)),
       )
       expect(result).toBe("denied")
     })
@@ -45,8 +36,7 @@ describe("Permission", () => {
       const rules = [new PermissionRule({ tool: "ReadFile", action: "allow" })]
       const layer = Permission.Live(rules, "deny")
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("ReadFile", { path: "/tmp/test" })),
+        Permission.use((p) => p.check("ReadFile", { path: "/tmp/test" })).pipe(
           Effect.provide(layer),
         ),
       )
@@ -57,8 +47,7 @@ describe("Permission", () => {
       const rules = [new PermissionRule({ tool: "Bash", action: "deny" })]
       const layer = Permission.Live(rules, "allow")
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("Bash", { command: "rm -rf /" })),
+        Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(
           Effect.provide(layer),
         ),
       )
@@ -69,8 +58,7 @@ describe("Permission", () => {
       const rules = [new PermissionRule({ tool: "Write", action: "ask" })]
       const layer = Permission.Live(rules, "allow")
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("Write", { path: "/etc/passwd" })),
+        Permission.use((p) => p.check("Write", { path: "/etc/passwd" })).pipe(
           Effect.provide(layer),
         ),
       )
@@ -81,10 +69,7 @@ describe("Permission", () => {
       const rules = [new PermissionRule({ tool: "*", action: "deny" })]
       const layer = Permission.Live(rules, "allow")
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("AnyTool", {})),
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.check("AnyTool", {})).pipe(Effect.provide(layer)),
       )
       expect(result).toBe("denied")
     })
@@ -95,8 +80,7 @@ describe("Permission", () => {
 
       // Should match pattern
       const result1 = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("Bash", { command: "rm -rf /tmp" })),
+        Permission.use((p) => p.check("Bash", { command: "rm -rf /tmp" })).pipe(
           Effect.provide(layer),
         ),
       )
@@ -104,8 +88,7 @@ describe("Permission", () => {
 
       // Should not match pattern
       const result2 = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("Bash", { command: "ls -la" })),
+        Permission.use((p) => p.check("Bash", { command: "ls -la" })).pipe(
           Effect.provide(layer),
         ),
       )
@@ -121,8 +104,7 @@ describe("Permission", () => {
 
       // First rule matches
       const result1 = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("Bash", { command: "git status" })),
+        Permission.use((p) => p.check("Bash", { command: "git status" })).pipe(
           Effect.provide(layer),
         ),
       )
@@ -130,8 +112,7 @@ describe("Permission", () => {
 
       // Second rule matches
       const result2 = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.check("Bash", { command: "rm -rf /" })),
+        Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(
           Effect.provide(layer),
         ),
       )
@@ -196,10 +177,7 @@ describe("Permission", () => {
       const layer = Permission.Live(rules, "allow")
 
       const result = await Effect.runPromise(
-        Permission.pipe(
-          Effect.flatMap((p) => p.getRules()),
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.getRules()).pipe(Effect.provide(layer)),
       )
       expect(result.length).toBe(2)
       expect(result[0]?.tool).toBe("Read")
