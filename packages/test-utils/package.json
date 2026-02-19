@@ -16,8 +16,7 @@
     "@gent/tools": "workspace:*"
   },
   "peerDependencies": {
-    "@effect/vitest": "catalog:",
     "effect": "catalog:",
-    "vitest": "catalog:"
+    "effect-bun-test": "catalog:"
   }
 }

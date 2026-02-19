@@ -21,8 +21,8 @@ import {
 import { AskUserHandler, AllTools } from "@gent/tools"
 import { AgentLoop, CheckpointService } from "@gent/runtime"
 
-// Re-export @effect/vitest
-export { it, describe, expect } from "@effect/vitest"
+// Re-export effect-bun-test
+export { it, describe, expect } from "effect-bun-test"
 
 // Call Record
 
