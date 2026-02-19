@@ -11,6 +11,7 @@ import {
   type ProviderId,
 } from "@gent/core"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
+import { authorizeAnthropic } from "./oauth/anthropic-oauth"
 
 export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
   "ProviderAuthError",
@@ -51,8 +52,39 @@ const buildProviders = (): Record<ProviderId, ProviderAuthProvider> => {
     new AuthMethod({ type: "api", label: "Manually enter API key" }),
   ]
 
+  const anthropicMethods = [
+    new AuthMethod({ type: "oauth", label: "Claude Pro/Max" }),
+    new AuthMethod({ type: "api", label: "Manually enter API key" }),
+  ]
+
   return {
-    anthropic: { methods: methodsDefault, authorize: () => Effect.succeed(undefined) },
+    anthropic: {
+      methods: anthropicMethods,
+      authorize: (index) =>
+        Effect.tryPromise({
+          try: async () => {
+            if (index !== 0) return undefined
+            const { authorization, callback } = await authorizeAnthropic()
+            return {
+              authorization,
+              callback: (code?: string) =>
+                Effect.tryPromise({
+                  try: async () => callback(code),
+                  catch: (e) =>
+                    new ProviderAuthError({
+                      message: "Anthropic OAuth callback failed",
+                      cause: e,
+                    }),
+                }),
+            }
+          },
+          catch: (e) =>
+            new ProviderAuthError({
+              message: "Anthropic OAuth authorize failed",
+              cause: e,
+            }),
+        }),
+    },
     openai: {
       methods: openaiMethods,
       authorize: (index) =>

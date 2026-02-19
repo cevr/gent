@@ -9,6 +9,7 @@ import { fromIni } from "@aws-sdk/credential-providers"
 import { AuthStore, SUPPORTED_PROVIDERS, type AuthInfo, type AuthStoreService } from "@gent/core"
 import { ProviderError } from "./provider"
 import { OPENAI_OAUTH_ALLOWED_MODELS, createOpenAIOAuthFetch } from "./oauth/openai-oauth"
+import { createAnthropicOAuthFetch } from "./oauth/anthropic-oauth"
 
 type ProviderApi =
   | "anthropic"
@@ -82,6 +83,12 @@ const createProviderClient = (
   const resolvedApiKey = apiKey !== undefined && apiKey !== "" ? { apiKey } : undefined
   switch (api) {
     case "anthropic":
+      if (auth?.type === "oauth") {
+        return createAnthropic({
+          apiKey: "oauth-placeholder",
+          fetch: createAnthropicOAuthFetch(authStore),
+        })
+      }
       return createAnthropic(resolvedApiKey)
     case "openai":
       if (auth?.type === "oauth") {
