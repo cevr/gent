@@ -2,7 +2,6 @@ import { mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
-import { Config, Effect, Option } from "effect"
 import * as os from "node:os"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -39,12 +38,7 @@ if (!buildResult.success) {
 console.log(`✅ Binary built: ${join(binDir, "gent")}`)
 
 // Symlink to global bun bin
-const home = Effect.runSync(
-  Config.option(Config.string("HOME")).pipe(
-    Effect.catchEager(() => Effect.succeed(Option.none())),
-    Effect.map(Option.getOrElse(() => os.homedir())),
-  ),
-)
+const home = process.env["HOME"] ?? os.homedir()
 const bunBin = join(home, ".bun", "bin", "gent")
 try {
   try {
