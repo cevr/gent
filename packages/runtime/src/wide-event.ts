@@ -141,7 +141,7 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
           }
 
           return eventStore.subscribe({ sessionId }).pipe(
-            Stream.filter(
+            Stream.filterMap(
               Filter.fromPredicateOption((envelope) => {
                 const event = envelope.event
                 const branchId =

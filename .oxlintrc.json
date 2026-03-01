@@ -28,7 +28,10 @@
     "node/no-process-env": "error",
 
     // Unused vars
-    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }]
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+
+    // Disabled — false positives with TS enums, type imports, etc.
+    "no-shadow": "off"
   },
   "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/*.d.ts", "**/scripts/**"],
   "overrides": [

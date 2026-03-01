@@ -9,6 +9,7 @@ import {
   Queue,
   Ref,
   Schema,
+  Semaphore,
   Stream,
 } from "effect"
 import {
@@ -129,10 +130,7 @@ type FollowUpItem = {
 
 type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
 
-type Semaphore =
-  ReturnType<typeof Effect.makeSemaphore> extends Effect.Effect<infer A, unknown, unknown>
-    ? A
-    : never
+type SemaphoreType = Semaphore.Semaphore
 
 type LoopHandle = {
   actor: LoopActor
@@ -140,7 +138,7 @@ type LoopHandle = {
   pendingSteerRef: Ref.Ref<SteerCommand[]>
   followUpQueue: Ref.Ref<FollowUpItem[]>
   currentAgentRef: Ref.Ref<AgentNameType | undefined>
-  serialSemaphore: Semaphore
+  serialSemaphore: SemaphoreType
 }
 
 // Agent Loop Machine
@@ -216,7 +214,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
-            const serialSemaphore = yield* Effect.makeSemaphore(1)
+            const serialSemaphore = yield* Semaphore.make(1)
             const steerQueue = yield* Queue.unbounded<SteerCommand>()
             const pendingSteerRef = yield* Ref.make<SteerCommand[]>([])
             const followUpQueue = yield* Ref.make<FollowUpItem[]>([])
@@ -945,7 +943,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
       const eventStore = yield* EventStore
       const agentRegistry = yield* AgentRegistry
       const toolRunner = yield* ToolRunner
-      const serialSemaphore = yield* Effect.makeSemaphore(1)
+      const serialSemaphore = yield* Semaphore.make(1)
 
       const actorIdFor = (input: AgentRunInput) => `agent-${input.sessionId}-${input.branchId}`
 

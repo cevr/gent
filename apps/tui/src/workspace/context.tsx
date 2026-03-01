@@ -1,8 +1,8 @@
 import { createContext, useContext, onMount, onCleanup, createSignal } from "solid-js"
 import type { JSX } from "solid-js"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ChildProcess } from "effect/unstable/process"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { Effect, Fiber, ServiceMap } from "effect"
+import { Effect, Fiber, ServiceMap, Stream } from "effect"
 
 export interface GitStatus {
   branch: string
@@ -39,13 +39,18 @@ interface GitInfo {
 }
 
 const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
-  ChildProcess.make("git", [...args]).pipe(
-    ChildProcess.setCwd(cwd),
-    ChildProcess.string,
-    Effect.map((text: string) => text.trim()),
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* ChildProcess.make("git", [...args], { cwd })
+      const chunks = yield* Stream.runCollect(handle.stdout)
+      const decoder = new TextDecoder()
+      return chunks.reduce((acc, chunk) => acc + decoder.decode(chunk), "").trim()
+    }),
   )
 
-const getGitInfo = (cwd: string): Effect.Effect<GitInfo | null, never, ChildProcessSpawner> =>
+const getGitInfo = (
+  cwd: string,
+): Effect.Effect<GitInfo | null, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const root = yield* gitCommand(cwd, ["rev-parse", "--show-toplevel"]).pipe(
       Effect.catchEager(() => Effect.succeed("")),
@@ -104,7 +109,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     if (currentFiber !== null) {
       Effect.runFork(Fiber.interrupt(currentFiber))
     }
-    const gitServices = services as ServiceMap.ServiceMap<ChildProcessSpawner>
+    const gitServices = services as ServiceMap.ServiceMap<ChildProcessSpawner.ChildProcessSpawner>
     currentFiber = Effect.runForkWith(gitServices)(
       getGitInfo(props.cwd).pipe(
         Effect.tap((info) =>
