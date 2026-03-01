@@ -47,9 +47,7 @@ describe("Permission", () => {
       const rules = [new PermissionRule({ tool: "Bash", action: "deny" })]
       const layer = Permission.Live(rules, "allow")
       const result = await Effect.runPromise(
-        Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(Effect.provide(layer)),
       )
       expect(result).toBe("denied")
     })
@@ -88,9 +86,7 @@ describe("Permission", () => {
 
       // Should not match pattern
       const result2 = await Effect.runPromise(
-        Permission.use((p) => p.check("Bash", { command: "ls -la" })).pipe(
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.check("Bash", { command: "ls -la" })).pipe(Effect.provide(layer)),
       )
       expect(result2).toBe("allowed")
     })
@@ -112,9 +108,7 @@ describe("Permission", () => {
 
       // Second rule matches
       const result2 = await Effect.runPromise(
-        Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(
-          Effect.provide(layer),
-        ),
+        Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(Effect.provide(layer)),
       )
       expect(result2).toBe("denied")
     })

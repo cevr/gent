@@ -228,8 +228,12 @@ const initSchema = Effect.gen(function* () {
   // Migrations
   yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN cwd TEXT`).pipe(Effect.ignoreCause)
   yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN bypass INTEGER`).pipe(Effect.ignoreCause)
-  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`).pipe(Effect.ignoreCause)
-  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN parent_branch_id TEXT`).pipe(Effect.ignoreCause)
+  yield* sql
+    .unsafe(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`)
+    .pipe(Effect.ignoreCause)
+  yield* sql
+    .unsafe(`ALTER TABLE sessions ADD COLUMN parent_branch_id TEXT`)
+    .pipe(Effect.ignoreCause)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS branches (
