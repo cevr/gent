@@ -59,6 +59,9 @@ export { TaskTool, TaskParams } from "./task"
 // Undo Edit Tool
 export { UndoEditTool, UndoEditParams, UndoEditError } from "./undo-edit"
 
+// Librarian Tool
+export { LibrarianTool, LibrarianParams, LibrarianError } from "./librarian"
+
 // All Tools
 import type { AnyToolDefinition } from "@gent/core"
 import { ReadTool } from "./read"
@@ -74,6 +77,7 @@ import { WebFetchTool } from "./webfetch"
 import { PlanTool } from "./plan"
 import { TaskTool } from "./task"
 import { UndoEditTool } from "./undo-edit"
+import { LibrarianTool } from "./librarian"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -91,4 +95,5 @@ export const AllTools: AnyToolDefinition[] = [
   PlanTool,
   TaskTool,
   UndoEditTool,
+  LibrarianTool,
 ]

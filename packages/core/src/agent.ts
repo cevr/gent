@@ -13,6 +13,7 @@ export const AgentName = Schema.Literals([
   "deepwork",
   "explore",
   "architect",
+  "librarian",
   "compaction",
   "title",
 ])
@@ -57,6 +58,12 @@ export const ARCHITECT_PROMPT = `
 Architect agent. Design implementation approach, structure, tradeoffs, risks. No code changes.
 `.trim()
 
+export const LIBRARIAN_PROMPT = `
+Librarian agent. Answer questions about an external repository by reading its source code.
+You have access to a local clone at the path specified in the prompt.
+Use read, grep, and glob tools to explore the code. Be precise — cite file paths and line numbers.
+`.trim()
+
 export const COMPACTION_PROMPT = `
 Compaction agent. Summarize prior context. Focus decisions, open questions, current state.
 `.trim()
@@ -68,7 +75,7 @@ export const Agents = {
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect"],
+    canDelegateToAgents: ["explore", "architect", "librarian"],
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
@@ -76,7 +83,7 @@ export const Agents = {
     name: "deepwork",
     description: "Deep reasoning mode - thorough analysis, slower/longer answers",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect"],
+    canDelegateToAgents: ["explore", "architect", "librarian"],
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
   }),
@@ -95,6 +102,14 @@ export const Agents = {
     kind: "subagent",
     allowedTools: ["read", "grep", "glob", "webfetch", "websearch"],
     systemPromptAddendum: ARCHITECT_PROMPT,
+  }),
+
+  librarian: defineAgent({
+    name: "librarian",
+    description: "Answers questions about external repos using local cached clones",
+    kind: "subagent",
+    allowedTools: ["read", "grep", "glob"],
+    systemPromptAddendum: LIBRARIAN_PROMPT,
   }),
 
   compaction: defineAgent({
@@ -121,6 +136,7 @@ export const AgentModels: Record<AgentName, ModelId> = {
   deepwork: "openai/gpt-5.2-codex" as ModelId,
   explore: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   architect: "anthropic/claude-opus-4-5" as ModelId,
+  librarian: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   compaction: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   title: "anthropic/claude-3-5-haiku-20241022" as ModelId,
 }
