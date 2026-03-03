@@ -233,15 +233,41 @@ const generateSessionName = Effect.fn("generateSessionName")(function* (
   provider: ProviderService,
   firstMessage: string,
 ) {
-  const prompt = `Generate a 2-4 word title for a chat starting with: "${firstMessage.slice(0, 200)}". Reply with just the title, no quotes or punctuation.`
-  const result = yield* provider
-    .generate({
-      model: NAME_GEN_MODEL,
-      prompt,
-      maxTokens: 20,
-    })
-    .pipe(Effect.catchEager(() => Effect.succeed("")))
-  return result.trim() || "New Chat"
+  const prompt = [
+    "Generate a 3-5 word lowercase title for a conversation that starts with the following message.",
+    "Rules:",
+    "- Lowercase only, no quotes, no punctuation",
+    "- Be specific to the content, not generic",
+    '- Bad: "help with code", "quick question", "new project"',
+    '- Good: "fix auth token refresh", "add dark mode toggle", "migrate postgres to sqlite"',
+    "",
+    `Message: "${firstMessage.slice(0, 300)}"`,
+    "",
+    "Title:",
+  ].join("\n")
+
+  // Try up to 2 times if we get an empty/generic result
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = yield* provider
+      .generate({
+        model: NAME_GEN_MODEL,
+        prompt,
+        maxTokens: 30,
+      })
+      .pipe(Effect.catchEager(() => Effect.succeed("")))
+
+    const name = result
+      .trim()
+      .replace(/^["']|["']$/g, "") // strip quotes
+      .replace(/\.$/g, "") // strip trailing period
+      .toLowerCase()
+
+    if (name.length > 0 && name !== "new chat" && name !== "untitled") {
+      return name
+    }
+  }
+
+  return "New Chat"
 })
 
 export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
