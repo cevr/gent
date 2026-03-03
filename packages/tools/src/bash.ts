@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core"
+import { defineTool, OutputBuffer, saveFullOutput } from "@gent/core"
 
 // Bash Tool Error
 
@@ -36,6 +36,51 @@ export const BashResult = Schema.Struct({
   exitCode: Schema.Number,
 })
 
+const HEAD_LINES = 50
+const TAIL_LINES = 50
+const SIGKILL_DELAY_MS = 3000
+
+/**
+ * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
+ * Models often emit this despite instructions to use the cwd param.
+ */
+function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
+  const match = cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s)
+  if (match === null) return null
+  const cwd = match[1] ?? match[2] ?? match[3] ?? ""
+  const command = match[4] ?? ""
+  return cwd.length > 0 && command.length > 0 ? { cwd, command } : null
+}
+
+/**
+ * Strip trailing & to prevent background jobs escaping tool control.
+ */
+function stripBackground(cmd: string): string {
+  return cmd.replace(/\s*&\s*$/, "")
+}
+
+/**
+ * SIGTERM → wait → SIGKILL. Targets process group via negative PID.
+ */
+function killGracefully(proc: { pid: number; kill: (signal?: number) => void }): void {
+  try {
+    // SIGTERM to process group
+    process.kill(-proc.pid, "SIGTERM")
+  } catch {
+    // already dead or no access
+    return
+  }
+
+  setTimeout(() => {
+    try {
+      process.kill(-proc.pid, 0) // existence check
+      process.kill(-proc.pid, "SIGKILL")
+    } catch {
+      // already dead
+    }
+  }, SIGKILL_DELAY_MS)
+}
+
 // Bash Tool
 
 export const BashTool = defineTool({
@@ -47,16 +92,27 @@ export const BashTool = defineTool({
   execute: Effect.fn("BashTool.execute")(function* (params) {
     const timeout = Math.min(params.timeout ?? 120000, 600000)
 
+    // Strip background operator
+    let command = stripBackground(params.command)
+
+    // Split cd + command patterns into cwd + command
+    let cwd = params.cwd
+    const split = splitCdCommand(command)
+    if (split !== null) {
+      cwd = split.cwd
+      command = split.command
+    }
+
     const result = yield* Effect.tryPromise({
       try: async () => {
         const spawnOpts: Parameters<typeof Bun.spawn>[1] = {
           stdout: "pipe",
           stderr: "pipe",
         }
-        if (params.cwd !== undefined) spawnOpts.cwd = params.cwd
-        const proc = Bun.spawn(["bash", "-c", params.command], spawnOpts)
+        if (cwd !== undefined) spawnOpts.cwd = cwd
+        const proc = Bun.spawn(["bash", "-c", command], spawnOpts)
 
-        const timeoutId = setTimeout(() => proc.kill(), timeout)
+        const timeoutId = setTimeout(() => killGracefully(proc), timeout)
 
         try {
           const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
@@ -75,18 +131,35 @@ export const BashTool = defineTool({
       catch: (e) =>
         new BashError({
           message: `Failed to execute command: ${e}`,
-          command: params.command,
+          command,
         }),
     })
 
-    // Truncate output if too long
-    const maxLen = 30000
-    const truncate = (s: string) =>
-      s.length > maxLen ? s.slice(0, maxLen) + "\n... (truncated)" : s
+    // Use OutputBuffer for head+tail truncation
+    const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
+    const fullOutput =
+      result.stderr.length > 0 ? `${result.stdout}\n${result.stderr}` : result.stdout
+    buf.add(fullOutput)
+    const formatted = buf.format()
+
+    // Save full output when truncated
+    let fullOutputPath: string | undefined
+    if (formatted.truncatedLines > 0) {
+      fullOutputPath = yield* saveFullOutput(fullOutput, `bash_${command.slice(0, 40)}`).pipe(
+        Effect.orElseSucceed(() => undefined),
+      )
+    }
+
+    const stdout =
+      formatted.truncatedLines > 0
+        ? fullOutputPath !== undefined
+          ? `${formatted.text}\n\nFull output saved to: ${fullOutputPath}`
+          : formatted.text
+        : formatted.text
 
     return {
-      stdout: truncate(result.stdout),
-      stderr: truncate(result.stderr),
+      stdout,
+      stderr: "",
       exitCode: result.exitCode,
     }
   }),
