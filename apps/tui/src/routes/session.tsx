@@ -36,6 +36,9 @@ import { useExit } from "../hooks/use-exit"
 import { BranchTree } from "../components/branch-tree"
 import { MessagePicker } from "../components/message-picker"
 import type { SessionEvent } from "../components/session-event-indicator"
+import { ActivityRow, type ActivityInfo } from "../components/activity-row"
+import { BorderLabel } from "../components/border-label"
+import { formatToolInput } from "../components/message-list-utils"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -64,6 +67,8 @@ export function Session(props: SessionProps) {
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
   const [overlay, setOverlay] = createSignal<OverlayState>(null)
   const [compacting, setCompacting] = createSignal(false)
+  const [turnCount, setTurnCount] = createSignal(0)
+  const [activeTool, setActiveTool] = createSignal<string | undefined>(undefined)
   let initialPromptSent = false
   let eventSeq = 0
 
@@ -207,6 +212,8 @@ export function Session(props: SessionProps) {
           router.navigateToSession(event.sessionId, event.toBranchId)
         }
       } else if (event._tag === "StreamStarted") {
+        setTurnCount((n) => n + 1)
+        setActiveTool(undefined)
         setStore(
           produce((draft) => {
             draft.messages.push({
@@ -269,6 +276,10 @@ export function Session(props: SessionProps) {
           )
         }
       } else if (event._tag === "ToolCallStarted") {
+        const inputSummary = formatToolInput(event.toolName, event.input)
+        setActiveTool(
+          inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
+        )
         setStore(
           produce((draft) => {
             const last = draft.messages[draft.messages.length - 1]
@@ -292,6 +303,7 @@ export function Session(props: SessionProps) {
       ) {
         const isError =
           event._tag === "ToolCallFailed" || (event._tag === "ToolCallCompleted" && event.isError)
+        setActiveTool(undefined)
         setStore(
           produce((draft) => {
             const last = draft.messages[draft.messages.length - 1]
@@ -526,6 +538,26 @@ export function Session(props: SessionProps) {
     return current?._tag === "tree" ? current.nodes : []
   }
 
+  const activity = (): ActivityInfo => {
+    if (compacting()) return { phase: "thinking", turn: turnCount() }
+    if (!client.isStreaming()) return { phase: "idle", turn: turnCount() }
+    const tool = activeTool()
+    if (tool !== undefined) return { phase: "tool", turn: turnCount(), toolInfo: tool }
+    return { phase: "thinking", turn: turnCount() }
+  }
+
+  const costLabel = () => {
+    const c = client.cost()
+    return c > 0 ? `$${c.toFixed(2)}` : ""
+  }
+
+  const modelLabel = () => {
+    const m = client.model()
+    // Strip provider prefix for display
+    const slashIdx = m.indexOf("/")
+    return slashIdx >= 0 ? m.slice(slashIdx + 1) : m
+  }
+
   return (
     <box flexDirection="column" flexGrow={1}>
       {/* Messages */}
@@ -570,10 +602,11 @@ export function Session(props: SessionProps) {
         onClose={() => setOverlay(null)}
       />
 
-      {/* Separator line */}
-      <box flexShrink={0}>
-        <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
-      </box>
+      {/* Activity row */}
+      <ActivityRow activity={activity()} />
+
+      {/* Border label with cost + model */}
+      <BorderLabel left={costLabel()} right={modelLabel()} />
 
       {/* Status Bar */}
       <StatusBar.Root>
