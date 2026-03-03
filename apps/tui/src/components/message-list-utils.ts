@@ -89,6 +89,18 @@ export function formatToolInput(
         typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(cwd, 30)
       return pattern.length > 0 ? `${pattern} in ${searchPath}` : ""
     }
+    case "webfetch": {
+      return typeof obj["url"] === "string" ? obj["url"] : ""
+    }
+    case "repo_explorer": {
+      const spec = typeof obj["spec"] === "string" ? obj["spec"] : ""
+      const action = typeof obj["action"] === "string" ? obj["action"] : ""
+      return spec.length > 0 ? `${action} ${spec}` : action
+    }
+    case "task": {
+      const prompt = typeof obj["prompt"] === "string" ? obj["prompt"] : ""
+      return prompt.length > 50 ? prompt.slice(0, 50) + "…" : prompt
+    }
     default:
       return ""
   }
