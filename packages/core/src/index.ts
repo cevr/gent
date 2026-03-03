@@ -150,6 +150,19 @@ export { OsService, type OsPlatform } from "./os-service"
 // Defaults
 export { DEFAULTS, type Defaults } from "./defaults"
 
+// Output Buffer
+export {
+  OutputBuffer,
+  headTail,
+  formatHeadTail,
+  headTailChars,
+  saveFullOutput,
+  type OutputBufferResult,
+} from "./output-buffer"
+
+// Windowing
+export { windowItems, headTailExcerpts, type Excerpt, type WindowResult } from "./windowing"
+
 // Result Type (for async state tracking)
 export {
   type Result,
