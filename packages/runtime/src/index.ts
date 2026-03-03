@@ -58,6 +58,8 @@ export { GentLogger, GentLoggerJson, GentLoggerPretty, GentLogLevel } from "./lo
 
 export { WideEvent, TurnWideEvent, type WideEventService } from "./wide-event"
 
+export { FileTracker, type FileChange, type FileTrackerService } from "./file-tracker"
+
 export {
   ClusterMemoryLive,
   ClusterSingleLive,

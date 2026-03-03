@@ -1,5 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "@gent/core"
+import { FileTracker } from "@gent/runtime"
 
 // Write Tool Error
 
@@ -34,12 +35,18 @@ export const WriteTool = defineTool({
   concurrency: "serial",
   description: "Write content to file. Creates directories if needed.",
   params: WriteParams,
-  execute: Effect.fn("WriteTool.execute")(function* (params) {
+  execute: Effect.fn("WriteTool.execute")(function* (params, ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
+    const tracker = yield* FileTracker
 
     const filePath = pathService.resolve(params.path)
     const dir = pathService.dirname(filePath)
+
+    // Read existing content for undo tracking (empty string if new file)
+    const existingContent = yield* fs
+      .readFileString(filePath)
+      .pipe(Effect.catch(() => Effect.succeed("")))
 
     // Ensure directory exists
     yield* fs.makeDirectory(dir, { recursive: true }).pipe(
@@ -52,6 +59,9 @@ export const WriteTool = defineTool({
           }),
       ),
     )
+
+    // Snapshot for undo support
+    yield* tracker.snapshot(filePath, existingContent, params.content, ctx.toolCallId)
 
     yield* fs.writeFileString(filePath, params.content).pipe(
       Effect.mapError(

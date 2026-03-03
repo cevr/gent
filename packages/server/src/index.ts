@@ -28,6 +28,7 @@ import {
   SubprocessRunner,
   SubagentRunnerConfig,
   ToolRunner,
+  FileTracker,
 } from "@gent/runtime"
 import type { ActorProcess } from "@gent/runtime"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
@@ -169,7 +170,8 @@ export const createDependencies = (
   | AuthStorage
   | AuthStore
   | AuthGuard
-  | ProviderAuth,
+  | ProviderAuth
+  | FileTracker,
   PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
@@ -224,6 +226,7 @@ export const createDependencies = (
     ConfigServiceLive,
     ModelRegistry.Live,
     SkillsLive,
+    FileTracker.layer,
   )
 
   // ProviderFactory uses built-in providers only

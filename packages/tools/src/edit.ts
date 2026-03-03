@@ -1,5 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "@gent/core"
+import { FileTracker } from "@gent/runtime"
 
 // Edit Tool Error
 
@@ -43,9 +44,10 @@ export const EditTool = defineTool({
   description:
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
   params: EditParams,
-  execute: Effect.fn("EditTool.execute")(function* (params) {
+  execute: Effect.fn("EditTool.execute")(function* (params, ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
+    const tracker = yield* FileTracker
 
     const filePath = pathService.resolve(params.path)
 
@@ -81,6 +83,9 @@ export const EditTool = defineTool({
     const newContent = replaceAll
       ? content.split(params.oldString).join(params.newString)
       : content.replace(params.oldString, params.newString)
+
+    // Snapshot for undo support
+    yield* tracker.snapshot(filePath, content, newContent, ctx.toolCallId)
 
     yield* fs.writeFileString(filePath, newContent).pipe(
       Effect.mapError(

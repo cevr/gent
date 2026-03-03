@@ -56,6 +56,9 @@ export { PlanTool, PlanParams, PlanResult } from "./plan"
 // Task Tool
 export { TaskTool, TaskParams } from "./task"
 
+// Undo Edit Tool
+export { UndoEditTool, UndoEditParams, UndoEditError } from "./undo-edit"
+
 // All Tools
 import type { AnyToolDefinition } from "@gent/core"
 import { ReadTool } from "./read"
@@ -70,6 +73,7 @@ import { TodoReadTool, TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { PlanTool } from "./plan"
 import { TaskTool } from "./task"
+import { UndoEditTool } from "./undo-edit"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -86,4 +90,5 @@ export const AllTools: AnyToolDefinition[] = [
   WebFetchTool,
   PlanTool,
   TaskTool,
+  UndoEditTool,
 ]
