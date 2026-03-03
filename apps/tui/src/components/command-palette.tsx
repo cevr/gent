@@ -1,4 +1,4 @@
-import { createSignal, createEffect, For, Show } from "solid-js"
+import { createSignal, createEffect, createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -15,6 +15,9 @@ import { formatError } from "../utils/format-error"
 interface MenuItem {
   id: string
   title: string
+  description?: string
+  category?: string
+  shortcut?: string
   onSelect: () => void
 }
 
@@ -22,6 +25,27 @@ interface MenuLevel {
   title: string
   items: MenuItem[] | (() => MenuItem[])
   searchable?: boolean
+}
+
+// Simple substring fuzzy filter — matches if all chars of query appear in order
+const fuzzyMatch = (text: string, query: string): boolean => {
+  const lower = text.toLowerCase()
+  const q = query.toLowerCase()
+  let j = 0
+  for (let i = 0; i < lower.length && j < q.length; i++) {
+    if (lower[i] === q[j]) j++
+  }
+  return j === q.length
+}
+
+const filterItems = (items: MenuItem[], query: string): MenuItem[] => {
+  if (query.length === 0) return items
+  return items.filter(
+    (item) =>
+      fuzzyMatch(item.title, query) ||
+      fuzzyMatch(item.description ?? "", query) ||
+      fuzzyMatch(item.category ?? "", query),
+  )
 }
 
 export function CommandPalette() {
@@ -56,10 +80,13 @@ export function CommandPalette() {
   // Build root menu
   const rootMenu = (): MenuLevel => ({
     title: "Commands",
+    searchable: true,
     items: [
       {
         id: "sessions",
         title: "Sessions",
+        description: "Browse and switch sessions",
+        category: "nav",
         onSelect: () => {
           cast(
             client.listSessions().pipe(
@@ -86,18 +113,76 @@ export function CommandPalette() {
       {
         id: "theme",
         title: "Theme",
+        description: "Switch color theme",
+        category: "config",
         onSelect: () => pushLevel(themeMenu()),
       },
       {
         id: "agent",
         title: "Agent",
+        description: "Switch agent mode",
+        category: "config",
         onSelect: () => pushLevel(agentMenu()),
+      },
+      {
+        id: "bypass",
+        title: bypassLabel(),
+        description: "Toggle permission bypass for this session",
+        category: "config",
+        onSelect: () => {
+          const session = client.session()
+          if (session === null) return
+          cast(
+            client.updateSessionBypass(!session.bypass).pipe(
+              Effect.catchEager((error) =>
+                Effect.sync(() => {
+                  client.setError(formatError(error))
+                }),
+              ),
+            ),
+          )
+          command.closePalette()
+        },
+      },
+      {
+        id: "compact",
+        title: "Compact",
+        description: "Compact conversation history",
+        category: "cmd",
+        onSelect: () => {
+          cast(
+            client.compactBranch().pipe(
+              Effect.catchEager((error) =>
+                Effect.sync(() => {
+                  client.setError(formatError(error))
+                }),
+              ),
+            ),
+          )
+          command.closePalette()
+        },
+      },
+      {
+        id: "new-session",
+        title: "New Session",
+        description: "Start a fresh session",
+        category: "cmd",
+        shortcut: "Ctrl+N",
+        onSelect: () => {
+          client.clearSession()
+          router.navigateToHome()
+          command.closePalette()
+        },
       },
     ],
   })
 
-  // Sessions submenu — items is a thunk so state().sessions is read at render time,
-  // not at menu-push time (when the setState hasn't committed yet)
+  const bypassLabel = () => {
+    const session = client.session()
+    return session?.bypass === true ? "Bypass ✓" : "Bypass"
+  }
+
+  // Sessions submenu
   const sessionsMenu = (): MenuLevel => {
     type SessionNode = {
       session: SessionInfo
@@ -192,6 +277,7 @@ export function CommandPalette() {
         {
           id: "theme.system",
           title: isSystem ? "System •" : "System",
+          description: "Follow terminal theme",
           onSelect: () => {
             set("system")
             command.closePalette()
@@ -229,6 +315,7 @@ export function CommandPalette() {
       items: agents.map((agent) => ({
         id: `agent.${agent.name}`,
         title: agent.name === current ? `${agent.name} •` : agent.name,
+        description: agent.description ?? undefined,
         onSelect: () => {
           client.steer({ _tag: "SwitchAgent", agent: agent.name })
           command.closePalette()
@@ -245,7 +332,30 @@ export function CommandPalette() {
   const levelItems = (level: MenuLevel) =>
     typeof level.items === "function" ? level.items() : level.items
 
-  const currentItems = () => levelItems(currentLevel())
+  const searchQuery = () => {
+    const current = state().search
+    return current._tag === "active" ? current.query : ""
+  }
+
+  // Filtered items based on search query
+  const filteredItems = createMemo(() => {
+    const level = currentLevel()
+    const items = levelItems(level)
+    const query = searchQuery()
+    if (level.searchable === false || query.length === 0) return items
+    return filterItems(items, query)
+  })
+
+  // Compute max category width for alignment
+  const maxCategoryWidth = createMemo(() => {
+    let max = 0
+    for (const item of filteredItems()) {
+      if (item.category !== undefined && item.category.length > max) {
+        max = item.category.length
+      }
+    }
+    return max
+  })
 
   const pushLevel = (level: MenuLevel) => {
     setState((current) => ({
@@ -271,7 +381,7 @@ export function CommandPalette() {
   }
 
   const handleSelect = () => {
-    const items = currentItems()
+    const items = filteredItems()
     const item = items[state().selectedIndex]
     if (item !== undefined) {
       item.onSelect()
@@ -291,10 +401,7 @@ export function CommandPalette() {
   useKeyboard((e) => {
     if (!command.paletteOpen()) return
 
-    const level = currentLevel()
-
     if (e.name === "escape") {
-      // Clear search first, then pop level
       if (state().search._tag === "active") {
         setState((current) => ({
           ...current,
@@ -313,9 +420,8 @@ export function CommandPalette() {
     }
 
     if (e.name === "backspace") {
-      // Handle search query backspace
       const currentSearch = state().search
-      if (level.searchable === true && currentSearch._tag === "active") {
+      if (currentSearch._tag === "active") {
         const next = currentSearch.query.slice(0, -1)
         setState((current) => ({
           ...current,
@@ -336,7 +442,7 @@ export function CommandPalette() {
       return
     }
 
-    const items = levelItems(level)
+    const items = filteredItems()
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
       setState((current) => ({
         ...current,
@@ -353,19 +459,16 @@ export function CommandPalette() {
       return
     }
 
-    // Handle search input for searchable levels
-    if (level.searchable === true && e.sequence !== undefined && e.sequence.length === 1) {
+    // Handle search input — all levels searchable unless explicitly disabled
+    const level = currentLevel()
+    if (level.searchable !== false && e.sequence !== undefined && e.sequence.length === 1) {
       const char = e.sequence
-      // Only accept printable characters
       if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
         setState((current) => {
           const query = current.search._tag === "active" ? current.search.query : ""
           return {
             ...current,
-            search: {
-              _tag: "active",
-              query: query + char,
-            },
+            search: { _tag: "active", query: query + char },
             selectedIndex: 0,
           }
         })
@@ -382,8 +485,8 @@ export function CommandPalette() {
   })
 
   // Calculate palette dimensions
-  const paletteWidth = () => Math.min(40, dimensions().width - 4)
-  const paletteHeight = () => Math.min(12, dimensions().height - 6)
+  const paletteWidth = () => Math.min(50, dimensions().width - 4)
+  const paletteHeight = () => Math.min(14, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - paletteWidth()) / 2)
   const top = () => Math.floor((dimensions().height - paletteHeight()) / 2)
 
@@ -391,10 +494,6 @@ export function CommandPalette() {
     const stack = state().levelStack
     if (stack.length === 0) return ""
     return stack.map((l) => l.title).join(" › ") + " ›"
-  }
-  const searchQuery = () => {
-    const current = state().search
-    return current._tag === "active" ? current.query : ""
   }
 
   return (
@@ -428,7 +527,7 @@ export function CommandPalette() {
               <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
             </Show>
             <Show
-              when={currentLevel().searchable === true && searchQuery().length > 0}
+              when={currentLevel().searchable !== false && searchQuery().length > 0}
               fallback={currentLevel().title}
             >
               <span style={{ fg: theme.textMuted }}>Search: </span>
@@ -445,9 +544,10 @@ export function CommandPalette() {
 
         {/* Items */}
         <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
-          <For each={currentItems()}>
+          <For each={filteredItems()}>
             {(item, index) => {
               const isSelected = () => state().selectedIndex === index()
+              const catW = maxCategoryWidth()
               return (
                 <box
                   id={`item-${index()}`}
@@ -459,19 +559,59 @@ export function CommandPalette() {
                       fg: isSelected() ? theme.selectedListItemText : theme.text,
                     }}
                   >
+                    {/* Category badge */}
+                    <Show when={catW > 0}>
+                      <span
+                        style={{
+                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
+                        }}
+                      >
+                        {(item.category ?? "").padEnd(catW)}
+                      </span>{" "}
+                    </Show>
                     {item.title}
+                    {/* Description */}
+                    <Show when={item.description !== undefined}>
+                      <span
+                        style={{
+                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
+                        }}
+                      >
+                        {" "}
+                        {item.description}
+                      </span>
+                    </Show>
+                    {/* Shortcut hint */}
+                    <Show when={item.shortcut !== undefined}>
+                      <span
+                        style={{
+                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
+                        }}
+                      >
+                        {" "}
+                        [{item.shortcut}]
+                      </span>
+                    </Show>
                   </text>
                 </box>
               )
             }}
           </For>
+          <Show when={filteredItems().length === 0}>
+            <box paddingLeft={1}>
+              <text style={{ fg: theme.textMuted }}>No matches</text>
+            </box>
+          </Show>
         </scrollbox>
 
         {/* Footer hint */}
         <box flexShrink={0} paddingLeft={1}>
           <text style={{ fg: theme.textMuted }}>
-            <Show when={state().levelStack.length > 0} fallback="↑↓ · →/Enter · Esc">
-              ↑↓ · →/Enter · ←/Esc
+            <Show
+              when={state().levelStack.length > 0}
+              fallback="↑↓ · →/Enter · Esc · type to search"
+            >
+              ↑↓ · →/Enter · ←/Esc · type to search
             </Show>
           </text>
         </box>
