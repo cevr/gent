@@ -24,7 +24,7 @@
     "beautiful-mermaid": "^1.1.3",
     "diff": "^8.0.3",
     "figlet": "^1.10.0",
-    "solid-js": "^1.9.11"
+    "solid-js": "catalog:"
   },
   "devDependencies": {
     "@types/figlet": "^1.7.0",

@@ -57,6 +57,7 @@
     "@ai-sdk/openai": "^3.0.39",
     "@ai-sdk/google": "^3.0.37",
     "@ai-sdk/mistral": "^3.0.22",
-    "effect-bun-test": "0.2.1"
+    "effect-bun-test": "0.2.1",
+    "solid-js": "^1.9.11"
   }
 }
