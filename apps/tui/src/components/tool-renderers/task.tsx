@@ -1,0 +1,137 @@
+import { Show, For } from "solid-js"
+import { useTheme } from "../../theme/index"
+import { ToolBox } from "../tool-box"
+import type { ToolRendererProps } from "./types"
+
+interface SubagentResult {
+  _tag: "success" | "error"
+  text?: string
+  error?: string
+  agentName?: string
+  sessionId?: string
+  usage?: { input: number; output: number; cost: number }
+}
+
+interface TaskOutput {
+  output?: string
+  error?: string
+  metadata?: {
+    mode: "single" | "parallel" | "chain"
+    results?: SubagentResult[]
+    sessionId?: string
+    agentName?: string
+  }
+}
+
+function parseTaskOutput(output: string | undefined): TaskOutput | undefined {
+  if (output === undefined) return undefined
+  try {
+    return JSON.parse(output) as TaskOutput
+  } catch {
+    return undefined
+  }
+}
+
+function parseTaskInput(
+  input: unknown,
+): { agent?: string; task?: string; tasks?: Array<{ agent: string; task: string }> } | undefined {
+  if (input === null || input === undefined || typeof input !== "object") return undefined
+  return input as { agent?: string; task?: string; tasks?: Array<{ agent: string; task: string }> }
+}
+
+const STATUS_ICONS = {
+  running: "⋯",
+  success: "✓",
+  error: "✕",
+} as const
+
+export function TaskToolRenderer(props: ToolRendererProps) {
+  const { theme } = useTheme()
+
+  const taskInput = () => parseTaskInput(props.toolCall.input)
+  const taskOutput = () => parseTaskOutput(props.toolCall.output)
+
+  const title = () => {
+    const inp = taskInput()
+    if (inp?.agent !== undefined) return `task → ${inp.agent}`
+    if (inp?.tasks !== undefined) return `task → ${inp.tasks.length} parallel`
+    return "task"
+  }
+
+  const subtitle = () => {
+    const inp = taskInput()
+    if (inp?.task !== undefined)
+      return inp.task.length > 60 ? inp.task.slice(0, 60) + "…" : inp.task
+    return undefined
+  }
+
+  const results = (): SubagentResult[] => {
+    const out = taskOutput()
+    if (out?.metadata?.results !== undefined) return out.metadata.results
+    return []
+  }
+
+  return (
+    <ToolBox
+      title={title()}
+      subtitle={subtitle()}
+      status={props.toolCall.status}
+      expanded={props.expanded}
+    >
+      <Show when={props.toolCall.status === "running"}>
+        <text style={{ fg: theme.textMuted }}>
+          <span style={{ fg: theme.warning }}>{STATUS_ICONS.running}</span> Running sub-agent...
+        </text>
+      </Show>
+
+      <Show when={results().length > 0}>
+        <For each={results()}>
+          {(result, index) => {
+            const isLast = () => index() === results().length - 1
+            const connector = () => (isLast() ? "╰──" : "├──")
+            const icon = () =>
+              result._tag === "success" ? STATUS_ICONS.success : STATUS_ICONS.error
+            const iconColor = () => (result._tag === "success" ? theme.success : theme.error)
+
+            return (
+              <box flexDirection="column">
+                <text style={{ fg: theme.textMuted }}>
+                  {connector()} <span style={{ fg: iconColor() }}>{icon()}</span>{" "}
+                  <span style={{ fg: theme.text }}>{result.agentName ?? "agent"}</span>
+                  <Show when={result.usage !== undefined}>
+                    {" "}
+                    <span style={{ fg: theme.textMuted }}>
+                      ${result.usage?.cost?.toFixed(4) ?? "0"}
+                    </span>
+                  </Show>
+                </text>
+                <Show
+                  when={props.expanded && result._tag === "success" && result.text !== undefined}
+                >
+                  <box paddingLeft={4}>
+                    <text style={{ fg: theme.textMuted }}>
+                      {result.text && result.text.length > 200
+                        ? result.text.slice(0, 200) + "…"
+                        : result.text}
+                    </text>
+                  </box>
+                </Show>
+                <Show when={result._tag === "error" && result.error !== undefined}>
+                  <box paddingLeft={4}>
+                    <text style={{ fg: theme.error }}>{result.error}</text>
+                  </box>
+                </Show>
+              </box>
+            )
+          }}
+        </For>
+      </Show>
+
+      <Show when={props.toolCall.status !== "running" && results().length === 0}>
+        <text style={{ fg: theme.textMuted }}>
+          {taskOutput()?.output ?? taskOutput()?.error ?? props.toolCall.summary ?? ""}
+        </text>
+      </Show>
+    </ToolBox>
+  )
+}

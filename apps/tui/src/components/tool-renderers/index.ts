@@ -6,6 +6,7 @@ export { WriteToolRenderer } from "./write"
 export { GrepToolRenderer } from "./grep"
 export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
+export { TaskToolRenderer } from "./task"
 export { GenericToolRenderer } from "./generic"
 
 import type { ToolRenderer } from "./types"
@@ -16,6 +17,7 @@ import { WriteToolRenderer } from "./write"
 import { GrepToolRenderer } from "./grep"
 import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
+import { TaskToolRenderer } from "./task"
 
 export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   read: ReadToolRenderer,
@@ -25,4 +27,6 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   grep: GrepToolRenderer,
   glob: GlobToolRenderer,
   webfetch: WebfetchToolRenderer,
+  task: TaskToolRenderer,
+  librarian: TaskToolRenderer,
 }
