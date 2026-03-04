@@ -317,6 +317,39 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
 
 const toolCache = new WeakMap<AnyToolDefinition, ToolSet[string]>()
 
+/**
+ * Flatten allOf into parent object. Effect's `.check()` emits constraints
+ * (minItems, maxItems, minLength, maxLength) as allOf entries, but some
+ * providers reject allOf sub-schemas that lack required fields like `items`.
+ * Merging them into the parent keeps the constraints while producing a flat,
+ * provider-compatible schema.
+ */
+function flattenAllOf(schema: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "allOf" && Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === "object" && entry !== null) {
+          Object.assign(result, flattenAllOf(entry as Record<string, unknown>))
+        }
+      }
+    } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      result[key] = flattenAllOf(value as Record<string, unknown>)
+    } else if (Array.isArray(value)) {
+      result[key] = value.map((item) =>
+        typeof item === "object" && item !== null && !Array.isArray(item)
+          ? flattenAllOf(item as Record<string, unknown>)
+          : item,
+      )
+    } else {
+      result[key] = value
+    }
+  }
+
+  return result
+}
+
 function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
   const result: ToolSet = {}
 
@@ -327,10 +360,11 @@ function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
       continue
     }
     const doc = Schema.toJsonSchemaDocument(t.params as Schema.Schema<unknown>)
-    const flatJsonSchema =
+    const merged =
       Object.keys(doc.definitions).length > 0
         ? { ...doc.schema, $defs: doc.definitions }
         : doc.schema
+    const flatJsonSchema = flattenAllOf(merged as Record<string, unknown>)
     const wrapped = tool({
       description: t.description,
       inputSchema: jsonSchema(flatJsonSchema),
