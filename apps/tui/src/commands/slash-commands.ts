@@ -18,6 +18,7 @@ export type SlashCommandId =
   | "bypass"
   | "permissions"
   | "auth"
+  | "handoff"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -30,6 +31,7 @@ export interface SlashCommandContext {
   toggleBypass: Effect.Effect<void, UiError>
   openPermissions: () => void
   openAuth: () => void
+  sendMessage: (content: string) => void
 }
 
 export interface SlashCommandResult {
@@ -107,6 +109,14 @@ export const executeSlashCommand = (
     case "auth":
       return Effect.sync(() => {
         ctx.openAuth()
+        return { handled: true }
+      })
+
+    case "handoff":
+      return Effect.sync(() => {
+        ctx.sendMessage(
+          "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
+        )
         return { handled: true }
       })
 

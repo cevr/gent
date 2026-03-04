@@ -84,6 +84,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: "bypass", label: "/bypass", description: "Toggle permission bypass" },
   { id: "permissions", label: "/permissions", description: "View/edit permission rules" },
   { id: "auth", label: "/auth", description: "Manage API keys" },
+  { id: "handoff", label: "/handoff", description: "Distill context into new session" },
 ]
 
 export interface AutocompletePopupProps {

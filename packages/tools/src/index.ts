@@ -62,6 +62,9 @@ export { UndoEditTool, UndoEditParams, UndoEditError } from "./undo-edit"
 // Librarian Tool
 export { LibrarianTool, LibrarianParams, LibrarianError } from "./librarian"
 
+// Handoff Tool
+export { HandoffTool, HandoffParams, HandoffError } from "./handoff"
+
 // All Tools
 import type { AnyToolDefinition } from "@gent/core"
 import { ReadTool } from "./read"
@@ -78,6 +81,7 @@ import { PlanTool } from "./plan"
 import { TaskTool } from "./task"
 import { UndoEditTool } from "./undo-edit"
 import { LibrarianTool } from "./librarian"
+import { HandoffTool } from "./handoff"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -96,4 +100,5 @@ export const AllTools: AnyToolDefinition[] = [
   TaskTool,
   UndoEditTool,
   LibrarianTool,
+  HandoffTool,
 ]

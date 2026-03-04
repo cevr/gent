@@ -386,6 +386,7 @@ export function Input(props: InputProps) {
               toggleBypass: Effect.fail(ClientError("Bypass not implemented yet")),
               openPermissions: () => {},
               openAuth: () => {},
+              sendMessage: (content: string) => client.sendMessage(content),
             }).pipe(
               Effect.tap((result) =>
                 Effect.sync(() => {

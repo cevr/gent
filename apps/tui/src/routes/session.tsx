@@ -317,6 +317,26 @@ export function Session(props: SessionProps) {
             }
           }),
         )
+        // Handle handoff tool completion
+        if (event._tag === "ToolCallSucceeded" && event.toolName === "handoff") {
+          try {
+            const handoffResult = JSON.parse(event.output ?? "{}") as {
+              handoff?: boolean
+              context?: string
+              sessionName?: string
+            }
+            if (handoffResult.handoff === true && handoffResult.context !== undefined) {
+              const context = handoffResult.context
+              const name = handoffResult.sessionName
+              // Create new session with distilled context
+              client.createSession(
+                `[Handoff${name !== undefined ? ` — ${name}` : ""}]\n\n${context}`,
+              )
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
       } else if (event._tag === "CompactionStarted") {
         startCompaction()
       } else if (event._tag === "CompactionCompleted") {
@@ -499,6 +519,7 @@ export function Session(props: SessionProps) {
       }),
       openPermissions: () => router.navigateToPermissions(),
       openAuth: () => router.navigateToAuth(),
+      sendMessage: (content: string) => client.sendMessage(content),
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {

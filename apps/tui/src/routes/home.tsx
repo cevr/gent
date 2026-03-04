@@ -110,6 +110,7 @@ export function Home(props: HomeProps) {
       toggleBypass: Effect.fail(ClientError("No active session")),
       openPermissions: () => {},
       openAuth: () => router.navigateToAuth(),
+      sendMessage: (content: string) => client.sendMessage(content),
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
