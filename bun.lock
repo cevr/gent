@@ -61,7 +61,7 @@
         "beautiful-mermaid": "^1.1.3",
         "diff": "^8.0.3",
         "figlet": "^1.10.0",
-        "solid-js": "^1.9.11",
+        "solid-js": "catalog:",
       },
       "devDependencies": {
         "@types/figlet": "^1.7.0",
@@ -75,7 +75,7 @@
       "name": "@gent/atom-solid",
       "version": "0.0.0",
       "devDependencies": {
-        "solid-js": "^1.9.11",
+        "solid-js": "catalog:",
       },
       "peerDependencies": {
         "effect": "catalog:",
@@ -199,6 +199,7 @@
     "effect-machine": "0.7.2",
     "msgpackr": "^1.11.4",
     "multipasta": "^0.2.7",
+    "solid-js": "^1.9.11",
   },
   "packages": {
     "@ai-sdk/amazon-bedrock": ["@ai-sdk/amazon-bedrock@4.0.73", "", { "dependencies": { "@ai-sdk/anthropic": "3.0.54", "@ai-sdk/provider": "3.0.8", "@ai-sdk/provider-utils": "4.0.17", "@smithy/eventstream-codec": "^4.0.1", "@smithy/util-utf8": "^4.0.0", "aws4fetch": "^1.0.20" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-saXerRo7ChlrIyIQ67o24TOsMPBNRJDNlAhJiiAkWO1OR+CuodScmGae0RbE8C7LWYEPRKbTxN5fAwiQU6/R7w=="],
