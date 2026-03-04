@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import {
   extractText,
@@ -16,9 +16,7 @@ import {
   useClient,
 } from "../client/index"
 import type { BranchId, MessageId, SessionId } from "@gent/core"
-import { StatusBar } from "../components/status-bar"
 import { MessageList, type Message, type SessionItem } from "../components/message-list"
-import { Indicators, type Indicator } from "../components/indicators"
 import { Input } from "../components/input"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { useCommand } from "../command/index"
@@ -36,10 +34,16 @@ import { useExit } from "../hooks/use-exit"
 import { BranchTree } from "../components/branch-tree"
 import { MessagePicker } from "../components/message-picker"
 import type { SessionEvent } from "../components/session-event-indicator"
-import { ActivityRow, type ActivityInfo } from "../components/activity-row"
-import { BorderLabel } from "../components/border-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { MermaidViewer, collectDiagrams } from "../components/mermaid-viewer"
+import { useWorkspace } from "../workspace/index"
+import { useSpinnerClock } from "../hooks/use-spinner-clock"
+import {
+  BorderedInput,
+  formatCwdGit,
+  formatElapsed,
+  type BorderLabelItem,
+} from "../components/bordered-input"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -54,13 +58,14 @@ type OverlayState =
   | { _tag: "mermaid" }
 
 export function Session(props: SessionProps) {
-  const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
   const { cast } = useRuntime(client.client.services)
   const { exit, handleEsc } = useExit()
+  const workspace = useWorkspace()
+  const tick = useSpinnerClock()
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
@@ -130,13 +135,22 @@ export function Session(props: SessionProps) {
     if (compactionTimer !== null) clearTimeout(compactionTimer)
   })
 
-  const indicator = (): Indicator | null => {
-    const error = client.error()
-    if (error !== null) return { _tag: "error", message: error }
-    if (compacting()) return { _tag: "compacting" }
-    if (client.isStreaming()) return { _tag: "thinking" }
-    return null
-  }
+  // ── Elapsed timer ──
+  const [elapsed, setElapsed] = createSignal(0)
+  let activityStartTime = Date.now()
+
+  createEffect(() => {
+    const a = activity()
+    activityStartTime = Date.now()
+    setElapsed(0)
+
+    if (a.phase === "idle") return
+
+    const interval = setInterval(() => {
+      setElapsed(Date.now() - activityStartTime)
+    }, 1000)
+    onCleanup(() => clearInterval(interval))
+  })
 
   // Build messages from raw messages
   const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
@@ -570,24 +584,64 @@ export function Session(props: SessionProps) {
     return current?._tag === "tree" ? current.nodes : []
   }
 
-  const activity = (): ActivityInfo => {
-    if (compacting()) return { phase: "thinking", turn: turnCount() }
-    if (!client.isStreaming()) return { phase: "idle", turn: turnCount() }
+  const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
+
+  const activity = () => {
+    if (compacting()) return { phase: "thinking" as const, turn: turnCount() }
+    if (!client.isStreaming()) return { phase: "idle" as const, turn: turnCount() }
     const tool = activeTool()
-    if (tool !== undefined) return { phase: "tool", turn: turnCount(), toolInfo: tool }
-    return { phase: "thinking", turn: turnCount() }
+    if (tool !== undefined) return { phase: "tool" as const, turn: turnCount(), toolInfo: tool }
+    return { phase: "thinking" as const, turn: turnCount() }
   }
 
-  const costLabel = () => {
+  const spinner = createMemo((): string => {
+    const idx = tick() % SPINNER_FRAMES.length
+    return SPINNER_FRAMES[idx] ?? "·"
+  })
+
+  const phaseLabel = createMemo(() => {
+    const a = activity()
+    switch (a.phase) {
+      case "thinking":
+        return "thinking"
+      case "tool":
+        return a.toolInfo ?? "working"
+      case "idle":
+        return ""
+    }
+  })
+
+  const borderColor = () => (client.isStreaming() ? theme.borderActive : theme.border)
+
+  const topLeftLabels = (): BorderLabelItem[] => {
     const c = client.cost()
-    return c > 0 ? `$${c.toFixed(2)}` : ""
+    return c > 0 ? [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }] : []
   }
 
-  const modelLabel = () => {
+  const topRightLabels = (): BorderLabelItem[] => {
     const m = client.model()
-    // Strip provider prefix for display
     const slashIdx = m.indexOf("/")
-    return slashIdx >= 0 ? m.slice(slashIdx + 1) : m
+    const label = slashIdx >= 0 ? m.slice(slashIdx + 1) : m
+    return label.length > 0 ? [{ text: label, color: theme.textMuted }] : []
+  }
+
+  const bottomLeftLabels = (): BorderLabelItem[] => {
+    const a = activity()
+    if (a.phase === "idle") return []
+    const items: BorderLabelItem[] = [
+      { text: spinner(), color: theme.textMuted },
+      { text: `turn ${a.turn}`, color: theme.textMuted },
+      { text: phaseLabel(), color: theme.info },
+    ]
+    if (elapsed() >= 1000) {
+      items.push({ text: formatElapsed(elapsed()), color: theme.textMuted })
+    }
+    return items
+  }
+
+  const bottomRightLabels = (): BorderLabelItem[] => {
+    const label = formatCwdGit(workspace.cwd, workspace.gitRoot(), workspace.gitStatus()?.branch)
+    return [{ text: label, color: theme.textMuted }]
   }
 
   return (
@@ -600,24 +654,26 @@ export function Session(props: SessionProps) {
         streaming={client.isStreaming()}
       />
 
-      {/* Thinking indicator */}
-      <Indicators indicator={indicator()} />
-
-      {/* Input with autocomplete above separator */}
-      <Input
-        onSubmit={handleSubmit}
-        onSlashCommand={handleSlashCommand}
-        clearMessages={clearMessages}
-        inputState={inputState()}
-        onInputEvent={handleInputEvent}
-        onInputEffect={handleInputEffect}
+      {/* Bordered input */}
+      <BorderedInput
+        topLeft={topLeftLabels()}
+        topRight={topRightLabels()}
+        bottomLeft={bottomLeftLabels()}
+        bottomRight={bottomRightLabels()}
+        borderColor={borderColor()}
+        error={client.error()}
       >
-        <Input.Autocomplete />
-        {/* Separator line */}
-        <box flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
-        </box>
-      </Input>
+        <Input
+          onSubmit={handleSubmit}
+          onSlashCommand={handleSlashCommand}
+          clearMessages={clearMessages}
+          inputState={inputState()}
+          onInputEvent={handleInputEvent}
+          onInputEffect={handleInputEffect}
+        >
+          <Input.Autocomplete />
+        </Input>
+      </BorderedInput>
 
       <BranchTree
         open={overlay()?._tag === "tree"}
@@ -639,27 +695,6 @@ export function Session(props: SessionProps) {
         diagrams={overlay()?._tag === "mermaid" ? collectDiagrams(store.messages) : []}
         onClose={() => setOverlay(null)}
       />
-
-      {/* Activity row */}
-      <ActivityRow activity={activity()} />
-
-      {/* Border label with cost + model */}
-      <BorderLabel left={costLabel()} right={modelLabel()} />
-
-      {/* Status Bar */}
-      <StatusBar.Root>
-        <StatusBar.ErrorRow />
-        <StatusBar.Row>
-          <StatusBar.Agent />
-        </StatusBar.Row>
-        <StatusBar.Row>
-          <StatusBar.Cwd />
-          <StatusBar.Separator />
-          <StatusBar.Git />
-          <StatusBar.Separator />
-          <StatusBar.Cost />
-        </StatusBar.Row>
-      </StatusBar.Root>
     </box>
   )
 }

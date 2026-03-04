@@ -3,19 +3,20 @@
  */
 
 import { createEffect, createMemo, createSignal, onMount, Show } from "solid-js"
-import { useTerminalDimensions, useKeyboard } from "@opentui/solid"
+import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import { getLogos } from "../logo.macro.js" with { type: "macro" }
 import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
-import { StatusBar } from "../components/status-bar"
 import { Input } from "../components/input"
 import { useRuntime } from "../hooks/use-runtime"
 import { useExit } from "../hooks/use-exit"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { ClientError, type UiError } from "../utils/format-error"
+import { useWorkspace } from "../workspace/index"
+import { BorderedInput, formatCwdGit } from "../components/bordered-input"
 
 const LOGOS = getLogos()
 
@@ -28,13 +29,16 @@ type HomeState =
   | { _tag: "pending"; prompt: string; showWelcome: boolean }
 
 export function Home(props: HomeProps) {
-  const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
   const { cast } = useRuntime(client.client.services)
   const { exit, handleEsc } = useExit()
+  const workspace = useWorkspace()
+
+  const cwdGitLabel = () =>
+    formatCwdGit(workspace.cwd, workspace.gitRoot(), workspace.gitStatus()?.branch)
 
   const logo = LOGOS[Math.floor(Math.random() * LOGOS.length)]
 
@@ -190,33 +194,12 @@ export function Home(props: HomeProps) {
         </Show>
       </box>
 
-      {/* Input with autocomplete above separator */}
-      <Input onSubmit={handleSubmit} onSlashCommand={handleSlashCommand}>
-        <Input.Autocomplete />
-        {/* Separator line */}
-        <box flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
-        </box>
-      </Input>
-
-      {/* Separator line */}
-      <box flexShrink={0}>
-        <text style={{ fg: theme.textMuted }}>{"─".repeat(dimensions().width)}</text>
-      </box>
-
-      {/* Status Bar */}
-      <StatusBar.Root>
-        <StatusBar.Row>
-          <StatusBar.Agent />
-        </StatusBar.Row>
-        <StatusBar.Row>
-          <StatusBar.Cwd />
-          <StatusBar.Separator />
-          <StatusBar.Git />
-          <StatusBar.Separator />
-          <StatusBar.Cost />
-        </StatusBar.Row>
-      </StatusBar.Root>
+      {/* Bordered input */}
+      <BorderedInput bottomRight={[{ text: cwdGitLabel(), color: theme.textMuted }]}>
+        <Input onSubmit={handleSubmit} onSlashCommand={handleSlashCommand}>
+          <Input.Autocomplete />
+        </Input>
+      </BorderedInput>
     </box>
   )
 }
