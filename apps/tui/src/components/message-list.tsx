@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
@@ -6,6 +6,7 @@ import { getSpinnerFrames, formatToolInput } from "./message-list-utils"
 import { SessionEventIndicator, type SessionEvent } from "./session-event-indicator"
 import type { ImageInfo } from "../client"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
+import { replaceMermaidBlocks } from "../utils/mermaid"
 
 export type { ToolCall }
 
@@ -74,6 +75,11 @@ function AssistantMessage(props: {
     props.images.length > 0 ||
     (props.toolCalls !== undefined && props.toolCalls.length > 0)
 
+  // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
+  const processedContent = createMemo(() =>
+    props.streaming ? props.content : replaceMermaidBlocks(props.content),
+  )
+
   return (
     <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
       <Show when={props.images.length > 0}>
@@ -104,7 +110,7 @@ function AssistantMessage(props: {
         <markdown
           syntaxStyle={props.syntaxStyle()}
           streaming={props.streaming}
-          content={props.content}
+          content={processedContent()}
           conceal
         />
       </Show>
