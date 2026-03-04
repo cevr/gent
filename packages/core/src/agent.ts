@@ -16,6 +16,9 @@ export const AgentName = Schema.Literals([
   "librarian",
   "compaction",
   "title",
+  "finder",
+  "oracle",
+  "reviewer",
 ])
 export type AgentName = typeof AgentName.Type
 
@@ -64,6 +67,24 @@ You have access to a local clone at the path specified in the prompt.
 Use read, grep, and glob tools to explore the code. Be precise — cite file paths and line numbers.
 `.trim()
 
+export const FINDER_PROMPT = `
+Finder agent. Multi-step codebase search specialist. Chain grep/read/glob to answer precisely.
+Report file paths and line numbers. Be exhaustive but concise.
+`.trim()
+
+export const ORACLE_PROMPT = `
+Oracle agent. Expert reasoning for hard problems — architecture review, debugging, complex planning.
+Provide comprehensive zero-shot analysis. Cite specific file paths and line numbers.
+Structure: problem → analysis → recommendation → implementation.
+`.trim()
+
+export const REVIEWER_PROMPT = `
+Reviewer agent. Examine code changes for bugs, security issues, and improvements.
+Run git diff or read specified files, then produce a structured review.
+Output a JSON array of review comments, each with: file, line (optional), severity (critical/high/medium/low), type (bug/suggestion/style), text, fix (optional).
+Only output the JSON array, no other text.
+`.trim()
+
 export const COMPACTION_PROMPT = `
 Compaction agent. Summarize prior context. Focus decisions, open questions, current state.
 `.trim()
@@ -75,7 +96,7 @@ export const Agents = {
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect", "librarian"],
+    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "oracle", "reviewer"],
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
@@ -83,7 +104,7 @@ export const Agents = {
     name: "deepwork",
     description: "Deep reasoning mode - thorough analysis, slower/longer answers",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect", "librarian"],
+    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "oracle", "reviewer"],
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
   }),
@@ -127,6 +148,30 @@ export const Agents = {
     allowedTools: [],
     temperature: 0.5,
   }),
+
+  finder: defineAgent({
+    name: "finder",
+    description: "Fast multi-step codebase search via cheap model",
+    kind: "subagent",
+    allowedTools: ["read", "grep", "glob", "bash"],
+    systemPromptAddendum: FINDER_PROMPT,
+  }),
+
+  oracle: defineAgent({
+    name: "oracle",
+    description: "Expert reasoning for hard problems via strong model",
+    kind: "subagent",
+    allowedTools: ["read", "grep", "glob", "bash"],
+    systemPromptAddendum: ORACLE_PROMPT,
+  }),
+
+  reviewer: defineAgent({
+    name: "reviewer",
+    description: "Structured code review with severity-graded comments",
+    kind: "subagent",
+    allowedTools: ["read", "grep", "glob", "bash"],
+    systemPromptAddendum: REVIEWER_PROMPT,
+  }),
 } as const
 
 // Curated model mapping (not user-configurable)
@@ -139,6 +184,9 @@ export const AgentModels: Record<AgentName, ModelId> = {
   librarian: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   compaction: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   title: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  finder: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  oracle: "anthropic/claude-opus-4-5" as ModelId,
+  reviewer: "anthropic/claude-3-5-haiku-20241022" as ModelId,
 }
 
 export const resolveAgentModelId = (agent: AgentName): ModelId => AgentModels[agent]

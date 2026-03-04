@@ -11,6 +11,7 @@ import {
   AuthStore,
   AgentRegistry,
   resolveAgentModelId,
+  FileLockService,
 } from "@gent/core"
 import type { SubagentRunnerService, EventStore } from "@gent/core"
 import { Storage } from "@gent/storage"
@@ -171,7 +172,8 @@ export const createDependencies = (
   | AuthStore
   | AuthGuard
   | ProviderAuth
-  | FileTracker,
+  | FileTracker
+  | FileLockService,
   PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
@@ -227,6 +229,7 @@ export const createDependencies = (
     ModelRegistry.Live,
     SkillsLive,
     FileTracker.layer,
+    FileLockService.layer,
   )
 
   // ProviderFactory uses built-in providers only

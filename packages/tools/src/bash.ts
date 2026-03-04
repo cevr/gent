@@ -44,7 +44,7 @@ const SIGKILL_DELAY_MS = 3000
  * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
  * Models often emit this despite instructions to use the cwd param.
  */
-function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
+export function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
   const match = cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s)
   if (match === null) return null
   const cwd = match[1] ?? match[2] ?? match[3] ?? ""
@@ -53,9 +53,18 @@ function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
 }
 
 /**
+ * Inject --trailer on git commit commands for session traceability.
+ */
+export function injectGitTrailers(cmd: string, sessionId: string): string {
+  if (!/\bgit\s+commit\b/.test(cmd)) return cmd
+  if (/--trailer/.test(cmd)) return cmd
+  return cmd.replace(/\bgit\s+commit\b/, `git commit --trailer "Session-Id: ${sessionId}"`)
+}
+
+/**
  * Strip trailing & to prevent background jobs escaping tool control.
  */
-function stripBackground(cmd: string): string {
+export function stripBackground(cmd: string): string {
   return cmd.replace(/\s*&\s*$/, "")
 }
 
@@ -89,11 +98,14 @@ export const BashTool = defineTool({
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
   params: BashParams,
-  execute: Effect.fn("BashTool.execute")(function* (params) {
+  execute: Effect.fn("BashTool.execute")(function* (params, ctx) {
     const timeout = Math.min(params.timeout ?? 120000, 600000)
 
     // Strip background operator
     let command = stripBackground(params.command)
+
+    // Inject git commit trailers for session traceability
+    command = injectGitTrailers(command, ctx.sessionId)
 
     // Split cd + command patterns into cwd + command
     let cwd = params.cwd

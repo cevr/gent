@@ -119,6 +119,38 @@ export interface StorageService {
     branchId: BranchId,
     todos: ReadonlyArray<TodoItem>,
   ) => Effect.Effect<void, StorageError>
+
+  // Session tree
+  readonly getSessionTree: (sessionId: SessionId) => Effect.Effect<
+    {
+      session: Session
+      branches: ReadonlyArray<{
+        branch: Branch
+        messages: ReadonlyArray<Message>
+      }>
+    },
+    StorageError
+  >
+
+  // Search
+  readonly searchMessages: (
+    query: string,
+    options?: {
+      sessionId?: string
+      dateAfter?: number
+      dateBefore?: number
+      limit?: number
+    },
+  ) => Effect.Effect<
+    ReadonlyArray<{
+      sessionId: string
+      sessionName: string | null
+      branchId: string
+      snippet: string
+      createdAt: number
+    }>,
+    StorageError
+  >
 }
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
@@ -320,6 +352,30 @@ const initSchema = Effect.gen(function* () {
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
+
+  // FTS5 for message search (standalone — no content-sync)
+  // Migration: drop old content-sync FTS table if it exists (had column mismatch bug)
+  yield* sql.unsafe(`DROP TRIGGER IF EXISTS messages_fts_ai`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`DROP TABLE IF EXISTS messages_fts`).pipe(Effect.ignoreCause)
+
+  yield* sql
+    .unsafe(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, message_id UNINDEXED, session_id UNINDEXED, branch_id UNINDEXED, role UNINDEXED)`,
+    )
+    .pipe(Effect.ignoreCause)
+
+  yield* sql
+    .unsafe(
+      `CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (new.parts, new.id, new.session_id, new.branch_id, new.role); END`,
+    )
+    .pipe(Effect.ignoreCause)
+
+  // Backfill FTS from existing messages
+  yield* sql
+    .unsafe(
+      `INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) SELECT parts, id, session_id, branch_id, role FROM messages WHERE id NOT IN (SELECT message_id FROM messages_fts)`,
+    )
+    .pipe(Effect.ignoreCause)
 })
 
 const makeStorage = Effect.gen(function* () {
@@ -752,6 +808,85 @@ const makeStorage = Effect.gen(function* () {
           Effect.mapError(mapError("Failed to replace todos")),
           Effect.withSpan("Storage.replaceTodos"),
         ),
+    // Session tree
+    getSessionTree: (sessionId) =>
+      Effect.gen(function* () {
+        // Get session
+        const sessionRows =
+          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${sessionId}`
+        const sessionRow = sessionRows[0]
+        if (sessionRow === undefined) {
+          return yield* new StorageError({ message: `Session not found: ${sessionId}` })
+        }
+        const session = sessionFromRow(sessionRow)
+
+        // Get all branches
+        const branchRows =
+          yield* sql<BranchRow>`SELECT id, session_id, parent_branch_id, parent_message_id, name, summary, created_at FROM branches WHERE session_id = ${sessionId} ORDER BY created_at ASC`
+        const branches = branchRows.map(branchFromRow)
+
+        // Get messages per branch
+        const result = yield* Effect.forEach(branches, (branch) =>
+          Effect.gen(function* () {
+            const msgRows =
+              yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ${branch.id} ORDER BY created_at ASC, id ASC`
+            const messages = yield* Effect.forEach(msgRows, (row) =>
+              Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
+            )
+            return { branch, messages }
+          }),
+        )
+
+        return { session, branches: result }
+      }).pipe(
+        Effect.mapError(mapError("Failed to get session tree")),
+        Effect.withSpan("Storage.getSessionTree"),
+      ),
+
+    // Search
+    searchMessages: (query, options) =>
+      Effect.gen(function* () {
+        const limit = options?.limit ?? 20
+        const sessionFilter = options?.sessionId
+        const dateAfter = options?.dateAfter
+        const dateBefore = options?.dateBefore
+
+        // Build FTS query — escape special chars for FTS5
+        const ftsQuery = query.replace(/['"]/g, "")
+
+        // Use raw SQL to build dynamic WHERE clauses
+        let whereExtra = ""
+        if (sessionFilter !== undefined) {
+          whereExtra += ` AND m.session_id = '${sessionFilter.replace(/'/g, "''")}'`
+        }
+        if (dateAfter !== undefined) {
+          whereExtra += ` AND m.created_at > ${dateAfter}`
+        }
+        if (dateBefore !== undefined) {
+          whereExtra += ` AND m.created_at < ${dateBefore}`
+        }
+
+        const rows = yield* sql.unsafe<{
+          session_id: string
+          session_name: string | null
+          branch_id: string
+          snippet_text: string
+          created_at: number
+        }>(
+          `SELECT m.session_id, s.name as session_name, m.branch_id, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet_text, m.created_at FROM messages_fts fts JOIN messages m ON m.id = fts.message_id JOIN sessions s ON s.id = m.session_id WHERE messages_fts MATCH '${ftsQuery.replace(/'/g, "''")}'${whereExtra} ORDER BY m.created_at DESC LIMIT ${limit}`,
+        )
+
+        return rows.map((row) => ({
+          sessionId: row.session_id,
+          sessionName: row.session_name,
+          branchId: row.branch_id,
+          snippet: row.snippet_text,
+          createdAt: row.created_at,
+        }))
+      }).pipe(
+        Effect.mapError(mapError("Failed to search messages")),
+        Effect.withSpan("Storage.searchMessages"),
+      ),
   } satisfies StorageService
 })
 

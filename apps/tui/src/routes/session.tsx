@@ -39,6 +39,7 @@ import type { SessionEvent } from "../components/session-event-indicator"
 import { ActivityRow, type ActivityInfo } from "../components/activity-row"
 import { BorderLabel } from "../components/border-label"
 import { formatToolInput } from "../components/message-list-utils"
+import { MermaidViewer, collectDiagrams } from "../components/mermaid-viewer"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -46,7 +47,11 @@ export interface SessionProps {
   initialPrompt?: string
 }
 
-type OverlayState = null | { _tag: "tree"; nodes: BranchTreeNode[] } | { _tag: "fork" }
+type OverlayState =
+  | null
+  | { _tag: "tree"; nodes: BranchTreeNode[] }
+  | { _tag: "fork" }
+  | { _tag: "mermaid" }
 
 export function Session(props: SessionProps) {
   const dimensions = useTerminalDimensions()
@@ -429,6 +434,12 @@ export function Session(props: SessionProps) {
       setToolsExpanded((prev) => !prev)
       return
     }
+
+    // Ctrl+Shift+M: open mermaid viewer
+    if (e.ctrl === true && e.shift === true && e.name === "m") {
+      setOverlay({ _tag: "mermaid" })
+      return
+    }
   })
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
@@ -620,6 +631,12 @@ export function Session(props: SessionProps) {
         open={overlay()?._tag === "fork"}
         messages={store.messages}
         onSelect={handleForkSelect}
+        onClose={() => setOverlay(null)}
+      />
+
+      <MermaidViewer
+        open={overlay()?._tag === "mermaid"}
+        diagrams={overlay()?._tag === "mermaid" ? collectDiagrams(store.messages) : []}
         onClose={() => setOverlay(null)}
       />
 

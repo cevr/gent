@@ -116,6 +116,9 @@ export {
   EXPLORE_PROMPT,
   ARCHITECT_PROMPT,
   COMPACTION_PROMPT,
+  FINDER_PROMPT,
+  ORACLE_PROMPT,
+  REVIEWER_PROMPT,
 } from "./agent"
 
 // Current Gen (auto-generated)
@@ -159,6 +162,9 @@ export {
   saveFullOutput,
   type OutputBufferResult,
 } from "./output-buffer"
+
+// File Lock
+export { FileLockService } from "./file-lock"
 
 // Windowing
 export { windowItems, headTailExcerpts, type Excerpt, type WindowResult } from "./windowing"

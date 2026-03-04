@@ -68,6 +68,47 @@ describe("Tools", () => {
           }
         }),
       ))
+
+    test("rejects .env file with ReadError", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+          yield* fs.writeFileString(`${tmpDir}/.env`, "SECRET=value")
+
+          const result = yield* Effect.result(ReadTool.execute({ path: `${tmpDir}/.env` }, ctx))
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure") {
+            expect(result.failure.message).toContain("Cannot read secret file")
+          }
+        }),
+      ))
+
+    test("allows .env.example", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+          yield* fs.writeFileString(`${tmpDir}/.env.example`, "KEY=placeholder")
+
+          const result = yield* ReadTool.execute({ path: `${tmpDir}/.env.example` }, ctx)
+          expect(result.content).toContain("KEY=placeholder")
+        }),
+      ))
+
+    test("rejects .env.local", () =>
+      runScoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+          yield* fs.writeFileString(`${tmpDir}/.env.local`, "SECRET=value")
+
+          const result = yield* Effect.result(
+            ReadTool.execute({ path: `${tmpDir}/.env.local` }, ctx),
+          )
+          expect(result._tag).toBe("Failure")
+        }),
+      ))
   })
 
   describe("GlobTool", () => {

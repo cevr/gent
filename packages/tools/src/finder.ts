@@ -1,0 +1,48 @@
+import { Effect, Schema } from "effect"
+import { Agents, SubagentRunnerService, defineTool } from "@gent/core"
+
+// Finder Tool Error
+
+export class FinderError extends Schema.TaggedErrorClass<FinderError>()("FinderError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
+
+// Finder Tool Params
+
+export const FinderParams = Schema.Struct({
+  query: Schema.String.annotate({
+    description: "What to search for in the codebase — can be a concept, pattern, or specific code",
+  }),
+})
+
+// Finder Tool
+
+export const FinderTool = defineTool({
+  name: "finder",
+  concurrency: "serial",
+  description:
+    "Delegate a multi-step codebase search to a fast sub-agent. Use when you need to find something that requires chaining multiple grep/read/glob calls.",
+  params: FinderParams,
+  execute: Effect.fn("FinderTool.execute")(function* (params, ctx) {
+    const runner = yield* SubagentRunnerService
+
+    const result = yield* runner.run({
+      agent: Agents.finder,
+      prompt: params.query,
+      parentSessionId: ctx.sessionId,
+      parentBranchId: ctx.branchId,
+      cwd: process.cwd(),
+    })
+
+    if (result._tag === "error") {
+      return { found: false, error: result.error }
+    }
+
+    return {
+      found: true,
+      response: result.text,
+      metadata: { sessionId: result.sessionId, agentName: result.agentName },
+    }
+  }),
+})

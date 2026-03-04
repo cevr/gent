@@ -76,8 +76,11 @@ function AssistantMessage(props: {
     (props.toolCalls !== undefined && props.toolCalls.length > 0)
 
   // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
+  // Use adaptive presets based on terminal width
   const processedContent = createMemo(() =>
-    props.streaming ? props.content : replaceMermaidBlocks(props.content),
+    props.streaming
+      ? props.content
+      : replaceMermaidBlocks(props.content, process.stdout.columns ?? 80),
   )
 
   return (

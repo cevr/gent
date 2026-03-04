@@ -8,6 +8,12 @@ export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
 export { TaskToolRenderer } from "./task"
 export { GenericToolRenderer } from "./generic"
+export { FinderToolRenderer } from "./finder"
+export { OracleToolRenderer } from "./oracle"
+export { CodeReviewToolRenderer } from "./code-review"
+export { SearchSessionsToolRenderer } from "./search-sessions"
+export { ReadSessionToolRenderer } from "./read-session"
+export { LookAtToolRenderer } from "./look-at"
 
 import type { ToolRenderer } from "./types"
 import { ReadToolRenderer } from "./read"
@@ -18,6 +24,12 @@ import { GrepToolRenderer } from "./grep"
 import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
 import { TaskToolRenderer } from "./task"
+import { FinderToolRenderer } from "./finder"
+import { OracleToolRenderer } from "./oracle"
+import { CodeReviewToolRenderer } from "./code-review"
+import { SearchSessionsToolRenderer } from "./search-sessions"
+import { ReadSessionToolRenderer } from "./read-session"
+import { LookAtToolRenderer } from "./look-at"
 
 export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   read: ReadToolRenderer,
@@ -29,4 +41,10 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   webfetch: WebfetchToolRenderer,
   task: TaskToolRenderer,
   librarian: TaskToolRenderer,
+  finder: FinderToolRenderer,
+  oracle: OracleToolRenderer,
+  code_review: CodeReviewToolRenderer,
+  search_sessions: SearchSessionsToolRenderer,
+  read_session: ReadSessionToolRenderer,
+  look_at: LookAtToolRenderer,
 }

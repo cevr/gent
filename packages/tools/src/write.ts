@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "@gent/core"
+import { defineTool, FileLockService } from "@gent/core"
 import { FileTracker } from "@gent/runtime"
 
 // Write Tool Error
@@ -39,44 +39,51 @@ export const WriteTool = defineTool({
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
     const tracker = yield* FileTracker
+    const fileLock = yield* FileLockService
 
     const filePath = pathService.resolve(params.path)
-    const dir = pathService.dirname(filePath)
 
-    // Read existing content for undo tracking (empty string if new file)
-    const existingContent = yield* fs
-      .readFileString(filePath)
-      .pipe(Effect.catch(() => Effect.succeed("")))
+    return yield* fileLock.withLock(
+      filePath,
+      Effect.gen(function* () {
+        const dir = pathService.dirname(filePath)
 
-    // Ensure directory exists
-    yield* fs.makeDirectory(dir, { recursive: true }).pipe(
-      Effect.mapError(
-        (e) =>
-          new WriteError({
-            message: `Failed to create directory: ${e.message}`,
-            path: dir,
-            cause: e,
-          }),
-      ),
+        // Read existing content for undo tracking (empty string if new file)
+        const existingContent = yield* fs
+          .readFileString(filePath)
+          .pipe(Effect.catch(() => Effect.succeed("")))
+
+        // Ensure directory exists
+        yield* fs.makeDirectory(dir, { recursive: true }).pipe(
+          Effect.mapError(
+            (e) =>
+              new WriteError({
+                message: `Failed to create directory: ${e.message}`,
+                path: dir,
+                cause: e,
+              }),
+          ),
+        )
+
+        // Snapshot for undo support
+        yield* tracker.snapshot(filePath, existingContent, params.content, ctx.toolCallId)
+
+        yield* fs.writeFileString(filePath, params.content).pipe(
+          Effect.mapError(
+            (e) =>
+              new WriteError({
+                message: `Failed to write file: ${e.message}`,
+                path: filePath,
+                cause: e,
+              }),
+          ),
+        )
+
+        return {
+          path: filePath,
+          bytesWritten: Buffer.byteLength(params.content, "utf-8"),
+        }
+      }),
     )
-
-    // Snapshot for undo support
-    yield* tracker.snapshot(filePath, existingContent, params.content, ctx.toolCallId)
-
-    yield* fs.writeFileString(filePath, params.content).pipe(
-      Effect.mapError(
-        (e) =>
-          new WriteError({
-            message: `Failed to write file: ${e.message}`,
-            path: filePath,
-            cause: e,
-          }),
-      ),
-    )
-
-    return {
-      path: filePath,
-      bytesWritten: Buffer.byteLength(params.content, "utf-8"),
-    }
   }),
 })
