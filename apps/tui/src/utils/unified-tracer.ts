@@ -6,7 +6,7 @@
 
 import { appendFileSync, writeFileSync } from "node:fs"
 import type { ServiceMap } from "effect"
-import { Layer, Tracer, Exit, Cause } from "effect"
+import { Layer, Option, Tracer, Exit, Cause } from "effect"
 
 const LOG_PATH = "/tmp/gent-unified.log"
 
@@ -60,7 +60,7 @@ class UnifiedSpan implements Tracer.Span {
   readonly sampled: boolean
 
   readonly name: string
-  readonly parent: Tracer.AnySpan | undefined
+  readonly parent: Option.Option<Tracer.AnySpan>
   readonly annotations: ServiceMap.ServiceMap<never>
   readonly kind: Tracer.SpanKind
 
@@ -73,7 +73,7 @@ class UnifiedSpan implements Tracer.Span {
 
   constructor(options: {
     readonly name: string
-    readonly parent: Tracer.AnySpan | undefined
+    readonly parent: Option.Option<Tracer.AnySpan>
     readonly annotations: ServiceMap.ServiceMap<never>
     readonly links: Array<Tracer.SpanLink>
     readonly startTime: bigint
@@ -86,7 +86,7 @@ class UnifiedSpan implements Tracer.Span {
     this.kind = options.kind
     this.status = { _tag: "Started", startTime: options.startTime }
     this.attributes = new Map()
-    this.traceId = options.parent?.traceId ?? randomHex(32)
+    this.traceId = Option.getOrUndefined(options.parent)?.traceId ?? randomHex(32)
     this.spanId = randomHex(16)
     this.links = Array.from(options.links)
     this.sampled = options.sampled
@@ -97,11 +97,11 @@ class UnifiedSpan implements Tracer.Span {
 
   private calculateDepth(): number {
     let depth = 0
-    let current: Tracer.AnySpan | undefined = this.parent
+    let current = Option.getOrUndefined(this.parent)
     while (current !== undefined) {
       depth++
       if (current._tag === "Span") {
-        current = current.parent
+        current = Option.getOrUndefined(current.parent)
       } else {
         break
       }

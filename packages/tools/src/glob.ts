@@ -69,7 +69,7 @@ export const GlobTool = defineTool({
     for (const file of files) {
       const statResult = yield* fs.stat(file).pipe(Effect.option)
       if (Option.isSome(statResult)) {
-        const mtime = statResult.value.mtime ?? new Date(0)
+        const mtime = Option.getOrElse(statResult.value.mtime, () => new Date(0))
         matches.push({ path: file, mtime: mtime.getTime() })
       }
     }

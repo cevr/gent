@@ -3,7 +3,7 @@
  * This file is kept for backwards compatibility. All exports are deprecated.
  */
 
-import { Effect, Exit, Layer, ServiceMap, Tracer, Cause } from "effect"
+import { Effect, Exit, Layer, Option, ServiceMap, Tracer, Cause } from "effect"
 
 import { appendFileSync, writeFileSync } from "node:fs"
 
@@ -15,7 +15,7 @@ class DevSpan implements Tracer.Span {
   readonly sampled: boolean
 
   readonly name: string
-  readonly parent: Tracer.AnySpan | undefined
+  readonly parent: Option.Option<Tracer.AnySpan>
   readonly annotations: ServiceMap.ServiceMap<never>
   readonly links: Array<Tracer.SpanLink>
   readonly startTime: bigint
@@ -31,7 +31,7 @@ class DevSpan implements Tracer.Span {
   constructor(
     options: {
       readonly name: string
-      readonly parent: Tracer.AnySpan | undefined
+      readonly parent: Option.Option<Tracer.AnySpan>
       readonly annotations: ServiceMap.ServiceMap<never>
       readonly links: Array<Tracer.SpanLink>
       readonly startTime: bigint
@@ -50,7 +50,7 @@ class DevSpan implements Tracer.Span {
     this.logFile = logFile
     this.status = { _tag: "Started", startTime: options.startTime }
     this.attributes = new Map()
-    this.traceId = options.parent?.traceId ?? randomHex(32)
+    this.traceId = Option.getOrUndefined(options.parent)?.traceId ?? randomHex(32)
     this.spanId = randomHex(16)
     this.depth = this.calculateDepth()
 
@@ -59,11 +59,11 @@ class DevSpan implements Tracer.Span {
 
   private calculateDepth(): number {
     let depth = 0
-    let current: Tracer.AnySpan | undefined = this.parent
+    let current = Option.getOrUndefined(this.parent)
     while (current !== undefined) {
       depth++
       if (current._tag === "Span") {
-        current = current.parent
+        current = Option.getOrUndefined(current.parent)
       } else {
         break
       }

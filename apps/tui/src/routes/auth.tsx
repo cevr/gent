@@ -389,7 +389,7 @@ export function Auth(props: AuthProps) {
 
   usePaste((event) => {
     const current = state()
-    const cleaned = event.text.replace(/\r?\n/g, "").trim()
+    const cleaned = new TextDecoder().decode(event.bytes).replace(/\r?\n/g, "").trim()
     if (cleaned.length === 0) return
 
     if (current._tag === "Key") {
