@@ -1,10 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { resolveEditor, makeTmpPath, parseEditorCommand } from "../src/utils/external-editor"
 
 // ── Editor resolution ─────────────────────────────────────────────────
-
-import { resolveEditor, makeTmpPath } from "../src/utils/external-editor"
 
 describe("resolveEditor", () => {
   test("prefers $VISUAL", () => {
@@ -21,6 +20,35 @@ describe("resolveEditor", () => {
 
   test("$VISUAL empty string falls through", () => {
     expect(resolveEditor("", "vim")).toBe("vim")
+  })
+})
+
+// ── Editor command parsing ────────────────────────────────────────────
+
+describe("parseEditorCommand", () => {
+  test("single command", () => {
+    expect(parseEditorCommand("vim")).toEqual(["vim"])
+  })
+
+  test("command with args", () => {
+    expect(parseEditorCommand("code --wait")).toEqual(["code", "--wait"])
+  })
+
+  test("command with multiple args", () => {
+    expect(parseEditorCommand("emacsclient -c -a emacs")).toEqual([
+      "emacsclient",
+      "-c",
+      "-a",
+      "emacs",
+    ])
+  })
+
+  test("extra whitespace trimmed", () => {
+    expect(parseEditorCommand("  nvim  -f  ")).toEqual(["nvim", "-f"])
+  })
+
+  test("empty string falls back to vi", () => {
+    expect(parseEditorCommand("")).toEqual(["vi"])
   })
 })
 

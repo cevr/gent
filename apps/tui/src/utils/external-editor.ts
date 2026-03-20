@@ -6,44 +6,68 @@
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
+import { unlink } from "node:fs/promises"
 
 export function resolveEditor(visual: string | undefined, editor: string | undefined): string {
   return visual || editor || "vi"
+}
+
+/** Split editor string into command + args (handles "code --wait", etc.) */
+export function parseEditorCommand(editor: string): [string, ...string[]] {
+  const parts = editor.trim().split(/\s+/)
+  const cmd = parts[0]
+  if (cmd === undefined || cmd.length === 0) return ["vi"]
+  return [cmd, ...parts.slice(1)]
 }
 
 export function makeTmpPath(): string {
   return join(tmpdir(), `gent-edit-${randomUUID()}.md`)
 }
 
+export type EditorResult =
+  | { _tag: "applied"; content: string }
+  | { _tag: "cancelled" }
+  | { _tag: "error"; message: string }
+
 export async function openExternalEditor(
   currentContent: string,
   suspend: () => void,
   resume: () => void,
   editor: string,
-): Promise<string> {
+): Promise<EditorResult> {
   const tmpPath = makeTmpPath()
+  const [cmd, ...args] = parseEditorCommand(editor)
 
-  // Write current content to tmp file
-  await Bun.write(tmpPath, currentContent)
+  try {
+    // Write current content to tmp file
+    await Bun.write(tmpPath, currentContent)
+  } catch (err) {
+    return { _tag: "error", message: `Failed to write tmp file: ${err}` }
+  }
 
   suspend()
   try {
     // Spawn editor with inherited stdio
-    const proc = Bun.spawn([editor, tmpPath], {
+    const proc = Bun.spawn([cmd, ...args, tmpPath], {
       stdio: ["inherit", "inherit", "inherit"],
     })
-    await proc.exited
+    const exitCode = await proc.exited
+
+    if (exitCode !== 0) {
+      return { _tag: "cancelled" }
+    }
 
     // Read back edited content
     const file = Bun.file(tmpPath)
     const exists = await file.exists()
-    if (!exists) return currentContent
-    return await file.text()
+    if (!exists) return { _tag: "cancelled" }
+    const content = await file.text()
+    return { _tag: "applied", content }
+  } catch (err) {
+    return { _tag: "error", message: `Editor failed: ${err}` }
   } finally {
     resume()
-    // Cleanup tmp file
     try {
-      const { unlink } = await import("node:fs/promises")
       await unlink(tmpPath)
     } catch {
       // Ignore cleanup failures

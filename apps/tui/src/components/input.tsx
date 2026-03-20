@@ -238,13 +238,19 @@ export function Input(props: InputProps) {
         () => renderer.suspend(),
         () => renderer.resume(),
         editor,
-      ).then((edited) => {
-        if (inputRef !== null) {
-          inputRef.replaceText(edited)
-          inputRef.cursorOffset = edited.length
-          previousValue = edited
-        }
-      })
+      )
+        .then((result) => {
+          if (result._tag === "applied" && inputRef !== null) {
+            inputRef.replaceText(result.content)
+            inputRef.cursorOffset = result.content.length
+            previousValue = result.content
+          } else if (result._tag === "error") {
+            client.setError(result.message)
+          }
+        })
+        .catch((err: unknown) => {
+          client.setError(`Editor error: ${err}`)
+        })
       return
     }
 
