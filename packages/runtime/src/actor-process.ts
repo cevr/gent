@@ -5,6 +5,7 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Cause, ServiceMap, Duration, Effect, Layer, Queue, Schedule, Schema } from "effect"
 import {
   AgentName,
+  AgentRestarted,
   BranchId,
   ErrorOccurred,
   EventStore,
@@ -19,7 +20,7 @@ import {
   type MessageId,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
-import { AgentLoop } from "./agent"
+import { AgentLoop, SteerCommand } from "./agent"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
   "ActorProcessError",
@@ -91,6 +92,7 @@ export interface ActorProcessService {
   ) => Effect.Effect<void, ActorProcessError>
   readonly sendToolResult: (input: SendToolResultPayload) => Effect.Effect<void, ActorProcessError>
   readonly interrupt: (input: InterruptPayload) => Effect.Effect<void, ActorProcessError>
+  readonly steerAgent: (command: SteerCommand) => Effect.Effect<void, ActorProcessError>
   readonly getState: (input: ActorTarget) => Effect.Effect<ActorProcessState, ActorProcessError>
   readonly getMetrics: (input: ActorTarget) => Effect.Effect<ActorProcessMetrics, ActorProcessError>
 }
@@ -103,6 +105,7 @@ export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessS
       sendUserMessage: () => Effect.void,
       sendToolResult: () => Effect.void,
       interrupt: () => Effect.void,
+      steerAgent: () => Effect.void,
       getState: () => Effect.succeed({ status: "idle" as const, queueDepth: 0 }),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
@@ -155,6 +158,16 @@ export const LocalActorProcessLive: Layer.Layer<
               Effect.catchCause((cause) => {
                 if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return Effect.gen(function* () {
+                  if (Cause.hasDies(cause)) {
+                    yield* eventStore.publish(
+                      new AgentRestarted({
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                        attempt: 0,
+                        error: Cause.pretty(cause),
+                      }),
+                    )
+                  }
                   yield* eventStore.publish(
                     new ErrorOccurred({
                       sessionId: input.sessionId,
@@ -240,6 +253,11 @@ export const LocalActorProcessLive: Layer.Layer<
           })
         }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("interrupt failed", cause)))),
 
+      steerAgent: (command) =>
+        agentLoop
+          .steer(command)
+          .pipe(Effect.catchCause((cause) => Effect.fail(wrapError("steerAgent failed", cause)))),
+
       getState: (_input) =>
         Effect.gen(function* () {
           const running = yield* agentLoop.isRunning(_input)
@@ -283,6 +301,11 @@ const GetStateRpc = Rpc.make("GetState", {
   success: ActorProcessState,
   error: ActorProcessError,
 })
+const SteerAgentRpc = Rpc.make("SteerAgent", {
+  payload: { command: SteerCommand },
+  success: Schema.Void,
+  error: ActorProcessError,
+})
 const GetMetricsRpc = Rpc.make("GetMetrics", {
   payload: ActorTarget.fields,
   success: ActorProcessMetrics,
@@ -293,6 +316,7 @@ const actorProcessRpcGroup = RpcGroup.make(
   SendUserMessageRpc,
   SendToolResultRpc,
   InterruptRpc,
+  SteerAgentRpc,
   GetStateRpc,
   GetMetricsRpc,
 )
@@ -308,6 +332,7 @@ export const SessionActorEntityLive = SessionActorEntity.toLayer(
       SendUserMessage: (envelope) => actorProcess.sendUserMessage(envelope.payload),
       SendToolResult: (envelope) => actorProcess.sendToolResult(envelope.payload),
       Interrupt: (envelope) => actorProcess.interrupt(envelope.payload),
+      SteerAgent: (envelope) => actorProcess.steerAgent(envelope.payload.command),
       GetState: (envelope) => actorProcess.getState(envelope.payload),
       GetMetrics: (envelope) => actorProcess.getMetrics(envelope.payload),
     })
@@ -339,6 +364,7 @@ export const SessionActorEntitySupervisedLive = SessionActorEntity.toLayerQueue(
       | typeof SendUserMessageRpc
       | typeof SendToolResultRpc
       | typeof InterruptRpc
+      | typeof SteerAgentRpc
       | typeof GetStateRpc
       | typeof GetMetricsRpc
 
@@ -483,6 +509,23 @@ export const SessionActorEntitySupervisedLive = SessionActorEntity.toLayerQueue(
               break
             }
 
+            case "SteerAgent": {
+              const input = request.payload as { command: SteerCommand }
+              yield* replier.complete(
+                request,
+                yield* Effect.exit(
+                  agentLoop
+                    .steer(input.command)
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.fail(wrapError("steerAgent failed", cause)),
+                      ),
+                    ),
+                ),
+              )
+              break
+            }
+
             case "GetState": {
               const input = request.payload as ActorTarget
               yield* replier.complete(
@@ -547,6 +590,10 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
           (client(input)["Interrupt"](input) as Effect.Effect<void, ActorProcessError>).pipe(
             Effect.catchCause((cause) => Effect.fail(wrapError("Interrupt failed", cause))),
           ),
+        steerAgent: (command) =>
+          (
+            client(command)["SteerAgent"]({ command }) as Effect.Effect<void, ActorProcessError>
+          ).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("SteerAgent failed", cause)))),
         getState: (input) =>
           (
             client(input)["GetState"](input) as Effect.Effect<ActorProcessState, ActorProcessError>

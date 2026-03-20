@@ -11,6 +11,8 @@ import {
   SubagentRunnerConfig,
   ToolRunner,
   CheckpointService,
+  LocalActorProcessLive,
+  ActorProcess,
 } from "@gent/runtime"
 import { Provider, ProviderError, ToolCallChunk, FinishChunk } from "@gent/providers"
 import {
@@ -622,5 +624,101 @@ describe("Tool concurrency", () => {
     expect(events[3]?.startsWith("end:")).toBe(true)
     expect(events[0]?.slice("start:".length)).toBe(events[1]?.slice("end:".length))
     expect(events[2]?.slice("start:".length)).toBe(events[3]?.slice("end:".length))
+  })
+})
+
+describe("ActorProcess", () => {
+  const makeActorProcessLayer = (agentLoopLayer: Layer.Layer<AgentLoop>) => {
+    const recorderLayer = SequenceRecorder.Live
+    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const deps = Layer.mergeAll(Storage.Test(), agentLoopLayer, eventStoreLayer, recorderLayer)
+    return Layer.provideMerge(LocalActorProcessLive, deps)
+  }
+
+  test("steerAgent delegates to AgentLoop.steer", async () => {
+    let steered = false
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      run: () => Effect.void,
+      steer: () =>
+        Effect.sync(() => {
+          steered = true
+        }),
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+    })
+
+    const layer = makeActorProcessLayer(agentLoopLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const actorProcess = yield* ActorProcess
+        yield* actorProcess.steerAgent({
+          _tag: "SwitchAgent",
+          sessionId: "s1" as never,
+          branchId: "b1" as never,
+          agent: "deepwork",
+        })
+        expect(steered).toBe(true)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("sendUserMessage publishes AgentRestarted on defect", async () => {
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      run: () => Effect.die("boom"),
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+    })
+
+    const layer = makeActorProcessLayer(agentLoopLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const actorProcess = yield* ActorProcess
+        const recorder = yield* SequenceRecorder
+
+        const now = new Date()
+        yield* storage.createSession(
+          new Session({
+            id: "defect-session",
+            name: "Defect",
+            bypass: true,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "defect-branch",
+            sessionId: "defect-session",
+            createdAt: now,
+          }),
+        )
+
+        yield* actorProcess.sendUserMessage({
+          sessionId: "defect-session" as never,
+          branchId: "defect-branch" as never,
+          content: "trigger defect",
+        })
+
+        // Give the forked fiber time to run
+        yield* Effect.sleep("50 millis")
+
+        const calls = yield* recorder.getCalls()
+        const publishedTags = calls
+          .filter((c) => c.service === "EventStore" && c.method === "publish")
+          .map((c) => (c.args as { _tag: string } | undefined)?._tag)
+
+        expect(publishedTags).toContain("AgentRestarted")
+        expect(publishedTags).toContain("ErrorOccurred")
+
+        // AgentRestarted should come before ErrorOccurred
+        const restartIdx = publishedTags.indexOf("AgentRestarted")
+        const errorIdx = publishedTags.indexOf("ErrorOccurred")
+        expect(restartIdx).toBeLessThan(errorIdx)
+      }).pipe(Effect.provide(layer)),
+    )
   })
 })
