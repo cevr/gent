@@ -1,8 +1,8 @@
-import type { Sharding } from "effect/unstable/cluster"
+import type { Sharding, Envelope } from "effect/unstable/cluster"
 import { Entity } from "effect/unstable/cluster"
 import * as TestRunner from "effect/unstable/cluster/TestRunner"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
-import { Cause, ServiceMap, Duration, Effect, Layer, Schedule, Schema } from "effect"
+import { Cause, ServiceMap, Duration, Effect, Layer, Queue, Schedule, Schema } from "effect"
 import {
   AgentName,
   BranchId,
@@ -320,26 +320,209 @@ export const SessionActorEntityLocalLive = Layer.provide(
 )
 
 /**
- * Supervised entity layer — entity handlers get automatic restart on defect.
- * Exponential backoff: 1s, 2s, 4s... up to 5 retries.
+ * Supervised entity using toLayerQueue — persistent mailbox-driven actor.
+ *
+ * The entity drains a mailbox in an infinite loop. For SendUserMessage,
+ * it runs agentLoop.run() inline (blocking the loop — serial turns).
+ * If the agent loop defects, the defect propagates up, entity manager
+ * restarts the loop with defectRetryPolicy.
+ *
+ * No forkDetach. The supervised work IS the entity fiber.
  */
-export const SessionActorEntitySupervisedLive = SessionActorEntity.toLayer(
+export const SessionActorEntitySupervisedLive = SessionActorEntity.toLayerQueue(
   Effect.gen(function* () {
-    const actorProcess = yield* ActorProcess
-    return SessionActorEntity.of({
-      SendUserMessage: (envelope) => actorProcess.sendUserMessage(envelope.payload),
-      SendToolResult: (envelope) => actorProcess.sendToolResult(envelope.payload),
-      Interrupt: (envelope) => actorProcess.interrupt(envelope.payload),
-      GetState: (envelope) => actorProcess.getState(envelope.payload),
-      GetMetrics: (envelope) => actorProcess.getMetrics(envelope.payload),
-    })
+    const agentLoop = yield* AgentLoop
+    const storage = yield* Storage
+    const eventStore = yield* EventStore
+
+    type AnyRpc =
+      | typeof SendUserMessageRpc
+      | typeof SendToolResultRpc
+      | typeof InterruptRpc
+      | typeof GetStateRpc
+      | typeof GetMetricsRpc
+
+    return (
+      queue: Queue.Dequeue<Envelope.Request<AnyRpc>>,
+      replier: Entity.Replier<AnyRpc>,
+    ): Effect.Effect<never, never, never> =>
+      Effect.gen(function* () {
+        while (true) {
+          const request = yield* Queue.take(queue)
+
+          switch (request.tag) {
+            case "SendUserMessage": {
+              const input = request.payload as SendUserMessagePayload
+              const session = yield* storage.getSession(input.sessionId)
+              const bypass = input.bypass ?? session?.bypass ?? true
+
+              if (input.mode !== undefined) {
+                yield* agentLoop.steer({
+                  _tag: "SwitchAgent",
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  agent: input.mode,
+                })
+              }
+
+              const message = new Message({
+                id: Bun.randomUUIDv7() as MessageId,
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                kind: "regular",
+                role: "user",
+                parts: [new TextPart({ type: "text", text: input.content })],
+                createdAt: new Date(),
+              })
+
+              // Reply immediately — caller doesn't wait for agent loop
+              yield* replier.succeed(request, undefined as void)
+
+              // Run agent loop inline — if this defects, entity restarts
+              yield* agentLoop.run(message, { bypass }).pipe(
+                Effect.catchCause((cause) => {
+                  if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+                  return eventStore
+                    .publish(
+                      new ErrorOccurred({
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                        error: `Agent loop failed: ${cause}`,
+                      }),
+                    )
+                    .pipe(Effect.catchEager(() => Effect.void))
+                }),
+              )
+              break
+            }
+
+            case "SendToolResult": {
+              const input = request.payload as SendToolResultPayload
+              yield* replier.complete(
+                request,
+                yield* Effect.exit(
+                  Effect.gen(function* () {
+                    const outputType = input.isError === true ? "error-json" : "json"
+                    const part = new ToolResultPart({
+                      type: "tool-result",
+                      toolCallId: input.toolCallId,
+                      toolName: input.toolName,
+                      output: { type: outputType, value: input.output },
+                    })
+                    const msg = new Message({
+                      id: Bun.randomUUIDv7() as MessageId,
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      role: "tool",
+                      parts: [part],
+                      createdAt: new Date(),
+                    })
+                    yield* storage.createMessage(msg)
+                    const isError = input.isError ?? false
+                    const toolCallFields = {
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      toolCallId: input.toolCallId,
+                      toolName: input.toolName,
+                      summary: summarizeToolOutput(part),
+                      output: stringifyOutput(part.output.value),
+                    }
+                    yield* eventStore.publish(
+                      isError
+                        ? new ToolCallFailed(toolCallFields)
+                        : new ToolCallSucceeded(toolCallFields),
+                    )
+                  }).pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.fail(wrapError("sendToolResult failed", cause)),
+                    ),
+                  ),
+                ),
+              )
+              break
+            }
+
+            case "Interrupt": {
+              const input = request.payload as InterruptPayload
+              yield* replier.complete(
+                request,
+                yield* Effect.exit(
+                  Effect.gen(function* () {
+                    if (input.kind === "interject") {
+                      if (input.message === undefined || input.message === "") {
+                        return yield* new ActorProcessError({
+                          message: "interject requires message",
+                        })
+                      }
+                      yield* agentLoop.steer({
+                        _tag: "Interject",
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                        message: input.message,
+                      })
+                      return
+                    }
+                    if (input.kind === "cancel") {
+                      yield* agentLoop.steer({
+                        _tag: "Cancel",
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                      })
+                      return
+                    }
+                    yield* agentLoop.steer({
+                      _tag: "Interrupt",
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                    })
+                  }).pipe(
+                    Effect.catchCause((cause) => Effect.fail(wrapError("interrupt failed", cause))),
+                  ),
+                ),
+              )
+              break
+            }
+
+            case "GetState": {
+              const input = request.payload as ActorTarget
+              yield* replier.complete(
+                request,
+                yield* Effect.exit(
+                  Effect.gen(function* () {
+                    const running = yield* agentLoop.isRunning(input)
+                    return {
+                      status: running ? "running" : "idle",
+                      agent: undefined,
+                      queueDepth: 0,
+                      lastError: undefined,
+                    } satisfies ActorProcessState
+                  }).pipe(
+                    Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause))),
+                  ),
+                ),
+              )
+              break
+            }
+
+            case "GetMetrics": {
+              yield* replier.succeed(request, {
+                turns: 0,
+                tokens: 0,
+                toolCalls: 0,
+                retries: 0,
+                durationMs: 0,
+              } satisfies ActorProcessMetrics)
+              break
+            }
+          }
+        }
+      }) as Effect.Effect<never, never, never>
   }),
   {
     defectRetryPolicy: Schedule.both(
       Schedule.exponential(Duration.seconds(1), 2),
       Schedule.recurs(5),
     ),
-    disableFatalDefects: true,
     maxIdleTime: Duration.minutes(30),
   },
 )
@@ -380,13 +563,10 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
   )
 
 /**
- * Supervised ActorProcess using SingleRunner (single-node cluster, in-memory storage).
- * Entity handlers get automatic restart on defect via defectRetryPolicy.
- * No distributed infrastructure required.
- */
-/**
  * Supervised ActorProcess using in-memory cluster (TestRunner).
- * Entity handlers get automatic restart on defect via defectRetryPolicy.
+ *
+ * Entity runs a mailbox-driven loop — agentLoop.run() executes inline.
+ * Defects → entity manager restarts with exponential backoff.
  * No distributed infrastructure required.
  */
 export const SupervisedActorProcessLive: Layer.Layer<
@@ -394,11 +574,9 @@ export const SupervisedActorProcessLive: Layer.Layer<
   never,
   AgentLoop | Storage | EventStore
 > = (() => {
-  // 1. Base: LocalActorProcessLive provides ActorProcess for entity handlers
-  // 2. TestRunner provides Sharding (in-memory, no SQL)
-  // 3. Entity registers with Sharding, delegates to ActorProcess
-  // 4. ClusterActorProcessLive provides the public ActorProcess via entity client
-  const base = Layer.mergeAll(LocalActorProcessLive, TestRunner.layer)
-  const withEntity = Layer.provideMerge(SessionActorEntitySupervisedLive, base)
+  // TestRunner provides Sharding (in-memory, no SQL)
+  // SessionActorEntitySupervisedLive registers the mailbox handler
+  // ClusterActorProcessLive routes ActorProcess calls through the entity
+  const withEntity = Layer.provideMerge(SessionActorEntitySupervisedLive, TestRunner.layer)
   return Layer.provide(ClusterActorProcessLive, withEntity)
 })()

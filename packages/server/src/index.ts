@@ -20,7 +20,7 @@ import {
   AgentLoop,
   SteerCommand,
   AgentLoopError,
-  LocalActorProcessLive,
+  SupervisedActorProcessLive,
   CheckpointService,
   ConfigService,
   ModelRegistry,
@@ -344,7 +344,7 @@ export const createDependencies = (
 
   const AllWithRuntime = Layer.mergeAll(AllDeps, AgentRuntimeDeps, TaskServiceLive)
 
-  const ActorProcessLive = Layer.provide(LocalActorProcessLive, AllWithRuntime)
+  const ActorProcessLive = Layer.provide(SupervisedActorProcessLive, AllWithRuntime)
 
   return Layer.mergeAll(AllWithRuntime, ActorProcessLive)
 }
