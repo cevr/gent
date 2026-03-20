@@ -233,15 +233,6 @@ export const RespondPlanPayload = Schema.Struct({
 })
 
 // ============================================================================
-// Compaction Operations
-// ============================================================================
-
-export const CompactBranchPayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-})
-
-// ============================================================================
 // Permission Operations
 // ============================================================================
 
@@ -381,12 +372,6 @@ export class GentRpcs extends RpcGroup.make(
   // Plans
   Rpc.make("respondPlan", {
     payload: RespondPlanPayload.fields,
-    error: GentRpcError,
-  }),
-
-  // Compaction
-  Rpc.make("compactBranch", {
-    payload: CompactBranchPayload.fields,
     error: GentRpcError,
   }),
 

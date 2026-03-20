@@ -257,12 +257,6 @@ export interface GentClient {
     name?: string
   }) => Effect.Effect<{ branchId: string }, GentRpcError>
 
-  /** Compact a branch */
-  compactBranch: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<void, GentRpcError>
-
   /** Subscribe to events - returns Stream */
   subscribeEvents: (input: {
     sessionId: SessionId
@@ -390,12 +384,6 @@ export function createClient(
         fromBranchId: input.fromBranchId,
         atMessageId: input.atMessageId,
         ...(input.name !== undefined ? { name: input.name } : {}),
-      }),
-
-    compactBranch: (input) =>
-      rpcClient.compactBranch({
-        sessionId: input.sessionId,
-        branchId: input.branchId,
       }),
 
     subscribeEvents: ({ sessionId, branchId, after }) =>

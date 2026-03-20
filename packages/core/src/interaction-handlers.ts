@@ -7,6 +7,10 @@ import {
   PlanPresented,
   PlanRejected,
   type PlanDecision,
+  HandoffPresented,
+  HandoffConfirmed,
+  HandoffRejected,
+  type HandoffDecision,
 } from "./event"
 import type { BranchId, SessionId } from "./ids"
 import type { ToolContext } from "./tool"
@@ -218,6 +222,129 @@ export class PlanHandler extends ServiceMap.Service<PlanHandler, PlanHandlerServ
   ): Layer.Layer<PlanHandler> => {
     let index = 0
     return Layer.succeed(PlanHandler, {
+      present: () => Effect.succeed(decisions[index++] ?? "confirm"),
+      respond: () => Effect.succeed(undefined),
+    })
+  }
+}
+
+// ============================================================================
+// Handoff Handler
+// ============================================================================
+
+export interface HandoffHandlerService {
+  readonly present: (params: {
+    sessionId: SessionId
+    branchId: BranchId
+    summary: string
+    reason?: string
+  }) => Effect.Effect<HandoffDecision, EventStoreError>
+  readonly respond: (
+    requestId: string,
+    decision: HandoffDecision,
+    childSessionId?: SessionId,
+    reason?: string,
+  ) => Effect.Effect<
+    | {
+        sessionId: SessionId
+        branchId: BranchId
+        summary: string
+        reason?: string
+      }
+    | undefined,
+    EventStoreError
+  >
+}
+
+export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHandlerService>()(
+  "@gent/core/src/interaction-handlers/HandoffHandler",
+) {
+  static Live: Layer.Layer<HandoffHandler, never, EventStore> = Layer.effect(
+    HandoffHandler,
+    Effect.gen(function* () {
+      const eventStore = yield* EventStore
+      const pending = new Map<
+        string,
+        {
+          deferred: Deferred.Deferred<HandoffDecision>
+          sessionId: SessionId
+          branchId: BranchId
+          summary: string
+          reason?: string
+        }
+      >()
+
+      return {
+        present: Effect.fn("HandoffHandler.present")(function* (params) {
+          const requestId = Bun.randomUUIDv7()
+          const deferred = yield* Deferred.make<HandoffDecision>()
+          pending.set(requestId, {
+            deferred,
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            summary: params.summary,
+            reason: params.reason,
+          })
+
+          yield* eventStore.publish(
+            new HandoffPresented({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              requestId,
+              summary: params.summary,
+              ...(params.reason !== undefined ? { reason: params.reason } : {}),
+            }),
+          )
+
+          const decision = yield* Deferred.await(deferred)
+          pending.delete(requestId)
+          return decision
+        }),
+
+        respond: Effect.fn("HandoffHandler.respond")(
+          function* (requestId, decision, childSessionId, reason) {
+            const entry = pending.get(requestId)
+            if (entry === undefined) return undefined
+
+            if (decision === "confirm" && childSessionId !== undefined) {
+              yield* eventStore.publish(
+                new HandoffConfirmed({
+                  sessionId: entry.sessionId,
+                  branchId: entry.branchId,
+                  requestId,
+                  childSessionId,
+                }),
+              )
+            } else if (decision === "reject") {
+              yield* eventStore.publish(
+                new HandoffRejected({
+                  sessionId: entry.sessionId,
+                  branchId: entry.branchId,
+                  requestId,
+                  ...(reason !== undefined ? { reason } : {}),
+                }),
+              )
+            }
+
+            yield* Deferred.succeed(entry.deferred, decision)
+            pending.delete(requestId)
+            return {
+              sessionId: entry.sessionId,
+              branchId: entry.branchId,
+              summary: entry.summary,
+              ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+            }
+          },
+        ),
+      }
+    }),
+  )
+
+  static Test = (
+    decisions: ReadonlyArray<HandoffDecision> = ["confirm"],
+  ): Layer.Layer<HandoffHandler> => {
+    let index = 0
+    return Layer.succeed(HandoffHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "confirm"),
       respond: () => Effect.succeed(undefined),
     })

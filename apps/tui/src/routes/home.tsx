@@ -107,7 +107,6 @@ export function Home(props: HomeProps) {
       openPalette: () => command.openPalette(),
       clearMessages: () => {},
       navigateToSessions: () => command.openPalette(),
-      compactHistory: Effect.fail(ClientError("No active session")),
       createBranch: Effect.fail(ClientError("No active session")),
       openTree: () => {},
       openFork: () => {},

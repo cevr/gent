@@ -17,12 +17,6 @@ export type SessionEvent =
       createdAt: number
       seq: number
     }
-  | {
-      _tag: "event"
-      kind: "compaction"
-      createdAt: number
-      seq: number
-    }
 
 export interface SessionEventIndicatorProps {
   event: SessionEvent
@@ -36,8 +30,6 @@ const getLabel = (event: SessionEvent): string => {
       return `Worked for ${formatThinkTime(event.durationSeconds)}`
     case "interruption":
       return "Interrupted - what do you want to do instead?"
-    case "compaction":
-      return "Compaction complete"
   }
 }
 
@@ -61,7 +53,7 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
     return truncate(getLabel(props.event), width)
   }
 
-  const isLineEvent = () => props.event.kind === "turn-ended" || props.event.kind === "compaction"
+  const isLineEvent = () => props.event.kind === "turn-ended"
 
   return (
     <box marginTop={1}>

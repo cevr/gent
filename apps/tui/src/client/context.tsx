@@ -136,8 +136,6 @@ export interface ClientContextValue {
   createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
   getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentRpcError>
-  compactBranch: () => Effect.Effect<void, GentRpcError>
-
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId, summarize?: boolean) => void
 
@@ -560,12 +558,6 @@ export function ClientProvider(props: ClientProviderProps) {
           ...(name !== undefined ? { name } : {}),
         })
         .pipe(Effect.map((result) => result.branchId as BranchId))
-    },
-
-    compactBranch: () => {
-      const s = session()
-      if (s === null) return Effect.void
-      return client.compactBranch({ sessionId: s.sessionId, branchId: s.branchId })
     },
 
     // Event subscription for message updates (shared with internal agent state subscription)

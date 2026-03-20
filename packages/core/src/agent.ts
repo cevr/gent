@@ -14,7 +14,7 @@ export const AgentName = Schema.Literals([
   "explore",
   "architect",
   "librarian",
-  "compaction",
+  "summarizer",
   "title",
   "finder",
   "oracle",
@@ -85,8 +85,8 @@ Output a JSON array of review comments, each with: file, line (optional), severi
 Only output the JSON array, no other text.
 `.trim()
 
-export const COMPACTION_PROMPT = `
-Compaction agent. Summarize prior context. Focus decisions, open questions, current state.
+export const SUMMARIZER_PROMPT = `
+Summarizer agent. Summarize prior context. Focus decisions, open questions, current state.
 `.trim()
 
 // Built-in agents
@@ -133,12 +133,12 @@ export const Agents = {
     systemPromptAddendum: LIBRARIAN_PROMPT,
   }),
 
-  compaction: defineAgent({
-    name: "compaction",
+  summarizer: defineAgent({
+    name: "summarizer",
     kind: "system",
     hidden: true,
     allowedTools: [],
-    systemPromptAddendum: COMPACTION_PROMPT,
+    systemPromptAddendum: SUMMARIZER_PROMPT,
   }),
 
   title: defineAgent({
@@ -182,7 +182,7 @@ export const AgentModels: Record<AgentName, ModelId> = {
   explore: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   architect: "anthropic/claude-opus-4-5" as ModelId,
   librarian: "anthropic/claude-3-5-haiku-20241022" as ModelId,
-  compaction: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  summarizer: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   title: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   finder: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   oracle: "anthropic/claude-opus-4-5" as ModelId,

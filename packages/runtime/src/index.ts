@@ -30,13 +30,10 @@ export {
   CheckpointService,
   CheckpointError,
   type CheckpointServiceApi,
-  CompactionConfig,
-  DEFAULT_COMPACTION_CONFIG,
-  COMPACTION_THRESHOLD,
-  PRUNE_PROTECT,
-  PRUNE_MINIMUM,
   estimateTokens,
-  pruneToolOutputs,
+  estimateContextPercent,
+  getContextWindow,
+  MODEL_CONTEXT_WINDOWS,
 } from "./checkpoint.js"
 export { ConfigService, UserConfig, type ConfigServiceService } from "./config-service.js"
 

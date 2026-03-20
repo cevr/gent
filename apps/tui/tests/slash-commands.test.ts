@@ -45,7 +45,6 @@ describe("executeSlashCommand", () => {
     openPalette: number
     clearMessages: number
     navigateToSessions: number
-    compactHistory: number
     createBranch: number
     openTree: number
     openFork: number
@@ -59,7 +58,6 @@ describe("executeSlashCommand", () => {
       openPalette: 0,
       clearMessages: 0,
       navigateToSessions: 0,
-      compactHistory: 0,
       createBranch: 0,
       openTree: 0,
       openFork: 0,
@@ -78,9 +76,6 @@ describe("executeSlashCommand", () => {
       navigateToSessions: () => {
         calls.navigateToSessions++
       },
-      compactHistory: Effect.sync(() => {
-        calls.compactHistory++
-      }),
       createBranch: Effect.sync(() => {
         calls.createBranch++
       }),
@@ -99,6 +94,7 @@ describe("executeSlashCommand", () => {
       openAuth: () => {
         calls.openAuth++
       },
+      sendMessage: () => {},
     }
 
     return { ctx, calls }
@@ -129,14 +125,6 @@ describe("executeSlashCommand", () => {
     expect(result.handled).toBe(true)
     expect(result.error).toBeUndefined()
     expect(calls.navigateToSessions).toBe(1)
-  })
-
-  test("/compact calls compactHistory", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(calls.compactHistory).toBe(1)
   })
 
   test("/branch calls createBranch", async () => {
@@ -194,17 +182,17 @@ describe("executeSlashCommand", () => {
       openPalette: () => {},
       clearMessages: () => {},
       navigateToSessions: () => {},
-      compactHistory: Effect.fail(ClientError("Compact failed")),
-      createBranch: Effect.void,
+      createBranch: Effect.fail(ClientError("Branch failed")),
       openTree: () => {},
       openFork: () => {},
       toggleBypass: Effect.void,
       openPermissions: () => {},
       openAuth: () => {},
+      sendMessage: () => {},
     }
 
-    const result = await Effect.runPromise(executeSlashCommand("compact", "", ctx))
+    const result = await Effect.runPromise(executeSlashCommand("branch", "", ctx))
     expect(result.handled).toBe(true)
-    expect(result.error).toBe("Compact failed")
+    expect(result.error).toBe("Branch failed")
   })
 })

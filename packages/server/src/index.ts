@@ -10,7 +10,6 @@ import {
   AuthStorage,
   AuthStore,
   AgentRegistry,
-  resolveAgentModelId,
   FileLockService,
 } from "@gent/core"
 import type { SubagentRunnerService, EventStore } from "@gent/core"
@@ -104,7 +103,6 @@ export {
   ForkBranchSuccess,
   RespondPermissionPayload,
   RespondPlanPayload,
-  CompactBranchPayload,
   UpdateSessionBypassPayload,
   UpdateSessionBypassSuccess,
   AuthProviderInfo,
@@ -262,8 +260,8 @@ export const createDependencies = (
   // PlanHandler requires EventStore
   const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseWithPermission)
 
-  // CheckpointService requires Storage and Provider
-  const CheckpointServiceLive = CheckpointService.Live(resolveAgentModelId("compaction"))
+  // CheckpointService requires Storage
+  const CheckpointServiceLive = CheckpointService.Live()
   const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseWithPermission)
 
   // AgentLoop requires CheckpointService and FileSystem

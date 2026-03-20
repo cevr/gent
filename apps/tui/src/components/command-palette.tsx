@@ -145,24 +145,6 @@ export function CommandPalette() {
         },
       },
       {
-        id: "compact",
-        title: "Compact",
-        description: "Compact conversation history",
-        category: "cmd",
-        onSelect: () => {
-          cast(
-            client.compactBranch().pipe(
-              Effect.catchEager((error) =>
-                Effect.sync(() => {
-                  client.setError(formatError(error))
-                }),
-              ),
-            ),
-          )
-          command.closePalette()
-        },
-      },
-      {
         id: "new-session",
         title: "New Session",
         description: "Start a fresh session",

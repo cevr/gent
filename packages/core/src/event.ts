@@ -132,22 +132,30 @@ export class PlanRejected extends Schema.TaggedClass<PlanRejected>()("PlanReject
 export const PlanDecision = Schema.Literals(["confirm", "reject"])
 export type PlanDecision = typeof PlanDecision.Type
 
-export class CompactionStarted extends Schema.TaggedClass<CompactionStarted>()(
-  "CompactionStarted",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-  },
-) {}
+export class HandoffPresented extends Schema.TaggedClass<HandoffPresented>()("HandoffPresented", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: Schema.String,
+  summary: Schema.String,
+  reason: Schema.optional(Schema.String),
+}) {}
 
-export class CompactionCompleted extends Schema.TaggedClass<CompactionCompleted>()(
-  "CompactionCompleted",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    compactionId: Schema.String,
-  },
-) {}
+export class HandoffConfirmed extends Schema.TaggedClass<HandoffConfirmed>()("HandoffConfirmed", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: Schema.String,
+  childSessionId: SessionId,
+}) {}
+
+export class HandoffRejected extends Schema.TaggedClass<HandoffRejected>()("HandoffRejected", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: Schema.String,
+  reason: Schema.optional(Schema.String),
+}) {}
+
+export const HandoffDecision = Schema.Literals(["confirm", "reject"])
+export type HandoffDecision = typeof HandoffDecision.Type
 
 export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOccurred", {
   sessionId: SessionId,
@@ -314,8 +322,9 @@ export const AgentEvent = Schema.Union([
   PlanPresented,
   PlanConfirmed,
   PlanRejected,
-  CompactionStarted,
-  CompactionCompleted,
+  HandoffPresented,
+  HandoffConfirmed,
+  HandoffRejected,
   ErrorOccurred,
   MachineInspected,
   MachineTaskSucceeded,

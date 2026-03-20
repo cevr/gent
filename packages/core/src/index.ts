@@ -48,8 +48,10 @@ export {
   PlanConfirmed,
   PlanRejected,
   PlanDecision,
-  CompactionStarted,
-  CompactionCompleted,
+  HandoffPresented,
+  HandoffConfirmed,
+  HandoffRejected,
+  HandoffDecision,
   ErrorOccurred,
   MachineInspected,
   MachineInspectionType,
@@ -78,8 +80,8 @@ export {
 // Permission Types
 export { Permission, PermissionRule, PermissionResult, PermissionDecision } from "./permission"
 
-// Permission Handler
-export { PermissionHandler, PlanHandler } from "./interaction-handlers"
+// Interaction Handlers
+export { PermissionHandler, PlanHandler, HandoffHandler } from "./interaction-handlers"
 
 // Plan Handler
 
@@ -115,7 +117,7 @@ export {
   DEEPWORK_PROMPT,
   EXPLORE_PROMPT,
   ARCHITECT_PROMPT,
-  COMPACTION_PROMPT,
+  SUMMARIZER_PROMPT,
   FINDER_PROMPT,
   ORACLE_PROMPT,
   REVIEWER_PROMPT,

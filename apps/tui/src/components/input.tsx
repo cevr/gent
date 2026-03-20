@@ -379,7 +379,6 @@ export function Input(props: InputProps) {
               openPalette: () => command.openPalette(),
               clearMessages: props.clearMessages ?? (() => {}),
               navigateToSessions: () => command.openPalette(),
-              compactHistory: Effect.fail(ClientError("Compact not implemented yet")),
               createBranch: Effect.void,
               openTree: () => {},
               openFork: () => {},

@@ -4,9 +4,7 @@ import {
   isRetryable,
   getRetryDelay,
   DEFAULT_RETRY_CONFIG,
-  pruneToolOutputs,
   estimateTokens,
-  DEFAULT_COMPACTION_CONFIG,
   AgentLoop,
   AgentActor,
   InProcessRunner,
@@ -18,7 +16,6 @@ import { Provider, ProviderError, ToolCallChunk, FinishChunk } from "@gent/provi
 import {
   Message,
   TextPart,
-  ToolResultPart,
   Agents,
   AgentRegistry,
   Session,
@@ -84,7 +81,7 @@ describe("Retry Logic", () => {
   })
 })
 
-describe("Compaction", () => {
+describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {
     const messages = [
       new Message({
@@ -99,36 +96,6 @@ describe("Compaction", () => {
 
     const tokens = estimateTokens(messages)
     expect(tokens).toBe(3) // ceil(11/4) = 3
-  })
-
-  test("pruneToolOutputs preserves recent outputs", () => {
-    const messages = [
-      new Message({
-        id: "m1",
-        sessionId: "s",
-        branchId: "b",
-        role: "tool",
-        parts: [
-          new ToolResultPart({
-            type: "tool-result",
-            toolCallId: "tc1",
-            toolName: "test",
-            output: { type: "json", value: { data: "x".repeat(1000) } },
-          }),
-        ],
-        createdAt: new Date(),
-      }),
-    ]
-
-    // With high pruneProtect, nothing should be pruned
-    const config = { ...DEFAULT_COMPACTION_CONFIG, pruneProtect: 100000 }
-    const result = pruneToolOutputs(messages, config)
-    expect(result.length).toBe(1)
-    const firstMessage = result[0]
-    expect(firstMessage).toBeDefined()
-    const firstPart = firstMessage?.parts[0] as ToolResultPart | undefined
-    expect(firstPart).toBeDefined()
-    expect(firstPart?.output.value).not.toHaveProperty("_pruned")
   })
 })
 

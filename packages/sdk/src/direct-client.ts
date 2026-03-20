@@ -173,11 +173,6 @@ export interface DirectClient {
     reason?: string,
   ) => Effect.Effect<void, GentCoreError>
 
-  compactBranch: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<void, GentCoreError>
-
   updateSessionBypass: (
     sessionId: SessionId,
     bypass: boolean,
@@ -326,9 +321,6 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
 
       respondPlan: (requestId, decision, reason) =>
         planHandler.respond(requestId, decision, reason),
-
-      compactBranch: (input) =>
-        core.compactBranch({ sessionId: input.sessionId, branchId: input.branchId }),
 
       updateSessionBypass: (sessionId, bypass) => core.updateSessionBypass({ sessionId, bypass }),
 

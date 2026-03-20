@@ -11,10 +11,8 @@ export const DEFAULTS = {
   // Grep tool match limit
   grepMatchLimit: 100,
 
-  // Compaction thresholds (tokens)
-  compactionThreshold: 100_000,
-  pruneProtect: 40_000,
-  pruneMinimum: 20_000,
+  // Handoff threshold (% of context window)
+  handoffThresholdPercent: 85,
 
   // Follow-up queue max size
   followUpQueueMax: 10,

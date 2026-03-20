@@ -76,50 +76,10 @@ export function Session(props: SessionProps) {
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
   const [overlay, setOverlay] = createSignal<OverlayState>(null)
-  const [compacting, setCompacting] = createSignal(false)
   const [turnCount, setTurnCount] = createSignal(0)
   const [activeTool, setActiveTool] = createSignal<string | undefined>(undefined)
   let initialPromptSent = false
   let eventSeq = 0
-
-  const COMPACTION_MIN_MS = 600
-  let compactionStartedAt: number | null = null
-  let compactionTimer: ReturnType<typeof setTimeout> | null = null
-
-  const startCompaction = () => {
-    compactionStartedAt = Date.now()
-    if (compactionTimer !== null) {
-      clearTimeout(compactionTimer)
-      compactionTimer = null
-    }
-    setCompacting(true)
-  }
-
-  const stopCompaction = () => {
-    if (!compacting()) {
-      compactionStartedAt = null
-      return
-    }
-
-    const startedAt = compactionStartedAt ?? Date.now()
-    const elapsedMs = Date.now() - startedAt
-    const remainingMs = COMPACTION_MIN_MS - elapsedMs
-
-    if (remainingMs <= 0) {
-      setCompacting(false)
-      compactionStartedAt = null
-      return
-    }
-
-    if (compactionTimer !== null) {
-      clearTimeout(compactionTimer)
-    }
-    compactionTimer = setTimeout(() => {
-      setCompacting(false)
-      compactionStartedAt = null
-      compactionTimer = null
-    }, remainingMs)
-  }
 
   const items = createMemo((): SessionItem[] => {
     const combined: SessionItem[] = [...store.messages, ...store.events]
@@ -129,10 +89,6 @@ export function Session(props: SessionProps) {
       if (a._tag === b._tag) return 0
       return a._tag === "message" ? -1 : 1
     })
-  })
-
-  onCleanup(() => {
-    if (compactionTimer !== null) clearTimeout(compactionTimer)
   })
 
   // ── Elapsed timer ──
@@ -356,20 +312,6 @@ export function Session(props: SessionProps) {
             // ignore parse errors
           }
         }
-      } else if (event._tag === "CompactionStarted") {
-        startCompaction()
-      } else if (event._tag === "CompactionCompleted") {
-        stopCompaction()
-        setStore(
-          produce((draft) => {
-            draft.events.push({
-              _tag: "event",
-              kind: "compaction",
-              createdAt: Date.now(),
-              seq: eventSeq++,
-            })
-          }),
-        )
       } else if (event._tag === "QuestionsAsked") {
         handleInputEvent({ _tag: "QuestionsAsked", event })
       } else if (event._tag === "PermissionRequested") {
@@ -523,18 +465,6 @@ export function Session(props: SessionProps) {
       openPalette: () => command.openPalette(),
       clearMessages,
       navigateToSessions: () => command.openPalette(),
-      compactHistory: Effect.gen(function* () {
-        yield* Effect.sync(() => {
-          startCompaction()
-        })
-        try {
-          yield* client.compactBranch()
-        } finally {
-          yield* Effect.sync(() => {
-            stopCompaction()
-          })
-        }
-      }),
       createBranch: client.createBranch().pipe(Effect.asVoid),
       openTree: openBranchTree,
       openFork: openForkPicker,
@@ -587,7 +517,6 @@ export function Session(props: SessionProps) {
   const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
 
   const activity = () => {
-    if (compacting()) return { phase: "thinking" as const, turn: turnCount() }
     if (!client.isStreaming()) return { phase: "idle" as const, turn: turnCount() }
     const tool = activeTool()
     if (tool !== undefined) return { phase: "tool" as const, turn: turnCount(), toolInfo: tool }

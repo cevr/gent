@@ -12,8 +12,6 @@ import {
   ErrorOccurred,
   SessionNameUpdated,
   PlanConfirmed,
-  CompactionStarted,
-  CompactionCompleted,
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
@@ -31,7 +29,6 @@ import {
   type ProviderService,
 } from "@gent/providers"
 import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
-import type { CheckpointError } from "@gent/runtime"
 import type { PlatformErrorSchema } from "./errors"
 import { NotFoundError } from "./errors"
 
@@ -148,7 +145,6 @@ export type GentCoreError =
   | ProviderError
   | ProviderAuthError
   | EventStoreError
-  | CheckpointError
   | NotFoundError
 
 // ============================================================================
@@ -201,11 +197,6 @@ export interface GentCoreService {
   readonly listMessages: (branchId: BranchId) => Effect.Effect<MessageInfo[], GentCoreError>
 
   readonly listBranches: (sessionId: SessionId) => Effect.Effect<BranchInfo[], GentCoreError>
-
-  readonly compactBranch: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<void, GentCoreError>
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
@@ -752,26 +743,6 @@ ${conversation}`
               createdAt: b.createdAt.getTime(),
             }))
           }).pipe(Effect.withSpan("GentCore.listBranches")),
-
-        compactBranch: (input) =>
-          Effect.gen(function* () {
-            const branch = yield* storage.getBranch(input.branchId)
-            if (branch === undefined || branch.sessionId !== input.sessionId) {
-              return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
-            }
-
-            yield* eventStore.publish(
-              new CompactionStarted({ sessionId: input.sessionId, branchId: input.branchId }),
-            )
-            const checkpoint = yield* checkpointService.createCompactionCheckpoint(input.branchId)
-            yield* eventStore.publish(
-              new CompactionCompleted({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                compactionId: checkpoint.id,
-              }),
-            )
-          }).pipe(Effect.withSpan("GentCore.compactBranch")),
 
         steer: (command) => agentLoop.steer(command),
 

@@ -11,7 +11,6 @@ export type SlashCommandId =
   | "agent"
   | "clear"
   | "sessions"
-  | "compact"
   | "branch"
   | "tree"
   | "fork"
@@ -24,7 +23,6 @@ export interface SlashCommandContext {
   openPalette: () => void
   clearMessages: () => void
   navigateToSessions: () => void
-  compactHistory: Effect.Effect<void, UiError>
   createBranch: Effect.Effect<void, UiError>
   openTree: () => void
   openFork: () => void
@@ -78,9 +76,6 @@ export const executeSlashCommand = (
         ctx.navigateToSessions()
         return { handled: true }
       })
-
-    case "compact":
-      return runCommandEffect(ctx.compactHistory)
 
     case "branch":
       return runCommandEffect(ctx.createBranch)

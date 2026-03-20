@@ -144,7 +144,7 @@ export const ReadSessionTool = defineTool({
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
 
       const result = yield* runner.run({
-        agent: Agents.compaction,
+        agent: Agents.summarizer,
         prompt,
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,

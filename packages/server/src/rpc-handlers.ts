@@ -126,8 +126,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           })
         }),
 
-      compactBranch: ({ sessionId, branchId }) => core.compactBranch({ sessionId, branchId }),
-
       updateSessionBypass: ({ sessionId, bypass }) =>
         core.updateSessionBypass({ sessionId, bypass }),
 

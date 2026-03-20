@@ -72,7 +72,6 @@ describe("createClient", () => {
     expect(typeof client.getBranchTree).toBe("function")
     expect(typeof client.switchBranch).toBe("function")
     expect(typeof client.forkBranch).toBe("function")
-    expect(typeof client.compactBranch).toBe("function")
     expect(typeof client.updateSessionBypass).toBe("function")
     expect(typeof client.getPermissionRules).toBe("function")
     expect(typeof client.deletePermissionRule).toBe("function")

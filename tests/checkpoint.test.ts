@@ -13,14 +13,13 @@ import {
 } from "@gent/core"
 import { CheckpointService, estimateTokens } from "@gent/runtime"
 import { SequenceRecorder, createRecordingTestLayer, assertSequence } from "@gent/test-utils"
-import { Provider } from "@gent/providers"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
   Effect.runPromise(Effect.provide(effect, Storage.Test()))
 
 describe("Checkpoints", () => {
   describe("Storage - Checkpoint CRUD", () => {
-    test("creates and retrieves CompactionCheckpoint", async () => {
+    test("creates and retrieves CompactionCheckpoint (legacy)", async () => {
       await run(
         Effect.gen(function* () {
           const storage = yield* Storage
@@ -125,7 +124,7 @@ describe("Checkpoints", () => {
             }),
           )
 
-          // Create older checkpoint
+          // Create older checkpoint (legacy compaction)
           yield* storage.createCheckpoint(
             new CompactionCheckpoint({
               id: "old-cp",
@@ -168,7 +167,7 @@ describe("Checkpoints", () => {
       )
     })
 
-    test("CompactionCheckpoint with empty summary is valid", async () => {
+    test("CompactionCheckpoint with empty summary is valid (legacy)", async () => {
       await run(
         Effect.gen(function* () {
           const storage = yield* Storage
@@ -231,7 +230,6 @@ describe("Checkpoints", () => {
 
           const baseTime = Date.now()
 
-          // Create messages with incrementing timestamps
           yield* storage.createMessage(
             new Message({
               id: "m1",
@@ -273,7 +271,6 @@ describe("Checkpoints", () => {
             }),
           )
 
-          // Get messages after m2
           const messages = yield* storage.listMessagesAfter("after-branch", "m2")
 
           expect(messages.length).toBe(2)
@@ -470,97 +467,9 @@ describe("Checkpoints", () => {
   })
 
   describe("CheckpointService", () => {
-    test("shouldCompact returns false below threshold", async () => {
-      // Create layer with low token messages
-      const BaseLayer = Layer.mergeAll(Storage.Test(), Provider.Test([[]]))
-      const CheckpointLayer = Layer.provide(
-        CheckpointService.Live("test/model", {
-          threshold: 1000,
-          pruneProtect: 100,
-          pruneMinimum: 50,
-        }),
-        BaseLayer,
-      )
-      const TestLayer = Layer.merge(BaseLayer, CheckpointLayer)
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const service = yield* CheckpointService
-
-          yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
-          )
-          yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
-          )
-          // Small message - well under 1000 token threshold
-          yield* storage.createMessage(
-            new Message({
-              id: "m1",
-              sessionId: "s",
-              branchId: "b",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "Hello" })],
-              createdAt: new Date(),
-            }),
-          )
-
-          const result = yield* service.shouldCompact("b")
-          expect(result).toBe(false)
-        }).pipe(Effect.provide(TestLayer)),
-      )
-    })
-
-    test("shouldCompact returns true above threshold", async () => {
-      const BaseLayer = Layer.mergeAll(Storage.Test(), Provider.Test([[]]))
-      const CheckpointLayer = Layer.provide(
-        CheckpointService.Live("test/model", {
-          threshold: 10, // Very low threshold
-          pruneProtect: 5,
-          pruneMinimum: 2,
-        }),
-        BaseLayer,
-      )
-      const TestLayer = Layer.merge(BaseLayer, CheckpointLayer)
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const service = yield* CheckpointService
-
-          yield* storage.createSession(
-            new Session({ id: "s", createdAt: new Date(), updatedAt: new Date() }),
-          )
-          yield* storage.createBranch(
-            new Branch({ id: "b", sessionId: "s", createdAt: new Date() }),
-          )
-          // Message with >40 chars = >10 tokens
-          yield* storage.createMessage(
-            new Message({
-              id: "m1",
-              sessionId: "s",
-              branchId: "b",
-              role: "user",
-              parts: [
-                new TextPart({
-                  type: "text",
-                  text: "This is a longer message that exceeds the threshold",
-                }),
-              ],
-              createdAt: new Date(),
-            }),
-          )
-
-          const result = yield* service.shouldCompact("b")
-          expect(result).toBe(true)
-        }).pipe(Effect.provide(TestLayer)),
-      )
-    })
-
     test("createPlanCheckpoint creates and stores checkpoint", async () => {
-      const BaseLayer = Layer.mergeAll(Storage.Test(), Provider.Test([[]]))
-      const CheckpointLayer = Layer.provide(CheckpointService.Live("test/model"), BaseLayer)
+      const BaseLayer = Storage.Test()
+      const CheckpointLayer = Layer.provide(CheckpointService.Live(), BaseLayer)
       const TestLayer = Layer.merge(BaseLayer, CheckpointLayer)
 
       await Effect.runPromise(
@@ -771,7 +680,7 @@ describe("Checkpoints", () => {
       )
     })
 
-    test("CompactionCheckpoint loads messages after firstKeptMessageId", async () => {
+    test("CompactionCheckpoint loads messages after firstKeptMessageId (legacy)", async () => {
       await run(
         Effect.gen(function* () {
           const storage = yield* Storage
@@ -785,7 +694,6 @@ describe("Checkpoints", () => {
 
           const baseTime = Date.now()
 
-          // Create messages
           yield* storage.createMessage(
             new Message({
               id: "old-1",
@@ -817,7 +725,6 @@ describe("Checkpoints", () => {
             }),
           )
 
-          // Create compaction checkpoint pointing to kept-1
           yield* storage.createCheckpoint(
             new CompactionCheckpoint({
               id: "cp-1",
@@ -833,7 +740,6 @@ describe("Checkpoints", () => {
           const checkpoint = yield* storage.getLatestCheckpoint("b")
           expect(checkpoint?._tag).toBe("CompactionCheckpoint")
 
-          // Should only get messages AFTER kept-1
           const messages = yield* storage.listMessagesAfter(
             "b",
             (checkpoint as CompactionCheckpoint).firstKeptMessageId,
@@ -858,7 +764,6 @@ describe("Checkpoints", () => {
 
           const baseTime = Date.now()
 
-          // Messages before plan approval
           yield* storage.createMessage(
             new Message({
               id: "pre-plan",
@@ -870,7 +775,6 @@ describe("Checkpoints", () => {
             }),
           )
 
-          // Plan checkpoint created at baseTime + 1000
           const checkpointTime = new Date(baseTime + 1000)
           yield* storage.createCheckpoint(
             new PlanCheckpoint({
@@ -883,7 +787,6 @@ describe("Checkpoints", () => {
             }),
           )
 
-          // Message after plan approval
           yield* storage.createMessage(
             new Message({
               id: "post-plan",
@@ -898,7 +801,6 @@ describe("Checkpoints", () => {
           const checkpoint = yield* storage.getLatestCheckpoint("b")
           expect(checkpoint?._tag).toBe("PlanCheckpoint")
 
-          // Should only get messages AFTER checkpoint creation
           const messages = yield* storage.listMessagesSince("b", checkpoint!.createdAt)
           expect(messages.length).toBe(1)
           expect(messages[0]?.id).toBe("post-plan")

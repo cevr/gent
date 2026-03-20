@@ -240,8 +240,9 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
                   case "PlanPresented":
                   case "PlanConfirmed":
                   case "PlanRejected":
-                  case "CompactionStarted":
-                  case "CompactionCompleted":
+                  case "HandoffPresented":
+                  case "HandoffConfirmed":
+                  case "HandoffRejected":
                   case "MachineInspected":
                   case "MachineTaskSucceeded":
                   case "MachineTaskFailed":

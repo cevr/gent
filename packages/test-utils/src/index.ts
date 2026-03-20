@@ -8,15 +8,15 @@ import {
   Permission,
   PermissionHandler,
   PlanHandler,
-  CompactionCheckpoint,
+  HandoffHandler,
   PlanCheckpoint,
   matchesEventFilter,
   type BranchId,
-  type MessageId,
   type Checkpoint,
   type AnyToolDefinition,
   type PermissionDecision,
   type PlanDecision,
+  type HandoffDecision,
 } from "@gent/core"
 import { AskUserHandler, AllTools } from "@gent/tools"
 import { AgentLoop, CheckpointService } from "@gent/runtime"
@@ -174,7 +174,6 @@ export const RecordingAskUserHandler = (
 // Recording CheckpointService
 
 export interface CheckpointServiceTestConfig {
-  shouldCompact?: boolean
   latestCheckpoint?: Checkpoint
 }
 
@@ -189,38 +188,6 @@ export const RecordingCheckpointService = (
       const checkpointRef = yield* Ref.make<Checkpoint | undefined>(config.latestCheckpoint)
 
       return {
-        shouldCompact: Effect.fn("CheckpointService.shouldCompact")(function* (branchId: BranchId) {
-          yield* recorder.record({
-            service: "CheckpointService",
-            method: "shouldCompact",
-            args: { branchId },
-          })
-          return config.shouldCompact ?? false
-        }),
-
-        createCompactionCheckpoint: Effect.fn("CheckpointService.createCompactionCheckpoint")(
-          function* (branchId: BranchId) {
-            const checkpoint = new CompactionCheckpoint({
-              id: Bun.randomUUIDv7(),
-              branchId,
-              summary: "Test compaction summary",
-              firstKeptMessageId: "test-kept-msg" as MessageId,
-              messageCount: 10,
-              tokenCount: 5000,
-              createdAt: new Date(),
-            })
-            yield* recorder.record({
-              service: "CheckpointService",
-              method: "createCompactionCheckpoint",
-              args: { branchId },
-              result: checkpoint,
-            })
-            yield* storage.createCheckpoint(checkpoint)
-            yield* Ref.set(checkpointRef, checkpoint)
-            return checkpoint
-          },
-        ),
-
         createPlanCheckpoint: Effect.fn("CheckpointService.createPlanCheckpoint")(function* (
           branchId: BranchId,
           planPath: string,
@@ -255,8 +222,6 @@ export const RecordingCheckpointService = (
           return yield* Ref.get(checkpointRef)
         }),
 
-        prune: (messages) => Effect.succeed([...messages]),
-
         estimateTokens: (messages) => {
           let chars = 0
           for (const msg of messages) {
@@ -267,6 +232,18 @@ export const RecordingCheckpointService = (
             }
           }
           return Effect.succeed(Math.ceil(chars / 4))
+        },
+
+        estimateContextPercent: (messages, _modelId) => {
+          let chars = 0
+          for (const msg of messages) {
+            for (const part of msg.parts) {
+              if (part.type === "text") {
+                chars += (part as { text: string }).text.length
+              }
+            }
+          }
+          return Effect.succeed(Math.round((Math.ceil(chars / 4) / 200_000) * 100))
         },
       }
     }),
@@ -282,6 +259,7 @@ export interface TestLayerConfig {
   checkpoint?: CheckpointServiceTestConfig
   permissionDecisions?: ReadonlyArray<PermissionDecision>
   planDecisions?: ReadonlyArray<PlanDecision>
+  handoffDecisions?: ReadonlyArray<HandoffDecision>
 }
 
 // Create Test Layer (no recording)
@@ -293,6 +271,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
   const askUserResponses = config.askUserResponses ?? ["yes"]
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const planDecisions = config.planDecisions ?? ["confirm"]
+  const handoffDecisions = config.handoffDecisions ?? ["confirm"]
   const tools = config.tools ?? AllTools
 
   return Layer.mergeAll(
@@ -304,6 +283,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     PermissionHandler.Test(permissionDecisions),
     AskUserHandler.Test(askUserResponses),
     PlanHandler.Test(planDecisions),
+    HandoffHandler.Test(handoffDecisions),
     AgentLoop.Test(),
     CheckpointService.Test(),
   )
@@ -318,6 +298,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   const askUserResponses = config.askUserResponses ?? ["yes"]
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const planDecisions = config.planDecisions ?? ["confirm"]
+  const handoffDecisions = config.handoffDecisions ?? ["confirm"]
   const tools = config.tools ?? AllTools
   const checkpointConfig = config.checkpoint ?? {}
 
@@ -329,6 +310,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     PermissionHandler.Test(permissionDecisions),
     ToolRegistry.Live(tools),
     PlanHandler.Test(planDecisions),
+    HandoffHandler.Test(handoffDecisions),
     AgentLoop.Test(),
   ).pipe(
     Layer.provideMerge(RecordingProvider(providerResponses)),
