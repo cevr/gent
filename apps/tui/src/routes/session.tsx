@@ -561,7 +561,7 @@ export function Session(props: SessionProps) {
     // Context window utilization
     const tokens = client.latestInputTokens()
     const model = client.modelInfo()
-    if (tokens > 0 && model?.contextLength !== undefined) {
+    if (tokens > 0 && model?.contextLength !== undefined && model.contextLength > 0) {
       const pct = Math.min(100, Math.round((tokens / model.contextLength) * 100))
       const color = pct >= 90 ? theme.error : pct >= 70 ? theme.warning : theme.textMuted
       items.push({ text: `${formatTokens(tokens)} (${pct}%)`, color })

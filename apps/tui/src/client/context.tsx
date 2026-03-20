@@ -501,6 +501,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
       // Reset agent state and activate new session
       setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
+      setLatestInputTokens(0)
       sendMachine(
         SessionMachineEvent.Activated({
           session: { sessionId, branchId, name, bypass: bypass ?? true },
@@ -511,6 +512,7 @@ export function ClientProvider(props: ClientProviderProps) {
     clearSession: () => {
       sendMachine(SessionMachineEvent.Clear)
       setAgentStore({ agent: preferredAgent(), status: AgentStatus.idle(), cost: 0 })
+      setLatestInputTokens(0)
     },
 
     // Return Effects for caller to run
