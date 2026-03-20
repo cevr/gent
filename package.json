@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.77",
-    "@aws-sdk/credential-providers": "^3.1012.0",
+    "@aws-sdk/credential-providers": "^3.1013.0",
     "effect-machine": "catalog:",
     "msgpackr": "catalog:",
     "multipasta": "catalog:"
@@ -29,7 +29,7 @@
   "devDependencies": {
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/mistral": "catalog:",
-    "@effect/language-service": "^0.80.0",
+    "@effect/language-service": "^0.81.0",
     "@effect/platform-bun": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
