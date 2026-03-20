@@ -16,6 +16,14 @@ import {
   BranchSwitched,
   BranchSummarized,
   AgentName,
+  Permission,
+  PermissionRule,
+  PermissionHandler,
+  PlanHandler,
+  HandoffHandler,
+  type PermissionDecision,
+  type PlanDecision,
+  type HandoffDecision,
   type MessagePart,
   type Task,
   type SessionId,
@@ -30,7 +38,13 @@ import {
   type ProviderAuthError,
   type ProviderService,
 } from "@gent/providers"
-import { AgentLoop, SteerCommand, AgentLoopError, CheckpointService } from "@gent/runtime"
+import {
+  AgentLoop,
+  SteerCommand,
+  AgentLoopError,
+  CheckpointService,
+  ConfigService,
+} from "@gent/runtime"
 import type { PlatformErrorSchema } from "./errors"
 import { NotFoundError } from "./errors"
 
@@ -231,6 +245,28 @@ export interface GentCoreService {
     sessionId: SessionId
     bypass: boolean
   }) => Effect.Effect<{ bypass: boolean }, GentCoreError>
+
+  // Interaction response methods (centralized business logic)
+  readonly respondPermission: (input: {
+    requestId: string
+    decision: PermissionDecision
+    persist?: boolean
+  }) => Effect.Effect<void, GentCoreError>
+
+  readonly respondPlan: (input: {
+    requestId: string
+    decision: PlanDecision
+    reason?: string
+  }) => Effect.Effect<void, GentCoreError>
+
+  readonly respondHandoff: (input: {
+    requestId: string
+    decision: HandoffDecision
+    reason?: string
+  }) => Effect.Effect<
+    { childSessionId: SessionId | undefined; childBranchId: BranchId | undefined },
+    GentCoreError
+  >
 }
 
 // Name generation model - using haiku for speed/cost
@@ -284,7 +320,16 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
   static Live: Layer.Layer<
     GentCore,
     never,
-    Storage | AgentLoop | EventStore | Provider | CheckpointService
+    | Storage
+    | AgentLoop
+    | EventStore
+    | Provider
+    | CheckpointService
+    | PermissionHandler
+    | PlanHandler
+    | HandoffHandler
+    | Permission
+    | ConfigService
   > = Layer.effect(
     GentCore,
     Effect.gen(function* () {
@@ -292,6 +337,11 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
       const agentLoop = yield* AgentLoop
       const eventStore = yield* EventStore
       const provider = yield* Provider
+      const permissionHandler = yield* PermissionHandler
+      const planHandler = yield* PlanHandler
+      const handoffHandler = yield* HandoffHandler
+      const permission = yield* Permission
+      const configService = yield* ConfigService
       const checkpointService = yield* CheckpointService
 
       const summarizeBranch = Effect.fn("GentCore.summarizeBranch")(function* (branchId: BranchId) {
@@ -913,6 +963,57 @@ ${conversation}`
             ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
             ...(input.after !== undefined ? { after: input.after as EventId } : {}),
           }),
+
+        respondPermission: (input) =>
+          Effect.gen(function* () {
+            const request = yield* permissionHandler.respond(input.requestId, input.decision)
+            if (input.persist === true && request !== undefined) {
+              const rule = new PermissionRule({
+                tool: request.toolName,
+                action: input.decision,
+              })
+              yield* configService.addPermissionRule(rule)
+              yield* permission.addRule(rule)
+            }
+          }).pipe(Effect.withSpan("GentCore.respondPermission")),
+
+        respondPlan: (input) =>
+          Effect.gen(function* () {
+            const entry = yield* planHandler.respond(input.requestId, input.decision, input.reason)
+            if (input.decision !== "confirm" || entry?.planPath === undefined) return
+            yield* service.approvePlan({
+              sessionId: entry.sessionId,
+              branchId: entry.branchId,
+              planPath: entry.planPath,
+              requestId: input.requestId,
+              emitEvent: false,
+            })
+          }).pipe(Effect.withSpan("GentCore.respondPlan")),
+
+        respondHandoff: (input) =>
+          Effect.gen(function* () {
+            if (input.decision !== "confirm") {
+              yield* handoffHandler.respond(input.requestId, "reject", undefined, input.reason)
+              return { childSessionId: undefined, childBranchId: undefined }
+            }
+
+            const entry = yield* handoffHandler.peek(input.requestId)
+            if (entry === undefined) {
+              return { childSessionId: undefined, childBranchId: undefined }
+            }
+
+            const parentSession = yield* service.getSession(entry.sessionId)
+            const result = yield* service.createSession({
+              firstMessage: `[Handoff]\n\n${entry.summary}`,
+              ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+              ...(parentSession?.bypass !== undefined ? { bypass: parentSession.bypass } : {}),
+              parentSessionId: entry.sessionId,
+              parentBranchId: entry.branchId,
+            })
+
+            yield* handoffHandler.respond(input.requestId, "confirm", result.sessionId)
+            return { childSessionId: result.sessionId, childBranchId: result.branchId }
+          }).pipe(Effect.withSpan("GentCore.respondHandoff")),
       }
 
       return service

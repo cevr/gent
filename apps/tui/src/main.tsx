@@ -12,7 +12,7 @@ import {
   type SessionInfo,
   type BranchInfo,
 } from "@gent/server"
-import { makeDirectClient, type DirectClient } from "@gent/sdk"
+import { makeDirectGentClient, type GentClient } from "@gent/sdk"
 import { GentLogger } from "@gent/runtime"
 import { UnifiedTracerLive } from "./utils/unified-tracer"
 import {
@@ -209,7 +209,7 @@ const CoreLayer = Layer.unwrap(
 // Headless runner - streams events to stdout
 const runHeadless = (
   core: GentCoreService,
-  directClient: DirectClient,
+  client: GentClient,
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
@@ -265,7 +265,7 @@ const runHeadless = (
               yield* Ref.set(handoffPendingRef, true)
               const hp = event as typeof HandoffPresented.Type
               process.stdout.write(`\n[handoff: auto-confirming]\n`)
-              yield* directClient
+              yield* client
                 .respondHandoff(hp.requestId, "confirm")
                 .pipe(Effect.catchEager(() => Effect.void))
               break
@@ -357,8 +357,8 @@ const main = Command.make(
           bypass,
         })
 
-        // Create direct client (used by both headless and TUI)
-        const directClient: DirectClient = yield* makeDirectClient
+        // Create client (used by both headless and TUI)
+        const gentClient: GentClient = yield* makeDirectGentClient
 
         // Handle headless mode
         if (state._tag === "headless") {
@@ -367,7 +367,7 @@ const main = Command.make(
             yield* Console.error("Error: session has no branch")
             return process.exit(1)
           }
-          yield* runHeadless(core, directClient, state.session.id, branchId, state.prompt)
+          yield* runHeadless(core, gentClient, state.session.id, branchId, state.prompt)
           return process.exit(0)
         }
 
@@ -406,11 +406,7 @@ const main = Command.make(
           render(() => (
             <WorkspaceProvider cwd={cwd} services={uiServices}>
               <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                <ClientProvider
-                  rpcClient={directClient}
-                  services={uiServices}
-                  initialSession={initialSession}
-                >
+                <ClientProvider client={gentClient} initialSession={initialSession}>
                   <RouterProvider initialRoute={initialRoute}>
                     <App
                       initialPrompt={initialPrompt}

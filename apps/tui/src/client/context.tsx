@@ -10,7 +10,6 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import type { ServiceMap } from "effect"
 import { Effect, Stream, Schema } from "effect"
 import { Machine } from "effect-machine"
 import {
@@ -31,15 +30,12 @@ import { useMachine } from "../hooks/use-machine"
 
 import {
   type GentClient,
-  type GentRpcClient,
   type GentRpcError,
-  type DirectClient,
   type MessageInfoReadonly,
   type SessionInfo,
   type BranchInfo,
   type BranchTreeNode,
   type SteerCommand,
-  createClient,
 } from "@gent/sdk"
 
 import { SessionMachineState, SessionMachineEvent, sessionMachine } from "./session-machine"
@@ -181,21 +177,13 @@ const toSessionState = (ms: typeof SessionMachineState.Type): SessionState => {
 // =============================================================================
 
 interface ClientProviderProps extends ParentProps {
-  rpcClient: GentRpcClient | DirectClient
-  services: ServiceMap.ServiceMap<unknown>
+  client: GentClient
   initialSession: Session | undefined
 }
 
 export function ClientProvider(props: ClientProviderProps) {
   const defaultAgent: AgentName = "cowork"
-
-  // DirectClient already has the right shape, use it directly
-  // For GentRpcClient, wrap with createClient
-  const client: GentClient =
-    "services" in props.rpcClient &&
-    typeof (props.rpcClient as DirectClient).createSession === "function"
-      ? (props.rpcClient as unknown as GentClient)
-      : createClient(props.rpcClient as GentRpcClient, props.services)
+  const client = props.client
 
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {

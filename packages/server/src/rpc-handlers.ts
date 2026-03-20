@@ -3,18 +3,7 @@ import { GentRpcs } from "./rpcs"
 import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
-import {
-  AuthGuard,
-  AuthApi,
-  AuthStore,
-  Model,
-  type ProviderId,
-  Permission,
-  PermissionHandler,
-  PermissionRule,
-  PlanHandler,
-  HandoffHandler,
-} from "@gent/core"
+import { AuthGuard, AuthApi, AuthStore, Model, type ProviderId, Permission } from "@gent/core"
 import { ActorProcess, ConfigService, ModelRegistry } from "@gent/runtime"
 import { OPENAI_OAUTH_ALLOWED_MODELS, ProviderAuth } from "@gent/providers"
 
@@ -26,9 +15,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
   Effect.gen(function* () {
     const core = yield* GentCore
     const askUserHandler = yield* AskUserHandler
-    const permissionHandler = yield* PermissionHandler
-    const planHandler = yield* PlanHandler
-    const handoffHandler = yield* HandoffHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
@@ -136,56 +122,20 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       respondQuestions: ({ requestId, answers }) => askUserHandler.respond(requestId, answers),
 
       respondPermission: ({ requestId, decision, persist }) =>
-        Effect.gen(function* () {
-          const request = yield* permissionHandler.respond(requestId, decision)
-          if (persist === true && request !== undefined) {
-            const rule = new PermissionRule({
-              tool: request.toolName,
-              action: decision,
-            })
-            yield* configService.addPermissionRule(rule)
-            yield* permission.addRule(rule)
-          }
-        }),
+        core.respondPermission({ requestId, decision, persist }),
 
       respondPlan: ({ requestId, decision, reason }) =>
-        Effect.gen(function* () {
-          const entry = yield* planHandler.respond(requestId, decision, reason)
-          if (decision !== "confirm" || entry?.planPath === undefined) return
-          yield* core.approvePlan({
-            sessionId: entry.sessionId,
-            branchId: entry.branchId,
-            planPath: entry.planPath,
-            requestId,
-            emitEvent: false,
-          })
+        core.respondPlan({
+          requestId,
+          decision,
+          ...(reason !== undefined ? { reason } : {}),
         }),
 
       respondHandoff: ({ requestId, decision, reason }) =>
-        Effect.gen(function* () {
-          if (decision !== "confirm") {
-            yield* handoffHandler.respond(requestId, "reject", undefined, reason)
-            return { childSessionId: undefined, childBranchId: undefined }
-          }
-
-          // Peek at the pending entry to get server-side data (no client round-trip)
-          const entry = yield* handoffHandler.peek(requestId)
-          if (entry === undefined) return { childSessionId: undefined, childBranchId: undefined }
-
-          // Create child session BEFORE confirming — no orphan if respond fails
-          const parentSession = yield* core.getSession(entry.sessionId)
-          const result = yield* core.createSession({
-            firstMessage: `[Handoff]\n\n${entry.summary}`,
-            ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
-            ...(parentSession?.bypass !== undefined ? { bypass: parentSession.bypass } : {}),
-            parentSessionId: entry.sessionId,
-            parentBranchId: entry.branchId,
-          })
-
-          // Confirm with child session ID — publishes HandoffConfirmed + resolves Deferred
-          yield* handoffHandler.respond(requestId, "confirm", result.sessionId)
-
-          return { childSessionId: result.sessionId, childBranchId: result.branchId }
+        core.respondHandoff({
+          requestId,
+          decision,
+          ...(reason !== undefined ? { reason } : {}),
         }),
 
       updateSessionBypass: ({ sessionId, bypass }) =>
@@ -250,6 +200,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       // SAFETY: provider is validated as ProviderId by the RPC schema layer
       callbackAuth: ({ sessionId, provider, method, authorizationId, code }) =>
         providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
+
+      listTasks: ({ sessionId, branchId }) => core.listTasks(sessionId, branchId),
 
       actorSendUserMessage: (input) => actorProcess.sendUserMessage(input),
 

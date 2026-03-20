@@ -1,7 +1,6 @@
 // Re-export client types/functions from SDK
 export {
   type GentClient,
-  type GentRpcClient,
   type GentRpcError,
   type MessageInfoReadonly,
   type SessionInfo,
@@ -18,8 +17,6 @@ export {
   type PermissionRule,
   type ImageInfo,
   type ExtractedToolCall,
-  createClient,
-  makeInProcessRpcClient,
   extractText,
   extractImages,
   extractToolCalls,

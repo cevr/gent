@@ -53,3 +53,9 @@ export {
 
 // Direct client (in-process, no RPC layer)
 export { makeDirectClient, type DirectClient, type DirectClientContext } from "./direct-client.js"
+
+// Direct GentClient (replaces DirectClient — single interface)
+export { makeDirectGentClient, type DirectGentClientContext } from "./client.js"
+
+// Session tree types
+export type { SessionTreeNode } from "./client.js"

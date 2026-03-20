@@ -10,11 +10,15 @@ import {
   calculateCost,
   EventStore,
   AgentSwitched,
+  Permission,
+  PermissionHandler,
+  PlanHandler,
+  HandoffHandler,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { GentCore } from "@gent/server"
-import { AgentLoop, CheckpointService } from "@gent/runtime"
+import { AgentLoop, CheckpointService, ConfigService } from "@gent/runtime"
 
 describe("Skills System", () => {
   test("Skills.Test provides test skills", async () => {
@@ -136,12 +140,21 @@ describe("Cost Calculation", () => {
 
 describe("Session State", () => {
   test("getSessionState returns latest agent switch", async () => {
-    const deps = Layer.mergeAll(
+    const eventStoreLayer = EventStore.Test()
+    const baseWithEventStore = Layer.mergeAll(
       Storage.Test(),
       Provider.Test([]),
-      EventStore.Test(),
+      eventStoreLayer,
       AgentLoop.Test(),
       CheckpointService.Test(),
+      Permission.Live([], "ask"),
+      ConfigService.Test(),
+    )
+    const deps = Layer.mergeAll(
+      baseWithEventStore,
+      Layer.provide(PermissionHandler.Live, baseWithEventStore),
+      Layer.provide(PlanHandler.Live, baseWithEventStore),
+      Layer.provide(HandoffHandler.Live, baseWithEventStore),
     )
     const testLayer = Layer.provideMerge(GentCore.Live, deps)
 

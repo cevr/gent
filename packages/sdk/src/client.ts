@@ -3,8 +3,23 @@ import type { Stream, ServiceMap, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
-import { GentRpcs, RpcHandlersLive, type GentRpcsClient, type GentRpcError } from "@gent/server"
-import { stringifyOutput, summarizeOutput } from "@gent/core"
+import {
+  GentRpcs,
+  RpcHandlersLive,
+  GentCore,
+  AskUserHandler,
+  type GentRpcsClient,
+  type GentRpcError,
+} from "@gent/server"
+import {
+  stringifyOutput,
+  summarizeOutput,
+  AuthApi,
+  AuthGuard,
+  AuthStore,
+  Permission,
+  Model,
+} from "@gent/core"
 import type {
   AgentName,
   AuthAuthorization,
@@ -17,14 +32,16 @@ import type {
   TextPart,
   ToolCallPart,
   ToolResultPart,
-  Model,
   PermissionDecision,
   PlanDecision,
   HandoffDecision,
   PermissionRule,
   SessionId,
   Task,
+  ProviderId,
 } from "@gent/core"
+import { ConfigService, ModelRegistry } from "@gent/runtime"
+import { ProviderAuth, OPENAI_OAUTH_ALLOWED_MODELS } from "@gent/providers"
 
 export type {
   MessagePart,
@@ -409,8 +426,11 @@ export function createClient(
 
     listBranches: (sessionId) => rpcClient.listBranches({ sessionId }),
 
-    // listTasks not available via RPC yet
-    listTasks: () => Effect.die(new Error("listTasks not available over RPC — use DirectClient")),
+    listTasks: (sessionId, branchId) =>
+      rpcClient.listTasks({
+        sessionId,
+        ...(branchId !== undefined ? { branchId } : {}),
+      }) as Effect.Effect<ReadonlyArray<Task>, GentRpcError>,
 
     getBranchTree: (sessionId) => rpcClient.getBranchTree({ sessionId }),
 
@@ -584,6 +604,215 @@ export const makeInProcessClient = <E, R>(
     const rpcClient = yield* makeInProcessRpcClient(handlersLayer)
     const services = yield* Effect.services<never>()
     return createClient(rpcClient, services as ServiceMap.ServiceMap<unknown>)
+  })
+
+// =============================================================================
+// Direct in-process client (no RPC layer, no scope issues)
+// =============================================================================
+
+/**
+ * Context required to create a direct GentClient.
+ * Use this for embedded TUI where client and server are in the same process.
+ */
+export type DirectGentClientContext =
+  | GentCore
+  | AskUserHandler
+  | Permission
+  | ConfigService
+  | ModelRegistry
+  | AuthStore
+  | AuthGuard
+  | ProviderAuth
+
+/**
+ * Creates a GentClient that calls GentCore and services directly.
+ * No RPC layer, no scope issues. Use for embedded/in-process mode.
+ */
+export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentClientContext> =
+  Effect.gen(function* () {
+    const core = yield* GentCore
+    const askUserHandler = yield* AskUserHandler
+    const permission = yield* Permission
+    const configService = yield* ConfigService
+    const modelRegistry = yield* ModelRegistry
+    const authStore = yield* AuthStore
+    const authGuard = yield* AuthGuard
+    const providerAuth = yield* ProviderAuth
+    const services = yield* Effect.services<never>()
+
+    // Error mapping: GentCoreError → GentRpcError (structurally compatible)
+    const mapErr = <A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, GentRpcError> =>
+      effect as Effect.Effect<A, GentRpcError>
+
+    const client: GentClient = {
+      sendMessage: (input) => mapErr(core.sendMessage(input)),
+
+      createSession: (input) =>
+        mapErr(
+          core.createSession({
+            ...(input?.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
+            ...(input?.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(input?.bypass !== undefined ? { bypass: input.bypass } : {}),
+            ...(input?.parentSessionId !== undefined
+              ? { parentSessionId: input.parentSessionId }
+              : {}),
+            ...(input?.parentBranchId !== undefined
+              ? { parentBranchId: input.parentBranchId }
+              : {}),
+          }),
+        ),
+
+      listMessages: (branchId) => mapErr(core.listMessages(branchId)),
+
+      getSessionState: (input) => mapErr(core.getSessionState(input)),
+
+      getSession: (sessionId) => mapErr(core.getSession(sessionId)),
+
+      listSessions: () => mapErr(core.listSessions()),
+
+      getChildSessions: (parentSessionId) => mapErr(core.getChildSessions(parentSessionId)),
+
+      getSessionTree: (sessionId) =>
+        mapErr(
+          core.getSessionTree(sessionId).pipe(
+            Effect.map(function toFlat(node): SessionTreeNode {
+              return {
+                id: node.session.id,
+                name: node.session.name,
+                cwd: node.session.cwd,
+                bypass: node.session.bypass,
+                parentSessionId: node.session.parentSessionId,
+                parentBranchId: node.session.parentBranchId,
+                createdAt: node.session.createdAt.getTime(),
+                updatedAt: node.session.updatedAt.getTime(),
+                children: node.children.map(toFlat),
+              }
+            }),
+          ),
+        ),
+
+      listModels: () =>
+        mapErr(
+          Effect.gen(function* () {
+            const models = yield* modelRegistry.list()
+            const authInfo = yield* authStore
+              .get("openai")
+              .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+            if (authInfo?.type !== "oauth") return models
+
+            return models
+              .filter((model) => {
+                if (model.provider !== "openai") return true
+                const [, modelName] = String(model.id).split("/", 2)
+                return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
+              })
+              .map((model) => {
+                if (model.provider !== "openai") return model
+                return new Model({
+                  id: model.id,
+                  name: model.name,
+                  provider: model.provider,
+                  ...(model.contextLength !== undefined
+                    ? { contextLength: model.contextLength }
+                    : {}),
+                  pricing: { input: 0, output: 0 },
+                })
+              })
+          }),
+        ),
+
+      listBranches: (sessionId) => mapErr(core.listBranches(sessionId)),
+
+      listTasks: (sessionId, branchId) => mapErr(core.listTasks(sessionId, branchId)),
+
+      getBranchTree: (sessionId) => mapErr(core.getBranchTree(sessionId)),
+
+      createBranch: (sessionId, name) =>
+        mapErr(
+          core
+            .createBranch({ sessionId, ...(name !== undefined ? { name } : {}) })
+            .pipe(Effect.map((r) => r.branchId)),
+        ),
+
+      switchBranch: (input) => mapErr(core.switchBranch(input)),
+
+      forkBranch: (input) => mapErr(core.forkBranch(input)),
+
+      subscribeEvents: (input) =>
+        core.subscribeEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
+
+      steer: (command) => mapErr(core.steer(command)),
+
+      respondQuestions: (requestId, answers) => mapErr(askUserHandler.respond(requestId, answers)),
+
+      respondPermission: (requestId, decision, persist) =>
+        mapErr(core.respondPermission({ requestId, decision, persist })),
+
+      respondPlan: (requestId, decision, reason) =>
+        mapErr(
+          core.respondPlan({
+            requestId,
+            decision,
+            ...(reason !== undefined ? { reason } : {}),
+          }),
+        ),
+
+      respondHandoff: (requestId, decision, reason) =>
+        mapErr(
+          core.respondHandoff({
+            requestId,
+            decision,
+            ...(reason !== undefined ? { reason } : {}),
+          }),
+        ),
+
+      updateSessionBypass: (sessionId, bypass) =>
+        mapErr(core.updateSessionBypass({ sessionId, bypass })),
+
+      getPermissionRules: () => mapErr(configService.getPermissionRules()),
+
+      deletePermissionRule: (tool, pattern) =>
+        mapErr(
+          Effect.gen(function* () {
+            yield* configService.removePermissionRule(tool, pattern)
+            yield* permission.removeRule(tool, pattern)
+          }),
+        ),
+
+      listAuthProviders: () => mapErr(authGuard.listProviders()),
+
+      setAuthKey: (provider, key) =>
+        mapErr(
+          authStore
+            .set(provider, new AuthApi({ type: "api", key }))
+            .pipe(Effect.catchEager((e) => Effect.logWarning("setAuthKey failed", e))),
+        ),
+
+      deleteAuthKey: (provider) =>
+        mapErr(
+          authStore
+            .remove(provider)
+            .pipe(Effect.catchEager((e) => Effect.logWarning("deleteAuthKey failed", e))),
+        ),
+
+      listAuthMethods: () => mapErr(providerAuth.listMethods()),
+
+      authorizeAuth: (sessionId, provider, method) =>
+        mapErr(
+          providerAuth
+            .authorize(sessionId, provider as ProviderId, method)
+            .pipe(Effect.map((result) => result ?? null)),
+        ),
+
+      callbackAuth: (sessionId, provider, method, authorizationId, code) =>
+        mapErr(
+          providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
+        ),
+
+      services: services as ServiceMap.ServiceMap<unknown>,
+    }
+
+    return client
   })
 
 // =============================================================================

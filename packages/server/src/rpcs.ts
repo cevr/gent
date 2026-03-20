@@ -504,6 +504,16 @@ export class GentRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
 
+  // Tasks
+  Rpc.make("listTasks", {
+    payload: {
+      sessionId: SessionId,
+      branchId: Schema.optional(BranchId),
+    },
+    success: Schema.Array(Schema.Unknown),
+    error: GentRpcError,
+  }),
+
   // ActorProcess
   Rpc.make("actorSendUserMessage", {
     payload: SendUserMessagePayload.fields,
