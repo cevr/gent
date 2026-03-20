@@ -21,7 +21,14 @@ export const AgentName = Schema.Literals([
 ])
 export type AgentName = typeof AgentName.Type
 
-export const ReasoningEffort = Schema.Literals(["minimal", "low", "medium", "high"])
+export const ReasoningEffort = Schema.Literals([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+])
 export type ReasoningEffort = typeof ReasoningEffort.Type
 
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({

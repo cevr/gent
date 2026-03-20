@@ -83,24 +83,8 @@ const buildSystemPrompt = (
   return parts.join("")
 }
 
-const providerIdFromModelId = (modelId: string): string | undefined => {
-  const slashIndex = modelId.indexOf("/")
-  if (slashIndex <= 0 || slashIndex === modelId.length - 1) return undefined
-  return modelId.slice(0, slashIndex)
-}
-
-const buildProviderOptions = (
-  modelId: string,
-  agent: AgentDefinition,
-): ProviderRequest["providerOptions"] | undefined => {
-  if (agent.reasoningEffort === undefined) return undefined
-  const providerId = providerIdFromModelId(modelId)
-  if (providerId === undefined) return undefined
-  return {
-    [providerId]: {
-      reasoningEffort: agent.reasoningEffort,
-    },
-  }
+const resolveReasoning = (agent: AgentDefinition): ProviderRequest["reasoning"] | undefined => {
+  return agent.reasoningEffort
 }
 
 export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("AgentLoopError", {
@@ -449,7 +433,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 )
 
                 const modelId = resolveAgentModelId(agent.name)
-                const providerOptions = buildProviderOptions(modelId, agent)
+                const reasoning = resolveReasoning(agent)
                 const streamEffect = yield* withRetry(
                   provider.stream({
                     model: modelId,
@@ -457,7 +441,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     tools: [...tools],
                     systemPrompt,
                     ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
-                    ...(providerOptions !== undefined ? { providerOptions } : {}),
+                    ...(reasoning !== undefined ? { reasoning } : {}),
                   }),
                 ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
 
@@ -1115,7 +1099,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             )
 
             const modelId = resolveAgentModelId(agent.name)
-            const providerOptions = buildProviderOptions(modelId, agent)
+            const reasoning = resolveReasoning(agent)
             const streamEffect = yield* withRetry(
               provider.stream({
                 model: modelId,
@@ -1123,7 +1107,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                 tools: [...tools],
                 systemPrompt: basePrompt,
                 ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
-                ...(providerOptions !== undefined ? { providerOptions } : {}),
+                ...(reasoning !== undefined ? { reasoning } : {}),
               }),
             ).pipe(Effect.withSpan("AgentActor.provider.stream"))
 

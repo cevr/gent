@@ -20,8 +20,8 @@
     "prepare": "lefthook install"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^4.0.77",
-    "@aws-sdk/credential-providers": "^3.1013.0",
+    "@ai-sdk/amazon-bedrock": "^4.0.82",
+    "@aws-sdk/credential-providers": "^3.1014.0",
     "effect-machine": "catalog:",
     "msgpackr": "catalog:",
     "multipasta": "catalog:"
@@ -52,11 +52,11 @@
     "effect-machine": "file:/Users/cvr/Developer/personal/effect-machine",
     "msgpackr": "^1.11.9",
     "multipasta": "^0.2.7",
-    "ai": "^6.0.116",
-    "@ai-sdk/anthropic": "^3.0.58",
-    "@ai-sdk/openai": "^3.0.41",
-    "@ai-sdk/google": "^3.0.43",
-    "@ai-sdk/mistral": "^3.0.24",
+    "ai": "^6.0.134",
+    "@ai-sdk/anthropic": "^3.0.63",
+    "@ai-sdk/openai": "^3.0.47",
+    "@ai-sdk/google": "^3.0.52",
+    "@ai-sdk/mistral": "^3.0.27",
     "effect-bun-test": "0.2.1",
     "solid-js": "^1.9.11"
   }

@@ -62,6 +62,7 @@ export interface ProviderRequest {
   readonly systemPrompt?: string
   readonly maxTokens?: number
   readonly temperature?: number
+  readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
   readonly providerOptions?: ProviderOptions
 }
 
@@ -82,6 +83,45 @@ export interface ProviderService {
   ) => Effect.Effect<Stream.Stream<StreamChunk, ProviderError>, ProviderError>
 
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
+}
+
+// Map gent reasoning level to Anthropic provider options.
+// The AI SDK Anthropic provider reads `thinking` + `effort` from providerOptions.
+// `thinking: { type: "adaptive" }` lets the model decide whether to think.
+// `effort` controls thinking depth: "low" | "medium" | "high".
+const REASONING_TO_EFFORT: Record<string, string> = {
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "high",
+}
+
+function buildReasoningProviderOptions(
+  modelId: string,
+  reasoning: ProviderRequest["reasoning"],
+  existing: ProviderOptions | undefined,
+): ProviderOptions | undefined {
+  if (reasoning === undefined || reasoning === "none") return existing
+
+  const providerId = modelId.indexOf("/") > 0 ? modelId.slice(0, modelId.indexOf("/")) : undefined
+  if (providerId !== "anthropic") return existing
+
+  const effort = REASONING_TO_EFFORT[reasoning]
+  const existingRec = existing as Record<string, unknown> | undefined
+  const existingAnthropic = existingRec?.["anthropic"] as Record<string, unknown> | undefined
+  const anthropicOpts: Record<string, unknown> = {
+    ...existingAnthropic,
+    thinking: { type: "adaptive" },
+  }
+  if (effort !== undefined) {
+    anthropicOpts["effort"] = effort
+  }
+
+  return {
+    ...existingRec,
+    anthropic: anthropicOpts,
+  } as ProviderOptions
 }
 
 export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
@@ -113,8 +153,12 @@ export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
           if (request.temperature !== undefined) {
             opts.temperature = request.temperature
           }
-          if (request.providerOptions !== undefined) {
-            opts.providerOptions = request.providerOptions
+          if (request.reasoning !== undefined || request.providerOptions !== undefined) {
+            opts.providerOptions = buildReasoningProviderOptions(
+              request.model,
+              request.reasoning,
+              request.providerOptions,
+            )
           }
 
           const result = yield* Effect.try({
