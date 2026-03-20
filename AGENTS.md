@@ -8,7 +8,7 @@ Building gent - minimal, opinionated agent harness (built with Effect).
 bun install
 bun run typecheck  # Must pass clean (no errors, no suggestions)
 bun run lint       # ESLint: no any, no floating promises
-bun run test       # Uses bun test, NOT vitest (bun:sqlite compat)
+bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
 bun run clean      # Remove dist and tsbuildinfo files
 ```
