@@ -46,6 +46,7 @@ import {
   formatElapsed,
   type BorderLabelItem,
 } from "../components/bordered-input"
+import { formatTokens } from "../utils/format-tool"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -555,10 +556,24 @@ export function Session(props: SessionProps) {
   }
 
   const topRightLabels = (): BorderLabelItem[] => {
+    const items: BorderLabelItem[] = []
+
+    // Context window utilization
+    const tokens = client.latestInputTokens()
+    const model = client.modelInfo()
+    if (tokens > 0 && model?.contextLength !== undefined) {
+      const pct = Math.min(100, Math.round((tokens / model.contextLength) * 100))
+      const color = pct >= 90 ? theme.error : pct >= 70 ? theme.warning : theme.textMuted
+      items.push({ text: `${formatTokens(tokens)} (${pct}%)`, color })
+    }
+
+    // Model name
     const m = client.model()
     const slashIdx = m.indexOf("/")
     const label = slashIdx >= 0 ? m.slice(slashIdx + 1) : m
-    return label.length > 0 ? [{ text: label, color: theme.textMuted }] : []
+    if (label.length > 0) items.push({ text: label, color: theme.textMuted })
+
+    return items
   }
 
   const bottomLeftLabels = (): BorderLabelItem[] => {

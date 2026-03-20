@@ -118,6 +118,8 @@ export interface ClientContextValue {
   isStreaming: () => boolean
   isError: () => boolean
   error: () => string | null
+  latestInputTokens: () => number
+  modelInfo: () => Model | undefined
 
   // Agent state setters (for local errors only)
   setError: (error: string | null) => void
@@ -245,6 +247,7 @@ export function ClientProvider(props: ClientProviderProps) {
     cost: 0,
   })
   const [preferredAgent, setPreferredAgent] = createSignal<AgentName>(defaultAgent)
+  const [latestInputTokens, setLatestInputTokens] = createSignal(0)
 
   const [modelStore, setModelStore] = createStore<{
     modelsById: Record<string, Model>
@@ -305,6 +308,7 @@ export function ClientProvider(props: ClientProviderProps) {
                   draft.cost += turnCost
                 }),
               )
+              setLatestInputTokens(event.usage.inputTokens)
             }
             break
 
@@ -417,6 +421,8 @@ export function ClientProvider(props: ClientProviderProps) {
     isStreaming: () => agentStore.status._tag === "streaming",
     isError: () => agentStore.status._tag === "error",
     error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
+    latestInputTokens,
+    modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
 
     // Agent state setters (for local errors only)
     setError: (error) =>
