@@ -51,10 +51,7 @@ export {
   type ExtractedToolCall,
 } from "./client.js"
 
-// Direct client (in-process, no RPC layer)
-export { makeDirectClient, type DirectClient, type DirectClientContext } from "./direct-client.js"
-
-// Direct GentClient (replaces DirectClient — single interface)
+// Direct GentClient (in-process, no RPC layer)
 export { makeDirectGentClient, type DirectGentClientContext } from "./client.js"
 
 // Session tree types

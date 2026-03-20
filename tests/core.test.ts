@@ -14,6 +14,7 @@ import {
   PermissionHandler,
   PlanHandler,
   HandoffHandler,
+  type SessionId,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
@@ -181,5 +182,113 @@ describe("Session State", () => {
     )
 
     expect(result.agent).toBe("deepwork")
+  })
+})
+
+describe("Session Tree", () => {
+  const makeTestLayer = () => {
+    const eventStoreLayer = EventStore.Test()
+    const baseWithEventStore = Layer.mergeAll(
+      Storage.Test(),
+      Provider.Test([]),
+      eventStoreLayer,
+      AgentLoop.Test(),
+      CheckpointService.Test(),
+      Permission.Live([], "ask"),
+      ConfigService.Test(),
+    )
+    const deps = Layer.mergeAll(
+      baseWithEventStore,
+      Layer.provide(PermissionHandler.Live, baseWithEventStore),
+      Layer.provide(PlanHandler.Live, baseWithEventStore),
+      Layer.provide(HandoffHandler.Live, baseWithEventStore),
+    )
+    return Layer.provideMerge(GentCore.Live, deps)
+  }
+
+  test("getChildSessions returns direct children", async () => {
+    const testLayer = makeTestLayer()
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        const parent = yield* core.createSession({ name: "Parent" })
+        yield* core.createSession({
+          name: "Child 1",
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+        })
+        yield* core.createSession({
+          name: "Child 2",
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+        })
+        return yield* core.getChildSessions(parent.sessionId)
+      }).pipe(Effect.provide(testLayer)),
+    )
+
+    expect(result.length).toBe(2)
+  })
+
+  test("getSessionTree builds recursive hierarchy", async () => {
+    const testLayer = makeTestLayer()
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        const root = yield* core.createSession({ name: "Root" })
+        const child = yield* core.createSession({
+          name: "Child",
+          parentSessionId: root.sessionId,
+          parentBranchId: root.branchId,
+        })
+        yield* core.createSession({
+          name: "Grandchild",
+          parentSessionId: child.sessionId,
+          parentBranchId: child.branchId,
+        })
+        return yield* core.getSessionTree(root.sessionId)
+      }).pipe(Effect.provide(testLayer)),
+    )
+
+    expect(result.session.name).toBe("Root")
+    expect(result.children.length).toBe(1)
+    expect(result.children[0]!.session.name).toBe("Child")
+    expect(result.children[0]!.children.length).toBe(1)
+    expect(result.children[0]!.children[0]!.session.name).toBe("Grandchild")
+  })
+
+  test("createSession rejects invalid parentSessionId", async () => {
+    const testLayer = makeTestLayer()
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        return yield* Effect.result(
+          core.createSession({
+            name: "Orphan",
+            parentSessionId: "nonexistent" as SessionId,
+          }),
+        )
+      }).pipe(Effect.provide(testLayer)),
+    )
+
+    expect(result._tag).toBe("Failure")
+  })
+
+  test("createSession threads parentSessionId to storage", async () => {
+    const testLayer = makeTestLayer()
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        const parent = yield* core.createSession({ name: "Parent" })
+        const child = yield* core.createSession({
+          name: "Child",
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+        })
+        return yield* core.getSession(child.sessionId)
+      }).pipe(Effect.provide(testLayer)),
+    )
+
+    expect(result).not.toBeNull()
+    expect(result!.parentSessionId).toBeDefined()
   })
 })

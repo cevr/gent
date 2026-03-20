@@ -248,6 +248,16 @@ export interface HandoffHandlerService {
       }
     | undefined
   >
+  /** Atomically claim a pending handoff — removes entry, returns it or undefined if already claimed. */
+  readonly claim: (requestId: string) => Effect.Effect<
+    | {
+        sessionId: SessionId
+        branchId: BranchId
+        summary: string
+        reason?: string
+      }
+    | undefined
+  >
   readonly respond: (
     requestId: string,
     decision: HandoffDecision,
@@ -287,6 +297,18 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
         peek: (requestId: string) => {
           const entry = pending.get(requestId)
           if (entry === undefined) return Effect.succeed(undefined)
+          return Effect.succeed({
+            sessionId: entry.sessionId,
+            branchId: entry.branchId,
+            summary: entry.summary,
+            ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+          })
+        },
+
+        claim: (requestId: string) => {
+          const entry = pending.get(requestId)
+          if (entry === undefined) return Effect.succeed(undefined)
+          pending.delete(requestId)
           return Effect.succeed({
             sessionId: entry.sessionId,
             branchId: entry.branchId,
@@ -369,6 +391,7 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
     return Layer.succeed(HandoffHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "confirm"),
       peek: () => Effect.succeed(undefined),
+      claim: () => Effect.succeed(undefined),
       respond: () => Effect.succeed(undefined),
     })
   }

@@ -997,7 +997,8 @@ ${conversation}`
               return { childSessionId: undefined, childBranchId: undefined }
             }
 
-            const entry = yield* handoffHandler.peek(input.requestId)
+            // Atomic claim — prevents duplicate child sessions on double-confirm
+            const entry = yield* handoffHandler.claim(input.requestId)
             if (entry === undefined) {
               return { childSessionId: undefined, childBranchId: undefined }
             }

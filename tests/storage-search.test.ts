@@ -207,3 +207,146 @@ describe("getSessionDetail", () => {
       }),
     ))
 })
+
+describe("getChildSessions", () => {
+  test("returns direct children of a parent session", () =>
+    run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const parent = yield* createFixture({ sessionName: "parent" })
+
+        // Create two child sessions
+        const child1Id = nextId() as SessionId
+        const child2Id = nextId() as SessionId
+        const now = new Date()
+
+        yield* storage.createSession(
+          new Session({
+            id: child1Id,
+            name: "child-1",
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createSession(
+          new Session({
+            id: child2Id,
+            name: "child-2",
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            createdAt: new Date(now.getTime() + 1000),
+            updatedAt: new Date(now.getTime() + 1000),
+          }),
+        )
+
+        const children = yield* storage.getChildSessions(parent.sessionId)
+        expect(children.length).toBe(2)
+        expect(children[0]!.id).toBe(child1Id)
+        expect(children[1]!.id).toBe(child2Id)
+        expect(children[0]!.parentSessionId).toBe(parent.sessionId)
+      }),
+    ))
+
+  test("returns empty array when no children", () =>
+    run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const parent = yield* createFixture()
+        const children = yield* storage.getChildSessions(parent.sessionId)
+        expect(children.length).toBe(0)
+      }),
+    ))
+
+  test("does not return grandchildren", () =>
+    run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const parent = yield* createFixture({ sessionName: "root" })
+        const now = new Date()
+
+        // Child
+        const childId = nextId() as SessionId
+        yield* storage.createSession(
+          new Session({
+            id: childId,
+            name: "child",
+            parentSessionId: parent.sessionId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+
+        // Grandchild
+        const grandchildId = nextId() as SessionId
+        yield* storage.createSession(
+          new Session({
+            id: grandchildId,
+            name: "grandchild",
+            parentSessionId: childId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+
+        const children = yield* storage.getChildSessions(parent.sessionId)
+        expect(children.length).toBe(1)
+        expect(children[0]!.id).toBe(childId)
+      }),
+    ))
+})
+
+describe("getSessionAncestors", () => {
+  test("walks from child to root", () =>
+    run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
+
+        // Root → Parent → Child
+        const rootId = nextId() as SessionId
+        const parentId = nextId() as SessionId
+        const childId = nextId() as SessionId
+
+        yield* storage.createSession(
+          new Session({ id: rootId, name: "root", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createSession(
+          new Session({
+            id: parentId,
+            name: "parent",
+            parentSessionId: rootId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createSession(
+          new Session({
+            id: childId,
+            name: "child",
+            parentSessionId: parentId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+
+        const ancestors = yield* storage.getSessionAncestors(childId)
+        expect(ancestors.length).toBe(3)
+        expect(ancestors[0]!.id).toBe(childId)
+        expect(ancestors[1]!.id).toBe(parentId)
+        expect(ancestors[2]!.id).toBe(rootId)
+      }),
+    ))
+
+  test("returns single session for root", () =>
+    run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const root = yield* createFixture({ sessionName: "lone-root" })
+        const ancestors = yield* storage.getSessionAncestors(root.sessionId)
+        expect(ancestors.length).toBe(1)
+        expect(ancestors[0]!.id).toBe(root.sessionId)
+      }),
+    ))
+})
