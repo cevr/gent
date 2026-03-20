@@ -177,15 +177,15 @@ export const Agents = {
 // Curated model mapping (not user-configurable)
 
 export const AgentModels: Record<AgentName, ModelId> = {
-  cowork: "anthropic/claude-opus-4-5" as ModelId,
-  deepwork: "openai/gpt-5.2-codex" as ModelId,
+  cowork: "anthropic/claude-opus-4-6" as ModelId,
+  deepwork: "openai/gpt-5.4" as ModelId,
   explore: "anthropic/claude-3-5-haiku-20241022" as ModelId,
-  architect: "anthropic/claude-opus-4-5" as ModelId,
+  architect: "anthropic/claude-opus-4-6" as ModelId,
   librarian: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   summarizer: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   title: "anthropic/claude-3-5-haiku-20241022" as ModelId,
   finder: "anthropic/claude-3-5-haiku-20241022" as ModelId,
-  oracle: "anthropic/claude-opus-4-5" as ModelId,
+  oracle: "anthropic/claude-opus-4-6" as ModelId,
   reviewer: "anthropic/claude-3-5-haiku-20241022" as ModelId,
 }
 

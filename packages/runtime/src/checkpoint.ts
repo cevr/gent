@@ -40,9 +40,11 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
 
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "anthropic/claude-opus-4-5": 200_000,
+  "anthropic/claude-opus-4-6": 1_000_000,
   "anthropic/claude-3-5-haiku-20241022": 200_000,
   "anthropic/claude-haiku-4-5-20251001": 200_000,
   "openai/gpt-5.2-codex": 1_000_000,
+  "openai/gpt-5.4": 1_000_000,
   "openai/o3": 200_000,
   "openai/o4-mini": 200_000,
 }

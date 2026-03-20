@@ -9,6 +9,7 @@ export const OPENAI_OAUTH_ALLOWED_MODELS = new Set([
   "gpt-5.2",
   "gpt-5.2-codex",
   "gpt-5.1-codex",
+  "gpt-5.4",
 ])
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
