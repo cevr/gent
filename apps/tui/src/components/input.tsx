@@ -16,7 +16,7 @@ import {
 import { Effect } from "effect"
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import type { Question } from "@gent/core"
-import { useKeyboard } from "@opentui/solid"
+import { useKeyboard, useRenderer } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"
 import { useCommand } from "../command/index"
@@ -32,6 +32,7 @@ import { expandFileRefs } from "../utils/file-refs"
 import { executeSlashCommand, parseSlashCommand } from "../commands/slash-commands"
 import { ClientError, formatError, type UiError } from "../utils/format-error"
 import { tuiEvent } from "../utils/unified-tracer"
+import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import type { InputState, InputEvent, InputEffect } from "./input-state"
 
 interface InputContextValue {
@@ -100,6 +101,7 @@ export function Input(props: InputProps) {
   const workspace = useWorkspace()
   const command = useCommand()
   const client = useClient()
+  const renderer = useRenderer()
   const { cast } = useRuntime(client.client.services)
   const paste = createPasteManager()
 
@@ -226,6 +228,26 @@ export function Input(props: InputProps) {
       client.steer({ _tag: "SwitchAgent", agent: nextAgent })
       return
     }
+
+    // Ctrl+G: open external editor
+    if (e.ctrl === true && e.name === "g") {
+      const currentContent = inputRef?.plainText ?? ""
+      const editor = resolveEditor(Bun.env["VISUAL"], Bun.env["EDITOR"])
+      openExternalEditor(
+        currentContent,
+        () => renderer.suspend(),
+        () => renderer.resume(),
+        editor,
+      ).then((edited) => {
+        if (inputRef !== null) {
+          inputRef.replaceText(edited)
+          inputRef.cursorOffset = edited.length
+          previousValue = edited
+        }
+      })
+      return
+    }
+
     if (
       e.name === "return" &&
       effectiveMode() !== "prompt" &&
