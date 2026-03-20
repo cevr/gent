@@ -1,4 +1,4 @@
-import { For } from "solid-js"
+import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { toolArgSummary } from "../../utils/format-tool.js"
 
@@ -14,22 +14,25 @@ export function ToolCallTree(props: {
 }) {
   const { theme } = useTheme()
 
-  const visible = () => {
-    const calls = props.toolCalls
-    if (props.collapsed && calls.length > 10) return calls.slice(calls.length - 10)
-    return calls
-  }
-
   const hiddenCount = () => {
     if (!props.collapsed) return 0
     return Math.max(0, props.toolCalls.length - 10)
   }
 
+  const visible = () => {
+    const calls = props.toolCalls
+    if (hiddenCount() > 0) return calls.slice(calls.length - 10)
+    return calls
+  }
+
   return (
     <box flexDirection="column" paddingLeft={2}>
+      <Show when={hiddenCount() > 0}>
+        <text style={{ fg: theme.textMuted }}>├── … {hiddenCount()} earlier calls</text>
+      </Show>
       <For each={[...visible()]}>
         {(call, index) => {
-          const isLast = () => index() === visible().length - 1 && hiddenCount() === 0
+          const isLast = () => index() === visible().length - 1
           const connector = () => (isLast() ? "╰──" : "├──")
           const icon = () => (call.isError ? "✕" : "✓")
           const iconColor = () => (call.isError ? theme.error : theme.textMuted)
