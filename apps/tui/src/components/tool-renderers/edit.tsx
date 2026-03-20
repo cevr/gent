@@ -113,6 +113,8 @@ export function EditToolRenderer(props: ToolRendererProps) {
             showLineNumbers={true}
             addedBg="#1a4d1a"
             removedBg="#4d1a1a"
+            addedContentBg="#2d6b2d"
+            removedContentBg="#6b2d2d"
             addedSignColor="#22c55e"
             removedSignColor="#ef4444"
             lineNumberFg={theme.textMuted}
