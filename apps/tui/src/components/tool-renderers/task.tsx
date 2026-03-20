@@ -3,6 +3,7 @@ import { useTheme } from "../../theme/index"
 import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolBox } from "../tool-box"
 import { ToolCallTree } from "./tool-call-tree"
+import { LiveChildTree } from "./live-child-tree"
 import type { ToolRendererProps } from "./types"
 
 // Parsed JSON shape — not the discriminated union from @gent/core
@@ -101,9 +102,16 @@ export function TaskToolRenderer(props: ToolRendererProps) {
       expanded={props.expanded}
     >
       <Show when={props.toolCall.status === "running"}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.warning }}>{STATUS_ICONS.running}</span> Running sub-agent...
-        </text>
+        <Show
+          when={props.childSessions !== undefined && props.childSessions.length > 0}
+          fallback={
+            <text style={{ fg: theme.textMuted }}>
+              <span style={{ fg: theme.warning }}>{STATUS_ICONS.running}</span> Running sub-agent...
+            </text>
+          }
+        >
+          <LiveChildTree childSessions={props.childSessions ?? []} />
+        </Show>
       </Show>
 
       <Show when={results().length > 0}>

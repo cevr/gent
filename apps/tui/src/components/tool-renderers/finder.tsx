@@ -3,6 +3,7 @@ import { useTheme } from "../../theme/index"
 import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolBox } from "../tool-box"
 import { ToolCallTree } from "./tool-call-tree"
+import { LiveChildTree } from "./live-child-tree"
 import type { ToolRendererProps } from "./types"
 
 function parseInput(input: unknown): { query?: string } | undefined {
@@ -53,9 +54,16 @@ export function FinderToolRenderer(props: ToolRendererProps) {
       expanded={props.expanded}
     >
       <Show when={props.toolCall.status === "running"}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.warning }}>⋯</span> Searching…
-        </text>
+        <Show
+          when={props.childSessions !== undefined && props.childSessions.length > 0}
+          fallback={
+            <text style={{ fg: theme.textMuted }}>
+              <span style={{ fg: theme.warning }}>⋯</span> Searching…
+            </text>
+          }
+        >
+          <LiveChildTree childSessions={props.childSessions ?? []} />
+        </Show>
       </Show>
 
       <Show when={props.toolCall.status !== "running" && output()?.found === true}>

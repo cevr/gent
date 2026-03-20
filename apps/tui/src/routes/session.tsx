@@ -39,6 +39,7 @@ import { MermaidViewer, collectDiagrams } from "../components/mermaid-viewer"
 import { TaskWidget } from "../components/task-widget"
 import { useWorkspace } from "../workspace/index"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
+import { useChildSessions } from "../hooks/use-child-sessions"
 import {
   BorderedInput,
   formatCwdGit,
@@ -67,6 +68,7 @@ export function Session(props: SessionProps) {
   const { exit, handleEsc } = useExit()
   const workspace = useWorkspace()
   const tick = useSpinnerClock()
+  const { getChildren } = useChildSessions(client)
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
@@ -586,6 +588,7 @@ export function Session(props: SessionProps) {
         toolsExpanded={toolsExpanded()}
         syntaxStyle={syntaxStyle}
         streaming={client.isStreaming()}
+        getChildSessions={getChildren}
       />
 
       {/* Task widget */}

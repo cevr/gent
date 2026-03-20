@@ -1,4 +1,5 @@
 import type { JSX } from "@opentui/solid"
+import type { ChildSessionEntry } from "../../hooks/use-child-sessions"
 
 export interface ToolCall {
   id: string
@@ -12,6 +13,7 @@ export interface ToolCall {
 export interface ToolRendererProps {
   toolCall: ToolCall
   expanded: boolean
+  childSessions?: ChildSessionEntry[]
 }
 
 export type ToolRenderer = (props: ToolRendererProps) => JSX.Element

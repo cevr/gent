@@ -1,18 +1,23 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { toolArgSummary } from "../../utils/format-tool.js"
+import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 
 interface ToolCallInfo {
   toolName: string
   args: Record<string, unknown>
   isError: boolean
+  status?: "running" | "completed" | "error"
 }
+
+const SPINNER_FRAMES = ["·", "•", "*"]
 
 export function ToolCallTree(props: {
   toolCalls: ReadonlyArray<ToolCallInfo>
   collapsed?: boolean
 }) {
   const { theme } = useTheme()
+  const tick = useSpinnerClock()
 
   const hiddenCount = () => {
     if (!props.collapsed) return 0
@@ -34,8 +39,17 @@ export function ToolCallTree(props: {
         {(call, index) => {
           const isLast = () => index() === visible().length - 1
           const connector = () => (isLast() ? "╰──" : "├──")
-          const icon = () => (call.isError ? "✕" : "✓")
-          const iconColor = () => (call.isError ? theme.error : theme.textMuted)
+          const icon = () => {
+            if (call.status === "running")
+              return SPINNER_FRAMES[tick() % SPINNER_FRAMES.length] ?? "·"
+            if (call.isError || call.status === "error") return "✕"
+            return "✓"
+          }
+          const iconColor = () => {
+            if (call.status === "running") return theme.warning
+            if (call.isError || call.status === "error") return theme.error
+            return theme.textMuted
+          }
           const summary = () => toolArgSummary(call.toolName, call.args)
 
           return (

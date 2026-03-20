@@ -5,6 +5,7 @@ import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-rende
 import { getSpinnerFrames, formatToolInput } from "./message-list-utils"
 import { SessionEventIndicator, type SessionEvent } from "./session-event-indicator"
 import type { ImageInfo } from "../client"
+import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { replaceMermaidBlocks } from "../utils/mermaid"
 
@@ -68,6 +69,7 @@ function AssistantMessage(props: {
   expanded: boolean
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
+  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
   const { theme } = useTheme()
   const hasContent = () =>
@@ -105,7 +107,13 @@ function AssistantMessage(props: {
       <Show when={props.toolCalls !== undefined && props.toolCalls.length > 0}>
         <box flexDirection="column" marginBottom={props.content.length > 0 ? 1 : 0}>
           <For each={props.toolCalls}>
-            {(tc) => <SingleToolCall toolCall={tc} expanded={props.expanded} />}
+            {(tc) => (
+              <SingleToolCall
+                toolCall={tc}
+                expanded={props.expanded}
+                getChildSessions={props.getChildSessions}
+              />
+            )}
           </For>
         </box>
       </Show>
@@ -127,7 +135,11 @@ function useSpinner(toolName: string) {
   return () => frames[tick() % frames.length] ?? frames[0]
 }
 
-function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
+function SingleToolCall(props: {
+  toolCall: ToolCall
+  expanded: boolean
+  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
+}) {
   const { theme } = useTheme()
   const spinner = useSpinner(props.toolCall.toolName)
   const toolName = () => props.toolCall.toolName.toLowerCase()
@@ -150,6 +162,8 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
 
   const Renderer = () => TOOL_RENDERERS[toolName()] ?? GenericToolRenderer
 
+  const childSessions = () => props.getChildSessions?.(props.toolCall.id)
+
   return (
     <box flexDirection="column">
       <text>
@@ -159,12 +173,12 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
           <span style={{ fg: theme.textMuted }}>({inputSummary()})</span>
         </Show>
       </text>
-      <Show when={props.toolCall.status !== "running"}>
-        {(() => {
-          const R = Renderer()
-          return <R toolCall={props.toolCall} expanded={props.expanded} />
-        })()}
-      </Show>
+      {(() => {
+        const R = Renderer()
+        return (
+          <R toolCall={props.toolCall} expanded={props.expanded} childSessions={childSessions()} />
+        )
+      })()}
     </box>
   )
 }
@@ -174,6 +188,7 @@ interface MessageListProps {
   toolsExpanded: boolean
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
+  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }
 
 export function MessageList(props: MessageListProps) {
@@ -194,6 +209,7 @@ export function MessageList(props: MessageListProps) {
                   expanded={props.toolsExpanded}
                   syntaxStyle={props.syntaxStyle}
                   streaming={props.streaming && index() === props.items.length - 1}
+                  getChildSessions={props.getChildSessions}
                 />
               }
             >
