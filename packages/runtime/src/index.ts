@@ -62,6 +62,14 @@ export { formatSchemaError } from "./format-schema-error"
 export { TaskService, type TaskServiceApi } from "./task-service"
 
 export {
+  type ChildSessionTrackerService,
+  type ChildSessionEntry,
+  type ChildToolCall,
+  type ChildSessionChange,
+  make as makeChildSessionTracker,
+} from "./child-session-tracker"
+
+export {
   ClusterMemoryLive,
   ClusterSingleLive,
   ClusterHttpServerLive,
