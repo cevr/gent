@@ -350,7 +350,8 @@ function flattenAllOf(schema: Record<string, unknown>): Record<string, unknown> 
   return result
 }
 
-function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
+/** @internal — exported for testing */
+export function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
   const result: ToolSet = {}
 
   for (const t of tools) {

@@ -24,11 +24,8 @@ export class TodoHandler extends ServiceMap.Service<TodoHandler, TodoHandlerServ
 }
 
 // TodoRead Params & Result
-// Note: needs at least one property for Bedrock JSON schema compatibility
 
-export const TodoReadParams = Schema.Struct({
-  _dummy: Schema.optional(Schema.Undefined),
-})
+export const TodoReadParams = Schema.Struct({})
 
 export const TodoReadResult = Schema.Struct({
   todos: Schema.Array(

@@ -7,6 +7,7 @@ export {
   ToolCallChunk,
   ReasoningChunk,
   FinishChunk,
+  convertTools,
 } from "./provider.js"
 
 export type { ProviderFactoryService } from "./provider-factory"
