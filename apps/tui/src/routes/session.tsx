@@ -8,6 +8,7 @@ import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import {
   extractText,
+  extractReasoning,
   extractImages,
   buildToolResultMap,
   extractToolCallsWithResults,
@@ -126,6 +127,7 @@ export function Session(props: SessionProps) {
         role: m.role,
         kind: m.kind ?? "regular",
         content: extractText(m.parts),
+        reasoning: extractReasoning(m.parts),
         images: extractImages(m.parts),
         createdAt: m.createdAt,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -201,6 +203,7 @@ export function Session(props: SessionProps) {
               role: "assistant",
               kind: "regular",
               content: "",
+              reasoning: "",
               images: [],
               createdAt: Date.now(),
               toolCalls: undefined,
@@ -220,6 +223,7 @@ export function Session(props: SessionProps) {
                 role: "assistant",
                 kind: "regular",
                 content: event.chunk,
+                reasoning: "",
                 images: [],
                 createdAt: Date.now(),
                 toolCalls: undefined,

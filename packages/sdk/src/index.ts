@@ -32,6 +32,7 @@ export type {
 export type {
   MessagePart,
   TextPart,
+  ReasoningPart,
   ToolCallPart,
   ToolResultPart,
   PermissionRule,
@@ -43,6 +44,7 @@ export type {
 // Utility functions
 export {
   extractText,
+  extractReasoning,
   extractImages,
   extractToolCalls,
   extractToolCallsWithResults,

@@ -17,6 +17,7 @@ export interface Message {
   role: "user" | "assistant" | "system" | "tool"
   kind: "regular" | "interjection"
   content: string
+  reasoning: string
   images: ImageInfo[]
   createdAt: number
   toolCalls: ToolCall[] | undefined
@@ -64,6 +65,7 @@ function UserMessage(props: {
 
 function AssistantMessage(props: {
   content: string
+  reasoning: string
   images: ImageInfo[]
   toolCalls: ToolCall[] | undefined
   expanded: boolean
@@ -74,6 +76,7 @@ function AssistantMessage(props: {
   const { theme } = useTheme()
   const hasContent = () =>
     props.content.length > 0 ||
+    props.reasoning.length > 0 ||
     props.images.length > 0 ||
     (props.toolCalls !== undefined && props.toolCalls.length > 0)
 
@@ -87,6 +90,21 @@ function AssistantMessage(props: {
 
   return (
     <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
+      <Show when={props.reasoning.length > 0}>
+        <box
+          flexDirection="column"
+          marginBottom={
+            props.content.length > 0 ||
+            props.images.length > 0 ||
+            (props.toolCalls !== undefined && props.toolCalls.length > 0)
+              ? 1
+              : 0
+          }
+        >
+          <text style={{ fg: theme.textMuted }}>[thinking]</text>
+          <text style={{ fg: theme.textMuted }}>{props.reasoning}</text>
+        </box>
+      </Show>
       <Show when={props.images.length > 0}>
         <box
           flexDirection="column"
@@ -214,6 +232,7 @@ export function MessageList(props: MessageListProps) {
               fallback={
                 <AssistantMessage
                   content={item.content}
+                  reasoning={item.reasoning}
                   images={item.images}
                   toolCalls={item.toolCalls}
                   expanded={props.toolsExpanded}

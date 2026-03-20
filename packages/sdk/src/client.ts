@@ -30,6 +30,7 @@ import type {
   MessageId,
   MessagePart,
   TextPart,
+  ReasoningPart,
   ToolCallPart,
   ToolResultPart,
   PermissionDecision,
@@ -46,6 +47,7 @@ import { ProviderAuth, OPENAI_OAUTH_ALLOWED_MODELS } from "@gent/providers"
 export type {
   MessagePart,
   TextPart,
+  ReasoningPart,
   ToolCallPart,
   ToolResultPart,
   PermissionRule,
@@ -67,6 +69,11 @@ export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 export function extractText(parts: readonly MessagePart[]): string {
   const textPart = parts.find((p): p is TextPart => p.type === "text")
   return textPart?.text ?? ""
+}
+
+export function extractReasoning(parts: readonly MessagePart[]): string {
+  const reasoningPart = parts.find((p): p is ReasoningPart => p.type === "reasoning")
+  return reasoningPart?.text ?? ""
 }
 
 export interface ImageInfo {
