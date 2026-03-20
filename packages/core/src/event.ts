@@ -144,7 +144,7 @@ export class HandoffConfirmed extends Schema.TaggedClass<HandoffConfirmed>()("Ha
   sessionId: SessionId,
   branchId: BranchId,
   requestId: Schema.String,
-  childSessionId: SessionId,
+  childSessionId: Schema.optional(SessionId),
 }) {}
 
 export class HandoffRejected extends Schema.TaggedClass<HandoffRejected>()("HandoffRejected", {

@@ -12,6 +12,7 @@ import {
   Model,
   PermissionDecision,
   PlanDecision,
+  HandoffDecision,
   PermissionRule,
   SessionId,
 } from "@gent/core"
@@ -232,6 +233,16 @@ export const RespondPlanPayload = Schema.Struct({
   reason: Schema.optional(Schema.String),
 })
 
+export const RespondHandoffPayload = Schema.Struct({
+  requestId: Schema.String,
+  decision: HandoffDecision,
+  reason: Schema.optional(Schema.String),
+})
+
+export const RespondHandoffSuccess = Schema.Struct({
+  childSessionId: Schema.optional(SessionId),
+})
+
 // ============================================================================
 // Permission Operations
 // ============================================================================
@@ -372,6 +383,13 @@ export class GentRpcs extends RpcGroup.make(
   // Plans
   Rpc.make("respondPlan", {
     payload: RespondPlanPayload.fields,
+    error: GentRpcError,
+  }),
+
+  // Handoff
+  Rpc.make("respondHandoff", {
+    payload: RespondHandoffPayload.fields,
+    success: RespondHandoffSuccess,
     error: GentRpcError,
   }),
 

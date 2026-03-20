@@ -2,7 +2,13 @@
  * Input state machine for unified input handling
  */
 
-import type { QuestionsAsked, PermissionRequested, PlanPresented, Question } from "@gent/core"
+import type {
+  QuestionsAsked,
+  PermissionRequested,
+  PlanPresented,
+  HandoffPresented,
+  Question,
+} from "@gent/core"
 
 // ============================================================================
 // Autocomplete Overlay
@@ -26,7 +32,7 @@ export interface PromptState {
   readonly answers: readonly (readonly string[])[]
 }
 
-export type PromptKind = "questions" | "permission" | "plan"
+export type PromptKind = "questions" | "permission" | "plan" | "handoff"
 
 // ============================================================================
 // Input State Union
@@ -77,6 +83,16 @@ export const InputState = {
       answers: [],
     },
   }),
+  fromHandoff: (event: typeof HandoffPresented.Type): InputState => ({
+    _tag: "prompt",
+    prompt: {
+      requestId: event.requestId,
+      kind: "handoff",
+      questions: [handoffQuestion(event)],
+      currentIndex: 0,
+      answers: [],
+    },
+  }),
 } as const
 
 // ============================================================================
@@ -97,6 +113,7 @@ export type InputEvent =
   | { readonly _tag: "QuestionsAsked"; readonly event: typeof QuestionsAsked.Type }
   | { readonly _tag: "PermissionRequested"; readonly event: typeof PermissionRequested.Type }
   | { readonly _tag: "PlanPresented"; readonly event: typeof PlanPresented.Type }
+  | { readonly _tag: "HandoffPresented"; readonly event: typeof HandoffPresented.Type }
   | { readonly _tag: "SubmitAnswer"; readonly selections: readonly string[] }
 
 // ============================================================================
@@ -148,6 +165,8 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
           return { state: InputState.fromPermission(event.event) }
         case "PlanPresented":
           return { state: InputState.fromPlan(event.event) }
+        case "HandoffPresented":
+          return { state: InputState.fromHandoff(event.event) }
         default:
           return { state }
       }
@@ -165,6 +184,8 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
           return { state: InputState.fromPermission(event.event) }
         case "PlanPresented":
           return { state: InputState.fromPlan(event.event) }
+        case "HandoffPresented":
+          return { state: InputState.fromHandoff(event.event) }
         default:
           return { state }
       }
@@ -231,6 +252,20 @@ const permissionQuestion = (event: typeof PermissionRequested.Type): Question =>
       { label: "Deny" },
       { label: "Always Deny" },
     ],
+    multiple: false,
+  }
+}
+
+const handoffQuestion = (event: typeof HandoffPresented.Type): Question => {
+  const reasonStr =
+    event.reason !== undefined && event.reason.length > 0 ? ` (${event.reason})` : ""
+  const summaryPreview =
+    event.summary.length > 200 ? event.summary.slice(0, 200) + "..." : event.summary
+  return {
+    question: `Handoff to new session?${reasonStr}`,
+    header: "Handoff",
+    markdown: summaryPreview,
+    options: [{ label: "Confirm" }, { label: "Reject" }],
     multiple: false,
   }
 }

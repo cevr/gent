@@ -5,6 +5,7 @@ import {
   Permission,
   PermissionHandler,
   PlanHandler,
+  HandoffHandler,
   Skills,
   AuthGuard,
   AuthStorage,
@@ -103,6 +104,8 @@ export {
   ForkBranchSuccess,
   RespondPermissionPayload,
   RespondPlanPayload,
+  RespondHandoffPayload,
+  RespondHandoffSuccess,
   UpdateSessionBypassPayload,
   UpdateSessionBypassSuccess,
   AuthProviderInfo,
@@ -166,6 +169,7 @@ export const createDependencies = (
   | AskUserHandler
   | QuestionHandler
   | PlanHandler
+  | HandoffHandler
   | AuthStorage
   | AuthStore
   | AuthGuard
@@ -260,6 +264,9 @@ export const createDependencies = (
   // PlanHandler requires EventStore
   const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseWithPermission)
 
+  // HandoffHandler requires EventStore
+  const HandoffHandlerLive = Layer.provide(HandoffHandler.Live, BaseWithPermission)
+
   // CheckpointService requires Storage
   const CheckpointServiceLive = CheckpointService.Live()
   const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseWithPermission)
@@ -321,6 +328,7 @@ export const createDependencies = (
     PermissionHandlerLive,
     ToolRunnerLive,
     PlanHandlerLive,
+    HandoffHandlerLive,
   )
 
   const AgentRuntimeDeps = Layer.provide(AgentRuntimeLive, AllDeps)

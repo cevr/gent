@@ -13,6 +13,7 @@ import {
   PermissionHandler,
   PermissionRule,
   PlanHandler,
+  HandoffHandler,
 } from "@gent/core"
 import { ActorProcess, ConfigService, ModelRegistry } from "@gent/runtime"
 import { OPENAI_OAUTH_ALLOWED_MODELS, ProviderAuth } from "@gent/providers"
@@ -27,6 +28,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const askUserHandler = yield* AskUserHandler
     const permissionHandler = yield* PermissionHandler
     const planHandler = yield* PlanHandler
+    const handoffHandler = yield* HandoffHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
@@ -124,6 +126,30 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             requestId,
             emitEvent: false,
           })
+        }),
+
+      respondHandoff: ({ requestId, decision, reason }) =>
+        Effect.gen(function* () {
+          if (decision !== "confirm") {
+            yield* handoffHandler.respond(requestId, "reject", undefined, reason)
+            return { childSessionId: undefined }
+          }
+
+          // Respond first — gets entry data and resolves the Deferred.
+          // We pass undefined childSessionId; HandoffConfirmed won't publish yet
+          // (only publishes when childSessionId is defined).
+          // We'll publish it manually after creating the child session.
+          const entry = yield* handoffHandler.respond(requestId, "confirm")
+          if (entry === undefined) return { childSessionId: undefined }
+
+          // Create child session with handoff summary
+          const parentSession = yield* core.getSession(entry.sessionId)
+          const result = yield* core.createSession({
+            firstMessage: `[Handoff]\n\n${entry.summary}`,
+            ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+          })
+
+          return { childSessionId: result.sessionId }
         }),
 
       updateSessionBypass: ({ sessionId, bypass }) =>

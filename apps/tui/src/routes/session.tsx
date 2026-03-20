@@ -292,32 +292,14 @@ export function Session(props: SessionProps) {
             }
           }),
         )
-        // Handle handoff tool completion
-        if (event._tag === "ToolCallSucceeded" && event.toolName === "handoff") {
-          try {
-            const handoffResult = JSON.parse(event.output ?? "{}") as {
-              handoff?: boolean
-              context?: string
-              sessionName?: string
-            }
-            if (handoffResult.handoff === true && handoffResult.context !== undefined) {
-              const context = handoffResult.context
-              const name = handoffResult.sessionName
-              // Create new session with distilled context
-              client.createSession(
-                `[Handoff${name !== undefined ? ` — ${name}` : ""}]\n\n${context}`,
-              )
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
       } else if (event._tag === "QuestionsAsked") {
         handleInputEvent({ _tag: "QuestionsAsked", event })
       } else if (event._tag === "PermissionRequested") {
         handleInputEvent({ _tag: "PermissionRequested", event })
       } else if (event._tag === "PlanPresented") {
         handleInputEvent({ _tag: "PlanPresented", event })
+      } else if (event._tag === "HandoffPresented") {
+        handleInputEvent({ _tag: "HandoffPresented", event })
       }
       // Note: agent state (status, cost, error) is updated by ClientProvider
     })
@@ -440,6 +422,29 @@ export function Session(props: SessionProps) {
               Effect.tapError((err) =>
                 Effect.sync(() => {
                   client.setError(formatError(err))
+                }),
+              ),
+            ),
+          )
+        } else if (effect.kind === "handoff") {
+          const { decision } = pickPlanDecision(effect.answers)
+          const handoffDecision = decision === "confirm" ? "confirm" : "reject"
+          cast(
+            Effect.gen(function* () {
+              const result = yield* client.client.respondHandoff(effect.requestId, handoffDecision)
+              const childId = result.childSessionId
+              if (childId === undefined) return
+              const info = yield* client.client.getSession(childId)
+              if (info === null || info.branchId === undefined) return
+              client.switchSession(info.id, info.branchId, info.name ?? "Handoff", info.bypass)
+            }).pipe(
+              Effect.catchEager((err: unknown) =>
+                Effect.sync(() => {
+                  client.setError(
+                    typeof err === "object" && err !== null
+                      ? formatError(err as UiError)
+                      : String(err),
+                  )
                 }),
               ),
             ),

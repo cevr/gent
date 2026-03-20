@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool, SubagentRunnerService, Agents } from "@gent/core"
+import { defineTool, SubagentRunnerService, Agents, HandoffHandler } from "@gent/core"
 
 // Handoff Tool Error
 
@@ -28,30 +28,46 @@ export const HandoffTool = defineTool({
   name: "handoff",
   concurrency: "serial",
   description:
-    "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information.",
+    "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",
   params: HandoffParams,
   execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
+    const handoffHandler = yield* HandoffHandler
 
-    // Use the title agent to generate a name for the handoff session
-    const nameResult = yield* runner.run({
-      agent: Agents.title,
-      prompt: `Generate a 3-5 word lowercase title for a session continuing this work:\n\n${params.context.slice(0, 300)}`,
-      parentSessionId: ctx.sessionId,
-      parentBranchId: ctx.branchId,
-      cwd: process.cwd(),
+    // Use summarizer agent to refine context if it's large
+    let summary = params.context
+    if (params.context.length > 2000) {
+      const summarizeResult = yield* runner.run({
+        agent: Agents.summarizer,
+        prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,
+        parentSessionId: ctx.sessionId,
+        parentBranchId: ctx.branchId,
+        cwd: process.cwd(),
+      })
+      if (summarizeResult._tag === "success") {
+        summary = summarizeResult.text
+      }
+    }
+
+    // Present handoff to user — blocks until confirmed or rejected
+    const decision = yield* handoffHandler.present({
+      sessionId: ctx.sessionId,
+      branchId: ctx.branchId,
+      summary,
+      reason: params.reason,
     })
 
-    const sessionName =
-      nameResult._tag === "success"
-        ? nameResult.text.trim().replace(/['"]/g, "")
-        : "handoff session"
+    if (decision === "reject") {
+      return {
+        handoff: false,
+        reason: "User rejected handoff",
+      }
+    }
 
     return {
       handoff: true,
-      context: params.context,
+      summary,
       reason: params.reason,
-      sessionName,
       parentSessionId: ctx.sessionId,
     }
   }),

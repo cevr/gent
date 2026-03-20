@@ -28,6 +28,8 @@ import {
   type Model,
   type PermissionDecision,
   type PlanDecision,
+  type HandoffDecision,
+  HandoffHandler,
   type SessionId,
 } from "@gent/core"
 import { ConfigService, ModelRegistry, type SteerCommand } from "@gent/runtime"
@@ -173,6 +175,12 @@ export interface DirectClient {
     reason?: string,
   ) => Effect.Effect<void, GentCoreError>
 
+  respondHandoff: (
+    requestId: string,
+    decision: HandoffDecision,
+    reason?: string,
+  ) => Effect.Effect<{ childSessionId?: SessionId }, GentCoreError>
+
   updateSessionBypass: (
     sessionId: SessionId,
     bypass: boolean,
@@ -215,6 +223,7 @@ export type DirectClientContext =
   | AskUserHandler
   | PermissionHandler
   | PlanHandler
+  | HandoffHandler
   | Permission
   | ConfigService
   | ModelRegistry
@@ -232,6 +241,7 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
     const askUserHandler = yield* AskUserHandler
     const permissionHandler = yield* PermissionHandler
     const planHandler = yield* PlanHandler
+    const handoffHandler = yield* HandoffHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
     const modelRegistry = yield* ModelRegistry
@@ -321,6 +331,22 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
 
       respondPlan: (requestId, decision, reason) =>
         planHandler.respond(requestId, decision, reason),
+
+      respondHandoff: (requestId, decision, reason) =>
+        Effect.gen(function* () {
+          if (decision !== "confirm") {
+            yield* handoffHandler.respond(requestId, "reject", undefined, reason)
+            return { childSessionId: undefined }
+          }
+          const entry = yield* handoffHandler.respond(requestId, "confirm")
+          if (entry === undefined) return { childSessionId: undefined }
+          const parentSession = yield* core.getSession(entry.sessionId)
+          const result = yield* core.createSession({
+            firstMessage: `[Handoff]\n\n${entry.summary}`,
+            ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+          })
+          return { childSessionId: result.sessionId }
+        }),
 
       updateSessionBypass: (sessionId, bypass) => core.updateSessionBypass({ sessionId, bypass }),
 

@@ -309,13 +309,13 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
             // Delete before publishing to prevent double-respond race
             pending.delete(requestId)
 
-            if (decision === "confirm" && childSessionId !== undefined) {
+            if (decision === "confirm") {
               yield* eventStore.publish(
                 new HandoffConfirmed({
                   sessionId: entry.sessionId,
                   branchId: entry.branchId,
                   requestId,
-                  childSessionId,
+                  ...(childSessionId !== undefined ? { childSessionId } : {}),
                 }),
               )
             } else if (decision === "reject") {

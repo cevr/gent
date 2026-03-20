@@ -20,6 +20,7 @@ import type {
   Model,
   PermissionDecision,
   PlanDecision,
+  HandoffDecision,
   PermissionRule,
   SessionId,
 } from "@gent/core"
@@ -226,6 +227,9 @@ export interface GentClient {
     branchId: BranchId
   }) => Effect.Effect<SessionState, GentRpcError>
 
+  /** Get a session by ID */
+  getSession: (sessionId: SessionId) => Effect.Effect<SessionInfo | null, GentRpcError>
+
   /** List all sessions */
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
 
@@ -286,6 +290,13 @@ export interface GentClient {
     decision: PlanDecision,
     reason?: string,
   ) => Effect.Effect<void, GentRpcError>
+
+  /** Respond to handoff prompt */
+  respondHandoff: (
+    requestId: string,
+    decision: HandoffDecision,
+    reason?: string,
+  ) => Effect.Effect<{ childSessionId?: SessionId }, GentRpcError>
 
   /** Update session bypass */
   updateSessionBypass: (
@@ -357,6 +368,8 @@ export function createClient(
     getSessionState: (input) =>
       rpcClient.getSessionState({ sessionId: input.sessionId, branchId: input.branchId }),
 
+    getSession: (sessionId) => rpcClient.getSession({ sessionId }),
+
     listSessions: () => rpcClient.listSessions(),
 
     listModels: () => rpcClient.listModels(),
@@ -407,6 +420,13 @@ export function createClient(
 
     respondPlan: (requestId, decision, reason) =>
       rpcClient.respondPlan({
+        requestId,
+        decision,
+        ...(reason !== undefined ? { reason } : {}),
+      }),
+
+    respondHandoff: (requestId, decision, reason) =>
+      rpcClient.respondHandoff({
         requestId,
         decision,
         ...(reason !== undefined ? { reason } : {}),

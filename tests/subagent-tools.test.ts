@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FinderTool, OracleTool, CodeReviewTool, LookAtTool, HandoffTool } from "@gent/tools"
-import { SubagentRunnerService, type ToolContext, type SessionId } from "@gent/core"
+import { SubagentRunnerService, HandoffHandler, type ToolContext, type SessionId } from "@gent/core"
 
 const ctx: ToolContext = {
   sessionId: "test-session",
@@ -208,8 +208,8 @@ describe("LookAtTool", () => {
 })
 
 describe("HandoffTool", () => {
-  test("returns handoff context with session info", async () => {
-    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
+  test("returns handoff confirmed when user accepts", async () => {
+    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer, HandoffHandler.Test(["confirm"]))
     const result = await Effect.runPromise(
       HandoffTool.execute(
         {
@@ -220,8 +220,21 @@ describe("HandoffTool", () => {
       ).pipe(Effect.provide(layer)),
     )
     expect(result.handoff).toBe(true)
-    expect(result.context).toContain("implement auth")
+    expect(result.summary).toContain("implement auth")
     expect(result.parentSessionId).toBe("test-session")
-    expect(result.sessionName).toBeDefined()
+  })
+
+  test("returns handoff rejected when user declines", async () => {
+    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer, HandoffHandler.Test(["reject"]))
+    const result = await Effect.runPromise(
+      HandoffTool.execute(
+        {
+          context: "Current task: implement auth",
+        },
+        ctx,
+      ).pipe(Effect.provide(layer)),
+    )
+    expect(result.handoff).toBe(false)
+    expect(result.reason).toBe("User rejected handoff")
   })
 })
