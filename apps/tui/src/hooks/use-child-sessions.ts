@@ -6,7 +6,7 @@
  * Entries are keyed by childSessionId internally, derived by toolCallId for renderers.
  */
 import { createStore, produce } from "solid-js/store"
-import { onCleanup } from "solid-js"
+import { createEffect, on, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
 import type { AgentEvent, EventEnvelope, SessionId } from "@gent/core"
 import type { ClientContextValue } from "../client/context"
@@ -185,6 +185,16 @@ export function useChildSessions(client: ClientContextValue): UseChildSessionsRe
 
   // Subscribe to parent event stream
   const unsub = client.subscribeEvents(handleParentEvent)
+
+  // Reset on session/branch changes — prevents stale child state leaking across sessions
+  createEffect(
+    on(
+      () => client.session(),
+      () => {
+        interruptAll()
+      },
+    ),
+  )
 
   onCleanup(() => {
     unsub()
