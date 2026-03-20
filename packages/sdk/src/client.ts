@@ -383,8 +383,8 @@ export function createClient(
 
     listBranches: (sessionId) => rpcClient.listBranches({ sessionId }),
 
-    // listTasks not available via RPC yet — returns empty for RPC clients
-    listTasks: () => Effect.succeed([]),
+    // listTasks not available via RPC yet
+    listTasks: () => Effect.die(new Error("listTasks not available over RPC — use DirectClient")),
 
     getBranchTree: (sessionId) => rpcClient.getBranchTree({ sessionId }),
 

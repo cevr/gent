@@ -55,6 +55,7 @@ export interface TaskServiceApi {
 
   readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
   readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
+  readonly getDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>>
 }
 
 export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>()(
@@ -92,21 +93,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             return
           }
 
-          // Mark in_progress
-          yield* storage
-            .updateTask(taskId, { status: "in_progress" })
-            .pipe(Effect.catchEager(() => Effect.void))
-          yield* eventStore
-            .publish(
-              new TaskUpdated({
-                sessionId: task.sessionId,
-                branchId: task.branchId,
-                taskId,
-                status: "in_progress",
-              }),
-            )
-            .pipe(Effect.catchEager(() => Effect.void))
-
+          // Status already set to in_progress by run() before forking
           const parentSessionId = task.sessionId
           const parentBranchId = task.branchId
 
@@ -175,6 +162,20 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 ),
             )
             if (allDone.every(Boolean)) {
+              // Atomically claim before forking
+              yield* storage
+                .updateTask(depTaskId, { status: "in_progress" })
+                .pipe(Effect.catchEager(() => Effect.void))
+              yield* eventStore
+                .publish(
+                  new TaskUpdated({
+                    sessionId: depTask.sessionId,
+                    branchId: depTask.branchId,
+                    taskId: depTaskId,
+                    status: "in_progress",
+                  }),
+                )
+                .pipe(Effect.catchEager(() => Effect.void))
               yield* Effect.forkDetach(runTaskInternal(depTaskId, depTask))
             }
           }
@@ -239,6 +240,22 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             if (task === undefined) {
               return { taskId: id, status: "not_found" }
             }
+            if (task.status !== "pending") {
+              return { taskId: id, status: task.status }
+            }
+
+            // Atomically claim before forking — prevents double-run race
+            yield* storage.updateTask(id, { status: "in_progress" }).pipe(Effect.orDie)
+            yield* eventStore
+              .publish(
+                new TaskUpdated({
+                  sessionId: task.sessionId,
+                  branchId: task.branchId,
+                  taskId: id,
+                  status: "in_progress",
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
 
             yield* Effect.forkDetach(runTaskInternal(id, task))
             return { taskId: id, status: "running" }
@@ -247,6 +264,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
         addDep: (taskId, blockedById) => storage.addTaskDep(taskId, blockedById).pipe(Effect.orDie),
         removeDep: (taskId, blockedById) =>
           storage.removeTaskDep(taskId, blockedById).pipe(Effect.orDie),
+        getDeps: (taskId) => storage.getTaskDeps(taskId).pipe(Effect.orDie),
       }
     }),
   )

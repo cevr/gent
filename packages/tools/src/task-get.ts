@@ -19,6 +19,8 @@ export const TaskGetTool = defineTool({
       return { error: `Task not found: ${params.taskId}` }
     }
 
+    const deps = yield* taskService.getDeps(params.taskId as TaskId)
+
     return {
       id: task.id,
       subject: task.subject,
@@ -29,6 +31,7 @@ export const TaskGetTool = defineTool({
       ...(task.owner !== undefined ? { owner: task.owner } : {}),
       ...(task.cwd !== undefined ? { cwd: task.cwd } : {}),
       ...(task.metadata !== undefined ? { metadata: task.metadata } : {}),
+      ...(deps.length > 0 ? { blockedBy: deps } : {}),
       createdAt: task.createdAt.getTime(),
     }
   }),
