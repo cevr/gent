@@ -292,6 +292,7 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
           reason?: string
         }
       >()
+      const claimed = new Set<string>()
 
       return {
         peek: (requestId: string) => {
@@ -307,8 +308,8 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
 
         claim: (requestId: string) => {
           const entry = pending.get(requestId)
-          if (entry === undefined) return Effect.succeed(undefined)
-          pending.delete(requestId)
+          if (entry === undefined || claimed.has(requestId)) return Effect.succeed(undefined)
+          claimed.add(requestId)
           return Effect.succeed({
             sessionId: entry.sessionId,
             branchId: entry.branchId,
