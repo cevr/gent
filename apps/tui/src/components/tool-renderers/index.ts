@@ -9,6 +9,7 @@ export { WebfetchToolRenderer } from "./webfetch"
 export { TaskToolRenderer } from "./task"
 export { GenericToolRenderer } from "./generic"
 export { FinderToolRenderer } from "./finder"
+export { CounselToolRenderer } from "./counsel"
 export { CodeReviewToolRenderer } from "./code-review"
 export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
@@ -24,6 +25,7 @@ import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
 import { TaskToolRenderer } from "./task"
 import { FinderToolRenderer } from "./finder"
+import { CounselToolRenderer } from "./counsel"
 import { CodeReviewToolRenderer } from "./code-review"
 import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
@@ -40,7 +42,7 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   task: TaskToolRenderer,
   librarian: TaskToolRenderer,
   finder: FinderToolRenderer,
-  counsel: FinderToolRenderer,
+  counsel: CounselToolRenderer,
   code_review: CodeReviewToolRenderer,
   search_sessions: SearchSessionsToolRenderer,
   read_session: ReadSessionToolRenderer,

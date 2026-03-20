@@ -4,63 +4,65 @@ import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolBox } from "../tool-box"
 import type { ToolRendererProps } from "./types"
 
-function parseInput(input: unknown): { query?: string } | undefined {
+function parseInput(input: unknown): { prompt?: string } | undefined {
   if (input === null || input === undefined || typeof input !== "object") return undefined
-  return input as { query?: string }
+  return input as { prompt?: string }
 }
 
-interface FinderOutput {
-  found?: boolean
-  response?: string
+interface CounselOutput {
+  review?: string
+  reviewer?: string
   error?: string
   metadata?: { usage?: { input?: number; output?: number; cost?: number } }
 }
 
-function parseOutput(output: string | undefined): FinderOutput | undefined {
+function parseOutput(output: string | undefined): CounselOutput | undefined {
   if (output === undefined) return undefined
   try {
-    return JSON.parse(output) as FinderOutput
+    return JSON.parse(output) as CounselOutput
   } catch {
     return undefined
   }
 }
 
-export function FinderToolRenderer(props: ToolRendererProps) {
+export function CounselToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const input = () => parseInput(props.toolCall.input)
   const output = () => parseOutput(props.toolCall.output)
 
   const subtitle = () => {
-    const q = input()?.query
-    if (q === undefined) return undefined
-    return q.length > 60 ? q.slice(0, 60) + "…" : q
+    const reviewer = output()?.reviewer
+    if (reviewer !== undefined) return `→ ${reviewer}`
+    const prompt = input()?.prompt
+    if (prompt === undefined) return undefined
+    return prompt.length > 60 ? prompt.slice(0, 60) + "…" : prompt
   }
 
   return (
     <ToolBox
-      title="finder"
+      title="counsel"
       subtitle={subtitle()}
       status={props.toolCall.status}
       expanded={props.expanded}
     >
       <Show when={props.toolCall.status === "running"}>
         <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.warning }}>⋯</span> Searching…
+          <span style={{ fg: theme.warning }}>⋯</span> Reviewing…
         </text>
       </Show>
 
-      <Show when={props.toolCall.status !== "running" && output()?.found === true}>
+      <Show when={props.toolCall.status !== "running" && output()?.review !== undefined}>
         <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.success }}>✓</span> Found
+          <span style={{ fg: theme.success }}>✓</span> Review complete
         </text>
-        <Show when={props.expanded && output()?.response !== undefined}>
+        <Show when={props.expanded}>
           {(() => {
-            const response = output()?.response ?? ""
+            const review = output()?.review ?? ""
             return (
               <box paddingLeft={2}>
                 <text style={{ fg: theme.textMuted }}>
-                  {response.length > 300 ? response.slice(0, 300) + "…" : response}
+                  {review.length > 300 ? review.slice(0, 300) + "…" : review}
                 </text>
               </box>
             )
@@ -68,9 +70,9 @@ export function FinderToolRenderer(props: ToolRendererProps) {
         </Show>
       </Show>
 
-      <Show when={props.toolCall.status !== "running" && output()?.found === false}>
+      <Show when={props.toolCall.status !== "running" && output()?.error !== undefined}>
         <text style={{ fg: theme.error }}>
-          <span>✕</span> {output()?.error ?? "Not found"}
+          <span>✕</span> {output()?.error}
         </text>
       </Show>
 

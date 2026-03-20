@@ -151,7 +151,7 @@ describe("formatToolInput", () => {
 
   test("formats grep pattern and path", () => {
     const result = formatToolInput("grep", { pattern: "TODO", path: "/src" })
-    expect(result).toBe("TODO in /src")
+    expect(result).toBe("/TODO/ in /src")
   })
 
   test("glob uses cwd fallback when no path", () => {
@@ -162,7 +162,7 @@ describe("formatToolInput", () => {
 
   test("grep uses cwd fallback when no path", () => {
     const result = formatToolInput("grep", { pattern: "error" }, "/my/project")
-    expect(result).toContain("error in")
+    expect(result).toContain("/error/ in")
   })
 
   test("returns empty for glob without pattern", () => {
@@ -185,5 +185,31 @@ describe("formatToolInput", () => {
     expect(formatToolInput("bash", { command: 123 })).toBe("")
     expect(formatToolInput("read", { path: null })).toBe("")
     expect(formatToolInput("glob", { pattern: {}, path: "/foo" })).toBe("")
+  })
+
+  test("formats task with correct fields", () => {
+    expect(formatToolInput("task", { agent: "explore", task: "find the bug" })).toBe(
+      "explore:find the bug",
+    )
+    expect(
+      formatToolInput("task", {
+        tasks: [
+          { agent: "a", task: "x" },
+          { agent: "b", task: "y" },
+        ],
+      }),
+    ).toBe("2 parallel")
+  })
+
+  test("formats finder query", () => {
+    expect(formatToolInput("finder", { query: "where is auth" })).toBe("where is auth")
+  })
+
+  test("formats counsel prompt", () => {
+    expect(formatToolInput("counsel", { prompt: "review this" })).toBe("review this")
+  })
+
+  test("read supports file_path field", () => {
+    expect(formatToolInput("read", { file_path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
   })
 })

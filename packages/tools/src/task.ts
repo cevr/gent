@@ -159,7 +159,12 @@ export const TaskTool = defineTool({
 
     return {
       output: `${result.text}\n\nFull session: session://${result.sessionId}`,
-      metadata: { mode: "single", sessionId: result.sessionId, agentName: result.agentName },
+      metadata: {
+        mode: "single",
+        sessionId: result.sessionId,
+        agentName: result.agentName,
+        usage: result.usage,
+      },
     }
   }),
 })

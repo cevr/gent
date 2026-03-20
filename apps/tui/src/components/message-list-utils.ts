@@ -2,6 +2,8 @@
  * Pure utility functions for message list rendering
  */
 
+import { toolArgSummary } from "../utils/format-tool.js"
+
 /**
  * Format seconds into human readable time string
  */
@@ -59,7 +61,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Format tool input for display in parenthesis
+ * Format tool input for display in tool header.
+ * Delegates to toolArgSummary for smart formatting, then applies
+ * truncatePath for width safety on path-heavy tools. Preserves
+ * cwd fallback for glob/grep when no path is specified.
  */
 export function formatToolInput(
   toolName: string,
@@ -67,41 +72,25 @@ export function formatToolInput(
   cwd: string = process.cwd(),
 ): string {
   if (!isRecord(input)) return ""
-  const obj = input
+  const name = toolName.toLowerCase()
 
-  switch (toolName.toLowerCase()) {
-    case "bash":
-      return typeof obj["command"] === "string" ? obj["command"] : ""
-    case "read":
-    case "write":
-      return typeof obj["path"] === "string" ? truncatePath(obj["path"]) : ""
-    case "edit":
-      return typeof obj["path"] === "string" ? truncatePath(obj["path"]) : ""
-    case "glob": {
-      const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
-      const searchPath =
-        typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(cwd, 30)
-      return pattern.length > 0 ? `${pattern} in ${searchPath}` : ""
-    }
-    case "grep": {
-      const pattern = typeof obj["pattern"] === "string" ? obj["pattern"] : ""
-      const searchPath =
-        typeof obj["path"] === "string" ? truncatePath(obj["path"], 30) : truncatePath(cwd, 30)
-      return pattern.length > 0 ? `${pattern} in ${searchPath}` : ""
-    }
-    case "webfetch": {
-      return typeof obj["url"] === "string" ? obj["url"] : ""
-    }
-    case "repo_explorer": {
-      const spec = typeof obj["spec"] === "string" ? obj["spec"] : ""
-      const action = typeof obj["action"] === "string" ? obj["action"] : ""
-      return spec.length > 0 ? `${action} ${spec}` : action
-    }
-    case "task": {
-      const prompt = typeof obj["prompt"] === "string" ? obj["prompt"] : ""
-      return prompt.length > 50 ? prompt.slice(0, 50) + "…" : prompt
-    }
-    default:
-      return ""
+  // glob/grep: cwd fallback needs to happen before toolArgSummary
+  if (name === "glob" || name === "grep") {
+    const pattern = typeof input["pattern"] === "string" ? input["pattern"] : ""
+    if (pattern.length === 0) return ""
+    const searchPath =
+      typeof input["path"] === "string" ? truncatePath(input["path"], 30) : truncatePath(cwd, 30)
+    const prefix = name === "grep" ? `/${pattern}/` : pattern
+    return `${prefix} in ${searchPath}`
   }
+
+  const summary = toolArgSummary(name, input)
+  if (summary.length === 0) return ""
+
+  // Apply truncatePath for path-heavy tools
+  if (name === "read" || name === "write" || name === "edit" || name === "look_at") {
+    return truncatePath(summary)
+  }
+
+  return summary
 }

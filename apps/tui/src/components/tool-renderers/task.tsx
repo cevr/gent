@@ -1,15 +1,18 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
+import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolBox } from "../tool-box"
 import type { ToolRendererProps } from "./types"
 
-interface SubagentResult {
+// Parsed JSON shape — not the discriminated union from @gent/core
+// because JSON.parse produces plain objects without TS narrowing
+interface SubagentResultJson {
   _tag: "success" | "error"
   text?: string
   error?: string
   agentName?: string
   sessionId?: string
-  usage?: { input: number; output: number; cost: number }
+  usage?: { input?: number; output?: number; cost?: number }
 }
 
 interface TaskOutput {
@@ -17,7 +20,7 @@ interface TaskOutput {
   error?: string
   metadata?: {
     mode: "single" | "parallel" | "chain"
-    results?: SubagentResult[]
+    results?: SubagentResultJson[]
     sessionId?: string
     agentName?: string
   }
@@ -32,11 +35,21 @@ function parseTaskOutput(output: string | undefined): TaskOutput | undefined {
   }
 }
 
-function parseTaskInput(
-  input: unknown,
-): { agent?: string; task?: string; tasks?: Array<{ agent: string; task: string }> } | undefined {
+function parseTaskInput(input: unknown):
+  | {
+      agent?: string
+      task?: string
+      tasks?: Array<{ agent: string; task: string }>
+      chain?: Array<{ agent: string; task: string }>
+    }
+  | undefined {
   if (input === null || input === undefined || typeof input !== "object") return undefined
-  return input as { agent?: string; task?: string; tasks?: Array<{ agent: string; task: string }> }
+  return input as {
+    agent?: string
+    task?: string
+    tasks?: Array<{ agent: string; task: string }>
+    chain?: Array<{ agent: string; task: string }>
+  }
 }
 
 const STATUS_ICONS = {
@@ -55,6 +68,7 @@ export function TaskToolRenderer(props: ToolRendererProps) {
     const inp = taskInput()
     if (inp?.agent !== undefined) return `task → ${inp.agent}`
     if (inp?.tasks !== undefined) return `task → ${inp.tasks.length} parallel`
+    if (inp?.chain !== undefined) return `task → ${inp.chain.length} chain`
     return "task"
   }
 
@@ -65,7 +79,7 @@ export function TaskToolRenderer(props: ToolRendererProps) {
     return undefined
   }
 
-  const results = (): SubagentResult[] => {
+  const results = (): SubagentResultJson[] => {
     const out = taskOutput()
     if (out?.metadata?.results !== undefined) return out.metadata.results
     return []
@@ -101,7 +115,7 @@ export function TaskToolRenderer(props: ToolRendererProps) {
                   <Show when={result.usage !== undefined}>
                     {" "}
                     <span style={{ fg: theme.textMuted }}>
-                      ${result.usage?.cost?.toFixed(4) ?? "0"}
+                      {formatUsageStats(result.usage ?? {})}
                     </span>
                   </Show>
                 </text>
