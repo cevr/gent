@@ -395,12 +395,9 @@ export function Input(props: InputProps) {
     previousValue = ""
   }
 
-  // Focus input and wire content change listener on mount
+  // Focus input on mount
   onMount(() => {
-    if (inputRef !== null) {
-      inputRef.focus()
-      inputRef.onContentChange = handleContentChange
-    }
+    inputRef?.focus()
   })
 
   onCleanup(() => {
@@ -452,7 +449,12 @@ export function Input(props: InputProps) {
           </text>
           <box flexGrow={1}>
             <textarea
-              ref={(r) => (inputRef = r)}
+              ref={(r) => {
+                inputRef = r
+                if (r !== null) {
+                  r.onContentChange = handleContentChange
+                }
+              }}
               focused={inputFocused()}
               onSubmit={handleSubmit}
               wrapMode="word"
@@ -460,6 +462,7 @@ export function Input(props: InputProps) {
               maxHeight={8}
               keyBindings={[
                 { name: "return", action: "submit" },
+                { name: "linefeed", action: "submit" },
                 { name: "return", shift: true, action: "newline" },
               ]}
               backgroundColor="transparent"
