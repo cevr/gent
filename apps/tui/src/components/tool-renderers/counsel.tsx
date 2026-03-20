@@ -52,38 +52,34 @@ export function CounselToolRenderer(props: ToolRendererProps) {
         </text>
       </Show>
 
-      <Show when={props.toolCall.status !== "running" && output()?.review !== undefined}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.success }}>✓</span> Review complete
-        </text>
-        <Show when={props.expanded}>
-          {(() => {
-            const review = output()?.review ?? ""
-            return (
+      <Show when={props.toolCall.status !== "running" ? output()?.review : undefined}>
+        {(review) => (
+          <>
+            <text style={{ fg: theme.textMuted }}>
+              <span style={{ fg: theme.success }}>✓</span> Review complete
+            </text>
+            <Show when={props.expanded}>
               <box paddingLeft={2}>
                 <text style={{ fg: theme.textMuted }}>
-                  {review.length > 300 ? review.slice(0, 300) + "…" : review}
+                  {review().length > 300 ? review().slice(0, 300) + "…" : review()}
                 </text>
               </box>
-            )
-          })()}
-        </Show>
+            </Show>
+          </>
+        )}
       </Show>
 
-      <Show when={props.toolCall.status !== "running" && output()?.error !== undefined}>
-        <text style={{ fg: theme.error }}>
-          <span>✕</span> {output()?.error}
-        </text>
+      <Show when={props.toolCall.status !== "running" ? output()?.error : undefined}>
+        {(error) => (
+          <text style={{ fg: theme.error }}>
+            <span>✕</span> {error()}
+          </text>
+        )}
       </Show>
 
-      {(() => {
-        const usage = output()?.metadata?.usage
-        return (
-          <Show when={usage !== undefined}>
-            <text style={{ fg: theme.textMuted }}>{formatUsageStats(usage ?? {})}</text>
-          </Show>
-        )
-      })()}
+      <Show when={output()?.metadata?.usage}>
+        {(usage) => <text style={{ fg: theme.textMuted }}>{formatUsageStats(usage())}</text>}
+      </Show>
     </ToolBox>
   )
 }

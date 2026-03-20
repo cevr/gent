@@ -54,17 +54,14 @@ export function FinderToolRenderer(props: ToolRendererProps) {
         <text style={{ fg: theme.textMuted }}>
           <span style={{ fg: theme.success }}>✓</span> Found
         </text>
-        <Show when={props.expanded && output()?.response !== undefined}>
-          {(() => {
-            const response = output()?.response ?? ""
-            return (
-              <box paddingLeft={2}>
-                <text style={{ fg: theme.textMuted }}>
-                  {response.length > 300 ? response.slice(0, 300) + "…" : response}
-                </text>
-              </box>
-            )
-          })()}
+        <Show when={props.expanded ? output()?.response : undefined}>
+          {(response) => (
+            <box paddingLeft={2}>
+              <text style={{ fg: theme.textMuted }}>
+                {response().length > 300 ? response().slice(0, 300) + "…" : response()}
+              </text>
+            </box>
+          )}
         </Show>
       </Show>
 
@@ -74,14 +71,9 @@ export function FinderToolRenderer(props: ToolRendererProps) {
         </text>
       </Show>
 
-      {(() => {
-        const usage = output()?.metadata?.usage
-        return (
-          <Show when={usage !== undefined}>
-            <text style={{ fg: theme.textMuted }}>{formatUsageStats(usage ?? {})}</text>
-          </Show>
-        )
-      })()}
+      <Show when={output()?.metadata?.usage}>
+        {(usage) => <text style={{ fg: theme.textMuted }}>{formatUsageStats(usage())}</text>}
+      </Show>
     </ToolBox>
   )
 }
