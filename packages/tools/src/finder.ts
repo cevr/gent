@@ -41,7 +41,7 @@ export const FinderTool = defineTool({
 
     return {
       found: true,
-      response: result.text,
+      response: `${result.text}\n\nFull session: session://${result.sessionId}`,
       metadata: { sessionId: result.sessionId, agentName: result.agentName },
     }
   }),

@@ -174,7 +174,7 @@ describe("CodeReviewTool", () => {
       CodeReviewTool.execute({ description: "test" }, ctx).pipe(Effect.provide(layer)),
     )
     expect(result.comments.length).toBe(0)
-    expect(result.raw).toBe("not valid json")
+    expect(result.raw).toBe("not valid json\n\nFull session: session://child")
   })
 })
 
@@ -236,5 +236,57 @@ describe("HandoffTool", () => {
     )
     expect(result.handoff).toBe(false)
     expect(result.reason).toBe("User rejected handoff")
+  })
+})
+
+describe("Session refs in subagent output", () => {
+  test("FinderTool appends session ref to response", async () => {
+    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
+    const result = await Effect.runPromise(
+      FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(result.response).toContain("\n\nFull session: session://child-session")
+  })
+
+  test("OracleTool appends session ref to output", async () => {
+    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
+    const result = await Effect.runPromise(
+      OracleTool.execute({ task: "analyze" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(result.output).toContain("\n\nFull session: session://child-session")
+  })
+
+  test("LookAtTool appends session ref to output", async () => {
+    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectory()
+        const filePath = `${tmpDir}/test.txt`
+        yield* fs.writeFileString(filePath, "test content")
+        return yield* LookAtTool.execute({ path: filePath, objective: "analyze" }, ctx)
+      }).pipe(Effect.scoped, Effect.provide(layer)),
+    )
+    expect(result.output).toContain("\n\nFull session: session://child-session")
+  })
+
+  test("CodeReviewTool includes session ref on structured output", async () => {
+    const jsonOutput = JSON.stringify([
+      { file: "a.ts", severity: "low", type: "style", text: "minor" },
+    ])
+    const runner = Layer.succeed(SubagentRunnerService, {
+      run: () =>
+        Effect.succeed({
+          _tag: "success" as const,
+          text: jsonOutput,
+          sessionId: "child" as SessionId,
+          agentName: "reviewer",
+        }),
+    })
+    const layer = Layer.mergeAll(runner, platformLayer)
+    const result = await Effect.runPromise(
+      CodeReviewTool.execute({ description: "test" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(result.sessionRef).toBe("session://child")
   })
 })

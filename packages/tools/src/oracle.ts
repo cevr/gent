@@ -69,7 +69,7 @@ export const OracleTool = defineTool({
     }
 
     return {
-      output: result.text,
+      output: `${result.text}\n\nFull session: session://${result.sessionId}`,
       metadata: { sessionId: result.sessionId, agentName: result.agentName },
     }
   }),

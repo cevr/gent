@@ -264,6 +264,64 @@ describe("Task Tool", () => {
       TaskTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(Effect.provide(layer)),
     )
 
-    expect(result.output).toBe("explore:hello")
+    expect(result.output).toBe("explore:hello\n\nFull session: session://child-session")
+  })
+
+  test("chain mode appends session refs for all steps", async () => {
+    let stepIdx = 0
+    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        const idx = stepIdx++
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: `step-${idx}`,
+          sessionId: `session-${idx}`,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
+    const result = await Effect.runPromise(
+      TaskTool.execute(
+        {
+          chain: [
+            { agent: "explore", task: "first" },
+            { agent: "explore", task: "second" },
+          ],
+        },
+        ctx,
+      ).pipe(Effect.provide(layer)),
+    )
+    expect(result.output).toContain("Full sessions: session://session-0, session://session-1")
+  })
+
+  test("parallel mode appends session refs for successes", async () => {
+    let callIdx = 0
+    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        const idx = callIdx++
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: `result-${idx}`,
+          sessionId: `session-${idx}`,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
+    const result = await Effect.runPromise(
+      TaskTool.execute(
+        {
+          tasks: [
+            { agent: "explore", task: "a" },
+            { agent: "explore", task: "b" },
+          ],
+        },
+        ctx,
+      ).pipe(Effect.provide(layer)),
+    )
+    expect(result.output).toContain("2/2 succeeded")
+    expect(result.output).toContain("Full sessions:")
+    expect(result.output).toContain("session://session-")
   })
 })

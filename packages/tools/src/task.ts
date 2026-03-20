@@ -68,7 +68,7 @@ export const TaskTool = defineTool({
       )
 
     if (hasChain) {
-      const results = [] as Array<unknown>
+      const results: SubagentResult[] = []
       let previousOutput = ""
 
       for (const step of params.chain ?? []) {
@@ -91,8 +91,12 @@ export const TaskTool = defineTool({
         previousOutput = result.text
       }
 
+      const chainSessionRefs = results
+        .filter((r): r is Extract<SubagentResult, { _tag: "success" }> => r._tag === "success")
+        .map((r) => `session://${r.sessionId}`)
+        .join(", ")
       return {
-        output: previousOutput,
+        output: `${previousOutput}${chainSessionRefs.length > 0 ? `\n\nFull sessions: ${chainSessionRefs}` : ""}`,
         metadata: { mode: "chain", results },
       }
     }
@@ -124,9 +128,12 @@ export const TaskTool = defineTool({
 
       const results = yield* Effect.forEach(tasks, runTask, { concurrency: MAX_CONCURRENCY })
 
-      const successCount = results.filter((r) => r._tag === "success").length
+      const successes = results.filter(
+        (r): r is Extract<SubagentResult, { _tag: "success" }> => r._tag === "success",
+      )
+      const parallelSessionRefs = successes.map((r) => `session://${r.sessionId}`).join(", ")
       return {
-        output: `Parallel: ${successCount}/${results.length} succeeded`,
+        output: `Parallel: ${successes.length}/${results.length} succeeded${parallelSessionRefs.length > 0 ? `\n\nFull sessions: ${parallelSessionRefs}` : ""}`,
         metadata: { mode: "parallel", results },
       }
     }
@@ -145,7 +152,7 @@ export const TaskTool = defineTool({
     if (result._tag === "error") return { error: result.error }
 
     return {
-      output: result.text,
+      output: `${result.text}\n\nFull session: session://${result.sessionId}`,
       metadata: { mode: "single", sessionId: result.sessionId, agentName: result.agentName },
     }
   }),

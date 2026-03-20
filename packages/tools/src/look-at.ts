@@ -81,7 +81,7 @@ export const LookAtTool = defineTool({
     }
 
     return {
-      output: result.text,
+      output: `${result.text}\n\nFull session: session://${result.sessionId}`,
       metadata: { path: params.path, sessionId: result.sessionId, agentName: result.agentName },
     }
   }),

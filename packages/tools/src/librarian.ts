@@ -155,7 +155,7 @@ Use read, grep, and glob tools to explore the code at ${cachePath} and answer th
     }
 
     return {
-      output: result.text,
+      output: `${result.text}\n\nFull session: session://${result.sessionId}`,
       metadata: { spec: params.spec, cachePath, sessionId: result.sessionId },
     }
   }),

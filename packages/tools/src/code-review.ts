@@ -89,10 +89,12 @@ Output ONLY the JSON array, no other text.`
       Effect.catch(() => Effect.succeed([] as readonly ReviewComment[])),
     )
 
+    const sessionRef = `\n\nFull session: session://${result.sessionId}`
+
     if (comments.length === 0) {
       return {
         comments: [],
-        raw: result.text,
+        raw: result.text + sessionRef,
         metadata: { sessionId: result.sessionId, agentName: result.agentName },
       }
     }
@@ -105,6 +107,7 @@ Output ONLY the JSON array, no other text.`
     return {
       comments,
       summary,
+      sessionRef: `session://${result.sessionId}`,
       metadata: { sessionId: result.sessionId, agentName: result.agentName },
     }
   }),
