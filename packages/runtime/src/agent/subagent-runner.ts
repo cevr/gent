@@ -15,6 +15,22 @@ import {
 import { Storage, type StorageService } from "@gent/storage"
 import { AgentActor } from "./agent-loop"
 
+const collectUsage = (storage: StorageService, sessionId: SessionId) =>
+  storage.listEvents({ sessionId }).pipe(
+    Effect.map((envelopes) => {
+      let input = 0
+      let output = 0
+      for (const env of envelopes) {
+        if (env.event._tag === "StreamEnded" && env.event.usage !== undefined) {
+          input += env.event.usage.inputTokens
+          output += env.event.usage.outputTokens
+        }
+      }
+      return input > 0 || output > 0 ? { input, output, cost: 0 } : undefined
+    }),
+    Effect.catchEager(() => Effect.succeed(undefined)),
+  )
+
 export class SubagentRunnerConfig extends ServiceMap.Service<
   SubagentRunnerConfig,
   {
@@ -179,6 +195,8 @@ export const InProcessRunner: Layer.Layer<
                 break
               }
 
+              const usage = yield* collectUsage(storage, sessionId)
+
               yield* eventStore.publish(
                 new SubagentSucceeded({
                   parentSessionId: params.parentSessionId,
@@ -187,7 +205,13 @@ export const InProcessRunner: Layer.Layer<
                 }),
               )
 
-              return { _tag: "success" as const, text, sessionId, agentName: params.agent.name }
+              return {
+                _tag: "success" as const,
+                text,
+                sessionId,
+                agentName: params.agent.name,
+                usage,
+              }
             })
 
             return run.pipe(
@@ -332,6 +356,8 @@ export const SubprocessRunner: Layer.Layer<
                 break
               }
 
+              const usage = yield* collectUsage(storage, sessionId)
+
               yield* eventStore.publish(
                 new SubagentSucceeded({
                   parentSessionId: params.parentSessionId,
@@ -340,7 +366,13 @@ export const SubprocessRunner: Layer.Layer<
                 }),
               )
 
-              return { _tag: "success" as const, text, sessionId, agentName: params.agent.name }
+              return {
+                _tag: "success" as const,
+                text,
+                sessionId,
+                agentName: params.agent.name,
+                usage,
+              }
             })
 
             return run.pipe(

@@ -97,7 +97,7 @@ Instructions:
     return {
       review: `${result.text}\n\nFull session: session://${result.sessionId}`,
       reviewer: opposite.name,
-      metadata: { sessionId: result.sessionId, agentName: result.agentName },
+      metadata: { sessionId: result.sessionId, agentName: result.agentName, usage: result.usage },
     }
   }),
 })
