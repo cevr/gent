@@ -427,4 +427,39 @@ describe("CounselTool", () => {
     expect(result.error).toContain("runner failed")
     expect(result.error).toContain("session://error-session")
   })
+
+  test("spawns agent with restricted read-only tools", async () => {
+    let capturedAllowedTools: readonly string[] | undefined
+    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        capturedAllowedTools = params.agent.allowedTools
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "review",
+          sessionId: "session" as SessionId,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(capturingRunner, platformLayer)
+    await Effect.runPromise(
+      CounselTool.execute({ prompt: "review" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(capturedAllowedTools).toBeDefined()
+    expect(capturedAllowedTools).toContain("read")
+    expect(capturedAllowedTools).toContain("grep")
+    expect(capturedAllowedTools).toContain("glob")
+    expect(capturedAllowedTools).not.toContain("write")
+    expect(capturedAllowedTools).not.toContain("edit")
+    expect(capturedAllowedTools).not.toContain("counsel")
+  })
+
+  test("rejects non-primary agent caller", async () => {
+    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
+    const explorerCtx: ToolContext = { ...ctx, agentName: "explore" }
+    const result = await Effect.runPromise(
+      CounselTool.execute({ prompt: "review" }, explorerCtx).pipe(Effect.provide(layer)),
+    )
+    expect(result.error).toContain("requires a primary agent")
+  })
 })

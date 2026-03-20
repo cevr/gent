@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem } from "effect"
-import { Agents, SubagentRunnerService, defineTool } from "@gent/core"
+import { Agents, AgentDefinition, SubagentRunnerService, defineTool } from "@gent/core"
 
 // Counsel Tool Error
 
@@ -38,9 +38,18 @@ export const CounselTool = defineTool({
     const runner = yield* SubagentRunnerService
     const fs = yield* FileSystem.FileSystem
 
-    // Resolve opposite agent — bypasses canDelegateToAgents by calling runner.run() directly
+    // Resolve opposite agent with read-only tool restriction
     const current = ctx.agentName ?? "cowork"
-    const opposite = current === "cowork" ? Agents.deepwork : Agents.cowork
+    if (current !== "cowork" && current !== "deepwork") {
+      return { error: `Counsel requires a primary agent (cowork/deepwork), got: ${current}` }
+    }
+    const base = current === "cowork" ? Agents.deepwork : Agents.cowork
+    // Spawn with restricted tools — counsel is read-only, no mutations
+    const opposite = new AgentDefinition({
+      ...base,
+      kind: "subagent",
+      allowedTools: ["read", "grep", "glob", "bash"],
+    })
 
     // Inline file contents (oracle pattern)
     let fileContext = ""
@@ -69,7 +78,7 @@ Instructions:
 - Ground every claim in specific file paths and line numbers.
 - If something looks correct, say so briefly and move on.
 - Focus on: correctness, edge cases, race conditions, missing error handling, architectural issues.
-- Be direct. No hedging. If it's wrong, say it's wrong.`
+- Be direct and evidence-based. Back claims with file paths and reasoning.`
 
     const result = yield* runner.run({
       agent: opposite,

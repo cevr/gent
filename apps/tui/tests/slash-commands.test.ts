@@ -177,6 +177,30 @@ describe("executeSlashCommand", () => {
     expect(calls2.clearMessages).toBe(1)
   })
 
+  test("/counsel sends counsel message", async () => {
+    let sentMessage = ""
+    const { ctx } = createMockContext()
+    ctx.sendMessage = (msg) => {
+      sentMessage = msg
+    }
+    const result = await Effect.runPromise(executeSlashCommand("counsel", "", ctx))
+    expect(result.handled).toBe(true)
+    expect(sentMessage).toContain("counsel tool")
+  })
+
+  test("/counsel with args passes prompt", async () => {
+    let sentMessage = ""
+    const { ctx } = createMockContext()
+    ctx.sendMessage = (msg) => {
+      sentMessage = msg
+    }
+    const result = await Effect.runPromise(
+      executeSlashCommand("counsel", "review auth module", ctx),
+    )
+    expect(result.handled).toBe(true)
+    expect(sentMessage).toContain("review auth module")
+  })
+
   test("handles async errors gracefully", async () => {
     const ctx: SlashCommandContext = {
       openPalette: () => {},

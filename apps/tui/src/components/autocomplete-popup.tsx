@@ -77,7 +77,6 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: "agent", label: "/agent", description: "Switch agent" },
   { id: "clear", label: "/clear", description: "Clear messages" },
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },
-  { id: "compact", label: "/compact", description: "Compact history" },
   { id: "branch", label: "/branch", description: "Create new branch" },
   { id: "tree", label: "/tree", description: "Browse branch tree" },
   { id: "fork", label: "/fork", description: "Fork from a message" },
@@ -85,6 +84,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: "permissions", label: "/permissions", description: "View/edit permission rules" },
   { id: "auth", label: "/auth", description: "Manage API keys" },
   { id: "handoff", label: "/handoff", description: "Distill context into new session" },
+  { id: "counsel", label: "/counsel", description: "Opposite-vendor peer review" },
 ]
 
 export interface AutocompletePopupProps {
