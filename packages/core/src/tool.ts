@@ -16,6 +16,8 @@ export interface ToolDefinition<
   readonly name: Name
   readonly description: string
   readonly concurrency?: "serial" | "parallel"
+  /** Whether this tool is safe to replay after restart (read-only tools = true) */
+  readonly idempotent?: boolean
   readonly params: Params
   readonly execute: (
     params: Schema.Schema.Type<Params>,

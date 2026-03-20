@@ -1,4 +1,4 @@
-import { Cause, ServiceMap, Duration, Effect, Layer, Schedule } from "effect"
+import { Cause, ServiceMap, Duration, Effect, Layer } from "effect"
 import {
   AgentSwitched,
   Branch,
@@ -83,9 +83,6 @@ export class SubagentRunnerConfig extends ServiceMap.Service<
     readonly subprocessBinaryPath?: string
     readonly dbPath?: string
     readonly systemPrompt: string
-    readonly maxAttempts: number
-    readonly retryInitialDelayMs: number
-    readonly retryMaxDelayMs: number
     readonly timeoutMs?: number
   }
 >()("@gent/runtime/src/agent/subagent-runner/SubagentRunnerConfig") {
@@ -93,18 +90,12 @@ export class SubagentRunnerConfig extends ServiceMap.Service<
     subprocessBinaryPath?: string
     dbPath?: string
     systemPrompt: string
-    maxAttempts?: number
-    retryInitialDelayMs?: number
-    retryMaxDelayMs?: number
     timeoutMs?: number
   }) =>
     Layer.succeed(SubagentRunnerConfig, {
       subprocessBinaryPath: config.subprocessBinaryPath,
       dbPath: config.dbPath,
       systemPrompt: config.systemPrompt,
-      maxAttempts: Math.max(1, config.maxAttempts ?? 1),
-      retryInitialDelayMs: Math.max(0, config.retryInitialDelayMs ?? 250),
-      retryMaxDelayMs: Math.max(0, config.retryMaxDelayMs ?? 5_000),
       timeoutMs: config.timeoutMs,
     })
 }
@@ -194,32 +185,12 @@ export const InProcessRunner: Layer.Layer<
                 bypass,
               })
 
-              const retrySchedule =
-                runnerConfig.maxAttempts > 1
-                  ? Schedule.modifyDelay(
-                      Schedule.both(
-                        Schedule.recurs(runnerConfig.maxAttempts - 1),
-                        Schedule.exponential(Duration.millis(runnerConfig.retryInitialDelayMs)),
-                      ),
-                      (_out, duration) =>
-                        Effect.succeed(
-                          Duration.millis(
-                            Math.min(
-                              Duration.toMillis(duration as Duration.Duration),
-                              runnerConfig.retryMaxDelayMs,
-                            ),
-                          ),
-                        ),
-                    )
-                  : null
-
-              const runWithRetry =
-                retrySchedule === null ? runSubagent : runSubagent.pipe(Effect.retry(retrySchedule))
-
+              // No actor-level retry — replays non-idempotent tool calls.
+              // Provider-level retry stays in runtime/src/retry.ts (transient, same process).
               const runWithTimeout =
                 runnerConfig.timeoutMs === undefined
-                  ? runWithRetry
-                  : runWithRetry.pipe(
+                  ? runSubagent
+                  : runSubagent.pipe(
                       Effect.timeoutOrElse({
                         duration: Duration.millis(runnerConfig.timeoutMs),
                         onTimeout: () =>

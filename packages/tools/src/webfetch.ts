@@ -35,6 +35,7 @@ export const WebFetchResult = Schema.Struct({
 export const WebFetchTool = defineTool({
   name: "webfetch",
   concurrency: "parallel",
+  idempotent: true,
   description:
     "Fetch a URL and convert HTML to markdown. Use for researching documentation, reading web content, or gathering information from websites.",
   params: WebFetchParams,

@@ -1,7 +1,8 @@
 import type { Sharding } from "effect/unstable/cluster"
 import { Entity } from "effect/unstable/cluster"
+import * as TestRunner from "effect/unstable/cluster/TestRunner"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
-import { Cause, ServiceMap, Effect, Layer, Schema } from "effect"
+import { Cause, ServiceMap, Duration, Effect, Layer, Schedule, Schema } from "effect"
 import {
   AgentName,
   BranchId,
@@ -318,6 +319,31 @@ export const SessionActorEntityLocalLive = Layer.provide(
   LocalActorProcessLive,
 )
 
+/**
+ * Supervised entity layer — entity handlers get automatic restart on defect.
+ * Exponential backoff: 1s, 2s, 4s... up to 5 retries.
+ */
+export const SessionActorEntitySupervisedLive = SessionActorEntity.toLayer(
+  Effect.gen(function* () {
+    const actorProcess = yield* ActorProcess
+    return SessionActorEntity.of({
+      SendUserMessage: (envelope) => actorProcess.sendUserMessage(envelope.payload),
+      SendToolResult: (envelope) => actorProcess.sendToolResult(envelope.payload),
+      Interrupt: (envelope) => actorProcess.interrupt(envelope.payload),
+      GetState: (envelope) => actorProcess.getState(envelope.payload),
+      GetMetrics: (envelope) => actorProcess.getMetrics(envelope.payload),
+    })
+  }),
+  {
+    defectRetryPolicy: Schedule.both(
+      Schedule.exponential(Duration.seconds(1), 2),
+      Schedule.recurs(5),
+    ),
+    disableFatalDefects: true,
+    maxIdleTime: Duration.minutes(30),
+  },
+)
+
 export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.Sharding> =
   Layer.effect(
     ActorProcess,
@@ -352,3 +378,27 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
       })
     }),
   )
+
+/**
+ * Supervised ActorProcess using SingleRunner (single-node cluster, in-memory storage).
+ * Entity handlers get automatic restart on defect via defectRetryPolicy.
+ * No distributed infrastructure required.
+ */
+/**
+ * Supervised ActorProcess using in-memory cluster (TestRunner).
+ * Entity handlers get automatic restart on defect via defectRetryPolicy.
+ * No distributed infrastructure required.
+ */
+export const SupervisedActorProcessLive: Layer.Layer<
+  ActorProcess,
+  never,
+  AgentLoop | Storage | EventStore
+> = (() => {
+  // 1. Base: LocalActorProcessLive provides ActorProcess for entity handlers
+  // 2. TestRunner provides Sharding (in-memory, no SQL)
+  // 3. Entity registers with Sharding, delegates to ActorProcess
+  // 4. ClusterActorProcessLive provides the public ActorProcess via entity client
+  const base = Layer.mergeAll(LocalActorProcessLive, TestRunner.layer)
+  const withEntity = Layer.provideMerge(SessionActorEntitySupervisedLive, base)
+  return Layer.provide(ClusterActorProcessLive, withEntity)
+})()

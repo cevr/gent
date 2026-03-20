@@ -78,6 +78,7 @@ export {
   TaskUpdated,
   TaskCompleted,
   TaskFailed,
+  AgentRestarted,
   getEventSessionId,
   matchesEventFilter,
 } from "./event.js"

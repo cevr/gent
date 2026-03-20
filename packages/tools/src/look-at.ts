@@ -34,6 +34,7 @@ export const LookAtParams = Schema.Struct({
 export const LookAtTool = defineTool({
   name: "look_at",
   concurrency: "serial",
+  idempotent: true,
   description:
     "Analyze a file (image, document, code) using a sub-agent. Supports comparison with reference files.",
   params: LookAtParams,

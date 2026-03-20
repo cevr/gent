@@ -83,6 +83,7 @@ function getCachePath(cacheDir: string, spec: string): string {
 export const LibrarianTool = defineTool({
   name: "librarian",
   concurrency: "serial",
+  idempotent: true,
   description:
     "Ask questions about external repositories. Fetches/caches the repo, then spawns a sub-agent that reads the code locally to answer your question.",
   params: LibrarianParams,

@@ -21,6 +21,7 @@ export const FinderParams = Schema.Struct({
 export const FinderTool = defineTool({
   name: "finder",
   concurrency: "serial",
+  idempotent: true,
   description:
     "Delegate a multi-step codebase search to a fast sub-agent. Use when you need to find something that requires chaining multiple grep/read/glob calls.",
   params: FinderParams,

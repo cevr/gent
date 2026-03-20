@@ -9,6 +9,7 @@ export const TaskGetParams = Schema.Struct({
 export const TaskGetTool = defineTool({
   name: "task_get",
   concurrency: "parallel",
+  idempotent: true,
   description: "Get full details of a task including description, dependencies, and owner session.",
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params) {

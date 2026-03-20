@@ -158,26 +158,16 @@ describe("Subagent Runner", () => {
     )
   })
 
-  test("retries transient failures", async () => {
-    let attempts = 0
-
+  test("propagates failures without retry (no maxAttempts)", async () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
       SubagentRunnerConfig.Live({
         systemPrompt: "",
-        maxAttempts: 2,
-        retryInitialDelayMs: 1,
-        retryMaxDelayMs: 1,
       }),
       Layer.succeed(AgentActor, {
-        run: () =>
-          Effect.gen(function* () {
-            if (attempts++ === 0) {
-              return yield* Effect.fail(new SubagentError({ message: "transient" }))
-            }
-          }),
+        run: () => Effect.fail(new SubagentError({ message: "permanent failure" })),
       }),
       recorderLayer,
       eventStoreLayer,
@@ -192,14 +182,14 @@ describe("Subagent Runner", () => {
 
         const now = new Date()
         const session = new Session({
-          id: "parent-session-retry",
+          id: "parent-session-noretr",
           name: "Parent",
           bypass: true,
           createdAt: now,
           updatedAt: now,
         })
         const branch = new Branch({
-          id: "parent-branch-retry",
+          id: "parent-branch-noretr",
           sessionId: session.id,
           createdAt: now,
         })
@@ -209,17 +199,16 @@ describe("Subagent Runner", () => {
 
         const result = yield* runner.run({
           agent: Agents.explore,
-          prompt: "retry test",
+          prompt: "fail test",
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
         })
 
-        expect(result._tag).toBe("success")
+        // Without retry, failure propagates as error result
+        expect(result._tag).toBe("error")
       }).pipe(Effect.provide(layer)),
     )
-
-    expect(attempts).toBe(2)
   })
 
   test("fails with timeout", async () => {

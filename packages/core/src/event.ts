@@ -342,6 +342,13 @@ export class TaskFailed extends Schema.TaggedClass<TaskFailed>()("TaskFailed", {
   error: Schema.optional(Schema.String),
 }) {}
 
+export class AgentRestarted extends Schema.TaggedClass<AgentRestarted>()("AgentRestarted", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  attempt: Schema.Number,
+  error: Schema.optional(Schema.String),
+}) {}
+
 export const AgentEvent = Schema.Union([
   SessionStarted,
   SessionEnded,
@@ -381,6 +388,7 @@ export const AgentEvent = Schema.Union([
   TaskUpdated,
   TaskCompleted,
   TaskFailed,
+  AgentRestarted,
 ])
 export type AgentEvent = typeof AgentEvent.Type
 

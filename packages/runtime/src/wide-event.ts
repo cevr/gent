@@ -261,6 +261,7 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
                   case "TaskUpdated":
                   case "TaskCompleted":
                   case "TaskFailed":
+                  case "AgentRestarted":
                     return Option.none()
                 }
               }),
