@@ -21,6 +21,8 @@ export interface ToolBoxProps {
   title: string
   /** Input summary shown after title */
   subtitle?: string
+  /** OSC8 hyperlink href for the subtitle */
+  subtitleHref?: string
   /** Status: drives icon */
   status: "running" | "completed" | "error"
   /** Duration in ms */
@@ -68,7 +70,13 @@ export function ToolBox(props: ToolBoxProps) {
         <span style={{ fg: statusColor() }}> </span>
         <span style={{ fg: theme.info, bold: true }}>{props.title}</span>
         <Show when={props.subtitle}>
-          <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
+          {props.subtitleHref !== undefined ? (
+            <a href={props.subtitleHref}>
+              <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
+            </a>
+          ) : (
+            <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
+          )}
         </Show>
         <span style={{ fg: statusColor() }}>{"]"}</span>
         <Show when={footer()}>

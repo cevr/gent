@@ -9,6 +9,7 @@ import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
 import { truncatePath } from "../message-list-utils"
+import { fileUrl, isAbsPath } from "../../utils/file-url"
 import type { ToolRendererProps } from "./types"
 
 interface WriteOutput {
@@ -50,6 +51,7 @@ export function WriteToolRenderer(props: ToolRendererProps) {
     <ToolBox
       title="write"
       subtitle={truncatePath(path())}
+      subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={

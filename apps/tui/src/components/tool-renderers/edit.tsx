@@ -10,6 +10,7 @@ import { windowItems, headTailExcerpts } from "@gent/core"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
 import { truncatePath } from "../message-list-utils"
+import { fileUrl, isAbsPath } from "../../utils/file-url"
 import type { ToolRendererProps } from "./types"
 import { getEditUnifiedDiff } from "./edit-utils"
 
@@ -58,6 +59,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
         <ToolBox
           title="edit"
           subtitle={truncatePath(path())}
+          subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
           status={props.toolCall.status}
           expanded={props.expanded}
         />
@@ -67,6 +69,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
         <ToolBox
           title="edit"
           subtitle={truncatePath(path())}
+          subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
           status={props.toolCall.status}
           expanded={props.expanded}
           collapsedContent={

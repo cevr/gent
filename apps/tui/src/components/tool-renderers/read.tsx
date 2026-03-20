@@ -11,6 +11,7 @@ import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
 import { GutterText } from "../gutter-text"
 import { truncatePath } from "../message-list-utils"
+import { fileUrl, isAbsPath } from "../../utils/file-url"
 import type { ToolRendererProps } from "./types"
 
 type WindowedLine =
@@ -113,6 +114,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
     <ToolBox
       title="read"
       subtitle={truncatePath(path())}
+      subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
