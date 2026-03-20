@@ -365,6 +365,15 @@ function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
         ? { ...doc.schema, $defs: doc.definitions }
         : doc.schema
     const flatJsonSchema = flattenAllOf(merged as Record<string, unknown>)
+    // Ensure top-level type: "object" — Anthropic rejects schemas without it
+    // and rejects anyOf/oneOf/allOf at the top level. Schema.Struct({}) produces
+    // anyOf: [{ type: "object" }, { type: "array" }] which triggers both issues.
+    if (flatJsonSchema["type"] === undefined) {
+      flatJsonSchema["type"] = "object"
+      if (flatJsonSchema["properties"] === undefined) flatJsonSchema["properties"] = {}
+      delete flatJsonSchema["anyOf"]
+      delete flatJsonSchema["oneOf"]
+    }
     const wrapped = tool({
       description: t.description,
       inputSchema: jsonSchema(flatJsonSchema),
