@@ -36,6 +36,7 @@ describe("Skills System", () => {
         description: "A test skill",
         filePath: "/test/skill.md",
         content: "# Test Skill\n\nContent here",
+        scope: "global",
       }),
     ]
 
@@ -57,12 +58,14 @@ describe("Skills System", () => {
         description: "First skill",
         filePath: "/s1.md",
         content: "",
+        scope: "global",
       }),
       new Skill({
         name: "skill2",
         description: "Second skill",
         filePath: "/s2.md",
         content: "",
+        scope: "project",
       }),
     ]
 
@@ -70,6 +73,29 @@ describe("Skills System", () => {
     expect(formatted).toContain("<available_skills>")
     expect(formatted).toContain("**skill1**")
     expect(formatted).toContain("**skill2**")
+  })
+
+  test("formatSkillsForPrompt qualifies names on collision", () => {
+    const skills = [
+      new Skill({
+        name: "deploy",
+        description: "Project deploy",
+        filePath: "/proj/.gent/skills/deploy.md",
+        content: "",
+        scope: "project",
+      }),
+      new Skill({
+        name: "deploy",
+        description: "Global deploy",
+        filePath: "/home/.gent/skills/deploy.md",
+        content: "",
+        scope: "global",
+      }),
+    ]
+
+    const formatted = formatSkillsForPrompt(skills)
+    expect(formatted).toContain("**deploy (project)**")
+    expect(formatted).toContain("**deploy (global)**")
   })
 
   test("formatSkillsForPrompt returns empty for no skills", () => {

@@ -3,11 +3,15 @@ import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect
 
 // Skill Schema
 
+export const SkillScope = Schema.Literals(["project", "global"])
+export type SkillScope = typeof SkillScope.Type
+
 export class Skill extends Schema.Class<Skill>("Skill")({
   name: Schema.String,
   description: Schema.String,
   filePath: Schema.String,
   content: Schema.String,
+  scope: SkillScope,
 }) {}
 
 // Skills Service Interface
@@ -38,6 +42,7 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()("@gent/c
 
         const loadSkillsFromDir = (
           dir: string,
+          scope: SkillScope,
         ): Effect.Effect<Skill[], PlatformError.PlatformError> =>
           Effect.gen(function* () {
             const exists = yield* fs.exists(dir)
@@ -58,6 +63,7 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()("@gent/c
                     new Skill({
                       ...parsed,
                       filePath,
+                      scope,
                     }),
                   )
                 }
@@ -73,6 +79,7 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()("@gent/c
                       new Skill({
                         ...parsed,
                         filePath: skillPath,
+                        scope,
                       }),
                     )
                   }
@@ -84,23 +91,25 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()("@gent/c
           })
 
         const loadAllSkills = Effect.gen(function* () {
-          const dirs = [
-            path.join(options.cwd, ".gent", "skills"),
-            options.globalDir,
-            ...(options.extraDirs ?? []),
+          const dirs: Array<{ path: string; scope: SkillScope }> = [
+            { path: path.join(options.cwd, ".gent", "skills"), scope: "project" as SkillScope },
+            { path: options.globalDir, scope: "global" as SkillScope },
+            ...(options.extraDirs ?? []).map((d) => ({
+              path: d,
+              scope: "global" as SkillScope,
+            })),
           ]
 
-          // Add Claude Code skills dir if provided
           if (options.claudeSkillsDir !== undefined) {
-            dirs.push(options.claudeSkillsDir)
+            dirs.push({ path: options.claudeSkillsDir, scope: "global" as SkillScope })
           }
 
           const allSkills: Skill[] = []
           const seenNames = new Set<string>()
 
           // Load from all dirs, project takes precedence
-          for (const dir of dirs) {
-            const dirSkills = yield* loadSkillsFromDir(dir)
+          for (const entry of dirs) {
+            const dirSkills = yield* loadSkillsFromDir(entry.path, entry.scope)
             for (const skill of dirSkills) {
               if (!seenNames.has(skill.name)) {
                 seenNames.add(skill.name)
@@ -187,7 +196,18 @@ function parseSkillFile(
 export const formatSkillsForPrompt = (skills: ReadonlyArray<Skill>): string => {
   if (skills.length === 0) return ""
 
-  const skillsList = skills.map((s) => `- **${s.name}**: ${s.description}`).join("\n")
+  // Detect name collisions across scopes
+  const nameCounts = new Map<string, number>()
+  for (const s of skills) {
+    nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1)
+  }
+
+  const skillsList = skills
+    .map((s) => {
+      const displayName = (nameCounts.get(s.name) ?? 0) > 1 ? `${s.name} (${s.scope})` : s.name
+      return `- **${displayName}**: ${s.description}`
+    })
+    .join("\n")
 
   return `<available_skills>
 ${skillsList}

@@ -138,7 +138,7 @@ export { TodoItem, TodoStatus, TodoPriority } from "./todo"
 export { Task, TaskStatus } from "./task"
 
 // Skills
-export { Skill, Skills, formatSkillsForPrompt } from "./skills"
+export { Skill, SkillScope, Skills, formatSkillsForPrompt } from "./skills"
 
 // Auth Storage
 export { AuthStorage, AuthStorageError, type AuthStorageService } from "./auth-storage"
