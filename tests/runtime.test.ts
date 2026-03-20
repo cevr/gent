@@ -494,7 +494,7 @@ describe("ToolRunner", () => {
 
     expect(result.output.type).toBe("error-json")
     const error = (result.output.value as { error?: string }).error ?? ""
-    expect(error).toContain("Tool failed")
+    expect(error).toContain("Tool 'fail' failed")
   })
 })
 

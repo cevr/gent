@@ -9,6 +9,7 @@ import {
   type ToolDefinition,
   type PermissionDecision,
 } from "@gent/core"
+import { formatSchemaError } from "../format-schema-error"
 
 export interface ToolRunnerService {
   readonly run: (
@@ -82,14 +83,22 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               toolCall.input,
             ).pipe(Effect.result)
             if (decodedInput._tag === "Failure") {
-              return errorResult(toolCall, `Invalid tool input: ${String(decodedInput.failure)}`)
+              const failure = decodedInput.failure
+              const message = Schema.isSchemaError(failure)
+                ? formatSchemaError(toolCall.toolName, failure)
+                : `Invalid tool input: ${String(failure)}`
+              return errorResult(toolCall, message)
             }
             const result = yield* toolDefinition
               .execute(decodedInput.success, ctx)
               .pipe(Effect.result)
 
             if (result._tag === "Failure") {
-              return errorResult(toolCall, `Tool failed: ${String(result.failure)}`)
+              const failure = result.failure
+              const message = Schema.isSchemaError(failure)
+                ? `Tool '${toolCall.toolName}' failed: ${failure.message}`
+                : `Tool '${toolCall.toolName}' failed: ${String(failure)}`
+              return errorResult(toolCall, message)
             }
 
             return new ToolResultPart({
