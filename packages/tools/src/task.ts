@@ -86,7 +86,9 @@ export const TaskTool = defineTool({
 
         results.push(result)
         if (result._tag === "error") {
-          return { error: result.error, metadata: { mode: "chain", results } }
+          const ref =
+            result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+          return { error: `${result.error}${ref}`, metadata: { mode: "chain", results } }
         }
         previousOutput = result.text
       }
@@ -149,7 +151,11 @@ export const TaskTool = defineTool({
       cwd: process.cwd(),
     })
 
-    if (result._tag === "error") return { error: result.error }
+    if (result._tag === "error") {
+      const ref =
+        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+      return { error: `${result.error}${ref}` }
+    }
 
     return {
       output: `${result.text}\n\nFull session: session://${result.sessionId}`,

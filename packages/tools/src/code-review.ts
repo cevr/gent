@@ -80,7 +80,9 @@ Output ONLY the JSON array, no other text.`
     })
 
     if (result._tag === "error") {
-      return { error: result.error, comments: [] }
+      const ref =
+        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+      return { error: `${result.error}${ref}`, comments: [] }
     }
 
     // Try to parse structured output
@@ -107,7 +109,7 @@ Output ONLY the JSON array, no other text.`
     return {
       comments,
       summary,
-      sessionRef: `session://${result.sessionId}`,
+      session: `session://${result.sessionId}`,
       metadata: { sessionId: result.sessionId, agentName: result.agentName },
     }
   }),

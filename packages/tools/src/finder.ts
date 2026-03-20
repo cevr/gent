@@ -36,7 +36,9 @@ export const FinderTool = defineTool({
     })
 
     if (result._tag === "error") {
-      return { found: false, error: result.error }
+      const ref =
+        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+      return { found: false, error: `${result.error}${ref}` }
     }
 
     return {

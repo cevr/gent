@@ -28,6 +28,15 @@ const mockRunnerError = Layer.succeed(SubagentRunnerService, {
     }),
 })
 
+const mockRunnerErrorWithSession = Layer.succeed(SubagentRunnerService, {
+  run: () =>
+    Effect.succeed({
+      _tag: "error" as const,
+      error: "runner failed",
+      sessionId: "error-session" as SessionId,
+    }),
+})
+
 const platformLayer = BunServices.layer
 
 describe("FinderTool", () => {
@@ -287,6 +296,24 @@ describe("Session refs in subagent output", () => {
     const result = await Effect.runPromise(
       CodeReviewTool.execute({ description: "test" }, ctx).pipe(Effect.provide(layer)),
     )
-    expect(result.sessionRef).toBe("session://child")
+    expect(result.session).toBe("session://child")
+  })
+
+  test("error path includes session ref when sessionId present", async () => {
+    const layer = Layer.mergeAll(mockRunnerErrorWithSession, platformLayer)
+    const result = await Effect.runPromise(
+      FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(result.found).toBe(false)
+    expect(result.error).toContain("session://error-session")
+  })
+
+  test("error path omits session ref when sessionId absent", async () => {
+    const layer = Layer.mergeAll(mockRunnerError, platformLayer)
+    const result = await Effect.runPromise(
+      OracleTool.execute({ task: "solve" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(result.error).toBe("runner failed")
+    expect(result.error).not.toContain("session://")
   })
 })

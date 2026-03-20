@@ -65,7 +65,9 @@ export const OracleTool = defineTool({
     })
 
     if (result._tag === "error") {
-      return { error: result.error }
+      const ref =
+        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+      return { error: `${result.error}${ref}` }
     }
 
     return {
