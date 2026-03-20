@@ -25,7 +25,8 @@ describe("formatTokens", () => {
   test("10k-1M shows rounded k", () => {
     expect(formatTokens(10000)).toBe("10k")
     expect(formatTokens(15432)).toBe("15k")
-    expect(formatTokens(999999)).toBe("1000k")
+    expect(formatTokens(999499)).toBe("999k")
+    expect(formatTokens(999500)).toBe("1.0M")
   })
 
   test(">=1M shows one decimal M", () => {
@@ -185,6 +186,49 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("counsel", { prompt: "review this code" })).toBe("review this code")
     const longPrompt = "p".repeat(60)
     expect(toolArgSummary("counsel", { prompt: longPrompt })).toBe("p".repeat(50) + "…")
+  })
+
+  test("librarian: spec + question", () => {
+    expect(
+      toolArgSummary("librarian", { spec: "effect-ts/effect", question: "how does Layer work" }),
+    ).toBe("effect-ts/effect: how does Layer work")
+    expect(toolArgSummary("librarian", { spec: "effect-ts/effect" })).toBe("effect-ts/effect")
+    expect(toolArgSummary("librarian", {})).toBe("")
+  })
+
+  test("code_review: description", () => {
+    expect(toolArgSummary("code_review", { description: "review auth changes" })).toBe(
+      "review auth changes",
+    )
+  })
+
+  test("search_sessions: query", () => {
+    expect(toolArgSummary("search_sessions", { query: "auth migration" })).toBe("auth migration")
+  })
+
+  test("read_session: goal", () => {
+    expect(toolArgSummary("read_session", { goal: "find the fix" })).toBe("find the fix")
+  })
+
+  test("look_at: path", () => {
+    expect(toolArgSummary("look_at", { path: `${HOME}/src/app.ts` })).toBe("~/src/app.ts")
+    expect(toolArgSummary("look_at", {})).toBe("")
+  })
+
+  test("handoff: reason", () => {
+    expect(toolArgSummary("handoff", { reason: "need deeper analysis" })).toBe(
+      "need deeper analysis",
+    )
+  })
+
+  test("degrades gracefully on bad input types", () => {
+    expect(toolArgSummary("grep", { pattern: "ok", path: {} })).toBe("/ok/ in .")
+    expect(toolArgSummary("glob", { pattern: "*.ts", path: 123 })).toBe("*.ts in .")
+    expect(toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: null })).toBe(
+      "/tmp/f.ts",
+    )
+    expect(toolArgSummary("bash", { command: 123 })).toBe("")
+    expect(toolArgSummary("read", { file_path: null })).toBe("")
   })
 
   test("unknown tool returns empty", () => {

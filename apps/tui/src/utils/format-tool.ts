@@ -5,7 +5,7 @@ const HOME = os.homedir()
 export function formatTokens(count: number): string {
   if (count < 1000) return count.toString()
   if (count < 10000) return `${(count / 1000).toFixed(1)}k`
-  if (count < 1000000) return `${Math.round(count / 1000)}k`
+  if (count < 999500) return `${Math.round(count / 1000)}k`
   return `${(count / 1000000).toFixed(1)}M`
 }
 
@@ -43,8 +43,8 @@ export function toolArgSummary(toolName: string, args: Record<string, unknown>):
       const rawPath = (args["file_path"] ?? args["path"] ?? "") as string
       if (typeof rawPath !== "string" || rawPath.length === 0) return ""
       let text = shortenPath(rawPath)
-      const offset = args["offset"] as number | undefined
-      const limit = args["limit"] as number | undefined
+      const offset = typeof args["offset"] === "number" ? args["offset"] : undefined
+      const limit = typeof args["limit"] === "number" ? args["limit"] : undefined
       if (offset !== undefined || limit !== undefined) {
         const startLine = offset ?? 1
         const endLine = limit !== undefined ? startLine + limit - 1 : ""
@@ -70,13 +70,13 @@ export function toolArgSummary(toolName: string, args: Record<string, unknown>):
     case "grep": {
       const pattern = (args["pattern"] ?? "") as string
       if (typeof pattern !== "string" || pattern.length === 0) return ""
-      const rawPath = (args["path"] ?? ".") as string
+      const rawPath = typeof args["path"] === "string" ? args["path"] : "."
       return `/${pattern}/ in ${shortenPath(rawPath)}`
     }
     case "glob": {
       const pattern = (args["pattern"] ?? "") as string
       if (typeof pattern !== "string" || pattern.length === 0) return ""
-      const rawPath = (args["path"] ?? ".") as string
+      const rawPath = typeof args["path"] === "string" ? args["path"] : "."
       return `${pattern} in ${shortenPath(rawPath)}`
     }
     case "webfetch": {
@@ -107,6 +107,35 @@ export function toolArgSummary(toolName: string, args: Record<string, unknown>):
     case "counsel": {
       const prompt = typeof args["prompt"] === "string" ? args["prompt"] : ""
       return prompt.length > 50 ? prompt.slice(0, 50) + "…" : prompt
+    }
+    case "librarian": {
+      const spec = typeof args["spec"] === "string" ? args["spec"] : ""
+      const question = typeof args["question"] === "string" ? args["question"] : ""
+      if (spec.length > 0 && question.length > 0) {
+        const q = question.length > 40 ? question.slice(0, 40) + "…" : question
+        return `${spec}: ${q}`
+      }
+      return spec || question
+    }
+    case "code_review": {
+      const desc = typeof args["description"] === "string" ? args["description"] : ""
+      return desc.length > 50 ? desc.slice(0, 50) + "…" : desc
+    }
+    case "search_sessions": {
+      const query = typeof args["query"] === "string" ? args["query"] : ""
+      return query.length > 50 ? query.slice(0, 50) + "…" : query
+    }
+    case "read_session": {
+      const goal = typeof args["goal"] === "string" ? args["goal"] : ""
+      return goal.length > 50 ? goal.slice(0, 50) + "…" : goal
+    }
+    case "look_at": {
+      const path = typeof args["path"] === "string" ? args["path"] : ""
+      return path.length > 0 ? shortenPath(path) : ""
+    }
+    case "handoff": {
+      const reason = typeof args["reason"] === "string" ? args["reason"] : ""
+      return reason.length > 50 ? reason.slice(0, 50) + "…" : reason
     }
     default:
       return ""
