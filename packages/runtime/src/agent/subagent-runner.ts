@@ -26,9 +26,11 @@ const collectUsage = (storage: StorageService, sessionId: SessionId) =>
           output += env.event.usage.outputTokens
         }
       }
-      return input > 0 || output > 0 ? { input, output, cost: 0 } : undefined
+      return input > 0 || output > 0 ? { input, output } : undefined
     }),
-    Effect.catchEager(() => Effect.succeed(undefined)),
+    Effect.catchEager((e) =>
+      Effect.logWarning("failed to collect subagent usage", e).pipe(Effect.as(undefined)),
+    ),
   )
 
 export class SubagentRunnerConfig extends ServiceMap.Service<

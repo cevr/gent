@@ -221,7 +221,7 @@ export type SubagentResult =
       text: string
       sessionId: SessionId
       agentName: AgentName
-      usage?: { input: number; output: number; cost: number }
+      usage?: { input: number; output: number; cost?: number }
     }
   | {
       _tag: "error"
