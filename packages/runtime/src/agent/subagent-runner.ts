@@ -9,27 +9,71 @@ import {
   SubagentError,
   SubagentRunnerService,
   SubagentSpawned,
+  type SubagentToolCall,
   type SessionId,
   type BranchId,
 } from "@gent/core"
 import { Storage, type StorageService } from "@gent/storage"
 import { AgentActor } from "./agent-loop"
 
-const collectUsage = (storage: StorageService, sessionId: SessionId) =>
+interface ChildMetadata {
+  usage?: { input: number; output: number }
+  toolCalls?: ReadonlyArray<SubagentToolCall>
+}
+
+const collectChildMetadata = (storage: StorageService, sessionId: SessionId) =>
   storage.listEvents({ sessionId }).pipe(
     Effect.map((envelopes) => {
       let input = 0
       let output = 0
+      const started = new Map<string, { toolName: string; args: Record<string, unknown> }>()
+      const toolCalls: SubagentToolCall[] = []
+
       for (const env of envelopes) {
-        if (env.event._tag === "StreamEnded" && env.event.usage !== undefined) {
-          input += env.event.usage.inputTokens
-          output += env.event.usage.outputTokens
+        switch (env.event._tag) {
+          case "StreamEnded":
+            if (env.event.usage !== undefined) {
+              input += env.event.usage.inputTokens
+              output += env.event.usage.outputTokens
+            }
+            break
+          case "ToolCallStarted":
+            started.set(env.event.toolCallId, {
+              toolName: env.event.toolName,
+              args: (env.event.input ?? {}) as Record<string, unknown>,
+            })
+            break
+          case "ToolCallSucceeded":
+          case "ToolCallCompleted": {
+            const info = started.get(env.event.toolCallId)
+            toolCalls.push({
+              toolName: info?.toolName ?? env.event.toolName,
+              args: info?.args ?? {},
+              isError: env.event._tag === "ToolCallCompleted" ? env.event.isError : false,
+            })
+            break
+          }
+          case "ToolCallFailed": {
+            const info = started.get(env.event.toolCallId)
+            toolCalls.push({
+              toolName: info?.toolName ?? env.event.toolName,
+              args: info?.args ?? {},
+              isError: true,
+            })
+            break
+          }
         }
       }
-      return input > 0 || output > 0 ? { input, output } : undefined
+
+      const result: ChildMetadata = {}
+      if (input > 0 || output > 0) result.usage = { input, output }
+      if (toolCalls.length > 0) result.toolCalls = toolCalls
+      return result
     }),
     Effect.catchEager((e) =>
-      Effect.logWarning("failed to collect subagent usage", e).pipe(Effect.as(undefined)),
+      Effect.logWarning("failed to collect subagent metadata", e).pipe(
+        Effect.as({} as ChildMetadata),
+      ),
     ),
   )
 
@@ -197,7 +241,7 @@ export const InProcessRunner: Layer.Layer<
                 break
               }
 
-              const usage = yield* collectUsage(storage, sessionId)
+              const meta = yield* collectChildMetadata(storage, sessionId)
 
               yield* eventStore.publish(
                 new SubagentSucceeded({
@@ -212,7 +256,8 @@ export const InProcessRunner: Layer.Layer<
                 text,
                 sessionId,
                 agentName: params.agent.name,
-                usage,
+                usage: meta.usage,
+                toolCalls: meta.toolCalls,
               }
             })
 
@@ -358,7 +403,7 @@ export const SubprocessRunner: Layer.Layer<
                 break
               }
 
-              const usage = yield* collectUsage(storage, sessionId)
+              const meta = yield* collectChildMetadata(storage, sessionId)
 
               yield* eventStore.publish(
                 new SubagentSucceeded({
@@ -373,7 +418,8 @@ export const SubprocessRunner: Layer.Layer<
                 text,
                 sessionId,
                 agentName: params.agent.name,
-                usage,
+                usage: meta.usage,
+                toolCalls: meta.toolCalls,
               }
             })
 

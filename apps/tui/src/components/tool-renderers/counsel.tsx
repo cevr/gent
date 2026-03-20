@@ -2,6 +2,7 @@ import { Show } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolBox } from "../tool-box"
+import { ToolCallTree } from "./tool-call-tree"
 import type { ToolRendererProps } from "./types"
 
 function parseInput(input: unknown): { prompt?: string } | undefined {
@@ -13,7 +14,14 @@ interface CounselOutput {
   review?: string
   reviewer?: string
   error?: string
-  metadata?: { usage?: { input?: number; output?: number; cost?: number } }
+  metadata?: {
+    usage?: { input?: number; output?: number; cost?: number }
+    toolCalls?: ReadonlyArray<{
+      toolName: string
+      args: Record<string, unknown>
+      isError: boolean
+    }>
+  }
 }
 
 function parseOutput(output: string | undefined): CounselOutput | undefined {
@@ -75,6 +83,10 @@ export function CounselToolRenderer(props: ToolRendererProps) {
             <span>✕</span> {error()}
           </text>
         )}
+      </Show>
+
+      <Show when={output()?.metadata?.toolCalls}>
+        {(calls) => <ToolCallTree toolCalls={calls()} collapsed={!props.expanded} />}
       </Show>
 
       <Show when={output()?.metadata?.usage}>

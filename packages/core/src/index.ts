@@ -116,6 +116,7 @@ export {
   SubagentRunnerService,
   SubagentError,
   type SubagentRunner,
+  type SubagentToolCall,
   type SubagentResult,
   COWORK_PROMPT,
   DEEPWORK_PROMPT,

@@ -215,6 +215,12 @@ export class AgentRegistry extends ServiceMap.Service<AgentRegistry, AgentRegist
 
 // Subagent runner types
 
+export interface SubagentToolCall {
+  toolName: string
+  args: Record<string, unknown>
+  isError: boolean
+}
+
 export type SubagentResult =
   | {
       _tag: "success"
@@ -222,6 +228,7 @@ export type SubagentResult =
       sessionId: SessionId
       agentName: AgentName
       usage?: { input: number; output: number; cost?: number }
+      toolCalls?: ReadonlyArray<SubagentToolCall>
     }
   | {
       _tag: "error"

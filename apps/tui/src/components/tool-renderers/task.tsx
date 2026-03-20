@@ -2,6 +2,7 @@ import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolBox } from "../tool-box"
+import { ToolCallTree } from "./tool-call-tree"
 import type { ToolRendererProps } from "./types"
 
 // Parsed JSON shape — not the discriminated union from @gent/core
@@ -13,6 +14,7 @@ interface SubagentResultJson {
   agentName?: string
   sessionId?: string
   usage?: { input?: number; output?: number; cost?: number }
+  toolCalls?: ReadonlyArray<{ toolName: string; args: Record<string, unknown>; isError: boolean }>
 }
 
 interface TaskOutput {
@@ -24,6 +26,11 @@ interface TaskOutput {
     sessionId?: string
     agentName?: string
     usage?: { input?: number; output?: number; cost?: number }
+    toolCalls?: ReadonlyArray<{
+      toolName: string
+      args: Record<string, unknown>
+      isError: boolean
+    }>
   }
 }
 
@@ -136,6 +143,19 @@ export function TaskToolRenderer(props: ToolRendererProps) {
                     <text style={{ fg: theme.error }}>{result.error}</text>
                   </box>
                 </Show>
+                <Show
+                  when={
+                    result.toolCalls !== undefined && result.toolCalls.length > 0
+                      ? result.toolCalls
+                      : undefined
+                  }
+                >
+                  {(calls) => (
+                    <box paddingLeft={4}>
+                      <ToolCallTree toolCalls={calls()} collapsed={!props.expanded} />
+                    </box>
+                  )}
+                </Show>
               </box>
             )
           }}
@@ -146,6 +166,9 @@ export function TaskToolRenderer(props: ToolRendererProps) {
         <text style={{ fg: theme.textMuted }}>
           {taskOutput()?.output ?? taskOutput()?.error ?? props.toolCall.summary ?? ""}
         </text>
+        <Show when={taskOutput()?.metadata?.toolCalls}>
+          {(calls) => <ToolCallTree toolCalls={calls()} collapsed={!props.expanded} />}
+        </Show>
       </Show>
 
       <Show when={taskOutput()?.metadata?.usage}>

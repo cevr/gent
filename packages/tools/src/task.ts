@@ -164,6 +164,7 @@ export const TaskTool = defineTool({
         sessionId: result.sessionId,
         agentName: result.agentName,
         usage: result.usage,
+        toolCalls: result.toolCalls,
       },
     }
   }),
