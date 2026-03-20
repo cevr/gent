@@ -23,6 +23,7 @@ interface TaskOutput {
     results?: SubagentResultJson[]
     sessionId?: string
     agentName?: string
+    usage?: { input?: number; output?: number; cost?: number }
   }
 }
 
@@ -145,6 +146,10 @@ export function TaskToolRenderer(props: ToolRendererProps) {
         <text style={{ fg: theme.textMuted }}>
           {taskOutput()?.output ?? taskOutput()?.error ?? props.toolCall.summary ?? ""}
         </text>
+      </Show>
+
+      <Show when={taskOutput()?.metadata?.usage}>
+        {(usage) => <text style={{ fg: theme.textMuted }}>{formatUsageStats(usage())}</text>}
       </Show>
     </ToolBox>
   )
