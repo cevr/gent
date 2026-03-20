@@ -625,7 +625,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                           agentName: currentAgent,
                         }
                         const run = toolRunner.run(toolCall, ctx, { bypass })
-                        const result = yield* toolCall.toolName === "bash"
+                        const tool = yield* toolRegistry.get(toolCall.toolName)
+                        const result = yield* tool?.concurrency === "serial"
                           ? bashSemaphore.withPermits(1)(run)
                           : run
 
@@ -1188,6 +1189,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                       }),
                     )
 
+                    const tool = yield* toolRegistry.get(toolCall.toolName)
                     const ctx: ToolContext = {
                       sessionId: input.sessionId,
                       branchId: input.branchId,
@@ -1195,7 +1197,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                       agentName: agent.name,
                     }
                     const run = toolRunner.run(toolCall, ctx, { bypass: input.bypass })
-                    const result = yield* toolCall.toolName === "bash"
+                    const result = yield* tool?.concurrency === "serial"
                       ? bashSemaphore.withPermits(1)(run)
                       : run
 

@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "@gent/core"
+import { defineTool, FileLockService } from "@gent/core"
 import { FileTracker } from "@gent/runtime"
 
 // Undo Edit Tool Error
@@ -29,59 +29,66 @@ export const UndoEditTool = defineTool({
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
     const tracker = yield* FileTracker
+    const fileLock = yield* FileLockService
 
     const filePath = pathService.resolve(params.path)
-    const change = yield* tracker.restore(filePath)
 
-    if (change === undefined) {
-      return yield* new UndoEditError({
-        message: "No recorded changes to undo for this file",
-        path: filePath,
-      })
-    }
+    return yield* fileLock.withLock(
+      filePath,
+      Effect.gen(function* () {
+        const change = yield* tracker.restore(filePath)
 
-    // Verify current file content matches what we expect (the "after" state)
-    const currentContent = yield* fs.readFileString(filePath).pipe(
-      Effect.mapError(
-        () =>
-          new UndoEditError({
-            message: "Failed to read file",
+        if (change === undefined) {
+          return yield* new UndoEditError({
+            message: "No recorded changes to undo for this file",
             path: filePath,
-          }),
-      ),
-    )
+          })
+        }
 
-    if (currentContent !== change.after) {
-      // File was modified since tracked change — restore anyway but warn
-      yield* fs.writeFileString(filePath, change.before).pipe(
-        Effect.mapError(
-          () =>
-            new UndoEditError({
-              message: "Failed to restore file",
-              path: filePath,
-            }),
-        ),
-      )
-      return {
-        path: filePath,
-        restored: true,
-        warning: "File was modified since tracked change. Restored to pre-edit state anyway.",
-      }
-    }
+        // Verify current file content matches what we expect (the "after" state)
+        const currentContent = yield* fs.readFileString(filePath).pipe(
+          Effect.mapError(
+            () =>
+              new UndoEditError({
+                message: "Failed to read file",
+                path: filePath,
+              }),
+          ),
+        )
 
-    yield* fs.writeFileString(filePath, change.before).pipe(
-      Effect.mapError(
-        () =>
-          new UndoEditError({
-            message: "Failed to restore file",
+        if (currentContent !== change.after) {
+          // File was modified since tracked change — restore anyway but warn
+          yield* fs.writeFileString(filePath, change.before).pipe(
+            Effect.mapError(
+              () =>
+                new UndoEditError({
+                  message: "Failed to restore file",
+                  path: filePath,
+                }),
+            ),
+          )
+          return {
             path: filePath,
-          }),
-      ),
-    )
+            restored: true,
+            warning: "File was modified since tracked change. Restored to pre-edit state anyway.",
+          }
+        }
 
-    return {
-      path: filePath,
-      restored: true,
-    }
+        yield* fs.writeFileString(filePath, change.before).pipe(
+          Effect.mapError(
+            () =>
+              new UndoEditError({
+                message: "Failed to restore file",
+                path: filePath,
+              }),
+          ),
+        )
+
+        return {
+          path: filePath,
+          restored: true,
+        }
+      }),
+    )
   }),
 })
