@@ -8,3 +8,6 @@ export type BranchId = typeof BranchId.Type
 
 export const MessageId = Schema.String.pipe(Schema.brand("MessageId"))
 export type MessageId = typeof MessageId.Type
+
+export const TaskId = Schema.String.pipe(Schema.brand("TaskId"))
+export type TaskId = typeof TaskId.Type

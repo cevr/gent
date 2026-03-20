@@ -8,6 +8,7 @@ import {
   PlanCheckpoint,
   MessagePart,
   TodoItem,
+  Task,
   AgentEvent,
   EventEnvelope,
   getEventSessionId,
@@ -15,6 +16,7 @@ import {
   type SessionId,
   type BranchId,
   type MessageId,
+  type TaskId,
 } from "@gent/core"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
@@ -119,6 +121,28 @@ export interface StorageService {
     branchId: BranchId,
     todos: ReadonlyArray<TodoItem>,
   ) => Effect.Effect<void, StorageError>
+
+  // Tasks
+  readonly createTask: (task: Task) => Effect.Effect<Task, StorageError>
+  readonly getTask: (id: TaskId) => Effect.Effect<Task | undefined, StorageError>
+  readonly listTasks: (
+    sessionId: SessionId,
+    branchId?: BranchId,
+  ) => Effect.Effect<ReadonlyArray<Task>, StorageError>
+  readonly updateTask: (
+    id: TaskId,
+    fields: Partial<{
+      status: string
+      description: string
+      owner: string
+      metadata: unknown
+    }>,
+  ) => Effect.Effect<Task | undefined, StorageError>
+  readonly deleteTask: (id: TaskId) => Effect.Effect<void, StorageError>
+  readonly addTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
+  readonly removeTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
+  readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
+  readonly getTaskDependents: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
 
   // Session tree
   readonly getSessionTree: (sessionId: SessionId) => Effect.Effect<
@@ -241,6 +265,39 @@ const messageFromRow = (row: MessageRow, parts: ReadonlyArray<MessagePart>) =>
     turnDurationMs: row.turn_duration_ms ?? undefined,
   })
 
+interface TaskRow {
+  id: TaskId
+  session_id: SessionId
+  branch_id: BranchId
+  subject: string
+  description: string | null
+  status: string
+  owner: string | null
+  agent_type: string | null
+  prompt: string | null
+  cwd: string | null
+  metadata: string | null
+  created_at: number
+  updated_at: number
+}
+
+const taskFromRow = (row: TaskRow) =>
+  new Task({
+    id: row.id,
+    sessionId: row.session_id,
+    branchId: row.branch_id,
+    subject: row.subject,
+    description: row.description ?? undefined,
+    status: row.status as Task["status"],
+    owner: (row.owner ?? undefined) as SessionId | undefined,
+    agentType: (row.agent_type ?? undefined) as Task["agentType"],
+    prompt: row.prompt ?? undefined,
+    cwd: row.cwd ?? undefined,
+    metadata: row.metadata !== null ? JSON.parse(row.metadata) : undefined,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  })
+
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
@@ -338,6 +395,35 @@ const initSchema = Effect.gen(function* () {
     )
   `)
 
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      owner TEXT,
+      agent_type TEXT,
+      prompt TEXT,
+      cwd TEXT,
+      metadata TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `)
+
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS task_deps (
+      task_id TEXT NOT NULL,
+      blocked_by_id TEXT NOT NULL,
+      PRIMARY KEY (task_id, blocked_by_id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
+    )
+  `)
+
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_messages_branch_created ON messages(branch_id, created_at, id)`,
@@ -352,6 +438,10 @@ const initSchema = Effect.gen(function* () {
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
+  yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
+  )
 
   // FTS5 for message search (standalone — no content-sync)
   // Migration: drop old content-sync FTS table if it exists (had column mismatch bug)
@@ -808,6 +898,109 @@ const makeStorage = Effect.gen(function* () {
           Effect.mapError(mapError("Failed to replace todos")),
           Effect.withSpan("Storage.replaceTodos"),
         ),
+    // Tasks
+    createTask: (task) =>
+      Effect.gen(function* () {
+        const meta = task.metadata !== undefined ? JSON.stringify(task.metadata) : null
+        yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
+        return task
+      }).pipe(
+        Effect.mapError(mapError("Failed to create task")),
+        Effect.withSpan("Storage.createTask"),
+      ),
+
+    getTask: (id) =>
+      Effect.gen(function* () {
+        const rows =
+          yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
+        const row = rows[0]
+        if (row === undefined) return undefined
+        return taskFromRow(row)
+      }).pipe(Effect.mapError(mapError("Failed to get task")), Effect.withSpan("Storage.getTask")),
+
+    listTasks: (sessionId, branchId) =>
+      Effect.gen(function* () {
+        const rows =
+          branchId !== undefined
+            ? yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} AND branch_id = ${branchId} ORDER BY created_at ASC`
+            : yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} ORDER BY created_at ASC`
+        return rows.map(taskFromRow)
+      }).pipe(
+        Effect.mapError(mapError("Failed to list tasks")),
+        Effect.withSpan("Storage.listTasks"),
+      ),
+
+    updateTask: (id, fields) =>
+      Effect.gen(function* () {
+        const now = Date.now()
+        const sets: string[] = [`updated_at = ${now}`]
+        if (fields.status !== undefined)
+          sets.push(`status = '${fields.status.replace(/'/g, "''")}'`)
+        if (fields.description !== undefined)
+          sets.push(`description = '${fields.description.replace(/'/g, "''")}'`)
+        if (fields.owner !== undefined) sets.push(`owner = '${fields.owner.replace(/'/g, "''")}'`)
+        if (fields.metadata !== undefined)
+          sets.push(`metadata = '${JSON.stringify(fields.metadata).replace(/'/g, "''")}'`)
+
+        yield* sql.unsafe(
+          `UPDATE tasks SET ${sets.join(", ")} WHERE id = '${id.replace(/'/g, "''")}'`,
+        )
+
+        const rows =
+          yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
+        const row = rows[0]
+        if (row === undefined) return undefined
+        return taskFromRow(row)
+      }).pipe(
+        Effect.mapError(mapError("Failed to update task")),
+        Effect.withSpan("Storage.updateTask"),
+      ),
+
+    deleteTask: (id) =>
+      Effect.gen(function* () {
+        yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
+        yield* sql`DELETE FROM tasks WHERE id = ${id}`
+      }).pipe(
+        Effect.mapError(mapError("Failed to delete task")),
+        Effect.withSpan("Storage.deleteTask"),
+      ),
+
+    addTaskDep: (taskId, blockedById) =>
+      sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`.pipe(
+        Effect.asVoid,
+        Effect.mapError(mapError("Failed to add task dep")),
+        Effect.withSpan("Storage.addTaskDep"),
+      ),
+
+    removeTaskDep: (taskId, blockedById) =>
+      sql`DELETE FROM task_deps WHERE task_id = ${taskId} AND blocked_by_id = ${blockedById}`.pipe(
+        Effect.asVoid,
+        Effect.mapError(mapError("Failed to remove task dep")),
+        Effect.withSpan("Storage.removeTaskDep"),
+      ),
+
+    getTaskDeps: (taskId) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{
+          blocked_by_id: TaskId
+        }>`SELECT blocked_by_id FROM task_deps WHERE task_id = ${taskId}`
+        return rows.map((r) => r.blocked_by_id)
+      }).pipe(
+        Effect.mapError(mapError("Failed to get task deps")),
+        Effect.withSpan("Storage.getTaskDeps"),
+      ),
+
+    getTaskDependents: (taskId) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{
+          task_id: TaskId
+        }>`SELECT task_id FROM task_deps WHERE blocked_by_id = ${taskId}`
+        return rows.map((r) => r.task_id)
+      }).pipe(
+        Effect.mapError(mapError("Failed to get task dependents")),
+        Effect.withSpan("Storage.getTaskDependents"),
+      ),
+
     // Session tree
     getSessionTree: (sessionId) =>
       Effect.gen(function* () {

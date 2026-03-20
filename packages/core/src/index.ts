@@ -1,5 +1,5 @@
 // Branded IDs
-export { SessionId, BranchId, MessageId } from "./ids"
+export { SessionId, BranchId, MessageId, TaskId } from "./ids"
 
 // Message Types
 export {
@@ -73,6 +73,10 @@ export {
   SubagentCompleted,
   SubagentSucceeded,
   SubagentFailed,
+  TaskCreated,
+  TaskUpdated,
+  TaskCompleted,
+  TaskFailed,
   getEventSessionId,
   matchesEventFilter,
 } from "./event.js"
@@ -127,6 +131,9 @@ export {
 
 // Todo Types
 export { TodoItem, TodoStatus, TodoPriority } from "./todo"
+
+// Task Types
+export { Task, TaskStatus } from "./task"
 
 // Skills
 export { Skill, Skills, formatSkillsForPrompt } from "./skills"

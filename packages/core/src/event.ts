@@ -1,6 +1,6 @@
 import { ServiceMap, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
-import { BranchId, MessageId, SessionId } from "./ids"
+import { BranchId, MessageId, SessionId, TaskId } from "./ids"
 
 // Event Types
 
@@ -306,6 +306,36 @@ export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("Subage
   agentName: Schema.String,
 }) {}
 
+// Task events
+
+export class TaskCreated extends Schema.TaggedClass<TaskCreated>()("TaskCreated", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  taskId: TaskId,
+  subject: Schema.String,
+}) {}
+
+export class TaskUpdated extends Schema.TaggedClass<TaskUpdated>()("TaskUpdated", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  taskId: TaskId,
+  status: Schema.String,
+}) {}
+
+export class TaskCompleted extends Schema.TaggedClass<TaskCompleted>()("TaskCompleted", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  taskId: TaskId,
+  owner: Schema.optional(SessionId),
+}) {}
+
+export class TaskFailed extends Schema.TaggedClass<TaskFailed>()("TaskFailed", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  taskId: TaskId,
+  error: Schema.optional(Schema.String),
+}) {}
+
 export const AgentEvent = Schema.Union([
   SessionStarted,
   SessionEnded,
@@ -341,6 +371,10 @@ export const AgentEvent = Schema.Union([
   SubagentCompleted,
   SubagentSucceeded,
   SubagentFailed,
+  TaskCreated,
+  TaskUpdated,
+  TaskCompleted,
+  TaskFailed,
 ])
 export type AgentEvent = typeof AgentEvent.Type
 
