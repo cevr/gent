@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Layer, Option, Stream } from "effect"
+import { Config, Console, Effect, Layer, Option, Ref, Stream } from "effect"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "@gent/atom-solid"
 import {
@@ -223,7 +223,12 @@ const runHeadless = (
       .sendMessage({ sessionId, branchId, content: promptText })
       .pipe(Effect.withSpan("Headless.sendMessage"))
 
-    // Stream events until complete
+    // Stream events until turn completes (with handoff support)
+    // TurnCompleted fires before HandoffPresented, so we can't use simple takeUntil.
+    // Track state with Refs for concurrency safety.
+    const doneRef = yield* Ref.make(false)
+    const handoffPendingRef = yield* Ref.make(false)
+
     yield* events.pipe(
       Stream.tap((envelope) =>
         Effect.gen(function* () {
@@ -251,23 +256,38 @@ const runHeadless = (
               break
             case "ErrorOccurred":
               process.stderr.write(`\nError: ${event.error}\n`)
+              yield* Ref.set(doneRef, true)
+              break
+            case "TurnCompleted":
+              // Don't exit yet — handoff check runs after this in the agent loop
               break
             case "HandoffPresented": {
-              // Auto-confirm handoff in headless mode
+              yield* Ref.set(handoffPendingRef, true)
               const hp = event as typeof HandoffPresented.Type
               process.stdout.write(`\n[handoff: auto-confirming]\n`)
               yield* directClient
-                .respondHandoff(hp.requestId, "confirm", hp.sessionId, hp.summary)
+                .respondHandoff(hp.requestId, "confirm")
                 .pipe(Effect.catchEager(() => Effect.void))
               break
             }
+            case "HandoffConfirmed":
+              yield* Ref.set(handoffPendingRef, false)
+              yield* Ref.set(doneRef, true)
+              break
+            case "HandoffRejected":
+              yield* Ref.set(handoffPendingRef, false)
+              break
+          }
+
+          // After TurnCompleted, wait briefly for HandoffPresented to arrive
+          if (event._tag === "TurnCompleted") {
+            yield* Effect.sleep("50 millis")
+            const pending = yield* Ref.get(handoffPendingRef)
+            if (!pending) yield* Ref.set(doneRef, true)
           }
         }),
       ),
-      Stream.takeUntil(
-        (envelope) =>
-          envelope.event._tag === "TurnCompleted" || envelope.event._tag === "ErrorOccurred",
-      ),
+      Stream.takeUntilEffect(() => Ref.get(doneRef)),
       Stream.runDrain,
     )
   })

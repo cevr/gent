@@ -239,6 +239,15 @@ export interface HandoffHandlerService {
     summary: string
     reason?: string
   }) => Effect.Effect<HandoffDecision, EventStoreError>
+  readonly peek: (requestId: string) => Effect.Effect<
+    | {
+        sessionId: SessionId
+        branchId: BranchId
+        summary: string
+        reason?: string
+      }
+    | undefined
+  >
   readonly respond: (
     requestId: string,
     decision: HandoffDecision,
@@ -275,6 +284,17 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
       >()
 
       return {
+        peek: (requestId: string) => {
+          const entry = pending.get(requestId)
+          if (entry === undefined) return Effect.succeed(undefined)
+          return Effect.succeed({
+            sessionId: entry.sessionId,
+            branchId: entry.branchId,
+            summary: entry.summary,
+            ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+          })
+        },
+
         present: Effect.fn("HandoffHandler.present")(function* (params) {
           const requestId = Bun.randomUUIDv7()
           const deferred = yield* Deferred.make<HandoffDecision>()
@@ -348,6 +368,7 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
     let index = 0
     return Layer.succeed(HandoffHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "confirm"),
+      peek: () => Effect.succeed(undefined),
       respond: () => Effect.succeed(undefined),
     })
   }
