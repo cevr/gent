@@ -63,14 +63,14 @@ export function ToolBox(props: ToolBoxProps) {
     <box flexDirection="column" paddingLeft={2}>
       {/* Header: ╭─[icon title subtitle] */}
       <text>
-        <span style={{ fg: theme.border }}>{"╭─["}</span>
+        <span style={{ fg: statusColor() }}>{"╭─["}</span>
         <span style={{ fg: statusColor() }}>{statusIcon()}</span>
-        <span style={{ fg: theme.border }}> </span>
+        <span style={{ fg: statusColor() }}> </span>
         <span style={{ fg: theme.info, bold: true }}>{props.title}</span>
         <Show when={props.subtitle}>
           <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
         </Show>
-        <span style={{ fg: theme.border }}>{"]"}</span>
+        <span style={{ fg: statusColor() }}>{"]"}</span>
         <Show when={footer()}>
           <span style={{ fg: theme.textMuted }}> {footer()}</span>
         </Show>
@@ -83,7 +83,7 @@ export function ToolBox(props: ToolBoxProps) {
           <Show when={props.collapsedContent}>
             <box paddingLeft={2}>
               <text>
-                <span style={{ fg: theme.border }}>{"│ "}</span>
+                <span style={{ fg: statusColor() }}>{"│ "}</span>
               </text>
               {props.collapsedContent}
             </box>
@@ -93,7 +93,7 @@ export function ToolBox(props: ToolBoxProps) {
         <Show when={props.children}>
           <box paddingLeft={2} flexDirection="column">
             <text>
-              <span style={{ fg: theme.border }}>{"│"}</span>
+              <span style={{ fg: statusColor() }}>{"│"}</span>
             </text>
             {props.children}
           </box>
@@ -102,7 +102,7 @@ export function ToolBox(props: ToolBoxProps) {
 
       {/* Footer */}
       <text>
-        <span style={{ fg: theme.border }}>{"╰────"}</span>
+        <span style={{ fg: statusColor() }}>{"╰────"}</span>
       </text>
     </box>
   )
