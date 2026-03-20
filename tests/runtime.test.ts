@@ -216,7 +216,6 @@ describe("Subagent Runner", () => {
       Storage.Test(),
       SubagentRunnerConfig.Live({
         systemPrompt: "",
-        maxAttempts: 1,
         timeoutMs: 5,
       }),
       Layer.succeed(AgentActor, {
