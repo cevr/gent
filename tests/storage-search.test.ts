@@ -153,7 +153,7 @@ describe("searchMessages", () => {
     ))
 })
 
-describe("getSessionTree", () => {
+describe("getSessionDetail", () => {
   test("returns all branches with messages", () =>
     run(
       Effect.gen(function* () {
@@ -175,7 +175,7 @@ describe("getSessionTree", () => {
         )
         yield* addMessage(sessionId, branchId2, "user", "fix this")
 
-        const tree = yield* storage.getSessionTree(sessionId)
+        const tree = yield* storage.getSessionDetail(sessionId)
         expect(tree.branches.length).toBe(2)
         expect(tree.branches[0]!.messages.length).toBe(2)
         expect(tree.branches[1]!.messages.length).toBe(1)
@@ -191,7 +191,7 @@ describe("getSessionTree", () => {
         yield* addMessage(sessionId, branchId, "user", "third", new Date(3000))
 
         const storage = yield* Storage
-        const tree = yield* storage.getSessionTree(sessionId)
+        const tree = yield* storage.getSessionDetail(sessionId)
         const msgs = tree.branches[0]!.messages
         expect(msgs[0]!.parts[0]!.type === "text" && msgs[0]!.parts[0]!.text).toBe("first")
         expect(msgs[2]!.parts[0]!.type === "text" && msgs[2]!.parts[0]!.text).toBe("third")
@@ -202,7 +202,7 @@ describe("getSessionTree", () => {
     run(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const result = yield* Effect.result(storage.getSessionTree("nonexistent" as SessionId))
+        const result = yield* Effect.result(storage.getSessionDetail("nonexistent" as SessionId))
         expect(result._tag).toBe("Failure")
       }),
     ))

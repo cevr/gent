@@ -193,6 +193,18 @@ export interface SessionState {
   bypass?: boolean
 }
 
+export interface SessionTreeNode {
+  id: SessionId
+  name?: string
+  cwd?: string
+  bypass?: boolean
+  parentSessionId?: SessionId
+  parentBranchId?: BranchId
+  createdAt: number
+  updatedAt: number
+  children: readonly SessionTreeNode[]
+}
+
 export interface CreateSessionResult {
   sessionId: SessionId
   branchId: BranchId
@@ -217,6 +229,8 @@ export interface GentClient {
     firstMessage?: string
     cwd?: string
     bypass?: boolean
+    parentSessionId?: SessionId
+    parentBranchId?: BranchId
   }) => Effect.Effect<CreateSessionResult, GentRpcError>
 
   /** List messages for a branch */
@@ -233,6 +247,14 @@ export interface GentClient {
 
   /** List all sessions */
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
+
+  /** Get direct child sessions of a parent */
+  getChildSessions: (
+    parentSessionId: SessionId,
+  ) => Effect.Effect<readonly SessionInfo[], GentRpcError>
+
+  /** Get full session tree rooted at a session */
+  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentRpcError>
 
   /** List available model metadata (pricing) */
   listModels: () => Effect.Effect<readonly Model[], GentRpcError>
@@ -378,6 +400,10 @@ export function createClient(
     getSession: (sessionId) => rpcClient.getSession({ sessionId }),
 
     listSessions: () => rpcClient.listSessions(),
+
+    getChildSessions: (parentSessionId) => rpcClient.getChildSessions({ parentSessionId }),
+
+    getSessionTree: (sessionId) => rpcClient.getSessionTree({ sessionId }),
 
     listModels: () => rpcClient.listModels(),
 

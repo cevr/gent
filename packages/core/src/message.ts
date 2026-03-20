@@ -97,6 +97,13 @@ export class Branch extends Schema.Class<Branch>("Branch")({
   createdAt: DateFromNumber,
 }) {}
 
+// Session Tree Node - recursive structure for session hierarchy
+
+export interface SessionTreeNode {
+  session: Session
+  children: readonly SessionTreeNode[]
+}
+
 // Checkpoint - discriminated union for context management
 
 const CheckpointBase = {

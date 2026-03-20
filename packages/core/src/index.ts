@@ -16,6 +16,7 @@ export {
   Checkpoint,
   CompactionCheckpoint,
   PlanCheckpoint,
+  type SessionTreeNode,
 } from "./message.js"
 
 // Tool Types

@@ -145,7 +145,16 @@ export interface StorageService {
   readonly getTaskDependents: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
 
   // Session tree
-  readonly getSessionTree: (sessionId: SessionId) => Effect.Effect<
+  readonly getChildSessions: (
+    parentSessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+
+  readonly getSessionAncestors: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+
+  /** Returns branches + messages within a single session (not cross-session tree) */
+  readonly getSessionDetail: (sessionId: SessionId) => Effect.Effect<
     {
       session: Session
       branches: ReadonlyArray<{
@@ -450,6 +459,7 @@ const initSchema = Effect.gen(function* () {
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
   )
+  yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)`)
 
   // FTS5 for message search (standalone — no content-sync)
   // Migration: drop old content-sync FTS table if it exists (had column mismatch bug)
@@ -1044,7 +1054,40 @@ const makeStorage = Effect.gen(function* () {
       ),
 
     // Session tree
-    getSessionTree: (sessionId) =>
+
+    getChildSessions: (parentSessionId) =>
+      Effect.gen(function* () {
+        const rows =
+          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE parent_session_id = ${parentSessionId} ORDER BY created_at ASC`
+        return rows.map(sessionFromRow)
+      }).pipe(
+        Effect.mapError(mapError("Failed to get child sessions")),
+        Effect.withSpan("Storage.getChildSessions"),
+      ),
+
+    getSessionAncestors: (sessionId) =>
+      Effect.gen(function* () {
+        const rows = yield* sql.unsafe<SessionRow>(
+          `WITH RECURSIVE ancestors(id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
+            SELECT id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at, 0
+            FROM sessions WHERE id = '${sessionId.replace(/'/g, "''")}'
+            UNION ALL
+            SELECT s.id, s.name, s.cwd, s.bypass, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
+            FROM sessions s
+            JOIN ancestors a ON s.id = a.parent_session_id
+            WHERE a.depth < 20
+          )
+          SELECT id, name, cwd, bypass, parent_session_id, parent_branch_id, created_at, updated_at
+          FROM ancestors
+          ORDER BY depth ASC`,
+        )
+        return rows.map(sessionFromRow)
+      }).pipe(
+        Effect.mapError(mapError("Failed to get session ancestors")),
+        Effect.withSpan("Storage.getSessionAncestors"),
+      ),
+
+    getSessionDetail: (sessionId) =>
       Effect.gen(function* () {
         // Get session
         const sessionRows =
@@ -1074,8 +1117,8 @@ const makeStorage = Effect.gen(function* () {
 
         return { session, branches: result }
       }).pipe(
-        Effect.mapError(mapError("Failed to get session tree")),
-        Effect.withSpan("Storage.getSessionTree"),
+        Effect.mapError(mapError("Failed to get session detail")),
+        Effect.withSpan("Storage.getSessionDetail"),
       ),
 
     // Search

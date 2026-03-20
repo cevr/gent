@@ -116,7 +116,7 @@ export const ReadSessionTool = defineTool({
   execute: Effect.fn("ReadSessionTool.execute")(function* (params, ctx) {
     const storage = yield* Storage
 
-    const tree = yield* storage.getSessionTree(params.sessionId as SessionId).pipe(
+    const tree = yield* storage.getSessionDetail(params.sessionId as SessionId).pipe(
       Effect.mapError(
         (e) =>
           new ReadSessionError({

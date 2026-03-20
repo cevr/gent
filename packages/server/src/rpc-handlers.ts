@@ -44,6 +44,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
           ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
           ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
+          ...(input.parentSessionId !== undefined
+            ? { parentSessionId: input.parentSessionId }
+            : {}),
+          ...(input.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
         }),
 
       listSessions: () => core.listSessions(),
@@ -51,6 +55,35 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       getSession: ({ sessionId }) => core.getSession(sessionId),
 
       deleteSession: ({ sessionId }) => core.deleteSession(sessionId),
+
+      getChildSessions: ({ parentSessionId }) => core.getChildSessions(parentSessionId),
+
+      getSessionTree: ({ sessionId }) =>
+        core.getSessionTree(sessionId).pipe(
+          Effect.map(function toRpc(node): {
+            id: typeof node.session.id
+            name: typeof node.session.name
+            cwd: typeof node.session.cwd
+            bypass: typeof node.session.bypass
+            parentSessionId: typeof node.session.parentSessionId
+            parentBranchId: typeof node.session.parentBranchId
+            createdAt: number
+            updatedAt: number
+            children: ReadonlyArray<ReturnType<typeof toRpc>>
+          } {
+            return {
+              id: node.session.id,
+              name: node.session.name,
+              cwd: node.session.cwd,
+              bypass: node.session.bypass,
+              parentSessionId: node.session.parentSessionId,
+              parentBranchId: node.session.parentBranchId,
+              createdAt: node.session.createdAt.getTime(),
+              updatedAt: node.session.updatedAt.getTime(),
+              children: node.children.map(toRpc),
+            }
+          }),
+        ),
 
       listBranches: ({ sessionId }) => core.listBranches(sessionId),
 
@@ -144,6 +177,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           const result = yield* core.createSession({
             firstMessage: `[Handoff]\n\n${entry.summary}`,
             ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+            parentSessionId: entry.sessionId,
+            parentBranchId: entry.branchId,
           })
 
           // Confirm with child session ID — publishes HandoffConfirmed + resolves Deferred

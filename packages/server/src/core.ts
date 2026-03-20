@@ -21,6 +21,7 @@ import {
   type SessionId,
   type BranchId,
   type MessageId,
+  type SessionTreeNode,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import {
@@ -47,6 +48,8 @@ export interface CreateSessionInput {
   cwd?: string
   firstMessage?: string
   bypass?: boolean
+  parentSessionId?: SessionId
+  parentBranchId?: BranchId
 }
 
 export interface CreateSessionOutput {
@@ -172,6 +175,14 @@ export interface GentCoreService {
   readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<SessionInfo | null, GentCoreError>
 
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, GentCoreError>
+
+  readonly getChildSessions: (
+    parentSessionId: SessionId,
+  ) => Effect.Effect<SessionInfo[], GentCoreError>
+
+  readonly getSessionTree: (
+    rootSessionId: SessionId,
+  ) => Effect.Effect<SessionTreeNode, GentCoreError>
 
   readonly createBranch: (
     input: CreateBranchInput,
@@ -352,6 +363,8 @@ ${conversation}`
               name: placeholderName,
               cwd: input.cwd,
               bypass,
+              parentSessionId: input.parentSessionId,
+              parentBranchId: input.parentBranchId,
               createdAt: now,
               updatedAt: now,
             })
@@ -484,6 +497,45 @@ ${conversation}`
           }).pipe(Effect.withSpan("GentCore.getLastSessionByCwd")),
 
         deleteSession: (sessionId) => storage.deleteSession(sessionId),
+
+        getChildSessions: (parentSessionId) =>
+          Effect.gen(function* () {
+            const children = yield* storage.getChildSessions(parentSessionId)
+            const firstBranches = yield* storage.listFirstBranches()
+            const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
+            return children.map((s) => ({
+              id: s.id,
+              name: s.name,
+              cwd: s.cwd,
+              bypass: s.bypass,
+              branchId: branchMap.get(s.id),
+              parentSessionId: s.parentSessionId,
+              parentBranchId: s.parentBranchId,
+              createdAt: s.createdAt.getTime(),
+              updatedAt: s.updatedAt.getTime(),
+            }))
+          }).pipe(Effect.withSpan("GentCore.getChildSessions")),
+
+        getSessionTree: (rootSessionId) =>
+          Effect.gen(function* () {
+            // BFS build of session tree
+            const rootSession = yield* storage.getSession(rootSessionId)
+            if (rootSession === undefined) {
+              return yield* new NotFoundError({
+                message: `Session not found: ${rootSessionId}`,
+                entity: "session",
+              })
+            }
+
+            const buildNode = (session: Session): Effect.Effect<SessionTreeNode, GentCoreError> =>
+              Effect.gen(function* () {
+                const children = yield* storage.getChildSessions(session.id)
+                const childNodes = yield* Effect.forEach(children, buildNode, { concurrency: 5 })
+                return { session, children: childNodes }
+              })
+
+            return yield* buildNode(rootSession)
+          }).pipe(Effect.withSpan("GentCore.getSessionTree")),
 
         createBranch: (input) =>
           Effect.gen(function* () {

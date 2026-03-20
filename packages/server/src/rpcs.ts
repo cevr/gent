@@ -35,6 +35,8 @@ export const CreateSessionPayload = Schema.Struct({
   firstMessage: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
+  parentSessionId: Schema.optional(SessionId),
+  parentBranchId: Schema.optional(BranchId),
 })
 
 export const CreateSessionSuccess = Schema.Struct({
@@ -54,6 +56,55 @@ export const SessionInfo = Schema.Struct({
   parentBranchId: Schema.optional(BranchId),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
+})
+
+// ============================================================================
+// Session Tree
+// ============================================================================
+
+export interface SessionTreeNodeType {
+  id: SessionId
+  name?: string
+  cwd?: string
+  bypass?: boolean
+  parentSessionId?: SessionId
+  parentBranchId?: BranchId
+  createdAt: number
+  updatedAt: number
+  children: readonly SessionTreeNodeType[]
+}
+
+interface SessionTreeNodeEncoded {
+  id: string
+  name?: string
+  cwd?: string
+  bypass?: boolean
+  parentSessionId?: string
+  parentBranchId?: string
+  createdAt: number
+  updatedAt: number
+  children: readonly SessionTreeNodeEncoded[]
+}
+
+export const SessionTreeNodeSchema: Schema.Codec<SessionTreeNodeType, SessionTreeNodeEncoded> =
+  Schema.Struct({
+    id: SessionId,
+    name: Schema.optional(Schema.String),
+    cwd: Schema.optional(Schema.String),
+    bypass: Schema.optional(Schema.Boolean),
+    parentSessionId: Schema.optional(SessionId),
+    parentBranchId: Schema.optional(BranchId),
+    createdAt: Schema.Number,
+    updatedAt: Schema.Number,
+    children: Schema.Array(Schema.suspend(() => SessionTreeNodeSchema)),
+  })
+
+export const GetChildSessionsPayload = Schema.Struct({
+  parentSessionId: SessionId,
+})
+
+export const GetSessionTreePayload = Schema.Struct({
+  sessionId: SessionId,
 })
 
 // ============================================================================
@@ -310,6 +361,16 @@ export class GentRpcs extends RpcGroup.make(
   }),
   Rpc.make("deleteSession", {
     payload: { sessionId: SessionId },
+    error: GentRpcError,
+  }),
+  Rpc.make("getChildSessions", {
+    payload: GetChildSessionsPayload.fields,
+    success: Schema.Array(SessionInfo),
+    error: GentRpcError,
+  }),
+  Rpc.make("getSessionTree", {
+    payload: GetSessionTreePayload.fields,
+    success: SessionTreeNodeSchema,
     error: GentRpcError,
   }),
 

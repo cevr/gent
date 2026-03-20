@@ -32,6 +32,7 @@ import {
   type Task,
   HandoffHandler,
   type SessionId,
+  type SessionTreeNode,
 } from "@gent/core"
 import { ConfigService, ModelRegistry, type SteerCommand } from "@gent/runtime"
 import { ProviderAuth } from "@gent/providers"
@@ -105,9 +106,17 @@ export interface DirectClient {
     firstMessage?: string
     cwd?: string
     bypass?: boolean
+    parentSessionId?: SessionId
+    parentBranchId?: BranchId
   }) => Effect.Effect<CreateSessionResult, GentCoreError>
 
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentCoreError>
+
+  getChildSessions: (
+    parentSessionId: SessionId,
+  ) => Effect.Effect<readonly SessionInfo[], GentCoreError>
+
+  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentCoreError>
 
   listModels: () => Effect.Effect<readonly Model[], GentCoreError>
 
@@ -263,9 +272,17 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
           ...(input?.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
           ...(input?.cwd !== undefined ? { cwd: input.cwd } : {}),
           ...(input?.bypass !== undefined ? { bypass: input.bypass } : {}),
+          ...(input?.parentSessionId !== undefined
+            ? { parentSessionId: input.parentSessionId }
+            : {}),
+          ...(input?.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
         }),
 
       listSessions: () => core.listSessions(),
+
+      getChildSessions: (parentSessionId) => core.getChildSessions(parentSessionId),
+
+      getSessionTree: (sessionId) => core.getSessionTree(sessionId),
 
       listModels: () => modelRegistry.list(),
 
@@ -352,6 +369,8 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
           const result = yield* core.createSession({
             firstMessage: `[Handoff]\n\n${entry.summary}`,
             ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+            parentSessionId: entry.sessionId,
+            parentBranchId: entry.branchId,
           })
           yield* handoffHandler.respond(requestId, "confirm", result.sessionId)
           return { childSessionId: result.sessionId, childBranchId: result.branchId }
