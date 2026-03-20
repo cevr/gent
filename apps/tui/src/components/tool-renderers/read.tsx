@@ -5,12 +5,17 @@
  * Expanded: line-numbered content with GutterText
  */
 
-import { Show, createMemo } from "solid-js"
+import { Show, For, createMemo } from "solid-js"
+import { windowItems, headTailExcerpts } from "@gent/core"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
 import { GutterText } from "../gutter-text"
 import { truncatePath } from "../message-list-utils"
 import type { ToolRendererProps } from "./types"
+
+type WindowedLine =
+  | { _tag: "line"; text: string; lineNum: number }
+  | { _tag: "elision"; count: number }
 
 interface ReadOutput {
   content: string
@@ -87,6 +92,23 @@ export function ReadToolRenderer(props: ToolRendererProps) {
     return getStartLine(d.content)
   })
 
+  const collapsedLines = createMemo((): WindowedLine[] => {
+    const lines = contentLines()
+    if (lines.length === 0) return []
+    const start = startLine()
+    const indexed: WindowedLine[] = lines.map((text, i) => ({
+      _tag: "line" as const,
+      text,
+      lineNum: start + i,
+    }))
+    if (lines.length <= 6) return indexed
+    const { items } = windowItems<WindowedLine>(indexed, headTailExcerpts(3, 3), (count) => ({
+      _tag: "elision",
+      count,
+    }))
+    return items
+  })
+
   return (
     <ToolBox
       title="read"
@@ -96,13 +118,34 @@ export function ReadToolRenderer(props: ToolRendererProps) {
       collapsedContent={
         <Show when={data()}>
           {(d) => (
-            <text>
-              <span style={{ fg: theme.success, bold: true }}>{d().lineCount}</span>
-              <span style={{ fg: theme.textMuted }}> lines</span>
-              <Show when={d().truncated}>
-                <span style={{ fg: theme.warning }}> (truncated)</span>
+            <box flexDirection="column">
+              <text>
+                <span style={{ fg: theme.success, bold: true }}>{d().lineCount}</span>
+                <span style={{ fg: theme.textMuted }}> lines</span>
+                <Show when={d().truncated}>
+                  <span style={{ fg: theme.warning }}> (truncated)</span>
+                </Show>
+              </text>
+              <Show when={collapsedLines().length > 0}>
+                <For each={collapsedLines()}>
+                  {(item) =>
+                    item._tag === "elision" ? (
+                      <text>
+                        <span style={{ fg: theme.border }}>{"· ··· "}</span>
+                        <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
+                      </text>
+                    ) : (
+                      <text>
+                        <span style={{ fg: theme.border }}>
+                          {String(item.lineNum).padStart(4)} │{" "}
+                        </span>
+                        <span style={{ fg: theme.textMuted }}>{item.text}</span>
+                      </text>
+                    )
+                  }
+                </For>
               </Show>
-            </text>
+            </box>
           )}
         </Show>
       }
