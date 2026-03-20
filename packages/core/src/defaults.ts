@@ -18,7 +18,7 @@ export const DEFAULTS = {
   followUpQueueMax: 10,
 
   // Tool execution concurrency
-  toolConcurrency: 4,
+  toolConcurrency: 8,
 } as const
 
 export type Defaults = typeof DEFAULTS

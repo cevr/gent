@@ -499,48 +499,45 @@ describe("ToolRunner", () => {
 })
 
 describe("Tool concurrency", () => {
-  test("serial tool calls do not overlap", async () => {
+  test("concurrent bash calls serialize via semaphore", async () => {
     const events: string[] = []
     let running = 0
     let maxRunning = 0
 
-    const makeSerialTool = (name: string) =>
-      defineTool({
-        name,
-        concurrency: "serial",
-        description: `Serial tool ${name}`,
-        params: Schema.Struct({}),
-        execute: () =>
-          Effect.gen(function* () {
-            yield* Effect.sync(() => {
-              running += 1
-              maxRunning = Math.max(maxRunning, running)
-              events.push(`start:${name}`)
-            })
+    const bashTool = defineTool({
+      name: "bash",
+      concurrency: "serial",
+      description: "Bash tool for serial test",
+      params: Schema.Struct({}),
+      execute: (_params, ctx) =>
+        Effect.gen(function* () {
+          const callId = ctx.toolCallId
+          yield* Effect.sync(() => {
+            running += 1
+            maxRunning = Math.max(maxRunning, running)
+            events.push(`start:${callId}`)
+          })
 
-            yield* Effect.promise(
-              () =>
-                new Promise<void>((resolve) => {
-                  setTimeout(resolve, 20)
-                }),
-            )
+          yield* Effect.promise(
+            () =>
+              new Promise<void>((resolve) => {
+                setTimeout(resolve, 20)
+              }),
+          )
 
-            yield* Effect.sync(() => {
-              events.push(`end:${name}`)
-              running -= 1
-            })
+          yield* Effect.sync(() => {
+            events.push(`end:${callId}`)
+            running -= 1
+          })
 
-            return { ok: true }
-          }),
-      })
-
-    const toolA = makeSerialTool("serial-a")
-    const toolB = makeSerialTool("serial-b")
+          return { ok: true }
+        }),
+    })
 
     const providerResponses = [
       [
-        new ToolCallChunk({ toolCallId: "tc-1", toolName: "serial-a", input: {} }),
-        new ToolCallChunk({ toolCallId: "tc-2", toolName: "serial-b", input: {} }),
+        new ToolCallChunk({ toolCallId: "tc-1", toolName: "bash", input: {} }),
+        new ToolCallChunk({ toolCallId: "tc-2", toolName: "bash", input: {} }),
         new FinishChunk({ finishReason: "tool_calls" }),
       ],
       [new FinishChunk({ finishReason: "stop" })],
@@ -549,7 +546,7 @@ describe("Tool concurrency", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       Provider.Test(providerResponses),
-      ToolRegistry.Live([toolA, toolB]),
+      ToolRegistry.Live([bashTool]),
       EventStore.Test(),
       AgentRegistry.Live,
       Permission.Test(),
@@ -595,11 +592,9 @@ describe("Tool concurrency", () => {
 
     expect(maxRunning).toBe(1)
     expect(events.length).toBe(4)
-    expect(events[0]?.startsWith("start:")).toBe(true)
-    expect(events[1]?.startsWith("end:")).toBe(true)
-    expect(events[2]?.startsWith("start:")).toBe(true)
-    expect(events[3]?.startsWith("end:")).toBe(true)
-    expect(events[0]?.slice("start:".length)).toBe(events[1]?.slice("end:".length))
-    expect(events[2]?.slice("start:".length)).toBe(events[3]?.slice("end:".length))
+    expect(events[0]).toBe("start:tc-1")
+    expect(events[1]).toBe("end:tc-1")
+    expect(events[2]).toBe("start:tc-2")
+    expect(events[3]).toBe("end:tc-2")
   })
 })

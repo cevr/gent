@@ -139,7 +139,7 @@ type LoopHandle = {
   pendingSteerRef: Ref.Ref<SteerCommand[]>
   followUpQueue: Ref.Ref<FollowUpItem[]>
   currentAgentRef: Ref.Ref<AgentNameType | undefined>
-  serialSemaphore: SemaphoreType
+  bashSemaphore: SemaphoreType
 }
 
 // Agent Loop Machine
@@ -217,7 +217,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
-            const serialSemaphore = yield* Semaphore.make(1)
+            const bashSemaphore = yield* Semaphore.make(1)
             const steerQueue = yield* Queue.unbounded<SteerCommand>()
             const pendingSteerRef = yield* Ref.make<SteerCommand[]>([])
             const followUpQueue = yield* Ref.make<FollowUpItem[]>([])
@@ -618,7 +618,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                           }),
                         )
 
-                        const tool = yield* toolRegistry.get(toolCall.toolName)
                         const ctx: ToolContext = {
                           sessionId,
                           branchId,
@@ -626,8 +625,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                           agentName: currentAgent,
                         }
                         const run = toolRunner.run(toolCall, ctx, { bypass })
-                        const result = yield* tool?.concurrency === "serial"
-                          ? serialSemaphore.withPermits(1)(run)
+                        const result = yield* toolCall.toolName === "bash"
+                          ? bashSemaphore.withPermits(1)(run)
                           : run
 
                         const outputSummary = summarizeToolOutput(result)
@@ -825,7 +824,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               pendingSteerRef,
               followUpQueue,
               currentAgentRef,
-              serialSemaphore,
+              bashSemaphore,
             }
           })
 
@@ -999,7 +998,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
       const eventStore = yield* EventStore
       const agentRegistry = yield* AgentRegistry
       const toolRunner = yield* ToolRunner
-      const serialSemaphore = yield* Semaphore.make(1)
+      const bashSemaphore = yield* Semaphore.make(1)
 
       const actorIdFor = (input: AgentRunInput) => `agent-${input.sessionId}-${input.branchId}`
 
@@ -1189,7 +1188,6 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                       }),
                     )
 
-                    const tool = yield* toolRegistry.get(toolCall.toolName)
                     const ctx: ToolContext = {
                       sessionId: input.sessionId,
                       branchId: input.branchId,
@@ -1197,8 +1195,8 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                       agentName: agent.name,
                     }
                     const run = toolRunner.run(toolCall, ctx, { bypass: input.bypass })
-                    const result = yield* tool?.concurrency === "serial"
-                      ? serialSemaphore.withPermits(1)(run)
+                    const result = yield* toolCall.toolName === "bash"
+                      ? bashSemaphore.withPermits(1)(run)
                       : run
 
                     const outputSummary = summarizeToolOutput(result)
