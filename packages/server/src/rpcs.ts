@@ -15,6 +15,7 @@ import {
   HandoffDecision,
   PermissionRule,
   SessionId,
+  Task,
 } from "@gent/core"
 import {
   ActorProcessMetrics,
@@ -510,7 +511,7 @@ export class GentRpcs extends RpcGroup.make(
       sessionId: SessionId,
       branchId: Schema.optional(BranchId),
     },
-    success: Schema.Array(Schema.Unknown),
+    success: Schema.Array(Task),
     error: GentRpcError,
   }),
 

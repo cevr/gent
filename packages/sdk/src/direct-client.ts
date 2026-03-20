@@ -12,11 +12,9 @@ import { AskUserHandler } from "@gent/tools"
 import {
   AuthApi,
   Permission,
-  PermissionHandler,
-  PermissionRule,
-  PlanHandler,
   AuthStore,
   AuthGuard,
+  type PermissionRule,
   type AuthAuthorization,
   type AuthMethod,
   type BranchId,
@@ -30,7 +28,6 @@ import {
   type PlanDecision,
   type HandoffDecision,
   type Task,
-  HandoffHandler,
   type SessionId,
   type SessionTreeNode,
 } from "@gent/core"
@@ -236,9 +233,6 @@ export interface DirectClient {
 export type DirectClientContext =
   | GentCore
   | AskUserHandler
-  | PermissionHandler
-  | PlanHandler
-  | HandoffHandler
   | Permission
   | ConfigService
   | ModelRegistry
@@ -254,9 +248,6 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
   function* () {
     const core = yield* GentCore
     const askUserHandler = yield* AskUserHandler
-    const permissionHandler = yield* PermissionHandler
-    const planHandler = yield* PlanHandler
-    const handoffHandler = yield* HandoffHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
     const modelRegistry = yield* ModelRegistry
@@ -342,39 +333,20 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       respondQuestions: (requestId, answers) => askUserHandler.respond(requestId, answers),
 
       respondPermission: (requestId, decision, persist) =>
-        Effect.gen(function* () {
-          const request = yield* permissionHandler.respond(requestId, decision)
-          if (persist === true && request !== undefined) {
-            const rule = new PermissionRule({
-              tool: request.toolName,
-              action: decision,
-            })
-            yield* configService.addPermissionRule(rule)
-            yield* permission.addRule(rule)
-          }
-        }),
+        core.respondPermission({ requestId, decision, persist }),
 
       respondPlan: (requestId, decision, reason) =>
-        planHandler.respond(requestId, decision, reason),
+        core.respondPlan({
+          requestId,
+          decision,
+          ...(reason !== undefined ? { reason } : {}),
+        }),
 
       respondHandoff: (requestId, decision, reason) =>
-        Effect.gen(function* () {
-          if (decision !== "confirm") {
-            yield* handoffHandler.respond(requestId, "reject", undefined, reason)
-            return { childSessionId: undefined, childBranchId: undefined }
-          }
-          const entry = yield* handoffHandler.peek(requestId)
-          if (entry === undefined) return { childSessionId: undefined, childBranchId: undefined }
-          const parentSession = yield* core.getSession(entry.sessionId)
-          const result = yield* core.createSession({
-            firstMessage: `[Handoff]\n\n${entry.summary}`,
-            ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
-            ...(parentSession?.bypass !== undefined ? { bypass: parentSession.bypass } : {}),
-            parentSessionId: entry.sessionId,
-            parentBranchId: entry.branchId,
-          })
-          yield* handoffHandler.respond(requestId, "confirm", result.sessionId)
-          return { childSessionId: result.sessionId, childBranchId: result.branchId }
+        core.respondHandoff({
+          requestId,
+          decision,
+          ...(reason !== undefined ? { reason } : {}),
         }),
 
       updateSessionBypass: (sessionId, bypass) => core.updateSessionBypass({ sessionId, bypass }),

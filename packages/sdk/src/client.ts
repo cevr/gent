@@ -430,7 +430,7 @@ export function createClient(
       rpcClient.listTasks({
         sessionId,
         ...(branchId !== undefined ? { branchId } : {}),
-      }) as Effect.Effect<ReadonlyArray<Task>, GentRpcError>,
+      }),
 
     getBranchTree: (sessionId) => rpcClient.getBranchTree({ sessionId }),
 
