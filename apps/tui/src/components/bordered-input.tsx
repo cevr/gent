@@ -1,106 +1,36 @@
 /**
- * BorderedInput — wraps Input in box-drawing borders with embedded labels.
+ * BorderedInput — wraps Input in flat horizontal rules with embedded labels.
  *
  * Layout:
- *   ╭─ $0.14 ──────────── claude-opus-4-5 ─╮
- *   │  [autocomplete / input content]        │
- *   ╰── · turn 2 · thinking · 5s ── gent ───╯
+ *   ── $0.14 ──────────── claude-opus-4-5 ──
+ *      [autocomplete / input content]
+ *   ── · turn 2 · thinking · 5s ── gent ────
  *
- * Top/bottom borders are manual <text> lines with embedded label segments.
- * Left/right borders use <box border={["left", "right"]}> for auto-stretch.
+ * Top/bottom borders are flat rule lines with embedded label segments.
+ * No side borders — content is indented with padding.
  */
 
 import { Show, For, type JSX } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 import { useTheme } from "../theme/index"
+import { buildBorderSegments, type BorderLabelItem, type Segment } from "../utils/border-segments"
 
-export interface BorderLabelItem {
-  text: string
-  color: RGBA
-}
+export type { BorderLabelItem, Segment } from "../utils/border-segments"
 
 // ── BorderLine ──────────────────────────────────────────────────
 
 interface BorderLineProps {
-  corner: "top" | "bottom"
   left?: BorderLabelItem[]
   right?: BorderLabelItem[]
   borderColor: RGBA
 }
 
-/** Segment with text + color for rendering spans */
-interface Segment {
-  text: string
-  color: RGBA
-}
-
 function BorderLine(props: BorderLineProps) {
   const dimensions = useTerminalDimensions()
 
-  const segments = (): Segment[] => {
-    const width = dimensions().width
-    const [cornerL, cornerR] = props.corner === "top" ? ["╭", "╮"] : ["╰", "╯"]
-    const bc = props.borderColor
-
-    const leftItems = props.left ?? []
-    const rightItems = props.right ?? []
-
-    const result: Segment[] = []
-
-    // Left corner
-    result.push({ text: cornerL, color: bc })
-
-    // Left labels: "─ label1 · label2 "
-    let usedWidth = 2 // both corners
-    if (leftItems.length > 0) {
-      result.push({ text: "─ ", color: bc })
-      usedWidth += 2
-      for (let idx = 0; idx < leftItems.length; idx++) {
-        const item = leftItems[idx]
-        if (item === undefined) continue
-        if (idx > 0) {
-          result.push({ text: " · ", color: bc })
-          usedWidth += 3
-        }
-        result.push({ text: item.text, color: item.color })
-        usedWidth += item.text.length
-      }
-      result.push({ text: " ", color: bc })
-      usedWidth += 1
-    }
-
-    // Right labels (build ahead to know width): " label1 · label2 ─"
-    const rightSegments: Segment[] = []
-    if (rightItems.length > 0) {
-      rightSegments.push({ text: " ", color: bc })
-      usedWidth += 1
-      for (let idx = 0; idx < rightItems.length; idx++) {
-        const item = rightItems[idx]
-        if (item === undefined) continue
-        if (idx > 0) {
-          rightSegments.push({ text: " · ", color: bc })
-          usedWidth += 3
-        }
-        rightSegments.push({ text: item.text, color: item.color })
-        usedWidth += item.text.length
-      }
-      rightSegments.push({ text: " ─", color: bc })
-      usedWidth += 2
-    }
-
-    // Fill
-    const fill = Math.max(0, width - usedWidth)
-    result.push({ text: "─".repeat(fill), color: bc })
-
-    // Right labels
-    result.push(...rightSegments)
-
-    // Right corner
-    result.push({ text: cornerR, color: bc })
-
-    return result
-  }
+  const segments = (): Segment[] =>
+    buildBorderSegments(dimensions().width, props.left ?? [], props.right ?? [], props.borderColor)
 
   return (
     <box flexShrink={0}>
@@ -135,16 +65,9 @@ export function BorderedInput(props: BorderedInputProps) {
           <text style={{ fg: theme.error }}>{props.error}</text>
         </box>
       </Show>
-      <BorderLine corner="top" left={props.topLeft} right={props.topRight} borderColor={bc()} />
-      <box border={["left", "right"]} borderColor={bc()} borderStyle="rounded">
-        {props.children}
-      </box>
-      <BorderLine
-        corner="bottom"
-        left={props.bottomLeft}
-        right={props.bottomRight}
-        borderColor={bc()}
-      />
+      <BorderLine left={props.topLeft} right={props.topRight} borderColor={bc()} />
+      <box paddingLeft={2}>{props.children}</box>
+      <BorderLine left={props.bottomLeft} right={props.bottomRight} borderColor={bc()} />
     </box>
   )
 }
