@@ -19,7 +19,7 @@ import {
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { GentCore } from "@gent/server"
-import { AgentLoop, CheckpointService, ConfigService } from "@gent/runtime"
+import { ActorProcess, CheckpointService, ConfigService } from "@gent/runtime"
 
 describe("Skills System", () => {
   test("Skills.Test provides test skills", async () => {
@@ -146,7 +146,7 @@ describe("Session State", () => {
       Storage.Test(),
       Provider.Test([]),
       eventStoreLayer,
-      AgentLoop.Test(),
+      ActorProcess.Test(),
       CheckpointService.Test(),
       Permission.Live([], "ask"),
       ConfigService.Test(),
@@ -192,7 +192,7 @@ describe("Session Tree", () => {
       Storage.Test(),
       Provider.Test([]),
       eventStoreLayer,
-      AgentLoop.Test(),
+      ActorProcess.Test(),
       CheckpointService.Test(),
       Permission.Live([], "ask"),
       ConfigService.Test(),

@@ -1,4 +1,4 @@
-import { Cause, ServiceMap, Effect, Layer, Schema, Stream } from "effect"
+import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import { identity } from "effect/Function"
 import {
   Session,
@@ -9,7 +9,6 @@ import {
   type EventEnvelope,
   EventStore,
   type EventStoreError,
-  ErrorOccurred,
   SessionNameUpdated,
   PlanConfirmed,
   BranchCreated,
@@ -39,7 +38,8 @@ import {
   type ProviderService,
 } from "@gent/providers"
 import {
-  AgentLoop,
+  ActorProcess,
+  type ActorProcessError,
   SteerCommand,
   AgentLoopError,
   CheckpointService,
@@ -159,6 +159,7 @@ export interface MessageInfo {
 export type GentCoreError =
   | StorageError
   | AgentLoopError
+  | ActorProcessError
   | PlatformErrorSchema
   | ProviderError
   | ProviderAuthError
@@ -321,7 +322,7 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
     GentCore,
     never,
     | Storage
-    | AgentLoop
+    | ActorProcess
     | EventStore
     | Provider
     | CheckpointService
@@ -334,7 +335,7 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
     GentCore,
     Effect.gen(function* () {
       const storage = yield* Storage
-      const agentLoop = yield* AgentLoop
+      const actorProcess = yield* ActorProcess
       const eventStore = yield* EventStore
       const provider = yield* Provider
       const permissionHandler = yield* PermissionHandler
@@ -450,14 +451,12 @@ ${conversation}`
               yield* Effect.forkDetach(
                 Effect.gen(function* () {
                   const generatedName = yield* generateSessionName(provider, firstMessage)
-                  // Update session with generated name
                   const updatedSession = new Session({
                     ...session,
                     name: generatedName,
                     updatedAt: new Date(),
                   })
                   yield* storage.updateSession(updatedSession)
-                  // Publish event for clients
                   yield* eventStore.publish(
                     new SessionNameUpdated({ sessionId, name: generatedName }),
                   )
@@ -467,37 +466,13 @@ ${conversation}`
                 ),
               )
 
-              // Fork sending the first message (non-blocking, starts agent loop)
-              const message = new Message({
-                id: Bun.randomUUIDv7() as MessageId,
+              // Route through ActorProcess — handles Message construction, forkDetach, error handling
+              yield* actorProcess.sendUserMessage({
                 sessionId,
                 branchId,
-                role: "user",
-                parts: [new TextPart({ type: "text", text: firstMessage })],
-                createdAt: now,
+                content: firstMessage,
+                bypass,
               })
-              yield* Effect.forkDetach(
-                agentLoop.run(message, { bypass }).pipe(
-                  Effect.withSpan("AgentLoop.firstMessage"),
-                  Effect.catchCause((cause) => {
-                    if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-                    return eventStore
-                      .publish(
-                        new ErrorOccurred({
-                          sessionId,
-                          branchId,
-                          error: Cause.pretty(cause),
-                        }),
-                      )
-                      .pipe(
-                        Effect.catchEager((e) =>
-                          Effect.logWarning("failed to publish ErrorOccurred event", e),
-                        ),
-                      )
-                  }),
-                  parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-                ),
-              )
             }
 
             return { sessionId, branchId, name: placeholderName, bypass }
@@ -773,13 +748,13 @@ ${conversation}`
 
         sendMessage: Effect.fn("GentCore.sendMessage")(function* (input) {
           const session = yield* storage.getSession(input.sessionId)
-          const bypass = session?.bypass ?? true
 
           // Capture caller's span so daemons inherit the traceId
           const parentSpan = yield* Effect.currentParentSpan.pipe(
             Effect.orElseSucceed(() => undefined),
           )
 
+          // Fork name generation (non-blocking, separate concern)
           yield* Effect.forkDetach(
             Effect.gen(function* () {
               if (session === undefined || session.name !== "New Chat") return
@@ -799,39 +774,12 @@ ${conversation}`
             ),
           )
 
-          const message = new Message({
-            id: Bun.randomUUIDv7() as MessageId,
+          // Route through ActorProcess — handles Message construction, forkDetach, error handling
+          yield* actorProcess.sendUserMessage({
             sessionId: input.sessionId,
             branchId: input.branchId,
-            kind: "regular",
-            role: "user",
-            parts: [new TextPart({ type: "text", text: input.content })],
-            createdAt: new Date(),
+            content: input.content,
           })
-
-          // Run agent loop in background - don't wait for completion
-          yield* Effect.forkDetach(
-            agentLoop.run(message, { bypass }).pipe(
-              Effect.withSpan("AgentLoop.background"),
-              Effect.catchCause((cause) => {
-                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-                return eventStore
-                  .publish(
-                    new ErrorOccurred({
-                      sessionId: input.sessionId,
-                      branchId: input.branchId,
-                      error: Cause.pretty(cause),
-                    }),
-                  )
-                  .pipe(
-                    Effect.catchEager((e) =>
-                      Effect.logWarning("failed to publish ErrorOccurred event", e),
-                    ),
-                  )
-              }),
-              parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-            ),
-          )
         }),
 
         listMessages: (branchId) =>
@@ -866,7 +814,7 @@ ${conversation}`
         listTasks: (sessionId, branchId) =>
           storage.listTasks(sessionId, branchId).pipe(Effect.withSpan("GentCore.listTasks")),
 
-        steer: (command) => agentLoop.steer(command),
+        steer: (command) => actorProcess.steerAgent(command),
 
         approvePlan: (input) =>
           Effect.gen(function* () {
