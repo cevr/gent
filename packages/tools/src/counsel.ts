@@ -85,6 +85,7 @@ Instructions:
       prompt: adversarialPrompt,
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
+      toolCallId: ctx.toolCallId,
       cwd: process.cwd(),
     })
 

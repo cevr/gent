@@ -278,6 +278,8 @@ export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("Suba
   childSessionId: SessionId,
   agentName: Schema.String,
   prompt: Schema.String,
+  toolCallId: Schema.optional(Schema.String),
+  branchId: Schema.optional(BranchId),
 }) {}
 
 /** @deprecated Use SubagentSucceeded or SubagentFailed instead */
@@ -297,6 +299,8 @@ export class SubagentSucceeded extends Schema.TaggedClass<SubagentSucceeded>()(
     parentSessionId: SessionId,
     childSessionId: SessionId,
     agentName: Schema.String,
+    toolCallId: Schema.optional(Schema.String),
+    branchId: Schema.optional(BranchId),
   },
 ) {}
 
@@ -304,6 +308,8 @@ export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("Subage
   parentSessionId: SessionId,
   childSessionId: SessionId,
   agentName: Schema.String,
+  toolCallId: Schema.optional(Schema.String),
+  branchId: Schema.optional(BranchId),
 }) {}
 
 // Task events

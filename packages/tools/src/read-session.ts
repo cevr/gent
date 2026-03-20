@@ -148,6 +148,7 @@ export const ReadSessionTool = defineTool({
         prompt,
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
+        toolCallId: ctx.toolCallId,
         cwd: process.cwd(),
       })
 

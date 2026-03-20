@@ -76,6 +76,7 @@ Output ONLY the JSON array, no other text.`
       prompt,
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
+      toolCallId: ctx.toolCallId,
       cwd: process.cwd(),
     })
 

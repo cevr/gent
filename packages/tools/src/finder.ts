@@ -32,6 +32,7 @@ export const FinderTool = defineTool({
       prompt: params.query,
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
+      toolCallId: ctx.toolCallId,
       cwd: process.cwd(),
     })
 

@@ -248,6 +248,7 @@ export interface SubagentRunner {
     prompt: string
     parentSessionId: SessionId
     parentBranchId: BranchId
+    toolCallId?: string
     cwd: string
   }) => EffectNs.Effect<SubagentResult, SubagentError>
 }

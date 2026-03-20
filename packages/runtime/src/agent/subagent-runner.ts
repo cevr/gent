@@ -172,6 +172,8 @@ export const InProcessRunner: Layer.Layer<
                   childSessionId: sessionId,
                   agentName: params.agent.name,
                   prompt: params.prompt,
+                  toolCallId: params.toolCallId,
+                  branchId: params.parentBranchId,
                 }),
               )
               yield* eventStore.publish(
@@ -248,6 +250,8 @@ export const InProcessRunner: Layer.Layer<
                   parentSessionId: params.parentSessionId,
                   childSessionId: sessionId,
                   agentName: params.agent.name,
+                  toolCallId: params.toolCallId,
+                  branchId: params.parentBranchId,
                 }),
               )
 
@@ -272,6 +276,8 @@ export const InProcessRunner: Layer.Layer<
                         parentSessionId: params.parentSessionId,
                         childSessionId: sessionId,
                         agentName: params.agent.name,
+                        toolCallId: params.toolCallId,
+                        branchId: params.parentBranchId,
                       }),
                     )
                     .pipe(
@@ -325,6 +331,8 @@ export const SubprocessRunner: Layer.Layer<
                   childSessionId: sessionId,
                   agentName: params.agent.name,
                   prompt: params.prompt,
+                  toolCallId: params.toolCallId,
+                  branchId: params.parentBranchId,
                 }),
               )
 
@@ -374,6 +382,8 @@ export const SubprocessRunner: Layer.Layer<
                       parentSessionId: params.parentSessionId,
                       childSessionId: sessionId,
                       agentName: params.agent.name,
+                      toolCallId: params.toolCallId,
+                      branchId: params.parentBranchId,
                     }),
                   )
                   .pipe(
@@ -410,6 +420,8 @@ export const SubprocessRunner: Layer.Layer<
                   parentSessionId: params.parentSessionId,
                   childSessionId: sessionId,
                   agentName: params.agent.name,
+                  toolCallId: params.toolCallId,
+                  branchId: params.parentBranchId,
                 }),
               )
 
@@ -434,6 +446,8 @@ export const SubprocessRunner: Layer.Layer<
                         parentSessionId: params.parentSessionId,
                         childSessionId: sessionId,
                         agentName: params.agent.name,
+                        toolCallId: params.toolCallId,
+                        branchId: params.parentBranchId,
                       }),
                     )
                     .pipe(

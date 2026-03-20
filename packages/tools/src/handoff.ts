@@ -42,6 +42,7 @@ export const HandoffTool = defineTool({
         prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
+        toolCallId: ctx.toolCallId,
         cwd: process.cwd(),
       })
       if (summarizeResult._tag === "success") {

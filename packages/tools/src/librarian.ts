@@ -147,6 +147,7 @@ Use read, grep, and glob tools to explore the code at ${cachePath} and answer th
       prompt,
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
+      toolCallId: ctx.toolCallId,
       cwd: cachePath,
     })
 

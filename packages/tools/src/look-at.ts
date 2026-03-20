@@ -73,6 +73,7 @@ export const LookAtTool = defineTool({
       prompt: promptParts.join("\n"),
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
+      toolCallId: ctx.toolCallId,
       cwd: process.cwd(),
     })
 

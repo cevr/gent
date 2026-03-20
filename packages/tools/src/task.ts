@@ -81,6 +81,7 @@ export const TaskTool = defineTool({
           prompt: taskWithContext,
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
+          toolCallId: ctx.toolCallId,
           cwd: process.cwd(),
         })
 
@@ -123,6 +124,7 @@ export const TaskTool = defineTool({
               prompt: task.task,
               parentSessionId: ctx.sessionId,
               parentBranchId: ctx.branchId,
+              toolCallId: ctx.toolCallId,
               cwd: process.cwd(),
             })
           }),
@@ -148,6 +150,7 @@ export const TaskTool = defineTool({
       prompt: params.task ?? "",
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
+      toolCallId: ctx.toolCallId,
       cwd: process.cwd(),
     })
 
