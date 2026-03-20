@@ -306,6 +306,9 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
             const entry = pending.get(requestId)
             if (entry === undefined) return undefined
 
+            // Delete before publishing to prevent double-respond race
+            pending.delete(requestId)
+
             if (decision === "confirm" && childSessionId !== undefined) {
               yield* eventStore.publish(
                 new HandoffConfirmed({
@@ -327,7 +330,6 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
             }
 
             yield* Deferred.succeed(entry.deferred, decision)
-            pending.delete(requestId)
             return {
               sessionId: entry.sessionId,
               branchId: entry.branchId,

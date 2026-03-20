@@ -224,6 +224,53 @@ describe("HandoffHandler", () => {
         }).pipe(Effect.provide(LiveLayer)),
       )
     })
+
+    test("double respond returns undefined on second call", async () => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const handler = yield* HandoffHandler
+          const eventStore = yield* EventStore
+
+          const requestIdDeferred = yield* Deferred.make<string>()
+
+          yield* Effect.forkDetach(
+            eventStore.subscribe({ sessionId: "s3" as SessionId }).pipe(
+              Stream.runForEach((env) =>
+                Effect.gen(function* () {
+                  if (env.event._tag === "HandoffPresented") {
+                    yield* Deferred.succeed(
+                      requestIdDeferred,
+                      (env.event as HandoffPresented).requestId,
+                    )
+                  }
+                }),
+              ),
+              Effect.catchCause(() => Effect.void),
+            ),
+          )
+
+          yield* Effect.forkDetach(
+            handler
+              .present({
+                sessionId: "s3" as SessionId,
+                branchId: "b3" as BranchId,
+                summary: "Double respond test",
+              })
+              .pipe(Effect.flatMap(() => Effect.void)),
+          )
+
+          const requestId = yield* Deferred.await(requestIdDeferred)
+
+          // First respond succeeds
+          const first = yield* handler.respond(requestId, "confirm", "child" as SessionId)
+          expect(first).toBeDefined()
+
+          // Second respond returns undefined (already consumed)
+          const second = yield* handler.respond(requestId, "reject")
+          expect(second).toBeUndefined()
+        }).pipe(Effect.provide(LiveLayer)),
+      )
+    })
   })
 })
 

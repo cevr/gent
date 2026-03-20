@@ -1,7 +1,7 @@
 /**
  * Slash command handlers
  *
- * Commands: /agent, /clear, /sessions, /compact, /branch, /tree, /fork, /bypass
+ * Commands: /agent, /clear, /sessions, /branch, /tree, /fork, /bypass, /handoff
  */
 
 import { Effect } from "effect"
