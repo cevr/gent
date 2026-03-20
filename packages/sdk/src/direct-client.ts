@@ -369,6 +369,7 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
           const result = yield* core.createSession({
             firstMessage: `[Handoff]\n\n${entry.summary}`,
             ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+            ...(parentSession?.bypass !== undefined ? { bypass: parentSession.bypass } : {}),
             parentSessionId: entry.sessionId,
             parentBranchId: entry.branchId,
           })

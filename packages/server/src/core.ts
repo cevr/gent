@@ -351,6 +351,17 @@ ${conversation}`
           Effect.gen(function* () {
             const sessionId = Bun.randomUUIDv7() as SessionId
 
+            // Validate parent session exists if specified
+            if (input.parentSessionId !== undefined) {
+              const parent = yield* storage.getSession(input.parentSessionId)
+              if (parent === undefined) {
+                return yield* new NotFoundError({
+                  message: `Parent session not found: ${input.parentSessionId}`,
+                  entity: "session",
+                })
+              }
+            }
+
             const branchId = Bun.randomUUIDv7() as BranchId
             const now = new Date()
 
