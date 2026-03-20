@@ -59,6 +59,8 @@ export { FileTracker, type FileChange, type FileTrackerService } from "./file-tr
 
 export { formatSchemaError } from "./format-schema-error"
 
+export { TaskService, type TaskServiceApi } from "./task-service"
+
 export {
   ClusterMemoryLive,
   ClusterSingleLive,

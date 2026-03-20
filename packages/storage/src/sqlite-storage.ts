@@ -133,9 +133,9 @@ export interface StorageService {
     id: TaskId,
     fields: Partial<{
       status: string
-      description: string
-      owner: string
-      metadata: unknown
+      description: string | null
+      owner: string | null
+      metadata: unknown | null
     }>,
   ) => Effect.Effect<Task | undefined, StorageError>
   readonly deleteTask: (id: TaskId) => Effect.Effect<void, StorageError>
@@ -265,6 +265,14 @@ const messageFromRow = (row: MessageRow, parts: ReadonlyArray<MessagePart>) =>
     turnDurationMs: row.turn_duration_ms ?? undefined,
   })
 
+const safeJsonParse = (s: string): unknown => {
+  try {
+    return JSON.parse(s)
+  } catch {
+    return undefined
+  }
+}
+
 interface TaskRow {
   id: TaskId
   session_id: SessionId
@@ -293,7 +301,7 @@ const taskFromRow = (row: TaskRow) =>
     agentType: (row.agent_type ?? undefined) as Task["agentType"],
     prompt: row.prompt ?? undefined,
     cwd: row.cwd ?? undefined,
-    metadata: row.metadata !== null ? JSON.parse(row.metadata) : undefined,
+    metadata: row.metadata !== null ? safeJsonParse(row.metadata) : undefined,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   })
@@ -901,7 +909,14 @@ const makeStorage = Effect.gen(function* () {
     // Tasks
     createTask: (task) =>
       Effect.gen(function* () {
-        const meta = task.metadata !== undefined ? JSON.stringify(task.metadata) : null
+        let meta: string | null = null
+        if (task.metadata !== undefined) {
+          try {
+            meta = JSON.stringify(task.metadata)
+          } catch {
+            return yield* new StorageError({ message: "Task metadata is not JSON-serializable" })
+          }
+        }
         yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
         return task
       }).pipe(
@@ -933,18 +948,45 @@ const makeStorage = Effect.gen(function* () {
     updateTask: (id, fields) =>
       Effect.gen(function* () {
         const now = Date.now()
-        const sets: string[] = [`updated_at = ${now}`]
-        if (fields.status !== undefined)
-          sets.push(`status = '${fields.status.replace(/'/g, "''")}'`)
-        if (fields.description !== undefined)
-          sets.push(`description = '${fields.description.replace(/'/g, "''")}'`)
-        if (fields.owner !== undefined) sets.push(`owner = '${fields.owner.replace(/'/g, "''")}'`)
-        if (fields.metadata !== undefined)
-          sets.push(`metadata = '${JSON.stringify(fields.metadata).replace(/'/g, "''")}'`)
+        // Validate status if provided
+        const VALID_STATUSES = new Set(["pending", "in_progress", "completed", "failed"])
+        if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
+          return yield* new StorageError({
+            message: `Invalid task status: ${fields.status}`,
+          })
+        }
 
-        yield* sql.unsafe(
-          `UPDATE tasks SET ${sets.join(", ")} WHERE id = '${id.replace(/'/g, "''")}'`,
-        )
+        // Build parameterized update
+        const sets: string[] = ["updated_at = ?"]
+        const params: (string | number | null)[] = [now]
+
+        if (fields.status !== undefined) {
+          sets.push("status = ?")
+          params.push(fields.status)
+        }
+        if ("description" in fields) {
+          sets.push("description = ?")
+          params.push(fields.description ?? null)
+        }
+        if ("owner" in fields) {
+          sets.push("owner = ?")
+          params.push(fields.owner ?? null)
+        }
+        if ("metadata" in fields) {
+          sets.push("metadata = ?")
+          if (fields.metadata === null || fields.metadata === undefined) {
+            params.push(null)
+          } else {
+            try {
+              params.push(JSON.stringify(fields.metadata))
+            } catch {
+              return yield* new StorageError({ message: "Metadata is not JSON-serializable" })
+            }
+          }
+        }
+
+        params.push(id)
+        yield* sql.unsafe(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, params)
 
         const rows =
           yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`

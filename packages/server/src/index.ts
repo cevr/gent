@@ -30,6 +30,7 @@ import {
   SubagentRunnerConfig,
   ToolRunner,
   FileTracker,
+  TaskService,
 } from "@gent/runtime"
 import type { ActorProcess } from "@gent/runtime"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
@@ -332,12 +333,16 @@ export const createDependencies = (
   )
 
   const AgentRuntimeDeps = Layer.provide(AgentRuntimeLive, AllDeps)
-  const ActorProcessLive = Layer.provide(
-    LocalActorProcessLive,
-    Layer.merge(AllDeps, AgentRuntimeDeps),
-  )
 
-  return Layer.mergeAll(AllDeps, AgentRuntimeDeps, ActorProcessLive)
+  // TaskService requires SubagentRunnerService (from AgentRuntime) + Storage + EventStore + AgentRegistry
+  const TaskServiceDeps = Layer.merge(AllDeps, AgentRuntimeDeps)
+  const TaskServiceLive = Layer.provide(TaskService.Live, TaskServiceDeps)
+
+  const AllWithRuntime = Layer.mergeAll(AllDeps, AgentRuntimeDeps, TaskServiceLive)
+
+  const ActorProcessLive = Layer.provide(LocalActorProcessLive, AllWithRuntime)
+
+  return Layer.mergeAll(AllWithRuntime, ActorProcessLive)
 }
 
 // Re-export AskUserHandler for RPC handlers

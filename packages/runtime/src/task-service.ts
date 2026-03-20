@@ -1,0 +1,253 @@
+import { ServiceMap, Effect, Layer } from "effect"
+import {
+  Task,
+  EventStore,
+  TaskCreated,
+  TaskUpdated,
+  TaskCompleted,
+  TaskFailed,
+  SubagentRunnerService,
+  AgentRegistry,
+  type TaskId,
+  type SessionId,
+  type BranchId,
+  type AgentName,
+  type TaskStatus,
+} from "@gent/core"
+import { Storage } from "@gent/storage"
+
+// TaskService
+
+export interface TaskServiceApi {
+  readonly create: (params: {
+    sessionId: SessionId
+    branchId: BranchId
+    subject: string
+    description?: string
+    agentType?: AgentName
+    prompt?: string
+    cwd?: string
+    metadata?: unknown
+  }) => Effect.Effect<Task>
+
+  readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
+
+  readonly list: (sessionId: SessionId, branchId?: BranchId) => Effect.Effect<ReadonlyArray<Task>>
+
+  readonly update: (
+    id: TaskId,
+    fields: Partial<{
+      status: TaskStatus
+      description: string | null
+      owner: string | null
+      metadata: unknown | null
+    }>,
+  ) => Effect.Effect<Task | undefined>
+
+  readonly remove: (id: TaskId) => Effect.Effect<void>
+
+  readonly run: (id: TaskId) => Effect.Effect<{
+    taskId: TaskId
+    status: string
+    sessionId?: SessionId
+    branchId?: BranchId
+  }>
+
+  readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
+  readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
+}
+
+export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>()(
+  "@gent/runtime/src/task-service/TaskService",
+) {
+  static Live: Layer.Layer<
+    TaskService,
+    never,
+    Storage | EventStore | SubagentRunnerService | AgentRegistry
+  > = Layer.effect(
+    TaskService,
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const eventStore = yield* EventStore
+      const runner = yield* SubagentRunnerService
+      const agentRegistry = yield* AgentRegistry
+
+      const runTaskInternal: (taskId: TaskId, task: Task) => Effect.Effect<void> = (taskId, task) =>
+        Effect.gen(function* () {
+          const agent = yield* agentRegistry.get(task.agentType ?? "explore")
+          if (agent === undefined) {
+            yield* storage
+              .updateTask(taskId, { status: "failed" })
+              .pipe(Effect.catchEager(() => Effect.void))
+            yield* eventStore
+              .publish(
+                new TaskFailed({
+                  sessionId: task.sessionId,
+                  branchId: task.branchId,
+                  taskId,
+                  error: `Unknown agent: ${task.agentType}`,
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+            return
+          }
+
+          // Mark in_progress
+          yield* storage
+            .updateTask(taskId, { status: "in_progress" })
+            .pipe(Effect.catchEager(() => Effect.void))
+          yield* eventStore
+            .publish(
+              new TaskUpdated({
+                sessionId: task.sessionId,
+                branchId: task.branchId,
+                taskId,
+                status: "in_progress",
+              }),
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
+
+          const parentSessionId = task.sessionId
+          const parentBranchId = task.branchId
+
+          // Run subagent
+          const result = yield* runner.run({
+            agent,
+            prompt: task.prompt ?? task.subject,
+            parentSessionId,
+            parentBranchId,
+            cwd: task.cwd ?? process.cwd(),
+          })
+
+          if (result._tag === "success") {
+            yield* storage
+              .updateTask(taskId, { status: "completed", owner: result.sessionId })
+              .pipe(Effect.catchEager(() => Effect.void))
+            yield* eventStore
+              .publish(
+                new TaskCompleted({
+                  sessionId: parentSessionId,
+                  branchId: parentBranchId,
+                  taskId,
+                  owner: result.sessionId,
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+
+            // Check dependent tasks for auto-run
+            yield* checkAndRunDependents(taskId).pipe(Effect.catchEager(() => Effect.void))
+          } else {
+            yield* storage
+              .updateTask(taskId, { status: "failed", metadata: { error: result.error } })
+              .pipe(Effect.catchEager(() => Effect.void))
+            yield* eventStore
+              .publish(
+                new TaskFailed({
+                  sessionId: parentSessionId,
+                  branchId: parentBranchId,
+                  taskId,
+                  error: result.error,
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+          }
+        }).pipe(Effect.catchEager(() => Effect.void))
+
+      const checkAndRunDependents: (completedTaskId: TaskId) => Effect.Effect<void> = (
+        completedTaskId,
+      ) =>
+        Effect.gen(function* () {
+          const dependents = yield* storage.getTaskDependents(completedTaskId)
+          for (const depTaskId of dependents) {
+            const depTask = yield* storage.getTask(depTaskId)
+            if (depTask === undefined || depTask.status !== "pending") continue
+            if (depTask.agentType === undefined || depTask.prompt === undefined) continue
+
+            // Check if all blockers are done
+            const blockers = yield* storage.getTaskDeps(depTaskId)
+            const allDone = yield* Effect.forEach(blockers, (blockerId) =>
+              storage
+                .getTask(blockerId)
+                .pipe(
+                  Effect.map(
+                    (t) => t === undefined || t.status === "completed" || t.status === "failed",
+                  ),
+                ),
+            )
+            if (allDone.every(Boolean)) {
+              yield* Effect.forkDetach(runTaskInternal(depTaskId, depTask))
+            }
+          }
+        }).pipe(Effect.catchEager(() => Effect.void))
+
+      return {
+        create: (params) =>
+          Effect.gen(function* () {
+            const id = Bun.randomUUIDv7() as TaskId
+            const now = new Date()
+            const task = new Task({
+              id,
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              subject: params.subject,
+              description: params.description,
+              status: "pending",
+              agentType: params.agentType,
+              prompt: params.prompt,
+              cwd: params.cwd,
+              metadata: params.metadata,
+              createdAt: now,
+              updatedAt: now,
+            })
+            yield* storage.createTask(task)
+            yield* eventStore.publish(
+              new TaskCreated({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                taskId: id,
+                subject: params.subject,
+              }),
+            )
+            return task
+          }).pipe(Effect.orDie),
+
+        get: (id) => storage.getTask(id).pipe(Effect.orDie),
+
+        list: (sessionId, branchId) => storage.listTasks(sessionId, branchId).pipe(Effect.orDie),
+
+        update: (id, fields) =>
+          Effect.gen(function* () {
+            const updated = yield* storage.updateTask(id, fields)
+            if (updated !== undefined && fields.status !== undefined) {
+              yield* eventStore.publish(
+                new TaskUpdated({
+                  sessionId: updated.sessionId,
+                  branchId: updated.branchId,
+                  taskId: id,
+                  status: fields.status,
+                }),
+              )
+            }
+            return updated
+          }).pipe(Effect.orDie),
+
+        remove: (id) => storage.deleteTask(id).pipe(Effect.orDie),
+
+        run: (id) =>
+          Effect.gen(function* () {
+            const task = yield* storage.getTask(id).pipe(Effect.orDie)
+            if (task === undefined) {
+              return { taskId: id, status: "not_found" }
+            }
+
+            yield* Effect.forkDetach(runTaskInternal(id, task))
+            return { taskId: id, status: "running" }
+          }),
+
+        addDep: (taskId, blockedById) => storage.addTaskDep(taskId, blockedById).pipe(Effect.orDie),
+        removeDep: (taskId, blockedById) =>
+          storage.removeTaskDep(taskId, blockedById).pipe(Effect.orDie),
+      }
+    }),
+  )
+}
