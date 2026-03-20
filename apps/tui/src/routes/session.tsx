@@ -36,6 +36,7 @@ import { MessagePicker } from "../components/message-picker"
 import type { SessionEvent } from "../components/session-event-indicator"
 import { formatToolInput } from "../components/message-list-utils"
 import { MermaidViewer, collectDiagrams } from "../components/mermaid-viewer"
+import { TaskWidget } from "../components/task-widget"
 import { useWorkspace } from "../workspace/index"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import {
@@ -586,6 +587,9 @@ export function Session(props: SessionProps) {
         syntaxStyle={syntaxStyle}
         streaming={client.isStreaming()}
       />
+
+      {/* Task widget */}
+      <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
 
       {/* Bordered input */}
       <BorderedInput

@@ -29,6 +29,7 @@ import {
   type PermissionDecision,
   type PlanDecision,
   type HandoffDecision,
+  type Task,
   HandoffHandler,
   type SessionId,
 } from "@gent/core"
@@ -115,6 +116,11 @@ export interface DirectClient {
   deleteSession: (sessionId: SessionId) => Effect.Effect<void, GentCoreError>
 
   listBranches: (sessionId: SessionId) => Effect.Effect<readonly BranchInfo[], GentCoreError>
+
+  listTasks: (
+    sessionId: SessionId,
+    branchId?: BranchId,
+  ) => Effect.Effect<ReadonlyArray<Task>, GentCoreError>
 
   createBranch: (
     sessionId: SessionId,
@@ -268,6 +274,8 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       deleteSession: (sessionId) => core.deleteSession(sessionId),
 
       listBranches: (sessionId) => core.listBranches(sessionId),
+
+      listTasks: (sessionId, branchId) => core.listTasks(sessionId, branchId),
 
       createBranch: (sessionId, name) =>
         core.createBranch({

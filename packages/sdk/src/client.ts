@@ -23,6 +23,7 @@ import type {
   HandoffDecision,
   PermissionRule,
   SessionId,
+  Task,
 } from "@gent/core"
 
 export type {
@@ -239,6 +240,12 @@ export interface GentClient {
   /** List branches for a session */
   listBranches: (sessionId: SessionId) => Effect.Effect<readonly BranchInfo[], GentRpcError>
 
+  /** List tasks for a session */
+  listTasks: (
+    sessionId: SessionId,
+    branchId?: BranchId,
+  ) => Effect.Effect<ReadonlyArray<Task>, GentRpcError>
+
   /** Get branch tree for a session */
   getBranchTree: (sessionId: SessionId) => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
 
@@ -375,6 +382,9 @@ export function createClient(
     listModels: () => rpcClient.listModels(),
 
     listBranches: (sessionId) => rpcClient.listBranches({ sessionId }),
+
+    // listTasks not available via RPC yet — returns empty for RPC clients
+    listTasks: () => Effect.succeed([]),
 
     getBranchTree: (sessionId) => rpcClient.getBranchTree({ sessionId }),
 

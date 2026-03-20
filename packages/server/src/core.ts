@@ -17,6 +17,7 @@ import {
   BranchSummarized,
   AgentName,
   type MessagePart,
+  type Task,
   type SessionId,
   type BranchId,
   type MessageId,
@@ -197,6 +198,11 @@ export interface GentCoreService {
   readonly listMessages: (branchId: BranchId) => Effect.Effect<MessageInfo[], GentCoreError>
 
   readonly listBranches: (sessionId: SessionId) => Effect.Effect<BranchInfo[], GentCoreError>
+
+  readonly listTasks: (
+    sessionId: SessionId,
+    branchId?: BranchId,
+  ) => Effect.Effect<ReadonlyArray<Task>, GentCoreError>
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
@@ -743,6 +749,9 @@ ${conversation}`
               createdAt: b.createdAt.getTime(),
             }))
           }).pipe(Effect.withSpan("GentCore.listBranches")),
+
+        listTasks: (sessionId, branchId) =>
+          storage.listTasks(sessionId, branchId).pipe(Effect.withSpan("GentCore.listTasks")),
 
         steer: (command) => agentLoop.steer(command),
 
