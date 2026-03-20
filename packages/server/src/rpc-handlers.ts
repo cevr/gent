@@ -128,28 +128,25 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           })
         }),
 
-      respondHandoff: ({ requestId, decision, reason }) =>
+      respondHandoff: ({ requestId, decision, sessionId, summary, reason }) =>
         Effect.gen(function* () {
           if (decision !== "confirm") {
             yield* handoffHandler.respond(requestId, "reject", undefined, reason)
-            return { childSessionId: undefined }
+            return { childSessionId: undefined, childBranchId: undefined }
           }
 
-          // Respond first — gets entry data and resolves the Deferred.
-          // We pass undefined childSessionId; HandoffConfirmed won't publish yet
-          // (only publishes when childSessionId is defined).
-          // We'll publish it manually after creating the child session.
-          const entry = yield* handoffHandler.respond(requestId, "confirm")
-          if (entry === undefined) return { childSessionId: undefined }
-
-          // Create child session with handoff summary
-          const parentSession = yield* core.getSession(entry.sessionId)
+          // Create child session BEFORE confirming — ensures atomicity
+          const parentSession = yield* core.getSession(sessionId)
+          const handoffSummary = summary ?? "Handoff session"
           const result = yield* core.createSession({
-            firstMessage: `[Handoff]\n\n${entry.summary}`,
+            firstMessage: `[Handoff]\n\n${handoffSummary}`,
             ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
           })
 
-          return { childSessionId: result.sessionId }
+          // Now confirm with the child session ID — publishes HandoffConfirmed + resolves Deferred
+          yield* handoffHandler.respond(requestId, "confirm", result.sessionId)
+
+          return { childSessionId: result.sessionId, childBranchId: result.branchId }
         }),
 
       updateSessionBypass: ({ sessionId, bypass }) =>

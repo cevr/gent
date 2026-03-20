@@ -80,6 +80,7 @@ export function Session(props: SessionProps) {
   const [activeTool, setActiveTool] = createSignal<string | undefined>(undefined)
   let initialPromptSent = false
   let eventSeq = 0
+  let lastHandoffSummary: string | undefined
 
   const items = createMemo((): SessionItem[] => {
     const combined: SessionItem[] = [...store.messages, ...store.events]
@@ -299,6 +300,7 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "PlanPresented") {
         handleInputEvent({ _tag: "PlanPresented", event })
       } else if (event._tag === "HandoffPresented") {
+        lastHandoffSummary = (event as { summary?: string }).summary
         handleInputEvent({ _tag: "HandoffPresented", event })
       }
       // Note: agent state (status, cost, error) is updated by ClientProvider
@@ -431,12 +433,17 @@ export function Session(props: SessionProps) {
           const handoffDecision = decision === "confirm" ? "confirm" : "reject"
           cast(
             Effect.gen(function* () {
-              const result = yield* client.client.respondHandoff(effect.requestId, handoffDecision)
+              const result = yield* client.client.respondHandoff(
+                effect.requestId,
+                handoffDecision,
+                props.sessionId,
+                lastHandoffSummary,
+              )
+              lastHandoffSummary = undefined
               const childId = result.childSessionId
-              if (childId === undefined) return
-              const info = yield* client.client.getSession(childId)
-              if (info === null || info.branchId === undefined) return
-              client.switchSession(info.id, info.branchId, info.name ?? "Handoff", info.bypass)
+              const childBranchId = result.childBranchId
+              if (childId === undefined || childBranchId === undefined) return
+              client.switchSession(childId, childBranchId, "Handoff")
             }).pipe(
               Effect.catchEager((err: unknown) =>
                 Effect.sync(() => {

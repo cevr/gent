@@ -236,11 +236,15 @@ export const RespondPlanPayload = Schema.Struct({
 export const RespondHandoffPayload = Schema.Struct({
   requestId: Schema.String,
   decision: HandoffDecision,
+  sessionId: SessionId,
+  branchId: BranchId,
+  summary: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
 })
 
 export const RespondHandoffSuccess = Schema.Struct({
   childSessionId: Schema.optional(SessionId),
+  childBranchId: Schema.optional(BranchId),
 })
 
 // ============================================================================

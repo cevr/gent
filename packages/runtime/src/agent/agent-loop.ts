@@ -43,6 +43,7 @@ import {
   MachineTaskFailed,
   MachineTaskSucceeded,
   SubagentError,
+  HandoffHandler,
   DEFAULTS,
   summarizeToolOutput,
   stringifyOutput,
@@ -184,6 +185,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
     | AgentRegistry
     | EventStore
     | CheckpointService
+    | HandoffHandler
     | FileSystem.FileSystem
     | ToolRunner
   > =>
@@ -196,6 +198,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const agentRegistry = yield* AgentRegistry
         const eventStore = yield* EventStore
         const checkpointService = yield* CheckpointService
+        const handoffHandler = yield* HandoffHandler
         const fs = yield* FileSystem.FileSystem
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
@@ -218,6 +221,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const steerQueue = yield* Queue.unbounded<SteerCommand>()
             const pendingSteerRef = yield* Ref.make<SteerCommand[]>([])
             const followUpQueue = yield* Ref.make<FollowUpItem[]>([])
+            const handoffSuppressRef = yield* Ref.make(0) // turns to suppress handoff after reject
             const currentAgentRef = yield* Ref.make<AgentNameType | undefined>(undefined)
 
             const resolveCurrentAgent = Effect.fn("AgentLoop.resolveCurrentAgent")(function* () {
@@ -696,6 +700,58 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   interrupted: turnInterrupted,
                 }),
               )
+
+              // Auto-handoff on context pressure (after turn completes, before next turn)
+              if (!turnInterrupted) {
+                const suppressLeft = yield* Ref.get(handoffSuppressRef)
+                if (suppressLeft > 0) {
+                  yield* Ref.update(handoffSuppressRef, (n) => n - 1)
+                } else {
+                  const allMessages = yield* storage.listMessages(branchId)
+                  const currentAgent = yield* resolveCurrentAgent()
+                  const modelId = resolveAgentModelId(currentAgent)
+                  const contextPercent = yield* checkpointService.estimateContextPercent(
+                    allMessages,
+                    modelId,
+                  )
+                  if (contextPercent >= DEFAULTS.handoffThresholdPercent) {
+                    yield* Effect.logInfo("auto-handoff.threshold").pipe(
+                      Effect.annotateLogs({
+                        contextPercent,
+                        threshold: DEFAULTS.handoffThresholdPercent,
+                      }),
+                    )
+                    // Build summary from recent messages
+                    const recentText = allMessages
+                      .slice(-20)
+                      .map((m) => {
+                        const text = m.parts
+                          .filter((p): p is typeof TextPart.Type => p.type === "text")
+                          .map((p) => p.text)
+                          .join("\n")
+                        return text !== "" ? `${m.role}: ${text}` : ""
+                      })
+                      .filter((line) => line.length > 0)
+                      .join("\n\n")
+                    const summary =
+                      recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
+
+                    const decision = yield* handoffHandler
+                      .present({
+                        sessionId,
+                        branchId,
+                        summary,
+                        reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
+                      })
+                      .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
+
+                    if (decision === "reject") {
+                      // Suppress for 5 more turns
+                      yield* Ref.set(handoffSuppressRef, 5)
+                    }
+                  }
+                }
+              }
 
               // Process follow-up queue
               const queue = yield* Ref.get(followUpQueue)

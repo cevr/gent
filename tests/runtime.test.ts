@@ -26,6 +26,7 @@ import {
   ToolRegistry,
   Permission,
   PermissionHandler,
+  HandoffHandler,
   EventStore,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
@@ -293,6 +294,7 @@ describe("AgentLoop actor model", () => {
       AgentRegistry.Live,
       EventStore.Test(),
       CheckpointService.Test(),
+      HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,
     )

@@ -295,8 +295,10 @@ export interface GentClient {
   respondHandoff: (
     requestId: string,
     decision: HandoffDecision,
+    sessionId: SessionId,
+    summary?: string,
     reason?: string,
-  ) => Effect.Effect<{ childSessionId?: SessionId }, GentRpcError>
+  ) => Effect.Effect<{ childSessionId?: SessionId; childBranchId?: BranchId }, GentRpcError>
 
   /** Update session bypass */
   updateSessionBypass: (
@@ -425,10 +427,13 @@ export function createClient(
         ...(reason !== undefined ? { reason } : {}),
       }),
 
-    respondHandoff: (requestId, decision, reason) =>
+    respondHandoff: (requestId, decision, sessionId, summary, reason) =>
       rpcClient.respondHandoff({
         requestId,
         decision,
+        sessionId,
+        branchId: "" as BranchId,
+        ...(summary !== undefined ? { summary } : {}),
         ...(reason !== undefined ? { reason } : {}),
       }),
 

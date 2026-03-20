@@ -19,6 +19,7 @@ import {
   AuthGuard,
   LinkOpener,
   OsService,
+  type HandoffPresented,
   type ProviderId,
   type SessionId,
   type BranchId,
@@ -208,6 +209,7 @@ const CoreLayer = Layer.unwrap(
 // Headless runner - streams events to stdout
 const runHeadless = (
   core: GentCoreService,
+  directClient: DirectClient,
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
@@ -224,7 +226,7 @@ const runHeadless = (
     // Stream events until complete
     yield* events.pipe(
       Stream.tap((envelope) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           const event = envelope.event
           switch (event._tag) {
             case "StreamChunk":
@@ -250,12 +252,21 @@ const runHeadless = (
             case "ErrorOccurred":
               process.stderr.write(`\nError: ${event.error}\n`)
               break
+            case "HandoffPresented": {
+              // Auto-confirm handoff in headless mode
+              const hp = event as typeof HandoffPresented.Type
+              process.stdout.write(`\n[handoff: auto-confirming]\n`)
+              yield* directClient
+                .respondHandoff(hp.requestId, "confirm", hp.sessionId, hp.summary)
+                .pipe(Effect.catchEager(() => Effect.void))
+              break
+            }
           }
         }),
       ),
       Stream.takeUntil(
         (envelope) =>
-          envelope.event._tag === "StreamEnded" || envelope.event._tag === "ErrorOccurred",
+          envelope.event._tag === "TurnCompleted" || envelope.event._tag === "ErrorOccurred",
       ),
       Stream.runDrain,
     )
@@ -326,6 +337,9 @@ const main = Command.make(
           bypass,
         })
 
+        // Create direct client (used by both headless and TUI)
+        const directClient: DirectClient = yield* makeDirectClient
+
         // Handle headless mode
         if (state._tag === "headless") {
           const branchId = state.session.branchId
@@ -333,12 +347,9 @@ const main = Command.make(
             yield* Console.error("Error: session has no branch")
             return process.exit(1)
           }
-          yield* runHeadless(core, state.session.id, branchId, state.prompt)
+          yield* runHeadless(core, directClient, state.session.id, branchId, state.prompt)
           return process.exit(0)
         }
-
-        // Create direct client for TUI (no RPC layer, avoids scope issues)
-        const directClient: DirectClient = yield* makeDirectClient
 
         // Get runtime for client
         const uiServices = (yield* Effect.services<never>()) as ServiceMap.ServiceMap<unknown>

@@ -178,8 +178,10 @@ export interface DirectClient {
   respondHandoff: (
     requestId: string,
     decision: HandoffDecision,
+    sessionId: SessionId,
+    summary?: string,
     reason?: string,
-  ) => Effect.Effect<{ childSessionId?: SessionId }, GentCoreError>
+  ) => Effect.Effect<{ childSessionId?: SessionId; childBranchId?: BranchId }, GentCoreError>
 
   updateSessionBypass: (
     sessionId: SessionId,
@@ -332,20 +334,20 @@ export const makeDirectClient: Effect.Effect<DirectClient, never, DirectClientCo
       respondPlan: (requestId, decision, reason) =>
         planHandler.respond(requestId, decision, reason),
 
-      respondHandoff: (requestId, decision, reason) =>
+      respondHandoff: (requestId, decision, sessionId, summary, reason) =>
         Effect.gen(function* () {
           if (decision !== "confirm") {
             yield* handoffHandler.respond(requestId, "reject", undefined, reason)
-            return { childSessionId: undefined }
+            return { childSessionId: undefined, childBranchId: undefined }
           }
-          const entry = yield* handoffHandler.respond(requestId, "confirm")
-          if (entry === undefined) return { childSessionId: undefined }
-          const parentSession = yield* core.getSession(entry.sessionId)
+          const parentSession = yield* core.getSession(sessionId)
+          const handoffSummary = summary ?? "Handoff session"
           const result = yield* core.createSession({
-            firstMessage: `[Handoff]\n\n${entry.summary}`,
+            firstMessage: `[Handoff]\n\n${handoffSummary}`,
             ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
           })
-          return { childSessionId: result.sessionId }
+          yield* handoffHandler.respond(requestId, "confirm", result.sessionId)
+          return { childSessionId: result.sessionId, childBranchId: result.branchId }
         }),
 
       updateSessionBypass: (sessionId, bypass) => core.updateSessionBypass({ sessionId, bypass }),
