@@ -24,8 +24,6 @@ export {
   SessionActorEntityLive,
   SessionActorEntityLocalLive,
   ClusterActorProcessLive,
-  SupervisedActorProcessLive,
-  SessionActorEntitySupervisedLive,
 } from "./actor-process"
 
 export {
