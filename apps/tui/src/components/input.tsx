@@ -14,7 +14,7 @@ import {
   type Accessor,
 } from "solid-js"
 import { Effect } from "effect"
-import { SyntaxStyle, type InputRenderable } from "@opentui/core"
+import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import type { Question } from "@gent/core"
 import { useKeyboard } from "@opentui/solid"
 import { useTheme } from "../theme/index"
@@ -103,7 +103,7 @@ export function Input(props: InputProps) {
   const { cast } = useRuntime(client.client.services)
   const paste = createPasteManager()
 
-  let inputRef: InputRenderable | null = null
+  let inputRef: TextareaRenderable | null = null
 
   // Internal state for uncontrolled mode (when inputState prop not provided)
   type InternalState =
@@ -133,38 +133,12 @@ export function Input(props: InputProps) {
     return internalState()._tag
   }
 
-  // Delete word backward
-  const deleteWordBackward = () => {
-    if (inputRef === null) return
-    const value = inputRef.value
-    const cursor = inputRef.cursorOffset
-    if (cursor === 0) return
-
-    let pos = cursor - 1
-    while (pos > 0 && value[pos - 1] === " ") pos--
-    while (pos > 0 && value[pos - 1] !== " ") pos--
-
-    inputRef.value = value.slice(0, pos) + value.slice(cursor)
-    inputRef.cursorOffset = pos
-  }
-
-  // Delete line backward
-  const deleteLineBackward = () => {
-    if (inputRef === null) return
-    const value = inputRef.value
-    const cursor = inputRef.cursorOffset
-    if (cursor === 0) return
-
-    inputRef.value = value.slice(cursor)
-    inputRef.cursorOffset = 0
-  }
-
   // Handle autocomplete selection
   const handleAutocompleteSelect = (value: string) => {
     const state = autocomplete()
     if (state === null || inputRef === null) return
 
-    const currentValue = inputRef.value
+    const currentValue = inputRef.plainText
     const beforeTrigger = currentValue.slice(0, state.triggerPos)
 
     let insertion = ""
@@ -180,8 +154,9 @@ export function Input(props: InputProps) {
         break
     }
 
-    inputRef.value = beforeTrigger + insertion
-    inputRef.cursorOffset = beforeTrigger.length + insertion.length
+    const newValue = beforeTrigger + insertion
+    inputRef.replaceText(newValue)
+    inputRef.cursorOffset = newValue.length
     setAutocomplete(null)
   }
 
@@ -191,8 +166,9 @@ export function Input(props: InputProps) {
     inputRef?.focus()
   }
 
-  // Handle input changes for autocomplete detection and paste detection
-  const handleInputChange = (value: string) => {
+  // Handle content changes for autocomplete detection and paste detection
+  const handleContentChange = () => {
+    const value = inputRef?.plainText ?? ""
     // Detect large pastes by comparing with previous value
     // If value grew significantly, check if it's a paste
     if (value.length > previousValue.length && inputRef !== null) {
@@ -201,7 +177,7 @@ export function Input(props: InputProps) {
         // Replace the pasted content with a placeholder
         const placeholder = paste.createPlaceholder(inserted)
         const newValue = previousValue + placeholder
-        inputRef.value = newValue
+        inputRef.replaceText(newValue)
         inputRef.cursorOffset = newValue.length
         previousValue = newValue
         setAutocomplete(null)
@@ -288,7 +264,7 @@ export function Input(props: InputProps) {
     if (effectiveMode() === "shell") {
       if (e.name === "escape") {
         setInternalState({ _tag: "normal", autocomplete: null })
-        if (inputRef !== null) inputRef.value = ""
+        if (inputRef !== null) inputRef.setText("")
         return
       }
       // Backspace at position 0 or 1 exits shell mode (like deleting the implicit !)
@@ -308,22 +284,10 @@ export function Input(props: InputProps) {
       setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
       return
     }
-
-    // Option+Backspace / Ctrl+W: delete word backward
-    if ((e.meta === true && e.name === "backspace") || (e.ctrl === true && e.name === "w")) {
-      deleteWordBackward()
-      return
-    }
-
-    // Cmd+Backspace / Ctrl+U: delete line backward
-    if ((e.super === true && e.name === "backspace") || (e.ctrl === true && e.name === "u")) {
-      deleteLineBackward()
-      return
-    }
   })
 
   const handleSubmit = () => {
-    const value = inputRef?.value ?? ""
+    const value = inputRef?.plainText ?? ""
     // Expand paste placeholders before processing
     const expanded = paste.expandPlaceholders(value)
     const text = expanded.trim()
@@ -427,13 +391,16 @@ export function Input(props: InputProps) {
   }
 
   const clearInput = () => {
-    if (inputRef !== null) inputRef.value = ""
+    if (inputRef !== null) inputRef.setText("")
     previousValue = ""
   }
 
-  // Focus input on mount
+  // Focus input and wire content change listener on mount
   onMount(() => {
-    inputRef?.focus()
+    if (inputRef !== null) {
+      inputRef.focus()
+      inputRef.onContentChange = handleContentChange
+    }
   })
 
   onCleanup(() => {
@@ -484,11 +451,17 @@ export function Input(props: InputProps) {
             {promptSymbol()}
           </text>
           <box flexGrow={1}>
-            <input
+            <textarea
               ref={(r) => (inputRef = r)}
               focused={inputFocused()}
-              onInput={handleInputChange}
               onSubmit={handleSubmit}
+              wrapMode="word"
+              minHeight={1}
+              maxHeight={8}
+              keyBindings={[
+                { name: "return", action: "submit" },
+                { name: "return", shift: true, action: "newline" },
+              ]}
               backgroundColor="transparent"
               focusedBackgroundColor="transparent"
             />
