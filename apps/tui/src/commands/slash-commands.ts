@@ -18,6 +18,7 @@ export type SlashCommandId =
   | "permissions"
   | "auth"
   | "handoff"
+  | "counsel"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -112,6 +113,19 @@ export const executeSlashCommand = (
         ctx.sendMessage(
           "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
         )
+        return { handled: true }
+      })
+
+    case "counsel":
+      return Effect.sync(() => {
+        const prompt = _args.trim()
+        if (prompt.length === 0) {
+          ctx.sendMessage(
+            "Use the counsel tool to get a peer review from the opposite vendor model. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
+          )
+        } else {
+          ctx.sendMessage(`Use the counsel tool with this prompt: ${prompt}`)
+        }
         return { handled: true }
       })
 

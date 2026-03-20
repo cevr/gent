@@ -114,6 +114,9 @@ export {
 // Look At Tool
 export { LookAtTool, LookAtParams, LookAtError } from "./look-at"
 
+// Counsel Tool
+export { CounselTool, CounselParams, CounselError } from "./counsel"
+
 // All Tools
 import type { AnyToolDefinition } from "@gent/core"
 import { ReadTool } from "./read"
@@ -137,6 +140,7 @@ import { CodeReviewTool } from "./code-review"
 import { SearchSessionsTool } from "./search-sessions"
 import { ReadSessionTool } from "./read-session"
 import { LookAtTool } from "./look-at"
+import { CounselTool } from "./counsel"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -162,4 +166,5 @@ export const AllTools: AnyToolDefinition[] = [
   SearchSessionsTool,
   ReadSessionTool,
   LookAtTool,
+  CounselTool,
 ]

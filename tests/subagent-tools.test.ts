@@ -1,7 +1,14 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { FinderTool, OracleTool, CodeReviewTool, LookAtTool, HandoffTool } from "@gent/tools"
+import {
+  FinderTool,
+  OracleTool,
+  CodeReviewTool,
+  LookAtTool,
+  HandoffTool,
+  CounselTool,
+} from "@gent/tools"
 import { SubagentRunnerService, HandoffHandler, type ToolContext, type SessionId } from "@gent/core"
 
 const ctx: ToolContext = {
@@ -315,5 +322,109 @@ describe("Session refs in subagent output", () => {
     )
     expect(result.error).toBe("runner failed")
     expect(result.error).not.toContain("session://")
+  })
+})
+
+describe("CounselTool", () => {
+  test("routes to opposite agent (cowork → deepwork)", async () => {
+    let capturedAgent = ""
+    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        capturedAgent = params.agent.name
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "review from deepwork",
+          sessionId: "counsel-session" as SessionId,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(capturingRunner, platformLayer)
+    const coworkCtx: ToolContext = { ...ctx, agentName: "cowork" }
+    const result = await Effect.runPromise(
+      CounselTool.execute({ prompt: "review this code" }, coworkCtx).pipe(Effect.provide(layer)),
+    )
+    expect(capturedAgent).toBe("deepwork")
+    expect(result.review).toContain("review from deepwork")
+    expect(result.review).toContain("session://counsel-session")
+    expect(result.reviewer).toBe("deepwork")
+  })
+
+  test("routes to opposite agent (deepwork → cowork)", async () => {
+    let capturedAgent = ""
+    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        capturedAgent = params.agent.name
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "review from cowork",
+          sessionId: "counsel-session" as SessionId,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(capturingRunner, platformLayer)
+    const deepworkCtx: ToolContext = { ...ctx, agentName: "deepwork" }
+    const result = await Effect.runPromise(
+      CounselTool.execute({ prompt: "check for bugs" }, deepworkCtx).pipe(Effect.provide(layer)),
+    )
+    expect(capturedAgent).toBe("cowork")
+    expect(result.reviewer).toBe("cowork")
+  })
+
+  test("includes adversarial framing in prompt", async () => {
+    let capturedPrompt = ""
+    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        capturedPrompt = params.prompt
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "looks fine",
+          sessionId: "session" as SessionId,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(capturingRunner, platformLayer)
+    await Effect.runPromise(
+      CounselTool.execute({ prompt: "review auth module" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(capturedPrompt).toContain("adversarial peer reviewer")
+    expect(capturedPrompt).toContain("review auth module")
+  })
+
+  test("inlines file contents when provided", async () => {
+    let capturedPrompt = ""
+    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        capturedPrompt = params.prompt
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "review result",
+          sessionId: "session" as SessionId,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(capturingRunner, platformLayer)
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectory()
+        const filePath = `${tmpDir}/auth.ts`
+        yield* fs.writeFileString(filePath, "export const secret = 42")
+        yield* CounselTool.execute({ prompt: "review this", files: [filePath] }, ctx)
+      }).pipe(Effect.scoped, Effect.provide(layer)),
+    )
+    expect(capturedPrompt).toContain("export const secret = 42")
+  })
+
+  test("returns error with session ref on failure", async () => {
+    const layer = Layer.mergeAll(mockRunnerErrorWithSession, platformLayer)
+    const result = await Effect.runPromise(
+      CounselTool.execute({ prompt: "review" }, ctx).pipe(Effect.provide(layer)),
+    )
+    expect(result.error).toContain("runner failed")
+    expect(result.error).toContain("session://error-session")
   })
 })
