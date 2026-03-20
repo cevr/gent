@@ -96,7 +96,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
             if (result._tag === "Failure") {
               const failure = result.failure
               const message = Schema.isSchemaError(failure)
-                ? `Tool '${toolCall.toolName}' failed: ${failure.message}`
+                ? formatSchemaError(toolCall.toolName, failure)
                 : `Tool '${toolCall.toolName}' failed: ${String(failure)}`
               return errorResult(toolCall, message)
             }

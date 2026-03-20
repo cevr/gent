@@ -496,6 +496,39 @@ describe("ToolRunner", () => {
     const error = (result.output.value as { error?: string }).error ?? ""
     expect(error).toContain("Tool 'fail' failed")
   })
+
+  test("returns structured error on invalid input", async () => {
+    const StrictTool = defineTool({
+      name: "strict",
+      concurrency: "parallel",
+      description: "Requires specific params",
+      params: Schema.Struct({ path: Schema.String }),
+      execute: () => Effect.succeed({ ok: true }),
+    })
+
+    const deps = Layer.mergeAll(
+      ToolRegistry.Live([StrictTool]),
+      Permission.Test(),
+      PermissionHandler.Test(["allow"]),
+    )
+    const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc1", toolName: "strict", input: { path: 42 } },
+          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("error-json")
+    const error = (result.output.value as { error?: string }).error ?? ""
+    expect(error).toContain("Tool 'strict' input failed:")
+    expect(error).toContain("path")
+  })
 })
 
 describe("Tool concurrency", () => {
