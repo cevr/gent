@@ -171,7 +171,7 @@ export const LocalActorProcessLive: Layer.Layer<
                     new ErrorOccurred({
                       sessionId: input.sessionId,
                       branchId: input.branchId,
-                      error: `Agent loop failed: ${cause}`,
+                      error: Cause.pretty(cause),
                     }),
                   )
                   yield* Effect.logWarning("agent loop failed", cause)

@@ -15,6 +15,7 @@ TUI (@opentui/solid) ←── SSE ──→ Server (HttpApi)
                                       │
                               ┌───────▼───────┐
                               │    Runtime    │
+                              │ ActorProcess  │
                               │  AgentLoop    │
                               │  AgentActor   │
                               │  EventStore   │
@@ -37,7 +38,7 @@ packages/
 ├── storage/        # SQLite (bun:sqlite) - baked in
 ├── tools/          # Effect services
 ├── providers/      # Vercel AI SDK adapters
-├── runtime/        # AgentLoop, AgentActor, EventStore, Hooks
+├── runtime/        # ActorProcess, AgentLoop, AgentActor, EventStore, Hooks
 └── test-utils/     # Mock layers, sequence recording
 
 apps/
@@ -58,11 +59,18 @@ MessagePart = TextPart | ToolCallPart | ToolResultPart | ReasoningPart | ImagePa
 Message = { id, sessionId, branchId, role, parts[], createdAt }
 ```
 
-### Agent Loop + Agents
+### ActorProcess + Agent Loop + Agents
 
-Primary agent loop is an effect-machine actor (Idle/Running/Interrupted). Subagents run via AgentActor (effect-machine Machine.spawn):
+GentCore routes all agent work through ActorProcess (single entry point). LocalActorProcessLive delegates to AgentLoop. Defects are surfaced via AgentRestarted events.
 
 ```typescript
+ActorProcess {
+  sendUserMessage(payload)  // Constructs Message, forkDetach agentLoop.run
+  sendToolResult(payload)   // Manual tool result injection
+  interrupt(payload)        // Cancel/interrupt/interject
+  steerAgent(command)       // Switch agent, etc.
+}
+
 AgentLoop {
   run(message)      // Executes; tools can include plan
   steer(command)    // Interrupt mid-run
