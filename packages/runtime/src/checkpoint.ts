@@ -45,6 +45,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "anthropic/claude-haiku-4-5-20251001": 200_000,
   "openai/gpt-5.2-codex": 1_000_000,
   "openai/gpt-5.4": 1_000_000,
+  "openai/gpt-5.4-mini": 1_000_000,
   "openai/o3": 200_000,
   "openai/o4-mini": 200_000,
 }

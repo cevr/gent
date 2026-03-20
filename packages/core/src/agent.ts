@@ -179,14 +179,14 @@ export const Agents = {
 export const AgentModels: Record<AgentName, ModelId> = {
   cowork: "anthropic/claude-opus-4-6" as ModelId,
   deepwork: "openai/gpt-5.4" as ModelId,
-  explore: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  explore: "openai/gpt-5.4-mini" as ModelId,
   architect: "anthropic/claude-opus-4-6" as ModelId,
-  librarian: "anthropic/claude-3-5-haiku-20241022" as ModelId,
-  summarizer: "anthropic/claude-3-5-haiku-20241022" as ModelId,
-  title: "anthropic/claude-3-5-haiku-20241022" as ModelId,
-  finder: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  librarian: "openai/gpt-5.4-mini" as ModelId,
+  summarizer: "openai/gpt-5.4-mini" as ModelId,
+  title: "openai/gpt-5.4-mini" as ModelId,
+  finder: "openai/gpt-5.4-mini" as ModelId,
   oracle: "anthropic/claude-opus-4-6" as ModelId,
-  reviewer: "anthropic/claude-3-5-haiku-20241022" as ModelId,
+  reviewer: "openai/gpt-5.4-mini" as ModelId,
 }
 
 export const resolveAgentModelId = (agent: AgentName): ModelId => AgentModels[agent]
