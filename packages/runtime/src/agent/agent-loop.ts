@@ -27,6 +27,7 @@ import {
   resolveAgentModelId,
   Message,
   TextPart,
+  ReasoningPart,
   ToolCallPart,
   EventStore,
   StreamStarted,
@@ -462,6 +463,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
                 // Collect response parts
                 const textParts: string[] = []
+                const reasoningParts: string[] = []
                 const toolCalls: ToolCallPart[] = []
                 let lastFinishChunk: FinishChunk | undefined
 
@@ -494,6 +496,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                             chunk: chunk.text,
                           }),
                         )
+                      } else if (chunk._tag === "ReasoningChunk") {
+                        reasoningParts.push(chunk.text)
                       } else if (chunk._tag === "ToolCallChunk") {
                         toolCalls.push(
                           new ToolCallPart({
@@ -522,16 +526,24 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   )
 
                   const partialText = textParts.join("")
+                  const partialReasoning = reasoningParts.join("")
                   let assistantCreatedAtMs: number | null = null
-                  if (partialText !== "") {
+                  if (partialText !== "" || partialReasoning !== "") {
                     const createdAt = new Date()
                     assistantCreatedAtMs = createdAt.getTime()
+                    const parts: Array<TextPart | ReasoningPart> = []
+                    if (partialReasoning !== "") {
+                      parts.push(new ReasoningPart({ type: "reasoning", text: partialReasoning }))
+                    }
+                    if (partialText !== "") {
+                      parts.push(new TextPart({ type: "text", text: partialText }))
+                    }
                     const assistantMessage = new Message({
                       id: Bun.randomUUIDv7() as MessageId,
                       sessionId,
                       branchId,
                       role: "assistant",
-                      parts: [new TextPart({ type: "text", text: partialText })],
+                      parts,
                       createdAt,
                     })
 
@@ -575,7 +587,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 )
 
                 // Build assistant message
-                const assistantParts: Array<TextPart | ToolCallPart> = []
+                const assistantParts: Array<TextPart | ReasoningPart | ToolCallPart> = []
+                const reasoningText = reasoningParts.join("")
+                if (reasoningText !== "") {
+                  assistantParts.push(new ReasoningPart({ type: "reasoning", text: reasoningText }))
+                }
                 const fullText = textParts.join("")
                 if (fullText !== "") {
                   assistantParts.push(new TextPart({ type: "text", text: fullText }))
@@ -1112,6 +1128,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             ).pipe(Effect.withSpan("AgentActor.provider.stream"))
 
             const textParts: string[] = []
+            const reasoningParts: string[] = []
             const toolCalls: ToolCallPart[] = []
             let lastFinishChunk: FinishChunk | undefined
 
@@ -1126,6 +1143,8 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                       chunk: chunk.text,
                     }),
                   )
+                } else if (chunk._tag === "ReasoningChunk") {
+                  reasoningParts.push(chunk.text)
                 } else if (chunk._tag === "ToolCallChunk") {
                   const toolCall = new ToolCallPart({
                     type: "tool-call",
@@ -1148,7 +1167,11 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
               }),
             )
 
-            const assistantParts: Array<TextPart | ToolCallPart> = []
+            const assistantParts: Array<TextPart | ReasoningPart | ToolCallPart> = []
+            const reasoningText = reasoningParts.join("")
+            if (reasoningText !== "") {
+              assistantParts.push(new ReasoningPart({ type: "reasoning", text: reasoningText }))
+            }
             const fullText = textParts.join("")
             if (fullText !== "") {
               assistantParts.push(new TextPart({ type: "text", text: fullText }))
