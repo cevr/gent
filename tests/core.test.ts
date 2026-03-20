@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import {
   Skills,
   Skill,
@@ -15,11 +15,18 @@ import {
   PlanHandler,
   HandoffHandler,
   type SessionId,
+  type Message,
 } from "@gent/core"
 import { Storage } from "@gent/storage"
 import { Provider } from "@gent/providers"
 import { GentCore } from "@gent/server"
-import { ActorProcess, CheckpointService, ConfigService } from "@gent/runtime"
+import {
+  ActorProcess,
+  AgentLoop,
+  LocalActorProcessLive,
+  CheckpointService,
+  ConfigService,
+} from "@gent/runtime"
 
 describe("Skills System", () => {
   test("Skills.Test provides test skills", async () => {
@@ -290,5 +297,149 @@ describe("Session Tree", () => {
 
     expect(result).not.toBeNull()
     expect(result!.parentSessionId).toBeDefined()
+  })
+})
+
+describe("GentCore → ActorProcess integration", () => {
+  const makeIntegrationLayer = (runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>) => {
+    const agentLoopLayer = Layer.effect(
+      AgentLoop,
+      Effect.gen(function* () {
+        const log = yield* Effect.succeed(runLog)
+        return {
+          run: (message: Message) =>
+            Ref.update(log, (entries) => [
+              ...entries,
+              {
+                sessionId: message.sessionId,
+                content: message.parts
+                  .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                  .map((p) => p.text)
+                  .join(""),
+              },
+            ]),
+          steer: () => Effect.void,
+          followUp: () => Effect.void,
+          isRunning: () => Effect.succeed(false),
+        }
+      }),
+    )
+
+    const eventStoreLayer = EventStore.Test()
+    const storageDeps = Layer.mergeAll(Storage.Test(), eventStoreLayer, agentLoopLayer)
+    const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
+    const baseWithActorProcess = Layer.mergeAll(
+      storageDeps,
+      actorProcessLayer,
+      Provider.Test([]),
+      CheckpointService.Test(),
+      Permission.Live([], "ask"),
+      ConfigService.Test(),
+    )
+    const deps = Layer.mergeAll(
+      baseWithActorProcess,
+      Layer.provide(PermissionHandler.Live, baseWithActorProcess),
+      Layer.provide(PlanHandler.Live, baseWithActorProcess),
+      Layer.provide(HandoffHandler.Live, baseWithActorProcess),
+    )
+    return Layer.provideMerge(GentCore.Live, deps)
+  }
+
+  test("createSession with firstMessage reaches AgentLoop.run", async () => {
+    const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
+    const layer = makeIntegrationLayer(runLog)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        const session = yield* core.createSession({
+          name: "Integration Test",
+          firstMessage: "hello from createSession",
+        })
+
+        // Give forked fiber time to execute
+        yield* Effect.sleep("50 millis")
+
+        const entries = yield* Ref.get(runLog)
+        expect(entries.length).toBe(1)
+        expect(entries[0]!.sessionId).toBe(session.sessionId)
+        expect(entries[0]!.content).toBe("hello from createSession")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("sendMessage reaches AgentLoop.run", async () => {
+    const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
+    const layer = makeIntegrationLayer(runLog)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        const session = yield* core.createSession({ name: "Send Test" })
+
+        yield* core.sendMessage({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          content: "hello from sendMessage",
+        })
+
+        // Give forked fiber time to execute
+        yield* Effect.sleep("50 millis")
+
+        const entries = yield* Ref.get(runLog)
+        expect(entries.length).toBe(1)
+        expect(entries[0]!.sessionId).toBe(session.sessionId)
+        expect(entries[0]!.content).toBe("hello from sendMessage")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("steer reaches AgentLoop.steer", async () => {
+    let steered = false
+
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      run: () => Effect.void,
+      steer: () =>
+        Effect.sync(() => {
+          steered = true
+        }),
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+    })
+
+    const eventStoreLayer = EventStore.Test()
+    const storageDeps = Layer.mergeAll(Storage.Test(), eventStoreLayer, agentLoopLayer)
+    const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
+    const baseWithActorProcess = Layer.mergeAll(
+      storageDeps,
+      actorProcessLayer,
+      Provider.Test([]),
+      CheckpointService.Test(),
+      Permission.Live([], "ask"),
+      ConfigService.Test(),
+    )
+    const deps = Layer.mergeAll(
+      baseWithActorProcess,
+      Layer.provide(PermissionHandler.Live, baseWithActorProcess),
+      Layer.provide(PlanHandler.Live, baseWithActorProcess),
+      Layer.provide(HandoffHandler.Live, baseWithActorProcess),
+    )
+    const layer = Layer.provideMerge(GentCore.Live, deps)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const core = yield* GentCore
+        const session = yield* core.createSession({ name: "Steer Test" })
+
+        yield* core.steer({
+          _tag: "SwitchAgent",
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          agent: "deepwork",
+        })
+
+        expect(steered).toBe(true)
+      }).pipe(Effect.provide(layer)),
+    )
   })
 })
