@@ -23,8 +23,17 @@ export function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
         return (
           <box flexDirection="column">
             <text style={{ fg: theme.textMuted }}>
-              <span style={{ fg: entry.status === "running" ? theme.warning : theme.success }}>
-                {entry.status === "running" ? "⋯" : "✓"}
+              <span
+                style={{
+                  fg:
+                    entry.status === "running"
+                      ? theme.warning
+                      : entry.status === "error"
+                        ? theme.error
+                        : theme.success,
+                }}
+              >
+                {entry.status === "running" ? "⋯" : entry.status === "error" ? "✕" : "✓"}
               </span>{" "}
               {entry.agentName}
             </text>

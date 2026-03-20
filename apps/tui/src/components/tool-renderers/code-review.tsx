@@ -1,6 +1,7 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
+import { LiveChildTree } from "./live-child-tree"
 import type { ToolRendererProps } from "./types"
 
 interface ReviewComment {
@@ -72,9 +73,16 @@ export function CodeReviewToolRenderer(props: ToolRendererProps) {
       expanded={props.expanded}
     >
       <Show when={props.toolCall.status === "running"}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.warning }}>⋯</span> Reviewing…
-        </text>
+        <Show
+          when={props.childSessions !== undefined && props.childSessions.length > 0}
+          fallback={
+            <text style={{ fg: theme.textMuted }}>
+              <span style={{ fg: theme.warning }}>⋯</span> Reviewing…
+            </text>
+          }
+        >
+          <LiveChildTree childSessions={props.childSessions ?? []} />
+        </Show>
       </Show>
 
       <Show when={props.toolCall.status !== "running" && summaryText() !== undefined}>

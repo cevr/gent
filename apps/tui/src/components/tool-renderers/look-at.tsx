@@ -1,6 +1,7 @@
 import { Show } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
+import { LiveChildTree } from "./live-child-tree"
 import type { ToolRendererProps } from "./types"
 
 function parseInput(input: unknown): { path?: string; objective?: string } | undefined {
@@ -40,9 +41,16 @@ export function LookAtToolRenderer(props: ToolRendererProps) {
       expanded={props.expanded}
     >
       <Show when={props.toolCall.status === "running"}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.warning }}>⋯</span> Analyzing…
-        </text>
+        <Show
+          when={props.childSessions !== undefined && props.childSessions.length > 0}
+          fallback={
+            <text style={{ fg: theme.textMuted }}>
+              <span style={{ fg: theme.warning }}>⋯</span> Analyzing…
+            </text>
+          }
+        >
+          <LiveChildTree childSessions={props.childSessions ?? []} />
+        </Show>
       </Show>
 
       <Show when={props.toolCall.status !== "running" && output()?.output !== undefined}>

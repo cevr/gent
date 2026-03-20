@@ -163,6 +163,10 @@ function SingleToolCall(props: {
   const Renderer = () => TOOL_RENDERERS[toolName()] ?? GenericToolRenderer
 
   const childSessions = () => props.getChildSessions?.(props.toolCall.id)
+  const hasLiveChildren = () => {
+    const cs = childSessions()
+    return cs !== undefined && cs.length > 0
+  }
 
   return (
     <box flexDirection="column">
@@ -173,12 +177,18 @@ function SingleToolCall(props: {
           <span style={{ fg: theme.textMuted }}>({inputSummary()})</span>
         </Show>
       </text>
-      {(() => {
-        const R = Renderer()
-        return (
-          <R toolCall={props.toolCall} expanded={props.expanded} childSessions={childSessions()} />
-        )
-      })()}
+      <Show when={props.toolCall.status !== "running" || hasLiveChildren()}>
+        {(() => {
+          const R = Renderer()
+          return (
+            <R
+              toolCall={props.toolCall}
+              expanded={props.expanded}
+              childSessions={childSessions()}
+            />
+          )
+        })()}
+      </Show>
     </box>
   )
 }
