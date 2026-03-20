@@ -346,13 +346,13 @@ describe("Handoff Events", () => {
 
 describe("estimateContextPercent", () => {
   test("returns 0 for empty messages", () => {
-    // System overhead only: 4000 tokens / 200000 = 2%
-    const percent = estimateContextPercent([], "anthropic/claude-opus-4-5")
-    expect(percent).toBe(2) // just system overhead
+    // System overhead only: 4000 tokens / 1000000 = 0.4% → 0
+    const percent = estimateContextPercent([], "anthropic/claude-opus-4-6")
+    expect(percent).toBe(0)
   })
 
   test("calculates percent against model context window", () => {
-    // 800 chars = 200 tokens. + 4000 overhead = 4200 tokens. / 200000 = 2.1% → rounds to 2
+    // 800 chars = 200 tokens. + 4000 overhead = 4200 tokens. / 1000000 = 0.42% → 0
     const messages = [
       new Message({
         id: "m1",
@@ -363,12 +363,12 @@ describe("estimateContextPercent", () => {
         createdAt: new Date(),
       }),
     ]
-    const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-5")
-    expect(percent).toBe(2)
+    const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-6")
+    expect(percent).toBe(0)
   })
 
   test("larger messages increase percent", () => {
-    // 40000 chars = 10000 tokens. + 4000 = 14000. / 200000 = 7%
+    // 40000 chars = 10000 tokens. + 4000 = 14000. / 1000000 = 1.4% → 1
     const messages = [
       new Message({
         id: "m1",
@@ -379,8 +379,8 @@ describe("estimateContextPercent", () => {
         createdAt: new Date(),
       }),
     ]
-    const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-5")
-    expect(percent).toBe(7)
+    const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-6")
+    expect(percent).toBe(1)
   })
 
   test("respects different model context windows", () => {
@@ -395,7 +395,7 @@ describe("estimateContextPercent", () => {
         createdAt: new Date(),
       }),
     ]
-    const percent = estimateContextPercent(messages, "openai/gpt-5.2-codex")
+    const percent = estimateContextPercent(messages, "openai/gpt-5.4")
     expect(percent).toBe(1)
   })
 
@@ -445,17 +445,17 @@ describe("estimateContextPercent", () => {
     const tokens = estimateTokens(messages)
     expect(tokens).toBeGreaterThan(0)
 
-    const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-5")
-    expect(percent).toBeGreaterThan(2) // more than just overhead
+    const percent = estimateContextPercent(messages, "anthropic/claude-opus-4-6")
+    expect(percent).toBeGreaterThan(0) // more than just overhead
     expect(percent).toBeLessThan(100)
   })
 })
 
 describe("getContextWindow", () => {
   test("returns known model windows", () => {
-    expect(getContextWindow("anthropic/claude-opus-4-5")).toBe(200_000)
-    expect(getContextWindow("openai/gpt-5.2-codex")).toBe(1_000_000)
-    expect(getContextWindow("anthropic/claude-3-5-haiku-20241022")).toBe(200_000)
+    expect(getContextWindow("anthropic/claude-opus-4-6")).toBe(1_000_000)
+    expect(getContextWindow("openai/gpt-5.4")).toBe(1_000_000)
+    expect(getContextWindow("openai/gpt-5.4-mini")).toBe(1_000_000)
   })
 
   test("returns default for unknown models", () => {

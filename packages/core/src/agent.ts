@@ -17,7 +17,6 @@ export const AgentName = Schema.Literals([
   "summarizer",
   "title",
   "finder",
-  "oracle",
   "reviewer",
 ])
 export type AgentName = typeof AgentName.Type
@@ -72,12 +71,6 @@ Finder agent. Multi-step codebase search specialist. Chain grep/read/glob to ans
 Report file paths and line numbers. Be exhaustive but concise.
 `.trim()
 
-export const ORACLE_PROMPT = `
-Oracle agent. Expert reasoning for hard problems — architecture review, debugging, complex planning.
-Provide comprehensive zero-shot analysis. Cite specific file paths and line numbers.
-Structure: problem → analysis → recommendation → implementation.
-`.trim()
-
 export const REVIEWER_PROMPT = `
 Reviewer agent. Examine code changes for bugs, security issues, and improvements.
 Run git diff or read specified files, then produce a structured review.
@@ -96,7 +89,7 @@ export const Agents = {
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "oracle", "reviewer"],
+    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer"],
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
@@ -104,7 +97,7 @@ export const Agents = {
     name: "deepwork",
     description: "Deep reasoning mode - thorough analysis, slower/longer answers",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "oracle", "reviewer"],
+    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer"],
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
   }),
@@ -157,14 +150,6 @@ export const Agents = {
     systemPromptAddendum: FINDER_PROMPT,
   }),
 
-  oracle: defineAgent({
-    name: "oracle",
-    description: "Expert reasoning for hard problems via strong model",
-    kind: "subagent",
-    allowedTools: ["read", "grep", "glob", "bash"],
-    systemPromptAddendum: ORACLE_PROMPT,
-  }),
-
   reviewer: defineAgent({
     name: "reviewer",
     description: "Structured code review with severity-graded comments",
@@ -185,7 +170,6 @@ export const AgentModels: Record<AgentName, ModelId> = {
   summarizer: "openai/gpt-5.4-mini" as ModelId,
   title: "openai/gpt-5.4-mini" as ModelId,
   finder: "openai/gpt-5.4-mini" as ModelId,
-  oracle: "anthropic/claude-opus-4-6" as ModelId,
   reviewer: "openai/gpt-5.4-mini" as ModelId,
 }
 

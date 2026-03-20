@@ -1,14 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import {
-  FinderTool,
-  OracleTool,
-  CodeReviewTool,
-  LookAtTool,
-  HandoffTool,
-  CounselTool,
-} from "@gent/tools"
+import { FinderTool, CodeReviewTool, LookAtTool, HandoffTool, CounselTool } from "@gent/tools"
 import { SubagentRunnerService, HandoffHandler, type ToolContext, type SessionId } from "@gent/core"
 
 const ctx: ToolContext = {
@@ -62,64 +55,6 @@ describe("FinderTool", () => {
       FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
     )
     expect(result.found).toBe(false)
-    expect(result.error).toBe("runner failed")
-  })
-})
-
-describe("OracleTool", () => {
-  test("passes task to runner prompt", async () => {
-    let capturedPrompt = ""
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        capturedPrompt = params.prompt
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "oracle response",
-          sessionId: "child" as SessionId,
-          agentName: params.agent.name,
-        })
-      },
-    })
-    const layer = Layer.mergeAll(capturingRunner, platformLayer)
-    await Effect.runPromise(
-      OracleTool.execute({ task: "analyze architecture" }, ctx).pipe(Effect.provide(layer)),
-    )
-    expect(capturedPrompt).toContain("analyze architecture")
-  })
-
-  test("inlines file contents when files provided", async () => {
-    let capturedPrompt = ""
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        capturedPrompt = params.prompt
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "oracle response",
-          sessionId: "child" as SessionId,
-          agentName: params.agent.name,
-        })
-      },
-    })
-    const layer = Layer.mergeAll(capturingRunner, platformLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const tmpDir = yield* fs.makeTempDirectory()
-        const filePath = `${tmpDir}/test.ts`
-        yield* fs.writeFileString(filePath, "const x = 42")
-
-        yield* OracleTool.execute({ task: "review this", files: [filePath] }, ctx)
-      }).pipe(Effect.scoped, Effect.provide(layer)),
-    )
-    expect(capturedPrompt).toContain("const x = 42")
-  })
-
-  test("returns error on runner failure", async () => {
-    const layer = Layer.mergeAll(mockRunnerError, platformLayer)
-    const result = await Effect.runPromise(
-      OracleTool.execute({ task: "solve this" }, ctx).pipe(Effect.provide(layer)),
-    )
     expect(result.error).toBe("runner failed")
   })
 })
@@ -264,14 +199,6 @@ describe("Session refs in subagent output", () => {
     expect(result.response).toContain("\n\nFull session: session://child-session")
   })
 
-  test("OracleTool appends session ref to output", async () => {
-    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
-    const result = await Effect.runPromise(
-      OracleTool.execute({ task: "analyze" }, ctx).pipe(Effect.provide(layer)),
-    )
-    expect(result.output).toContain("\n\nFull session: session://child-session")
-  })
-
   test("LookAtTool appends session ref to output", async () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
     const result = await Effect.runPromise(
@@ -318,7 +245,7 @@ describe("Session refs in subagent output", () => {
   test("error path omits session ref when sessionId absent", async () => {
     const layer = Layer.mergeAll(mockRunnerError, platformLayer)
     const result = await Effect.runPromise(
-      OracleTool.execute({ task: "solve" }, ctx).pipe(Effect.provide(layer)),
+      FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
     )
     expect(result.error).toBe("runner failed")
     expect(result.error).not.toContain("session://")

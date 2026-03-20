@@ -3,15 +3,7 @@ import { AuthOauth, type AuthStoreService } from "@gent/core"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
 
-export const OPENAI_OAUTH_ALLOWED_MODELS = new Set([
-  "gpt-5.1-codex-max",
-  "gpt-5.1-codex-mini",
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  "gpt-5.1-codex",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-])
+export const OPENAI_OAUTH_ALLOWED_MODELS = new Set(["gpt-5.4", "gpt-5.4-mini"])
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const ISSUER = "https://auth.openai.com"

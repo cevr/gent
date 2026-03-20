@@ -87,9 +87,6 @@ export { HandoffTool, HandoffParams, HandoffError } from "./handoff"
 // Finder Tool
 export { FinderTool, FinderParams, FinderError } from "./finder"
 
-// Oracle Tool
-export { OracleTool, OracleParams, OracleError } from "./oracle"
-
 // Code Review Tool
 export { CodeReviewTool, CodeReviewParams, CodeReviewError, ReviewComment } from "./code-review"
 
@@ -142,7 +139,6 @@ import { UndoEditTool } from "./undo-edit"
 import { LibrarianTool } from "./librarian"
 import { HandoffTool } from "./handoff"
 import { FinderTool } from "./finder"
-import { OracleTool } from "./oracle"
 import { CodeReviewTool } from "./code-review"
 import { SearchSessionsTool } from "./search-sessions"
 import { ReadSessionTool } from "./read-session"
@@ -173,7 +169,6 @@ export const AllTools: AnyToolDefinition[] = [
   LibrarianTool,
   HandoffTool,
   FinderTool,
-  OracleTool,
   CodeReviewTool,
   SearchSessionsTool,
   ReadSessionTool,
