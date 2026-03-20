@@ -117,6 +117,13 @@ export { LookAtTool, LookAtParams, LookAtError } from "./look-at"
 // Counsel Tool
 export { CounselTool, CounselParams, CounselError } from "./counsel"
 
+// Task Management Tools
+export { TaskCreateTool, TaskCreateParams } from "./task-create"
+export { TaskListTool, TaskListParams } from "./task-list"
+export { TaskGetTool, TaskGetParams } from "./task-get"
+export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
+export { TaskRunTool, TaskRunParams } from "./task-run"
+
 // All Tools
 import type { AnyToolDefinition } from "@gent/core"
 import { ReadTool } from "./read"
@@ -141,6 +148,11 @@ import { SearchSessionsTool } from "./search-sessions"
 import { ReadSessionTool } from "./read-session"
 import { LookAtTool } from "./look-at"
 import { CounselTool } from "./counsel"
+import { TaskCreateTool } from "./task-create"
+import { TaskListTool } from "./task-list"
+import { TaskGetTool } from "./task-get"
+import { TaskUpdateTool } from "./task-update"
+import { TaskRunTool } from "./task-run"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -167,4 +179,9 @@ export const AllTools: AnyToolDefinition[] = [
   ReadSessionTool,
   LookAtTool,
   CounselTool,
+  TaskCreateTool,
+  TaskListTool,
+  TaskGetTool,
+  TaskUpdateTool,
+  TaskRunTool,
 ]
