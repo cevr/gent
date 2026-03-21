@@ -9,5 +9,7 @@ pre-commit:
       stage_fixed: true
     - name: typecheck
       run: bun run typecheck
+    - name: build
+      run: bun run build
     - name: test
       run: bun run test
