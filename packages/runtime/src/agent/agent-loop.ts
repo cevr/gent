@@ -445,12 +445,14 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   .getSession(sessionId)
                   .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
                 const reasoning = resolveReasoning(agent, session?.reasoningLevel)
+                const abortController = new AbortController()
                 const streamEffect = yield* withRetry(
                   provider.stream({
                     model: modelId,
                     messages: [...messages],
                     tools: [...tools],
                     systemPrompt,
+                    abortSignal: abortController.signal,
                     ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
                     ...(reasoning !== undefined ? { reasoning } : {}),
                   }),
@@ -472,6 +474,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       cmd._tag === "Interject"
                     ) {
                       yield* Ref.set(interruptRef, cmd)
+                      abortController.abort()
                       return
                     }
                     yield* Ref.update(pendingSteerRef, (pending) => [...pending, cmd])

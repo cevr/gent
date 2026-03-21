@@ -63,6 +63,7 @@ export interface ProviderRequest {
   readonly maxTokens?: number
   readonly temperature?: number
   readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+  readonly abortSignal?: AbortSignal
   readonly providerOptions?: ProviderOptions
 }
 
@@ -160,11 +161,16 @@ export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
           if (request.temperature !== undefined) {
             opts.temperature = request.temperature
           }
+          if (request.abortSignal !== undefined) {
+            opts.abortSignal = request.abortSignal
+          }
           opts.providerOptions = buildProviderOptions(
             request.model,
             request.reasoning,
             request.providerOptions,
           )
+          // 30s chunk timeout — abort stream if no data for 30 seconds
+          opts.timeout = { chunkMs: 30_000 }
 
           const result = yield* Effect.try({
             try: () => streamText(opts),
