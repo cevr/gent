@@ -97,25 +97,32 @@ const REASONING_TO_EFFORT: Record<string, string> = {
   xhigh: "high",
 }
 
-function buildReasoningProviderOptions(
+function buildProviderOptions(
   modelId: string,
   reasoning: ProviderRequest["reasoning"],
   existing: ProviderOptions | undefined,
 ): ProviderOptions | undefined {
-  if (reasoning === undefined || reasoning === "none") return existing
-
   const providerId = modelId.indexOf("/") > 0 ? modelId.slice(0, modelId.indexOf("/")) : undefined
-  if (providerId !== "anthropic") return existing
+  if (providerId !== "anthropic") {
+    // Non-Anthropic: no custom provider options to add
+    return existing
+  }
 
-  const effort = REASONING_TO_EFFORT[reasoning]
   const existingRec = existing as Record<string, unknown> | undefined
   const existingAnthropic = existingRec?.["anthropic"] as Record<string, unknown> | undefined
   const anthropicOpts: Record<string, unknown> = {
     ...existingAnthropic,
-    thinking: { type: "adaptive" },
+    // Prompt caching — marks system prompt for ephemeral caching
+    cacheControl: { type: "ephemeral" },
   }
-  if (effort !== undefined) {
-    anthropicOpts["effort"] = effort
+
+  // Reasoning: adaptive thinking + effort level
+  if (reasoning !== undefined && reasoning !== "none") {
+    const effort = REASONING_TO_EFFORT[reasoning]
+    anthropicOpts["thinking"] = { type: "adaptive" }
+    if (effort !== undefined) {
+      anthropicOpts["effort"] = effort
+    }
   }
 
   return {
@@ -153,13 +160,11 @@ export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
           if (request.temperature !== undefined) {
             opts.temperature = request.temperature
           }
-          if (request.reasoning !== undefined || request.providerOptions !== undefined) {
-            opts.providerOptions = buildReasoningProviderOptions(
-              request.model,
-              request.reasoning,
-              request.providerOptions,
-            )
-          }
+          opts.providerOptions = buildProviderOptions(
+            request.model,
+            request.reasoning,
+            request.providerOptions,
+          )
 
           const result = yield* Effect.try({
             try: () => streamText(opts),
