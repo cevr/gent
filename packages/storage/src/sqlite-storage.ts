@@ -17,6 +17,7 @@ import {
   type BranchId,
   type MessageId,
   type TaskId,
+  type ReasoningEffort,
 } from "@gent/core"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
@@ -240,13 +241,18 @@ interface CheckpointRow {
   created_at: number
 }
 
+const VALID_REASONING = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
+
 const sessionFromRow = (row: SessionRow) =>
   new Session({
     id: row.id,
     name: row.name ?? undefined,
     cwd: row.cwd ?? undefined,
     bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
-    reasoningLevel: row.reasoning_level ?? undefined,
+    reasoningLevel:
+      row.reasoning_level !== null && VALID_REASONING.has(row.reasoning_level)
+        ? (row.reasoning_level as ReasoningEffort)
+        : undefined,
     parentSessionId: row.parent_session_id ?? undefined,
     parentBranchId: row.parent_branch_id ?? undefined,
     createdAt: new Date(row.created_at),

@@ -29,6 +29,7 @@ import {
   type BranchId,
   type MessageId,
   type SessionTreeNode,
+  type ReasoningEffort,
 } from "@gent/core"
 import { Storage, StorageError } from "@gent/storage"
 import {
@@ -114,7 +115,7 @@ export interface SessionInfo {
   name: string | undefined
   cwd: string | undefined
   bypass: boolean | undefined
-  reasoningLevel: string | undefined
+  reasoningLevel: ReasoningEffort | undefined
   branchId: BranchId | undefined
   parentSessionId: SessionId | undefined
   parentBranchId: BranchId | undefined
@@ -250,8 +251,8 @@ export interface GentCoreService {
 
   readonly updateSessionReasoningLevel: (input: {
     sessionId: SessionId
-    reasoningLevel: string | undefined
-  }) => Effect.Effect<{ reasoningLevel: string | undefined }, GentCoreError>
+    reasoningLevel: ReasoningEffort | undefined
+  }) => Effect.Effect<{ reasoningLevel: ReasoningEffort | undefined }, GentCoreError>
 
   // Interaction response methods (centralized business logic)
   readonly respondPermission: (input: {

@@ -5,6 +5,7 @@
  */
 
 import { Effect } from "effect"
+import type { ReasoningEffort } from "@gent/core"
 import { formatError, type UiError } from "../utils/format-error"
 
 export type SlashCommandId =
@@ -29,7 +30,7 @@ export interface SlashCommandContext {
   openTree: () => void
   openFork: () => void
   toggleBypass: Effect.Effect<void, UiError>
-  setReasoningLevel: (level: string | undefined) => Effect.Effect<void, UiError>
+  setReasoningLevel: (level: ReasoningEffort | undefined) => Effect.Effect<void, UiError>
   openPermissions: () => void
   openAuth: () => void
   sendMessage: (content: string) => void
@@ -107,7 +108,9 @@ export const executeSlashCommand = (
           error: `Usage: /think <${validLevels.join("|")}>`,
         })
       }
-      return runCommandEffect(ctx.setReasoningLevel(level === "off" ? undefined : level))
+      return runCommandEffect(
+        ctx.setReasoningLevel(level === "off" ? undefined : (level as ReasoningEffort)),
+      )
     }
 
     case "permissions":

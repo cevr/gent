@@ -1,5 +1,6 @@
 import { Schema, SchemaGetter as Getter } from "effect"
 import { SessionId, BranchId, MessageId } from "./ids"
+import { ReasoningEffort } from "./agent"
 
 // v4: DateFromNumber was removed — define locally
 export const DateFromNumber = Schema.Number.pipe(
@@ -79,7 +80,7 @@ export class Session extends Schema.Class<Session>("Session")({
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
-  reasoningLevel: Schema.optional(Schema.String),
+  reasoningLevel: Schema.optional(ReasoningEffort),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
   createdAt: DateFromNumber,

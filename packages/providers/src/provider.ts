@@ -86,11 +86,8 @@ export interface ProviderService {
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
 
-// Map gent reasoning level to Anthropic provider options.
-// The AI SDK Anthropic provider reads `thinking` + `effort` from providerOptions.
-// `thinking: { type: "adaptive" }` lets the model decide whether to think.
-// `effort` controls thinking depth: "low" | "medium" | "high".
-const REASONING_TO_EFFORT: Record<string, string> = {
+// Maps gent reasoning level to Anthropic effort (Anthropic caps at "high").
+const ANTHROPIC_EFFORT: Record<string, string> = {
   minimal: "low",
   low: "low",
   medium: "medium",
@@ -104,32 +101,32 @@ function buildProviderOptions(
   existing: ProviderOptions | undefined,
 ): ProviderOptions | undefined {
   const providerId = modelId.indexOf("/") > 0 ? modelId.slice(0, modelId.indexOf("/")) : undefined
-  if (providerId !== "anthropic") {
-    // Non-Anthropic: no custom provider options to add
-    return existing
-  }
-
   const existingRec = existing as Record<string, unknown> | undefined
-  const existingAnthropic = existingRec?.["anthropic"] as Record<string, unknown> | undefined
-  const anthropicOpts: Record<string, unknown> = {
-    ...existingAnthropic,
-    // Prompt caching — marks system prompt for ephemeral caching
-    cacheControl: { type: "ephemeral" },
-  }
 
-  // Reasoning: adaptive thinking + effort level
-  if (reasoning !== undefined && reasoning !== "none") {
-    const effort = REASONING_TO_EFFORT[reasoning]
-    anthropicOpts["thinking"] = { type: "adaptive" }
-    if (effort !== undefined) {
-      anthropicOpts["effort"] = effort
+  if (providerId === "anthropic") {
+    const existingAnthropic = existingRec?.["anthropic"] as Record<string, unknown> | undefined
+    const anthropicOpts: Record<string, unknown> = {
+      ...existingAnthropic,
+      cacheControl: { type: "ephemeral" },
     }
+    if (reasoning !== undefined && reasoning !== "none") {
+      anthropicOpts["thinking"] = { type: "adaptive" }
+      const effort = ANTHROPIC_EFFORT[reasoning]
+      if (effort !== undefined) anthropicOpts["effort"] = effort
+    }
+    return { ...existingRec, anthropic: anthropicOpts } as ProviderOptions
   }
 
-  return {
-    ...existingRec,
-    anthropic: anthropicOpts,
-  } as ProviderOptions
+  if (providerId === "openai" && reasoning !== undefined && reasoning !== "none") {
+    // OpenAI reads `reasoningEffort` directly — same levels as gent's ReasoningEffort
+    const existingOpenai = existingRec?.["openai"] as Record<string, unknown> | undefined
+    return {
+      ...existingRec,
+      openai: { ...existingOpenai, reasoningEffort: reasoning },
+    } as ProviderOptions
+  }
+
+  return existing
 }
 
 export class Provider extends ServiceMap.Service<Provider, ProviderService>()(

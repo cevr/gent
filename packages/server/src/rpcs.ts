@@ -14,6 +14,7 @@ import {
   PlanDecision,
   HandoffDecision,
   PermissionRule,
+  ReasoningEffort,
   SessionId,
   Task,
 } from "@gent/core"
@@ -52,7 +53,7 @@ export const SessionInfo = Schema.Struct({
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
-  reasoningLevel: Schema.optional(Schema.String),
+  reasoningLevel: Schema.optional(ReasoningEffort),
   branchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
@@ -227,7 +228,7 @@ export const SessionState = Schema.Struct({
   isStreaming: Schema.Boolean,
   agent: AgentName,
   bypass: Schema.optional(Schema.Boolean),
-  reasoningLevel: Schema.optional(Schema.String),
+  reasoningLevel: Schema.optional(ReasoningEffort),
 })
 
 // ============================================================================
@@ -283,11 +284,11 @@ export const UpdateSessionBypassSuccess = Schema.Struct({
 
 export const UpdateSessionReasoningLevelPayload = Schema.Struct({
   sessionId: SessionId,
-  reasoningLevel: Schema.UndefinedOr(Schema.String),
+  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 
 export const UpdateSessionReasoningLevelSuccess = Schema.Struct({
-  reasoningLevel: Schema.UndefinedOr(Schema.String),
+  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 
 export const RespondPlanPayload = Schema.Struct({

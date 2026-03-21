@@ -22,6 +22,7 @@ import {
   type EventEnvelope,
   type MessageId,
   type Model,
+  type ReasoningEffort,
   type SessionId,
 } from "@gent/core"
 import { tuiError } from "../utils/unified-tracer"
@@ -61,7 +62,7 @@ export interface Session {
   branchId: BranchId
   name: string
   bypass: boolean
-  reasoningLevel: string | undefined
+  reasoningLevel: ReasoningEffort | undefined
 }
 
 export type SessionState =
@@ -128,7 +129,7 @@ export interface ClientContextValue {
   clearSession: () => void
   updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
   updateSessionReasoningLevel: (
-    reasoningLevel: string | undefined,
+    reasoningLevel: ReasoningEffort | undefined,
   ) => Effect.Effect<void, GentRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)

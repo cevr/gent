@@ -481,7 +481,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   }
                 })
 
-                yield* Stream.runForEach(
+                const streamFailed = yield* Stream.runForEach(
                   streamEffect.pipe(Stream.interruptWhen(interruptSignal)),
                   (chunk) =>
                     Effect.gen(function* () {
@@ -509,7 +509,59 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                         lastFinishChunk = chunk
                       }
                     }),
+                ).pipe(
+                  Effect.as(false),
+                  Effect.catchEager((streamError) =>
+                    // Stream error (timeout, provider error) — persist any partial output
+                    Effect.gen(function* () {
+                      yield* Effect.logWarning(
+                        "stream error, persisting partial output",
+                        streamError,
+                      )
+                      const partialText = textParts.join("")
+                      const partialReasoning = reasoningParts.join("")
+                      if (partialText !== "" || partialReasoning !== "") {
+                        const parts: Array<TextPart | ReasoningPart> = []
+                        if (partialReasoning !== "") {
+                          parts.push(
+                            new ReasoningPart({ type: "reasoning", text: partialReasoning }),
+                          )
+                        }
+                        if (partialText !== "") {
+                          parts.push(new TextPart({ type: "text", text: partialText }))
+                        }
+                        const partialMessage = new Message({
+                          id: Bun.randomUUIDv7() as MessageId,
+                          sessionId,
+                          branchId,
+                          role: "assistant",
+                          parts,
+                          createdAt: new Date(),
+                        })
+                        yield* storage.createMessage(partialMessage)
+                        appendCachedMessage(partialMessage)
+                        yield* publishEvent(
+                          new MessageReceived({
+                            sessionId,
+                            branchId,
+                            messageId: partialMessage.id,
+                            role: "assistant",
+                          }),
+                        )
+                      }
+                      yield* publishEvent(
+                        new StreamEnded({ sessionId, branchId, interrupted: true }),
+                      )
+                      return true
+                    }),
+                  ),
                 )
+
+                if (streamFailed) {
+                  turnInterrupted = true
+                  continueLoop = false
+                  break
+                }
 
                 yield* applyPendingSteerCommands()
                 const interruptCmd = yield* Ref.get(interruptRef)

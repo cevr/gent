@@ -7,7 +7,7 @@
 
 import { Schema } from "effect"
 import { Event, Machine, State } from "effect-machine"
-import { SessionId, BranchId } from "@gent/core"
+import { SessionId, BranchId, ReasoningEffort } from "@gent/core"
 
 // ============================================================================
 // Schemas
@@ -18,7 +18,7 @@ const SessionSchema = Schema.Struct({
   branchId: BranchId,
   name: Schema.String,
   bypass: Schema.Boolean,
-  reasoningLevel: Schema.UndefinedOr(Schema.String),
+  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 
 // ============================================================================
@@ -58,7 +58,7 @@ export const SessionMachineEvent = Event({
   UpdateName: { name: Schema.String },
   UpdateBranch: { branchId: BranchId },
   UpdateBypass: { bypass: Schema.Boolean },
-  UpdateReasoningLevel: { reasoningLevel: Schema.UndefinedOr(Schema.String) },
+  UpdateReasoningLevel: { reasoningLevel: Schema.UndefinedOr(ReasoningEffort) },
 })
 
 // ============================================================================

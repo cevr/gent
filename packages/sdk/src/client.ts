@@ -37,6 +37,7 @@ import type {
   PlanDecision,
   HandoffDecision,
   PermissionRule,
+  ReasoningEffort,
   SessionId,
   Task,
   ProviderId,
@@ -180,7 +181,7 @@ export interface SessionInfo {
   name?: string
   cwd?: string
   bypass?: boolean
-  reasoningLevel?: string
+  reasoningLevel?: ReasoningEffort
   branchId?: BranchId
   parentSessionId?: SessionId
   parentBranchId?: BranchId
@@ -216,7 +217,7 @@ export interface SessionState {
   isStreaming: boolean
   agent: AgentName
   bypass?: boolean
-  reasoningLevel?: string
+  reasoningLevel?: ReasoningEffort
 }
 
 export interface SessionTreeNode {
@@ -361,8 +362,8 @@ export interface GentClient {
 
   updateSessionReasoningLevel: (
     sessionId: SessionId,
-    reasoningLevel: string | undefined,
-  ) => Effect.Effect<{ reasoningLevel: string | undefined }, GentRpcError>
+    reasoningLevel: ReasoningEffort | undefined,
+  ) => Effect.Effect<{ reasoningLevel: ReasoningEffort | undefined }, GentRpcError>
 
   /** Get permission rules */
   getPermissionRules: () => Effect.Effect<readonly PermissionRule[], GentRpcError>

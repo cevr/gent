@@ -107,6 +107,7 @@ export {
 export {
   AgentKind,
   AgentName,
+  ReasoningEffort,
   AgentDefinition,
   defineAgent,
   type AgentDefinitionInput,
