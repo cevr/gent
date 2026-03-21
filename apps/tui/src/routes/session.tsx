@@ -47,7 +47,7 @@ import {
   formatElapsed,
   type BorderLabelItem,
 } from "../components/bordered-input"
-import { formatTokens } from "../utils/format-tool"
+import { buildTopRightLabels } from "../utils/session-labels"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -560,26 +560,14 @@ export function Session(props: SessionProps) {
     return c > 0 ? [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }] : []
   }
 
-  const topRightLabels = (): BorderLabelItem[] => {
-    const items: BorderLabelItem[] = []
-
-    // Context window utilization
-    const tokens = client.latestInputTokens()
-    const model = client.modelInfo()
-    if (tokens > 0 && model?.contextLength !== undefined && model.contextLength > 0) {
-      const pct = Math.min(100, Math.round((tokens / model.contextLength) * 100))
-      const color = pct >= 90 ? theme.error : pct >= 70 ? theme.warning : theme.textMuted
-      items.push({ text: `${formatTokens(tokens)} (${pct}%)`, color })
-    }
-
-    // Model name
-    const m = client.model()
-    const slashIdx = m.indexOf("/")
-    const label = slashIdx >= 0 ? m.slice(slashIdx + 1) : m
-    if (label.length > 0) items.push({ text: label, color: theme.textMuted })
-
-    return items
-  }
+  const topRightLabels = (): BorderLabelItem[] =>
+    buildTopRightLabels(
+      client.agent(),
+      client.session()?.reasoningLevel,
+      client.latestInputTokens(),
+      client.modelInfo()?.contextLength,
+      theme,
+    )
 
   const bottomLeftLabels = (): BorderLabelItem[] => {
     const a = activity()

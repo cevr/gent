@@ -16,7 +16,7 @@ import { useExit } from "../hooks/use-exit"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { ClientError, type UiError } from "../utils/format-error"
 import { useWorkspace } from "../workspace/index"
-import { BorderedInput, formatCwdGit } from "../components/bordered-input"
+import { BorderedInput, formatCwdGit, type BorderLabelItem } from "../components/bordered-input"
 
 const LOGOS = getLogos()
 
@@ -195,7 +195,10 @@ export function Home(props: HomeProps) {
       </box>
 
       {/* Bordered input */}
-      <BorderedInput bottomRight={[{ text: cwdGitLabel(), color: theme.textMuted }]}>
+      <BorderedInput
+        topRight={[{ text: client.agent(), color: theme.textMuted }] satisfies BorderLabelItem[]}
+        bottomRight={[{ text: cwdGitLabel(), color: theme.textMuted }]}
+      >
         <Input onSubmit={handleSubmit} onSlashCommand={handleSlashCommand}>
           <Input.Autocomplete />
         </Input>
