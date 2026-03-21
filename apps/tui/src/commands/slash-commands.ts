@@ -15,6 +15,7 @@ export type SlashCommandId =
   | "tree"
   | "fork"
   | "bypass"
+  | "think"
   | "permissions"
   | "auth"
   | "handoff"
@@ -28,6 +29,7 @@ export interface SlashCommandContext {
   openTree: () => void
   openFork: () => void
   toggleBypass: Effect.Effect<void, UiError>
+  setReasoningLevel: (level: string | undefined) => Effect.Effect<void, UiError>
   openPermissions: () => void
   openAuth: () => void
   sendMessage: (content: string) => void
@@ -95,6 +97,18 @@ export const executeSlashCommand = (
 
     case "bypass":
       return runCommandEffect(ctx.toggleBypass)
+
+    case "think": {
+      const level = _args.trim().toLowerCase()
+      const validLevels = ["off", "low", "medium", "high", "xhigh"]
+      if (level === "" || !validLevels.includes(level)) {
+        return Effect.succeed({
+          handled: true,
+          error: `Usage: /think <${validLevels.join("|")}>`,
+        })
+      }
+      return runCommandEffect(ctx.setReasoningLevel(level === "off" ? undefined : level))
+    }
 
     case "permissions":
       return Effect.sync(() => {

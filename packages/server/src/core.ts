@@ -114,6 +114,7 @@ export interface SessionInfo {
   name: string | undefined
   cwd: string | undefined
   bypass: boolean | undefined
+  reasoningLevel: string | undefined
   branchId: BranchId | undefined
   parentSessionId: SessionId | undefined
   parentBranchId: BranchId | undefined
@@ -246,6 +247,11 @@ export interface GentCoreService {
     sessionId: SessionId
     bypass: boolean
   }) => Effect.Effect<{ bypass: boolean }, GentCoreError>
+
+  readonly updateSessionReasoningLevel: (input: {
+    sessionId: SessionId
+    reasoningLevel: string | undefined
+  }) => Effect.Effect<{ reasoningLevel: string | undefined }, GentCoreError>
 
   // Interaction response methods (centralized business logic)
   readonly respondPermission: (input: {
@@ -488,6 +494,7 @@ ${conversation}`
               name: s.name,
               cwd: s.cwd,
               bypass: s.bypass,
+              reasoningLevel: s.reasoningLevel,
               branchId: branchMap.get(s.id),
               parentSessionId: s.parentSessionId,
               parentBranchId: s.parentBranchId,
@@ -506,6 +513,7 @@ ${conversation}`
               name: session.name,
               cwd: session.cwd,
               bypass: session.bypass,
+              reasoningLevel: session.reasoningLevel,
               branchId: branches[0]?.id,
               parentSessionId: session.parentSessionId,
               parentBranchId: session.parentBranchId,
@@ -524,6 +532,7 @@ ${conversation}`
               name: session.name,
               cwd: session.cwd,
               bypass: session.bypass,
+              reasoningLevel: session.reasoningLevel,
               branchId: branches[0]?.id,
               parentSessionId: session.parentSessionId,
               parentBranchId: session.parentBranchId,
@@ -544,6 +553,7 @@ ${conversation}`
               name: s.name,
               cwd: s.cwd,
               bypass: s.bypass,
+              reasoningLevel: s.reasoningLevel,
               branchId: branchMap.get(s.id),
               parentSessionId: s.parentSessionId,
               parentBranchId: s.parentBranchId,
@@ -887,6 +897,7 @@ ${conversation}`
               isStreaming: streamTag === "StreamStarted",
               agent: currentAgent,
               bypass: session.bypass,
+              reasoningLevel: session.reasoningLevel,
             }
           }).pipe(Effect.withSpan("GentCore.getSessionState")),
 
@@ -904,6 +915,21 @@ ${conversation}`
             yield* storage.updateSession(updated)
             return { bypass: input.bypass }
           }).pipe(Effect.withSpan("GentCore.updateSessionBypass")),
+
+        updateSessionReasoningLevel: (input) =>
+          Effect.gen(function* () {
+            const session = yield* storage.getSession(input.sessionId)
+            if (session === undefined) {
+              return yield* new NotFoundError({ message: "Session not found", entity: "session" })
+            }
+            const updated = new Session({
+              ...session,
+              reasoningLevel: input.reasoningLevel,
+              updatedAt: new Date(),
+            })
+            yield* storage.updateSession(updated)
+            return { reasoningLevel: input.reasoningLevel }
+          }).pipe(Effect.withSpan("GentCore.updateSessionReasoningLevel")),
 
         subscribeEvents: (input) =>
           eventStore.subscribe({

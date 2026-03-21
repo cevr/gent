@@ -52,6 +52,7 @@ export const SessionInfo = Schema.Struct({
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
+  reasoningLevel: Schema.optional(Schema.String),
   branchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
@@ -226,6 +227,7 @@ export const SessionState = Schema.Struct({
   isStreaming: Schema.Boolean,
   agent: AgentName,
   bypass: Schema.optional(Schema.Boolean),
+  reasoningLevel: Schema.optional(Schema.String),
 })
 
 // ============================================================================
@@ -277,6 +279,15 @@ export const UpdateSessionBypassPayload = Schema.Struct({
 
 export const UpdateSessionBypassSuccess = Schema.Struct({
   bypass: Schema.Boolean,
+})
+
+export const UpdateSessionReasoningLevelPayload = Schema.Struct({
+  sessionId: SessionId,
+  reasoningLevel: Schema.UndefinedOr(Schema.String),
+})
+
+export const UpdateSessionReasoningLevelSuccess = Schema.Struct({
+  reasoningLevel: Schema.UndefinedOr(Schema.String),
 })
 
 export const RespondPlanPayload = Schema.Struct({
@@ -502,6 +513,11 @@ export class GentRpcs extends RpcGroup.make(
   Rpc.make("updateSessionBypass", {
     payload: UpdateSessionBypassPayload.fields,
     success: UpdateSessionBypassSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("updateSessionReasoningLevel", {
+    payload: UpdateSessionReasoningLevelPayload.fields,
+    success: UpdateSessionReasoningLevelSuccess,
     error: GentRpcError,
   }),
 

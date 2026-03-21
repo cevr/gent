@@ -375,6 +375,7 @@ export function Input(props: InputProps) {
               openTree: () => {},
               openFork: () => {},
               toggleBypass: Effect.fail(ClientError("Bypass not implemented yet")),
+              setReasoningLevel: () => Effect.fail(ClientError("Think not available here")),
               openPermissions: () => {},
               openAuth: () => {},
               sendMessage: (content: string) => client.sendMessage(content),

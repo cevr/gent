@@ -85,6 +85,7 @@ const resolveInitialState = (input: {
         name: result.name,
         cwd,
         bypass: result.bypass,
+        reasoningLevel: undefined,
         branchId: result.branchId,
         parentSessionId: undefined,
         parentBranchId: undefined,
@@ -126,6 +127,7 @@ const resolveInitialState = (input: {
           name: result.name,
           cwd,
           bypass: result.bypass,
+          reasoningLevel: undefined,
           branchId: result.branchId,
           parentSessionId: undefined,
           parentBranchId: undefined,
@@ -154,6 +156,7 @@ const resolveInitialState = (input: {
         name: result.name,
         cwd,
         bypass: result.bypass,
+        reasoningLevel: undefined,
         branchId: result.branchId,
         parentSessionId: undefined,
         parentBranchId: undefined,
@@ -387,6 +390,7 @@ const main = Command.make(
             branchId: state.session.branchId,
             name: state.session.name ?? "Unnamed",
             bypass: state.session.bypass ?? true,
+            reasoningLevel: state.session.reasoningLevel,
           }
           initialRoute = Route.session(state.session.id, state.session.branchId)
           initialPrompt = state.prompt

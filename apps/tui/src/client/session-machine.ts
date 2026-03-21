@@ -18,6 +18,7 @@ const SessionSchema = Schema.Struct({
   branchId: BranchId,
   name: Schema.String,
   bypass: Schema.Boolean,
+  reasoningLevel: Schema.UndefinedOr(Schema.String),
 })
 
 // ============================================================================
@@ -57,6 +58,7 @@ export const SessionMachineEvent = Event({
   UpdateName: { name: Schema.String },
   UpdateBranch: { branchId: BranchId },
   UpdateBypass: { bypass: Schema.Boolean },
+  UpdateReasoningLevel: { reasoningLevel: Schema.UndefinedOr(Schema.String) },
 })
 
 // ============================================================================
@@ -119,6 +121,11 @@ export const sessionMachine = Machine.make({
   .on(SessionMachineState.Active, SessionMachineEvent.UpdateBypass, ({ state, event }) =>
     SessionMachineState.Active({
       session: { ...state.session, bypass: event.bypass },
+    }),
+  )
+  .on(SessionMachineState.Active, SessionMachineEvent.UpdateReasoningLevel, ({ state, event }) =>
+    SessionMachineState.Active({
+      session: { ...state.session, reasoningLevel: event.reasoningLevel },
     }),
   )
 

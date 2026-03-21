@@ -111,6 +111,7 @@ export function Home(props: HomeProps) {
       openTree: () => {},
       openFork: () => {},
       toggleBypass: Effect.fail(ClientError("No active session")),
+      setReasoningLevel: () => Effect.fail(ClientError("No active session")),
       openPermissions: () => {},
       openAuth: () => router.navigateToAuth(),
       sendMessage: (content: string) => client.sendMessage(content),

@@ -61,6 +61,7 @@ export interface Session {
   branchId: BranchId
   name: string
   bypass: boolean
+  reasoningLevel: string | undefined
 }
 
 export type SessionState =
@@ -126,6 +127,9 @@ export interface ClientContextValue {
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, bypass?: boolean) => void
   clearSession: () => void
   updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
+  updateSessionReasoningLevel: (
+    reasoningLevel: string | undefined,
+  ) => Effect.Effect<void, GentRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: () => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
@@ -354,6 +358,13 @@ export function ClientProvider(props: ClientProviderProps) {
             if (snapshot.bypass !== undefined) {
               sendMachine(SessionMachineEvent.UpdateBypass({ bypass: snapshot.bypass ?? true }))
             }
+            if (snapshot.reasoningLevel !== undefined) {
+              sendMachine(
+                SessionMachineEvent.UpdateReasoningLevel({
+                  reasoningLevel: snapshot.reasoningLevel,
+                }),
+              )
+            }
           })
 
           const events = client.subscribeEvents({
@@ -445,6 +456,7 @@ export function ClientProvider(props: ClientProviderProps) {
                     branchId: result.branchId,
                     name: result.name,
                     bypass: result.bypass,
+                    reasoningLevel: undefined,
                   },
                 }),
               )
@@ -492,7 +504,7 @@ export function ClientProvider(props: ClientProviderProps) {
       setLatestInputTokens(0)
       sendMachine(
         SessionMachineEvent.Activated({
-          session: { sessionId, branchId, name, bypass: bypass ?? true },
+          session: { sessionId, branchId, name, bypass: bypass ?? true, reasoningLevel: undefined },
         }),
       )
     },
@@ -525,6 +537,23 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.tap((result) =>
           Effect.sync(() => {
             sendMachine(SessionMachineEvent.UpdateBypass({ bypass: result.bypass }))
+          }),
+        ),
+        Effect.asVoid,
+      )
+    },
+
+    updateSessionReasoningLevel: (reasoningLevel) => {
+      const s = session()
+      if (s === null) return Effect.succeed(undefined)
+      return client.updateSessionReasoningLevel(s.sessionId, reasoningLevel).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            sendMachine(
+              SessionMachineEvent.UpdateReasoningLevel({
+                reasoningLevel: result.reasoningLevel,
+              }),
+            )
           }),
         ),
         Effect.asVoid,

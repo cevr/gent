@@ -83,7 +83,15 @@ const buildSystemPrompt = (
   return parts.join("")
 }
 
-const resolveReasoning = (agent: AgentDefinition): ProviderRequest["reasoning"] | undefined => {
+const VALID_REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
+
+const resolveReasoning = (
+  agent: AgentDefinition,
+  sessionOverride?: string,
+): ProviderRequest["reasoning"] | undefined => {
+  if (sessionOverride !== undefined && VALID_REASONING_LEVELS.has(sessionOverride)) {
+    return sessionOverride as ProviderRequest["reasoning"]
+  }
   return agent.reasoningEffort
 }
 
@@ -433,7 +441,10 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 )
 
                 const modelId = resolveAgentModelId(agent.name)
-                const reasoning = resolveReasoning(agent)
+                const session = yield* storage
+                  .getSession(sessionId)
+                  .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                const reasoning = resolveReasoning(agent, session?.reasoningLevel)
                 const streamEffect = yield* withRetry(
                   provider.stream({
                     model: modelId,

@@ -484,6 +484,7 @@ export function Session(props: SessionProps) {
         const current = client.session()?.bypass ?? true
         yield* client.updateSessionBypass(!current)
       }),
+      setReasoningLevel: (level) => client.updateSessionReasoningLevel(level),
       openPermissions: () => router.navigateToPermissions(),
       openAuth: () => router.navigateToAuth(),
       sendMessage: (content: string) => client.sendMessage(content),

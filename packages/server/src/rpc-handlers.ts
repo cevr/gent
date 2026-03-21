@@ -141,6 +141,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       updateSessionBypass: ({ sessionId, bypass }) =>
         core.updateSessionBypass({ sessionId, bypass }),
 
+      updateSessionReasoningLevel: ({ sessionId, reasoningLevel }) =>
+        core.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
+
       getPermissionRules: () => configService.getPermissionRules(),
 
       deletePermissionRule: ({ tool, pattern }) =>

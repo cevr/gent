@@ -180,6 +180,7 @@ export interface SessionInfo {
   name?: string
   cwd?: string
   bypass?: boolean
+  reasoningLevel?: string
   branchId?: BranchId
   parentSessionId?: SessionId
   parentBranchId?: BranchId
@@ -215,6 +216,7 @@ export interface SessionState {
   isStreaming: boolean
   agent: AgentName
   bypass?: boolean
+  reasoningLevel?: string
 }
 
 export interface SessionTreeNode {
@@ -357,6 +359,11 @@ export interface GentClient {
     bypass: boolean,
   ) => Effect.Effect<{ bypass: boolean }, GentRpcError>
 
+  updateSessionReasoningLevel: (
+    sessionId: SessionId,
+    reasoningLevel: string | undefined,
+  ) => Effect.Effect<{ reasoningLevel: string | undefined }, GentRpcError>
+
   /** Get permission rules */
   getPermissionRules: () => Effect.Effect<readonly PermissionRule[], GentRpcError>
 
@@ -497,6 +504,9 @@ export function createClient(
 
     updateSessionBypass: (sessionId, bypass) =>
       rpcClient.updateSessionBypass({ sessionId, bypass }),
+
+    updateSessionReasoningLevel: (sessionId, reasoningLevel) =>
+      rpcClient.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
 
     getPermissionRules: () => rpcClient.getPermissionRules(),
 
@@ -775,6 +785,9 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
 
       updateSessionBypass: (sessionId, bypass) =>
         mapErr(core.updateSessionBypass({ sessionId, bypass })),
+
+      updateSessionReasoningLevel: (sessionId, reasoningLevel) =>
+        mapErr(core.updateSessionReasoningLevel({ sessionId, reasoningLevel })),
 
       getPermissionRules: () => mapErr(configService.getPermissionRules()),
 
