@@ -78,11 +78,16 @@ function AssistantMessage(props: {
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
   const { theme } = useTheme()
+  const visibleToolCalls = createMemo(() =>
+    (props.toolCalls ?? []).filter(
+      (toolCall) => !toolCall.toolName.toLowerCase().startsWith("task_"),
+    ),
+  )
   const hasContent = () =>
     props.content.length > 0 ||
     props.reasoning.length > 0 ||
     props.images.length > 0 ||
-    (props.toolCalls !== undefined && props.toolCalls.length > 0)
+    visibleToolCalls().length > 0
 
   // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
   // Use adaptive presets based on terminal width
@@ -104,9 +109,7 @@ function AssistantMessage(props: {
         <box
           flexDirection="column"
           marginBottom={
-            props.content.length > 0 ||
-            props.images.length > 0 ||
-            (props.toolCalls !== undefined && props.toolCalls.length > 0)
+            props.content.length > 0 || props.images.length > 0 || visibleToolCalls().length > 0
               ? 1
               : 0
           }
@@ -117,12 +120,7 @@ function AssistantMessage(props: {
       <Show when={props.images.length > 0}>
         <box
           flexDirection="column"
-          marginBottom={
-            props.content.length > 0 ||
-            (props.toolCalls !== undefined && props.toolCalls.length > 0)
-              ? 1
-              : 0
-          }
+          marginBottom={props.content.length > 0 || visibleToolCalls().length > 0 ? 1 : 0}
         >
           <For each={props.images}>
             {(img) => (
@@ -131,9 +129,9 @@ function AssistantMessage(props: {
           </For>
         </box>
       </Show>
-      <Show when={props.toolCalls !== undefined && props.toolCalls.length > 0}>
+      <Show when={visibleToolCalls().length > 0}>
         <box flexDirection="column" marginBottom={props.content.length > 0 ? 1 : 0}>
-          <For each={props.toolCalls}>
+          <For each={visibleToolCalls()}>
             {(tc) => (
               <SingleToolCall
                 toolCall={tc}

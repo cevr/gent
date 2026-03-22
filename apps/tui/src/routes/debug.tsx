@@ -15,8 +15,43 @@ import { useWorkspace } from "../workspace/index"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { Effect } from "effect"
-import { DEBUG_CHILD_SESSIONS, DEBUG_ITEMS, DEBUG_TASKS } from "./debug-fixtures"
+import { DEBUG_CHILD_SESSIONS, DEBUG_ITEMS } from "./debug-fixtures"
 import type { SessionItem } from "../components/message-list"
+import type { TaskPreview } from "../components/task-widget"
+
+const DEBUG_TASK_STAGES: readonly (readonly TaskPreview[])[] = [
+  [
+    { subject: "Inspect codebase", status: "in_progress" },
+    { subject: "Run verification", status: "pending" },
+    { subject: "Summarize outcome", status: "pending" },
+    { subject: "Fix broken widget layout", status: "completed" },
+  ],
+  [
+    { subject: "Inspect codebase", status: "completed" },
+    { subject: "Run verification", status: "in_progress" },
+    { subject: "Summarize outcome", status: "pending" },
+    { subject: "Fix broken widget layout", status: "completed" },
+  ],
+  [
+    { subject: "Inspect codebase", status: "completed" },
+    { subject: "Run verification", status: "completed" },
+    { subject: "Summarize outcome", status: "in_progress" },
+    { subject: "Fix broken widget layout", status: "completed" },
+  ],
+  [
+    { subject: "Inspect codebase", status: "completed" },
+    { subject: "Run verification", status: "completed" },
+    { subject: "Summarize outcome", status: "completed" },
+    { subject: "Fix broken widget layout", status: "completed" },
+  ],
+  [],
+  [
+    { subject: "Inspect codebase", status: "pending" },
+    { subject: "Run verification", status: "pending" },
+    { subject: "Summarize outcome", status: "pending" },
+    { subject: "Fix broken widget layout", status: "pending" },
+  ],
+]
 
 export function DebugPlayground() {
   const { theme } = useTheme()
@@ -27,7 +62,11 @@ export function DebugPlayground() {
   const [toolsExpanded, setToolsExpanded] = createSignal(true)
   const [showTasks, setShowTasks] = createSignal(true)
   const [items, setItems] = createSignal<SessionItem[]>([...DEBUG_ITEMS])
+  const [taskStageIndex, setTaskStageIndex] = createSignal(0)
   const pendingReplies = new Set<ReturnType<typeof setTimeout>>()
+  const taskTimer = setInterval(() => {
+    setTaskStageIndex((current) => (current + 1) % DEBUG_TASK_STAGES.length)
+  }, 2500)
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
     const createdAt = Date.now()
@@ -77,6 +116,7 @@ export function DebugPlayground() {
       clearTimeout(timer)
     }
     pendingReplies.clear()
+    clearInterval(taskTimer)
   })
 
   const spinner = () => {
@@ -122,6 +162,7 @@ export function DebugPlayground() {
       color: theme.textMuted,
     },
   ]
+  const previewTasks = createMemo(() => DEBUG_TASK_STAGES[taskStageIndex()] ?? [])
 
   return (
     <box flexDirection="column" flexGrow={1}>
@@ -143,7 +184,7 @@ export function DebugPlayground() {
         getChildSessions={(toolCallId) => [...(DEBUG_CHILD_SESSIONS[toolCallId] ?? [])]}
         footer={
           <Show when={showTasks()}>
-            <TaskWidget previewTasks={DEBUG_TASKS} />
+            <TaskWidget previewTasks={previewTasks()} />
           </Show>
         }
       />
