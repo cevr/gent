@@ -64,25 +64,28 @@ import { ToolRunner } from "./tool-runner"
 
 // Tool filtering — resolves allowedActions + allowedTools + deniedTools
 
-const filterTools = (
+/** @internal — exported for testing */
+export const filterTools = (
   allTools: ReadonlyArray<AnyToolDefinition>,
   agent: AgentDefinition,
 ): AnyToolDefinition[] => {
-  let tools: AnyToolDefinition[] = [...allTools]
+  const hasAllowList = agent.allowedActions !== undefined || agent.allowedTools !== undefined
 
-  // allowedActions: filter to tools matching any listed action
-  if (agent.allowedActions !== undefined) {
-    const actions = new Set(agent.allowedActions)
-    tools = tools.filter((t) => actions.has(t.action))
-  }
+  // If any allow-list is set, start from empty — only explicitly allowed tools pass.
+  // If no allow-list is set, start from all tools (primary agents).
+  let tools: AnyToolDefinition[] = hasAllowList ? [] : [...allTools]
 
-  // allowedTools: union explicit tool names with action-filtered set
-  if (agent.allowedTools !== undefined) {
-    const names = new Set(agent.allowedTools)
-    const alreadyIncluded = new Set(tools.map((t) => t.name))
+  if (hasAllowList) {
+    const actions = agent.allowedActions !== undefined ? new Set(agent.allowedActions) : undefined
+    const names = agent.allowedTools !== undefined ? new Set(agent.allowedTools) : undefined
+    const included = new Set<string>()
+
     for (const t of allTools) {
-      if (names.has(t.name) && !alreadyIncluded.has(t.name)) {
+      const byAction = actions !== undefined && actions.has(t.action)
+      const byName = names !== undefined && names.has(t.name)
+      if ((byAction || byName) && !included.has(t.name)) {
         tools.push(t)
+        included.add(t.name)
       }
     }
   }

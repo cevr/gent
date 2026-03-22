@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { isRetryable, getRetryDelay, DEFAULT_RETRY_CONFIG } from "@gent/core/runtime/retry"
 import { estimateTokens } from "@gent/core/runtime/context-estimation"
-import { AgentLoop, AgentActor } from "@gent/core/runtime/agent/agent-loop"
+import { AgentLoop, AgentActor, filterTools } from "@gent/core/runtime/agent/agent-loop"
 import { InProcessRunner, SubagentRunnerConfig } from "@gent/core/runtime/agent/subagent-runner"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
@@ -16,6 +16,7 @@ import {
 import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
 import {
   Agents,
+  AgentDefinition,
   AgentRegistry,
   SubagentRunnerService,
   SubagentError,
@@ -92,6 +93,87 @@ describe("Token Estimation", () => {
 
     const tokens = estimateTokens(messages)
     expect(tokens).toBe(3) // ceil(11/4) = 3
+  })
+})
+
+describe("filterTools", () => {
+  const makeTool = (
+    name: string,
+    action: "read" | "edit" | "exec" | "delegate" | "interact" | "network" | "state",
+  ) =>
+    defineTool({
+      name,
+      action,
+      concurrency: "parallel",
+      description: name,
+      params: Schema.Struct({}),
+      execute: () => Effect.succeed(null),
+    })
+
+  const allTools = [
+    makeTool("read", "read"),
+    makeTool("grep", "read"),
+    makeTool("glob", "read"),
+    makeTool("write", "edit"),
+    makeTool("edit", "edit"),
+    makeTool("bash", "exec"),
+    makeTool("delegate", "delegate"),
+    makeTool("ask_user", "interact"),
+    makeTool("webfetch", "network"),
+    makeTool("websearch", "network"),
+    makeTool("todo_read", "state"),
+  ]
+
+  const names = (tools: ReturnType<typeof filterTools>) => tools.map((t) => t.name).sort()
+
+  test("no allow-list → all tools", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    expect(names(filterTools(allTools, agent))).toEqual(names(allTools))
+  })
+
+  test("allowedActions filters by action", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedActions: ["read"] })
+    expect(names(filterTools(allTools, agent))).toEqual(["glob", "grep", "read"])
+  })
+
+  test("allowedActions + allowedTools unions", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read"],
+      allowedTools: ["bash"],
+    })
+    expect(names(filterTools(allTools, agent))).toEqual(["bash", "glob", "grep", "read"])
+  })
+
+  test("allowedTools: [] means no tools", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedTools: [] })
+    expect(filterTools(allTools, agent)).toEqual([])
+  })
+
+  test("deniedTools removes from result", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read"],
+      deniedTools: ["grep"],
+    })
+    expect(names(filterTools(allTools, agent))).toEqual(["glob", "read"])
+  })
+
+  test("multiple actions", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read", "network"],
+    })
+    expect(names(filterTools(allTools, agent))).toEqual([
+      "glob",
+      "grep",
+      "read",
+      "webfetch",
+      "websearch",
+    ])
   })
 })
 
