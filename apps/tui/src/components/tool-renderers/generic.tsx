@@ -2,23 +2,27 @@ import { Show } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { formatToolInput } from "../message-list-utils"
 import { ToolBox } from "../tool-box"
+import { formatGenericToolText } from "./generic-format"
 import type { ToolRendererProps } from "./types"
 
 export function GenericToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
+  const summaryText = () => formatGenericToolText(props.toolCall.summary)
+  const outputText = () => formatGenericToolText(props.toolCall.output)
 
   const isTruncated = () => {
-    const { output, summary } = props.toolCall
+    const output = outputText()
+    const summary = summaryText()
     return output && summary && output.length > summary.length
   }
 
   const remainingLines = () => {
-    const output = props.toolCall.output ?? ""
-    const summary = props.toolCall.summary ?? ""
+    const output = outputText() ?? ""
+    const summary = summaryText() ?? ""
     return Math.max(0, output.split("\n").length - summary.split("\n").length)
   }
 
-  const hasOutput = () => props.toolCall.summary || props.toolCall.output
+  const hasOutput = () => summaryText() || outputText()
   const subtitle = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
 
   return (
@@ -30,8 +34,8 @@ export function GenericToolRenderer(props: ToolRendererProps) {
       collapsedContent={
         <Show when={hasOutput()}>
           <box flexDirection="column">
-            <Show when={props.toolCall.summary}>
-              <text style={{ fg: theme.textMuted }}>{props.toolCall.summary}</text>
+            <Show when={summaryText()}>
+              <text style={{ fg: theme.textMuted }}>{summaryText()}</text>
             </Show>
             <Show when={isTruncated()}>
               <text style={{ fg: theme.textMuted }}>
@@ -44,9 +48,7 @@ export function GenericToolRenderer(props: ToolRendererProps) {
       }
     >
       <Show when={hasOutput()}>
-        <text style={{ fg: theme.textMuted }}>
-          {props.toolCall.output ?? props.toolCall.summary}
-        </text>
+        <text style={{ fg: theme.textMuted }}>{outputText() ?? summaryText()}</text>
       </Show>
     </ToolBox>
   )
