@@ -162,18 +162,30 @@ export const discoverExtensions = (opts: {
     return results
   })()
 
-/** Run extension setup and produce LoadedExtension. */
+/** Run extension setup and produce LoadedExtension. Catches defects from malformed setup functions. */
 export const setupExtension = (
   discovered: DiscoveredExtension,
   cwd: string,
 ): Effect.Effect<LoadedExtension, ExtensionLoadError> =>
   Effect.fn("ExtensionLoader.setupExtension")(function* () {
     const { extension, kind, sourcePath } = discovered
-    const setup: ExtensionSetup = yield* extension.setup({
-      cwd,
-      config: undefined as never, // TODO: config resolution
-      source: sourcePath,
-    })
+    const setup: ExtensionSetup = yield* extension
+      .setup({
+        cwd,
+        config: undefined as never, // TODO: config resolution
+        source: sourcePath,
+      })
+      .pipe(
+        Effect.catchDefect((defect) =>
+          Effect.fail(
+            new ExtensionLoadError(
+              extension.manifest.id,
+              `Extension setup threw: ${String(defect)}`,
+              defect,
+            ),
+          ),
+        ),
+      )
 
     return {
       manifest: extension.manifest,
