@@ -257,7 +257,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
                   id={`ac-item-${index()}`}
                   backgroundColor={isSelected() ? theme.primary : "transparent"}
                   paddingLeft={1}
-                  flexDirection="row"
                 >
                   <text
                     style={{
@@ -265,17 +264,18 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
                     }}
                   >
                     {item.label}
+                    <Show when={item.description !== undefined}>
+                      <span
+                        style={{
+                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
+                          dim: !isSelected(),
+                        }}
+                      >
+                        {"  "}
+                        {item.description}
+                      </span>
+                    </Show>
                   </text>
-                  <Show when={item.description !== undefined}>
-                    <text
-                      style={{
-                        fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
-                      }}
-                    >
-                      {" "}
-                      {item.description}
-                    </text>
-                  </Show>
                 </box>
               )
             }}
