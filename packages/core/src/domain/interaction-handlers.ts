@@ -1,4 +1,4 @@
-import { ServiceMap, Deferred, Effect, Layer } from "effect"
+import { ServiceMap, Effect, Layer } from "effect"
 import {
   EventStore,
   PermissionRequested,
@@ -16,6 +16,19 @@ import {
 import type { BranchId, SessionId } from "./ids"
 import type { ToolContext } from "./tool"
 import type { PermissionDecision } from "./permission"
+import { makeInteractionService } from "./interaction-request"
+
+// ============================================================================
+// Permission Handler
+// ============================================================================
+
+interface PermissionParams {
+  sessionId: SessionId
+  branchId: BranchId
+  toolCallId: string
+  toolName: string
+  input: unknown
+}
 
 export interface PermissionHandlerService {
   readonly request: (
@@ -25,16 +38,7 @@ export interface PermissionHandlerService {
   readonly respond: (
     requestId: string,
     decision: PermissionDecision,
-  ) => Effect.Effect<
-    | {
-        sessionId: SessionId
-        branchId: BranchId
-        toolCallId: string
-        toolName: string
-        input: unknown
-      }
-    | undefined
-  >
+  ) => Effect.Effect<PermissionParams | undefined, EventStoreError>
 }
 
 export class PermissionHandler extends ServiceMap.Service<
@@ -45,60 +49,33 @@ export class PermissionHandler extends ServiceMap.Service<
     PermissionHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
-      const pending = new Map<
-        string,
-        {
-          deferred: Deferred.Deferred<PermissionDecision>
-          sessionId: SessionId
-          branchId: BranchId
-          toolCallId: string
-          toolName: string
-          input: unknown
-        }
-      >()
+
+      const interaction = makeInteractionService<PermissionParams, PermissionDecision>({
+        onPresent: (requestId, params) =>
+          eventStore.publish(
+            new PermissionRequested({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              requestId,
+              toolCallId: params.toolCallId,
+              toolName: params.toolName,
+              ...(params.input !== undefined ? { input: params.input } : {}),
+            }),
+          ),
+        onRespond: () => Effect.void,
+      })
 
       return {
         request: Effect.fn("PermissionHandler.request")(function* (params, ctx) {
-          const requestId = Bun.randomUUIDv7()
-          const deferred = yield* Deferred.make<PermissionDecision>()
-          pending.set(requestId, {
-            deferred,
+          return yield* interaction.present({
             sessionId: ctx.sessionId,
             branchId: ctx.branchId,
             toolCallId: params.toolCallId,
             toolName: params.toolName,
             input: params.input,
           })
-
-          yield* eventStore.publish(
-            new PermissionRequested({
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-              requestId,
-              toolCallId: params.toolCallId,
-              toolName: params.toolName,
-              ...(params.input !== undefined ? { input: params.input } : {}),
-            }),
-          )
-
-          const decision = yield* Deferred.await(deferred)
-          pending.delete(requestId)
-          return decision
         }),
-
-        respond: Effect.fn("PermissionHandler.respond")(function* (requestId, decision) {
-          const entry = pending.get(requestId)
-          if (entry === undefined) return undefined
-          yield* Deferred.succeed(entry.deferred, decision)
-          pending.delete(requestId)
-          return {
-            sessionId: entry.sessionId,
-            branchId: entry.branchId,
-            toolCallId: entry.toolCallId,
-            toolName: entry.toolName,
-            input: entry.input,
-          }
-        }),
+        respond: (requestId, decision) => interaction.respond(requestId, decision),
       }
     }),
   )
@@ -114,28 +91,26 @@ export class PermissionHandler extends ServiceMap.Service<
   }
 }
 
+// ============================================================================
+// Prompt Handler
+// ============================================================================
+
+interface PromptParams {
+  sessionId: SessionId
+  branchId: BranchId
+  mode: "present" | "confirm" | "review"
+  path?: string
+  content?: string
+  title?: string
+}
+
 export interface PromptHandlerService {
-  readonly present: (params: {
-    sessionId: SessionId
-    branchId: BranchId
-    mode: "present" | "confirm" | "review"
-    path?: string
-    content?: string
-    title?: string
-  }) => Effect.Effect<PromptDecision, EventStoreError>
+  readonly present: (params: PromptParams) => Effect.Effect<PromptDecision, EventStoreError>
   readonly respond: (
     requestId: string,
     decision: PromptDecision,
     content?: string,
-  ) => Effect.Effect<
-    | {
-        sessionId: SessionId
-        branchId: BranchId
-        path?: string
-      }
-    | undefined,
-    EventStoreError
-  >
+  ) => Effect.Effect<PromptParams | undefined, EventStoreError>
 }
 
 export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandlerService>()(
@@ -145,39 +120,12 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
     PromptHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
-      const pending = new Map<
-        string,
-        {
-          deferred: Deferred.Deferred<PromptDecision>
-          sessionId: SessionId
-          branchId: BranchId
-          mode: "present" | "confirm" | "review"
-          path?: string
-          content?: string
-          title?: string
-        }
-      >()
 
-      return {
-        present: Effect.fn("PromptHandler.present")(function* (params) {
-          // Present mode auto-resolves — no event, no user interaction
-          if (params.mode === "present") {
-            return "yes" as PromptDecision
-          }
-
-          const requestId = Bun.randomUUIDv7()
-          const deferred = yield* Deferred.make<PromptDecision>()
-          pending.set(requestId, {
-            deferred,
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            mode: params.mode,
-            path: params.path,
-            content: params.content,
-            title: params.title,
-          })
-
-          yield* eventStore.publish(
+      const interaction = makeInteractionService<PromptParams, PromptDecision>({
+        autoResolve: (params) =>
+          params.mode === "present" ? ("yes" as PromptDecision) : undefined,
+        onPresent: (requestId, params) =>
+          eventStore.publish(
             new PromptPresented({
               sessionId: params.sessionId,
               branchId: params.branchId,
@@ -187,55 +135,44 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
               ...(params.content !== undefined ? { content: params.content } : {}),
               ...(params.title !== undefined ? { title: params.title } : {}),
             }),
-          )
-
-          const decision = yield* Deferred.await(deferred)
-          pending.delete(requestId)
-          return decision
-        }),
-
-        respond: Effect.fn("PromptHandler.respond")(function* (requestId, decision, content) {
-          const entry = pending.get(requestId)
-          if (entry === undefined) return undefined
-
+          ),
+        onRespond: (requestId, params, decision, content) => {
           if (decision === "yes") {
-            yield* eventStore.publish(
+            return eventStore.publish(
               new PromptConfirmed({
-                sessionId: entry.sessionId,
-                branchId: entry.branchId,
+                sessionId: params.sessionId,
+                branchId: params.branchId,
                 requestId,
-                ...(entry.path !== undefined ? { path: entry.path } : {}),
+                ...(params.path !== undefined ? { path: params.path } : {}),
               }),
             )
-          } else if (decision === "edit") {
-            yield* eventStore.publish(
+          }
+          if (decision === "edit") {
+            return eventStore.publish(
               new PromptEdited({
-                sessionId: entry.sessionId,
-                branchId: entry.branchId,
+                sessionId: params.sessionId,
+                branchId: params.branchId,
                 requestId,
-                ...(entry.path !== undefined ? { path: entry.path } : {}),
-              }),
-            )
-          } else {
-            yield* eventStore.publish(
-              new PromptRejected({
-                sessionId: entry.sessionId,
-                branchId: entry.branchId,
-                requestId,
-                ...(entry.path !== undefined ? { path: entry.path } : {}),
-                ...(content !== undefined ? { reason: content } : {}),
+                ...(params.path !== undefined ? { path: params.path } : {}),
               }),
             )
           }
+          return eventStore.publish(
+            new PromptRejected({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              requestId,
+              ...(params.path !== undefined ? { path: params.path } : {}),
+              ...(content !== undefined ? { reason: content } : {}),
+            }),
+          )
+        },
+      })
 
-          yield* Deferred.succeed(entry.deferred, decision)
-          pending.delete(requestId)
-          return {
-            sessionId: entry.sessionId,
-            branchId: entry.branchId,
-            ...(entry.path !== undefined ? { path: entry.path } : {}),
-          }
-        }),
+      return {
+        present: (params) => interaction.present(params),
+        respond: (requestId, decision, content) =>
+          interaction.respond(requestId, decision, content),
       }
     }),
   )
@@ -255,47 +192,23 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
 // Handoff Handler
 // ============================================================================
 
+interface HandoffParams {
+  sessionId: SessionId
+  branchId: BranchId
+  summary: string
+  reason?: string
+}
+
 export interface HandoffHandlerService {
-  readonly present: (params: {
-    sessionId: SessionId
-    branchId: BranchId
-    summary: string
-    reason?: string
-  }) => Effect.Effect<HandoffDecision, EventStoreError>
-  readonly peek: (requestId: string) => Effect.Effect<
-    | {
-        sessionId: SessionId
-        branchId: BranchId
-        summary: string
-        reason?: string
-      }
-    | undefined
-  >
-  /** Atomically claim a pending handoff — removes entry, returns it or undefined if already claimed. */
-  readonly claim: (requestId: string) => Effect.Effect<
-    | {
-        sessionId: SessionId
-        branchId: BranchId
-        summary: string
-        reason?: string
-      }
-    | undefined
-  >
+  readonly present: (params: HandoffParams) => Effect.Effect<HandoffDecision, EventStoreError>
+  readonly peek: (requestId: string) => Effect.Effect<HandoffParams | undefined>
+  readonly claim: (requestId: string) => Effect.Effect<HandoffParams | undefined>
   readonly respond: (
     requestId: string,
     decision: HandoffDecision,
     childSessionId?: SessionId,
     reason?: string,
-  ) => Effect.Effect<
-    | {
-        sessionId: SessionId
-        branchId: BranchId
-        summary: string
-        reason?: string
-      }
-    | undefined,
-    EventStoreError
-  >
+  ) => Effect.Effect<HandoffParams | undefined, EventStoreError>
 }
 
 export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHandlerService>()(
@@ -305,54 +218,11 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
     HandoffHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
-      const pending = new Map<
-        string,
-        {
-          deferred: Deferred.Deferred<HandoffDecision>
-          sessionId: SessionId
-          branchId: BranchId
-          summary: string
-          reason?: string
-        }
-      >()
       const claimed = new Set<string>()
 
-      return {
-        peek: (requestId: string) => {
-          const entry = pending.get(requestId)
-          if (entry === undefined) return Effect.succeed(undefined)
-          return Effect.succeed({
-            sessionId: entry.sessionId,
-            branchId: entry.branchId,
-            summary: entry.summary,
-            ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
-          })
-        },
-
-        claim: (requestId: string) => {
-          const entry = pending.get(requestId)
-          if (entry === undefined || claimed.has(requestId)) return Effect.succeed(undefined)
-          claimed.add(requestId)
-          return Effect.succeed({
-            sessionId: entry.sessionId,
-            branchId: entry.branchId,
-            summary: entry.summary,
-            ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
-          })
-        },
-
-        present: Effect.fn("HandoffHandler.present")(function* (params) {
-          const requestId = Bun.randomUUIDv7()
-          const deferred = yield* Deferred.make<HandoffDecision>()
-          pending.set(requestId, {
-            deferred,
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            summary: params.summary,
-            reason: params.reason,
-          })
-
-          yield* eventStore.publish(
+      const interaction = makeInteractionService<HandoffParams, HandoffDecision>({
+        onPresent: (requestId, params) =>
+          eventStore.publish(
             new HandoffPresented({
               sessionId: params.sessionId,
               branchId: params.branchId,
@@ -360,48 +230,46 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
               summary: params.summary,
               ...(params.reason !== undefined ? { reason: params.reason } : {}),
             }),
+          ),
+        onRespond: (requestId, params, decision, extra) => {
+          if (decision === "confirm") {
+            return eventStore.publish(
+              new HandoffConfirmed({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+                ...(extra !== undefined ? { childSessionId: extra as SessionId } : {}),
+              }),
+            )
+          }
+          return eventStore.publish(
+            new HandoffRejected({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              requestId,
+              ...(extra !== undefined ? { reason: extra } : {}),
+            }),
           )
+        },
+      })
 
-          const decision = yield* Deferred.await(deferred)
-          pending.delete(requestId)
-          return decision
-        }),
+      return {
+        present: (params) => interaction.present(params),
+
+        peek: (requestId) => Effect.succeed(interaction.peek(requestId)),
+
+        claim: (requestId) => {
+          const params = interaction.peek(requestId)
+          if (params === undefined || claimed.has(requestId)) return Effect.succeed(undefined)
+          claimed.add(requestId)
+          return Effect.succeed(params)
+        },
 
         respond: Effect.fn("HandoffHandler.respond")(
           function* (requestId, decision, childSessionId, reason) {
-            const entry = pending.get(requestId)
-            if (entry === undefined) return undefined
-
-            // Delete before publishing to prevent double-respond race
-            pending.delete(requestId)
-
-            if (decision === "confirm") {
-              yield* eventStore.publish(
-                new HandoffConfirmed({
-                  sessionId: entry.sessionId,
-                  branchId: entry.branchId,
-                  requestId,
-                  ...(childSessionId !== undefined ? { childSessionId } : {}),
-                }),
-              )
-            } else if (decision === "reject") {
-              yield* eventStore.publish(
-                new HandoffRejected({
-                  sessionId: entry.sessionId,
-                  branchId: entry.branchId,
-                  requestId,
-                  ...(reason !== undefined ? { reason } : {}),
-                }),
-              )
-            }
-
-            yield* Deferred.succeed(entry.deferred, decision)
-            return {
-              sessionId: entry.sessionId,
-              branchId: entry.branchId,
-              summary: entry.summary,
-              ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
-            }
+            // Pass childSessionId or reason as extra
+            const extra = decision === "confirm" ? childSessionId : reason
+            return yield* interaction.respond(requestId, decision, extra)
           },
         ),
       }

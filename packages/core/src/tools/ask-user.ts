@@ -1,6 +1,8 @@
-import { ServiceMap, Deferred, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { EventStore, type EventStoreError, QuestionsAsked, type Question } from "../domain/event.js"
+import type { SessionId, BranchId } from "../domain/ids.js"
+import { makeInteractionService } from "../domain/interaction-request.js"
 
 // Question option schema
 
@@ -48,6 +50,12 @@ export const AskUserResult = Schema.Struct({
 
 // AskUser Handler Service
 
+interface AskUserParams_ {
+  questions: ReadonlyArray<Question>
+  sessionId: SessionId
+  branchId: BranchId
+}
+
 export interface AskUserHandlerService {
   readonly askMany: (
     questions: ReadonlyArray<Question>,
@@ -56,7 +64,7 @@ export interface AskUserHandlerService {
   readonly respond: (
     requestId: string,
     answers: ReadonlyArray<ReadonlyArray<string>>,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, EventStoreError>
 }
 
 export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
@@ -66,37 +74,36 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
     AskUserHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
-      const pending = new Map<string, Deferred.Deferred<ReadonlyArray<ReadonlyArray<string>>>>()
 
-      const askMany = Effect.fn("AskUserHandler.askMany")(function* (
-        questions: ReadonlyArray<Question>,
-        ctx: ToolContext,
-      ) {
-        const requestId = Bun.randomUUIDv7()
-        const deferred = yield* Deferred.make<ReadonlyArray<ReadonlyArray<string>>>()
-        pending.set(requestId, deferred)
-        yield* eventStore.publish(
-          new QuestionsAsked({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            requestId,
-            questions: [...questions],
-          }),
-        )
-        const answers = yield* Deferred.await(deferred)
-        pending.delete(requestId)
-        return answers
+      const interaction = makeInteractionService<
+        AskUserParams_,
+        ReadonlyArray<ReadonlyArray<string>>
+      >({
+        onPresent: (requestId, params) =>
+          eventStore.publish(
+            new QuestionsAsked({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              requestId,
+              questions: [...params.questions],
+            }),
+          ),
+        onRespond: () => Effect.void,
       })
 
       return {
-        askMany,
+        askMany: Effect.fn("AskUserHandler.askMany")(function* (
+          questions: ReadonlyArray<Question>,
+          ctx: ToolContext,
+        ) {
+          return yield* interaction.present({
+            questions,
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+          })
+        }),
         respond: (requestId, answers) =>
-          Effect.gen(function* () {
-            const deferred = pending.get(requestId)
-            if (deferred !== undefined) {
-              yield* Deferred.succeed(deferred, answers)
-            }
-          }),
+          interaction.respond(requestId, answers).pipe(Effect.asVoid),
       }
     }),
   )
