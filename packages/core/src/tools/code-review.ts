@@ -45,6 +45,7 @@ export const CodeReviewParams = Schema.Struct({
 
 export const CodeReviewTool = defineTool({
   name: "code_review",
+  action: "delegate",
   concurrency: "serial",
   description:
     "Spawn a sub-agent to review code changes. Returns structured comments with severity levels.",

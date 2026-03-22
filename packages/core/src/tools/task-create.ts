@@ -22,6 +22,7 @@ export const TaskCreateParams = Schema.Struct({
 
 export const TaskCreateTool = defineTool({
   name: "task_create",
+  action: "state",
   concurrency: "parallel",
   description:
     "Create a durable task with optional dependencies. Tasks persist across turns and can be run in the background. Set agent + prompt for executable tasks.",

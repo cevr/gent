@@ -31,6 +31,7 @@ export const CounselParams = Schema.Struct({
 
 export const CounselTool = defineTool({
   name: "counsel",
+  action: "delegate",
   concurrency: "serial",
   description:
     "Get an adversarial peer review from the opposite vendor model. If you're running on Anthropic (cowork), counsel runs on OpenAI (deepwork), and vice versa. Use for architecture reviews, bug hunts, or second opinions.",

@@ -51,6 +51,7 @@ export const ReadResult = Schema.Struct({
 
 export const ReadTool = defineTool({
   name: "read",
+  action: "read",
   concurrency: "parallel",
   idempotent: true,
   description: "Read file contents. Returns numbered lines. Use offset/limit for large files.",

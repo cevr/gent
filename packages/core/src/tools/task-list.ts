@@ -6,6 +6,7 @@ export const TaskListParams = Schema.Struct({})
 
 export const TaskListTool = defineTool({
   name: "task_list",
+  action: "state",
   concurrency: "parallel",
   idempotent: true,
   description: "List all tasks for the current session and branch, sorted by creation time.",

@@ -83,6 +83,7 @@ function getCachePath(cacheDir: string, spec: string): string {
 
 export const LibrarianTool = defineTool({
   name: "librarian",
+  action: "delegate",
   concurrency: "serial",
   idempotent: true,
   description:

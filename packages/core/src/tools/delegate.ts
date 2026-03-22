@@ -34,6 +34,7 @@ export const DelegateParams = Schema.Struct({
 
 export const DelegateTool = defineTool({
   name: "delegate",
+  action: "delegate",
   concurrency: "serial",
   description:
     "Delegate work to specialized subagents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",

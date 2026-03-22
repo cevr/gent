@@ -34,6 +34,7 @@ export const WebFetchResult = Schema.Struct({
 
 export const WebFetchTool = defineTool({
   name: "webfetch",
+  action: "network",
   concurrency: "parallel",
   idempotent: true,
   description:

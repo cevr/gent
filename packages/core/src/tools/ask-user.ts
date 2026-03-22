@@ -117,6 +117,7 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
 
 export const AskUserTool = defineTool({
   name: "ask_user",
+  action: "interact",
   concurrency: "serial",
   description:
     "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",

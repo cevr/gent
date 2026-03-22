@@ -21,6 +21,7 @@ export const FinderParams = Schema.Struct({
 
 export const FinderTool = defineTool({
   name: "finder",
+  action: "delegate",
   concurrency: "serial",
   idempotent: true,
   description:

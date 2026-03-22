@@ -104,6 +104,7 @@ export function renderSessionTree(
 
 export const ReadSessionTool = defineTool({
   name: "read_session",
+  action: "read",
   concurrency: "parallel",
   idempotent: true,
   description:

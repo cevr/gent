@@ -107,6 +107,7 @@ function getCachePath(cacheDir: string, spec: string): string {
 
 export const RepoExplorerTool = defineTool({
   name: "repo_explorer",
+  action: "state",
   concurrency: "serial",
   idempotent: true,
   description:

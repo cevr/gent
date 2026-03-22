@@ -47,7 +47,7 @@ import {
 } from "../../domain/event.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId } from "../../domain/ids.js"
-import { ToolRegistry, type ToolContext } from "../../domain/tool.js"
+import { ToolRegistry, type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { HandoffHandler } from "../../domain/interaction-handlers.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -61,6 +61,40 @@ import {
 import { withRetry } from "../retry"
 import { estimateContextPercent } from "../context-estimation"
 import { ToolRunner } from "./tool-runner"
+
+// Tool filtering — resolves allowedActions + allowedTools + deniedTools
+
+const filterTools = (
+  allTools: ReadonlyArray<AnyToolDefinition>,
+  agent: AgentDefinition,
+): AnyToolDefinition[] => {
+  let tools: AnyToolDefinition[] = [...allTools]
+
+  // allowedActions: filter to tools matching any listed action
+  if (agent.allowedActions !== undefined) {
+    const actions = new Set(agent.allowedActions)
+    tools = tools.filter((t) => actions.has(t.action))
+  }
+
+  // allowedTools: union explicit tool names with action-filtered set
+  if (agent.allowedTools !== undefined) {
+    const names = new Set(agent.allowedTools)
+    const alreadyIncluded = new Set(tools.map((t) => t.name))
+    for (const t of allTools) {
+      if (names.has(t.name) && !alreadyIncluded.has(t.name)) {
+        tools.push(t)
+      }
+    }
+  }
+
+  // deniedTools always wins
+  if (agent.deniedTools !== undefined) {
+    const denied = new Set(agent.deniedTools)
+    tools = tools.filter((t) => !denied.has(t.name))
+  }
+
+  return tools
+}
 
 // Agent Loop Error
 
@@ -363,15 +397,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 }
 
                 const allTools = yield* toolRegistry.list()
-                const tools = allTools.filter((tool) => {
-                  if (agent.allowedTools !== undefined && !agent.allowedTools.includes(tool.name)) {
-                    return false
-                  }
-                  if (agent.deniedTools !== undefined && agent.deniedTools.includes(tool.name)) {
-                    return false
-                  }
-                  return true
-                })
+                const tools = filterTools(allTools, agent)
 
                 const systemPrompt = buildSystemPrompt(config.systemPrompt, agent)
 
@@ -1087,15 +1113,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
           )
 
           const allTools = yield* toolRegistry.list()
-          const tools = allTools.filter((tool) => {
-            if (agent.allowedTools !== undefined && !agent.allowedTools.includes(tool.name)) {
-              return false
-            }
-            if (agent.deniedTools !== undefined && agent.deniedTools.includes(tool.name)) {
-              return false
-            }
-            return true
-          })
+          const tools = filterTools(allTools, agent)
 
           const messages: Message[] = [userMessage]
           let continueLoop = true

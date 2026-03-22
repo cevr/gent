@@ -71,6 +71,7 @@ const defaultPromptPath = (title: string | undefined, toolCallId: string) => {
 
 export const PromptTool = defineTool({
   name: "prompt",
+  action: "interact",
   concurrency: "serial",
   description:
     "Present content to the user for review, confirmation, or informational display. " +

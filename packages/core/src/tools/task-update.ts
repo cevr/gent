@@ -15,6 +15,7 @@ export const TaskUpdateParams = Schema.Struct({
 
 export const TaskUpdateTool = defineTool({
   name: "task_update",
+  action: "state",
   concurrency: "parallel",
   description:
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",

@@ -31,6 +31,16 @@ export const ReasoningEffort = Schema.Literals([
 ])
 export type ReasoningEffort = typeof ReasoningEffort.Type
 
+export const ToolAction = Schema.Literals([
+  "read",
+  "edit",
+  "exec",
+  "delegate",
+  "interact",
+  "network",
+  "state",
+])
+
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
   description: Schema.optional(Schema.String),
@@ -38,6 +48,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   hidden: Schema.optional(Schema.Boolean),
   systemPromptAddendum: Schema.optional(Schema.String),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
+  allowedActions: Schema.optional(Schema.Array(ToolAction)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
   temperature: Schema.optional(Schema.Number),
   reasoningEffort: Schema.optional(ReasoningEffort),
@@ -113,7 +124,8 @@ export const Agents = {
     name: "explore",
     description: "Fast codebase exploration - finds files, searches patterns",
     kind: "subagent",
-    allowedTools: ["read", "grep", "glob", "bash"],
+    allowedActions: ["read"],
+    allowedTools: ["bash"],
     systemPromptAddendum: EXPLORE_PROMPT,
   }),
 
@@ -121,7 +133,7 @@ export const Agents = {
     name: "architect",
     description: "Designs implementation approaches",
     kind: "subagent",
-    allowedTools: ["read", "grep", "glob", "webfetch", "websearch"],
+    allowedActions: ["read", "network"],
     systemPromptAddendum: ARCHITECT_PROMPT,
   }),
 
@@ -129,7 +141,7 @@ export const Agents = {
     name: "librarian",
     description: "Answers questions about external repos using local cached clones",
     kind: "subagent",
-    allowedTools: ["read", "grep", "glob"],
+    allowedActions: ["read"],
     systemPromptAddendum: LIBRARIAN_PROMPT,
   }),
 
@@ -153,7 +165,8 @@ export const Agents = {
     name: "finder",
     description: "Fast multi-step codebase search via cheap model",
     kind: "subagent",
-    allowedTools: ["read", "grep", "glob", "bash"],
+    allowedActions: ["read"],
+    allowedTools: ["bash"],
     systemPromptAddendum: FINDER_PROMPT,
   }),
 
@@ -161,7 +174,8 @@ export const Agents = {
     name: "reviewer",
     description: "Structured code review with severity-graded comments",
     kind: "subagent",
-    allowedTools: ["read", "grep", "glob", "bash"],
+    allowedActions: ["read"],
+    allowedTools: ["bash"],
     systemPromptAddendum: REVIEWER_PROMPT,
   }),
 } as const
