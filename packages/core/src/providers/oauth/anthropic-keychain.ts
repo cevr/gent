@@ -215,7 +215,7 @@ export const getModelBetas = (modelId: string, excluded?: Set<string>): string[]
   const betas = [...getRequiredBetas()]
   const lower = modelId.toLowerCase()
 
-  // context-1m only for opus/sonnet 4.6+
+  // context-1m for opus/sonnet 4.6+ (1M context is default for these models)
   if (lower.includes("opus") || lower.includes("sonnet")) {
     const versionMatch = lower.match(/(opus|sonnet)-(\d+)-(\d+)/)
     if (versionMatch) {
@@ -224,7 +224,6 @@ export const getModelBetas = (modelId: string, excluded?: Set<string>): string[]
       if (majorStr !== undefined && minorStr !== undefined) {
         const major = parseInt(majorStr, 10)
         const minor = parseInt(minorStr, 10)
-        // Date suffixes like 20250514 are not minor versions
         const effectiveMinor = minor > 99 ? 0 : minor
         if (major > 4 || (major === 4 && effectiveMinor >= 6)) {
           betas.push("context-1m-2025-08-07")
@@ -246,6 +245,127 @@ export const getModelBetas = (modelId: string, excluded?: Set<string>): string[]
   return betas
 }
 
+// ── Tool Name Transforms (mcp_ prefix) ──
+
+const TOOL_PREFIX = "mcp_"
+
+/** Prefix all tool names with mcp_ in outgoing request bodies (Claude Code convention) */
+const transformBody = (body: BodyInit | null | undefined): BodyInit | null | undefined => {
+  if (typeof body !== "string") return body
+  try {
+    const parsed = JSON.parse(body) as {
+      tools?: Array<{ name?: string } & Record<string, unknown>>
+      messages?: Array<{ content?: Array<Record<string, unknown>> }>
+    }
+
+    const prefixName = (name: string): string =>
+      name.startsWith(TOOL_PREFIX) ? name : `${TOOL_PREFIX}${name}`
+
+    if (Array.isArray(parsed.tools)) {
+      parsed.tools = parsed.tools.map((tool) => ({
+        ...tool,
+        name: tool.name ? prefixName(tool.name) : tool.name,
+      }))
+    }
+
+    if (Array.isArray(parsed.messages)) {
+      parsed.messages = parsed.messages.map((message) => {
+        if (!Array.isArray(message.content)) return message
+        return {
+          ...message,
+          content: message.content.map((block) => {
+            if (block["type"] !== "tool_use" || typeof block["name"] !== "string") return block
+            return { ...block, name: prefixName(block["name"] as string) }
+          }),
+        }
+      })
+    }
+
+    return JSON.stringify(parsed)
+  } catch {
+    return body
+  }
+}
+
+/** Strip mcp_ prefix from tool names in response stream */
+const stripToolPrefix = (text: string): string =>
+  text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"')
+
+/** Transform response stream to strip mcp_ prefixes */
+const transformResponseStream = (response: Response): Response => {
+  if (!response.body) return response
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  let buffer = ""
+
+  const drain = async (controller: ReadableStreamDefaultController): Promise<void> => {
+    // Emit complete SSE events from buffer
+    const boundary = buffer.indexOf("\n\n")
+    if (boundary !== -1) {
+      const completeEvent = buffer.slice(0, boundary + 2)
+      buffer = buffer.slice(boundary + 2)
+      controller.enqueue(encoder.encode(stripToolPrefix(completeEvent)))
+      return
+    }
+
+    const { done, value } = await reader.read()
+    if (done) {
+      if (buffer) {
+        controller.enqueue(encoder.encode(stripToolPrefix(buffer)))
+        buffer = ""
+      }
+      controller.close()
+      return
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    return drain(controller)
+  }
+
+  const stream = new ReadableStream({ pull: (controller) => drain(controller) })
+
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  })
+}
+
+// ── System Identity ──
+
+const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
+
+/** Inject Claude Code system identity into request body if not already present */
+const injectSystemIdentity = (body: BodyInit | null | undefined): BodyInit | null | undefined => {
+  if (typeof body !== "string") return body
+  try {
+    const parsed = JSON.parse(body) as {
+      system?: string | Array<{ type?: string; text?: string }>
+    }
+
+    if (typeof parsed.system === "string") {
+      if (!parsed.system.includes(SYSTEM_IDENTITY_PREFIX)) {
+        parsed.system = `${SYSTEM_IDENTITY_PREFIX}\n\n${parsed.system}`
+      }
+    } else if (Array.isArray(parsed.system)) {
+      const hasPrefix = parsed.system.some(
+        (entry) => typeof entry.text === "string" && entry.text.includes(SYSTEM_IDENTITY_PREFIX),
+      )
+      if (!hasPrefix) {
+        parsed.system.unshift({ type: "text", text: SYSTEM_IDENTITY_PREFIX })
+      }
+    } else {
+      parsed.system = SYSTEM_IDENTITY_PREFIX
+    }
+
+    return JSON.stringify(parsed)
+  } catch {
+    return body
+  }
+}
+
 // ── Custom Fetch ──
 
 const DEFAULT_CC_VERSION = "2.1.80"
@@ -255,7 +375,7 @@ const getCliVersion = (): string => _env.cliVersion ?? DEFAULT_CC_VERSION
 const getUserAgent = (): string => _env.userAgent ?? `claude-cli/${getCliVersion()} (external, cli)`
 
 const getBillingHeader = (modelId: string): string =>
-  `cc_version=${getCliVersion()}.${modelId}; cc_entrypoint=cli; cch=93769;`
+  `cc_version=${getCliVersion()}.${modelId}; cc_entrypoint=cli; cch=c5e82;`
 
 const buildRequestHeaders = (
   input: RequestInfo | URL,
@@ -451,7 +571,11 @@ export const createAnthropicKeychainFetch = (authStore: AuthStoreService): typeo
     }
 
     const requestInit = init ?? {}
-    const bodyStr = typeof requestInit.body === "string" ? requestInit.body : undefined
+    // Apply body transforms: mcp_ tool prefix + system identity injection
+    const transformedBody = injectSystemIdentity(transformBody(requestInit.body))
+    const finalInit = { ...requestInit, body: transformedBody }
+
+    const bodyStr = typeof transformedBody === "string" ? transformedBody : undefined
     let modelId = "unknown"
     if (bodyStr !== undefined) {
       try {
@@ -461,7 +585,11 @@ export const createAnthropicKeychainFetch = (authStore: AuthStoreService): typeo
       }
     }
 
-    return Effect.runPromise(fetchWithBetaRetry(input, requestInit, latest.accessToken, modelId))
+    const response = await Effect.runPromise(
+      fetchWithBetaRetry(input, finalInit, latest.accessToken, modelId),
+    )
+    // Strip mcp_ prefixes from response stream
+    return transformResponseStream(response)
   }
   return Object.assign(fetcher, {
     preconnect: fetch.preconnect?.bind(fetch),
