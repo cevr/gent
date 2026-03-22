@@ -8,6 +8,8 @@
     "./providers/*": "./src/providers/*",
     "./runtime/*": "./src/runtime/*",
     "./tools/*": "./src/tools/*",
+    "./extensions": "./src/extensions/index.ts",
+    "./extensions/*": "./src/extensions/*",
     "./server/*": "./src/server/*",
     "./test-utils": "./src/test-utils/index.ts",
     "./test-utils/*": "./src/test-utils/*"
