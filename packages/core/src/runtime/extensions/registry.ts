@@ -25,7 +25,7 @@ export interface ResolvedExtensions {
   readonly extensions: ReadonlyArray<LoadedExtension>
 }
 
-/** Compile loaded extensions into an immutable resolved snapshot. */
+/** Compile loaded extensions into an immutable resolved snapshot. Throws on same-scope collisions. */
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ResolvedExtensions => {
@@ -36,19 +36,35 @@ export const resolveExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-  // Tools: later scope wins for same name
+  // Tools: later scope wins for same name; reject same-scope collisions
   const tools = new Map<string, AnyToolDefinition>()
+  const toolScopes = new Map<string, { kind: ExtensionKind; extId: string }>()
   for (const ext of sorted) {
     for (const tool of ext.setup.tools ?? []) {
+      const prev = toolScopes.get(tool.name)
+      if (prev !== undefined && prev.kind === ext.kind && prev.extId !== ext.manifest.id) {
+        throw new Error(
+          `Same-scope tool collision: "${tool.name}" provided by both "${prev.extId}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
+        )
+      }
       tools.set(tool.name, tool)
+      toolScopes.set(tool.name, { kind: ext.kind, extId: ext.manifest.id })
     }
   }
 
-  // Agents: later scope wins for same name
+  // Agents: later scope wins for same name; reject same-scope collisions
   const agents = new Map<string, AgentDefinition>()
+  const agentScopes = new Map<string, { kind: ExtensionKind; extId: string }>()
   for (const ext of sorted) {
     for (const agent of ext.setup.agents ?? []) {
+      const prev = agentScopes.get(agent.name)
+      if (prev !== undefined && prev.kind === ext.kind && prev.extId !== ext.manifest.id) {
+        throw new Error(
+          `Same-scope agent collision: "${agent.name}" provided by both "${prev.extId}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
+        )
+      }
       agents.set(agent.name, agent)
+      agentScopes.set(agent.name, { kind: ext.kind, extId: ext.manifest.id })
     }
   }
 
@@ -89,9 +105,6 @@ export interface ExtensionRegistryService {
 
   // Hooks
   readonly hooks: CompiledHookMap
-
-  // Register a tool at runtime (compat for additionalTools pattern during migration)
-  readonly registerTool: (tool: AnyToolDefinition) => Effect.Effect<void>
 }
 
 export class ExtensionRegistry extends ServiceMap.Service<
@@ -103,11 +116,16 @@ export class ExtensionRegistry extends ServiceMap.Service<
       getTool: (name) => Effect.succeed(resolved.tools.get(name)),
       listTools: () => Effect.succeed([...resolved.tools.values()]),
       listToolsForAgent: (agent, runContext) =>
-        resolved.hooks.runInterceptor(
-          "tools.visible",
-          { agent, tools: filterToolsForAgent([...resolved.tools.values()], agent), runContext },
-          (input: any) => Effect.succeed(input.tools),
-        ),
+        resolved.hooks
+          .runInterceptor(
+            "tools.visible",
+            { agent, tools: filterToolsForAgent([...resolved.tools.values()], agent), runContext },
+            (input: any) => Effect.succeed(input.tools),
+          )
+          .pipe(
+            // Re-apply deny filter after interceptor — hooks can inject but not override deny policy
+            Effect.map((tools: any) => applyDenyFilter(tools as AnyToolDefinition[], agent)),
+          ),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       listPrimaryAgents: () =>
@@ -118,10 +136,6 @@ export class ExtensionRegistry extends ServiceMap.Service<
         Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "subagent")),
       getPromptFragments: () => Effect.succeed(resolved.promptFragments),
       hooks: resolved.hooks,
-      registerTool: (tool) =>
-        Effect.sync(() => {
-          ;(resolved.tools as Map<string, AnyToolDefinition>).set(tool.name, tool)
-        }),
     })
 
   static Live = (extensions: ReadonlyArray<LoadedExtension>): Layer.Layer<ExtensionRegistry> =>
@@ -131,9 +145,9 @@ export class ExtensionRegistry extends ServiceMap.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
-// Tool filtering — mirrors existing filterTools logic from agent-loop.ts
+// Tool filtering — shared pure helper for agent tool visibility
 
-const filterToolsForAgent = (
+export const filterToolsForAgent = (
   allTools: ReadonlyArray<AnyToolDefinition>,
   agent: AgentDefinition,
 ): AnyToolDefinition[] => {
@@ -157,9 +171,18 @@ const filterToolsForAgent = (
   }
 
   if (agent.deniedTools !== undefined) {
-    const denied = new Set(agent.deniedTools)
-    tools = tools.filter((t) => !denied.has(t.name))
+    tools = applyDenyFilter(tools, agent)
   }
 
   return tools
+}
+
+/** Re-apply deny filter — used after interceptor to prevent hook-based escalation. */
+const applyDenyFilter = (
+  tools: AnyToolDefinition[],
+  agent: AgentDefinition,
+): AnyToolDefinition[] => {
+  if (agent.deniedTools === undefined) return tools
+  const denied = new Set(agent.deniedTools)
+  return tools.filter((t) => !denied.has(t.name))
 }
