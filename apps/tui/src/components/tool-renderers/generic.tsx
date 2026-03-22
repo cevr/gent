@@ -1,7 +1,7 @@
 import { Show } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { formatToolInput } from "../message-list-utils"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import { formatGenericToolText } from "./generic-format"
 import type { ToolRendererProps } from "./types"
 
@@ -26,7 +26,7 @@ export function GenericToolRenderer(props: ToolRendererProps) {
   const subtitle = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
 
   return (
-    <ToolBox
+    <ToolFrame
       title={props.toolCall.toolName}
       subtitle={subtitle()}
       status={props.toolCall.status}
@@ -50,6 +50,6 @@ export function GenericToolRenderer(props: ToolRendererProps) {
       <Show when={hasOutput()}>
         <text style={{ fg: theme.textMuted }}>{outputText() ?? summaryText()}</text>
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

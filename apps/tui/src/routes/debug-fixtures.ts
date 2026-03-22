@@ -36,14 +36,14 @@ export const DEBUG_TOOL_CALLS: readonly ToolCall[] = [
     {
       path: "/Users/cvr/Developer/personal/gent/apps/tui/src/components/message-list.tsx",
       oldString: "<text>[ x ] tool_call</text>",
-      newString: "<ToolBox />",
+      newString: "<ToolFrame />",
     },
     undefined,
     `--- a/apps/tui/src/components/message-list.tsx
 +++ b/apps/tui/src/components/message-list.tsx
 @@
 -<text>[ x ] tool_call</text>
-+<ToolBox />`,
++<ToolFrame />`,
   ),
   toolCall(
     "tc-bash",
@@ -70,23 +70,23 @@ export const DEBUG_TOOL_CALLS: readonly ToolCall[] = [
   toolCall(
     "tc-grep",
     "grep",
-    { pattern: "ToolBox", path: "/Users/cvr/Developer/personal/gent/apps/tui/src" },
+    { pattern: "ToolFrame", path: "/Users/cvr/Developer/personal/gent/apps/tui/src" },
     JSON.stringify({
       matches: [
         {
           file: "/Users/cvr/Developer/personal/gent/apps/tui/src/components/tool-renderers/generic.tsx",
           line: 3,
-          content: 'import { ToolBox } from "../tool-box"',
+          content: 'import { ToolFrame } from "../tool-frame"',
         },
         {
           file: "/Users/cvr/Developer/personal/gent/apps/tui/src/components/tool-renderers/edit.tsx",
           line: 10,
-          content: 'import { ToolBox } from "../tool-box"',
+          content: 'import { ToolFrame } from "../tool-frame"',
         },
         {
           file: "/Users/cvr/Developer/personal/gent/apps/tui/src/components/tool-renderers/read.tsx",
           line: 10,
-          content: 'import { ToolBox } from "../tool-box"',
+          content: 'import { ToolFrame } from "../tool-frame"',
         },
       ],
       truncated: false,
@@ -138,7 +138,7 @@ export const DEBUG_TOOL_CALLS: readonly ToolCall[] = [
     JSON.stringify({
       found: true,
       response:
-        "The old header lived in message-list.tsx while bash/edit already wrapped themselves in ToolBox.",
+        "The old header lived in message-list.tsx while bash/edit already wrapped themselves in ToolFrame.",
       metadata: {
         usage: { input: 451, output: 92, cost: 0.01 },
       },
@@ -244,7 +244,7 @@ export const DEBUG_CHILD_SESSIONS: Readonly<Record<string, ChildSessionEntry[]>>
           toolCallId: "debug-child-tool-2",
           toolName: "grep",
           status: "running",
-          input: { pattern: "ToolBox", path: "/Users/cvr/Developer/personal/gent/apps/tui/src" },
+          input: { pattern: "ToolFrame", path: "/Users/cvr/Developer/personal/gent/apps/tui/src" },
         },
       ],
     },

@@ -1,6 +1,6 @@
 import { Show } from "solid-js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import type { ToolRendererProps } from "./types"
 
 interface ReadSessionOutput {
@@ -50,7 +50,7 @@ export function ReadSessionToolRenderer(props: ToolRendererProps) {
   }
 
   return (
-    <ToolBox
+    <ToolFrame
       title="read_session"
       subtitle={subtitle()}
       status={props.toolCall.status}
@@ -86,6 +86,6 @@ export function ReadSessionToolRenderer(props: ToolRendererProps) {
           <span>✕</span> {output()?.error}
         </text>
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

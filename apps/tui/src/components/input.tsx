@@ -514,7 +514,7 @@ export function Input(props: InputProps) {
 
       {/* Normal input row (hidden when in prompt mode) */}
       <Show when={effectiveMode() !== "prompt"}>
-        <box flexShrink={0} flexDirection="row" paddingLeft={1}>
+        <box flexShrink={0} flexDirection="row">
           <text style={{ fg: effectiveMode() === "shell" ? theme.warning : theme.primary }}>
             {promptSymbol()}
           </text>
@@ -533,8 +533,9 @@ export function Input(props: InputProps) {
               maxHeight={8}
               keyBindings={[
                 { name: "return", action: "submit" },
-                { name: "linefeed", action: "submit" },
                 { name: "return", shift: true, action: "newline" },
+                { name: "linefeed", action: "newline" },
+                { name: "linefeed", shift: true, action: "newline" },
                 { name: "backspace", meta: true, action: "delete-word-backward" },
               ]}
               backgroundColor="transparent"

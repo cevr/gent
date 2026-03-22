@@ -1,7 +1,7 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { formatUsageStats } from "../../utils/format-tool.js"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import { ToolCallTree } from "./tool-call-tree"
 import { LiveChildTree } from "./live-child-tree"
 import type { ToolRendererProps } from "./types"
@@ -95,7 +95,7 @@ export function DelegateToolRenderer(props: ToolRendererProps) {
   }
 
   return (
-    <ToolBox
+    <ToolFrame
       title={title()}
       subtitle={subtitle()}
       status={props.toolCall.status}
@@ -182,6 +182,6 @@ export function DelegateToolRenderer(props: ToolRendererProps) {
       <Show when={delegateOutput()?.metadata?.usage}>
         {(usage) => <text style={{ fg: theme.textMuted }}>{formatUsageStats(usage())}</text>}
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

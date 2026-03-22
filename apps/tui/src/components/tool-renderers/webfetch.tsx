@@ -7,7 +7,7 @@
 
 import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import type { ToolRendererProps } from "./types"
 
 interface WebfetchOutput {
@@ -62,7 +62,7 @@ export function WebfetchToolRenderer(props: ToolRendererProps) {
   })
 
   return (
-    <ToolBox
+    <ToolFrame
       title="webfetch"
       subtitle={url()}
       status={props.toolCall.status}
@@ -95,6 +95,6 @@ export function WebfetchToolRenderer(props: ToolRendererProps) {
           </box>
         )}
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

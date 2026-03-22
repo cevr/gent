@@ -7,7 +7,7 @@
 
 import { For, Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import type { ToolRendererProps } from "./types"
 
@@ -76,7 +76,7 @@ export function GrepToolRenderer(props: ToolRendererProps) {
   const collapsedFiles = createMemo(() => fileNames().slice(0, 3))
 
   return (
-    <ToolBox
+    <ToolFrame
       title="grep"
       subtitle={pattern()}
       status={props.toolCall.status}
@@ -130,6 +130,6 @@ export function GrepToolRenderer(props: ToolRendererProps) {
           </For>
         </box>
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

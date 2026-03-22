@@ -8,7 +8,7 @@
 import { Show, For, createMemo } from "solid-js"
 import { windowItems, headTailExcerpts } from "@gent/core/domain/windowing.js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-url"
@@ -111,7 +111,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
   })
 
   return (
-    <ToolBox
+    <ToolFrame
       title="read"
       subtitle={truncatePath(path())}
       subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
@@ -155,6 +155,6 @@ export function ReadToolRenderer(props: ToolRendererProps) {
       <Show when={contentLines().length > 0}>
         <GutterText lines={contentLines()} startLine={startLine()} />
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

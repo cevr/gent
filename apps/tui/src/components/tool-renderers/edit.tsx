@@ -8,7 +8,7 @@
 import { Show, For, createMemo } from "solid-js"
 import { windowItems, headTailExcerpts } from "@gent/core/domain/windowing.js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-url"
 import type { ToolRendererProps } from "./types"
@@ -56,7 +56,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
     <Show
       when={editData()}
       fallback={
-        <ToolBox
+        <ToolFrame
           title="edit"
           subtitle={truncatePath(path())}
           subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
@@ -66,7 +66,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
       }
     >
       {(data) => (
-        <ToolBox
+        <ToolFrame
           title="edit"
           subtitle={truncatePath(path())}
           subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
@@ -123,7 +123,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
             lineNumberFg={theme.textMuted}
             width="100%"
           />
-        </ToolBox>
+        </ToolFrame>
       )}
     </Show>
   )

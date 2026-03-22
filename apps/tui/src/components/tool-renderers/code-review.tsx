@@ -1,6 +1,6 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import { LiveChildTree } from "./live-child-tree"
 import type { ToolRendererProps } from "./types"
 
@@ -66,7 +66,7 @@ export function CodeReviewToolRenderer(props: ToolRendererProps) {
   }
 
   return (
-    <ToolBox
+    <ToolFrame
       title="code_review"
       subtitle={subtitle()}
       status={props.toolCall.status}
@@ -138,6 +138,6 @@ export function CodeReviewToolRenderer(props: ToolRendererProps) {
           <span>✕</span> {output()?.error}
         </text>
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

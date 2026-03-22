@@ -8,7 +8,7 @@
 import { For, Show, createMemo } from "solid-js"
 import { headTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import type { ToolRendererProps } from "./types"
 
@@ -61,7 +61,7 @@ export function GlobToolRenderer(props: ToolRendererProps) {
   })
 
   return (
-    <ToolBox
+    <ToolFrame
       title="glob"
       subtitle={pattern()}
       status={props.toolCall.status}
@@ -119,6 +119,6 @@ export function GlobToolRenderer(props: ToolRendererProps) {
           </box>
         )}
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }

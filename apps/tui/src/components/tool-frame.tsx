@@ -1,5 +1,5 @@
 /**
- * ToolBox — box chrome wrapper for tool output.
+ * ToolFrame — inline chrome wrapper for tool output.
  *
  * Provides visual framing with:
  * - Status icon (spinner/check/error)
@@ -15,8 +15,9 @@
 
 import { Show, type JSX } from "solid-js"
 import { useTheme } from "../theme/index"
+import { InlineChrome } from "./inline-chrome"
 
-export interface ToolBoxProps {
+export interface ToolFrameProps {
   /** Tool display name */
   title: string
   /** Input summary shown after title */
@@ -44,7 +45,7 @@ function formatDuration(ms: number): string {
   return `${mins}m ${remainingSecs}s`
 }
 
-export function ToolBox(props: ToolBoxProps) {
+export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
 
   const statusIcon = () => (props.status === "running" ? "⋯" : props.status === "error" ? "✕" : "✓")
@@ -62,56 +63,37 @@ export function ToolBox(props: ToolBoxProps) {
   }
 
   return (
-    <box flexDirection="column" paddingLeft={2}>
-      {/* Header: ╭─[icon title subtitle] */}
-      <text>
-        <span style={{ fg: statusColor() }}>{"╭─["}</span>
-        <span style={{ fg: statusColor() }}>{statusIcon()}</span>
-        <span style={{ fg: statusColor() }}> </span>
-        <span style={{ fg: theme.info, bold: true }}>{props.title}</span>
-        <Show when={props.subtitle}>
-          {props.subtitleHref !== undefined ? (
-            <a href={props.subtitleHref}>
-              <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
-            </a>
-          ) : (
-            <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
-          )}
-        </Show>
-        <span style={{ fg: statusColor() }}>{"]"}</span>
-        <Show when={footer()}>
-          <span style={{ fg: theme.textMuted }}> {footer()}</span>
-        </Show>
-      </text>
+    <InlineChrome.Root paddingLeft={2}>
+      <InlineChrome.Header
+        accentColor={statusColor()}
+        leading={<span style={{ fg: statusColor() }}>{statusIcon()}</span>}
+        title={<span style={{ fg: theme.info, bold: true }}>{props.title}</span>}
+        subtitle={props.subtitle}
+        subtitleHref={props.subtitleHref}
+        subtitleColor={theme.textMuted}
+        trailing={
+          <Show when={footer()}>
+            <span style={{ fg: theme.textMuted }}>{footer()}</span>
+          </Show>
+        }
+      />
 
-      {/* Content area */}
       <Show
         when={props.expanded}
         fallback={
           <Show when={props.collapsedContent}>
-            <box paddingLeft={2}>
-              <text>
-                <span style={{ fg: statusColor() }}>{"│ "}</span>
-              </text>
+            <InlineChrome.Body accentColor={statusColor()}>
               {props.collapsedContent}
-            </box>
+            </InlineChrome.Body>
           </Show>
         }
       >
         <Show when={props.children}>
-          <box paddingLeft={2} flexDirection="column">
-            <text>
-              <span style={{ fg: statusColor() }}>{"│"}</span>
-            </text>
-            {props.children}
-          </box>
+          <InlineChrome.Body accentColor={statusColor()}>{props.children}</InlineChrome.Body>
         </Show>
       </Show>
 
-      {/* Footer */}
-      <text>
-        <span style={{ fg: statusColor() }}>{"╰────"}</span>
-      </text>
-    </box>
+      <InlineChrome.Footer accentColor={statusColor()} />
+    </InlineChrome.Root>
   )
 }

@@ -5,6 +5,7 @@ import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
 import { useClient } from "../client/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { useTheme } from "../theme/index"
+import { InlineChrome } from "./inline-chrome"
 
 const STATUS_ICONS: Record<string, string> = {
   pending: "◻",
@@ -113,30 +114,35 @@ export function TaskWidget(props: TaskWidgetProps) {
 
   return (
     <Show when={currentTasks().length > 0}>
-      <box flexDirection="column" paddingLeft={1} marginBottom={1}>
-        <text>
-          <span style={{ fg: theme.border }}>{"·· "}</span>
-          <span style={{ fg: theme.info, bold: true }}>tasks</span>
-          <span style={{ fg: theme.textMuted }}> {summary()}</span>
-        </text>
-        <For each={displayTasks()}>
-          {(task) => (
+      <InlineChrome.Root paddingLeft={2} marginTop={1} marginBottom={1}>
+        <InlineChrome.Header
+          accentColor={theme.info}
+          leading={<span style={{ fg: theme.info }}>•</span>}
+          title={<span style={{ fg: theme.info, bold: true }}>tasks</span>}
+          subtitle={summary()}
+          subtitleColor={theme.textMuted}
+        />
+        <InlineChrome.Body accentColor={theme.info}>
+          <For each={displayTasks()}>
+            {(task) => (
+              <text>
+                <span style={{ fg: theme.info }}>{"│ "}</span>
+                <span style={{ fg: statusColor(task.status) }}>
+                  {STATUS_ICONS[task.status] ?? "?"}
+                </span>
+                <span style={{ fg: theme.text }}> {task.subject}</span>
+              </text>
+            )}
+          </For>
+          <Show when={overflow() > 0}>
             <text>
-              <span style={{ fg: theme.border }}>{"   │ "}</span>
-              <span style={{ fg: statusColor(task.status) }}>
-                {STATUS_ICONS[task.status] ?? "?"}
-              </span>
-              <span style={{ fg: theme.text }}> {task.subject}</span>
+              <span style={{ fg: theme.info }}>{"│ "}</span>
+              <span style={{ fg: theme.textMuted }}>+{overflow()} more</span>
             </text>
-          )}
-        </For>
-        <Show when={overflow() > 0}>
-          <text>
-            <span style={{ fg: theme.border }}>{"   ╰─ "}</span>
-            <span style={{ fg: theme.textMuted }}>+{overflow()} more</span>
-          </text>
-        </Show>
-      </box>
+          </Show>
+        </InlineChrome.Body>
+        <InlineChrome.Footer accentColor={theme.info} />
+      </InlineChrome.Root>
     </Show>
   )
 }

@@ -8,7 +8,7 @@
 import { Show, createMemo } from "solid-js"
 import { formatHeadTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
-import { ToolBox } from "../tool-box"
+import { ToolFrame } from "../tool-frame"
 import type { ToolRendererProps } from "./types"
 
 interface BashOutput {
@@ -70,7 +70,7 @@ export function BashToolRenderer(props: ToolRendererProps) {
   }
 
   return (
-    <ToolBox
+    <ToolFrame
       title="bash"
       subtitle={command()}
       status={props.toolCall.status}
@@ -100,6 +100,6 @@ export function BashToolRenderer(props: ToolRendererProps) {
           </Show>
         </box>
       </Show>
-    </ToolBox>
+    </ToolFrame>
   )
 }
