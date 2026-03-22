@@ -1,12 +1,12 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import {
-  AgentRegistry,
   AgentName,
   SubagentRunnerService,
   type SubagentResult,
   type SubagentError,
 } from "../domain/agent.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { TaskService } from "../runtime/task-service.js"
 
 const MAX_PARALLEL_TASKS = 8
@@ -41,9 +41,9 @@ export const DelegateTool = defineTool({
   params: DelegateParams,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
-    const registry = yield* AgentRegistry
+    const registry = yield* ExtensionRegistry
 
-    const caller = ctx.agentName !== undefined ? yield* registry.get(ctx.agentName) : undefined
+    const caller = ctx.agentName !== undefined ? yield* registry.getAgent(ctx.agentName) : undefined
 
     const hasChain = (params.chain?.length ?? 0) > 0
     const hasTasks = (params.tasks?.length ?? 0) > 0
@@ -60,7 +60,7 @@ export const DelegateTool = defineTool({
     }
 
     const resolveAgent = (agentName: string) =>
-      registry.get(agentName).pipe(
+      registry.getAgent(agentName).pipe(
         Effect.map((agent) => {
           if (agent === undefined) {
             return { ok: false as const, error: `Unknown agent: ${agentName}` }

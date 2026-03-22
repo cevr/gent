@@ -2,7 +2,24 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { AuditTool } from "@gent/core/tools/audit"
-import { AgentRegistry, SubagentRunnerService, type SubagentResult } from "@gent/core/domain/agent"
+import {
+  AgentRegistry,
+  Agents,
+  SubagentRunnerService,
+  type SubagentResult,
+} from "@gent/core/domain/agent"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+
+const TestExtRegistry = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents) },
+    },
+  ]),
+)
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -75,6 +92,7 @@ describe("Audit Workflow", () => {
     const layer = Layer.mergeAll(
       runnerLayer,
       AgentRegistry.Live,
+      TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
       Storage.Test(),
@@ -133,6 +151,7 @@ describe("Audit Workflow", () => {
     const layer = Layer.mergeAll(
       runnerLayer,
       AgentRegistry.Live,
+      TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
       Storage.Test(),
@@ -159,6 +178,7 @@ describe("Audit Workflow", () => {
     const layer = Layer.mergeAll(
       runnerLayer,
       AgentRegistry.Live,
+      TestExtRegistry,
       PromptPresenter.Test(),
       EventStore.Test(),
       Storage.Test(),
@@ -188,6 +208,7 @@ describe("Audit Workflow", () => {
     const layer = Layer.mergeAll(
       runnerLayer,
       AgentRegistry.Live,
+      TestExtRegistry,
       PromptPresenter.Test(["no"]),
       EventStore.Test(),
       Storage.Test(),
@@ -229,6 +250,7 @@ describe("Audit Workflow", () => {
     const layer = Layer.mergeAll(
       runnerLayer,
       AgentRegistry.Live,
+      TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
       Storage.Test(),

@@ -1,13 +1,13 @@
 import { Effect, Schema } from "effect"
 import {
   Agents,
-  AgentRegistry,
   SubagentRunnerService,
   SubagentError,
   type AgentDefinition,
   type AgentName as AgentNameType,
   type SubagentResult,
 } from "../domain/agent.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import {
   EventStore,
   WorkflowPhaseStarted,
@@ -274,22 +274,22 @@ export const AuditTool = defineWorkflow({
     const runner = yield* SubagentRunnerService
     const eventStore = yield* EventStore
     const presenter = yield* PromptPresenter
-    const registry = yield* AgentRegistry
+    const registry = yield* ExtensionRegistry
 
     const storage = yield* Storage
     const maxIterations = params.maxIterations ?? 3
     const maxConcerns = params.maxConcerns ?? 5
     const mode = params.mode ?? "fix"
 
-    const architectDef = yield* registry.get("architect")
+    const architectDef = yield* registry.getAgent("architect")
     const architect = architectDef ?? Agents.architect
 
-    const auditorDef = yield* registry.get("auditor")
+    const auditorDef = yield* registry.getAgent("auditor")
     const auditor = auditorDef ?? Agents.auditor
 
     // Resolve caller agent for execution (primary agent, not architect)
     const callerAgent = ctx.agentName ?? "cowork"
-    const callerDef = yield* registry.get(callerAgent)
+    const callerDef = yield* registry.getAgent(callerAgent)
     const executor = callerDef ?? Agents.cowork
 
     const emitPhase = (phase: string, iteration?: number) =>

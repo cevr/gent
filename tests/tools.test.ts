@@ -9,7 +9,19 @@ import { AskUserTool, AskUserHandler } from "@gent/core/tools/ask-user"
 import { PromptTool } from "@gent/core/tools/prompt"
 import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
-import { AgentRegistry, SubagentRunnerService } from "@gent/core/domain/agent"
+import { AgentRegistry, Agents, SubagentRunnerService } from "@gent/core/domain/agent"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+
+const TestExtRegistry = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents) },
+    },
+  ]),
+)
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { TodoItem } from "@gent/core/domain/todo"
 
@@ -245,7 +257,7 @@ describe("Delegate Tool", () => {
         }),
     })
 
-    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
+    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live, TestExtRegistry)
 
     const result = await Effect.runPromise(
       DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(Effect.provide(layer)),
@@ -267,7 +279,7 @@ describe("Delegate Tool", () => {
         })
       },
     })
-    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
+    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live, TestExtRegistry)
     const result = await Effect.runPromise(
       DelegateTool.execute(
         {
@@ -295,7 +307,7 @@ describe("Delegate Tool", () => {
         })
       },
     })
-    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
+    const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live, TestExtRegistry)
     const result = await Effect.runPromise(
       DelegateTool.execute(
         {

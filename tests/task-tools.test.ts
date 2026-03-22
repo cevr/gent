@@ -6,7 +6,8 @@ import { TaskListTool } from "@gent/core/tools/task-list"
 import { TaskGetTool } from "@gent/core/tools/task-get"
 import { TaskUpdateTool } from "@gent/core/tools/task-update"
 import { DelegateTool } from "@gent/core/tools/delegate"
-import { SubagentRunnerService, AgentRegistry } from "@gent/core/domain/agent"
+import { SubagentRunnerService, AgentRegistry, Agents } from "@gent/core/domain/agent"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
@@ -33,10 +34,21 @@ const ctx: ToolContext = {
 }
 
 // Build a full layer with real Storage + TaskService
+const TestExtRegistry = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents) },
+    },
+  ]),
+)
 const baseDeps = Layer.mergeAll(
   Storage.Test(),
   EventStore.Test(),
   AgentRegistry.Live,
+  TestExtRegistry,
   mockRunnerSuccess,
   platformLayer,
 )

@@ -1,11 +1,11 @@
 import { Effect, Schema } from "effect"
 import {
   Agents,
-  AgentRegistry,
   getAdversarialModels,
   SubagentError,
   SubagentRunnerService,
 } from "../domain/agent.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { EventStore, WorkflowPhaseStarted, WorkflowCompleted } from "../domain/event.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
@@ -56,10 +56,10 @@ export const PlanTool = defineWorkflow({
     const runner = yield* SubagentRunnerService
     const eventStore = yield* EventStore
     const presenter = yield* PromptPresenter
-    const registry = yield* AgentRegistry
+    const registry = yield* ExtensionRegistry
     const [modelA, modelB] = getAdversarialModels()
 
-    const architectDef = yield* registry.get("architect")
+    const architectDef = yield* registry.getAgent("architect")
     const architect = architectDef ?? Agents.architect
 
     const emitPhase = (phase: string) =>

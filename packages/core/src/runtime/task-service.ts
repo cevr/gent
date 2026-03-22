@@ -1,7 +1,8 @@
 import { ServiceMap, Effect, Layer } from "effect"
 import { Task, type TaskStatus } from "../domain/task.js"
 import { EventStore, TaskCreated, TaskUpdated, TaskCompleted, TaskFailed } from "../domain/event.js"
-import { SubagentRunnerService, AgentRegistry, type AgentName } from "../domain/agent.js"
+import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
+import { ExtensionRegistry } from "./extensions/registry.js"
 import type { TaskId, SessionId, BranchId } from "../domain/ids.js"
 import { Storage } from "../storage/sqlite-storage.js"
 
@@ -53,18 +54,18 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
   static Live: Layer.Layer<
     TaskService,
     never,
-    Storage | EventStore | SubagentRunnerService | AgentRegistry
+    Storage | EventStore | SubagentRunnerService | ExtensionRegistry
   > = Layer.effect(
     TaskService,
     Effect.gen(function* () {
       const storage = yield* Storage
       const eventStore = yield* EventStore
       const runner = yield* SubagentRunnerService
-      const agentRegistry = yield* AgentRegistry
+      const extensionRegistry = yield* ExtensionRegistry
 
       const runTaskInternal: (taskId: TaskId, task: Task) => Effect.Effect<void> = (taskId, task) =>
         Effect.gen(function* () {
-          const agent = yield* agentRegistry.get(task.agentType ?? "explore")
+          const agent = yield* extensionRegistry.getAgent(task.agentType ?? "explore")
           if (agent === undefined) {
             yield* storage
               .updateTask(taskId, { status: "failed" })
