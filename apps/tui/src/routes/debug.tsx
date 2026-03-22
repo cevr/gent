@@ -72,7 +72,7 @@ export function DebugPlayground() {
 
   return (
     <box flexDirection="column" flexGrow={1}>
-      <box paddingLeft={2} paddingTop={1} flexDirection="column">
+      <box paddingLeft={2} paddingTop={1} paddingBottom={1} flexDirection="column" flexShrink={0}>
         <text>
           <span style={{ fg: theme.info, bold: true }}>Debug Playground</span>
           <span style={{ fg: theme.textMuted }}>
@@ -90,15 +90,18 @@ export function DebugPlayground() {
         getChildSessions={(toolCallId) => [...(DEBUG_CHILD_SESSIONS[toolCallId] ?? [])]}
       />
 
+      <Show when={showTasks()}>
+        <box flexShrink={0}>
+          <TaskWidget previewTasks={DEBUG_TASKS} />
+        </box>
+      </Show>
+
       <BorderedInput
         topLeft={[{ text: "$0.14", color: theme.textMuted }]}
         topRight={topRight()}
         bottomLeft={bottomLeft()}
         bottomRight={bottomRight()}
       >
-        <Show when={showTasks()}>
-          <TaskWidget previewTasks={DEBUG_TASKS} />
-        </Show>
         <Input onSubmit={() => {}} onSlashCommand={() => Effect.void}>
           <Input.Autocomplete />
         </Input>

@@ -378,6 +378,10 @@ export function Session(props: SessionProps) {
         getChildSessions={getChildren}
       />
 
+      <box flexShrink={0}>
+        <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
+      </box>
+
       {/* Bordered input */}
       <BorderedInput
         topLeft={topLeftLabels()}
@@ -386,7 +390,6 @@ export function Session(props: SessionProps) {
         bottomRight={bottomRightLabels()}
         borderColor={borderColor()}
       >
-        <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
         <Input
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
