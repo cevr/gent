@@ -1,6 +1,6 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { AuthStore, AuthType } from "./auth-store"
-import { AgentModels } from "./agent"
+import { Agents, resolveAgentModel } from "./agent"
 import { ProviderId, SUPPORTED_PROVIDERS, parseModelProvider } from "./model"
 
 export const AuthSource = Schema.Literal("stored")
@@ -23,7 +23,8 @@ export interface AuthGuardService {
 
 const REQUIRED_PROVIDERS: readonly ProviderId[] = (() => {
   const providers = new Set<ProviderId>()
-  for (const modelId of Object.values(AgentModels)) {
+  for (const agent of Object.values(Agents)) {
+    const modelId = resolveAgentModel(agent)
     const provider = parseModelProvider(modelId)
     if (provider !== undefined) providers.add(provider)
   }

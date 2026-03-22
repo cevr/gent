@@ -23,8 +23,9 @@ import {
   AgentDefinition,
   AgentName,
   AgentRegistry,
+  Agents,
   ReasoningEffort,
-  resolveAgentModelId,
+  resolveAgentModel,
   SubagentError,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
@@ -416,11 +417,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 yield* Effect.logInfo("stream.start").pipe(
                   Effect.annotateLogs({
                     agent: currentAgent,
-                    model: resolveAgentModelId(agent.name),
+                    model: resolveAgentModel(agent),
                   }),
                 )
 
-                const modelId = resolveAgentModelId(agent.name)
+                const modelId = resolveAgentModel(agent)
                 const session = yield* storage
                   .getSession(sessionId)
                   .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
@@ -755,7 +756,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 } else {
                   const allMessages = yield* storage.listMessages(branchId)
                   const currentAgent = yield* resolveCurrentAgent()
-                  const modelId = resolveAgentModelId(currentAgent)
+                  const currentAgentDef = yield* agentRegistry.get(currentAgent)
+                  const modelId = resolveAgentModel(currentAgentDef ?? Agents.cowork)
                   const contextPercent = estimateContextPercent(allMessages, modelId)
                   if (contextPercent >= DEFAULTS.handoffThresholdPercent) {
                     yield* Effect.logInfo("auto-handoff.threshold").pipe(
@@ -1173,8 +1175,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
               new StreamStarted({ sessionId: input.sessionId, branchId: input.branchId }),
             )
 
-            const modelId =
-              (input.modelId as ModelId | undefined) ?? resolveAgentModelId(agent.name)
+            const modelId = (input.modelId as ModelId | undefined) ?? resolveAgentModel(agent)
             const reasoning = resolveReasoning(effectiveAgent)
             const streamEffect = yield* withRetry(
               provider.stream({

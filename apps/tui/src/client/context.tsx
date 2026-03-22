@@ -14,7 +14,8 @@ import { Effect, Stream, Schema } from "effect"
 import { Machine } from "effect-machine"
 import {
   AgentName as AgentNameSchema,
-  resolveAgentModelId,
+  Agents,
+  resolveAgentModel,
   type AgentName,
   type ReasoningEffort,
 } from "@gent/core/domain/agent.js"
@@ -47,7 +48,7 @@ type SteerCommandInput =
   | { _tag: "SwitchAgent"; agent: AgentName }
 
 const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Model | undefined =>
-  models[resolveAgentModelId(agent)]
+  models[resolveAgentModel(Agents[agent])]
 
 // =============================================================================
 // Session State
@@ -412,7 +413,7 @@ export function ClientProvider(props: ClientProviderProps) {
     agent: () => agentStore.agent,
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
-    model: () => resolveAgentModelId(agentStore.agent),
+    model: () => resolveAgentModel(Agents[agentStore.agent]),
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",
     isError: () => agentStore.status._tag === "error",

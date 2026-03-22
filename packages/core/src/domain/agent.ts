@@ -1,7 +1,7 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId } from "./ids"
-import type { ModelId } from "./model"
+import { ModelId } from "./model"
 import type { ToolAction as ToolActionType, AnyToolDefinition } from "./tool"
 
 // Agent definitions
@@ -48,6 +48,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   description: Schema.optional(Schema.String),
   kind: AgentKind,
   hidden: Schema.optional(Schema.Boolean),
+  model: Schema.optional(ModelId),
   systemPromptAddendum: Schema.optional(Schema.String),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
   allowedActions: Schema.optional(Schema.Array(ToolAction)),
@@ -113,6 +114,7 @@ export const Agents = {
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
     kind: "primary",
+    model: "anthropic/claude-opus-4-6" as ModelId,
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     deniedTools: ["loop_evaluation"],
     systemPromptAddendum: COWORK_PROMPT,
@@ -122,6 +124,7 @@ export const Agents = {
     name: "deepwork",
     description: "Deep reasoning mode - thorough analysis, slower/longer answers",
     kind: "primary",
+    model: "openai/gpt-5.4" as ModelId,
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     deniedTools: ["loop_evaluation"],
     systemPromptAddendum: DEEPWORK_PROMPT,
@@ -132,6 +135,7 @@ export const Agents = {
     name: "explore",
     description: "Fast codebase exploration - finds files, searches patterns",
     kind: "subagent",
+    model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: EXPLORE_PROMPT,
@@ -141,6 +145,7 @@ export const Agents = {
     name: "architect",
     description: "Designs implementation approaches",
     kind: "subagent",
+    model: "anthropic/claude-opus-4-6" as ModelId,
     allowedActions: ["read", "network"],
     systemPromptAddendum: ARCHITECT_PROMPT,
   }),
@@ -149,6 +154,7 @@ export const Agents = {
     name: "librarian",
     description: "Answers questions about external repos using local cached clones",
     kind: "subagent",
+    model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     systemPromptAddendum: LIBRARIAN_PROMPT,
   }),
@@ -157,6 +163,7 @@ export const Agents = {
     name: "summarizer",
     kind: "system",
     hidden: true,
+    model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: [],
     systemPromptAddendum: SUMMARIZER_PROMPT,
   }),
@@ -165,6 +172,7 @@ export const Agents = {
     name: "title",
     kind: "system",
     hidden: true,
+    model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: [],
     temperature: 0.5,
   }),
@@ -173,6 +181,7 @@ export const Agents = {
     name: "finder",
     description: "Fast multi-step codebase search via cheap model",
     kind: "subagent",
+    model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: FINDER_PROMPT,
@@ -182,6 +191,7 @@ export const Agents = {
     name: "reviewer",
     description: "Structured code review with severity-graded comments",
     kind: "subagent",
+    model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: REVIEWER_PROMPT,
@@ -191,34 +201,26 @@ export const Agents = {
     name: "auditor",
     description: "Audits code for a specific concern category",
     kind: "subagent",
+    model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: AUDITOR_PROMPT,
   }),
 } as const
 
-// Curated model mapping (not user-configurable)
+// Default model — used when an agent has no model set
+export const DEFAULT_MODEL_ID = "openai/gpt-5.4-mini" as ModelId
 
-export const AgentModels: Record<AgentName, ModelId> = {
-  cowork: "anthropic/claude-opus-4-6" as ModelId,
-  deepwork: "openai/gpt-5.4" as ModelId,
-  explore: "openai/gpt-5.4-mini" as ModelId,
-  architect: "anthropic/claude-opus-4-6" as ModelId,
-  librarian: "openai/gpt-5.4-mini" as ModelId,
-  summarizer: "openai/gpt-5.4-mini" as ModelId,
-  title: "openai/gpt-5.4-mini" as ModelId,
-  finder: "openai/gpt-5.4-mini" as ModelId,
-  reviewer: "openai/gpt-5.4-mini" as ModelId,
-  auditor: "openai/gpt-5.4-mini" as ModelId,
-}
-
-export const resolveAgentModelId = (agent: AgentName): ModelId => AgentModels[agent]
+/** Resolve model for an agent definition */
+export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
+  agent.model ?? DEFAULT_MODEL_ID
 
 /** Derive adversarial model pair from the two primary agents */
-export const getAdversarialModels = (): [ModelId, ModelId] => [
-  AgentModels.cowork,
-  AgentModels.deepwork,
-]
+export const getAdversarialModels = (): [ModelId, ModelId] => {
+  const coworkModel = Agents.cowork.model ?? DEFAULT_MODEL_ID
+  const deepworkModel = Agents.deepwork.model ?? DEFAULT_MODEL_ID
+  return [coworkModel, deepworkModel]
+}
 
 // Agent Execution Overrides — per-run overrides for subagent dispatch
 

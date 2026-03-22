@@ -28,9 +28,12 @@ export interface WorkflowContext {
   ) => Effect.Effect<void, EventStoreError>
 }
 
-// Workflow Definition — tool + subagent orchestration + command + phases
+// Workflow Definition — a tool with orchestration metadata
+//
+// WorkflowDefinition is a ToolDefinition with extra `phases` and `command` fields.
+// It lives in the same tool map — the registry can filter workflows via `isWorkflow`.
 
-export interface WorkflowDefinition<
+export type WorkflowDefinition<
   Name extends string = string,
   Phases extends readonly string[] = readonly string[],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -38,20 +41,13 @@ export interface WorkflowDefinition<
   Result = unknown,
   Error = never,
   Deps = never,
-> {
-  readonly name: Name
-  readonly description: string
+> = ToolDefinition<Name, Params, Result, Error, Deps> & {
   readonly command?: string
   readonly phases: Phases
-  readonly params: Params
-  readonly execute: (
-    params: Schema.Schema.Type<Params>,
-    ctx: WorkflowContext,
-  ) => Effect.Effect<Result, Error, Deps>
 }
 
 /**
- * Define a workflow — returns a ToolDefinition that the tool registry handles.
+ * Define a workflow — returns a WorkflowDefinition (ToolDefinition + phases/command).
  *
  * The workflow's execute function receives a WorkflowContext instead of plain ToolContext.
  * The context injection happens at runtime when the workflow tool is executed within
@@ -67,32 +63,30 @@ export const defineWorkflow = <
   Result,
   Error,
   Deps,
->(
-  definition: WorkflowDefinition<Name, Phases, Params, Result, Error, Deps>,
-): ToolDefinition<Name, Params, Result, Error, Deps> & {
+>(definition: {
+  readonly name: Name
+  readonly description: string
   readonly command?: string
   readonly phases: Phases
-  readonly _workflow: true
-} =>
-  ({
-    ...defineTool({
-      name: definition.name,
-      action: "delegate" as const,
-      concurrency: "serial" as const,
-      description: definition.description,
-      params: definition.params,
-      execute: definition.execute as ToolDefinition<Name, Params, Result, Error, Deps>["execute"],
-    }),
-    command: definition.command,
-    phases: definition.phases,
-    _workflow: true as const,
-  }) as ToolDefinition<Name, Params, Result, Error, Deps> & {
-    readonly command?: string
-    readonly phases: Phases
-    readonly _workflow: true
-  }
+  readonly params: Params
+  readonly execute: (
+    params: Schema.Schema.Type<Params>,
+    ctx: WorkflowContext,
+  ) => Effect.Effect<Result, Error, Deps>
+}): WorkflowDefinition<Name, Phases, Params, Result, Error, Deps> => ({
+  ...defineTool({
+    name: definition.name,
+    action: "delegate" as const,
+    concurrency: "serial" as const,
+    description: definition.description,
+    params: definition.params,
+    execute: definition.execute as ToolDefinition<Name, Params, Result, Error, Deps>["execute"],
+  }),
+  command: definition.command,
+  phases: definition.phases,
+})
 
 /** Type guard for workflow tools */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const isWorkflow = (tool: ToolDefinition<any, any, any, any, any>): boolean =>
-  "_workflow" in tool && (tool as Record<string, unknown>)["_workflow"] === true
+  "phases" in tool && Array.isArray((tool as Record<string, unknown>)["phases"])

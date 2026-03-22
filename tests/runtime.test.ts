@@ -17,9 +17,9 @@ import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
 import {
   Agents,
   AgentDefinition,
-  AgentModels,
   AgentRegistry,
   getAdversarialModels,
+  resolveAgentModel,
   SubagentRunnerService,
   SubagentError,
 } from "@gent/core/domain/agent"
@@ -184,8 +184,8 @@ describe("filterTools", () => {
 describe("AgentExecutionOverrides", () => {
   test("getAdversarialModels returns cowork and deepwork models", () => {
     const [a, b] = getAdversarialModels()
-    expect(a).toBe(AgentModels.cowork)
-    expect(b).toBe(AgentModels.deepwork)
+    expect(a).toBe(resolveAgentModel(Agents.cowork))
+    expect(b).toBe(resolveAgentModel(Agents.deepwork))
     expect(a).not.toBe(b)
   })
 
@@ -205,8 +205,9 @@ describe("AgentExecutionOverrides", () => {
     expect(Agents.auditor.allowedTools).toEqual(["bash"])
   })
 
-  test("AgentModels includes auditor", () => {
-    expect(AgentModels.auditor).toBeDefined()
+  test("auditor agent has model set", () => {
+    expect(Agents.auditor.model).toBeDefined()
+    expect(resolveAgentModel(Agents.auditor)).toBeDefined()
   })
 
   test("overrides thread through SubagentRunner to AgentActor", async () => {
