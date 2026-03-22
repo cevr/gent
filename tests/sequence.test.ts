@@ -47,7 +47,7 @@ describe("Sequence Recording", () => {
   describe("Recording Layers", () => {
     const TestLayer = createRecordingTestLayer({
       providerResponses: [mockTextResponse("Hello!")],
-      askUserResponses: ["yes", "no"],
+      askUserResponses: [["yes"], ["no"]],
     })
 
     test("records Provider.stream calls", async () => {
@@ -87,7 +87,7 @@ describe("Sequence Recording", () => {
       )
     })
 
-    test("records AskUserHandler.ask calls", async () => {
+    test("records AskUserHandler.askMany calls", async () => {
       const testCtx = {
         sessionId: "test-session",
         branchId: "test-branch",
@@ -99,11 +99,11 @@ describe("Sequence Recording", () => {
           const handler = yield* AskUserHandler
           const recorder = yield* SequenceRecorder
 
-          const response1 = yield* handler.ask({ question: "Continue?" }, testCtx)
-          const response2 = yield* handler.ask({ question: "Sure?" }, testCtx)
+          const response1 = yield* handler.askMany([{ question: "Continue?" }], testCtx)
+          const response2 = yield* handler.askMany([{ question: "Sure?" }], testCtx)
 
-          expect(response1).toBe("yes")
-          expect(response2).toBe("no")
+          expect(response1[0]).toEqual(["yes"])
+          expect(response2[0]).toEqual(["no"])
 
           const calls = yield* recorder.getCalls()
           const askCalls = calls.filter((c) => c.service === "AskUserHandler")

@@ -2,51 +2,57 @@ import { ServiceMap, Deferred, Effect, Layer, Schema } from "effect"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { EventStore, type EventStoreError, QuestionsAsked, type Question } from "../domain/event.js"
 
-// AskUser Tool Params
+// Question option schema
 
-const QuestionOptionParamsSchema = Schema.Struct({
-  label: Schema.String.annotate({ description: "Option label shown to user" }),
-  description: Schema.optional(Schema.String.annotate({ description: "Optional description" })),
+const QuestionOption = Schema.Struct({
+  label: Schema.String.annotate({ description: "Short display text for the option" }),
+  description: Schema.optional(
+    Schema.String.annotate({ description: "Explanation of what this option means" }),
+  ),
 })
 
-export const AskUserParams = Schema.Struct({
-  question: Schema.String.annotate({
-    description: "Question to ask the user",
-  }),
+// Question input schema
+
+const QuestionInput = Schema.Struct({
+  question: Schema.String.annotate({ description: "The question to ask" }),
   header: Schema.optional(
-    Schema.String.annotate({
-      description: "Short header label (max 12 chars)",
+    Schema.String.check(Schema.isMaxLength(30)).annotate({
+      description: "Short label for the question (max 30 chars)",
     }),
   ),
   options: Schema.optional(
-    Schema.Array(QuestionOptionParamsSchema).annotate({
-      description: "Options for user to choose from (label + optional description)",
-    }),
+    Schema.Array(QuestionOption)
+      .check(Schema.isMaxLength(4))
+      .annotate({ description: "Options for user to choose from" }),
   ),
   multiple: Schema.optional(
-    Schema.Boolean.annotate({
-      description: "Allow multiple selections (checkbox) vs single (radio)",
-    }),
+    Schema.Boolean.annotate({ description: "Allow selecting multiple options" }),
   ),
 })
 
-// AskUser Tool Result
+// AskUser Params — canonical questions[] input
+
+export const AskUserParams = Schema.Struct({
+  questions: Schema.Array(QuestionInput)
+    .check(Schema.isMinLength(1), Schema.isMaxLength(5))
+    .annotate({ description: "1-5 questions to ask the user" }),
+})
+
+// AskUser Result — canonical answers[][] output
 
 export const AskUserResult = Schema.Struct({
-  response: Schema.String,
+  answers: Schema.Array(Schema.Array(Schema.String)).annotate({
+    description: "Selected labels for each question",
+  }),
 })
 
 // AskUser Handler Service
 
 export interface AskUserHandlerService {
-  /** Single question - uses ToolContext for sessionId/branchId */
-  readonly ask: (params: Question, ctx: ToolContext) => Effect.Effect<string, EventStoreError>
-  /** Multiple questions - uses ToolContext */
   readonly askMany: (
     questions: ReadonlyArray<Question>,
     ctx: ToolContext,
   ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>, EventStoreError>
-  /** Respond to pending request */
   readonly respond: (
     requestId: string,
     answers: ReadonlyArray<ReadonlyArray<string>>,
@@ -60,7 +66,6 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
     AskUserHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
-      // Global pending map keyed by requestId
       const pending = new Map<string, Deferred.Deferred<ReadonlyArray<ReadonlyArray<string>>>>()
 
       const askMany = Effect.fn("AskUserHandler.askMany")(function* (
@@ -84,10 +89,6 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
       })
 
       return {
-        ask: Effect.fn("AskUserHandler.ask")(function* (params: Question, ctx: ToolContext) {
-          const answers = yield* askMany([params], ctx)
-          return answers[0]?.join(", ") ?? ""
-        }),
         askMany,
         respond: (requestId, answers) =>
           Effect.gen(function* () {
@@ -100,11 +101,13 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
     }),
   )
 
-  static Test = (responses: ReadonlyArray<string>): Layer.Layer<AskUserHandler> => {
-    let index = 0
+  static Test = (responses: ReadonlyArray<ReadonlyArray<string>>): Layer.Layer<AskUserHandler> => {
+    let callIndex = 0
     return Layer.succeed(AskUserHandler, {
-      ask: (_params, _ctx) => Effect.succeed(responses[index++] ?? ""),
-      askMany: (_questions, _ctx) => Effect.succeed([]),
+      askMany: (questions, _ctx) =>
+        Effect.succeed(
+          questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
+        ).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
       respond: (_requestId, _answers) => Effect.void,
     })
   }
@@ -116,107 +119,11 @@ export const AskUserTool = defineTool({
   name: "ask_user",
   concurrency: "serial",
   description:
-    "Ask user for clarification. Use frequently to validate assumptions and get preferences.",
+    "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",
   params: AskUserParams,
   execute: Effect.fn("AskUserTool.execute")(function* (params, ctx) {
     const handler = yield* AskUserHandler
-    const response = yield* handler.ask(
-      {
-        question: params.question,
-        header: params.header,
-        options: params.options,
-        multiple: params.multiple,
-      },
-      ctx,
-    )
-    return { response }
-  }),
-})
-
-// ============================================================================
-// Question tool (structured multi-question)
-// ============================================================================
-
-const QuestionOption = Schema.Struct({
-  label: Schema.String.annotate({
-    description: "Short display text for the option",
-  }),
-  description: Schema.String.annotate({
-    description: "Explanation of what this option means",
-  }),
-})
-
-const QuestionInput = Schema.Struct({
-  question: Schema.String.annotate({
-    description: "The question to ask",
-  }),
-  header: Schema.String.check(Schema.isMaxLength(30)).annotate({
-    description: "Short label for the question (max 30 chars)",
-  }),
-  options: Schema.Array(QuestionOption)
-    .check(Schema.isMinLength(2), Schema.isMaxLength(4))
-    .annotate({
-      description: "2-4 choices for the user",
-    }),
-  multiple: Schema.optional(Schema.Boolean).annotate({
-    description: "Allow selecting multiple options",
-  }),
-})
-
-export interface QuestionHandlerService {
-  readonly ask: (
-    questions: ReadonlyArray<Question>,
-    ctx: ToolContext,
-  ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>, EventStoreError>
-}
-
-export class QuestionHandler extends ServiceMap.Service<QuestionHandler, QuestionHandlerService>()(
-  "@gent/tools/src/ask-user/QuestionHandler",
-) {
-  static Live: Layer.Layer<QuestionHandler, never, AskUserHandler> = Layer.effect(
-    QuestionHandler,
-    Effect.gen(function* () {
-      const askUserHandler = yield* AskUserHandler
-      return {
-        ask: (questions, ctx) => askUserHandler.askMany(questions, ctx),
-      }
-    }),
-  )
-
-  static Test = (responses: ReadonlyArray<ReadonlyArray<string>>): Layer.Layer<QuestionHandler> => {
-    let callIndex = 0
-    return Layer.succeed(QuestionHandler, {
-      ask: (questions, _ctx) =>
-        Effect.succeed(
-          questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
-        ).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
-    })
-  }
-}
-
-export const QuestionParams = Schema.Struct({
-  questions: Schema.Array(QuestionInput)
-    .check(Schema.isMinLength(1), Schema.isMaxLength(5))
-    .annotate({
-      description: "1-5 questions to ask the user",
-    }),
-})
-
-export const QuestionResult = Schema.Struct({
-  answers: Schema.Array(Schema.Array(Schema.String)).annotate({
-    description: "Selected labels for each question",
-  }),
-})
-
-export const QuestionTool = defineTool({
-  name: "question",
-  concurrency: "serial",
-  description:
-    "Ask user structured questions with predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or making implementation choices.",
-  params: QuestionParams,
-  execute: Effect.fn("QuestionTool.execute")(function* (params, ctx) {
-    const handler = yield* QuestionHandler
-    const answers = yield* handler.ask(params.questions, ctx)
+    const answers = yield* handler.askMany(params.questions, ctx)
     return { answers }
   }),
 })

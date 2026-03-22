@@ -28,7 +28,7 @@ import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { TaskService } from "../runtime/task-service.js"
 import { AllTools } from "../tools/index.js"
-import { AskUserHandler, QuestionHandler } from "../tools/ask-user.js"
+import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
 import * as nodePath from "node:path"
@@ -167,7 +167,6 @@ export const createDependencies = (
   | ActorProcess
   | CheckpointService
   | AskUserHandler
-  | QuestionHandler
   | PlanHandler
   | HandoffHandler
   | AuthStorage
@@ -249,8 +248,6 @@ export const createDependencies = (
 
   // AskUserHandler requires EventStore
   const AskUserHandlerLive = Layer.provide(AskUserHandler.Live, BaseWithPermission)
-  const QuestionHandlerLive = Layer.provide(QuestionHandler.Live, AskUserHandlerLive)
-
   // PermissionHandler requires EventStore
   const PermissionHandlerLive = Layer.provide(PermissionHandler.Live, BaseWithPermission)
 
@@ -322,7 +319,6 @@ export const createDependencies = (
     BaseWithPermission,
     CheckpointLayer,
     AskUserHandlerLive,
-    QuestionHandlerLive,
     PermissionHandlerLive,
     ToolRunnerLive,
     PlanHandlerLive,

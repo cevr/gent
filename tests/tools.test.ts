@@ -5,7 +5,7 @@ import { ReadTool } from "@gent/core/tools/read"
 import { GlobTool } from "@gent/core/tools/glob"
 import { GrepTool } from "@gent/core/tools/grep"
 import { TodoReadTool, TodoWriteTool, TodoHandler } from "@gent/core/tools/todo"
-import { QuestionTool, QuestionHandler } from "@gent/core/tools/ask-user"
+import { AskUserTool, AskUserHandler } from "@gent/core/tools/ask-user"
 import { PlanTool } from "@gent/core/tools/plan"
 import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
@@ -190,15 +190,15 @@ describe("Todo Tools", () => {
   })
 })
 
-describe("Question Tool", () => {
-  test("QuestionTool asks questions and returns answers", async () => {
+describe("AskUser Tool", () => {
+  test("asks questions and returns answers", async () => {
     const layer = Layer.merge(
-      QuestionHandler.Test([["Option A"], ["Option B", "Option C"]]),
+      AskUserHandler.Test([["Option A"], ["Option B", "Option C"]]),
       PlatformLayer,
     )
 
     const result = await Effect.runPromise(
-      QuestionTool.execute(
+      AskUserTool.execute(
         {
           questions: [
             {

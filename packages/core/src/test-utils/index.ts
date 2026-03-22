@@ -130,7 +130,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
 // Recording AskUserHandler
 
 export const RecordingAskUserHandler = (
-  responses: ReadonlyArray<string>,
+  responses: ReadonlyArray<ReadonlyArray<string>>,
 ): Layer.Layer<AskUserHandler, never, SequenceRecorder> =>
   Layer.effect(
     AskUserHandler,
@@ -139,15 +139,6 @@ export const RecordingAskUserHandler = (
       const indexRef = yield* Ref.make(0)
 
       return {
-        ask: Effect.fn("RecordingAskUserHandler.ask")(function* (question, ctx) {
-          const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
-          yield* recorder.record({
-            service: "AskUserHandler",
-            method: "ask",
-            args: { question, ctx },
-          })
-          return responses[idx] ?? ""
-        }),
         askMany: Effect.fn("RecordingAskUserHandler.askMany")(function* (questions, ctx) {
           yield* recorder.record({
             service: "AskUserHandler",
@@ -155,8 +146,7 @@ export const RecordingAskUserHandler = (
             args: { questions, ctx },
           })
           const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
-          const response = responses[idx] ?? ""
-          return [[response]]
+          return [responses[idx] ?? [""]]
         }),
         respond: Effect.fn("RecordingAskUserHandler.respond")(function* (requestId, answers) {
           yield* recorder.record({
@@ -251,7 +241,7 @@ export const RecordingCheckpointService = (
 
 export interface TestLayerConfig {
   providerResponses?: ReadonlyArray<ReadonlyArray<StreamChunk>>
-  askUserResponses?: ReadonlyArray<string>
+  askUserResponses?: ReadonlyArray<ReadonlyArray<string>>
   tools?: ReadonlyArray<AnyToolDefinition>
   recording?: boolean
   checkpoint?: CheckpointServiceTestConfig
@@ -266,7 +256,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
   const providerResponses = config.providerResponses ?? [
     [new FinishChunk({ finishReason: "stop" })],
   ]
-  const askUserResponses = config.askUserResponses ?? ["yes"]
+  const askUserResponses = config.askUserResponses ?? [["yes"]]
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const planDecisions = config.planDecisions ?? ["confirm"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
@@ -293,7 +283,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   const providerResponses = config.providerResponses ?? [
     [new FinishChunk({ finishReason: "stop" })],
   ]
-  const askUserResponses = config.askUserResponses ?? ["yes"]
+  const askUserResponses = config.askUserResponses ?? [["yes"]]
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const planDecisions = config.planDecisions ?? ["confirm"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
