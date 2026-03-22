@@ -11,6 +11,7 @@ import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { PermissionRule, GentClient } from "../client"
+import { ChromePanel } from "../components/chrome-panel"
 import { formatError } from "../utils/format-error"
 
 export interface PermissionsProps {
@@ -180,55 +181,28 @@ export function Permissions(props: PermissionsProps) {
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      {/* Overlay */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Panel */}
-      <box
-        position="absolute"
-        left={left()}
-        top={top()}
+      <ChromePanel.Root
+        title="Permission Rules"
         width={panelWidth()}
         height={panelHeight()}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
+        left={left()}
+        top={top()}
       >
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.text }}>Permission Rules</text>
-        </box>
-
-        <box flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
-        </box>
-
-        <Show when={state().error !== undefined}>
-          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-            <text style={{ fg: theme.error }}>{state().error}</text>
-          </box>
-        </Show>
+        <ChromePanel.Error error={state().error} />
 
         <Show
           when={hasRules()}
           fallback={
-            <box paddingLeft={1} paddingRight={1} flexGrow={1}>
+            <ChromePanel.Section>
               <text style={{ fg: theme.textMuted }}>
                 {state()._tag === "loading"
                   ? "Loading permission rules..."
                   : "No permission rules configured"}
               </text>
-            </box>
+            </ChromePanel.Section>
           }
         >
-          <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
+          <ChromePanel.Body ref={scrollRef}>
             <For each={readyState()?.rules ?? []}>
               {(rule, index) => {
                 const isSelected = () => {
@@ -252,13 +226,11 @@ export function Permissions(props: PermissionsProps) {
                 )
               }}
             </For>
-          </scrollbox>
+          </ChromePanel.Body>
         </Show>
 
-        <box flexShrink={0} paddingLeft={1}>
-          <text style={{ fg: theme.textMuted }}>Up/Down | d=delete | Esc</text>
-        </box>
-      </box>
+        <ChromePanel.Footer>Up/Down | d=delete | Esc</ChromePanel.Footer>
+      </ChromePanel.Root>
     </box>
   )
 }

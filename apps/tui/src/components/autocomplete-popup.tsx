@@ -6,6 +6,7 @@ import { createSignal, createEffect, createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
+import { ChromePanel } from "./chrome-panel"
 import { useWorkspace } from "../workspace/index"
 import { useSkills } from "../hooks/use-skills"
 import { useFileSearch } from "../hooks/use-file-search"
@@ -214,41 +215,24 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   return (
     <Show when={items().length > 0}>
-      {/* Transparent backdrop */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Popup */}
-      <box
-        position="absolute"
-        left={popupLeft()}
-        bottom={3}
+      <ChromePanel.Root
+        title={title()}
         width={popupWidth()}
         height={popupHeight()}
-        backgroundColor={theme.background}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
-        title={title()}
+        left={popupLeft()}
+        bottom={3}
       >
         {/* Filter display */}
         <Show when={props.state.filter.length > 0}>
-          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+          <ChromePanel.Section>
             <text style={{ fg: theme.textMuted }}>
               › <span style={{ fg: theme.text }}>{props.state.filter}</span>
             </text>
-          </box>
+          </ChromePanel.Section>
         </Show>
 
         {/* Items */}
-        <scrollbox ref={scrollRef} flexGrow={1}>
+        <ChromePanel.Body ref={scrollRef} paddingLeft={0} paddingRight={0}>
           <For each={items()}>
             {(item, index) => {
               const isSelected = () => selectedIndex() === index()
@@ -280,13 +264,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
               )
             }}
           </For>
-        </scrollbox>
+        </ChromePanel.Body>
 
-        {/* Footer hints */}
-        <box flexShrink={0} paddingLeft={1}>
-          <text style={{ fg: theme.textMuted }}>↑↓ navigate · enter select · esc close</text>
-        </box>
-      </box>
+        <ChromePanel.Footer>↑↓ navigate · enter select · esc close</ChromePanel.Footer>
+      </ChromePanel.Root>
     </Show>
   )
 }

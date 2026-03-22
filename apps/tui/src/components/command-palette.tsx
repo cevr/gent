@@ -3,6 +3,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { Agents } from "@gent/core/domain/agent.js"
+import { ChromePanel } from "./chrome-panel"
 import { useCommand } from "../command/index"
 import { useTheme } from "../theme/index"
 import { useClient } from "../client/index"
@@ -480,32 +481,15 @@ export function CommandPalette() {
 
   return (
     <Show when={command.paletteOpen()}>
-      {/* Overlay */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Palette */}
-      <box
-        position="absolute"
-        left={left()}
-        top={top()}
+      <ChromePanel.Root
+        title={currentLevel().title}
         width={paletteWidth()}
         height={paletteHeight()}
-        backgroundColor={theme.background}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
-        title={currentLevel().title}
+        left={left()}
+        top={top()}
       >
         {/* Search */}
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+        <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
             <Show when={breadcrumb().length > 0}>
               <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
@@ -516,10 +500,10 @@ export function CommandPalette() {
               <span style={{ fg: theme.primary }}>│</span>
             </Show>
           </text>
-        </box>
+        </ChromePanel.Section>
 
         {/* Items */}
-        <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
+        <ChromePanel.Body ref={scrollRef}>
           <For each={filteredItems()}>
             {(item, index) => {
               const isSelected = () => state().selectedIndex === index()
@@ -578,20 +562,14 @@ export function CommandPalette() {
               <text style={{ fg: theme.textMuted }}>No matches</text>
             </box>
           </Show>
-        </scrollbox>
+        </ChromePanel.Body>
 
-        {/* Footer hint */}
-        <box flexShrink={0} paddingLeft={1}>
-          <text style={{ fg: theme.textMuted }}>
-            <Show
-              when={state().levelStack.length > 0}
-              fallback="↑↓ · →/Enter · Esc · type to search"
-            >
-              ↑↓ · →/Enter · ←/Esc · type to search
-            </Show>
-          </text>
-        </box>
-      </box>
+        <ChromePanel.Footer>
+          <Show when={state().levelStack.length > 0} fallback="↑↓ · →/Enter · Esc · type to search">
+            ↑↓ · →/Enter · ←/Esc · type to search
+          </Show>
+        </ChromePanel.Footer>
+      </ChromePanel.Root>
     </Show>
   )
 }

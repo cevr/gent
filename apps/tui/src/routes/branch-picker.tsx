@@ -2,7 +2,7 @@
  * Branch picker route - choose branch when resuming multi-branch session
  */
 
-import { createEffect, createSignal, For, Show } from "solid-js"
+import { createEffect, createSignal, For } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -11,6 +11,7 @@ import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
+import { ChromePanel } from "../components/chrome-panel"
 import type { BranchInfo, BranchTreeNode } from "../client"
 import type { SessionId } from "@gent/core/domain/ids.js"
 import { formatError } from "../utils/format-error"
@@ -172,43 +173,16 @@ export function BranchPicker(props: BranchPickerProps) {
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      {/* Overlay */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Panel */}
-      <box
-        position="absolute"
-        left={left()}
-        top={top()}
+      <ChromePanel.Root
+        title={`Resume: ${props.sessionName}`}
         width={panelWidth()}
         height={panelHeight()}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
+        left={left()}
+        top={top()}
       >
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.text }}>Resume: {props.sessionName}</text>
-        </box>
+        <ChromePanel.Error error={state().error} />
 
-        <box flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
-        </box>
-
-        <Show when={state().error !== undefined}>
-          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-            <text style={{ fg: theme.error }}>{state().error}</text>
-          </box>
-        </Show>
-
-        <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
+        <ChromePanel.Body ref={scrollRef}>
           <For each={props.branches}>
             {(branch, index) => {
               const isSelected = () => {
@@ -241,12 +215,10 @@ export function BranchPicker(props: BranchPickerProps) {
               )
             }}
           </For>
-        </scrollbox>
+        </ChromePanel.Body>
 
-        <box flexShrink={0} paddingLeft={1}>
-          <text style={{ fg: theme.textMuted }}>Up/Down | Enter | Esc</text>
-        </box>
-      </box>
+        <ChromePanel.Footer>Up/Down | Enter | Esc</ChromePanel.Footer>
+      </ChromePanel.Root>
     </box>
   )
 }

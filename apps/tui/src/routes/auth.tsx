@@ -17,6 +17,7 @@ import { useRuntime } from "../hooks/use-runtime"
 import { useMachine } from "../hooks/use-machine"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { GentClient } from "../client"
+import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
 import { tuiEvent, tuiError } from "../utils/unified-tracer"
 import { AuthState, AuthEvent, authMachine } from "./auth-machine"
@@ -39,7 +40,15 @@ export function Auth(props: AuthProps) {
     "auth",
   )
   const [autoPrompted, setAutoPrompted] = createSignal(false)
+  const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
   const authSessionId = Bun.randomUUIDv7()
+  let successTimer: ReturnType<typeof setTimeout> | undefined
+
+  const flashSuccess = (msg: string) => {
+    if (successTimer !== undefined) clearTimeout(successTimer)
+    setSuccessMessage(msg)
+    successTimer = setTimeout(() => setSuccessMessage(null), 2000)
+  }
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
   useScrollSync(() => `auth-provider-${state().providerIndex}`, { getRef: () => scrollRef })
@@ -147,6 +156,7 @@ export function Auth(props: AuthProps) {
       props.client.setAuthKey(provider.provider, key).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
+            flashSuccess(`API key saved for ${provider.provider}`)
             send(AuthEvent.ActionSucceeded)
             loadAuth()
           }),
@@ -185,6 +195,7 @@ export function Auth(props: AuthProps) {
               return
             }
             if (authorization.method === "done") {
+              flashSuccess(`Authenticated ${provider.provider} via keychain`)
               send(AuthEvent.ActionSucceeded)
               loadAuth()
               return
@@ -234,6 +245,7 @@ export function Auth(props: AuthProps) {
       props.client.callbackAuth(authSessionId, providerName, methodIndex, authorizationId).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
+            flashSuccess(`Authenticated ${providerName} via OAuth`)
             send(AuthEvent.ActionSucceeded)
             loadAuth()
           }),
@@ -272,6 +284,7 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {
+              flashSuccess(`Authenticated ${provider.provider} via OAuth`)
               send(AuthEvent.ActionSucceeded)
               loadAuth()
             }),
@@ -455,41 +468,15 @@ export function Auth(props: AuthProps) {
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      {/* Overlay */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Panel */}
-      <box
-        position="absolute"
-        left={left()}
-        top={top()}
+      <ChromePanel.Root
+        title="API Keys"
         width={panelWidth()}
         height={panelHeight()}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
+        left={left()}
+        top={top()}
       >
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.text }}>API Keys</text>
-        </box>
-
-        <box flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
-        </box>
-
-        <Show when={state().error !== undefined}>
-          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-            <text style={{ fg: theme.error }}>{state().error}</text>
-          </box>
-        </Show>
+        <ChromePanel.Error error={state().error} />
+        <ChromePanel.Success message={successMessage()} />
 
         <Show when={keyState()}>
           {(current) => (
@@ -620,21 +607,13 @@ export function Auth(props: AuthProps) {
           </Show>
         </Show>
 
-        <box flexShrink={0} paddingLeft={1}>
-          <Show when={state()._tag === "List"}>
-            <text style={{ fg: theme.textMuted }}>Up/Down | Enter=select | d=delete | Esc</text>
-          </Show>
-          <Show when={state()._tag === "Method"}>
-            <text style={{ fg: theme.textMuted }}>Up/Down | Enter=choose | Esc</text>
-          </Show>
-          <Show when={state()._tag === "Key"}>
-            <text style={{ fg: theme.textMuted }}>Enter=save | Esc=cancel</text>
-          </Show>
-          <Show when={state()._tag === "OAuth"}>
-            <text style={{ fg: theme.textMuted }}>Enter=continue | Esc=cancel</text>
-          </Show>
-        </box>
-      </box>
+        <ChromePanel.Footer>
+          <Show when={state()._tag === "List"}>Up/Down | Enter=select | d=delete | Esc</Show>
+          <Show when={state()._tag === "Method"}>Up/Down | Enter=choose | Esc</Show>
+          <Show when={state()._tag === "Key"}>Enter=save | Esc=cancel</Show>
+          <Show when={state()._tag === "OAuth"}>Enter=continue | Esc=cancel</Show>
+        </ChromePanel.Footer>
+      </ChromePanel.Root>
     </box>
   )
 }

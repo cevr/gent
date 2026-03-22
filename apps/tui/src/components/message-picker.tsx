@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
+import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
 import type { MessageId } from "@gent/core/domain/ids.js"
@@ -84,37 +85,14 @@ export function MessagePicker(props: MessagePickerProps) {
 
   return (
     <Show when={props.open}>
-      {/* Overlay */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Panel */}
-      <box
-        position="absolute"
-        left={left()}
-        top={top()}
+      <ChromePanel.Root
+        title="Fork From Message"
         width={panelWidth()}
         height={panelHeight()}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
+        left={left()}
+        top={top()}
       >
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.text }}>Fork From Message</text>
-        </box>
-
-        <box flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>{"-".repeat(panelWidth() - 2)}</text>
-        </box>
-
-        <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
+        <ChromePanel.Body ref={scrollRef}>
           <For each={items()}>
             {(item, index) => {
               const isSelected = () => selectedIndex() === index()
@@ -135,12 +113,10 @@ export function MessagePicker(props: MessagePickerProps) {
               )
             }}
           </For>
-        </scrollbox>
+        </ChromePanel.Body>
 
-        <box flexShrink={0} paddingLeft={1}>
-          <text style={{ fg: theme.textMuted }}>Up/Down | Enter | Esc</text>
-        </box>
-      </box>
+        <ChromePanel.Footer>Up/Down | Enter | Esc</ChromePanel.Footer>
+      </ChromePanel.Root>
     </Show>
   )
 }
