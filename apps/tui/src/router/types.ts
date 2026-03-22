@@ -7,6 +7,7 @@ import type { BranchInfo } from "../client"
 
 export type AppRoute =
   | { readonly _tag: "home" }
+  | { readonly _tag: "debug" }
   | {
       readonly _tag: "session"
       readonly sessionId: SessionId
@@ -31,6 +32,7 @@ export interface AppRouterState {
 // Constructors
 export const Route = {
   home: (): AppRoute => ({ _tag: "home" }),
+  debug: (): AppRoute => ({ _tag: "debug" }),
   session: (sessionId: SessionId, branchId: BranchId, prompt?: string): AppRoute => ({
     _tag: "session",
     sessionId,
@@ -56,6 +58,7 @@ export const Route = {
 // Type guards
 export const isRoute = {
   home: (r: AppRoute): r is Extract<AppRoute, { _tag: "home" }> => r._tag === "home",
+  debug: (r: AppRoute): r is Extract<AppRoute, { _tag: "debug" }> => r._tag === "debug",
   session: (r: AppRoute): r is Extract<AppRoute, { _tag: "session" }> => r._tag === "session",
   branchPicker: (r: AppRoute): r is Extract<AppRoute, { _tag: "branchPicker" }> =>
     r._tag === "branchPicker",

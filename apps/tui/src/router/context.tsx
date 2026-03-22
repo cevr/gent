@@ -12,6 +12,7 @@ export interface RouterContextValue {
   route: () => AppRoute
   navigate: (route: AppRoute) => void
   navigateToHome: () => void
+  navigateToDebug: () => void
   navigateToSession: (sessionId: SessionId, branchId: BranchId, prompt?: string) => void
   navigateToBranchPicker: (
     sessionId: SessionId,
@@ -52,6 +53,7 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
     route,
     navigate: router.navigate,
     navigateToHome: () => router.navigate(Route.home()),
+    navigateToDebug: () => router.navigate(Route.debug()),
     navigateToSession: (sessionId: SessionId, branchId: BranchId, prompt?: string) =>
       router.navigate(Route.session(sessionId, branchId, prompt)),
     navigateToBranchPicker: (sessionId, sessionName, branches, prompt) =>

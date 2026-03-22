@@ -15,14 +15,33 @@ const STATUS_ICONS: Record<string, string> = {
 
 const MAX_DISPLAY = 10
 
-export function TaskWidget(props: { sessionId: SessionId; branchId: BranchId }) {
+export interface TaskPreview {
+  subject: string
+  status: Task["status"]
+}
+
+type TaskWidgetProps =
+  | {
+      sessionId: SessionId
+      branchId: BranchId
+      previewTasks?: undefined
+    }
+  | {
+      previewTasks: readonly TaskPreview[]
+      sessionId?: undefined
+      branchId?: undefined
+    }
+
+export function TaskWidget(props: TaskWidgetProps) {
   const client = useClient()
   const { cast } = useRuntime(client.client.services)
   const { theme } = useTheme()
 
   const [tasks, setTasks] = createSignal<Task[]>([])
+  const currentTasks = () => props.previewTasks ?? tasks()
 
   const loadTasks = () => {
+    if (props.previewTasks !== undefined) return
     cast(
       client.client.listTasks(props.sessionId, props.branchId).pipe(
         Effect.tap((result) =>
@@ -37,11 +56,13 @@ export function TaskWidget(props: { sessionId: SessionId; branchId: BranchId }) 
 
   // Initial load
   createEffect(() => {
+    if (props.previewTasks !== undefined) return
     loadTasks()
   })
 
   // Subscribe to task events for live updates
   createEffect(() => {
+    if (props.previewTasks !== undefined) return
     if (!client.isActive()) return
 
     const unsub = client.subscribeEvents((event) => {
@@ -59,7 +80,7 @@ export function TaskWidget(props: { sessionId: SessionId; branchId: BranchId }) 
   })
 
   const summary = () => {
-    const t = tasks()
+    const t = currentTasks()
     const pending = t.filter((x) => x.status === "pending").length
     const active = t.filter((x) => x.status === "in_progress").length
     const done = t.filter((x) => x.status === "completed").length
@@ -73,9 +94,9 @@ export function TaskWidget(props: { sessionId: SessionId; branchId: BranchId }) 
     return `${t.length} tasks (${parts.join(", ")})`
   }
 
-  const displayTasks = () => tasks().slice(0, MAX_DISPLAY)
+  const displayTasks = () => currentTasks().slice(0, MAX_DISPLAY)
 
-  const overflow = () => Math.max(0, tasks().length - MAX_DISPLAY)
+  const overflow = () => Math.max(0, currentTasks().length - MAX_DISPLAY)
 
   const statusColor = (status: Task["status"]) => {
     switch (status) {
@@ -91,7 +112,7 @@ export function TaskWidget(props: { sessionId: SessionId; branchId: BranchId }) 
   }
 
   return (
-    <Show when={tasks().length > 0}>
+    <Show when={currentTasks().length > 0}>
       <box flexDirection="column" paddingLeft={1} marginBottom={1}>
         <text>
           <span style={{ fg: theme.border }}>{"·· "}</span>

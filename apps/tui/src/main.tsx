@@ -42,6 +42,7 @@ clearClientLog()
 
 type InitialState =
   | { _tag: "home" }
+  | { _tag: "debug" }
   | { _tag: "session"; session: SessionInfo; prompt?: string }
   | {
       _tag: "branchPicker"
@@ -58,12 +59,17 @@ const resolveInitialState = (input: {
   session: Option.Option<string>
   continue_: boolean
   headless: boolean
+  debug: boolean
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
   bypass: boolean
 }): Effect.Effect<InitialState, GentCoreError> =>
   Effect.gen(function* () {
-    const { core, cwd, session, continue_, headless, prompt, promptArg, bypass } = input
+    const { core, cwd, session, continue_, headless, debug, prompt, promptArg, bypass } = input
+
+    if (debug) {
+      return { _tag: "debug" as const }
+    }
 
     // 1. Headless mode
     if (headless) {
@@ -317,6 +323,10 @@ const main = Command.make(
       Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
       Flag.withDefault(false),
     ),
+    debug: Flag.boolean("debug").pipe(
+      Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
+      Flag.withDefault(false),
+    ),
     prompt: Flag.string("prompt").pipe(
       Flag.withAlias("p"),
       Flag.withDescription("Initial prompt (TUI mode)"),
@@ -331,7 +341,7 @@ const main = Command.make(
       Flag.withDefault(true),
     ),
   },
-  ({ session, continue_, headless, prompt, promptArg, bypass }) =>
+  ({ session, continue_, headless, debug, prompt, promptArg, bypass }) =>
     Effect.gen(function* () {
       // Get core service for direct access (headless, session management)
       const cwd = process.cwd()
@@ -345,7 +355,7 @@ const main = Command.make(
           .filter((p) => p.required && !p.hasKey)
           .map((p) => p.provider)
 
-        if (missingProviders.length > 0 && headless) {
+        if (missingProviders.length > 0 && headless && !debug) {
           const hint = formatMissingProviders(missingProviders)
           yield* Console.error(`Error: missing required API keys: ${hint}`)
           return process.exit(1)
@@ -358,6 +368,7 @@ const main = Command.make(
           session,
           continue_,
           headless,
+          debug,
           prompt,
           promptArg,
           bypass,
@@ -405,8 +416,16 @@ const main = Command.make(
         let initialSession: Session | undefined
         let initialRoute = Route.home()
         let initialPrompt: string | undefined
+        let debugMode = false
         const missingAuthProviders =
-          missingProviders.length > 0 ? (missingProviders as readonly ProviderId[]) : undefined
+          !debug && missingProviders.length > 0
+            ? (missingProviders as readonly ProviderId[])
+            : undefined
+
+        if (state._tag === "debug") {
+          initialRoute = Route.debug()
+          debugMode = true
+        }
 
         if (state._tag === "session" && state.session.branchId !== undefined) {
           initialSession = {
@@ -448,6 +467,7 @@ const main = Command.make(
                       <App
                         initialPrompt={initialPrompt}
                         missingAuthProviders={missingAuthProviders}
+                        debugMode={debugMode}
                       />
                     </RouterProvider>
                   </ClientProvider>
