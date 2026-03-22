@@ -47,8 +47,10 @@ type SteerCommandInput =
   | { _tag: "Interject"; message: string }
   | { _tag: "SwitchAgent"; agent: AgentName }
 
-const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Model | undefined =>
-  models[resolveAgentModel(Agents[agent])]
+const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Model | undefined => {
+  const agentDef = (Agents as Record<string, typeof Agents.cowork>)[agent]
+  return agentDef !== undefined ? models[resolveAgentModel(agentDef)] : undefined
+}
 
 // =============================================================================
 // Session State
@@ -413,7 +415,10 @@ export function ClientProvider(props: ClientProviderProps) {
     agent: () => agentStore.agent,
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
-    model: () => resolveAgentModel(Agents[agentStore.agent]),
+    model: () => {
+      const agentDef = (Agents as Record<string, typeof Agents.cowork>)[agentStore.agent]
+      return agentDef !== undefined ? resolveAgentModel(agentDef) : resolveAgentModel(Agents.cowork)
+    },
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",
     isError: () => agentStore.status._tag === "error",

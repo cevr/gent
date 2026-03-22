@@ -9,18 +9,7 @@ import type { ToolAction as ToolActionType, AnyToolDefinition } from "./tool"
 export const AgentKind = Schema.Literals(["primary", "subagent", "system"])
 export type AgentKind = typeof AgentKind.Type
 
-export const AgentName = Schema.Literals([
-  "cowork",
-  "deepwork",
-  "explore",
-  "architect",
-  "librarian",
-  "summarizer",
-  "title",
-  "finder",
-  "reviewer",
-  "auditor",
-])
+export const AgentName = Schema.String
 export type AgentName = typeof AgentName.Type
 
 export const ReasoningEffort = Schema.Literals([
