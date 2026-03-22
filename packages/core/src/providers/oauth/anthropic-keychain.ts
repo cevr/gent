@@ -154,22 +154,34 @@ const DEFAULT_BETA_FLAGS =
 
 export const LONG_CONTEXT_BETAS = ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
 
+/** Env vars for Anthropic keychain, read once at init via Config */
+export interface AnthropicKeychainEnv {
+  betaFlags?: string
+  cliVersion?: string
+  userAgent?: string
+}
+
+let _env: AnthropicKeychainEnv = {}
+
+/** Call once at layer construction with values from Config */
+export const initAnthropicKeychainEnv = (env: AnthropicKeychainEnv): void => {
+  _env = env
+  lastBetaFlagsEnv = env.betaFlags
+}
+
 const getRequiredBetas = (): string[] =>
-  // eslint-disable-next-line no-process-env
-  (process.env["ANTHROPIC_BETA_FLAGS"] ?? DEFAULT_BETA_FLAGS)
+  (_env.betaFlags ?? DEFAULT_BETA_FLAGS)
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
 
 // Session-level excluded betas per model
 const excludedBetas = new Map<string, Set<string>>()
-// eslint-disable-next-line no-process-env
-let lastBetaFlagsEnv: string | undefined = process.env["ANTHROPIC_BETA_FLAGS"]
+let lastBetaFlagsEnv: string | undefined
 let lastModelId: string | undefined
 
 export const getExcludedBetas = (modelId: string): Set<string> => {
-  // eslint-disable-next-line no-process-env
-  const currentBetaFlags = process.env["ANTHROPIC_BETA_FLAGS"]
+  const currentBetaFlags = _env.betaFlags
   if (currentBetaFlags !== lastBetaFlagsEnv) {
     excludedBetas.clear()
     lastBetaFlagsEnv = currentBetaFlags
@@ -238,13 +250,9 @@ export const getModelBetas = (modelId: string, excluded?: Set<string>): string[]
 
 const DEFAULT_CC_VERSION = "2.1.80"
 
-const getCliVersion = (): string =>
-  // eslint-disable-next-line no-process-env
-  process.env["ANTHROPIC_CLI_VERSION"] ?? DEFAULT_CC_VERSION
+const getCliVersion = (): string => _env.cliVersion ?? DEFAULT_CC_VERSION
 
-const getUserAgent = (): string =>
-  // eslint-disable-next-line no-process-env
-  process.env["ANTHROPIC_USER_AGENT"] ?? `claude-cli/${getCliVersion()} (external, cli)`
+const getUserAgent = (): string => _env.userAgent ?? `claude-cli/${getCliVersion()} (external, cli)`
 
 const getBillingHeader = (modelId: string): string =>
   `cc_version=${getCliVersion()}.${modelId}; cc_entrypoint=cli; cch=93769;`

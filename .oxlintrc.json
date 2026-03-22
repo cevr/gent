@@ -9,7 +9,7 @@
   "jsPlugins": ["./lint/no-direct-env.ts"],
   "rules": {
     // Custom — use Config from effect, not direct env access
-    "gent/no-direct-env": "warn",
+    "gent/no-direct-env": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
 

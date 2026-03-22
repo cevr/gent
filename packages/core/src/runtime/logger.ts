@@ -8,7 +8,7 @@
  * Uses Effect.withLogSpan for timing data.
  */
 
-import { Cause, Effect, Layer, Logger, ServiceMap } from "effect"
+import { Cause, Config, Effect, Layer, Logger, Option, ServiceMap } from "effect"
 import type { LogLevel } from "effect/LogLevel"
 import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
 import { appendFileSync, writeFileSync } from "node:fs"
@@ -196,15 +196,6 @@ const makeJsonFileLogger = (path: string): Logger.Logger<unknown, void> =>
 
 const DEFAULT_LOG_FILE = "/tmp/gent.log"
 
-const getLogFormat = (): "pretty" | "json" | "both" => {
-  const env = Bun.env["GENT_LOG_FORMAT"]
-  if (env === "pretty" || env === "json" || env === "both") return env
-  return "json"
-}
-
-const getLogFile = (): string => Bun.env["GENT_LOG_FILE"] ?? DEFAULT_LOG_FILE
-
-// Truncate log file on startup
 const clearLogFile = (path: string): void => {
   try {
     writeFileSync(path, "")
@@ -218,50 +209,73 @@ const clearLogFile = (path: string): void => {
 // =============================================================================
 
 /** JSON (file) logger by default. Set GENT_LOG_FORMAT=pretty|both for stderr output. */
-export const GentLogger: Layer.Layer<never> = (() => {
-  const format = getLogFormat()
-  const logFile = getLogFile()
+export const GentLogger: Layer.Layer<never> = Layer.unwrap(
+  Effect.gen(function* () {
+    const formatOpt = yield* Config.option(Config.string("GENT_LOG_FORMAT"))
+    const format = Option.getOrElse(formatOpt, () => "json")
+    const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
+    const logFile = Option.getOrElse(logFileOpt, () => DEFAULT_LOG_FILE)
+    // Don't truncate when running as subprocess — parent is writing to same file
+    const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
 
-  if (format === "pretty") {
-    return Logger.layer([prettyLogger])
-  }
+    if (format === "pretty") {
+      return Logger.layer([prettyLogger])
+    }
 
-  if (format === "json") {
-    clearLogFile(logFile)
+    if (format === "both") {
+      if (!isSubprocess) clearLogFile(logFile)
+      return Logger.layer([prettyLogger, makeJsonFileLogger(logFile)])
+    }
+
+    // json (default)
+    if (!isSubprocess) clearLogFile(logFile)
     return Logger.layer([makeJsonFileLogger(logFile)])
-  }
-
-  // both
-  clearLogFile(logFile)
-  return Logger.layer([prettyLogger, makeJsonFileLogger(logFile)])
-})()
+  }).pipe(
+    Effect.catchEager(() => Effect.succeed(Logger.layer([makeJsonFileLogger(DEFAULT_LOG_FILE)]))),
+  ),
+)
 
 /** JSON-only logger layer (for headless/prod). */
-export const GentLoggerJson: Layer.Layer<never> = (() => {
-  const logFile = getLogFile()
-  clearLogFile(logFile)
-  return Logger.layer([makeJsonFileLogger(logFile)])
-})()
+export const GentLoggerJson: Layer.Layer<never> = Layer.unwrap(
+  Effect.gen(function* () {
+    const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
+    const logFile = Option.getOrElse(logFileOpt, () => DEFAULT_LOG_FILE)
+    const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
+    if (!isSubprocess) clearLogFile(logFile)
+    return Logger.layer([makeJsonFileLogger(logFile)])
+  }).pipe(
+    Effect.catchEager(() => Effect.succeed(Logger.layer([makeJsonFileLogger(DEFAULT_LOG_FILE)]))),
+  ),
+)
 
 /** Pretty-only logger layer (for testing/debugging). */
 export const GentLoggerPretty: Layer.Layer<never> = Logger.layer([prettyLogger])
 
 /** Minimum log level — filters out Trace/Debug in non-dev. */
-export const GentLogLevel: Layer.Layer<never> = (() => {
-  const env = Bun.env["GENT_LOG_LEVEL"]
-  const level: LogLevel = (() => {
-    switch (env) {
-      case "trace":
-        return "Trace"
-      case "debug":
-        return "Debug"
-      case "warning":
-        return "Warn"
-      case "error":
-        return "Error"
-      default:
-        return "Info"
-    }
-  })()
-  return Layer.effectServices(Effect.succeed(ServiceMap.make(MinimumLogLevel, level)))
-})()
+export const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
+  Effect.gen(function* () {
+    const envOpt = yield* Config.option(Config.string("GENT_LOG_LEVEL"))
+    const env = Option.getOrUndefined(envOpt)
+    const level: LogLevel = (() => {
+      switch (env) {
+        case "trace":
+          return "Trace"
+        case "debug":
+          return "Debug"
+        case "warning":
+          return "Warn"
+        case "error":
+          return "Error"
+        default:
+          return "Info"
+      }
+    })()
+    return Layer.effectServices(Effect.succeed(ServiceMap.make(MinimumLogLevel, level)))
+  }).pipe(
+    Effect.catchEager(() =>
+      Effect.succeed(
+        Layer.effectServices(Effect.succeed(ServiceMap.make(MinimumLogLevel, "Info" as LogLevel))),
+      ),
+    ),
+  ),
+)

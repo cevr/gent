@@ -33,6 +33,7 @@ import { executeSlashCommand, parseSlashCommand } from "../commands/slash-comman
 import { ClientError, formatError, type UiError } from "../utils/format-error"
 import { tuiEvent } from "../utils/unified-tracer"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
+import { useEnv } from "../env/context"
 import { expandSkillMentions } from "../utils/skill-expansion"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useSkills } from "../hooks/use-skills"
@@ -105,6 +106,7 @@ export function Input(props: InputProps) {
   const command = useCommand()
   const client = useClient()
   const renderer = useRenderer()
+  const env = useEnv()
   const { cast } = useRuntime(client.client.services)
   const paste = createPasteManager()
   const history = usePromptHistory()
@@ -237,7 +239,7 @@ export function Input(props: InputProps) {
     // Ctrl+G: open external editor
     if (e.ctrl === true && e.name === "g") {
       const currentContent = inputRef?.plainText ?? ""
-      const editor = resolveEditor(Bun.env["VISUAL"], Bun.env["EDITOR"])
+      const editor = resolveEditor(env.visual, env.editor)
       openExternalEditor(
         currentContent,
         () => renderer.suspend(),

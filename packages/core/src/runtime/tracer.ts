@@ -7,7 +7,7 @@
 
 import { appendFileSync, writeFileSync } from "node:fs"
 import type { ServiceMap } from "effect"
-import { Layer, Option, Tracer, Exit, Cause } from "effect"
+import { Config, Effect, Layer, Option, Tracer, Exit, Cause } from "effect"
 
 const LOG_PATH = "/tmp/gent-trace.log"
 
@@ -144,8 +144,12 @@ export function makeGentTracer(): Tracer.Tracer {
   })
 }
 
-/** Provides the GentTracer as the Effect Tracer. Clears the trace log on creation. */
-export const GentTracerLive: Layer.Layer<never> = (() => {
-  clearTraceLog()
-  return Layer.succeed(Tracer.Tracer, makeGentTracer())
-})()
+/** Provides the GentTracer as the Effect Tracer. Clears the trace log unless running as subprocess. */
+export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
+  Effect.gen(function* () {
+    // Don't truncate when running as a subprocess — parent is writing to same file
+    const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
+    if (!isSubprocess) clearTraceLog()
+    return Layer.succeed(Tracer.Tracer, makeGentTracer())
+  }).pipe(Effect.catchEager(() => Effect.succeed(Layer.succeed(Tracer.Tracer, makeGentTracer())))),
+)

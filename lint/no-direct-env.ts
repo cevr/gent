@@ -1,14 +1,15 @@
 /**
  * Oxlint JS plugin: no-direct-env
  *
- * Flags direct access to `Bun.env` and `process.env`.
+ * Flags direct reads from `Bun.env` and `process.env`
+ * (e.g. `Bun.env["X"]`, `process.env.NODE_ENV`).
+ *
  * Use `Config` from `effect` instead for consistent, testable env access.
+ * Spreading env to child processes (`{ ...Bun.env }`) is allowed.
  *
- * Valid:   Config.option(Config.string("MY_VAR"))
- * Invalid: Bun.env["MY_VAR"], Bun.env.MY_VAR, process.env.MY_VAR
- *
- * Note: `process.env` is also caught by the built-in `node/no-process-env` rule.
- * This plugin adds coverage for `Bun.env` which has no built-in rule.
+ * Valid:   yield* Config.option(Config.string("MY_VAR"))
+ * Valid:   { ...Bun.env, TERM: "dumb" }
+ * Invalid: Bun.env["MY_VAR"], process.env.NODE_ENV
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -22,15 +23,19 @@ const plugin: Plugin = {
       create(context) {
         return {
           MemberExpression(node) {
-            // Match Bun.env or process.env
+            // Match X.env["Y"] or X.env.Y — a property access ON the env object
+            // This catches reads but not spreads like `{ ...Bun.env }`
+            if (node.object.type !== "MemberExpression") return
+
+            const inner = node.object
             if (
-              node.object.type === "Identifier" &&
-              (node.object.name === "Bun" || node.object.name === "process") &&
-              ((node.property.type === "Identifier" && node.property.name === "env") ||
-                (node.property.type === "StringLiteral" && node.property.value === "env"))
+              inner.object.type === "Identifier" &&
+              (inner.object.name === "Bun" || inner.object.name === "process") &&
+              ((inner.property.type === "Identifier" && inner.property.name === "env") ||
+                (inner.property.type === "StringLiteral" && inner.property.value === "env"))
             ) {
               context.report({
-                message: `Use \`Config\` from \`effect\` instead of \`${node.object.name}.env\`. See: Config.option(Config.string("VAR_NAME"))`,
+                message: `Use \`Config\` from \`effect\` instead of \`${inner.object.name}.env\`. See: yield* Config.option(Config.string("VAR_NAME"))`,
                 node,
               })
             }

@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Config, Effect, Layer, Option, Schema } from "effect"
 import type { LanguageModel } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
@@ -10,7 +10,7 @@ import { AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-
 import { SUPPORTED_PROVIDERS } from "../domain/model.js"
 import { ProviderError } from "./provider"
 import { OPENAI_OAUTH_ALLOWED_MODELS, createOpenAIOAuthFetch } from "./oauth/openai-oauth"
-import { createAnthropicKeychainFetch } from "./oauth/anthropic-keychain"
+import { createAnthropicKeychainFetch, initAnthropicKeychainEnv } from "./oauth/anthropic-keychain"
 
 type ProviderApi =
   | "anthropic"
@@ -45,6 +45,12 @@ const testAuthStorage: AuthStoreService = {
   listInfo: () => Effect.succeed({}),
 }
 
+const readEnv = (name: string) =>
+  Effect.gen(function* () {
+    const opt = yield* Config.option(Config.string(name))
+    return Option.getOrUndefined(opt)
+  }).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+
 // Service tag
 export class ProviderFactory extends ServiceMap.Service<ProviderFactory, ProviderFactoryService>()(
   "@gent/providers/src/provider-factory/ProviderFactory",
@@ -52,6 +58,12 @@ export class ProviderFactory extends ServiceMap.Service<ProviderFactory, Provide
   static Live: Layer.Layer<ProviderFactory, never, AuthStore> = Layer.effect(
     ProviderFactory,
     Effect.gen(function* () {
+      // Read Anthropic env vars via Config at layer construction
+      const betaFlags = yield* readEnv("ANTHROPIC_BETA_FLAGS")
+      const cliVersion = yield* readEnv("ANTHROPIC_CLI_VERSION")
+      const userAgent = yield* readEnv("ANTHROPIC_USER_AGENT")
+      initAnthropicKeychainEnv({ betaFlags, cliVersion, userAgent })
+
       const authStore = yield* AuthStore
       return makeProviderFactory(authStore)
     }),
@@ -192,8 +204,7 @@ function makeProviderFactory(auth: AuthStoreService): ProviderFactoryService {
           })
         }
       }
-      // eslint-disable-next-line no-process-env
-      const region = api === "bedrock" ? (process.env["AWS_REGION"] ?? "us-east-1") : undefined
+      const region = api === "bedrock" ? ((yield* readEnv("AWS_REGION")) ?? "us-east-1") : undefined
       const client = createProviderClient(api, auth, authInfo, apiKey, undefined, region)
       if (client === undefined) {
         return yield* new ProviderError({

@@ -30,6 +30,7 @@ import { App } from "./app"
 import { ClientProvider, type Session } from "./client/index"
 import { RouterProvider, Route } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
+import { EnvProvider } from "./env/context"
 
 // ============================================================================
 // Initial State - discriminated union for clarity
@@ -424,21 +425,31 @@ const main = Command.make(
           )
         }
 
+        // Read env vars via Config at startup
+        const visualOpt = yield* Config.option(Config.string("VISUAL"))
+        const editorOpt = yield* Config.option(Config.string("EDITOR"))
+        const env = {
+          visual: Option.getOrUndefined(visualOpt),
+          editor: Option.getOrUndefined(editorOpt),
+        }
+
         // Launch TUI with providers
         yield* Effect.promise(() =>
           render(() => (
-            <WorkspaceProvider cwd={cwd} services={uiServices}>
-              <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                <ClientProvider client={gentClient} initialSession={initialSession}>
-                  <RouterProvider initialRoute={initialRoute}>
-                    <App
-                      initialPrompt={initialPrompt}
-                      missingAuthProviders={missingAuthProviders}
-                    />
-                  </RouterProvider>
-                </ClientProvider>
-              </RegistryProvider>
-            </WorkspaceProvider>
+            <EnvProvider env={env}>
+              <WorkspaceProvider cwd={cwd} services={uiServices}>
+                <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
+                  <ClientProvider client={gentClient} initialSession={initialSession}>
+                    <RouterProvider initialRoute={initialRoute}>
+                      <App
+                        initialPrompt={initialPrompt}
+                        missingAuthProviders={missingAuthProviders}
+                      />
+                    </RouterProvider>
+                  </ClientProvider>
+                </RegistryProvider>
+              </WorkspaceProvider>
+            </EnvProvider>
           )),
         )
 
