@@ -9,6 +9,10 @@ import { replaceMermaidBlocks } from "../utils/mermaid"
 
 export type { ToolCall }
 
+function escapeMarkdownInline(value: string): string {
+  return value.replaceAll(/([\\`*_{}[\]()#+.!>-])/g, "\\$1")
+}
+
 export interface Message {
   _tag: "message"
   id: string
@@ -85,6 +89,12 @@ function AssistantMessage(props: {
       ? props.content
       : replaceMermaidBlocks(props.content, process.stdout.columns ?? 80),
   )
+  const thinkingContent = createMemo(() =>
+    [
+      `*${escapeMarkdownInline("[thinking]")}*`,
+      ...props.reasoning.split("\n").map((line) => `*${escapeMarkdownInline(line)}*`),
+    ].join("  \n"),
+  )
 
   return (
     <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
@@ -99,8 +109,7 @@ function AssistantMessage(props: {
               : 0
           }
         >
-          <text style={{ fg: theme.textMuted }}>[thinking]</text>
-          <text style={{ fg: theme.textMuted }}>{props.reasoning}</text>
+          <markdown syntaxStyle={props.syntaxStyle()} content={thinkingContent()} conceal />
         </box>
       </Show>
       <Show when={props.images.length > 0}>
