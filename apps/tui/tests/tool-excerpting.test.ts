@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { windowItems, headTailExcerpts } from "@gent/core"
+import { windowItems, headTailExcerpts } from "@gent/core/domain/windowing"
 
 type TestItem = { _tag: "item"; value: string } | { _tag: "elision"; count: number }
 

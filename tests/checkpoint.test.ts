@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { Storage } from "@gent/storage"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   Session,
   Branch,
@@ -8,9 +8,8 @@ import {
   TextPart,
   CompactionCheckpoint,
   PlanCheckpoint,
-  EventStore,
-  PlanConfirmed,
-} from "@gent/core"
+} from "@gent/core/domain/message"
+import { EventStore, PlanConfirmed } from "@gent/core/domain/event"
 import { CheckpointService, estimateTokens } from "@gent/runtime"
 import { SequenceRecorder, createRecordingTestLayer, assertSequence } from "@gent/test-utils"
 

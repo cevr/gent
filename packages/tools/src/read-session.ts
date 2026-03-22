@@ -1,15 +1,10 @@
 import { Effect, Schema } from "effect"
-import {
-  Agents,
-  SubagentRunnerService,
-  defineTool,
-  headTailChars,
-  type Message,
-  type MessagePart,
-  type Branch,
-  type SessionId,
-} from "@gent/core"
-import { Storage } from "@gent/storage"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { Agents, SubagentRunnerService } from "@gent/core/domain/agent.js"
+import { headTailChars } from "@gent/core/domain/output-buffer.js"
+import type { Message, MessagePart, Branch } from "@gent/core/domain/message.js"
+import type { SessionId } from "@gent/core/domain/ids.js"
+import { Storage } from "@gent/core/storage/sqlite-storage.js"
 
 // Read Session Error
 

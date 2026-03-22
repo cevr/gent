@@ -7,7 +7,7 @@ import {
   extractToolCallsWithResults,
   type MessageInfoReadonly,
 } from "@gent/sdk"
-import type { MessagePart } from "@gent/core"
+import type { MessagePart } from "@gent/core/domain/message"
 
 describe("extractText", () => {
   test("extracts text from text part", () => {

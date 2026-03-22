@@ -7,7 +7,8 @@
 
 import { Schema } from "effect"
 import { Event, Machine, State } from "effect-machine"
-import { SessionId, BranchId, ReasoningEffort } from "@gent/core"
+import { SessionId, BranchId } from "@gent/core/domain/ids.js"
+import { ReasoningEffort } from "@gent/core/domain/agent.js"
 
 // ============================================================================
 // Schemas

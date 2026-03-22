@@ -1,5 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool, FileLockService } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { FileLockService } from "@gent/core/domain/file-lock.js"
 import { FileTracker } from "@gent/runtime"
 
 // Undo Edit Tool Error

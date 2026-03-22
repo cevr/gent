@@ -4,8 +4,8 @@
 
 import { describe, it, expect } from "bun:test"
 import { Effect } from "effect"
-import { Session } from "@gent/core"
-import { Storage } from "@gent/storage"
+import { Session } from "@gent/core/domain/message"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 
 describe("Session bypass", () => {
   describe("Storage", () => {

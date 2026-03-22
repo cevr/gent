@@ -14,17 +14,13 @@ import { Effect, Stream, Schema } from "effect"
 import { Machine } from "effect-machine"
 import {
   AgentName as AgentNameSchema,
-  calculateCost,
   resolveAgentModelId,
-  type AgentEvent,
   type AgentName,
-  type BranchId,
-  type EventEnvelope,
-  type MessageId,
-  type Model,
   type ReasoningEffort,
-  type SessionId,
-} from "@gent/core"
+} from "@gent/core/domain/agent.js"
+import { calculateCost, type Model } from "@gent/core/domain/model.js"
+import type { AgentEvent, EventEnvelope } from "@gent/core/domain/event.js"
+import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import { tuiError } from "../utils/unified-tracer"
 import { formatError } from "../utils/format-error"
 import { useMachine } from "../hooks/use-machine"

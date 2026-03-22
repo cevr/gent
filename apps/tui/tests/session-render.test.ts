@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from "bun:test"
-import type { MessagePart } from "@gent/core"
+import type { MessagePart } from "@gent/core/domain/message"
 import type { MessageInfoReadonly } from "@gent/sdk"
 
 // Test message data

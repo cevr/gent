@@ -5,7 +5,7 @@
  */
 
 import { Effect } from "effect"
-import type { ReasoningEffort } from "@gent/core"
+import type { ReasoningEffort } from "@gent/core/domain/agent.js"
 import { formatError, type UiError } from "../utils/format-error"
 
 export type SlashCommandId =

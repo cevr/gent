@@ -3,7 +3,9 @@
  */
 
 import { describe, it, expect } from "bun:test"
-import { AuthGuard, AuthApi, AuthOauth, AuthStore, AuthStorage } from "@gent/core"
+import { AuthGuard } from "@gent/core/domain/auth-guard"
+import { AuthApi, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
+import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { Effect, Layer } from "effect"
 
 describe("AuthStore", () => {

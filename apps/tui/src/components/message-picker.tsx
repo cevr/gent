@@ -4,7 +4,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
-import type { MessageId } from "@gent/core"
+import type { MessageId } from "@gent/core/domain/ids.js"
 import { truncate } from "../utils/truncate"
 
 interface PickerItem {

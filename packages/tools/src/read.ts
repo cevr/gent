@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
 
 // Secret file blocking
 

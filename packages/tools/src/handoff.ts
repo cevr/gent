@@ -1,5 +1,7 @@
 import { Effect, Schema } from "effect"
-import { defineTool, SubagentRunnerService, Agents, HandoffHandler } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { SubagentRunnerService, Agents } from "@gent/core/domain/agent.js"
+import { HandoffHandler } from "@gent/core/domain/interaction-handlers.js"
 
 // Handoff Tool Error
 

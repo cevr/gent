@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "bun:test"
 import { Effect } from "effect"
-import { Permission, PermissionRule } from "@gent/core"
+import { Permission, PermissionRule } from "@gent/core/domain/permission"
 
 describe("Permission", () => {
   describe("check", () => {

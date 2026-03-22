@@ -6,7 +6,7 @@
  */
 
 import { Show, For, createMemo } from "solid-js"
-import { windowItems, headTailExcerpts } from "@gent/core"
+import { windowItems, headTailExcerpts } from "@gent/core/domain/windowing.js"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
 import { GutterText } from "../gutter-text"

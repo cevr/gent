@@ -1,5 +1,6 @@
 import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
-import type { Message, AnyToolDefinition, TextPart, ToolResultPart } from "@gent/core"
+import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
+import type { AnyToolDefinition } from "../domain/tool.js"
 import {
   streamText,
   generateText,

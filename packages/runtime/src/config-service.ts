@@ -1,5 +1,5 @@
 import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
-import { PermissionRule } from "@gent/core"
+import { PermissionRule } from "@gent/core/domain/permission.js"
 import * as os from "node:os"
 
 // User config schema - stored at ~/.gent/config.json

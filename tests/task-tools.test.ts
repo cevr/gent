@@ -2,16 +2,12 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TaskCreateTool, TaskListTool, TaskGetTool, TaskUpdateTool, TaskRunTool } from "@gent/tools"
-import {
-  SubagentRunnerService,
-  AgentRegistry,
-  EventStore,
-  Session,
-  Branch,
-  type ToolContext,
-  type SessionId,
-} from "@gent/core"
-import { Storage } from "@gent/storage"
+import { SubagentRunnerService, AgentRegistry } from "@gent/core/domain/agent"
+import { EventStore } from "@gent/core/domain/event"
+import { Session, Branch } from "@gent/core/domain/message"
+import type { ToolContext } from "@gent/core/domain/tool"
+import type { SessionId } from "@gent/core/domain/ids"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import { TaskService } from "@gent/runtime"
 
 const platformLayer = BunServices.layer

@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { AuthOauth, type AuthStoreService } from "@gent/core"
+import { AuthOauth, type AuthStoreService } from "../../domain/auth-store.js"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
 

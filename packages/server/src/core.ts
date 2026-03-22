@@ -1,43 +1,46 @@
 import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import { identity } from "effect/Function"
+import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
 import {
   Session,
   Branch,
   Message,
   TextPart,
+  type MessagePart,
+  type SessionTreeNode,
+} from "@gent/core/domain/message.js"
+import {
+  EventStore,
   type EventId,
   type EventEnvelope,
-  EventStore,
   type EventStoreError,
+  type PlanDecision,
+  type HandoffDecision,
   SessionNameUpdated,
   PlanConfirmed,
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
-  AgentName,
+} from "@gent/core/domain/event.js"
+import { AgentName, type ReasoningEffort } from "@gent/core/domain/agent.js"
+import {
   Permission,
   PermissionRule,
+  type PermissionDecision,
+} from "@gent/core/domain/permission.js"
+import {
   PermissionHandler,
   PlanHandler,
   HandoffHandler,
-  type PermissionDecision,
-  type PlanDecision,
-  type HandoffDecision,
-  type MessagePart,
-  type Task,
-  type SessionId,
-  type BranchId,
-  type MessageId,
-  type SessionTreeNode,
-  type ReasoningEffort,
-} from "@gent/core"
-import { Storage, StorageError } from "@gent/storage"
+} from "@gent/core/domain/interaction-handlers.js"
+import type { Task } from "@gent/core/domain/task.js"
+import { Storage, StorageError } from "@gent/core/storage/sqlite-storage.js"
 import {
   Provider,
   type ProviderError,
-  type ProviderAuthError,
   type ProviderService,
-} from "@gent/providers"
+} from "@gent/core/providers/provider.js"
+import type { ProviderAuthError } from "@gent/core/providers/provider-auth.js"
 import {
   ActorProcess,
   type ActorProcessError,

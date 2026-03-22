@@ -2,7 +2,10 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FinderTool, CodeReviewTool, LookAtTool, HandoffTool, CounselTool } from "@gent/tools"
-import { SubagentRunnerService, HandoffHandler, type ToolContext, type SessionId } from "@gent/core"
+import { SubagentRunnerService } from "@gent/core/domain/agent"
+import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import type { ToolContext } from "@gent/core/domain/tool"
+import type { SessionId } from "@gent/core/domain/ids"
 
 const ctx: ToolContext = {
   sessionId: "test-session",

@@ -1,23 +1,14 @@
 import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "effect/unstable/rpc"
 import { Schema } from "effect"
-import {
-  AgentName,
-  AuthAuthorization,
-  AuthMethod,
-  AuthProviderInfo,
-  BranchId,
-  EventEnvelope,
-  MessageId,
-  MessagePart,
-  Model,
-  PermissionDecision,
-  PlanDecision,
-  HandoffDecision,
-  PermissionRule,
-  ReasoningEffort,
-  SessionId,
-  Task,
-} from "@gent/core"
+import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
+import { MessagePart } from "@gent/core/domain/message.js"
+import { EventEnvelope, PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
+import { AgentName, ReasoningEffort } from "@gent/core/domain/agent.js"
+import { Model } from "@gent/core/domain/model.js"
+import { PermissionDecision, PermissionRule } from "@gent/core/domain/permission.js"
+import { Task } from "@gent/core/domain/task.js"
+import { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
+import { AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
 import {
   ActorProcessMetrics,
   ActorProcessState,

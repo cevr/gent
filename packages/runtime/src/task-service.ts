@@ -1,20 +1,15 @@
 import { ServiceMap, Effect, Layer } from "effect"
+import { Task, type TaskStatus } from "@gent/core/domain/task.js"
 import {
-  Task,
   EventStore,
   TaskCreated,
   TaskUpdated,
   TaskCompleted,
   TaskFailed,
-  SubagentRunnerService,
-  AgentRegistry,
-  type TaskId,
-  type SessionId,
-  type BranchId,
-  type AgentName,
-  type TaskStatus,
-} from "@gent/core"
-import { Storage } from "@gent/storage"
+} from "@gent/core/domain/event.js"
+import { SubagentRunnerService, AgentRegistry, type AgentName } from "@gent/core/domain/agent.js"
+import type { TaskId, SessionId, BranchId } from "@gent/core/domain/ids.js"
+import { Storage } from "@gent/core/storage/sqlite-storage.js"
 
 // TaskService
 

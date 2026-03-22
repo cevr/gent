@@ -1,12 +1,12 @@
 import { Effect, Schema } from "effect"
+import { defineTool } from "@gent/core/domain/tool.js"
 import {
   AgentRegistry,
   AgentName,
   SubagentRunnerService,
-  defineTool,
   type SubagentResult,
   type SubagentError,
-} from "@gent/core"
+} from "@gent/core/domain/agent.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4

@@ -23,13 +23,14 @@ import {
 import {
   AgentName,
   AgentRegistry,
-  AgentSwitched,
   resolveAgentModelId,
-  Message,
-  TextPart,
-  ReasoningPart,
-  ToolCallPart,
+  SubagentError,
+  type AgentDefinition,
+  type AgentName as AgentNameType,
+} from "@gent/core/domain/agent.js"
+import {
   EventStore,
+  AgentSwitched,
   StreamStarted,
   StreamChunk as EventStreamChunk,
   StreamEnded,
@@ -38,29 +39,26 @@ import {
   ToolCallSucceeded,
   ToolCallFailed,
   MessageReceived,
-  ToolRegistry,
   ErrorOccurred,
   MachineInspected,
   MachineTaskFailed,
   MachineTaskSucceeded,
-  SubagentError,
-  HandoffHandler,
-  DEFAULTS,
-  summarizeToolOutput,
-  stringifyOutput,
-  SessionId,
-  BranchId,
-  type AgentDefinition,
   type AgentEvent,
   type EventStoreError,
-  type ToolContext,
-  type AgentName as AgentNameType,
-  type MessageId,
-} from "@gent/core"
-import type { StorageError } from "@gent/storage"
-import { Storage } from "@gent/storage"
-import type { ProviderError, FinishChunk, ProviderRequest } from "@gent/providers"
-import { Provider } from "@gent/providers"
+} from "@gent/core/domain/event.js"
+import { Message, TextPart, ReasoningPart, ToolCallPart } from "@gent/core/domain/message.js"
+import { SessionId, BranchId, type MessageId } from "@gent/core/domain/ids.js"
+import { ToolRegistry, type ToolContext } from "@gent/core/domain/tool.js"
+import { summarizeToolOutput, stringifyOutput } from "@gent/core/domain/tool-output.js"
+import { HandoffHandler } from "@gent/core/domain/interaction-handlers.js"
+import { DEFAULTS } from "@gent/core/domain/defaults.js"
+import { Storage, type StorageError } from "@gent/core/storage/sqlite-storage.js"
+import {
+  Provider,
+  type ProviderError,
+  type FinishChunk,
+  type ProviderRequest,
+} from "@gent/core/providers/provider.js"
 import { withRetry } from "../retry"
 import { CheckpointService } from "../checkpoint"
 import { ToolRunner } from "./tool-runner"

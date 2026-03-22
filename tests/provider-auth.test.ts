@@ -1,7 +1,10 @@
 import { describe, it, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { AuthMethod, AuthStore, AuthStorage, type AuthApi } from "@gent/core"
-import { ProviderAuth, type ProviderAuthProvider } from "@gent/providers"
+import { AuthMethod } from "@gent/core/domain/auth-method"
+import { AuthStore } from "@gent/core/domain/auth-store"
+import { AuthStorage } from "@gent/core/domain/auth-storage"
+import type { AuthApi } from "@gent/core/domain/auth-store"
+import { ProviderAuth, type ProviderAuthProvider } from "@gent/core/providers/provider-auth"
 
 const oauthProvider: ProviderAuthProvider = {
   methods: [new AuthMethod({ type: "oauth", label: "OAuth" })],

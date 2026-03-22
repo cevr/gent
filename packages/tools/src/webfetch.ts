@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
 import TurndownService from "turndown"
 import { parseHTML } from "linkedom"
 

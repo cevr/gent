@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test"
-import { OutputBuffer, headTail, formatHeadTail, headTailChars } from "@gent/core"
+import {
+  OutputBuffer,
+  headTail,
+  formatHeadTail,
+  headTailChars,
+} from "@gent/core/domain/output-buffer"
 
 describe("headTail", () => {
   test("returns all items when under limit", () => {

@@ -7,18 +7,13 @@ import {
   CompactionCheckpoint,
   PlanCheckpoint,
   MessagePart,
-  TodoItem,
-  Task,
-  AgentEvent,
-  EventEnvelope,
-  getEventSessionId,
   type Checkpoint,
-  type SessionId,
-  type BranchId,
-  type MessageId,
-  type TaskId,
-  type ReasoningEffort,
-} from "@gent/core"
+} from "../domain/message.js"
+import { TodoItem } from "../domain/todo.js"
+import { Task } from "../domain/task.js"
+import { AgentEvent, EventEnvelope, getEventSessionId } from "../domain/event.js"
+import type { SessionId, BranchId, MessageId, TaskId } from "../domain/ids.js"
+import type { ReasoningEffort } from "../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 

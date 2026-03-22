@@ -11,39 +11,30 @@ import {
   type GentRpcsClient,
   type GentRpcError,
 } from "@gent/server"
+import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
+import { AuthApi, AuthStore } from "@gent/core/domain/auth-store.js"
+import { AuthGuard, type AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
 import {
-  stringifyOutput,
-  summarizeOutput,
-  AuthApi,
-  AuthGuard,
-  AuthStore,
   Permission,
-  Model,
-} from "@gent/core"
+  type PermissionDecision,
+  type PermissionRule,
+} from "@gent/core/domain/permission.js"
+import { Model, type ProviderId } from "@gent/core/domain/model.js"
+import type { AgentName, ReasoningEffort } from "@gent/core/domain/agent.js"
+import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
+import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
+import type { EventEnvelope, PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
 import type {
-  AgentName,
-  AuthAuthorization,
-  AuthMethod,
-  AuthProviderInfo,
-  BranchId,
-  EventEnvelope,
-  MessageId,
   MessagePart,
   TextPart,
   ReasoningPart,
   ToolCallPart,
   ToolResultPart,
-  PermissionDecision,
-  PlanDecision,
-  HandoffDecision,
-  PermissionRule,
-  ReasoningEffort,
-  SessionId,
-  Task,
-  ProviderId,
-} from "@gent/core"
+} from "@gent/core/domain/message.js"
+import type { Task } from "@gent/core/domain/task.js"
 import { ConfigService, ModelRegistry } from "@gent/runtime"
-import { ProviderAuth, OPENAI_OAUTH_ALLOWED_MODELS } from "@gent/providers"
+import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
+import { OPENAI_OAUTH_ALLOWED_MODELS } from "@gent/core/providers/oauth/openai-oauth.js"
 
 export type {
   MessagePart,

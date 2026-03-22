@@ -3,12 +3,22 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    "./domain/*": "./src/domain/*",
+    "./storage/*": "./src/storage/*",
+    "./providers/*": "./src/providers/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@ai-sdk/anthropic": "catalog:",
+    "@ai-sdk/google": "catalog:",
+    "@ai-sdk/mistral": "catalog:",
+    "@ai-sdk/openai": "catalog:",
+    "ai": "catalog:"
+  },
   "peerDependencies": {
+    "@effect/sql-sqlite-bun": "catalog:",
     "effect": "catalog:"
   }
 }

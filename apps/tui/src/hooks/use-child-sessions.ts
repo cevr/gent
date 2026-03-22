@@ -7,7 +7,7 @@
 import { createStore, produce } from "solid-js/store"
 import { createEffect, on, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
-import type { SessionId, BranchId } from "@gent/core"
+import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
 import { makeChildSessionTracker, type ChildSessionEntry, type ChildToolCall } from "@gent/runtime"
 import type { ClientContextValue } from "../client/context"
 

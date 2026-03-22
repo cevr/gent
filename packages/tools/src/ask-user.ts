@@ -1,12 +1,11 @@
 import { ServiceMap, Deferred, Effect, Layer, Schema } from "effect"
+import { defineTool, type ToolContext } from "@gent/core/domain/tool.js"
 import {
-  defineTool,
   EventStore,
   type EventStoreError,
   QuestionsAsked,
   type Question,
-  type ToolContext,
-} from "@gent/core"
+} from "@gent/core/domain/event.js"
 
 // AskUser Tool Params
 

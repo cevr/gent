@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineTool, OutputBuffer, saveFullOutput } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { OutputBuffer, saveFullOutput } from "@gent/core/domain/output-buffer.js"
 
 // Bash Tool Error
 

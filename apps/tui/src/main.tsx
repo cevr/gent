@@ -15,15 +15,12 @@ import {
 import { makeDirectGentClient, type GentClient } from "@gent/sdk"
 import { GentLogger } from "@gent/runtime"
 import { UnifiedTracerLive } from "./utils/unified-tracer"
-import {
-  AuthGuard,
-  LinkOpener,
-  OsService,
-  type HandoffPresented,
-  type ProviderId,
-  type SessionId,
-  type BranchId,
-} from "@gent/core"
+import { AuthGuard } from "@gent/core/domain/auth-guard.js"
+import { LinkOpener } from "@gent/core/domain/link-opener.js"
+import { OsService } from "@gent/core/domain/os-service.js"
+import type { HandoffPresented } from "@gent/core/domain/event.js"
+import type { ProviderId } from "@gent/core/domain/model.js"
+import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
 import * as path from "node:path"
 import * as os from "node:os"
 

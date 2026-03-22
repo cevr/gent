@@ -1,7 +1,9 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
-import { Storage } from "@gent/storage"
-import { Session, Branch, Task, type SessionId, type BranchId, type TaskId } from "@gent/core"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Session, Branch } from "@gent/core/domain/message"
+import { Task } from "@gent/core/domain/task"
+import type { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"
 
 const layer = Storage.Test()
 

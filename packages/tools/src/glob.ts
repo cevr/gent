@@ -1,5 +1,5 @@
 import { Effect, Option, Schema, Stream, FileSystem, Path } from "effect"
-import { defineTool } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
 import { Glob } from "bun"
 
 // Glob Tool Error

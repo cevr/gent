@@ -10,7 +10,7 @@ import {
   isFailure,
   getOrUndefined,
   getOrElse,
-} from "@gent/core"
+} from "@gent/core/domain/result"
 
 describe("Result", () => {
   describe("constructors", () => {

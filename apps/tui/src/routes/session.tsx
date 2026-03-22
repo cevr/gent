@@ -16,7 +16,7 @@ import {
   type BranchTreeNode,
   useClient,
 } from "../client/index"
-import type { BranchId, MessageId, SessionId } from "@gent/core"
+import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList, type Message, type SessionItem } from "../components/message-list"
 import { Input } from "../components/input"
 import { useTheme, buildSyntaxStyle } from "../theme/index"

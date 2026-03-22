@@ -2,19 +2,20 @@ import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Layer, Stream } from "effect"
 import {
   EventStore,
-  HandoffHandler,
   HandoffPresented,
   HandoffConfirmed,
   HandoffRejected,
+  type HandoffDecision,
+} from "@gent/core/domain/event"
+import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import {
   Message,
   TextPart,
   ToolCallPart,
   ToolResultPart,
   ImagePart,
-  type HandoffDecision,
-  type SessionId,
-  type BranchId,
-} from "@gent/core"
+} from "@gent/core/domain/message"
+import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import { estimateTokens, estimateContextPercent, getContextWindow } from "@gent/runtime"
 
 // ============================================================================

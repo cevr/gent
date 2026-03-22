@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { AuthOauth, type AuthStoreService } from "@gent/core"
+import { AuthOauth, type AuthStoreService } from "../../domain/auth-store.js"
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize"

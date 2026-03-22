@@ -1,21 +1,24 @@
 import type { PlatformError } from "effect"
 import { Config, Effect, Layer, Option, FileSystem, Path } from "effect"
+import { ToolRegistry } from "@gent/core/domain/tool.js"
+import { Permission } from "@gent/core/domain/permission.js"
 import {
-  ToolRegistry,
-  Permission,
   PermissionHandler,
   PlanHandler,
   HandoffHandler,
-  Skills,
-  AuthGuard,
-  AuthStorage,
-  AuthStore,
-  AgentRegistry,
-  FileLockService,
-} from "@gent/core"
-import type { SubagentRunnerService, EventStore } from "@gent/core"
-import { Storage } from "@gent/storage"
-import { Provider, ProviderAuth, ProviderFactory } from "@gent/providers"
+} from "@gent/core/domain/interaction-handlers.js"
+import { Skills } from "@gent/core/domain/skills.js"
+import { AuthGuard } from "@gent/core/domain/auth-guard.js"
+import { AuthStorage } from "@gent/core/domain/auth-storage.js"
+import { AuthStore } from "@gent/core/domain/auth-store.js"
+import { AgentRegistry } from "@gent/core/domain/agent.js"
+import type { SubagentRunnerService } from "@gent/core/domain/agent.js"
+import { FileLockService } from "@gent/core/domain/file-lock.js"
+import type { EventStore } from "@gent/core/domain/event.js"
+import { Storage } from "@gent/core/storage/sqlite-storage.js"
+import { Provider } from "@gent/core/providers/provider.js"
+import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
+import { ProviderFactory } from "@gent/core/providers/provider-factory.js"
 import {
   AgentLoop,
   SteerCommand,

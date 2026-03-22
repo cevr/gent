@@ -6,8 +6,8 @@ import {
   assertSequence,
   mockTextResponse,
 } from "@gent/test-utils"
-import { Provider } from "@gent/providers"
-import { EventStore, StreamStarted } from "@gent/core"
+import { Provider } from "@gent/core/providers/provider"
+import { EventStore, StreamStarted } from "@gent/core/domain/event"
 import { AskUserHandler } from "@gent/tools"
 
 describe("Sequence Recording", () => {

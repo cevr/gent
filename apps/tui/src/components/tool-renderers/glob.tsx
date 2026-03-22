@@ -6,7 +6,7 @@
  */
 
 import { For, Show, createMemo } from "solid-js"
-import { headTail } from "@gent/core"
+import { headTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
 import { truncatePath } from "../message-list-utils"

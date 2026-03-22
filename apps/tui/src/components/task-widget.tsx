@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { createSignal, createEffect, onCleanup, Show, For } from "solid-js"
-import type { Task, SessionId, BranchId } from "@gent/core"
+import type { Task } from "@gent/core/domain/task.js"
+import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
 import { useClient } from "../client/context"
 import { useRuntime } from "../hooks/use-runtime"
 

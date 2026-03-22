@@ -1,24 +1,20 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
+import { Skills, Skill, formatSkillsForPrompt } from "@gent/core/domain/skills"
+import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
+import { AuthStorage } from "@gent/core/domain/auth-storage"
+import { calculateCost } from "@gent/core/domain/model"
+import { EventStore, AgentSwitched } from "@gent/core/domain/event"
+import { Permission } from "@gent/core/domain/permission"
 import {
-  Skills,
-  Skill,
-  formatSkillsForPrompt,
-  AuthApi,
-  AuthStore,
-  AuthStorage,
-  calculateCost,
-  EventStore,
-  AgentSwitched,
-  Permission,
   PermissionHandler,
   PlanHandler,
   HandoffHandler,
-  type SessionId,
-  type Message,
-} from "@gent/core"
-import { Storage } from "@gent/storage"
-import { Provider } from "@gent/providers"
+} from "@gent/core/domain/interaction-handlers"
+import type { SessionId } from "@gent/core/domain/ids"
+import type { Message } from "@gent/core/domain/message"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Provider } from "@gent/core/providers/provider"
 import { GentCore } from "@gent/server"
 import {
   ActorProcess,

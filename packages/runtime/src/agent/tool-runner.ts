@@ -1,14 +1,13 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import {
   ToolRegistry,
-  ToolResultPart,
   type ToolContext,
-  Permission,
-  PermissionHandler,
   type AnyToolDefinition,
   type ToolDefinition,
-  type PermissionDecision,
-} from "@gent/core"
+} from "@gent/core/domain/tool.js"
+import { ToolResultPart } from "@gent/core/domain/message.js"
+import { Permission, type PermissionDecision } from "@gent/core/domain/permission.js"
+import { PermissionHandler } from "@gent/core/domain/interaction-handlers.js"
 import { formatSchemaError } from "../format-schema-error"
 
 export interface ToolRunnerService {

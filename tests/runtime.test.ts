@@ -14,24 +14,25 @@ import {
   LocalActorProcessLive,
   ActorProcess,
 } from "@gent/runtime"
-import { Provider, ProviderError, ToolCallChunk, FinishChunk, convertTools } from "@gent/providers"
 import {
-  Message,
-  TextPart,
+  Provider,
+  ProviderError,
+  ToolCallChunk,
+  FinishChunk,
+  convertTools,
+} from "@gent/core/providers/provider"
+import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
+import {
   Agents,
   AgentRegistry,
-  Session,
-  Branch,
   SubagentRunnerService,
   SubagentError,
-  defineTool,
-  ToolRegistry,
-  Permission,
-  PermissionHandler,
-  HandoffHandler,
-  EventStore,
-} from "@gent/core"
-import { Storage } from "@gent/storage"
+} from "@gent/core/domain/agent"
+import { defineTool, ToolRegistry } from "@gent/core/domain/tool"
+import { Permission } from "@gent/core/domain/permission"
+import { PermissionHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { EventStore } from "@gent/core/domain/event"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/test-utils"
 import { BunServices } from "@effect/platform-bun"
 

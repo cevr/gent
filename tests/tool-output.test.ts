@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test"
-import { stringifyOutput, summarizeOutput, summarizeToolOutput, ToolResultPart } from "@gent/core"
+import {
+  stringifyOutput,
+  summarizeOutput,
+  summarizeToolOutput,
+} from "@gent/core/domain/tool-output"
+import { ToolResultPart } from "@gent/core/domain/message"
 
 describe("stringifyOutput", () => {
   test("string passthrough", () => {

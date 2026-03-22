@@ -1,5 +1,6 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
-import { defineTool, TodoStatus, TodoPriority, TodoItem } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { TodoStatus, TodoPriority, TodoItem } from "@gent/core/domain/todo.js"
 
 // Todo Handler Service - provides storage access
 

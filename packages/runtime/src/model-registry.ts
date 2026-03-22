@@ -1,6 +1,6 @@
 import { Config, ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
-import { Model } from "@gent/core"
-import type { ModelId, ModelPricing } from "@gent/core"
+import { Model } from "@gent/core/domain/model.js"
+import type { ModelId, ModelPricing } from "@gent/core/domain/model.js"
 import * as os from "node:os"
 
 const MODELS_URL = "https://models.dev"

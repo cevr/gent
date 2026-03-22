@@ -1,5 +1,6 @@
 import { Effect, Schema, FileSystem } from "effect"
-import { Agents, AgentDefinition, SubagentRunnerService, defineTool } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { Agents, AgentDefinition, SubagentRunnerService } from "@gent/core/domain/agent.js"
 
 // Counsel Tool Error
 

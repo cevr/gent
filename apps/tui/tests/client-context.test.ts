@@ -4,14 +4,14 @@
 
 import { describe, test, expect, mock } from "bun:test"
 import { Effect, Stream, ServiceMap } from "effect"
-import type { AgentEvent, EventEnvelope } from "@gent/core"
+import type { AgentEvent, EventEnvelope } from "@gent/core/domain/event"
 import {
   EventEnvelope as EventEnvelopeClass,
   StreamStarted,
   StreamEnded,
   StreamChunk,
   MessageReceived,
-} from "@gent/core"
+} from "@gent/core/domain/event"
 
 // Mock client for testing
 function createMockClient() {

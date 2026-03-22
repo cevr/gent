@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
-import { Agents, SubagentRunnerService, defineTool } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { Agents, SubagentRunnerService } from "@gent/core/domain/agent.js"
 
 // Code Review Error
 

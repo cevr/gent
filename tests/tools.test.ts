@@ -13,8 +13,10 @@ import {
   PlanTool,
   TaskTool,
 } from "@gent/tools"
-import type { ToolContext } from "@gent/core"
-import { AgentRegistry, PlanHandler, SubagentRunnerService, TodoItem } from "@gent/core"
+import type { ToolContext } from "@gent/core/domain/tool"
+import { AgentRegistry, SubagentRunnerService } from "@gent/core/domain/agent"
+import { PlanHandler } from "@gent/core/domain/interaction-handlers"
+import { TodoItem } from "@gent/core/domain/todo"
 
 const ctx: ToolContext = {
   sessionId: "test-session",

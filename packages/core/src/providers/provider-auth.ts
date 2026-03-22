@@ -1,15 +1,11 @@
 import { ServiceMap, Effect, Layer, Ref, Schema } from "effect"
+import { AuthApi, AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
 import {
-  AuthApi,
-  AuthAuthorization,
   AuthMethod,
-  AuthOauth,
-  AuthStore,
-  SUPPORTED_PROVIDERS,
+  AuthAuthorization,
   type AuthAuthorizationMethod,
-  type AuthStoreService,
-  type ProviderId,
-} from "@gent/core"
+} from "../domain/auth-method.js"
+import { SUPPORTED_PROVIDERS, type ProviderId } from "../domain/model.js"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
 import { authorizeAnthropic } from "./oauth/anthropic-oauth"
 

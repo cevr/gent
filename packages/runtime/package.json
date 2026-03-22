@@ -10,8 +10,6 @@
   },
   "dependencies": {
     "@gent/core": "workspace:*",
-    "@gent/providers": "workspace:*",
-    "@gent/storage": "workspace:*",
     "effect-machine": "catalog:"
   },
   "peerDependencies": {

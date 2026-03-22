@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineTool, type TaskId } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import type { TaskId } from "@gent/core/domain/ids.js"
 import { TaskService } from "@gent/runtime"
 
 export const TaskGetParams = Schema.Struct({

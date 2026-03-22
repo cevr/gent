@@ -7,10 +7,8 @@ import {
   Branch,
   Message,
   type MessagePart,
-  type SessionId,
-  type BranchId,
-  type MessageId,
-} from "@gent/core"
+} from "@gent/core/domain/message"
+import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
 describe("truncate", () => {
   test("under max → unchanged", () => {

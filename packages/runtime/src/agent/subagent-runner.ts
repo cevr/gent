@@ -1,19 +1,19 @@
 import { Cause, ServiceMap, Duration, Effect, Layer } from "effect"
 import {
   AgentSwitched,
-  Branch,
   EventStore,
-  Session,
   SubagentSucceeded,
   SubagentFailed,
+  SubagentSpawned,
+} from "@gent/core/domain/event.js"
+import {
   SubagentError,
   SubagentRunnerService,
-  SubagentSpawned,
   type SubagentToolCall,
-  type SessionId,
-  type BranchId,
-} from "@gent/core"
-import { Storage, type StorageService } from "@gent/storage"
+} from "@gent/core/domain/agent.js"
+import { Session, Branch } from "@gent/core/domain/message.js"
+import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
+import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage.js"
 import { AgentActor } from "./agent-loop"
 
 interface ChildMetadata {

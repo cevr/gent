@@ -8,7 +8,7 @@ import type {
   PlanPresented,
   HandoffPresented,
   Question,
-} from "@gent/core"
+} from "@gent/core/domain/event.js"
 
 // ============================================================================
 // Autocomplete Overlay

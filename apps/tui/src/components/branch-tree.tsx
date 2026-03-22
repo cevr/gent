@@ -4,7 +4,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { BranchTreeNode } from "../client"
-import type { BranchId } from "@gent/core"
+import type { BranchId } from "@gent/core/domain/ids.js"
 import { truncate } from "../utils/truncate"
 
 interface FlatNode {

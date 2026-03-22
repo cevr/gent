@@ -1,23 +1,23 @@
 import { ServiceMap, Effect, Layer, Ref, Stream } from "effect"
-import { Storage } from "@gent/storage"
-import { Provider, FinishChunk, TextChunk, ToolCallChunk, type StreamChunk } from "@gent/providers"
+import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import {
-  ToolRegistry,
-  EventStore,
-  EventEnvelope,
-  Permission,
+  Provider,
+  FinishChunk,
+  TextChunk,
+  ToolCallChunk,
+  type StreamChunk,
+} from "@gent/core/providers/provider.js"
+import { ToolRegistry, type AnyToolDefinition } from "@gent/core/domain/tool.js"
+import { EventStore, EventEnvelope, matchesEventFilter } from "@gent/core/domain/event.js"
+import { Permission, type PermissionDecision } from "@gent/core/domain/permission.js"
+import {
   PermissionHandler,
   PlanHandler,
   HandoffHandler,
-  PlanCheckpoint,
-  matchesEventFilter,
-  type BranchId,
-  type Checkpoint,
-  type AnyToolDefinition,
-  type PermissionDecision,
-  type PlanDecision,
-  type HandoffDecision,
-} from "@gent/core"
+} from "@gent/core/domain/interaction-handlers.js"
+import type { PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
+import { PlanCheckpoint, type Checkpoint } from "@gent/core/domain/message.js"
+import type { BranchId } from "@gent/core/domain/ids.js"
 import { AskUserHandler, AllTools } from "@gent/tools"
 import { AgentLoop, CheckpointService } from "@gent/runtime"
 

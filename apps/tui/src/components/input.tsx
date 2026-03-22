@@ -15,7 +15,7 @@ import {
 } from "solid-js"
 import { Effect } from "effect"
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
-import type { Question } from "@gent/core"
+import type { Question } from "@gent/core/domain/event.js"
 import { useKeyboard, useRenderer } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"

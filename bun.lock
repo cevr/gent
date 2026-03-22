@@ -85,7 +85,15 @@
     "packages/core": {
       "name": "@gent/core",
       "version": "0.0.0",
+      "dependencies": {
+        "@ai-sdk/anthropic": "catalog:",
+        "@ai-sdk/google": "catalog:",
+        "@ai-sdk/mistral": "catalog:",
+        "@ai-sdk/openai": "catalog:",
+        "ai": "catalog:",
+      },
       "peerDependencies": {
+        "@effect/sql-sqlite-bun": "catalog:",
         "effect": "catalog:",
       },
     },
@@ -109,8 +117,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
-        "@gent/providers": "workspace:*",
-        "@gent/storage": "workspace:*",
         "effect-machine": "catalog:",
       },
       "peerDependencies": {
@@ -124,7 +130,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
-        "@gent/providers": "workspace:*",
         "@gent/runtime": "workspace:*",
         "@gent/server": "workspace:*",
       },
@@ -137,9 +142,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
-        "@gent/providers": "workspace:*",
         "@gent/runtime": "workspace:*",
-        "@gent/storage": "workspace:*",
         "@gent/tools": "workspace:*",
       },
       "peerDependencies": {
@@ -162,9 +165,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
-        "@gent/providers": "workspace:*",
         "@gent/runtime": "workspace:*",
-        "@gent/storage": "workspace:*",
         "@gent/tools": "workspace:*",
       },
       "peerDependencies": {

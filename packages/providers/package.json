@@ -1,22 +1,6 @@
 {
   "name": "@gent/providers",
   "version": "0.0.0",
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@ai-sdk/anthropic": "catalog:",
-    "@ai-sdk/google": "catalog:",
-    "@ai-sdk/mistral": "catalog:",
-    "@ai-sdk/openai": "catalog:",
-    "@gent/core": "workspace:*",
-    "ai": "catalog:"
-  },
-  "peerDependencies": {
-    "effect": "catalog:"
-  }
+  "private": true,
+  "type": "module"
 }

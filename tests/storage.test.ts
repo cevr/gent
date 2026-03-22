@@ -1,7 +1,9 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
-import { Storage } from "@gent/storage"
-import { Session, Branch, Message, TextPart, TodoItem, AgentSwitched } from "@gent/core"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
+import { TodoItem } from "@gent/core/domain/todo"
+import { AgentSwitched } from "@gent/core/domain/event"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
   Effect.runPromise(Effect.provide(effect, Storage.Test()))

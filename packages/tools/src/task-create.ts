@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
-import { AgentName, defineTool } from "@gent/core"
+import { defineTool } from "@gent/core/domain/tool.js"
+import { AgentName } from "@gent/core/domain/agent.js"
 import { TaskService } from "@gent/runtime"
 
 export const TaskCreateParams = Schema.Struct({

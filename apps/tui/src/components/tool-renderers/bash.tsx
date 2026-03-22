@@ -6,7 +6,7 @@
  */
 
 import { Show, createMemo } from "solid-js"
-import { formatHeadTail } from "@gent/core"
+import { formatHeadTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolBox } from "../tool-box"
 import type { ToolRendererProps } from "./types"

@@ -3,9 +3,13 @@ import { GentRpcs } from "./rpcs"
 import { GentCore } from "./core"
 import type { SteerCommand } from "@gent/runtime"
 import { AskUserHandler } from "@gent/tools"
-import { AuthGuard, AuthApi, AuthStore, Model, type ProviderId, Permission } from "@gent/core"
+import { AuthGuard } from "@gent/core/domain/auth-guard.js"
+import { AuthApi, AuthStore } from "@gent/core/domain/auth-store.js"
+import { Model, type ProviderId } from "@gent/core/domain/model.js"
+import { Permission } from "@gent/core/domain/permission.js"
 import { ActorProcess, ConfigService, ModelRegistry } from "@gent/runtime"
-import { OPENAI_OAUTH_ALLOWED_MODELS, ProviderAuth } from "@gent/providers"
+import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
+import { OPENAI_OAUTH_ALLOWED_MODELS } from "@gent/core/providers/oauth/openai-oauth.js"
 
 // ============================================================================
 // RPC Handlers Layer

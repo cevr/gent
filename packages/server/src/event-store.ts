@@ -1,8 +1,7 @@
 import { Effect, Layer, PubSub, Stream } from "effect"
-import { EventStore, EventStoreError, matchesEventFilter } from "@gent/core"
-import type { EventEnvelope } from "@gent/core"
-import type { StorageError } from "@gent/storage"
-import { Storage } from "@gent/storage"
+import { EventStore, EventStoreError, matchesEventFilter } from "@gent/core/domain/event.js"
+import type { EventEnvelope } from "@gent/core/domain/event.js"
+import { Storage, type StorageError } from "@gent/core/storage/sqlite-storage.js"
 
 const toEventStoreError =
   (message: string) =>
