@@ -16,10 +16,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^4.0.82",
     "@ai-sdk/anthropic": "catalog:",
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/mistral": "catalog:",
     "@ai-sdk/openai": "catalog:",
+    "@aws-sdk/credential-providers": "^3.1014.0",
     "@types/turndown": "^5.0.6",
     "ai": "catalog:",
     "effect-machine": "catalog:",

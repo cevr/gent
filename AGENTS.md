@@ -42,7 +42,9 @@ bun run --cwd apps/tui dev sessions
 - **Effect LSP suggestions** - TS41 messages are suggestions, not errors. Still must fix them.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
-- **No `any` casts** - ESLint enforces. Causes type drift bugs. Import types from `@gent/core`, don't redeclare.
+- **No `any` casts** - ESLint enforces. Causes type drift bugs. Import types from `@gent/core/domain/<file>`, don't redeclare.
+- **No barrels** - `@gent/core` uses subpath exports. Import from specific files: `@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop`, etc.
+- **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 
 ## Architecture
@@ -69,12 +71,17 @@ Use `effect` skill. Key patterns:
 ## Package Structure
 
 ```
-packages/{name}/
-├── src/
-│   ├── index.ts      # Public exports (use `export type` for interfaces)
-│   └── *.ts
-├── package.json      # peerDependencies for effect
-└── tsconfig.json     # references to deps
+packages/core/src/       # Everything non-UI
+  domain/                # Schemas + services (ids, message, event, tool, agent, etc.)
+  storage/               # SQLite
+  providers/             # AI SDK adapters
+  runtime/               # AgentLoop, ActorProcess, checkpoint, retry
+  tools/                 # Tool implementations
+  server/                # GentCore, RPCs, event-store
+  test-utils/            # Mock layers, sequence recording
+packages/sdk/            # Client wrappers
+apps/tui/                # @opentui/solid TUI
+apps/server/             # BunHttpServer
 ```
 
 ## Testing
@@ -90,20 +97,17 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 ## Key Files
 
-| File                                     | Purpose                                          |
-| ---------------------------------------- | ------------------------------------------------ |
-| `packages/storage/src/sqlite-storage.ts` | `decodeMessageParts` for JSON→Schema roundtrip   |
-| `packages/test-utils/src/index.ts`       | `SequenceRecorder`, recording layers, assertions |
-| `apps/tui/tsconfig.json`                 | `jsxImportSource: "@opentui/solid"` required     |
+| File                                            | Purpose                                        |
+| ----------------------------------------------- | ---------------------------------------------- |
+| `packages/core/src/storage/sqlite-storage.ts`   | `decodeMessageParts` for JSON→Schema roundtrip |
+| `packages/core/src/test-utils/index.ts`         | `SequenceRecorder`, recording layers           |
+| `packages/core/src/server/index.ts`             | `createDependencies` — full layer wiring       |
+| `packages/core/src/runtime/agent/agent-loop.ts` | Agent loop — recursive, largest single file    |
+| `apps/tui/tsconfig.json`                        | `jsxImportSource: "@opentui/solid"` required   |
 
 ## Documentation
 
-| Path                            | Focus                                     |
-| ------------------------------- | ----------------------------------------- |
-| `packages/server/AGENTS.md`     | GentCore, RPC/HTTP API, layer composition |
-| `packages/core/AGENTS.md`       | Type exports, schema patterns             |
-| `packages/runtime/AGENTS.md`    | AgentLoop, tracing, telemetry             |
-| `packages/providers/AGENTS.md`  | Provider setup, Stream.async              |
-| `packages/storage/AGENTS.md`    | SQLite, JSON roundtrip                    |
-| `packages/test-utils/AGENTS.md` | Test layers, mocking                      |
-| `apps/tui/AGENTS.md`            | OpenTUI, Solid patterns                   |
+| Path                 | Focus                       |
+| -------------------- | --------------------------- |
+| `ARCHITECTURE.md`    | Package structure, concepts |
+| `apps/tui/AGENTS.md` | OpenTUI, Solid patterns     |

@@ -34,17 +34,22 @@ TUI (@opentui/solid) ←── SSE ──→ Server (HttpApi)
 
 ```
 packages/
-├── core/           # Types, schemas, service interfaces
-├── storage/        # SQLite (bun:sqlite) - baked in
-├── tools/          # Effect services
-├── providers/      # Vercel AI SDK adapters
-├── runtime/        # ActorProcess, AgentLoop, AgentActor, EventStore, Hooks
-└── test-utils/     # Mock layers, sequence recording
+├── core/src/
+│   ├── domain/      # Schemas + services: ids, message, event, tool, agent, permission, auth, etc.
+│   ├── storage/     # SQLite (bun:sqlite) - baked in
+│   ├── providers/   # Vercel AI SDK adapters
+│   ├── runtime/     # ActorProcess, AgentLoop, AgentActor, checkpoint, retry
+│   ├── tools/       # Read, Write, Edit, Bash, Glob, Grep, etc.
+│   ├── server/      # GentCore, RPCs, EventStore, system prompt
+│   └── test-utils/  # Mock layers, sequence recording
+└── sdk/             # Client wrappers (RPC + HTTP transport)
 
 apps/
-├── tui/            # @opentui/solid
-└── server/         # BunHttpServer + SSE
+├── tui/             # @opentui/solid TUI client
+└── server/          # BunHttpServer + SSE
 ```
+
+No barrel files. `@gent/core` uses subpath exports (`@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop`, etc.). Internal imports use relative paths.
 
 ## Core Concepts
 
@@ -119,7 +124,7 @@ Per-mode policy (one-for-one):
 - cowork: retry provider errors with DEFAULT_RETRY_CONFIG (maxAttempts=3). No retry on tool errors, permission denies, or user interrupts.
 - deepwork: retry provider errors with extended backoff (maxAttempts=5, maxDelay=60s). Tool retries only if tool is marked safe/idempotent.
 
-See `/Users/cvr/Developer/personal/gent/packages/runtime/src/retry.ts` for current defaults.
+See `packages/core/src/runtime/retry.ts` for current defaults.
 
 ### Tools as Effect Services
 

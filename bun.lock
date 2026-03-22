@@ -5,8 +5,6 @@
     "": {
       "name": "gent",
       "dependencies": {
-        "@ai-sdk/amazon-bedrock": "^4.0.82",
-        "@aws-sdk/credential-providers": "^3.1014.0",
         "effect-machine": "catalog:",
         "msgpackr": "catalog:",
         "multipasta": "catalog:",
@@ -67,18 +65,16 @@
         "effect": "catalog:",
       },
     },
-    "packages/atom-solid": {
-      "name": "@gent/atom-solid",
-      "version": "0.0.0",
-    },
     "packages/core": {
       "name": "@gent/core",
       "version": "0.0.0",
       "dependencies": {
+        "@ai-sdk/amazon-bedrock": "^4.0.82",
         "@ai-sdk/anthropic": "catalog:",
         "@ai-sdk/google": "catalog:",
         "@ai-sdk/mistral": "catalog:",
         "@ai-sdk/openai": "catalog:",
+        "@aws-sdk/credential-providers": "^3.1014.0",
         "@types/turndown": "^5.0.6",
         "ai": "catalog:",
         "effect-machine": "catalog:",
@@ -93,14 +89,6 @@
         "effect-bun-test": "catalog:",
       },
     },
-    "packages/providers": {
-      "name": "@gent/providers",
-      "version": "0.0.0",
-    },
-    "packages/runtime": {
-      "name": "@gent/runtime",
-      "version": "0.0.0",
-    },
     "packages/sdk": {
       "name": "@gent/sdk",
       "version": "0.0.0",
@@ -110,22 +98,6 @@
       "peerDependencies": {
         "effect": "catalog:",
       },
-    },
-    "packages/server": {
-      "name": "@gent/server",
-      "version": "0.0.0",
-    },
-    "packages/storage": {
-      "name": "@gent/storage",
-      "version": "0.0.0",
-    },
-    "packages/test-utils": {
-      "name": "@gent/test-utils",
-      "version": "0.0.0",
-    },
-    "packages/tools": {
-      "name": "@gent/tools",
-      "version": "0.0.0",
     },
   },
   "catalog": {
@@ -339,25 +311,11 @@
 
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.0", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-N10dEJNSsUx41Z6pZsXU8FjPjpBEplgH24sfkmITrBED1/U2Esum9F3lfLrMjKHHjmi557zQn7kR9R+XWXu5Rg=="],
 
-    "@gent/atom-solid": ["@gent/atom-solid@workspace:packages/atom-solid"],
-
     "@gent/core": ["@gent/core@workspace:packages/core"],
-
-    "@gent/providers": ["@gent/providers@workspace:packages/providers"],
-
-    "@gent/runtime": ["@gent/runtime@workspace:packages/runtime"],
 
     "@gent/sdk": ["@gent/sdk@workspace:packages/sdk"],
 
-    "@gent/server": ["@gent/server@workspace:packages/server"],
-
     "@gent/server-http": ["@gent/server-http@workspace:apps/server"],
-
-    "@gent/storage": ["@gent/storage@workspace:packages/storage"],
-
-    "@gent/test-utils": ["@gent/test-utils@workspace:packages/test-utils"],
-
-    "@gent/tools": ["@gent/tools@workspace:packages/tools"],
 
     "@gent/tui": ["@gent/tui@workspace:apps/tui"],
 

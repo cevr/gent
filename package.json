@@ -20,8 +20,6 @@
     "prepare": "lefthook install"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^4.0.82",
-    "@aws-sdk/credential-providers": "^3.1014.0",
     "effect-machine": "catalog:",
     "msgpackr": "catalog:",
     "multipasta": "catalog:"
