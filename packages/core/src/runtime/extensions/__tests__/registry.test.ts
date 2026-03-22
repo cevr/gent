@@ -1,0 +1,304 @@
+import { describe, test, expect } from "bun:test"
+import { Effect } from "effect"
+import { AgentDefinition } from "../../../domain/agent.js"
+import type { LoadedExtension, RunContext } from "../../../domain/extension.js"
+import type { AnyToolDefinition, ToolAction } from "../../../domain/tool.js"
+import type { SessionId, BranchId } from "../../../domain/ids.js"
+import { ExtensionRegistry, resolveExtensions } from "../registry.js"
+
+const makeTool = (name: string, action: ToolAction = "read"): AnyToolDefinition => ({
+  name,
+  action,
+  description: `test tool ${name}`,
+  params: {} as never,
+  execute: () => Effect.succeed(undefined),
+})
+
+const makeAgent = (name: string, kind: "primary" | "subagent" | "system" = "subagent") =>
+  new AgentDefinition({ name: name as never, kind })
+
+const makeExt = (
+  id: string,
+  kind: "builtin" | "user" | "project",
+  opts?: {
+    tools?: AnyToolDefinition[]
+    agents?: AgentDefinition[]
+    hooks?: Record<string, unknown>
+  },
+): LoadedExtension => ({
+  manifest: { id },
+  kind,
+  sourcePath: `/test/${id}`,
+  setup: {
+    tools: opts?.tools,
+    agents: opts?.agents,
+    hooks: opts?.hooks as never,
+  },
+})
+
+const runCtx: RunContext = {
+  sessionId: "test-session" as SessionId,
+  branchId: "test-branch" as BranchId,
+}
+
+describe("resolveExtensions", () => {
+  test("empty extensions produce empty maps", () => {
+    const resolved = resolveExtensions([])
+    expect(resolved.tools.size).toBe(0)
+    expect(resolved.agents.size).toBe(0)
+    expect(resolved.promptFragments.length).toBe(0)
+  })
+
+  test("collects tools from multiple extensions", () => {
+    const resolved = resolveExtensions([
+      makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
+      makeExt("b", "builtin", { tools: [makeTool("bash", "exec")] }),
+    ])
+    expect(resolved.tools.size).toBe(3)
+    expect(resolved.tools.has("read")).toBe(true)
+    expect(resolved.tools.has("write")).toBe(true)
+    expect(resolved.tools.has("bash")).toBe(true)
+  })
+
+  test("later scope wins for same-name tool", () => {
+    const builtinRead = makeTool("read")
+    const projectRead = { ...makeTool("read"), description: "project override" }
+
+    const resolved = resolveExtensions([
+      makeExt("a", "builtin", { tools: [builtinRead] }),
+      makeExt("b", "project", { tools: [projectRead] }),
+    ])
+
+    expect(resolved.tools.get("read")?.description).toBe("project override")
+  })
+
+  test("later scope wins for same-name agent", () => {
+    const builtinExplore = makeAgent("explore")
+    const projectExplore = new AgentDefinition({
+      name: "explore" as never,
+      kind: "subagent",
+      description: "project explore",
+    })
+
+    const resolved = resolveExtensions([
+      makeExt("a", "builtin", { agents: [builtinExplore] }),
+      makeExt("b", "project", { agents: [projectExplore] }),
+    ])
+
+    expect(resolved.agents.get("explore")?.description).toBe("project explore")
+  })
+
+  test("collects prompt fragments sorted by priority", () => {
+    const resolved = resolveExtensions(
+      [makeExt("a", "builtin"), makeExt("b", "project")].map((ext) => ({
+        ...ext,
+        setup: {
+          ...ext.setup,
+          promptFragments: [
+            {
+              section: "custom" as const,
+              content: ext.manifest.id,
+              priority: ext.kind === "builtin" ? 50 : 10,
+            },
+          ],
+        },
+      })),
+    )
+
+    expect(resolved.promptFragments[0]?.content).toBe("b")
+    expect(resolved.promptFragments[1]?.content).toBe("a")
+  })
+})
+
+describe("ExtensionRegistry", () => {
+  const buildRegistry = (extensions: LoadedExtension[]) => {
+    const resolved = resolveExtensions(extensions)
+    return Effect.provide(
+      Effect.gen(function* () {
+        return yield* ExtensionRegistry
+      }),
+      ExtensionRegistry.fromResolved(resolved),
+    )
+  }
+
+  test("getTool returns tool by name", async () => {
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read")] })]),
+    )
+    const tool = await Effect.runPromise(registry.getTool("read"))
+    expect(tool?.name).toBe("read")
+  })
+
+  test("getTool returns undefined for missing tool", async () => {
+    const registry = await Effect.runPromise(buildRegistry([]))
+    const tool = await Effect.runPromise(registry.getTool("nonexistent"))
+    expect(tool).toBeUndefined()
+  })
+
+  test("listTools returns all tools", async () => {
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] })]),
+    )
+    const tools = await Effect.runPromise(registry.listTools())
+    expect(tools.length).toBe(2)
+  })
+
+  test("getAgent returns agent by name", async () => {
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { agents: [makeAgent("explore")] })]),
+    )
+    const agent = await Effect.runPromise(registry.getAgent("explore"))
+    expect(agent?.name).toBe("explore")
+  })
+
+  test("listPrimaryAgents filters correctly", async () => {
+    const primary = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
+    const sub = makeAgent("explore", "subagent")
+    const hidden = new AgentDefinition({ name: "title" as never, kind: "primary", hidden: true })
+
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { agents: [primary, sub, hidden] })]),
+    )
+
+    const primaryAgents = await Effect.runPromise(registry.listPrimaryAgents())
+    expect(primaryAgents.length).toBe(1)
+    expect(primaryAgents[0]?.name).toBe("cowork")
+  })
+
+  test("listSubagents filters correctly", async () => {
+    const primary = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
+    const sub = makeAgent("explore", "subagent")
+
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { agents: [primary, sub] })]),
+    )
+
+    const subagents = await Effect.runPromise(registry.listSubagents())
+    expect(subagents.length).toBe(1)
+    expect(subagents[0]?.name).toBe("explore")
+  })
+
+  test("listToolsForAgent filters by allowedActions", async () => {
+    const readTool = makeTool("read", "read")
+    const bashTool = makeTool("bash", "exec")
+    const agent = new AgentDefinition({
+      name: "explore" as never,
+      kind: "subagent",
+      allowedActions: ["read"],
+    })
+
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { tools: [readTool, bashTool], agents: [agent] })]),
+    )
+
+    const tools = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    expect(tools.length).toBe(1)
+    expect(tools[0]?.name).toBe("read")
+  })
+
+  test("listToolsForAgent filters by allowedTools", async () => {
+    const readTool = makeTool("read", "read")
+    const bashTool = makeTool("bash", "exec")
+    const editTool = makeTool("edit", "edit")
+    const agent = new AgentDefinition({
+      name: "explore" as never,
+      kind: "subagent",
+      allowedActions: ["read"],
+      allowedTools: ["bash"],
+    })
+
+    const registry = await Effect.runPromise(
+      buildRegistry([
+        makeExt("a", "builtin", { tools: [readTool, bashTool, editTool], agents: [agent] }),
+      ]),
+    )
+
+    const tools = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    const names = tools.map((t) => t.name)
+    expect(names).toContain("read")
+    expect(names).toContain("bash")
+    expect(names).not.toContain("edit")
+  })
+
+  test("listToolsForAgent applies deniedTools", async () => {
+    const readTool = makeTool("read", "read")
+    const writeTool = makeTool("write", "read")
+    const agent = new AgentDefinition({
+      name: "cowork" as never,
+      kind: "primary",
+      deniedTools: ["write"],
+    })
+
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { tools: [readTool, writeTool], agents: [agent] })]),
+    )
+
+    const tools = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    const names = tools.map((t) => t.name)
+    expect(names).toContain("read")
+    expect(names).not.toContain("write")
+  })
+
+  test("tools.visible interceptor can inject additional tools", async () => {
+    const readTool = makeTool("read", "read")
+    const signalTool = makeTool("loop_evaluation", "state")
+    const agent = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
+
+    const registry = await Effect.runPromise(
+      buildRegistry([
+        makeExt("core", "builtin", { tools: [readTool] }),
+        makeExt("workflow", "builtin", {
+          hooks: {
+            "tools.visible": (
+              input: { agent: AgentDefinition; tools: AnyToolDefinition[]; runContext: RunContext },
+              next: (i: typeof input) => Effect.Effect<AnyToolDefinition[]>,
+            ) => {
+              if (input.runContext.tags?.includes("loop-evaluation")) {
+                return next({ ...input, tools: [...input.tools, signalTool] })
+              }
+              return next(input)
+            },
+          },
+        }),
+      ]),
+    )
+
+    // Without tag — signal tool not included
+    const toolsWithout = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    expect(toolsWithout.map((t) => t.name)).not.toContain("loop_evaluation")
+
+    // With tag — signal tool injected
+    const toolsWith = await Effect.runPromise(
+      registry.listToolsForAgent(agent, { ...runCtx, tags: ["loop-evaluation"] }),
+    )
+    expect(toolsWith.map((t) => t.name)).toContain("loop_evaluation")
+  })
+
+  test("registerTool adds tool at runtime (compat)", async () => {
+    const registry = await Effect.runPromise(
+      buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read")] })]),
+    )
+
+    await Effect.runPromise(registry.registerTool(makeTool("extra")))
+
+    const tools = await Effect.runPromise(registry.listTools())
+    expect(tools.map((t) => t.name)).toContain("extra")
+  })
+
+  test("Test layer provides empty registry", async () => {
+    const registry = await Effect.runPromise(
+      Effect.provide(
+        Effect.gen(function* () {
+          return yield* ExtensionRegistry
+        }),
+        ExtensionRegistry.Test(),
+      ),
+    )
+
+    const tools = await Effect.runPromise(registry.listTools())
+    expect(tools.length).toBe(0)
+
+    const agents = await Effect.runPromise(registry.listAgents())
+    expect(agents.length).toBe(0)
+  })
+})
