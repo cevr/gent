@@ -3,7 +3,7 @@ import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunServices, BunRuntime } from "@effect/platform-bun"
 import { Config, Console, Effect, Layer, Option, Ref, Stream } from "effect"
 import type { ServiceMap } from "effect"
-import { RegistryProvider } from "@gent/atom-solid"
+import { RegistryProvider } from "./atom-solid/solid"
 import { createDependencies } from "@gent/core/server/index.js"
 import {
   GentCore,

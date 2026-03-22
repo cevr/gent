@@ -1,18 +1,6 @@
 {
   "name": "@gent/atom-solid",
   "version": "0.0.0",
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
-  "devDependencies": {
-    "solid-js": "catalog:"
-  },
-  "peerDependencies": {
-    "effect": "catalog:",
-    "solid-js": "^1.9.11"
-  }
+  "private": true,
+  "type": "module"
 }

@@ -10,7 +10,7 @@ import { readdir, readFile, mkdir, writeFile } from "fs/promises"
 import { homedir } from "os"
 import { join, basename } from "path"
 import { Effect, Fiber } from "effect"
-import { atom, useAtomValue, useRegistry } from "@gent/atom-solid"
+import { atom, useAtomValue, useRegistry } from "../atom-solid"
 
 export interface Skill {
   id: string

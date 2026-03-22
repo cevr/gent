@@ -4,7 +4,7 @@
  */
 import { Effect, Exit, Fiber, Cause, type ServiceMap } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
-import { type Result, initial, success, failure } from "@gent/atom-solid"
+import { type Result, initial, success, failure } from "../atom-solid/result"
 import { tuiError } from "../utils/unified-tracer"
 
 export interface UseRuntimeReturn<R> {

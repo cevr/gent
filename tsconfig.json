@@ -15,7 +15,6 @@
     "baseUrl": ".",
     "paths": {
       "@gent/core/*": ["packages/core/src/*"],
-      "@gent/atom-solid": ["packages/atom-solid/src/index.ts"],
       "@gent/sdk": ["packages/sdk/src/index.ts"]
     },
     "plugins": [

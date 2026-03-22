@@ -2,7 +2,7 @@
  * Simple key-based cache for Effect results
  */
 import type { Accessor } from "solid-js"
-import type { Result } from "@gent/atom-solid"
+import type { Result } from "../atom-solid/result"
 
 // Global cache for Effect results
 const cache = new Map<string, Accessor<Result<unknown, unknown>>>()

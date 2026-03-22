@@ -50,7 +50,6 @@
       },
       "dependencies": {
         "@effect/platform-bun": "catalog:",
-        "@gent/atom-solid": "workspace:*",
         "@gent/core": "workspace:*",
         "@gent/sdk": "workspace:*",
         "@opentui/core": "^0.1.88",
@@ -71,13 +70,6 @@
     "packages/atom-solid": {
       "name": "@gent/atom-solid",
       "version": "0.0.0",
-      "devDependencies": {
-        "solid-js": "catalog:",
-      },
-      "peerDependencies": {
-        "effect": "catalog:",
-        "solid-js": "^1.9.11",
-      },
     },
     "packages/core": {
       "name": "@gent/core",

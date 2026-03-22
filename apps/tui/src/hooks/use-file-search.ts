@@ -10,7 +10,7 @@ import { Glob } from "bun"
 import { readFile, access } from "fs/promises"
 import { join, dirname } from "path"
 import { Effect, Exit, Fiber } from "effect"
-import { atom, state, useAtomSet, useAtomValue } from "@gent/atom-solid"
+import { atom, state, useAtomSet, useAtomValue } from "../atom-solid"
 
 const FILE_GLOB = new Glob("**/*")
 const MAX_PARENT_TRAVERSAL = 10
