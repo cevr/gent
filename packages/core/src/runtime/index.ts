@@ -50,6 +50,8 @@ export { makeDevTracer, DevTracerLive, DevTracer, DEFAULT_LOG_FILE, clearLog } f
 
 export { GentLogger, GentLoggerJson, GentLoggerPretty, GentLogLevel } from "./logger"
 
+export { GentTracerLive, makeGentTracer, clearTraceLog } from "./tracer"
+
 export { WideEvent, TurnWideEvent, type WideEventService } from "./wide-event"
 
 export { formatSchemaError } from "./format-schema-error"

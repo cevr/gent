@@ -6,7 +6,10 @@
     "perf": "error"
   },
   "plugins": ["typescript", "import", "node"],
+  "jsPlugins": ["./lint/no-direct-env.ts"],
   "rules": {
+    // Custom — use Config from effect, not direct env access
+    "gent/no-direct-env": "warn",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
 

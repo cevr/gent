@@ -16,8 +16,12 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.eff
 
     return {
       publish: Effect.fn("EventStore.publish")(function* (event) {
+        const currentSpan = yield* Effect.currentParentSpan.pipe(
+          Effect.orElseSucceed(() => undefined),
+        )
+        const traceId = currentSpan !== undefined ? currentSpan.traceId : undefined
         const envelope = yield* storage
-          .appendEvent(event)
+          .appendEvent(event, traceId !== undefined ? { traceId } : undefined)
           .pipe(Effect.mapError(toEventStoreError("Failed to append event")))
         yield* PubSub.publish(pubsub, envelope)
       }),

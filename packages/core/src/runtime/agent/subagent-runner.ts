@@ -254,6 +254,9 @@ export const InProcessRunner: Layer.Layer<
             })
 
             return run.pipe(
+              Effect.withSpan("SubagentRunner.inProcess", {
+                attributes: { agentName: params.agent.name },
+              }),
               Effect.catchCause((cause) => {
                 if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return Effect.gen(function* () {
@@ -324,6 +327,11 @@ export const SubprocessRunner: Layer.Layer<
                 }),
               )
 
+              // Capture trace context for subprocess propagation
+              const currentSpan = yield* Effect.currentParentSpan.pipe(
+                Effect.orElseSucceed(() => undefined),
+              )
+
               const binary = config.subprocessBinaryPath ?? "gent"
               const args = [
                 binary,
@@ -342,6 +350,12 @@ export const SubprocessRunner: Layer.Layer<
                 env: {
                   ...Bun.env,
                   ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
+                  ...(currentSpan !== undefined
+                    ? {
+                        GENT_TRACE_ID: currentSpan.traceId,
+                        GENT_PARENT_SPAN_ID: currentSpan.spanId,
+                      }
+                    : {}),
                 },
               })
 
@@ -424,6 +438,9 @@ export const SubprocessRunner: Layer.Layer<
             })
 
             return run.pipe(
+              Effect.withSpan("SubagentRunner.subprocess", {
+                attributes: { agentName: params.agent.name },
+              }),
               Effect.catchCause((cause) => {
                 if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return Effect.gen(function* () {

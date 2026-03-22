@@ -68,7 +68,10 @@ export interface StorageService {
   ) => Effect.Effect<void, StorageError>
 
   // Events
-  readonly appendEvent: (event: AgentEvent) => Effect.Effect<EventEnvelope, StorageError>
+  readonly appendEvent: (
+    event: AgentEvent,
+    options?: { traceId?: string },
+  ) => Effect.Effect<EventEnvelope, StorageError>
   readonly listEvents: (params: {
     sessionId: SessionId
     branchId?: BranchId
@@ -200,6 +203,7 @@ interface EventRow {
   id: number
   event_json: string
   created_at: number
+  trace_id: string | null
 }
 
 const VALID_REASONING = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
@@ -354,6 +358,8 @@ const initSchema = Effect.gen(function* () {
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
   `)
+
+  yield* sql.unsafe(`ALTER TABLE events ADD COLUMN trace_id TEXT`).pipe(Effect.ignoreCause)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS todos (
@@ -659,7 +665,7 @@ const makeStorage = Effect.gen(function* () {
       ),
 
     // Events
-    appendEvent: (event) =>
+    appendEvent: (event, options) =>
       Effect.gen(function* () {
         const sessionId = getEventSessionId(event)
         if (sessionId === undefined) {
@@ -667,14 +673,16 @@ const makeStorage = Effect.gen(function* () {
         }
         const branchId = "branchId" in event ? (event.branchId as string | undefined) : undefined
         const createdAt = Date.now()
+        const traceId = options?.traceId
         const eventJson = yield* encodeEvent(event)
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId ?? null}, ${event._tag}, ${eventJson}, ${createdAt})`
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at, trace_id) VALUES (${sessionId}, ${branchId ?? null}, ${event._tag}, ${eventJson}, ${createdAt}, ${traceId ?? null})`
         const rows = yield* sql<{ id: number }>`SELECT last_insert_rowid() as id`
         const id = rows[0]?.id ?? 0
         return new EventEnvelope({
           id: id as EventEnvelope["id"],
           event,
           createdAt,
+          ...(traceId !== undefined ? { traceId } : {}),
         })
       }).pipe(
         Effect.mapError(mapError("Failed to append event")),
@@ -686,8 +694,8 @@ const makeStorage = Effect.gen(function* () {
         const sinceId = afterId ?? 0
         const rows =
           branchId !== undefined
-            ? yield* sql<EventRow>`SELECT id, event_json, created_at FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND id > ${sinceId} ORDER BY id ASC`
-            : yield* sql<EventRow>`SELECT id, event_json, created_at FROM events WHERE session_id = ${sessionId} AND id > ${sinceId} ORDER BY id ASC`
+            ? yield* sql<EventRow>`SELECT id, event_json, created_at, trace_id FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND id > ${sinceId} ORDER BY id ASC`
+            : yield* sql<EventRow>`SELECT id, event_json, created_at, trace_id FROM events WHERE session_id = ${sessionId} AND id > ${sinceId} ORDER BY id ASC`
         return yield* Effect.forEach(rows, (row) =>
           Effect.map(
             decodeEvent(row.event_json),
@@ -696,6 +704,7 @@ const makeStorage = Effect.gen(function* () {
                 id: row.id as EventEnvelope["id"],
                 event,
                 createdAt: row.created_at,
+                ...(row.trace_id !== null ? { traceId: row.trace_id } : {}),
               }),
           ),
         )

@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Layer, Option, Ref, Stream } from "effect"
+import { Config, Console, Effect, Layer, Option, Ref, Stream, Tracer } from "effect"
+import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
 import { createDependencies } from "@gent/core/server/index.js"
@@ -14,7 +15,7 @@ import {
 } from "@gent/core/server/core.js"
 import { makeDirectGentClient, type GentClient } from "@gent/sdk"
 import { GentLogger } from "@gent/core/runtime/logger.js"
-import { UnifiedTracerLive } from "./utils/unified-tracer"
+import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
 import { OsService } from "@gent/core/domain/os-service.js"
@@ -178,8 +179,8 @@ const PlatformLayer = BunServices.layer
 // Logger layer — pretty (stderr) + JSON (/tmp/gent.log)
 const LoggerLayer = GentLogger
 
-// Tracer layer — span tracing to /tmp/gent-unified.log
-const TracerLayer = UnifiedTracerLive
+// Tracer layer — span tracing to /tmp/gent-trace.log
+const TracerLayer = GentTracerLive
 
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 
@@ -367,7 +368,28 @@ const main = Command.make(
             yield* Console.error("Error: session has no branch")
             return process.exit(1)
           }
-          yield* runHeadless(core, gentClient, state.session.id, branchId, state.prompt)
+          // If spawned as subprocess, inherit parent trace context
+          const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
+          const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
+          const parentSpan =
+            Option.isSome(traceIdOpt) && Option.isSome(parentSpanIdOpt)
+              ? Tracer.externalSpan({
+                  traceId: traceIdOpt.value,
+                  spanId: parentSpanIdOpt.value,
+                  sampled: true,
+                })
+              : undefined
+          const headlessEffect = runHeadless(
+            core,
+            gentClient,
+            state.session.id,
+            branchId,
+            state.prompt,
+          ).pipe(
+            Effect.withSpan("Headless.run"),
+            parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
+          )
+          yield* headlessEffect
           return process.exit(0)
         }
 

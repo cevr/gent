@@ -1,4 +1,6 @@
 import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { GentTracerLive } from "@gent/core/runtime/tracer.js"
+import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
 import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
@@ -67,7 +69,12 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
 const DepsLive = createDependencies({
   cwd: process.cwd(),
   dbPath: ".gent/data.db",
-}).pipe(Layer.provide(PlatformLayer))
+}).pipe(
+  Layer.provide(PlatformLayer),
+  Layer.provide(GentLogger),
+  Layer.provide(GentLogLevel),
+  Layer.provide(GentTracerLive),
+)
 
 // GentCore layer
 const GentCoreLive = GentCore.Live.pipe(Layer.provide(DepsLive))

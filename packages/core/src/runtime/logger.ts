@@ -110,8 +110,12 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
     const color = levelColor(logLevel)
     const label = levelLabel(logLevel)
 
-    // Header line: [HH:mm:ss.SSS] LEVEL  message
-    let output = `${DIM}[${formatTime(date)}]${RESET} ${color}${label}${RESET}  ${BOLD}${msg}${RESET}`
+    // Header line: [HH:mm:ss.SSS] [traceId] LEVEL  message
+    const tracePrefix =
+      fiber.currentSpan !== undefined
+        ? `${DIM}[${fiber.currentSpan.traceId.slice(0, 8)}]${RESET} `
+        : ""
+    let output = `${DIM}[${formatTime(date)}]${RESET} ${tracePrefix}${color}${label}${RESET}  ${BOLD}${msg}${RESET}`
 
     // Cause
     if (cause.reasons.length > 0) {
@@ -161,6 +165,14 @@ const makeJsonFileLogger = (path: string): Logger.Logger<unknown, void> =>
       level: logLevel,
       msg,
       ...annots,
+    }
+
+    if (fiber.currentSpan !== undefined) {
+      entry["traceId"] = fiber.currentSpan.traceId
+      entry["spanId"] = fiber.currentSpan.spanId
+      if (fiber.currentSpan._tag === "Span") {
+        entry["spanName"] = fiber.currentSpan.name
+      }
     }
 
     if (Object.keys(spanEntries).length > 0) {
