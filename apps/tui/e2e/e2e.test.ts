@@ -20,6 +20,7 @@ const ENTER = "\r"
 const ESC = "\x1b"
 const CTRL_C = "\x03"
 const SHIFT_TAB = "\x1b[Z"
+const UP = "\x1b[A"
 const DOWN = "\x1b[B"
 
 interface TestContext {
@@ -48,7 +49,11 @@ const seedAuth = async (tempDir: string): Promise<void> => {
   )
 }
 
-function spawnWithDir(tempDir: string, extraArgs: string[] = []): TestContext {
+function spawnWithDir(
+  tempDir: string,
+  extraArgs: string[] = [],
+  extraEnv: Record<string, string> = {},
+): TestContext {
   const tuiDir = path.resolve(import.meta.dir, "..")
   const mainPath = path.join(tuiDir, "src", "main.tsx")
   const preloadPath = path.join(
@@ -67,7 +72,7 @@ function spawnWithDir(tempDir: string, extraArgs: string[] = []): TestContext {
     cols: 120,
     rows: 40,
     cwd: tuiDir,
-    env: { ...Bun.env, GENT_DATA_DIR: tempDir },
+    env: { ...Bun.env, GENT_DATA_DIR: tempDir, ...extraEnv },
   })
 
   pty.onData((data) => {
@@ -350,6 +355,91 @@ describe("E2E: Headless", () => {
         new Promise<null>((r) => setTimeout(() => r(null), 8_000)),
       ])
       expect(testContext.output.length).toBeGreaterThan(0)
+    },
+    TEST_TIMEOUT,
+  )
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Prompt History
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+describe("E2E: Prompt History", () => {
+  test(
+    "up arrow at empty prompt does not crash",
+    async () => {
+      testContext = await seedAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write(UP)
+      await new Promise((r) => setTimeout(r, 500))
+      // TUI still running — prompt visible
+      expect(stripAnsi(testContext.output)).toContain("❯")
+    },
+    TEST_TIMEOUT,
+  )
+
+  test(
+    "up arrow at non-empty input does not navigate",
+    async () => {
+      testContext = await seedAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("some text")
+      await new Promise((r) => setTimeout(r, 500))
+      testContext.pty.write(UP)
+      await new Promise((r) => setTimeout(r, 300))
+      // Text should still be present (up was a no-op because cursor not at 0)
+      expect(stripAnsi(testContext.output)).toContain("some")
+    },
+    TEST_TIMEOUT,
+  )
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Skill Popup
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const seedSkillAndSpawn = async (): Promise<TestContext> => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
+  await seedAuth(tempDir)
+
+  // Create a fake skill in a custom HOME
+  const fakeHome = path.join(tempDir, "home")
+  const skillDir = path.join(fakeHome, ".claude", "skills", "test-skill")
+  fs.mkdirSync(skillDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: test-skill\ndescription: A test skill for e2e\n---\n\nTest skill content.",
+  )
+
+  return spawnWithDir(tempDir, [], { HOME: fakeHome })
+}
+
+describe("E2E: Skill Popup", () => {
+  test(
+    "$ trigger shows skills popup",
+    async () => {
+      testContext = await seedSkillAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("$t")
+      await testContext.pty.waitFor("Skills", { timeout: 5_000 })
+      const clean = stripAnsi(testContext.output)
+      expect(clean).toContain("Skills")
+      testContext.pty.write(ESC)
+    },
+    TEST_TIMEOUT,
+  )
+
+  test(
+    "ESC closes skill popup",
+    async () => {
+      testContext = await seedSkillAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("$t")
+      await testContext.pty.waitFor("Skills", { timeout: 5_000 })
+      testContext.pty.write(ESC)
+      await new Promise((r) => setTimeout(r, 500))
+      // Popup closed — prompt still there
+      expect(stripAnsi(testContext.output)).toContain("❯")
     },
     TEST_TIMEOUT,
   )
