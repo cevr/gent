@@ -36,6 +36,8 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
         const permission = yield* Permission
         const permissionHandler = yield* PermissionHandler
 
+        const { hooks } = extensionRegistry
+
         return ToolRunner.of({
           run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, options) {
             const tool: AnyToolDefinition | undefined = yield* extensionRegistry.getTool(
@@ -45,10 +47,15 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               return errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`)
             }
 
+            // Run permission.check interceptor, falling back to base Permission service
             const permResult =
               options?.bypass === true
                 ? ("allowed" as const)
-                : yield* permission.check(toolCall.toolName, toolCall.input)
+                : yield* hooks.runInterceptor(
+                    "permission.check",
+                    { toolName: toolCall.toolName, input: toolCall.input },
+                    (input) => permission.check(input.toolName, input.input),
+                  )
 
             if (permResult === "ask") {
               const decision = yield* permissionHandler
@@ -86,12 +93,24 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                 : `Invalid tool input: ${String(failure)}`
               return errorResult(toolCall, message)
             }
-            const result = yield* toolDefinition
-              .execute(decodedInput.success, ctx)
+
+            // Run tool.execute interceptor, falling back to direct tool execution
+            const executeResult = yield* hooks
+              .runInterceptor(
+                "tool.execute",
+                {
+                  toolCallId: toolCall.toolCallId,
+                  toolName: toolCall.toolName,
+                  input: decodedInput.success,
+                  sessionId: ctx.sessionId,
+                  branchId: ctx.branchId,
+                },
+                () => toolDefinition.execute(decodedInput.success, ctx) as Effect.Effect<unknown>,
+              )
               .pipe(Effect.result)
 
-            if (result._tag === "Failure") {
-              const failure = result.failure
+            if (executeResult._tag === "Failure") {
+              const failure = executeResult.failure
               const message = Schema.isSchemaError(failure)
                 ? formatSchemaError(toolCall.toolName, failure)
                 : `Tool '${toolCall.toolName}' failed: ${String(failure)}`
@@ -102,7 +121,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               type: "tool-result",
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
-              output: { type: "json", value: result.success },
+              output: { type: "json", value: executeResult.success },
             })
           }),
         })

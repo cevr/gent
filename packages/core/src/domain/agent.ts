@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId } from "./ids"
 import { ModelId } from "./model"
@@ -225,42 +225,6 @@ export interface AgentExecutionOverrides {
 }
 
 export type BuiltinAgentName = keyof typeof Agents
-
-// Agent registry
-
-export interface AgentRegistryService {
-  readonly get: (name: string) => Effect.Effect<AgentDefinition | undefined>
-  readonly list: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
-  readonly listPrimary: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
-  readonly listSubagents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
-  readonly register: (agent: AgentDefinition) => Effect.Effect<void>
-}
-
-export class AgentRegistry extends ServiceMap.Service<AgentRegistry, AgentRegistryService>()(
-  "@gent/core/src/agent/AgentRegistry",
-) {
-  static Live = Layer.effect(
-    AgentRegistry,
-    Effect.sync(() => {
-      const agents = new Map<string, AgentDefinition>()
-      for (const agent of Object.values(Agents)) {
-        agents.set(agent.name, agent)
-      }
-
-      return AgentRegistry.of({
-        get: (name) => Effect.succeed(agents.get(name)),
-        list: () => Effect.succeed([...agents.values()]),
-        listPrimary: () =>
-          Effect.succeed(
-            [...agents.values()].filter((a) => a.kind === "primary" && a.hidden !== true),
-          ),
-        listSubagents: () =>
-          Effect.succeed([...agents.values()].filter((a) => a.kind === "subagent")),
-        register: (agent) => Effect.sync(() => void agents.set(agent.name, agent)),
-      })
-    }),
-  )
-}
 
 // Subagent runner types
 

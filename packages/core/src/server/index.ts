@@ -22,6 +22,7 @@ import {
 } from "../runtime/agent/subagent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import { LocalActorProcessLive, type ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -176,7 +177,7 @@ export const createDependencies = (
   PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
-  // Build ExtensionRegistry from builtins (loaded synchronously)
+  // Build ExtensionRegistry from builtins + discovered user/project extensions
   const builtinLoaded: LoadedExtension[] = BuiltinExtensions.map((ext) => ({
     manifest: ext.manifest,
     kind: "builtin" as const,
@@ -185,7 +186,28 @@ export const createDependencies = (
       ext.setup({ cwd: config.cwd, config: undefined as never, source: "builtin" }),
     ),
   }))
-  const ExtensionRegistryLive = ExtensionRegistry.Live(builtinLoaded)
+  const userExtDir = nodePath.join(os.homedir(), ".gent", "extensions")
+  const projectExtDir = nodePath.join(config.cwd, ".gent", "extensions")
+  const ExtensionRegistryLive = Layer.unwrap(
+    Effect.gen(function* () {
+      const discovered = yield* discoverExtensions({
+        userDir: userExtDir,
+        projectDir: projectExtDir,
+      }).pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+      const external: LoadedExtension[] = []
+      for (const d of discovered) {
+        const loaded = yield* setupExtension(d, config.cwd).pipe(
+          Effect.catchEager((err) => {
+            return Effect.logWarning(
+              `Failed to load extension ${d.extension.manifest.id}: ${err.message}`,
+            ).pipe(Effect.as(undefined))
+          }),
+        )
+        if (loaded !== undefined) external.push(loaded)
+      }
+      return ExtensionRegistry.Live([...builtinLoaded, ...external])
+    }),
+  )
 
   const StorageLive = Storage.Live(config.dbPath ?? ".gent/data.db")
 

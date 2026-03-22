@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, type Schema } from "effect"
+import type { Effect, Schema } from "effect"
 import type { AgentName } from "./agent"
 import type { BranchId, SessionId } from "./ids"
 
@@ -50,41 +50,6 @@ export const defineTool = <
   definition: ToolDefinition<Name, Params, Result, Error, Deps>,
 ): ToolDefinition<Name, Params, Result, Error, Deps> => definition
 
-// Tool Registry Service
-
 // Use any for variance - tools have varying params/result/error/deps types
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyToolDefinition = ToolDefinition<string, any, any, any, any>
-
-export interface ToolRegistryService {
-  readonly get: (name: string) => Effect.Effect<AnyToolDefinition | undefined>
-  readonly list: () => Effect.Effect<ReadonlyArray<AnyToolDefinition>>
-  readonly register: (tool: AnyToolDefinition) => Effect.Effect<void>
-}
-
-export class ToolRegistry extends ServiceMap.Service<ToolRegistry, ToolRegistryService>()(
-  "@gent/core/src/tool/ToolRegistry",
-) {
-  static Live = (tools: ReadonlyArray<AnyToolDefinition>): Layer.Layer<ToolRegistry> =>
-    Layer.succeed(
-      ToolRegistry,
-      (() => {
-        const toolMap = new Map(tools.map((tool) => [tool.name, tool]))
-        return {
-          get: (name) => Effect.succeed(toolMap.get(name)),
-          list: () => Effect.succeed([...toolMap.values()]),
-          register: (tool) =>
-            Effect.sync(() => {
-              toolMap.set(tool.name, tool)
-            }),
-        }
-      })(),
-    )
-
-  static Test = (): Layer.Layer<ToolRegistry> =>
-    Layer.succeed(ToolRegistry, {
-      get: () => Effect.succeed(undefined),
-      list: () => Effect.succeed([]),
-      register: () => Effect.void,
-    })
-}

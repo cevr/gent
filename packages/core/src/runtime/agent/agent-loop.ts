@@ -370,7 +370,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   agentName: currentAgent,
                 })
 
-                const systemPrompt = buildSystemPrompt(config.systemPrompt, agent)
+                const systemPrompt = yield* extensionRegistry.hooks.runInterceptor(
+                  "prompt.system",
+                  { basePrompt: buildSystemPrompt(config.systemPrompt, agent), agent },
+                  (input) => Effect.succeed(input.basePrompt),
+                )
 
                 // Start streaming
                 yield* publishEvent(new StreamStarted({ sessionId, branchId }))
@@ -1103,7 +1107,14 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                 })
               : agent
 
-          const basePrompt = buildSystemPrompt(input.systemPrompt, effectiveAgent)
+          const basePrompt = yield* extensionRegistry.hooks.runInterceptor(
+            "prompt.system",
+            {
+              basePrompt: buildSystemPrompt(input.systemPrompt, effectiveAgent),
+              agent: effectiveAgent,
+            },
+            (i) => Effect.succeed(i.basePrompt),
+          )
 
           const userMessage = new Message({
             id: Bun.randomUUIDv7() as MessageId,
