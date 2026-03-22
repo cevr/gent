@@ -41,6 +41,7 @@ import {
   ToolCallFailed,
   MessageReceived,
   ErrorOccurred,
+  ProviderRetrying,
   MachineInspected,
   MachineTaskFailed,
   MachineTaskSucceeded,
@@ -104,7 +105,11 @@ const SteerTargetFields = {
 export const SteerCommand = Schema.Union([
   Schema.TaggedStruct("Cancel", SteerTargetFields),
   Schema.TaggedStruct("Interrupt", SteerTargetFields),
-  Schema.TaggedStruct("Interject", { ...SteerTargetFields, message: Schema.String }),
+  Schema.TaggedStruct("Interject", {
+    ...SteerTargetFields,
+    message: Schema.String,
+    agent: Schema.optional(AgentName),
+  }),
   Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
 ])
 export type SteerCommand = typeof SteerCommand.Type
@@ -114,7 +119,55 @@ export type SteerCommand = typeof SteerCommand.Type
 type FollowUpItem = {
   message: Message
   bypass: boolean
+  agentOverride?: AgentNameType
 }
+
+const getSingleText = (message: Message): string | undefined => {
+  if (message.parts.length !== 1) return undefined
+  const [part] = message.parts
+  return part?.type === "text" ? part.text : undefined
+}
+
+const canBatchQueuedFollowUp = (existing: FollowUpItem, incoming: FollowUpItem): boolean => {
+  if (existing.agentOverride !== undefined || incoming.agentOverride !== undefined) return false
+  if (existing.message.role !== "user" || incoming.message.role !== "user") return false
+  if (existing.message.kind === "interjection" || incoming.message.kind === "interjection")
+    return false
+  return (
+    getSingleText(existing.message) !== undefined && getSingleText(incoming.message) !== undefined
+  )
+}
+
+const mergeQueuedFollowUp = (existing: FollowUpItem, incoming: FollowUpItem): FollowUpItem => {
+  const existingText = getSingleText(existing.message)
+  const incomingText = getSingleText(incoming.message)
+  if (existingText === undefined || incomingText === undefined) return incoming
+
+  return {
+    ...existing,
+    message: new Message({
+      ...existing.message,
+      parts: [new TextPart({ type: "text", text: `${existingText}\n${incomingText}` })],
+    }),
+  }
+}
+
+const appendFollowUpItem = (
+  queue: ReadonlyArray<FollowUpItem>,
+  item: FollowUpItem,
+): FollowUpItem[] => {
+  const last = queue[queue.length - 1]
+  if (last === undefined || !canBatchQueuedFollowUp(last, item)) {
+    return [...queue, item]
+  }
+  return [...queue.slice(0, -1), mergeQueuedFollowUp(last, item)]
+}
+
+const restampQueuedMessage = (message: Message): Message =>
+  new Message({
+    ...message,
+    createdAt: new Date(),
+  })
 
 type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
 
@@ -124,6 +177,7 @@ type LoopHandle = {
   actor: LoopActor
   steerQueue: Queue.Queue<SteerCommand>
   pendingSteerRef: Ref.Ref<SteerCommand[]>
+  steeringMessageQueue: Ref.Ref<FollowUpItem[]>
   followUpQueue: Ref.Ref<FollowUpItem[]>
   currentAgentRef: Ref.Ref<AgentNameType | undefined>
   bashSemaphore: SemaphoreType
@@ -196,6 +250,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const bashSemaphore = yield* Semaphore.make(1)
             const steerQueue = yield* Queue.unbounded<SteerCommand>()
             const pendingSteerRef = yield* Ref.make<SteerCommand[]>([])
+            const steeringMessageQueue = yield* Ref.make<FollowUpItem[]>([])
             const followUpQueue = yield* Ref.make<FollowUpItem[]>([])
             const handoffSuppressRef = yield* Ref.make(0) // turns to suppress handoff after reject
             const currentAgentRef = yield* Ref.make<AgentNameType | undefined>(undefined)
@@ -221,10 +276,10 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const applySteerCommand = Effect.fn("AgentLoop.applySteerCommand")(function* (
               cmd: SteerCommand,
             ) {
-              if (cmd._tag !== "SwitchAgent") return
-
               const previous = yield* resolveCurrentAgent()
+              if (!("agent" in cmd)) return
               const next: AgentNameType = Schema.is(AgentName)(cmd.agent) ? cmd.agent : "cowork"
+              if (previous === next) return
               const resolved = yield* extensionRegistry.getAgent(next)
               if (resolved === undefined) return
 
@@ -253,15 +308,18 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runLoop: (
               initialMessage: Message,
               bypass: boolean,
+              agentOverride?: AgentNameType,
             ) => Effect.Effect<
               boolean,
               AgentLoopError | StorageError | ProviderError | EventStoreError
             > = Effect.fn("AgentLoop.runLoop")(function* (
               initialMessage: Message,
               bypass: boolean,
+              agentOverride?: AgentNameType,
             ) {
               const enqueueInterject = Effect.fn("AgentLoop.enqueueInterject")(function* (
                 content: string,
+                agentOverride?: AgentNameType,
                 createdAt?: Date,
               ) {
                 const interjectMsg = new Message({
@@ -273,9 +331,13 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   parts: [new TextPart({ type: "text", text: content })],
                   createdAt: createdAt ?? new Date(),
                 })
-                yield* Ref.update(followUpQueue, (queue) => [
-                  { message: interjectMsg, bypass },
+                yield* Ref.update(steeringMessageQueue, (queue) => [
                   ...queue,
+                  {
+                    message: interjectMsg,
+                    bypass,
+                    ...(agentOverride !== undefined ? { agentOverride } : {}),
+                  },
                 ])
               })
 
@@ -335,8 +397,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     )
                     break
                   } else if (cmd._tag === "Interject") {
-                    // Seamless pivot - queue message for immediate processing
-                    yield* enqueueInterject(cmd.message)
+                    yield* enqueueInterject(cmd.message, cmd.agent)
                     continueLoop = false
                     break
                   } else if (cmd._tag === "SwitchAgent") {
@@ -344,7 +405,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   }
                 }
 
-                const currentAgent = yield* resolveCurrentAgent()
+                const currentAgent = agentOverride ?? (yield* resolveCurrentAgent())
 
                 // Load all messages for the branch
                 const messages =
@@ -401,6 +462,20 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
                     ...(reasoning !== undefined ? { reasoning } : {}),
                   }),
+                  undefined,
+                  {
+                    onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+                      publishEvent(
+                        new ProviderRetrying({
+                          sessionId,
+                          branchId,
+                          attempt,
+                          maxAttempts,
+                          delayMs,
+                          error: error.message,
+                        }),
+                      ).pipe(Effect.orDie),
+                  },
                 ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
 
                 // Collect response parts
@@ -571,7 +646,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       assistantCreatedAtMs !== null
                         ? new Date(assistantCreatedAtMs + 1)
                         : new Date()
-                    yield* enqueueInterject(interruptCmd.message, createdAt)
+                    yield* enqueueInterject(interruptCmd.message, interruptCmd.agent, createdAt)
                   }
 
                   continueLoop = false
@@ -774,12 +849,29 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 }
               }
 
+              // Process steering queue first
+              const steeringItems = yield* Ref.get(steeringMessageQueue)
+              const nextSteer = steeringItems[0]
+              if (nextSteer !== undefined) {
+                yield* Ref.update(steeringMessageQueue, (items) => items.slice(1))
+                const nextInterrupted = yield* runLoop(
+                  nextSteer.message,
+                  nextSteer.bypass,
+                  nextSteer.agentOverride,
+                )
+                interrupted = interrupted || nextInterrupted
+                return interrupted
+              }
+
               // Process follow-up queue
               const queue = yield* Ref.get(followUpQueue)
               const nextItem = queue[0]
               if (nextItem !== undefined) {
                 yield* Ref.update(followUpQueue, (items) => items.slice(1))
-                const nextInterrupted = yield* runLoop(nextItem.message, nextItem.bypass)
+                const nextInterrupted = yield* runLoop(
+                  restampQueuedMessage(nextItem.message),
+                  nextItem.bypass,
+                )
                 interrupted = interrupted || nextInterrupted
               }
 
@@ -844,6 +936,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               actor: loopActor,
               steerQueue,
               pendingSteerRef,
+              steeringMessageQueue,
               followUpQueue,
               currentAgentRef,
               bashSemaphore,
@@ -885,7 +978,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const isRunning = yield* loop.actor.matches("Running")
 
             if (isRunning) {
-              yield* Ref.update(loop.followUpQueue, (queue) => [...queue, { message, bypass }])
+              yield* Ref.update(loop.followUpQueue, (queue) =>
+                appendFollowUpItem(queue, { message, bypass }),
+              )
               return
             }
 
@@ -925,7 +1020,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 .getSession(message.sessionId)
                 .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
               const bypass = session?.bypass ?? true
-              yield* Ref.update(loop.followUpQueue, (items) => [...items, { message, bypass }])
+              yield* Ref.update(loop.followUpQueue, (items) =>
+                appendFollowUpItem(items, { message, bypass }),
+              )
             }),
 
           isRunning: (input) =>
@@ -1173,6 +1270,22 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                 ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
                 ...(reasoning !== undefined ? { reasoning } : {}),
               }),
+              undefined,
+              {
+                onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+                  eventStore
+                    .publish(
+                      new ProviderRetrying({
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                        attempt,
+                        maxAttempts,
+                        delayMs,
+                        error: error.message,
+                      }),
+                    )
+                    .pipe(Effect.orDie),
+              },
             ).pipe(Effect.withSpan("AgentActor.provider.stream"))
 
             const textParts: string[] = []

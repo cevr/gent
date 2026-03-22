@@ -236,7 +236,11 @@ const SteerTargetFields = {
 export const SteerPayload = Schema.Union([
   Schema.TaggedStruct("Cancel", SteerTargetFields),
   Schema.TaggedStruct("Interrupt", SteerTargetFields),
-  Schema.TaggedStruct("Interject", { ...SteerTargetFields, message: Schema.String }),
+  Schema.TaggedStruct("Interject", {
+    ...SteerTargetFields,
+    message: Schema.String,
+    agent: Schema.optional(AgentName),
+  }),
   Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
 ])
 export type SteerPayload = typeof SteerPayload.Type

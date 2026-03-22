@@ -7,7 +7,7 @@ import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import { type BranchTreeNode, useClient } from "../client/index"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
-import { MessageList } from "../components/message-list"
+import { MessageList, type SessionItem } from "../components/message-list"
 import { Input } from "../components/input"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { useCommand } from "../command/index"
@@ -66,6 +66,10 @@ export function Session(props: SessionProps) {
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
   const [overlay, setOverlay] = createSignal<OverlayState>(null)
+  const [pendingQueuedMessage, setPendingQueuedMessage] = createSignal<{
+    content: string
+    createdAt: number
+  } | null>(null)
 
   // Handle input state transitions
   const handleInputEvent = (event: InputEvent) => {
@@ -90,6 +94,44 @@ export function Session(props: SessionProps) {
     },
     props.initialPrompt,
   )
+
+  const items = createMemo<SessionItem[]>(() => {
+    const pending = pendingQueuedMessage()
+    if (pending === null) return feed.items()
+    return [
+      ...feed.items(),
+      {
+        _tag: "message",
+        id: `pending-queue-${pending.createdAt}`,
+        role: "user",
+        kind: "regular",
+        content: pending.content,
+        reasoning: "",
+        images: [],
+        createdAt: pending.createdAt,
+        toolCalls: undefined,
+      },
+    ]
+  })
+
+  createEffect(() => {
+    const pending = pendingQueuedMessage()
+    if (pending === null) return
+
+    const matched = feed
+      .messages()
+      .some(
+        (message) =>
+          message.role === "user" &&
+          message.kind === "regular" &&
+          message.content === pending.content &&
+          message.createdAt >= pending.createdAt,
+      )
+
+    if (matched) {
+      setPendingQueuedMessage(null)
+    }
+  })
 
   // ── Elapsed timer ──
   const [elapsed, setElapsed] = createSignal(0)
@@ -176,7 +218,16 @@ export function Session(props: SessionProps) {
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
     if (mode === "interject" && client.isStreaming()) {
-      client.steer({ _tag: "Interject", message: content })
+      client.steer({ _tag: "Interject", message: content, agent: client.agent() })
+      return
+    }
+
+    if (client.isStreaming()) {
+      setPendingQueuedMessage((current) => ({
+        content: current === null ? content : `${current.content}\n${content}`,
+        createdAt: current?.createdAt ?? Date.now(),
+      }))
+      client.sendMessage(content)
       return
     }
 
@@ -371,7 +422,7 @@ export function Session(props: SessionProps) {
     <box flexDirection="column" flexGrow={1}>
       {/* Messages */}
       <MessageList
-        items={feed.items()}
+        items={items()}
         toolsExpanded={toolsExpanded()}
         syntaxStyle={syntaxStyle}
         streaming={client.isStreaming()}

@@ -45,7 +45,7 @@ type EventListener = (event: AgentEvent) => void
 type SteerCommandInput =
   | { _tag: "Cancel" }
   | { _tag: "Interrupt" }
-  | { _tag: "Interject"; message: string }
+  | { _tag: "Interject"; message: string; agent?: AgentName }
   | { _tag: "SwitchAgent"; agent: AgentName }
 
 const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Model | undefined => {

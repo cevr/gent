@@ -175,7 +175,13 @@ export interface MessageInfoReadonly {
 export type SteerCommand =
   | { _tag: "Cancel"; sessionId: SessionId; branchId: BranchId }
   | { _tag: "Interrupt"; sessionId: SessionId; branchId: BranchId }
-  | { _tag: "Interject"; sessionId: SessionId; branchId: BranchId; message: string }
+  | {
+      _tag: "Interject"
+      sessionId: SessionId
+      branchId: BranchId
+      message: string
+      agent?: AgentName
+    }
   | { _tag: "SwitchAgent"; sessionId: SessionId; branchId: BranchId; agent: AgentName }
 
 // Session info (minimal for client)

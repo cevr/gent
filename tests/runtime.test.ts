@@ -1,6 +1,11 @@
 import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
-import { isRetryable, getRetryDelay, DEFAULT_RETRY_CONFIG } from "@gent/core/runtime/retry"
+import {
+  isRetryable,
+  getRetryDelay,
+  DEFAULT_RETRY_CONFIG,
+  withRetry,
+} from "@gent/core/runtime/retry"
 import { estimateTokens } from "@gent/core/runtime/context-estimation"
 import { AgentLoop, AgentActor } from "@gent/core/runtime/agent/agent-loop"
 import {
@@ -105,6 +110,54 @@ describe("Retry Logic", () => {
   test("getRetryDelay respects maxDelay", () => {
     const delay = getRetryDelay(10, null)
     expect(delay).toBeLessThanOrEqual(DEFAULT_RETRY_CONFIG.maxDelay)
+  })
+
+  test("withRetry reports retry progress", async () => {
+    const attempts: Array<{
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      error: string
+    }> = []
+    let callCount = 0
+
+    const result = await Effect.runPromise(
+      withRetry(
+        Effect.gen(function* () {
+          callCount += 1
+          if (callCount < 3) {
+            return yield* new ProviderError({
+              message: "Rate limit exceeded (429)",
+              model: "test",
+            })
+          }
+          return "ok"
+        }),
+        { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 1, maxAttempts: 3 },
+        {
+          onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+            Effect.sync(() => {
+              attempts.push({ attempt, maxAttempts, delayMs, error: error.message })
+            }),
+        },
+      ),
+    )
+
+    expect(result).toBe("ok")
+    expect(attempts).toEqual([
+      {
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 1,
+        error: "Rate limit exceeded (429)",
+      },
+      {
+        attempt: 2,
+        maxAttempts: 3,
+        delayMs: 1,
+        error: "Rate limit exceeded (429)",
+      },
+    ])
   })
 })
 
@@ -572,6 +625,128 @@ describe("AgentLoop actor model", () => {
           yield* Deferred.succeed(gateA, undefined)
           yield* Deferred.succeed(gateB, undefined)
           yield* Fiber.join(fiberB)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("batches queued regular messages into one follow-up message", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    let calls = 0
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
+            ),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+      },
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const layer = makeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const storage = yield* Storage
+
+          const first = makeMessage("s1", "b1", "first")
+          const second = makeMessage("s1", "b1", "second")
+          const third = makeMessage("s1", "b1", "third")
+
+          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          yield* Effect.sleep("10 millis")
+          yield* agentLoop.run(second)
+          yield* agentLoop.run(third)
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiber)
+
+          const messages = yield* storage.listMessages("b1")
+          const userTexts = messages
+            .filter((message) => message.role === "user")
+            .map((message) =>
+              message.parts
+                .filter((part): part is TextPart => part.type === "text")
+                .map((part) => part.text)
+                .join("\n"),
+            )
+
+          expect(userTexts).toEqual(["first", "second\nthird"])
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("runs interjection before queued follow-up and scopes agent override to that turn", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    const calls: Array<{ model: string; latestUserText: string }> = []
+    let streamCount = 0
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: (request) => {
+        const latestUserText = [...request.messages]
+          .reverse()
+          .find((message) => message.role === "user")
+          ?.parts.filter((part): part is TextPart => part.type === "text")
+          .map((part) => part.text)
+          .join("\n")
+
+        calls.push({
+          model: request.model,
+          latestUserText: latestUserText ?? "",
+        })
+
+        streamCount += 1
+        if (streamCount === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
+            ),
+          )
+        }
+
+        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+      },
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const layer = makeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const first = makeMessage("s1", "b1", "first")
+          const queued = makeMessage("s1", "b1", "queued")
+
+          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          yield* Effect.sleep("10 millis")
+          yield* agentLoop.run(queued)
+          yield* agentLoop.steer({
+            _tag: "Interject",
+            sessionId: "s1",
+            branchId: "b1",
+            message: "steer now",
+            agent: "deepwork",
+          })
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiber)
+
+          expect(calls.map((call) => [call.model, call.latestUserText])).toEqual([
+            ["anthropic/claude-opus-4-6", "first"],
+            ["openai/gpt-5.4", "steer now"],
+            ["anthropic/claude-opus-4-6", "queued"],
+          ])
         }).pipe(Effect.provide(layer)),
       ),
     )
