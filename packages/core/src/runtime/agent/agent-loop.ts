@@ -20,13 +20,15 @@ import {
   makeInspector,
 } from "effect-machine"
 import {
+  AgentDefinition,
   AgentName,
   AgentRegistry,
+  ReasoningEffort,
   resolveAgentModelId,
   SubagentError,
-  type AgentDefinition,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
+import type { ModelId } from "../../domain/model.js"
 import {
   EventStore,
   AgentSwitched,
@@ -47,7 +49,12 @@ import {
 } from "../../domain/event.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId } from "../../domain/ids.js"
-import { ToolRegistry, type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
+import {
+  ToolRegistry,
+  type AnyToolDefinition,
+  type ToolAction,
+  type ToolContext,
+} from "../../domain/tool.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { HandoffHandler } from "../../domain/interaction-handlers.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -975,6 +982,12 @@ const AgentRunInputFields = {
   prompt: Schema.String,
   systemPrompt: Schema.String,
   bypass: Schema.UndefinedOr(Schema.Boolean),
+  modelId: Schema.optional(Schema.String),
+  overrideAllowedActions: Schema.optional(Schema.Array(Schema.String)),
+  overrideAllowedTools: Schema.optional(Schema.Array(Schema.String)),
+  overrideDeniedTools: Schema.optional(Schema.Array(Schema.String)),
+  overrideReasoningEffort: Schema.optional(ReasoningEffort),
+  overrideSystemPromptAddendum: Schema.optional(Schema.String),
 }
 
 const AgentRunInputSchema = Schema.Struct(AgentRunInputFields)
@@ -1094,7 +1107,41 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             return yield* new SubagentError({ message: `Unknown agent: ${input.agentName}` })
           }
 
-          const basePrompt = buildSystemPrompt(input.systemPrompt, agent)
+          // Apply execution overrides if present
+          const effectiveAgent =
+            input.overrideAllowedActions !== undefined ||
+            input.overrideAllowedTools !== undefined ||
+            input.overrideDeniedTools !== undefined ||
+            input.overrideReasoningEffort !== undefined ||
+            input.overrideSystemPromptAddendum !== undefined
+              ? new AgentDefinition({
+                  ...agent,
+                  ...(input.overrideAllowedActions !== undefined
+                    ? {
+                        allowedActions: input.overrideAllowedActions as ReadonlyArray<ToolAction>,
+                      }
+                    : {}),
+                  ...(input.overrideAllowedTools !== undefined
+                    ? { allowedTools: input.overrideAllowedTools }
+                    : {}),
+                  ...(input.overrideDeniedTools !== undefined
+                    ? { deniedTools: input.overrideDeniedTools }
+                    : {}),
+                  ...(input.overrideReasoningEffort !== undefined
+                    ? { reasoningEffort: input.overrideReasoningEffort }
+                    : {}),
+                  ...(input.overrideSystemPromptAddendum !== undefined
+                    ? {
+                        systemPromptAddendum:
+                          agent.systemPromptAddendum !== undefined
+                            ? `${agent.systemPromptAddendum}\n\n${input.overrideSystemPromptAddendum}`
+                            : input.overrideSystemPromptAddendum,
+                      }
+                    : {}),
+                })
+              : agent
+
+          const basePrompt = buildSystemPrompt(input.systemPrompt, effectiveAgent)
 
           const userMessage = new Message({
             id: Bun.randomUUIDv7() as MessageId,
@@ -1116,7 +1163,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
           )
 
           const allTools = yield* toolRegistry.list()
-          const tools = filterTools(allTools, agent)
+          const tools = filterTools(allTools, effectiveAgent)
 
           const messages: Message[] = [userMessage]
           let continueLoop = true
@@ -1126,8 +1173,9 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
               new StreamStarted({ sessionId: input.sessionId, branchId: input.branchId }),
             )
 
-            const modelId = resolveAgentModelId(agent.name)
-            const reasoning = resolveReasoning(agent)
+            const modelId =
+              (input.modelId as ModelId | undefined) ?? resolveAgentModelId(agent.name)
+            const reasoning = resolveReasoning(effectiveAgent)
             const streamEffect = yield* withRetry(
               provider.stream({
                 model: modelId,

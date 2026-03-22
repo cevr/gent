@@ -2,6 +2,7 @@ import { ServiceMap, Effect, Layer, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId } from "./ids"
 import type { ModelId } from "./model"
+import type { ToolAction as ToolActionType } from "./tool"
 
 // Agent definitions
 
@@ -18,6 +19,7 @@ export const AgentName = Schema.Literals([
   "title",
   "finder",
   "reviewer",
+  "auditor",
 ])
 export type AgentName = typeof AgentName.Type
 
@@ -96,6 +98,10 @@ Output a JSON array of review comments, each with: file, line (optional), severi
 Only output the JSON array, no other text.
 `.trim()
 
+export const AUDITOR_PROMPT = `
+Auditor agent. Audit code for a specific concern category. Read files, identify issues, produce concrete findings with file references. Be thorough but focused on the assigned concern.
+`.trim()
+
 export const SUMMARIZER_PROMPT = `
 Summarizer agent. Summarize prior context. Focus decisions, open questions, current state.
 `.trim()
@@ -107,7 +113,7 @@ export const Agents = {
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer"],
+    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
@@ -115,7 +121,7 @@ export const Agents = {
     name: "deepwork",
     description: "Deep reasoning mode - thorough analysis, slower/longer answers",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer"],
+    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
   }),
@@ -178,6 +184,15 @@ export const Agents = {
     allowedTools: ["bash"],
     systemPromptAddendum: REVIEWER_PROMPT,
   }),
+
+  auditor: defineAgent({
+    name: "auditor",
+    description: "Audits code for a specific concern category",
+    kind: "subagent",
+    allowedActions: ["read"],
+    allowedTools: ["bash"],
+    systemPromptAddendum: AUDITOR_PROMPT,
+  }),
 } as const
 
 // Curated model mapping (not user-configurable)
@@ -192,9 +207,27 @@ export const AgentModels: Record<AgentName, ModelId> = {
   title: "openai/gpt-5.4-mini" as ModelId,
   finder: "openai/gpt-5.4-mini" as ModelId,
   reviewer: "openai/gpt-5.4-mini" as ModelId,
+  auditor: "openai/gpt-5.4-mini" as ModelId,
 }
 
 export const resolveAgentModelId = (agent: AgentName): ModelId => AgentModels[agent]
+
+/** Derive adversarial model pair from the two primary agents */
+export const getAdversarialModels = (): [ModelId, ModelId] => [
+  AgentModels.cowork,
+  AgentModels.deepwork,
+]
+
+// Agent Execution Overrides — per-run overrides for subagent dispatch
+
+export interface AgentExecutionOverrides {
+  readonly modelId?: ModelId
+  readonly allowedActions?: ReadonlyArray<ToolActionType>
+  readonly allowedTools?: ReadonlyArray<string>
+  readonly deniedTools?: ReadonlyArray<string>
+  readonly reasoningEffort?: ReasoningEffort
+  readonly systemPromptAddendum?: string
+}
 
 export type BuiltinAgentName = keyof typeof Agents
 
@@ -271,6 +304,7 @@ export interface SubagentRunner {
     parentBranchId: BranchId
     toolCallId?: string
     cwd: string
+    overrides?: AgentExecutionOverrides
   }) => EffectNs.Effect<SubagentResult, SubagentError>
 }
 

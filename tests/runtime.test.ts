@@ -17,11 +17,15 @@ import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
 import {
   Agents,
   AgentDefinition,
+  AgentModels,
   AgentRegistry,
+  getAdversarialModels,
   SubagentRunnerService,
   SubagentError,
 } from "@gent/core/domain/agent"
 import { defineTool, ToolRegistry } from "@gent/core/domain/tool"
+import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import type { ModelId } from "@gent/core/domain/model"
 import { Permission } from "@gent/core/domain/permission"
 import { PermissionHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { EventStore } from "@gent/core/domain/event"
@@ -174,6 +178,90 @@ describe("filterTools", () => {
       "webfetch",
       "websearch",
     ])
+  })
+})
+
+describe("AgentExecutionOverrides", () => {
+  test("getAdversarialModels returns cowork and deepwork models", () => {
+    const [a, b] = getAdversarialModels()
+    expect(a).toBe(AgentModels.cowork)
+    expect(b).toBe(AgentModels.deepwork)
+    expect(a).not.toBe(b)
+  })
+
+  test("auditor agent exists and is a subagent", () => {
+    expect(Agents.auditor).toBeDefined()
+    expect(Agents.auditor.kind).toBe("subagent")
+    expect(Agents.auditor.name).toBe("auditor")
+  })
+
+  test("primary agents can delegate to auditor", () => {
+    expect(Agents.cowork.canDelegateToAgents).toContain("auditor")
+    expect(Agents.deepwork.canDelegateToAgents).toContain("auditor")
+  })
+
+  test("auditor has read + bash tools", () => {
+    expect(Agents.auditor.allowedActions).toEqual(["read"])
+    expect(Agents.auditor.allowedTools).toEqual(["bash"])
+  })
+
+  test("AgentModels includes auditor", () => {
+    expect(AgentModels.auditor).toBeDefined()
+  })
+
+  test("overrides thread through SubagentRunner to AgentActor", async () => {
+    let capturedInput: Record<string, unknown> | undefined
+    const recorderLayer = SequenceRecorder.Live
+    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      SubagentRunnerConfig.Live({ systemPrompt: "test" }),
+      Layer.succeed(AgentActor, {
+        run: (input) => {
+          capturedInput = input as unknown as Record<string, unknown>
+          return Effect.void
+        },
+      }),
+      recorderLayer,
+      eventStoreLayer,
+    )
+    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* SubagentRunnerService
+
+        const now = new Date()
+        yield* storage.createSession(
+          new Session({ id: "s1", name: "S", bypass: true, createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(new Branch({ id: "b1", sessionId: "s1", createdAt: now }))
+
+        yield* runner.run({
+          agent: Agents.explore,
+          prompt: "test",
+          parentSessionId: "s1" as SessionId,
+          parentBranchId: "b1" as BranchId,
+          cwd: "/tmp",
+          overrides: {
+            modelId: "custom/model" as ModelId,
+            allowedActions: ["read", "edit"],
+            allowedTools: ["bash", "grep"],
+            reasoningEffort: "high",
+            systemPromptAddendum: "Extra instructions",
+          },
+        })
+
+        expect(capturedInput).toBeDefined()
+        expect(capturedInput!.modelId).toBe("custom/model")
+        expect(capturedInput!.overrideAllowedActions).toEqual(["read", "edit"])
+        expect(capturedInput!.overrideAllowedTools).toEqual(["bash", "grep"])
+        expect(capturedInput!.overrideReasoningEffort).toBe("high")
+        expect(capturedInput!.overrideSystemPromptAddendum).toBe("Extra instructions")
+      }).pipe(Effect.provide(layer)),
+    )
   })
 })
 

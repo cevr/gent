@@ -179,6 +179,24 @@ export const InProcessRunner: Layer.Layer<
                 prompt: params.prompt,
                 systemPrompt: runnerConfig.systemPrompt,
                 bypass,
+                ...(params.overrides?.modelId !== undefined
+                  ? { modelId: params.overrides.modelId }
+                  : {}),
+                ...(params.overrides?.allowedActions !== undefined
+                  ? { overrideAllowedActions: [...params.overrides.allowedActions] }
+                  : {}),
+                ...(params.overrides?.allowedTools !== undefined
+                  ? { overrideAllowedTools: [...params.overrides.allowedTools] }
+                  : {}),
+                ...(params.overrides?.deniedTools !== undefined
+                  ? { overrideDeniedTools: [...params.overrides.deniedTools] }
+                  : {}),
+                ...(params.overrides?.reasoningEffort !== undefined
+                  ? { overrideReasoningEffort: params.overrides.reasoningEffort }
+                  : {}),
+                ...(params.overrides?.systemPromptAddendum !== undefined
+                  ? { overrideSystemPromptAddendum: params.overrides.systemPromptAddendum }
+                  : {}),
               })
 
               // No actor-level retry — replays non-idempotent tool calls.
