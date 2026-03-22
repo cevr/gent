@@ -497,31 +497,25 @@ export function CommandPalette() {
         top={top()}
         width={paletteWidth()}
         height={paletteHeight()}
-        backgroundColor={theme.backgroundMenu}
+        backgroundColor={theme.background}
         border
+        borderStyle="rounded"
         borderColor={theme.borderSubtle}
         flexDirection="column"
+        title={currentLevel().title}
       >
-        {/* Header with search */}
+        {/* Search */}
         <box paddingLeft={1} paddingRight={1} flexShrink={0}>
           <text style={{ fg: theme.text }}>
             <Show when={breadcrumb().length > 0}>
               <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
             </Show>
-            <Show
-              when={currentLevel().searchable !== false && searchQuery().length > 0}
-              fallback={currentLevel().title}
-            >
-              <span style={{ fg: theme.textMuted }}>Search: </span>
+            <Show when={currentLevel().searchable !== false && searchQuery().length > 0}>
+              <span style={{ fg: theme.textMuted }}>› </span>
               {searchQuery()}
               <span style={{ fg: theme.primary }}>│</span>
             </Show>
           </text>
-        </box>
-
-        {/* Separator */}
-        <box flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>{"─".repeat(paletteWidth() - 2)}</text>
         </box>
 
         {/* Items */}

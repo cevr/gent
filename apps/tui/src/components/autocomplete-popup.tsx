@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard } from "@opentui/solid"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"
 import { useSkills } from "../hooks/use-skills"
@@ -190,8 +190,16 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     }
   })
 
-  // Calculate popup height (max 8 items visible)
-  const popupHeight = () => Math.min(8, Math.max(1, items().length + 1))
+  const dimensions = useTerminalDimensions()
+
+  // Content-driven height with floor/cap
+  const popupHeight = () => {
+    const contentH = items().length + 3 // items + header + filter hint + footer
+    return Math.min(14, Math.max(5, contentH))
+  }
+
+  const popupWidth = () => Math.min(60, dimensions().width - 2)
+  const popupLeft = () => Math.floor((dimensions().width - popupWidth()) / 2)
 
   const title = () => {
     switch (props.state.type) {
@@ -206,21 +214,38 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   return (
     <Show when={items().length > 0}>
+      {/* Transparent backdrop */}
       <box
-        flexShrink={0}
+        position="absolute"
+        left={0}
+        top={0}
+        width={dimensions().width}
+        height={dimensions().height}
+        backgroundColor="transparent"
+      />
+
+      {/* Popup */}
+      <box
+        position="absolute"
+        left={popupLeft()}
+        bottom={3}
+        width={popupWidth()}
         height={popupHeight()}
-        backgroundColor={theme.backgroundPanel}
+        backgroundColor={theme.background}
+        border
+        borderStyle="rounded"
+        borderColor={theme.borderSubtle}
         flexDirection="column"
+        title={title()}
       >
-        {/* Header */}
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>
-            {title()}
-            <Show when={props.state.filter.length > 0}>
-              <span style={{ fg: theme.text }}> › {props.state.filter}</span>
-            </Show>
-          </text>
-        </box>
+        {/* Filter display */}
+        <Show when={props.state.filter.length > 0}>
+          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+            <text style={{ fg: theme.textMuted }}>
+              › <span style={{ fg: theme.text }}>{props.state.filter}</span>
+            </text>
+          </box>
+        </Show>
 
         {/* Items */}
         <scrollbox ref={scrollRef} flexGrow={1}>
@@ -256,6 +281,11 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
             }}
           </For>
         </scrollbox>
+
+        {/* Footer hints */}
+        <box flexShrink={0} paddingLeft={1}>
+          <text style={{ fg: theme.textMuted }}>↑↓ navigate · enter select · esc close</text>
+        </box>
       </box>
     </Show>
   )
