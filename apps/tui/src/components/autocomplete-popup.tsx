@@ -115,9 +115,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         return skills()
           .filter((s) => s.name.toLowerCase().includes(filter))
           .map((s) => ({
-            id: s.id,
+            id: s.name,
             label: s.name,
-            description: s.source,
+            description:
+              s.description.length > 60 ? s.description.slice(0, 60) + "…" : s.description,
           }))
       }
 

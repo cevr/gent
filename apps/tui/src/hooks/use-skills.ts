@@ -1,101 +1,34 @@
 /**
  * useSkills Hook
  *
- * Scans skill directories with stale-while-revalidate caching.
- * Skill dirs: ~/.claude/skills, ~/.cursor/skills, ~/.config/opencode/skills
+ * Fetches skills (with content) from the core Skills service via RPC.
+ * Skills are preloaded — content available immediately for $-token expansion.
  */
 
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
-import { readdir, readFile, mkdir, writeFile } from "fs/promises"
-import { homedir } from "os"
-import { join, basename } from "path"
 import { Effect, Fiber } from "effect"
+import type { SkillContent } from "@gent/sdk"
 import { atom, useAtomValue, useRegistry } from "../atom-solid"
+import { useClient } from "../client/index"
 
-export interface Skill {
-  id: string
-  name: string
-  path: string
-  source: "claude" | "cursor" | "opencode"
-}
+export type { SkillContent as SkillInfo }
 
-interface SkillCache {
-  skills: Skill[]
-  timestamp: number
-}
-
-const SKILL_DIRS: Array<{ path: string; source: Skill["source"] }> = [
-  { path: join(homedir(), ".claude", "skills"), source: "claude" },
-  { path: join(homedir(), ".cursor", "skills"), source: "cursor" },
-  { path: join(homedir(), ".config", "opencode", "skills"), source: "opencode" },
-]
-
-const CACHE_PATH = join(homedir(), ".cache", "gent", "skills.json")
 const REFRESH_INTERVAL = 30_000
 
-const loadCache = (): Effect.Effect<Skill[] | null> =>
-  Effect.tryPromise(() => readFile(CACHE_PATH, "utf-8")).pipe(
-    Effect.map((content) => {
-      if (content.length === 0) return null
-      try {
-        const cache = JSON.parse(content) as SkillCache
-        return cache.skills
-      } catch {
-        return null
-      }
-    }),
-    Effect.catchEager(() => Effect.succeed(null)),
-  )
-
-const saveCache = (skills: Skill[]): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const cacheDir = join(homedir(), ".cache", "gent")
-    yield* Effect.tryPromise({
-      try: () => mkdir(cacheDir, { recursive: true }),
-      catch: () => undefined,
-    })
-    const cache: SkillCache = { skills, timestamp: Date.now() }
-    yield* Effect.tryPromise({
-      try: () => writeFile(CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8"),
-      catch: () => undefined,
-    })
-  }).pipe(Effect.catchEager(() => Effect.void))
-
-const scanSkillDir = (dir: string, source: Skill["source"]): Effect.Effect<Skill[]> =>
-  Effect.tryPromise(() => readdir(dir, { withFileTypes: true })).pipe(
-    Effect.map((entries) => {
-      const skills: Skill[] = []
-      for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.endsWith(".md")) continue
-        const name = basename(entry.name, ".md")
-        const path = join(dir, entry.name)
-        skills.push({
-          id: `${source}:${name}`,
-          name,
-          path,
-          source,
-        })
-      }
-      return skills
-    }),
-    Effect.catchEager(() => Effect.succeed([])),
-  )
-
-const scanAllSkillDirs = (): Effect.Effect<Skill[]> =>
-  Effect.all(SKILL_DIRS.map(({ path, source }) => scanSkillDir(path, source))).pipe(
-    Effect.map((results) => results.flat()),
-  )
-
 export interface UseSkillsReturn {
-  skills: Accessor<Skill[]>
+  skills: Accessor<SkillContent[]>
   isRefreshing: Accessor<boolean>
   refresh: () => void
+  getContent: (name: string) => string | null
 }
 
 export function useSkills(): UseSkillsReturn {
   const registry = useRegistry()
+  const client = useClient()
 
-  type SkillsState = { _tag: "idle"; skills: Skill[] } | { _tag: "refreshing"; skills: Skill[] }
+  type SkillsState =
+    | { _tag: "idle"; skills: SkillContent[] }
+    | { _tag: "refreshing"; skills: SkillContent[] }
 
   const skillsAtom = atom((registry) => {
     const [state, setState] = createSignal<SkillsState>({ _tag: "idle", skills: [] })
@@ -108,19 +41,11 @@ export function useSkills(): UseSkillsReturn {
           setState((prev) => ({ _tag: "refreshing", skills: prev.skills }))
         })
 
-        const cached = yield* loadCache()
-        if (cached !== null) {
-          yield* Effect.sync(() => {
-            setState({ _tag: "refreshing", skills: cached })
-          })
-        }
-
-        const fresh = yield* scanAllSkillDirs()
+        const fresh = yield* client.client.listSkills()
         yield* Effect.sync(() => {
-          setState({ _tag: "idle", skills: fresh })
+          setState({ _tag: "idle", skills: fresh as SkillContent[] })
         })
-        yield* saveCache(fresh)
-      })
+      }).pipe(Effect.catchEager(() => Effect.void))
 
       const services = registry.services
       const fiber = Effect.runForkWith(services)(effect)
@@ -162,5 +87,11 @@ export function useSkills(): UseSkillsReturn {
   const isRefreshing = () => state()._tag === "refreshing"
   const refresh = () => registry.refresh(skillsAtom)
 
-  return { skills, isRefreshing, refresh }
+  /** Sync lookup — content is preloaded from the RPC list. */
+  const getContent = (name: string): string | null => {
+    const skill = state().skills.find((s) => s.name === name)
+    return skill?.content ?? null
+  }
+
+  return { skills, isRefreshing, refresh, getContent }
 }
