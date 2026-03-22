@@ -7,6 +7,11 @@
 
 import { dirname } from "path"
 
+/** Escape a string for use in an XML attribute value. */
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
+}
+
 /** Max total bytes of expanded skill content (~100KB) */
 const MAX_EXPANDED_BYTES = 100_000
 
@@ -66,9 +71,15 @@ export function expandSkillMentions(
 
     const filePath = getFilePath?.(token.name)
     const baseDir = filePath !== null && filePath !== undefined ? dirname(filePath) : undefined
-    const baseDirAttr = baseDir !== undefined ? ` base_dir="${baseDir}"` : ""
+    const baseDirAttr = baseDir !== undefined ? ` base_dir="${escapeAttr(baseDir)}"` : ""
 
-    blocks.push(`<loaded_skill name="${token.name}"${baseDirAttr}>\n${content}\n</loaded_skill>`)
+    // CDATA wrapping prevents skill content (arbitrary markdown) from breaking the XML envelope
+    const safeContent = content.includes("]]>")
+      ? content.replaceAll("]]>", "]]]]><![CDATA[>")
+      : content
+    blocks.push(
+      `<loaded_skill name="${escapeAttr(token.name)}"${baseDirAttr}>\n<![CDATA[${safeContent}]]>\n</loaded_skill>`,
+    )
     totalBytes += content.length
   }
 

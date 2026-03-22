@@ -318,10 +318,10 @@ export function Input(props: InputProps) {
       return
     }
 
-    // Prompt history: up/down at cursor boundaries
+    // Prompt history: up/down at cursor boundaries (normal mode only)
     if (
       (e.name === "up" || e.name === "down") &&
-      effectiveMode() !== "prompt" &&
+      effectiveMode() === "normal" &&
       autocomplete() === null &&
       inputRef !== null &&
       !e.ctrl &&
@@ -347,12 +347,9 @@ export function Input(props: InputProps) {
     const text = expanded.trim()
     if (text.length === 0) return
 
-    // Store expanded text in history (not raw placeholder markers)
-    history.add(text)
-    history.reset()
-
     // Close autocomplete
     setAutocomplete(null)
+    history.reset()
 
     // 1. Shell mode: execute entire input as bash
     if (effectiveMode() === "shell") {
@@ -434,6 +431,7 @@ export function Input(props: InputProps) {
     }
 
     // 3. Normal message (may contain @file refs and $skill mentions)
+    history.add(text)
     const mode = submitMode
     submitMode = "queue"
 

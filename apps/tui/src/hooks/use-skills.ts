@@ -3,34 +3,33 @@
  *
  * Fetches skills (with content) from the core Skills service via RPC.
  * Skills are preloaded — content available immediately for $-token expansion.
+ *
+ * The atom is hoisted to module scope so all consumers share one instance
+ * (popup and submit path see the same snapshot).
  */
 
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import { Effect, Fiber } from "effect"
-import type { SkillContent } from "@gent/sdk"
-import { atom, useAtomValue, useRegistry } from "../atom-solid"
+import type { SkillContent, GentClient } from "@gent/sdk"
+import { type Atom, atom, useAtomValue, useRegistry } from "../atom-solid"
 import { useClient } from "../client/index"
 
 export type { SkillContent as SkillInfo }
 
 const REFRESH_INTERVAL = 30_000
 
-export interface UseSkillsReturn {
-  skills: Accessor<SkillContent[]>
-  isRefreshing: Accessor<boolean>
-  refresh: () => void
-  getContent: (name: string) => string | null
-}
+type SkillsState =
+  | { _tag: "idle"; skills: SkillContent[] }
+  | { _tag: "refreshing"; skills: SkillContent[] }
 
-export function useSkills(): UseSkillsReturn {
-  const registry = useRegistry()
-  const client = useClient()
+// Module-level atom — lazily created on first useSkills() call,
+// shared across all consumers so popup and submit see the same data.
+let sharedAtom: Atom<SkillsState> | null = null
 
-  type SkillsState =
-    | { _tag: "idle"; skills: SkillContent[] }
-    | { _tag: "refreshing"; skills: SkillContent[] }
+function getOrCreateAtom(client: GentClient) {
+  if (sharedAtom !== null) return sharedAtom
 
-  const skillsAtom = atom((registry) => {
+  sharedAtom = atom((registry) => {
     const [state, setState] = createSignal<SkillsState>({ _tag: "idle", skills: [] })
     const [version, setVersion] = createSignal(0)
     let cancelRefresh: (() => void) | undefined
@@ -41,7 +40,7 @@ export function useSkills(): UseSkillsReturn {
           setState((prev) => ({ _tag: "refreshing", skills: prev.skills }))
         })
 
-        const fresh = yield* client.client.listSkills()
+        const fresh = yield* client.listSkills()
         yield* Effect.sync(() => {
           setState({ _tag: "idle", skills: fresh as SkillContent[] })
         })
@@ -81,6 +80,21 @@ export function useSkills(): UseSkillsReturn {
     }
   })
 
+  return sharedAtom
+}
+
+export interface UseSkillsReturn {
+  skills: Accessor<SkillContent[]>
+  isRefreshing: Accessor<boolean>
+  refresh: () => void
+  getContent: (name: string) => string | null
+}
+
+export function useSkills(): UseSkillsReturn {
+  const registry = useRegistry()
+  const client = useClient()
+
+  const skillsAtom = getOrCreateAtom(client.client)
   const state = useAtomValue(skillsAtom)
 
   const skills = () => state().skills
@@ -89,7 +103,7 @@ export function useSkills(): UseSkillsReturn {
 
   /** Sync lookup — content is preloaded from the RPC list. */
   const getContent = (name: string): string | null => {
-    const skill = state().skills.find((s) => s.name === name)
+    const skill = state().skills.find((s: SkillContent) => s.name === name)
     return skill?.content ?? null
   }
 
