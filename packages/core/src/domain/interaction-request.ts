@@ -65,8 +65,9 @@ export const makeInteractionService = <TParams, TDecision>(config: {
       if (entry === undefined) return undefined
 
       pending.delete(requestId)
-      yield* config.onRespond(requestId, entry.params, decision, extra)
+      // Unblock the caller first — event publish failure must not hang the tool
       yield* Deferred.succeed(entry.deferred, decision)
+      yield* config.onRespond(requestId, entry.params, decision, extra)
       return entry.params
     }),
 
