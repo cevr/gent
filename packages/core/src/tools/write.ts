@@ -1,7 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { FileLockService } from "../domain/file-lock.js"
-import { FileTracker } from "../runtime/file-tracker.js"
 
 // Write Tool Error
 
@@ -36,10 +35,9 @@ export const WriteTool = defineTool({
   concurrency: "serial",
   description: "Write content to file. Creates directories if needed.",
   params: WriteParams,
-  execute: Effect.fn("WriteTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("WriteTool.execute")(function* (params, _ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
-    const tracker = yield* FileTracker
     const fileLock = yield* FileLockService
 
     const filePath = pathService.resolve(params.path)
@@ -48,11 +46,6 @@ export const WriteTool = defineTool({
       filePath,
       Effect.gen(function* () {
         const dir = pathService.dirname(filePath)
-
-        // Read existing content for undo tracking (empty string if new file)
-        const existingContent = yield* fs
-          .readFileString(filePath)
-          .pipe(Effect.catch(() => Effect.succeed("")))
 
         // Ensure directory exists
         yield* fs.makeDirectory(dir, { recursive: true }).pipe(
@@ -65,9 +58,6 @@ export const WriteTool = defineTool({
               }),
           ),
         )
-
-        // Snapshot for undo support
-        yield* tracker.snapshot(filePath, existingContent, params.content, ctx.toolCallId)
 
         yield* fs.writeFileString(filePath, params.content).pipe(
           Effect.mapError(

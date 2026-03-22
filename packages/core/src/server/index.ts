@@ -26,7 +26,6 @@ import { LocalActorProcessLive, type ActorProcess } from "../runtime/actor-proce
 import { CheckpointService } from "../runtime/checkpoint.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { FileTracker } from "../runtime/file-tracker.js"
 import { TaskService } from "../runtime/task-service.js"
 import { AllTools } from "../tools/index.js"
 import { AskUserHandler, QuestionHandler } from "../tools/ask-user.js"
@@ -175,7 +174,6 @@ export const createDependencies = (
   | AuthStore
   | AuthGuard
   | ProviderAuth
-  | FileTracker
   | FileLockService,
   PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
@@ -231,7 +229,6 @@ export const createDependencies = (
     ConfigServiceLive,
     ModelRegistry.Live,
     SkillsLive,
-    FileTracker.layer,
     FileLockService.layer,
   )
 

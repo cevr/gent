@@ -55,8 +55,6 @@ export { GentLogger, GentLoggerJson, GentLoggerPretty, GentLogLevel } from "./lo
 
 export { WideEvent, TurnWideEvent, type WideEventService } from "./wide-event"
 
-export { FileTracker, type FileChange, type FileTrackerService } from "./file-tracker"
-
 export { formatSchemaError } from "./format-schema-error"
 
 export { TaskService, type TaskServiceApi } from "./task-service"

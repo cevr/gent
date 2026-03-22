@@ -1,7 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { FileLockService } from "../domain/file-lock.js"
-import { FileTracker } from "../runtime/file-tracker.js"
 
 // Edit Tool Error
 
@@ -143,10 +142,9 @@ export const EditTool = defineTool({
   description:
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
   params: EditParams,
-  execute: Effect.fn("EditTool.execute")(function* (params, ctx) {
+  execute: Effect.fn("EditTool.execute")(function* (params, _ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
-    const tracker = yield* FileTracker
     const fileLock = yield* FileLockService
 
     const filePath = pathService.resolve(params.path)
@@ -197,9 +195,6 @@ export const EditTool = defineTool({
         const newContent = replaceAll
           ? content.split(searchStr).join(params.newString)
           : content.replace(searchStr, params.newString)
-
-        // Snapshot for undo support
-        yield* tracker.snapshot(filePath, content, newContent, ctx.toolCallId)
 
         yield* fs.writeFileString(filePath, newContent).pipe(
           Effect.mapError(

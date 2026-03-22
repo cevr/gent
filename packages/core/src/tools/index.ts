@@ -75,9 +75,6 @@ export { PlanTool, PlanParams, PlanResult } from "./plan"
 // Task Tool
 export { TaskTool, TaskParams } from "./task"
 
-// Undo Edit Tool
-export { UndoEditTool, UndoEditParams, UndoEditError } from "./undo-edit"
-
 // Librarian Tool
 export { LibrarianTool, LibrarianParams, LibrarianError } from "./librarian"
 
@@ -132,7 +129,6 @@ import { TodoReadTool, TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { PlanTool } from "./plan"
 import { TaskTool } from "./task"
-import { UndoEditTool } from "./undo-edit"
 import { LibrarianTool } from "./librarian"
 import { HandoffTool } from "./handoff"
 import { FinderTool } from "./finder"
@@ -161,7 +157,6 @@ export const AllTools: AnyToolDefinition[] = [
   WebFetchTool,
   PlanTool,
   TaskTool,
-  UndoEditTool,
   LibrarianTool,
   HandoffTool,
   FinderTool,
