@@ -29,6 +29,9 @@ export {
   stripBackground,
 } from "./bash"
 
+// Bash Guardrails
+export { classify as classifyBashCommand, type BashRisk, type RiskLevel } from "./bash-guardrails"
+
 // Glob Tool
 export { GlobTool, GlobParams, GlobResult, GlobError } from "./glob"
 
