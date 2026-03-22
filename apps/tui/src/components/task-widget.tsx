@@ -4,15 +4,18 @@ import type { Task } from "@gent/core/domain/task.js"
 import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
 import { useClient } from "../client/context"
 import { useRuntime } from "../hooks/use-runtime"
+import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
 
 const STATUS_ICONS: Record<string, string> = {
   pending: "◻",
-  in_progress: "✳",
+  in_progress: "⠋",
   completed: "✔",
   failed: "✗",
 }
+
+const IN_PROGRESS_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const
 
 const MAX_DISPLAY = 10
 
@@ -37,6 +40,7 @@ export function TaskWidget(props: TaskWidgetProps) {
   const client = useClient()
   const { cast } = useRuntime(client.client.services)
   const { theme } = useTheme()
+  const tick = useSpinnerClock()
 
   const [tasks, setTasks] = createSignal<Task[]>([])
   const currentTasks = () => props.previewTasks ?? tasks()
@@ -99,6 +103,13 @@ export function TaskWidget(props: TaskWidgetProps) {
 
   const overflow = () => Math.max(0, currentTasks().length - MAX_DISPLAY)
 
+  const statusIcon = (status: Task["status"]) => {
+    if (status !== "in_progress") {
+      return STATUS_ICONS[status] ?? "?"
+    }
+    return IN_PROGRESS_SPINNER[tick() % IN_PROGRESS_SPINNER.length] ?? STATUS_ICONS["in_progress"]
+  }
+
   const statusColor = (status: Task["status"]) => {
     switch (status) {
       case "in_progress":
@@ -127,9 +138,7 @@ export function TaskWidget(props: TaskWidgetProps) {
             {(task) => (
               <text>
                 <span style={{ fg: theme.info }}>{"│ "}</span>
-                <span style={{ fg: statusColor(task.status) }}>
-                  {STATUS_ICONS[task.status] ?? "?"}
-                </span>
+                <span style={{ fg: statusColor(task.status) }}>{statusIcon(task.status)}</span>
                 <span style={{ fg: theme.text }}> {task.subject}</span>
               </text>
             )}
