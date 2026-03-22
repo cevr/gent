@@ -494,8 +494,20 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                           }),
                         )
                       }
+                      // Stream error is not an interruption — emit error event, not interrupted
+                      yield* publishEvent(new StreamEnded({ sessionId, branchId }))
+                      const errorMessage =
+                        streamError instanceof Error
+                          ? streamError.message
+                          : "message" in (streamError as Record<string, unknown>)
+                            ? String((streamError as Record<string, unknown>)["message"])
+                            : String(streamError)
                       yield* publishEvent(
-                        new StreamEnded({ sessionId, branchId, interrupted: true }),
+                        new ErrorOccurred({
+                          sessionId,
+                          branchId,
+                          error: errorMessage,
+                        }),
                       )
                       return true
                     }),
@@ -503,7 +515,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 )
 
                 if (streamFailed) {
-                  turnInterrupted = true
+                  // Stream error (not user interruption) — stop loop but don't mark as interrupted
                   continueLoop = false
                   break
                 }
