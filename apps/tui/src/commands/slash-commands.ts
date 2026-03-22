@@ -21,6 +21,7 @@ export type SlashCommandId =
   | "auth"
   | "handoff"
   | "counsel"
+  | "loop"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -142,6 +143,19 @@ export const executeSlashCommand = (
           )
         } else {
           ctx.sendMessage(`Use the counsel tool with this prompt: ${prompt}`)
+        }
+        return { handled: true }
+      })
+
+    case "loop":
+      return Effect.sync(() => {
+        const prompt = _args.trim()
+        if (prompt.length === 0) {
+          ctx.sendMessage(
+            "Use the loop tool to iterate on the current task until complete or a condition is met.",
+          )
+        } else {
+          ctx.sendMessage(`Use the loop tool: ${prompt}`)
         }
         return { handled: true }
       })

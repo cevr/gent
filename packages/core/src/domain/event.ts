@@ -358,6 +358,31 @@ export class AgentRestarted extends Schema.TaggedClass<AgentRestarted>()("AgentR
   error: Schema.optional(Schema.String),
 }) {}
 
+// Workflow Events
+
+export class WorkflowPhaseStarted extends Schema.TaggedClass<WorkflowPhaseStarted>()(
+  "WorkflowPhaseStarted",
+  {
+    sessionId: SessionId,
+    branchId: BranchId,
+    workflowName: Schema.String,
+    phase: Schema.String,
+    iteration: Schema.optional(Schema.Number),
+    maxIterations: Schema.optional(Schema.Number),
+    metadata: Schema.optional(Schema.Unknown),
+  },
+) {}
+
+export class WorkflowCompleted extends Schema.TaggedClass<WorkflowCompleted>()(
+  "WorkflowCompleted",
+  {
+    sessionId: SessionId,
+    branchId: BranchId,
+    workflowName: Schema.String,
+    result: Schema.Literals(["success", "rejected", "error", "max_iterations"]),
+  },
+) {}
+
 export const AgentEvent = Schema.Union([
   SessionStarted,
   SessionEnded,
@@ -399,6 +424,8 @@ export const AgentEvent = Schema.Union([
   TaskCompleted,
   TaskFailed,
   AgentRestarted,
+  WorkflowPhaseStarted,
+  WorkflowCompleted,
 ])
 export type AgentEvent = typeof AgentEvent.Type
 

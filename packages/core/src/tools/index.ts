@@ -111,6 +111,9 @@ export { TaskListTool, TaskListParams } from "./task-list"
 export { TaskGetTool, TaskGetParams } from "./task-get"
 export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
 
+// Loop Workflow Tool
+export { LoopTool, LoopParams } from "./loop"
+
 // All Tools
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ReadTool } from "./read"
@@ -137,6 +140,7 @@ import { TaskCreateTool } from "./task-create"
 import { TaskListTool } from "./task-list"
 import { TaskGetTool } from "./task-get"
 import { TaskUpdateTool } from "./task-update"
+import { LoopTool } from "./loop"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -164,4 +168,5 @@ export const AllTools: AnyToolDefinition[] = [
   TaskListTool,
   TaskGetTool,
   TaskUpdateTool,
+  LoopTool,
 ]
