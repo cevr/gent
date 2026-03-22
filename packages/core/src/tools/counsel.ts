@@ -15,6 +15,11 @@ export const CounselParams = Schema.Struct({
   prompt: Schema.String.annotate({
     description: "The question or review request for the opposite-vendor model",
   }),
+  content: Schema.optional(
+    Schema.String.annotate({
+      description: "Inline content to review directly, such as a diff or patch",
+    }),
+  ),
   context: Schema.optional(
     Schema.String.annotate({
       description: "Additional context for the review",
@@ -50,7 +55,8 @@ export const CounselTool = defineTool({
     const opposite = new AgentDefinition({
       ...base,
       kind: "subagent",
-      allowedTools: ["read", "grep", "glob", "bash"],
+      allowedActions: ["read"],
+      deniedTools: ["bash"],
     })
 
     // Inline file contents (oracle pattern)
@@ -68,12 +74,14 @@ export const CounselTool = defineTool({
       fileContext = "\n\n" + fileContents.join("\n\n")
     }
 
+    const contentStr =
+      params.content !== undefined ? `\n\nContent to review:\n${params.content}` : ""
     const contextStr = params.context !== undefined ? `\n\nContext: ${params.context}` : ""
 
     // Build adversarial prompt
     const adversarialPrompt = `You are reviewing work done by ${current === "cowork" ? "Anthropic Claude" : "OpenAI Codex"}. Your job is to be a rigorous, adversarial peer reviewer.
 
-Review request: ${params.prompt}${contextStr}${fileContext}
+Review request: ${params.prompt}${contextStr}${contentStr}${fileContext}
 
 Instructions:
 - Challenge assumptions. Find what's wrong, not what's right.

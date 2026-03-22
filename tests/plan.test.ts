@@ -17,6 +17,7 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
 )
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { EventStore } from "@gent/core/domain/event"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { ToolContext } from "@gent/core/domain/tool"
 
 const ctx: ToolContext = {
@@ -176,5 +177,66 @@ describe("Plan Workflow", () => {
     // Should have at least 2 different models used
     const uniqueModels = new Set(models)
     expect(uniqueModels.size).toBe(2)
+  })
+
+  test("fix mode synthesizes an execution plan in batches and executes batch-by-batch", async () => {
+    const calls: string[] = []
+
+    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        calls.push(params.prompt)
+        if (params.prompt.includes("Evaluate whether the implementation is complete")) {
+          return Effect.succeed({
+            _tag: "success" as const,
+            text: "VERDICT: done",
+            sessionId: "eval-session",
+            agentName: params.agent.name,
+          } as SubagentResult & { _tag: "success" })
+        }
+        if (
+          params.prompt.includes(
+            "Synthesize these two revised implementation plans into one execution plan organized into batches",
+          )
+        ) {
+          return Effect.succeed({
+            _tag: "success" as const,
+            text: "Batch 1: update auth\n- Files: src/auth.ts\n- Changes: add validation",
+            sessionId: "synth-session",
+            agentName: params.agent.name,
+          } as SubagentResult & { _tag: "success" })
+        }
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "ok",
+          sessionId: "s1",
+          agentName: params.agent.name,
+        } as SubagentResult & { _tag: "success" })
+      },
+    })
+
+    const layer = Layer.mergeAll(
+      runnerLayer,
+      TestExtRegistry,
+      PromptPresenter.Test([], ["yes"]),
+      EventStore.Test(),
+      BunServices.layer,
+      Storage.Test(),
+    )
+
+    const result = await Effect.runPromise(
+      PlanTool.execute({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+        Effect.provide(layer),
+      ),
+    )
+
+    expect(result.reason).toBe("done")
+    expect(
+      calls.some((prompt) =>
+        prompt.includes("Organize the output into a small number of ordered batches"),
+      ),
+    ).toBe(true)
+    expect(
+      calls.some((prompt) => prompt.includes("Work through the plan batch by batch, in order")),
+    ).toBe(true)
   })
 })

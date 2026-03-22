@@ -92,6 +92,9 @@ export {
   parseRelativeDate,
 } from "./search-sessions"
 
+// Search Skills Tool
+export { SearchSkillsTool, SearchSkillsParams, SearchSkillsError } from "./search-skills"
+
 // Read Session Tool
 export {
   ReadSessionTool,

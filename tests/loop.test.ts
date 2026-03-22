@@ -133,4 +133,26 @@ describe("runLoop", () => {
     expect(result.reason).toBe("done")
     expect(result.output).toBe("first")
   })
+
+  test("passes evaluator feedback into the next body iteration", async () => {
+    const receivedFeedback: Array<string | undefined> = []
+
+    await Effect.runPromise(
+      runLoop({
+        maxIterations: 2,
+        body: (_iteration, _previousOutput, evaluatorFeedback) => {
+          receivedFeedback.push(evaluatorFeedback)
+          return Effect.succeed(makeSuccess(`out-${_iteration}`))
+        },
+        evaluate: (iteration) =>
+          Effect.succeed(
+            iteration === 1
+              ? { verdict: "continue" as const, feedback: "fix remaining issue" }
+              : { verdict: "done" as const, feedback: "complete" },
+          ),
+      }),
+    )
+
+    expect(receivedFeedback).toEqual([undefined, "fix remaining issue"])
+  })
 })

@@ -50,7 +50,7 @@ describe("BuiltinExtensions", () => {
       expect(allToolNames.has(name)).toBe(true)
     }
     // Subagent tools
-    for (const name of ["delegate", "handoff"]) {
+    for (const name of ["delegate", "handoff", "search_skills"]) {
       expect(allToolNames.has(name)).toBe(true)
     }
     // Workflows

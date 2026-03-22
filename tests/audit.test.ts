@@ -39,7 +39,7 @@ const makeSuccess = (text: string): SubagentResult => ({
 })
 
 describe("Audit Workflow", () => {
-  test("detects concerns, audits, synthesizes, and executes", async () => {
+  test("fix mode detects concerns, audits each concern with both models, synthesizes, and executes", async () => {
     const calls: Array<{ agentName: string; prompt: string }> = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
@@ -57,12 +57,12 @@ describe("Audit Workflow", () => {
         }
 
         // Concern audit responses
-        if (prompt.includes("Audit the following code for:")) {
+        if (prompt.includes("Audit the code for this concern:")) {
           return Effect.succeed(makeSuccess("Found issues in src/foo.ts"))
         }
 
         // Synthesis response
-        if (prompt.includes("Synthesize audit findings")) {
+        if (prompt.includes("Synthesize these audit notes into final findings")) {
           return Effect.succeed(
             makeSuccess(
               "1. [warning] src/foo.ts — missing error handling\n2. [suggestion] src/bar.ts — use stricter types",
@@ -99,7 +99,7 @@ describe("Audit Workflow", () => {
         {
           prompt: "check error handling",
           paths: ["src/foo.ts", "src/bar.ts"],
-          autoApprove: true,
+          mode: "fix",
         },
         ctx,
       ).pipe(Effect.provide(layer)),
@@ -107,22 +107,26 @@ describe("Audit Workflow", () => {
 
     expect(result.reason).toBe("done")
 
-    // Should have: detect(1) + audit(2 concerns) + synthesize(1) + execute(1) + evaluate(1) = 6
+    // detect(1) + audit(2 concerns x 2 models) + synthesize(1) + execute(1) + evaluate(1)
     const detectCalls = calls.filter((c) => c.prompt.includes("Identify audit concerns"))
-    const auditCalls = calls.filter((c) => c.prompt.includes("Audit the following code for:"))
-    const synthesisCalls = calls.filter((c) => c.prompt.includes("Synthesize audit findings"))
+    const auditCalls = calls.filter((c) => c.prompt.includes("Audit the code for this concern:"))
+    const synthesisCalls = calls.filter((c) =>
+      c.prompt.includes("Synthesize these audit notes into final findings"),
+    )
     const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
 
     expect(detectCalls.length).toBe(1)
-    expect(auditCalls.length).toBe(2)
+    expect(auditCalls.length).toBe(4)
     expect(synthesisCalls.length).toBe(1)
     expect(executeCalls.length).toBe(1)
+    expect(synthesisCalls[0]!.prompt).toContain("executor can work in batches")
+    expect(executeCalls[0]!.prompt).toContain("small batches grouped by file or dependency")
 
     // Auditor agent used for concern audits
     expect(auditCalls.every((c) => c.agentName === "auditor")).toBe(true)
   })
 
-  test("report mode skips execution", async () => {
+  test("report mode skips execution and returns done", async () => {
     const calls: Array<{ prompt: string }> = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
@@ -131,10 +135,10 @@ describe("Audit Workflow", () => {
         if (params.prompt.includes("Identify audit concerns")) {
           return Effect.succeed(makeSuccess("1. security: Check security patterns"))
         }
-        if (params.prompt.includes("Audit the following code for:")) {
+        if (params.prompt.includes("Audit the code for this concern:")) {
           return Effect.succeed(makeSuccess("Found SQL injection risk"))
         }
-        if (params.prompt.includes("Synthesize audit findings")) {
+        if (params.prompt.includes("Synthesize these audit notes into final findings")) {
           return Effect.succeed(
             makeSuccess("1. [critical] src/db.ts — SQL injection vulnerability"),
           )
@@ -154,9 +158,7 @@ describe("Audit Workflow", () => {
     )
 
     const result = await Effect.runPromise(
-      AuditTool.execute({ paths: ["src/db.ts"], mode: "report", autoApprove: true }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+      AuditTool.execute({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.reason).toBe("done")
@@ -181,41 +183,11 @@ describe("Audit Workflow", () => {
     )
 
     const result = await Effect.runPromise(
-      AuditTool.execute({ paths: ["src/clean.ts"], autoApprove: true }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+      AuditTool.execute({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.reason).toBe("done")
     expect(result.iterations).toBe(1)
-  })
-
-  test("respects concern approval rejection", async () => {
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        if (params.prompt.includes("Identify audit concerns")) {
-          return Effect.succeed(makeSuccess("1. perf: Check performance"))
-        }
-        return Effect.succeed(makeSuccess("ok"))
-      },
-    })
-
-    const layer = Layer.mergeAll(
-      runnerLayer,
-
-      TestExtRegistry,
-      PromptPresenter.Test(["no"]),
-      EventStore.Test(),
-      Storage.Test(),
-      BunServices.layer,
-    )
-
-    const result = await Effect.runPromise(
-      AuditTool.execute({ paths: ["src/app.ts"] }, ctx).pipe(Effect.provide(layer)),
-    )
-
-    expect(result.reason).toBe("done")
-    expect(result.output).toContain("cancelled")
   })
 
   test("uses primary agent for execution, not architect", async () => {
@@ -229,10 +201,10 @@ describe("Audit Workflow", () => {
         if (params.prompt.includes("Identify audit concerns")) {
           return Effect.succeed(makeSuccess("1. types: Check types"))
         }
-        if (params.prompt.includes("Audit the following code for:")) {
+        if (params.prompt.includes("Audit the code for this concern:")) {
           return Effect.succeed(makeSuccess("Issues found"))
         }
-        if (params.prompt.includes("Synthesize audit findings")) {
+        if (params.prompt.includes("Synthesize these audit notes into final findings")) {
           return Effect.succeed(makeSuccess("1. [warning] src/a.ts — type issue"))
         }
         if (params.prompt.includes("Evaluate whether")) {
@@ -253,13 +225,55 @@ describe("Audit Workflow", () => {
     )
 
     await Effect.runPromise(
-      AuditTool.execute({ paths: ["src/a.ts"], autoApprove: true }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+      AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(Effect.provide(layer)),
     )
 
     // Executor should be the caller agent (cowork), not architect
     expect(executorAgents.length).toBeGreaterThan(0)
     expect(executorAgents[0]).toBe("cowork")
+  })
+
+  test("auditor subagents run read-only with bash denied", async () => {
+    const auditOverrides: Array<Record<string, unknown> | undefined> = []
+
+    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        if (params.prompt.includes("Audit the code for this concern:")) {
+          auditOverrides.push(params.overrides as Record<string, unknown> | undefined)
+        }
+        if (params.prompt.includes("Identify audit concerns")) {
+          return Effect.succeed(makeSuccess("1. types: Check types"))
+        }
+        if (params.prompt.includes("Audit the code for this concern:")) {
+          return Effect.succeed(makeSuccess("Issues found"))
+        }
+        if (params.prompt.includes("Synthesize these audit notes into final findings")) {
+          return Effect.succeed(makeSuccess("1. [warning] src/a.ts — type issue"))
+        }
+        if (params.prompt.includes("Evaluate whether")) {
+          return Effect.succeed(makeSuccess("VERDICT: done"))
+        }
+        return Effect.succeed(makeSuccess("done"))
+      },
+    })
+
+    const layer = Layer.mergeAll(
+      runnerLayer,
+      TestExtRegistry,
+      PromptPresenter.Test(["yes"]),
+      EventStore.Test(),
+      Storage.Test(),
+      BunServices.layer,
+    )
+
+    await Effect.runPromise(
+      AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(Effect.provide(layer)),
+    )
+
+    expect(auditOverrides.length).toBeGreaterThan(0)
+    for (const overrides of auditOverrides) {
+      expect(overrides?.["allowedActions"]).toEqual(["read"])
+      expect(overrides?.["deniedTools"]).toEqual(["bash"])
+    }
   })
 })

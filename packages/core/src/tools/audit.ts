@@ -1,32 +1,23 @@
 import { Effect, Schema } from "effect"
 import {
   Agents,
+  getAdversarialModels,
   SubagentRunnerService,
-  SubagentError,
   type AgentDefinition,
-  type AgentName as AgentNameType,
-  type SubagentResult,
+  type SubagentRunner,
 } from "../domain/agent.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import {
-  EventStore,
-  WorkflowPhaseStarted,
-  WorkflowCompleted,
-  type EventEnvelope,
-} from "../domain/event.js"
+import { EventStore, WorkflowCompleted, WorkflowPhaseStarted } from "../domain/event.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { runLoop } from "../runtime/loop.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { runLoop, type LoopVerdict } from "../runtime/loop.js"
-
-// Audit concern — classified by the detection agent
+import { extractLoopEvaluation, requireText, type WorkflowRunContext } from "./workflow-helpers.js"
 
 interface AuditConcern {
   name: string
   description: string
 }
-
-// Audit finding — produced by synthesis
 
 interface AuditFinding {
   file: string
@@ -34,69 +25,101 @@ interface AuditFinding {
   severity: "critical" | "warning" | "suggestion"
 }
 
-// Schema
-
 export const AuditParams = Schema.Struct({
   prompt: Schema.optional(
     Schema.String.annotate({ description: "Focus area or specific concern" }),
   ),
   paths: Schema.optional(
     Schema.Array(Schema.String).annotate({
-      description: "Paths to audit (default: git diff changed files)",
+      description: "Paths to audit (default: changed files from git diff --name-only)",
     }),
   ),
   maxIterations: Schema.optional(
     Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 10 })).annotate({
-      description: "Max audit loop iterations (default 3)",
+      description: "Max audit loop iterations in fix mode (default 3)",
     }),
   ),
   maxConcerns: Schema.optional(
     Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 8 })).annotate({
-      description: "Max concerns to audit (default 5)",
+      description: "Max concern categories to audit (default 5)",
     }),
-  ),
-  autoApprove: Schema.optional(
-    Schema.Boolean.annotate({ description: "Skip concern approval step" }),
   ),
   mode: Schema.optional(
     Schema.Literals(["fix", "report"]).annotate({
-      description: "fix: apply changes, report: findings only (default: fix)",
+      description: "report: findings only, fix: apply changes iteratively",
     }),
   ),
 })
 
-// Prompt builders
+const runCommand = (cmd: string[]) =>
+  Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(cmd, {
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      if (exitCode !== 0) {
+        throw new Error(stderr || `Command failed: ${cmd.join(" ")}`)
+      }
+      return stdout
+    },
+    catch: () => "",
+  })
+
+const resolveAuditPaths = (paths?: ReadonlyArray<string>) => {
+  if (paths !== undefined && paths.length > 0) {
+    return Effect.succeed([...paths])
+  }
+
+  return runCommand(["git", "diff", "--name-only"]).pipe(
+    Effect.map((stdout) =>
+      stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== ""),
+    ),
+  )
+}
 
 const buildDetectPrompt = (
   userPrompt: string | undefined,
   paths: ReadonlyArray<string>,
   maxConcerns: number,
+  evaluatorFeedback?: string,
 ) => {
   const pathsList =
-    paths.length > 0 ? paths.map((p) => `- ${p}`).join("\n") : "(no paths specified)"
+    paths.length > 0 ? paths.map((path) => `- ${path}`).join("\n") : "(no specific paths)"
   const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
+  const feedbackBlock =
+    evaluatorFeedback !== undefined && evaluatorFeedback !== ""
+      ? `\n## Remaining Issues\n${evaluatorFeedback}\n`
+      : ""
 
-  return `Identify audit concerns for the following code.${focusBlock}
+  return `Identify audit concerns for this code.${focusBlock}${feedbackBlock}
 ## Paths
 ${pathsList}
 
 ## Instructions
-Identify ${maxConcerns} or fewer concern categories. Each concern should be a distinct area of review (e.g., "error handling", "type safety", "performance", "security").
+Identify ${maxConcerns} or fewer concrete concern categories.
+Each concern should be a distinct audit pass like error handling, typing, concurrency, security, or performance.
 
-Respond with a numbered list of concerns, each on its own line:
+Respond with a numbered list:
 1. <concern name>: <brief description>
-2. <concern name>: <brief description>
-
-Be concise. Do not read files — classify based on path names and the focus area.`
+2. <concern name>: <brief description>`
 }
 
 const parseConcerns = (text: string, maxConcerns: number): AuditConcern[] => {
   const concerns: AuditConcern[] = []
-  // Accept: "1. name: desc", "1) name: desc", "- name: desc", "* name: desc", "**name**: desc"
   const pattern = /^(?:\d+[.)]\s*|\s*[-*]\s*)(?:\*\*)?(.+?)(?:\*\*)?:\s*(.+)$/
   for (const line of text.split("\n")) {
     const match = line.match(pattern)
-    if (match !== null && match[1] !== undefined && match[2] !== undefined) {
+    if (match?.[1] !== undefined && match[2] !== undefined) {
       concerns.push({ name: match[1].trim(), description: match[2].trim() })
     }
     if (concerns.length >= maxConcerns) break
@@ -107,191 +130,207 @@ const parseConcerns = (text: string, maxConcerns: number): AuditConcern[] => {
 const buildConcernAuditPrompt = (
   concern: AuditConcern,
   paths: ReadonlyArray<string>,
-  userPrompt: string | undefined,
+  userPrompt?: string,
 ) => {
-  const pathsList = paths.map((p) => `- ${p}`).join("\n")
+  const pathsList =
+    paths.length > 0 ? paths.map((path) => `- ${path}`).join("\n") : "(no specific paths)"
   const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
 
-  return `Audit the following code for: ${concern.name}
+  return `Audit the code for this concern: ${concern.name}
 ${concern.description}${focusBlock}
 ## Paths
 ${pathsList}
 
 ## Instructions
-Read the relevant files. Identify concrete issues related to "${concern.name}".
-For each finding, include the file path and a specific description.
-Be thorough but focused on this concern only.`
+Read the relevant files.
+Identify concrete findings tied to this concern only.
+Include file paths in every finding.`
 }
 
 const buildSynthesisPrompt = (
-  concernNotes: ReadonlyArray<{ concern: AuditConcern; notes: string }>,
-  userPrompt: string | undefined,
+  notes: ReadonlyArray<{
+    concern: AuditConcern
+    cowork: string
+    deepwork: string
+  }>,
+  userPrompt?: string,
 ) => {
   const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
-  const notesBlock = concernNotes
-    .map(({ concern, notes }) => `## Concern: ${concern.name}\n${concern.description}\n\n${notes}`)
+  const notesBlock = notes
+    .map(
+      ({ concern, cowork, deepwork }) =>
+        `## Concern: ${concern.name}\n${concern.description}\n\n### Cowork\n${cowork}\n\n### Deepwork\n${deepwork}`,
+    )
     .join("\n\n---\n\n")
 
-  return `Synthesize audit findings into an ordered execution plan.${focusBlock}
-
-## Concern Audit Notes
+  return `Synthesize these audit notes into final findings.${focusBlock}
+## Concern Notes
 ${notesBlock}
 
 ## Instructions
-1. Deduplicate across concerns
-2. Group related findings for coherent fixes
-3. Order by dependency, then severity
-4. For each finding, specify: file, description, severity (critical/warning/suggestion)
-
-Respond with a numbered list:
-1. [severity] file — description
-2. [severity] file — description`
+Deduplicate and keep only evidence-backed findings.
+Group related findings near each other so the executor can work in batches.
+Return a numbered list in this exact format:
+1. [critical|warning|suggestion] path/to/file.ts - finding description`
 }
 
 const parseFindings = (text: string): AuditFinding[] => {
   const findings: AuditFinding[] = []
-  const severities = new Set(["critical", "warning", "suggestion"])
-
   for (const line of text.split("\n")) {
-    const match = line.match(/^\d+\.\s*\[(\w+)\]\s*(\S+)\s*[—-]\s*(.+)$/)
-    if (
-      match !== null &&
-      match[1] !== undefined &&
-      match[2] !== undefined &&
-      match[3] !== undefined
-    ) {
-      const sev = match[1].toLowerCase()
+    const match = line.match(/^\d+\.\s*\[(critical|warning|suggestion)\]\s*(\S+)\s*[-–—]\s*(.+)$/i)
+    if (match?.[1] !== undefined && match[2] !== undefined && match[3] !== undefined) {
       findings.push({
         file: match[2].trim(),
         description: match[3].trim(),
-        severity: severities.has(sev) ? (sev as AuditFinding["severity"]) : "warning",
+        severity: match[1].toLowerCase() as AuditFinding["severity"],
       })
     }
   }
   return findings
 }
 
-const buildExecutionPrompt = (findings: AuditFinding[], userPrompt: string | undefined) => {
+const buildExecutionPrompt = (findings: ReadonlyArray<AuditFinding>, userPrompt?: string) => {
   const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
-  const plan = findings
-    .map((f, i) => `${i + 1}. [${f.severity}] ${f.file} — ${f.description}`)
-    .join("\n")
-
-  return `Execute this audit plan. Apply the fixes in order.${focusBlock}
-
-## Plan
-${plan}
+  return `Execute this audit plan.${focusBlock}
+## Findings
+${findings.map((finding, index) => `${index + 1}. [${finding.severity}] ${finding.file} - ${finding.description}`).join("\n")}
 
 ## Instructions
-Apply each fix. Related findings may need to be fixed together.
-Run validation as needed. Try to complete the whole plan.`
+Work through the findings in small batches grouped by file or dependency.
+Apply the fixes directly.
+Group related fixes where that reduces churn.
+Summarize what changed, which findings are resolved, and what remains.`
 }
 
-const buildEvaluationPrompt = (executionOutput: string) =>
-  `Evaluate whether this audit execution resolved all issues or if further iteration is needed.
+const buildEvaluationPrompt = (
+  executionOutput: string,
+  findings: ReadonlyArray<AuditFinding>,
+) => `Evaluate whether the audit findings have been resolved.
+
+## Findings
+${findings.map((finding, index) => `${index + 1}. [${finding.severity}] ${finding.file} - ${finding.description}`).join("\n")}
 
 ## Execution Output
 ${executionOutput}
 
 ## Instructions
-Assess whether actionable issues remain. Consider:
-- Were all planned fixes applied?
-- Did fixes introduce new issues?
-- Are there remaining items not addressed?
+You MUST call the loop_evaluation tool.
+- verdict: "done" if the findings are addressed
+- verdict: "continue" if more work is needed
+- summary: brief explanation of what remains or why it is done`
 
-You MUST call the loop_evaluation tool with your verdict:
-- verdict: "done" if all issues are resolved
-- verdict: "continue" if further iteration is needed
-- summary: brief explanation of your decision`
-
-const extractVerdictFromEvents = (
-  envelopes: ReadonlyArray<EventEnvelope>,
-  resultText: string,
-): LoopVerdict => {
-  // Only trust input from tool calls that completed successfully
-  const succeededCallIds = new Set<string>()
-  for (const envelope of envelopes) {
-    if (
-      (envelope.event._tag === "ToolCallSucceeded" ||
-        envelope.event._tag === "ToolCallCompleted") &&
-      envelope.event.toolName === "loop_evaluation"
-    ) {
-      succeededCallIds.add(envelope.event.toolCallId)
-    }
-  }
-  for (const envelope of envelopes) {
-    if (
-      envelope.event._tag === "ToolCallStarted" &&
-      envelope.event.toolName === "loop_evaluation" &&
-      envelope.event.input !== undefined &&
-      succeededCallIds.has(envelope.event.toolCallId)
-    ) {
-      const input = envelope.event.input as Record<string, unknown>
-      if (input["verdict"] === "done") return "done"
-      if (input["verdict"] === "continue") return "continue"
-    }
+const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
+  runner: SubagentRunner
+  architect: AgentDefinition
+  auditor: AgentDefinition
+  runnerContext: WorkflowRunContext
+  paths: ReadonlyArray<string>
+  prompt?: string
+  maxConcerns: number
+  evaluatorFeedback?: string
+  emitPhase: (phase: string) => Effect.Effect<void, never>
+}) {
+  const [coworkModel, deepworkModel] = getAdversarialModels()
+  const auditOverrides = {
+    allowedActions: ["read"] as const,
+    deniedTools: ["bash"] as const,
   }
 
-  for (const line of resultText.split("\n")) {
-    const trimmed = line.trim().toLowerCase()
-    if (trimmed === "verdict: done" || trimmed === "verdict:done") return "done"
-    if (trimmed === "verdict: continue" || trimmed === "verdict:continue") return "continue"
+  yield* params.emitPhase("detect")
+  const detectResult = yield* params.runner.run({
+    agent: params.architect,
+    prompt: buildDetectPrompt(
+      params.prompt,
+      params.paths,
+      params.maxConcerns,
+      params.evaluatorFeedback,
+    ),
+    ...params.runnerContext,
+    overrides: { ...auditOverrides, modelId: coworkModel },
+  })
+  const detectText = yield* requireText(detectResult, "audit-detect")
+  const concerns = parseConcerns(detectText, params.maxConcerns)
+
+  if (concerns.length === 0) {
+    return { raw: "No concerns detected.", findings: [] as AuditFinding[] }
   }
 
-  return "continue"
-}
+  yield* params.emitPhase("audit")
+  const pairedNotes = yield* Effect.forEach(
+    concerns,
+    (concern) =>
+      Effect.gen(function* () {
+        const prompt = buildConcernAuditPrompt(concern, params.paths, params.prompt)
+        const [coworkResult, deepworkResult] = yield* Effect.all(
+          [
+            params.runner.run({
+              agent: params.auditor,
+              prompt,
+              ...params.runnerContext,
+              overrides: { ...auditOverrides, modelId: coworkModel },
+            }),
+            params.runner.run({
+              agent: params.auditor,
+              prompt,
+              ...params.runnerContext,
+              overrides: { ...auditOverrides, modelId: deepworkModel },
+            }),
+          ] as const,
+          { concurrency: 2 },
+        )
 
-const requireText = (result: SubagentResult, label: string) => {
-  if (result._tag === "error")
-    return Effect.die(new Error(`Audit ${label} failed: ${result.error}`))
-  return Effect.succeed(result.text)
-}
+        return {
+          concern,
+          cowork: yield* requireText(coworkResult, `${concern.name}-cowork`),
+          deepwork: yield* requireText(deepworkResult, `${concern.name}-deepwork`),
+        }
+      }),
+    { concurrency: 4 },
+  )
 
-const successResult = (text: string, sessionId: string, agentName: string): SubagentResult => ({
-  _tag: "success",
-  text,
-  sessionId: sessionId as SubagentResult & { _tag: "success" } extends { sessionId: infer S }
-    ? S
-    : never,
-  agentName: agentName as AgentNameType,
+  yield* params.emitPhase("synthesize")
+  const synthesisResult = yield* params.runner.run({
+    agent: params.architect,
+    prompt: buildSynthesisPrompt(pairedNotes, params.prompt),
+    ...params.runnerContext,
+    overrides: { ...auditOverrides, modelId: coworkModel },
+  })
+  const raw = yield* requireText(synthesisResult, "audit-synthesize")
+  const findings = parseFindings(raw)
+  return { raw, findings }
 })
-
-const formatConcernsForApproval = (concerns: AuditConcern[]) =>
-  concerns.map((c, i) => `${i + 1}. **${c.name}**: ${c.description}`).join("\n")
-
-// Audit Workflow
 
 export const AuditTool = defineWorkflow({
   name: "audit",
   description:
-    "Audit code: detect concerns → parallel audit per concern → synthesize findings → execute fixes → loop until clean. " +
-    "Supports fix mode (apply changes) and report mode (findings only).",
+    "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode executes them iteratively.",
   command: "audit",
-  phases: ["detect", "approve", "audit", "synthesize", "execute", "evaluate"] as const,
+  phases: ["detect", "audit", "synthesize", "present", "execute", "evaluate"] as const,
   params: AuditParams,
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: WorkflowContext) {
     const runner = yield* SubagentRunnerService
     const eventStore = yield* EventStore
     const presenter = yield* PromptPresenter
+    const storage = yield* Storage
     const registry = yield* ExtensionRegistry
 
-    const storage = yield* Storage
+    const mode = params.mode ?? "report"
     const maxIterations = params.maxIterations ?? 3
     const maxConcerns = params.maxConcerns ?? 5
-    const mode = params.mode ?? "fix"
+    const paths = yield* resolveAuditPaths(params.paths)
+    const runnerContext: WorkflowRunContext = {
+      parentSessionId: ctx.sessionId,
+      parentBranchId: ctx.branchId,
+      toolCallId: ctx.toolCallId,
+      cwd: process.cwd(),
+    }
 
-    const architectDef = yield* registry.getAgent("architect")
-    const architect = architectDef ?? Agents.architect
+    const architect = (yield* registry.getAgent("architect")) ?? Agents.architect
+    const auditor = (yield* registry.getAgent("auditor")) ?? Agents.auditor
+    const callerAgentName = ctx.agentName ?? "cowork"
+    const executor = (yield* registry.getAgent(callerAgentName)) ?? Agents.cowork
 
-    const auditorDef = yield* registry.getAgent("auditor")
-    const auditor = auditorDef ?? Agents.auditor
-
-    // Resolve caller agent for execution (primary agent, not architect)
-    const callerAgent = ctx.agentName ?? "cowork"
-    const callerDef = yield* registry.getAgent(callerAgent)
-    const executor = callerDef ?? Agents.cowork
-
-    const emitPhase = (phase: string, iteration?: number) =>
+    const emitPhase = (phase: string) =>
       eventStore
         .publish(
           new WorkflowPhaseStarted({
@@ -299,158 +338,143 @@ export const AuditTool = defineWorkflow({
             branchId: ctx.branchId,
             workflowName: "audit",
             phase,
-            ...(iteration !== undefined ? { iteration, maxIterations } : {}),
           }),
         )
         .pipe(Effect.catchEager(() => Effect.void))
 
-    const runAgent = (agent: AgentDefinition, prompt: string) =>
-      runner.run({
-        agent,
-        prompt,
-        parentSessionId: ctx.sessionId,
-        parentBranchId: ctx.branchId,
-        toolCallId: ctx.toolCallId,
-        cwd: process.cwd(),
+    const emitIterationPhase = (phase: string, iteration: number) =>
+      eventStore
+        .publish(
+          new WorkflowPhaseStarted({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            workflowName: "audit",
+            phase,
+            iteration,
+            maxIterations,
+          }),
+        )
+        .pipe(Effect.catchEager(() => Effect.void))
+
+    const completeWorkflow = (result: "success" | "rejected" | "error" | "max_iterations") =>
+      eventStore
+        .publish(
+          new WorkflowCompleted({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            workflowName: "audit",
+            result,
+          }),
+        )
+        .pipe(Effect.catchEager(() => Effect.void))
+
+    if (mode === "report") {
+      const report = yield* runAuditCycle({
+        runner,
+        architect,
+        auditor,
+        runnerContext,
+        paths,
+        prompt: params.prompt,
+        maxConcerns,
+        emitPhase,
       })
 
-    // Get audit paths
-    const paths = params.paths ?? []
+      yield* emitPhase("present")
+      yield* presenter.present({
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        content: report.raw,
+        title: "Audit Findings",
+      })
+      yield* completeWorkflow("success")
 
-    // Use runLoop for the audit cycle
-    const result = yield* runLoop({
+      return {
+        iterations: 1,
+        reason: "done" as const,
+        output: report.raw,
+        findings: report.findings,
+        raw: report.raw,
+        paths,
+      }
+    }
+
+    let latestFindings: ReadonlyArray<AuditFinding> = []
+
+    const loopResult = yield* runLoop({
       maxIterations,
-
-      body: (iteration: number, _previousOutput: string) =>
+      body: (iteration, _previousOutput, evaluatorFeedback) =>
         Effect.gen(function* () {
-          // Phase 1: Detect concerns
-          yield* emitPhase("detect", iteration)
-          const detectResult = yield* runAgent(
+          const report = yield* runAuditCycle({
+            runner,
             architect,
-            buildDetectPrompt(params.prompt, paths, maxConcerns),
-          )
-          const detectText = yield* requireText(detectResult, "detect")
-          const concerns = parseConcerns(detectText, maxConcerns)
+            auditor,
+            runnerContext,
+            paths,
+            prompt: params.prompt,
+            maxConcerns,
+            evaluatorFeedback,
+            emitPhase,
+          })
+          latestFindings = report.findings
 
-          if (concerns.length === 0) {
-            return successResult("No concerns detected.", ctx.sessionId, "architect")
-          }
-
-          // Phase 2: Approve concerns (unless autoApprove)
-          if (params.autoApprove !== true) {
-            yield* emitPhase("approve", iteration)
-            const approval = yield* presenter
-              .confirm({
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-                content: `## Audit Concerns (${concerns.length})\n\n${formatConcernsForApproval(concerns)}\n\nProceed with audit?`,
-                title: `Audit Loop ${iteration}/${maxIterations}`,
-              })
-              .pipe(Effect.catchEager(() => Effect.succeed("no" as const)))
-            if (approval === "no") {
-              return successResult("Audit cancelled by user.", ctx.sessionId, "architect")
-            }
-          }
-
-          // Phase 3: Parallel concern audits
-          yield* emitPhase("audit", iteration)
-          const auditResults = yield* Effect.forEach(
-            concerns,
-            (concern) => runAgent(auditor, buildConcernAuditPrompt(concern, paths, params.prompt)),
-            { concurrency: 3 },
-          )
-          const concernNotes = concerns.map((concern, i) => {
-            const r = auditResults[i]
+          if (report.findings.length === 0) {
             return {
-              concern,
-              notes: r !== undefined && r._tag === "success" ? r.text : "(audit failed)",
+              _tag: "success" as const,
+              text: "No concerns detected.",
+              sessionId: ctx.sessionId,
+              agentName: callerAgentName,
             }
+          }
+
+          yield* emitIterationPhase("execute", iteration)
+          return yield* runner.run({
+            agent: executor,
+            prompt: buildExecutionPrompt(report.findings, params.prompt),
+            ...runnerContext,
+          })
+        }),
+      evaluate: (iteration, bodyOutput) =>
+        Effect.gen(function* () {
+          if (latestFindings.length === 0) {
+            return { verdict: "done" as const, feedback: "No findings remain." }
+          }
+
+          yield* emitIterationPhase("evaluate", iteration)
+          const evalResult = yield* runner.run({
+            agent: architect,
+            prompt: buildEvaluationPrompt(bodyOutput, latestFindings),
+            ...runnerContext,
+            overrides: {
+              allowedActions: ["read"],
+              deniedTools: ["bash"],
+              tags: ["loop-evaluation"],
+            },
           })
 
-          // Phase 4: Synthesize findings
-          yield* emitPhase("synthesize", iteration)
-          const synthesisResult = yield* runAgent(
-            architect,
-            buildSynthesisPrompt(concernNotes, params.prompt),
-          )
-          const synthesisText = yield* requireText(synthesisResult, "synthesize")
-          const findings = parseFindings(synthesisText)
-
-          if (findings.length === 0) {
-            return successResult(
-              `No actionable findings after synthesis.\n\n${synthesisText}`,
-              ctx.sessionId,
-              "architect",
-            )
-          }
-
-          // Phase 5: Execute (fix mode only)
-          if (mode === "fix") {
-            yield* emitPhase("execute", iteration)
-            const executionResult = yield* runAgent(
-              executor,
-              buildExecutionPrompt(findings, params.prompt),
-            )
-            const executionText = yield* requireText(executionResult, "execute")
-            return successResult(executionText, ctx.sessionId, callerAgent)
-          }
-
-          // Report mode — return findings without executing
-          return successResult(synthesisText, ctx.sessionId, "architect")
-        }).pipe(Effect.catchEager((e) => Effect.fail(new SubagentError({ message: String(e) })))),
-
-      evaluate: (_iteration: number, bodyOutput: string) => {
-        if (mode === "report") return Effect.succeed("done" as LoopVerdict)
-        if (
-          bodyOutput.includes("No concerns detected") ||
-          bodyOutput.includes("Audit cancelled") ||
-          bodyOutput.includes("No actionable findings")
-        ) {
-          return Effect.succeed("done" as LoopVerdict)
-        }
-        return emitPhase("evaluate").pipe(
-          Effect.andThen(
-            runner.run({
-              agent: architect,
-              prompt: buildEvaluationPrompt(bodyOutput),
-              parentSessionId: ctx.sessionId,
-              parentBranchId: ctx.branchId,
-              toolCallId: ctx.toolCallId,
-              cwd: process.cwd(),
-              overrides: { tags: ["loop-evaluation"] },
-            }),
-          ),
-          Effect.flatMap((evalResult) => {
-            if (evalResult._tag === "error") return Effect.succeed("done" as LoopVerdict)
-            return storage.listEvents({ sessionId: evalResult.sessionId }).pipe(
-              Effect.catchEager(() => Effect.succeed([] as ReadonlyArray<EventEnvelope>)),
-              Effect.map((envelopes) => extractVerdictFromEvents(envelopes, evalResult.text)),
-            )
-          }),
-          Effect.catchEager(() => Effect.succeed("done" as LoopVerdict)),
-        )
-      },
+          if (evalResult._tag === "error") return { verdict: "done" as const }
+          const envelopes = yield* storage
+            .listEvents({ sessionId: evalResult.sessionId })
+            .pipe(Effect.catchEager(() => Effect.succeed([])))
+          return extractLoopEvaluation(envelopes, evalResult.text)
+        }),
     })
 
-    const workflowResult =
-      result.reason === "done" ? "success" : result.reason === "error" ? "error" : "max_iterations"
-
-    yield* eventStore
-      .publish(
-        new WorkflowCompleted({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          workflowName: "audit",
-          result: workflowResult as "success" | "error" | "max_iterations",
-        }),
-      )
-      .pipe(Effect.catchEager(() => Effect.void))
+    yield* completeWorkflow(
+      loopResult.reason === "done"
+        ? "success"
+        : loopResult.reason === "error"
+          ? "error"
+          : "max_iterations",
+    )
 
     return {
-      iterations: result.iterations,
-      reason: result.reason,
-      output: result.output,
-      ...(result.error !== undefined ? { error: result.error } : {}),
+      findings: latestFindings,
+      iterations: loopResult.iterations,
+      reason: loopResult.reason,
+      output: loopResult.output,
+      paths,
+      ...(loopResult.error !== undefined ? { error: loopResult.error } : {}),
     }
   }),
 })

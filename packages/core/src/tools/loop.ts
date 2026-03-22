@@ -9,7 +9,8 @@ import {
 import { Storage } from "../storage/sqlite-storage.js"
 import { defineTool } from "../domain/tool.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
-import { runLoop, type LoopVerdict } from "../runtime/loop.js"
+import { runLoop } from "../runtime/loop.js"
+import { extractLoopEvaluation } from "./workflow-helpers.js"
 
 const LoopBody = Schema.Struct({
   agent: AgentName,
@@ -58,49 +59,6 @@ export const LoopEvaluationTool = defineTool({
   execute: (params) => Effect.succeed(params),
 })
 
-/**
- * Extract verdict from evaluator subagent events.
- * Searches for loop_evaluation tool call, falls back to text parsing.
- */
-const extractVerdictFromEvents = (
-  envelopes: ReadonlyArray<EventEnvelope>,
-  resultText: string,
-): LoopVerdict => {
-  // Primary: search for a successfully completed loop_evaluation tool call
-  const succeededCallIds = new Set<string>()
-  for (const envelope of envelopes) {
-    if (
-      (envelope.event._tag === "ToolCallSucceeded" ||
-        envelope.event._tag === "ToolCallCompleted") &&
-      envelope.event.toolName === "loop_evaluation"
-    ) {
-      succeededCallIds.add(envelope.event.toolCallId)
-    }
-  }
-  // Only trust input from tool calls that completed successfully
-  for (const envelope of envelopes) {
-    if (
-      envelope.event._tag === "ToolCallStarted" &&
-      envelope.event.toolName === "loop_evaluation" &&
-      envelope.event.input !== undefined &&
-      succeededCallIds.has(envelope.event.toolCallId)
-    ) {
-      const input = envelope.event.input as Record<string, unknown>
-      if (input["verdict"] === "done") return "done"
-      if (input["verdict"] === "continue") return "continue"
-    }
-  }
-
-  // Fallback: check text for verdict lines
-  for (const line of resultText.split("\n")) {
-    const trimmed = line.trim().toLowerCase()
-    if (trimmed === "verdict: done" || trimmed === "verdict:done") return "done"
-    if (trimmed === "verdict: continue" || trimmed === "verdict:continue") return "continue"
-  }
-
-  return "continue"
-}
-
 export const LoopTool = defineWorkflow({
   name: "loop",
   description:
@@ -118,11 +76,18 @@ export const LoopTool = defineWorkflow({
     const result = yield* runLoop({
       maxIterations,
 
-      body: (iteration, previousOutput) => {
+      body: (iteration, previousOutput, evaluatorFeedback) => {
         const prompt =
           iteration === 1
             ? params.body.prompt
-            : `${params.body.prompt}\n\n## Previous Output\n${previousOutput}`
+            : [
+                params.body.prompt,
+                "## Previous Output",
+                previousOutput,
+                ...(evaluatorFeedback !== undefined && evaluatorFeedback !== ""
+                  ? ["## Evaluator Feedback", evaluatorFeedback]
+                  : []),
+              ].join("\n\n")
 
         return runner.run({
           agent: { name: params.body.agent } as Parameters<typeof runner.run>[0]["agent"],
@@ -149,13 +114,13 @@ export const LoopTool = defineWorkflow({
           },
         })
 
-        if (evalResult._tag === "error") return "done" as LoopVerdict
+        if (evalResult._tag === "error") return { verdict: "done" as const }
 
         const envelopes = yield* storage
           .listEvents({ sessionId: evalResult.sessionId })
           .pipe(Effect.catchEager(() => Effect.succeed([] as ReadonlyArray<EventEnvelope>)))
 
-        return extractVerdictFromEvents(envelopes, evalResult.text)
+        return extractLoopEvaluation(envelopes, evalResult.text)
       }),
 
       onIteration: Effect.fn("LoopTool.onIteration")(function* (iteration, phase) {

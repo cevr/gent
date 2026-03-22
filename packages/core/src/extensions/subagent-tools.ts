@@ -7,6 +7,7 @@ import { LibrarianTool } from "../tools/librarian.js"
 import { CounselTool } from "../tools/counsel.js"
 import { CodeReviewTool } from "../tools/code-review.js"
 import { RepoExplorerTool } from "../tools/repo-explorer.js"
+import { SearchSkillsTool } from "../tools/search-skills.js"
 
 export const SubagentToolsExtension = defineExtension({
   manifest: { id: "@gent/subagent-tools" },
@@ -20,6 +21,7 @@ export const SubagentToolsExtension = defineExtension({
         CounselTool,
         CodeReviewTool,
         RepoExplorerTool,
+        SearchSkillsTool,
       ],
     }),
 })

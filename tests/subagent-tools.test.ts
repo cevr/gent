@@ -5,10 +5,13 @@ import { FinderTool } from "@gent/core/tools/finder"
 import { CodeReviewTool } from "@gent/core/tools/code-review"
 import { HandoffTool } from "@gent/core/tools/handoff"
 import { CounselTool } from "@gent/core/tools/counsel"
-import { SubagentRunnerService } from "@gent/core/domain/agent"
+import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
+import { EventStore } from "@gent/core/domain/event"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
 const ctx: ToolContext = {
   sessionId: "test-session",
@@ -43,7 +46,20 @@ const mockRunnerErrorWithSession = Layer.succeed(SubagentRunnerService, {
     }),
 })
 
+const TestExtRegistry = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents) },
+    },
+  ]),
+)
+
 const platformLayer = BunServices.layer
+
+const workflowTestLayer = Layer.mergeAll(TestExtRegistry, EventStore.Test(), Storage.Test())
 
 describe("FinderTool", () => {
   test("success → { found: true, response }", async () => {
@@ -68,9 +84,11 @@ describe("FinderTool", () => {
 describe("CodeReviewTool", () => {
   test("passes description to runner", async () => {
     let capturedPrompt = ""
+    const capturedOverrides: Array<Record<string, unknown> | undefined> = []
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
         capturedPrompt = params.prompt
+        capturedOverrides.push(params.overrides as Record<string, unknown> | undefined)
         return Effect.succeed({
           _tag: "success" as const,
           text: "[]",
@@ -79,13 +97,19 @@ describe("CodeReviewTool", () => {
         })
       },
     })
-    const layer = Layer.mergeAll(capturingRunner, platformLayer)
+    const layer = Layer.mergeAll(capturingRunner, platformLayer, workflowTestLayer)
     await Effect.runPromise(
-      CodeReviewTool.execute({ description: "refactored auth module" }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+      CodeReviewTool.execute(
+        { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
+        ctx,
+      ).pipe(Effect.provide(layer)),
     )
     expect(capturedPrompt).toContain("refactored auth module")
+    const reviewOverrides = capturedOverrides.find(
+      (overrides) => overrides?.["deniedTools"] !== undefined,
+    )
+    expect(reviewOverrides?.["allowedActions"]).toEqual(["read"])
+    expect(reviewOverrides?.["deniedTools"]).toEqual(["bash"])
   })
 
   test("parses structured JSON review output", async () => {
@@ -107,9 +131,11 @@ describe("CodeReviewTool", () => {
           agentName: "reviewer",
         }),
     })
-    const layer = Layer.mergeAll(runner, platformLayer)
+    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
     const result = await Effect.runPromise(
-      CodeReviewTool.execute({ description: "test" }, ctx).pipe(Effect.provide(layer)),
+      CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+        Effect.provide(layer),
+      ),
     )
     expect(result.comments.length).toBe(1)
     expect(result.comments[0]!.severity).toBe("high")
@@ -126,12 +152,62 @@ describe("CodeReviewTool", () => {
           agentName: "reviewer",
         }),
     })
-    const layer = Layer.mergeAll(runner, platformLayer)
+    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
     const result = await Effect.runPromise(
-      CodeReviewTool.execute({ description: "test" }, ctx).pipe(Effect.provide(layer)),
+      CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+        Effect.provide(layer),
+      ),
     )
     expect(result.comments.length).toBe(0)
-    expect(result.raw).toBe("not valid json\n\nFull session: session://child")
+    expect(result.raw).toBe("not valid json")
+  })
+
+  test("fix mode tells executor to work findings in batches", async () => {
+    const prompts: string[] = []
+    const runner = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        prompts.push(params.prompt)
+        if (params.prompt.includes("Evaluate whether the review findings have been addressed")) {
+          return Effect.succeed({
+            _tag: "success" as const,
+            text: "VERDICT: done",
+            sessionId: "eval" as SessionId,
+            agentName: params.agent.name,
+          })
+        }
+        if (params.prompt.includes("Synthesize these adversarial reviews")) {
+          return Effect.succeed({
+            _tag: "success" as const,
+            text: JSON.stringify([
+              {
+                file: "src/auth.ts",
+                severity: "high",
+                type: "bug",
+                text: "Missing null check",
+              },
+            ]),
+            sessionId: "synth" as SessionId,
+            agentName: params.agent.name,
+          })
+        }
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "[]",
+          sessionId: "child" as SessionId,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
+    const result = await Effect.runPromise(
+      CodeReviewTool.execute({ description: "test", content: "fake diff", mode: "fix" }, ctx).pipe(
+        Effect.provide(layer),
+      ),
+    )
+    expect(result.raw).toContain("[]")
+    expect(
+      prompts.some((prompt) => prompt.includes("Work through the findings in small batches")),
+    ).toBe(true)
   })
 })
 
@@ -189,9 +265,11 @@ describe("Session refs in subagent output", () => {
           agentName: "reviewer",
         }),
     })
-    const layer = Layer.mergeAll(runner, platformLayer)
+    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
     const result = await Effect.runPromise(
-      CodeReviewTool.execute({ description: "test" }, ctx).pipe(Effect.provide(layer)),
+      CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+        Effect.provide(layer),
+      ),
     )
     expect(result.session).toBe("session://child")
   })
@@ -319,10 +397,12 @@ describe("CounselTool", () => {
   })
 
   test("spawns agent with restricted read-only tools", async () => {
-    let capturedAllowedTools: readonly string[] | undefined
+    let capturedAllowedActions: readonly string[] | undefined
+    let capturedDeniedTools: readonly string[] | undefined
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
-        capturedAllowedTools = params.agent.allowedTools
+        capturedAllowedActions = params.agent.allowedActions
+        capturedDeniedTools = params.agent.deniedTools
         return Effect.succeed({
           _tag: "success" as const,
           text: "review",
@@ -335,13 +415,12 @@ describe("CounselTool", () => {
     await Effect.runPromise(
       CounselTool.execute({ prompt: "review" }, ctx).pipe(Effect.provide(layer)),
     )
-    expect(capturedAllowedTools).toBeDefined()
-    expect(capturedAllowedTools).toContain("read")
-    expect(capturedAllowedTools).toContain("grep")
-    expect(capturedAllowedTools).toContain("glob")
-    expect(capturedAllowedTools).not.toContain("write")
-    expect(capturedAllowedTools).not.toContain("edit")
-    expect(capturedAllowedTools).not.toContain("counsel")
+    expect(capturedAllowedActions).toBeDefined()
+    expect(capturedAllowedActions).toContain("read")
+    expect(capturedAllowedActions).not.toContain("edit")
+    expect(capturedAllowedActions).not.toContain("exec")
+    expect(capturedDeniedTools).toBeDefined()
+    expect(capturedDeniedTools).toContain("bash")
   })
 
   test("rejects non-primary agent caller", async () => {
