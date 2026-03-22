@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { detectRedaction, unescapeStr, normalizeWhitespace, findMatch } from "@gent/tools"
+import { detectRedaction, unescapeStr, normalizeWhitespace, findMatch } from "@gent/core/tools/edit"
 
 describe("detectRedaction", () => {
   test("clean replacement → undefined", () => {

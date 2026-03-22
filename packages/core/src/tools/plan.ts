@@ -1,6 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "@gent/core/domain/tool.js"
-import { PlanHandler } from "@gent/core/domain/interaction-handlers.js"
+import { defineTool } from "../domain/tool.js"
+import { PlanHandler } from "../domain/interaction-handlers.js"
 
 export const PlanParams = Schema.Struct({
   plan: Schema.String.annotate({

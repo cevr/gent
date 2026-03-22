@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/domain/tool.js"
-import { Storage } from "@gent/core/storage/sqlite-storage.js"
+import { defineTool } from "../domain/tool.js"
+import { Storage } from "../storage/sqlite-storage.js"
 
 // Search Sessions Error
 

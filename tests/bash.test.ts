@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { splitCdCommand, injectGitTrailers, stripBackground } from "@gent/tools"
+import { splitCdCommand, injectGitTrailers, stripBackground } from "@gent/core/tools/bash"
 
 describe("splitCdCommand", () => {
   test("cd /foo && ls → { cwd: '/foo', command: 'ls' }", () => {

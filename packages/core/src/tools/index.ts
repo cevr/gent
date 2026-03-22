@@ -122,7 +122,7 @@ export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
 export { TaskRunTool, TaskRunParams } from "./task-run"
 
 // All Tools
-import type { AnyToolDefinition } from "@gent/core/domain/tool.js"
+import type { AnyToolDefinition } from "../domain/tool.js"
 import { ReadTool } from "./read"
 import { WriteTool } from "./write"
 import { EditTool } from "./edit"

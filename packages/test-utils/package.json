@@ -9,8 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@gent/core": "workspace:*",
-    "@gent/tools": "workspace:*"
+    "@gent/core": "workspace:*"
   },
   "peerDependencies": {
     "effect": "catalog:",

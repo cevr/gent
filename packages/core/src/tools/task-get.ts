@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/domain/tool.js"
-import type { TaskId } from "@gent/core/domain/ids.js"
-import { TaskService } from "@gent/core/runtime/task-service.js"
+import { defineTool } from "../domain/tool.js"
+import type { TaskId } from "../domain/ids.js"
+import { TaskService } from "../runtime/task-service.js"
 
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),

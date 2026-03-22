@@ -18,7 +18,8 @@ import {
 import type { PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
 import { PlanCheckpoint, type Checkpoint } from "@gent/core/domain/message.js"
 import type { BranchId } from "@gent/core/domain/ids.js"
-import { AskUserHandler, AllTools } from "@gent/tools"
+import { AskUserHandler } from "@gent/core/tools/ask-user.js"
+import { AllTools } from "@gent/core/tools/index.js"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.js"
 import { CheckpointService } from "@gent/core/runtime/checkpoint.js"
 

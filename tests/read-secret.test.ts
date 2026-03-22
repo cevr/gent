@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { isSecretFile } from "@gent/tools"
+import { isSecretFile } from "@gent/core/tools/read"
 
 describe("isSecretFile", () => {
   test(".env → true", () => {

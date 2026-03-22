@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { truncate, renderMessageParts, renderSessionTree } from "@gent/tools"
+import { truncate, renderMessageParts, renderSessionTree } from "@gent/core/tools/read-session"
 import {
   TextPart,
   ToolCallPart,

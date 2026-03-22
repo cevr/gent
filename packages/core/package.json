@@ -6,7 +6,8 @@
     "./domain/*": "./src/domain/*",
     "./storage/*": "./src/storage/*",
     "./providers/*": "./src/providers/*",
-    "./runtime/*": "./src/runtime/*"
+    "./runtime/*": "./src/runtime/*",
+    "./tools/*": "./src/tools/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -16,8 +17,11 @@
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/mistral": "catalog:",
     "@ai-sdk/openai": "catalog:",
+    "@types/turndown": "^5.0.6",
     "ai": "catalog:",
-    "effect-machine": "catalog:"
+    "effect-machine": "catalog:",
+    "linkedom": "^0.18.12",
+    "turndown": "^7.2.2"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

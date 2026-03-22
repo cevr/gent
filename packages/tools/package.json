@@ -1,20 +1,6 @@
 {
   "name": "@gent/tools",
   "version": "0.0.0",
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@gent/core": "workspace:*",
-    "@types/turndown": "^5.0.6",
-    "linkedom": "^0.18.12",
-    "turndown": "^7.2.2"
-  },
-  "peerDependencies": {
-    "effect": "catalog:"
-  }
+  "private": true,
+  "type": "module"
 }

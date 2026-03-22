@@ -89,8 +89,11 @@
         "@ai-sdk/google": "catalog:",
         "@ai-sdk/mistral": "catalog:",
         "@ai-sdk/openai": "catalog:",
+        "@types/turndown": "^5.0.6",
         "ai": "catalog:",
         "effect-machine": "catalog:",
+        "linkedom": "^0.18.12",
+        "turndown": "^7.2.2",
       },
       "peerDependencies": {
         "@effect/platform-bun": "catalog:",
@@ -123,7 +126,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
-        "@gent/tools": "workspace:*",
       },
       "peerDependencies": {
         "effect": "catalog:",
@@ -138,7 +140,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
-        "@gent/tools": "workspace:*",
       },
       "peerDependencies": {
         "effect": "catalog:",
@@ -148,15 +149,6 @@
     "packages/tools": {
       "name": "@gent/tools",
       "version": "0.0.0",
-      "dependencies": {
-        "@gent/core": "workspace:*",
-        "@types/turndown": "^5.0.6",
-        "linkedom": "^0.18.12",
-        "turndown": "^7.2.2",
-      },
-      "peerDependencies": {
-        "effect": "catalog:",
-      },
     },
   },
   "catalog": {

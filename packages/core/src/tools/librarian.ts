@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/domain/tool.js"
-import { Agents, SubagentRunnerService } from "@gent/core/domain/agent.js"
+import { defineTool } from "../domain/tool.js"
+import { Agents, SubagentRunnerService } from "../domain/agent.js"
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
 import { $ } from "bun"

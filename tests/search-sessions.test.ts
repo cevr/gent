@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { parseRelativeDate } from "@gent/tools"
+import { parseRelativeDate } from "@gent/core/tools/search-sessions"
 
 describe("parseRelativeDate", () => {
   test('"7d" → ~7 days ago', () => {

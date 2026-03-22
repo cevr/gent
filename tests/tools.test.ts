@@ -1,18 +1,13 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, FileSystem, Layer, pipe, type Path, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import {
-  ReadTool,
-  GlobTool,
-  GrepTool,
-  TodoReadTool,
-  TodoWriteTool,
-  TodoHandler,
-  QuestionTool,
-  QuestionHandler,
-  PlanTool,
-  TaskTool,
-} from "@gent/tools"
+import { ReadTool } from "@gent/core/tools/read"
+import { GlobTool } from "@gent/core/tools/glob"
+import { GrepTool } from "@gent/core/tools/grep"
+import { TodoReadTool, TodoWriteTool, TodoHandler } from "@gent/core/tools/todo"
+import { QuestionTool, QuestionHandler } from "@gent/core/tools/ask-user"
+import { PlanTool } from "@gent/core/tools/plan"
+import { TaskTool } from "@gent/core/tools/task"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { AgentRegistry, SubagentRunnerService } from "@gent/core/domain/agent"
 import { PlanHandler } from "@gent/core/domain/interaction-handlers"

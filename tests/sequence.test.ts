@@ -8,7 +8,7 @@ import {
 } from "@gent/test-utils"
 import { Provider } from "@gent/core/providers/provider"
 import { EventStore, StreamStarted } from "@gent/core/domain/event"
-import { AskUserHandler } from "@gent/tools"
+import { AskUserHandler } from "@gent/core/tools/ask-user"
 
 describe("Sequence Recording", () => {
   describe("SequenceRecorder", () => {
