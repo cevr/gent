@@ -23,7 +23,6 @@ import {
 } from "../runtime/agent/subagent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive, type ActorProcess } from "../runtime/actor-process.js"
-import { CheckpointService } from "../runtime/checkpoint.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { TaskService } from "../runtime/task-service.js"
@@ -165,7 +164,6 @@ export const createDependencies = (
   | PermissionHandler
   | AgentLoop
   | ActorProcess
-  | CheckpointService
   | AskUserHandler
   | PlanHandler
   | HandoffHandler
@@ -262,11 +260,7 @@ export const createDependencies = (
   // HandoffHandler requires EventStore
   const HandoffHandlerLive = Layer.provide(HandoffHandler.Live, BaseWithPermission)
 
-  // CheckpointService requires Storage
-  const CheckpointServiceLive = CheckpointService.Live()
-  const CheckpointLayer = Layer.provide(CheckpointServiceLive, BaseWithPermission)
-
-  // AgentLoop requires CheckpointService and FileSystem
+  // AgentLoop requires Storage, Provider, EventStore, etc.
   const AgentRuntimeLive = Layer.unwrap(
     Effect.gen(function* () {
       const skills = yield* Skills
@@ -314,10 +308,9 @@ export const createDependencies = (
     }),
   )
 
-  // Compose all dependencies - AgentLoop needs BaseServices + CheckpointService + FileSystem
+  // Compose all dependencies
   const AllDeps = Layer.mergeAll(
     BaseWithPermission,
-    CheckpointLayer,
     AskUserHandlerLive,
     PermissionHandlerLive,
     ToolRunnerLive,

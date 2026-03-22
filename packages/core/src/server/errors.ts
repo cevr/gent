@@ -4,7 +4,6 @@ import { ProviderError } from "../providers/provider.js"
 import { ProviderAuthError } from "../providers/provider-auth.js"
 import { ActorProcessError } from "../runtime/actor-process.js"
 import { AgentLoopError } from "../runtime/agent/agent-loop.js"
-import { CheckpointError } from "../runtime/checkpoint.js"
 import { StorageError } from "../storage/sqlite-storage.js"
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("NotFoundError", {
@@ -29,7 +28,6 @@ export type GentRpcError =
   | ProviderAuthError
   | PlatformErrorSchema
   | EventStoreError
-  | CheckpointError
   | NotFoundError
 
 export const GentRpcError = Schema.Union([
@@ -40,6 +38,5 @@ export const GentRpcError = Schema.Union([
   ProviderAuthError,
   PlatformErrorSchema,
   EventStoreError,
-  CheckpointError,
   NotFoundError,
 ])

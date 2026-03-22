@@ -27,14 +27,11 @@ export {
 } from "./actor-process"
 
 export {
-  CheckpointService,
-  CheckpointError,
-  type CheckpointServiceApi,
   estimateTokens,
   estimateContextPercent,
   getContextWindow,
   MODEL_CONTEXT_WINDOWS,
-} from "./checkpoint.js"
+} from "./context-estimation.js"
 export { ConfigService, UserConfig, type ConfigServiceService } from "./config-service.js"
 
 export { ModelRegistry, type ModelRegistryService } from "./model-registry.js"

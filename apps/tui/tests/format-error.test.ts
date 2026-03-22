@@ -27,11 +27,6 @@ describe("formatError", () => {
     expect(formatError(err)).toBe("Events: replay failed")
   })
 
-  test("CheckpointError → prefixed", () => {
-    const err = { _tag: "CheckpointError", message: "corrupt" } as UiError
-    expect(formatError(err)).toBe("Checkpoint: corrupt")
-  })
-
   test("NotFoundError → prefixed", () => {
     const err = { _tag: "NotFoundError", message: "session abc" } as UiError
     expect(formatError(err)).toBe("Not found: session abc")

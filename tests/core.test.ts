@@ -18,7 +18,6 @@ import { Provider } from "@gent/core/providers/provider"
 import { GentCore } from "@gent/core/server/core"
 import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { CheckpointService } from "@gent/core/runtime/checkpoint"
 import { ConfigService } from "@gent/core/runtime/config-service"
 
 describe("Skills System", () => {
@@ -173,7 +172,7 @@ describe("Session State", () => {
       Provider.Test([]),
       eventStoreLayer,
       ActorProcess.Test(),
-      CheckpointService.Test(),
+
       Permission.Live([], "ask"),
       ConfigService.Test(),
     )
@@ -219,7 +218,7 @@ describe("Session Tree", () => {
       Provider.Test([]),
       eventStoreLayer,
       ActorProcess.Test(),
-      CheckpointService.Test(),
+
       Permission.Live([], "ask"),
       ConfigService.Test(),
     )
@@ -351,7 +350,7 @@ describe("GentCore → ActorProcess integration", () => {
       storageDeps,
       actorProcessLayer,
       Provider.Test([]),
-      CheckpointService.Test(),
+
       Permission.Live([], "ask"),
       ConfigService.Test(),
     )
@@ -433,7 +432,7 @@ describe("GentCore → ActorProcess integration", () => {
       storageDeps,
       actorProcessLayer,
       Provider.Test([]),
-      CheckpointService.Test(),
+
       Permission.Live([], "ask"),
       ConfigService.Test(),
     )

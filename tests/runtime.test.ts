@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { isRetryable, getRetryDelay, DEFAULT_RETRY_CONFIG } from "@gent/core/runtime/retry"
-import { estimateTokens, CheckpointService } from "@gent/core/runtime/checkpoint"
+import { estimateTokens } from "@gent/core/runtime/context-estimation"
 import { AgentLoop, AgentActor } from "@gent/core/runtime/agent/agent-loop"
 import { InProcessRunner, SubagentRunnerConfig } from "@gent/core/runtime/agent/subagent-runner"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -276,7 +276,6 @@ describe("AgentLoop actor model", () => {
       ToolRegistry.Test(),
       AgentRegistry.Live,
       EventStore.Test(),
-      CheckpointService.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,

@@ -20,7 +20,7 @@ import {
   estimateTokens,
   estimateContextPercent,
   getContextWindow,
-} from "@gent/core/runtime/checkpoint"
+} from "@gent/core/runtime/context-estimation"
 
 // ============================================================================
 // HandoffHandler

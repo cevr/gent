@@ -4,7 +4,6 @@ import {
   DateTime,
   Deferred,
   Effect,
-  FileSystem,
   Layer,
   Queue,
   Ref,
@@ -60,19 +59,13 @@ import {
   type ProviderRequest,
 } from "../../providers/provider.js"
 import { withRetry } from "../retry"
-import { CheckpointService } from "../checkpoint"
+import { estimateContextPercent } from "../context-estimation"
 import { ToolRunner } from "./tool-runner"
 
 // Agent Loop Error
 
-const buildSystemPrompt = (
-  basePrompt: string,
-  agent: AgentDefinition,
-  contextPrefix?: string,
-): string => {
-  const parts: string[] = []
-  if (contextPrefix !== undefined && contextPrefix !== "") parts.push(contextPrefix)
-  parts.push(basePrompt)
+const buildSystemPrompt = (basePrompt: string, agent: AgentDefinition): string => {
+  const parts: string[] = [basePrompt]
 
   if (agent.systemPromptAddendum !== undefined && agent.systemPromptAddendum !== "") {
     parts.push(`\n\n## Agent: ${agent.name}\n${agent.systemPromptAddendum}`)
@@ -170,15 +163,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
   }): Layer.Layer<
     AgentLoop,
     never,
-    | Storage
-    | Provider
-    | ToolRegistry
-    | AgentRegistry
-    | EventStore
-    | CheckpointService
-    | HandoffHandler
-    | FileSystem.FileSystem
-    | ToolRunner
+    Storage | Provider | ToolRegistry | AgentRegistry | EventStore | HandoffHandler | ToolRunner
   > =>
     Layer.effect(
       AgentLoop,
@@ -188,9 +173,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const toolRegistry = yield* ToolRegistry
         const agentRegistry = yield* AgentRegistry
         const eventStore = yield* EventStore
-        const checkpointService = yield* CheckpointService
         const handoffHandler = yield* HandoffHandler
-        const fs = yield* FileSystem.FileSystem
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
 
@@ -314,8 +297,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               let continueLoop = true
               let cachedMessages: Message[] | undefined
-              let cachedCheckpointId: string | undefined
-              let cachedContextPrefix = ""
 
               const appendCachedMessage = (message: Message) => {
                 if (cachedMessages !== undefined) cachedMessages.push(message)
@@ -363,46 +344,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
                 const currentAgent = yield* resolveCurrentAgent()
 
-                // Checkpoint-aware message loading
-                const checkpoint = yield* checkpointService.getLatestCheckpoint(branchId)
-                const checkpointId = checkpoint?.id ?? "none"
-                const { messages, contextPrefix } = yield* Effect.gen(function* () {
-                  if (cachedMessages !== undefined && cachedCheckpointId === checkpointId) {
-                    return {
-                      messages: cachedMessages,
-                      contextPrefix: cachedContextPrefix,
-                    }
-                  }
-                  if (checkpoint === undefined) {
-                    const loaded = yield* storage.listMessages(branchId)
-                    cachedMessages = [...loaded]
-                    cachedContextPrefix = ""
-                    cachedCheckpointId = checkpointId
-                    return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
-                  }
-                  if (checkpoint._tag === "PlanCheckpoint") {
-                    const planContent = yield* fs
-                      .readFileString(checkpoint.planPath)
-                      .pipe(Effect.catchEager(() => Effect.succeed("")))
-                    const loaded = yield* storage.listMessagesSince(branchId, checkpoint.createdAt)
-                    cachedMessages = [...loaded]
-                    cachedContextPrefix =
-                      planContent !== "" ? `Plan to execute:\n${planContent}\n\n` : ""
-                    cachedCheckpointId = checkpointId
-                    return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
-                  }
-                  const loaded = yield* storage.listMessagesAfter(
-                    branchId,
-                    checkpoint.firstKeptMessageId,
-                  )
-                  cachedMessages = [...loaded]
-                  cachedContextPrefix =
-                    checkpoint.summary !== undefined && checkpoint.summary !== ""
-                      ? `Previous context:\n${checkpoint.summary}\n\n`
-                      : ""
-                  cachedCheckpointId = checkpointId
-                  return { messages: cachedMessages, contextPrefix: cachedContextPrefix }
-                })
+                // Load all messages for the branch
+                const messages =
+                  cachedMessages ??
+                  (yield* storage.listMessages(branchId).pipe(Effect.map((m) => [...m])))
+                if (cachedMessages === undefined) cachedMessages = messages
 
                 const agent = yield* agentRegistry.get(currentAgent)
                 if (agent === undefined) {
@@ -427,7 +373,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return true
                 })
 
-                const systemPrompt = buildSystemPrompt(config.systemPrompt, agent, contextPrefix)
+                const systemPrompt = buildSystemPrompt(config.systemPrompt, agent)
 
                 // Start streaming
                 yield* publishEvent(new StreamStarted({ sessionId, branchId }))
@@ -774,10 +720,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   const allMessages = yield* storage.listMessages(branchId)
                   const currentAgent = yield* resolveCurrentAgent()
                   const modelId = resolveAgentModelId(currentAgent)
-                  const contextPercent = yield* checkpointService.estimateContextPercent(
-                    allMessages,
-                    modelId,
-                  )
+                  const contextPercent = estimateContextPercent(allMessages, modelId)
                   if (contextPercent >= DEFAULTS.handoffThresholdPercent) {
                     yield* Effect.logInfo("auto-handoff.threshold").pipe(
                       Effect.annotateLogs({

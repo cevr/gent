@@ -31,7 +31,6 @@ import { Provider, type ProviderError, type ProviderService } from "../providers
 import type { ProviderAuthError } from "../providers/provider-auth.js"
 import { ActorProcess, type ActorProcessError } from "../runtime/actor-process.js"
 import { SteerCommand, AgentLoopError } from "../runtime/agent/agent-loop.js"
-import { CheckpointService } from "../runtime/checkpoint.js"
 import { ConfigService } from "../runtime/config-service.js"
 import type { PlatformErrorSchema } from "./errors"
 import { NotFoundError } from "./errors"
@@ -319,7 +318,6 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
     | ActorProcess
     | EventStore
     | Provider
-    | CheckpointService
     | PermissionHandler
     | PlanHandler
     | HandoffHandler
@@ -337,7 +335,6 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
       const handoffHandler = yield* HandoffHandler
       const permission = yield* Permission
       const configService = yield* ConfigService
-      const checkpointService = yield* CheckpointService
 
       const summarizeBranch = Effect.fn("GentCore.summarizeBranch")(function* (branchId: BranchId) {
         const messages = yield* storage.listMessages(branchId)
@@ -816,9 +813,6 @@ ${conversation}`
 
         approvePlan: (input) =>
           Effect.gen(function* () {
-            // Create plan checkpoint - hard reset context
-            yield* checkpointService.createPlanCheckpoint(input.branchId, input.planPath)
-
             // Emit plan confirmed event
             if (input.emitEvent !== false) {
               yield* eventStore.publish(

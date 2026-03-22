@@ -128,7 +128,6 @@ Special prefixes at input start trigger different modes:
 | `/agent`    | Switch agent             |
 | `/clear`    | Clear messages           |
 | `/sessions` | Open sessions picker     |
-| `/compact`  | Compact history          |
 | `/branch`   | Create new branch        |
 | `/tree`     | Browse branch tree       |
 | `/fork`     | Fork from a message      |
