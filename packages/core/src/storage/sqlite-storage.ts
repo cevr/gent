@@ -1,14 +1,6 @@
 import type { PlatformError } from "effect"
 import { ServiceMap, Effect, Layer, Schema, FileSystem, Path } from "effect"
-import {
-  Message,
-  Session,
-  Branch,
-  CompactionCheckpoint,
-  PlanCheckpoint,
-  MessagePart,
-  type Checkpoint,
-} from "../domain/message.js"
+import { Message, Session, Branch, MessagePart } from "../domain/message.js"
 import { TodoItem } from "../domain/todo.js"
 import { Task } from "../domain/task.js"
 import { AgentEvent, EventEnvelope, getEventSessionId } from "../domain/event.js"
@@ -96,20 +88,6 @@ export interface StorageService {
     branchId: BranchId
     tags: ReadonlyArray<string>
   }) => Effect.Effect<AgentEvent | undefined, StorageError>
-
-  // Checkpoints
-  readonly createCheckpoint: (checkpoint: Checkpoint) => Effect.Effect<Checkpoint, StorageError>
-  readonly getLatestCheckpoint: (
-    branchId: BranchId,
-  ) => Effect.Effect<Checkpoint | undefined, StorageError>
-  readonly listMessagesAfter: (
-    branchId: BranchId,
-    afterMessageId: MessageId,
-  ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
-  readonly listMessagesSince: (
-    branchId: BranchId,
-    sinceTimestamp: Date,
-  ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
 
   // Todos
   readonly listTodos: (branchId: BranchId) => Effect.Effect<ReadonlyArray<TodoItem>, StorageError>
@@ -221,18 +199,6 @@ interface MessageRow {
 interface EventRow {
   id: number
   event_json: string
-  created_at: number
-}
-
-interface CheckpointRow {
-  id: string
-  branch_id: BranchId
-  _tag: string
-  summary: string | null
-  plan_path: string | null
-  first_kept_message_id: MessageId | null
-  message_count: number
-  token_count: number
   created_at: number
 }
 
@@ -390,21 +356,6 @@ const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS checkpoints (
-      id TEXT PRIMARY KEY,
-      branch_id TEXT NOT NULL,
-      _tag TEXT NOT NULL,
-      summary TEXT,
-      plan_path TEXT,
-      first_kept_message_id TEXT,
-      message_count INTEGER NOT NULL,
-      token_count INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
-    )
-  `)
-
-  yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS todos (
       id TEXT PRIMARY KEY,
       branch_id TEXT NOT NULL,
@@ -458,7 +409,6 @@ const initSchema = Effect.gen(function* () {
     `CREATE INDEX IF NOT EXISTS idx_events_session_tag ON events(session_id, event_tag, id)`,
   )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
-  yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
   yield* sql.unsafe(
@@ -794,91 +744,6 @@ const makeStorage = Effect.gen(function* () {
       }).pipe(
         Effect.mapError(mapError("Failed to get latest event")),
         Effect.withSpan("Storage.getLatestEvent"),
-      ),
-
-    // Checkpoints
-    createCheckpoint: (checkpoint) =>
-      Effect.gen(function* () {
-        if (checkpoint._tag === "CompactionCheckpoint") {
-          yield* sql`INSERT INTO checkpoints (id, branch_id, _tag, summary, first_kept_message_id, message_count, token_count, created_at) VALUES (${checkpoint.id}, ${checkpoint.branchId}, ${checkpoint._tag}, ${checkpoint.summary}, ${checkpoint.firstKeptMessageId}, ${checkpoint.messageCount}, ${checkpoint.tokenCount}, ${checkpoint.createdAt.getTime()})`
-        } else {
-          yield* sql`INSERT INTO checkpoints (id, branch_id, _tag, plan_path, message_count, token_count, created_at) VALUES (${checkpoint.id}, ${checkpoint.branchId}, ${checkpoint._tag}, ${checkpoint.planPath}, ${checkpoint.messageCount}, ${checkpoint.tokenCount}, ${checkpoint.createdAt.getTime()})`
-        }
-        return checkpoint
-      }).pipe(
-        Effect.mapError(mapError("Failed to create checkpoint")),
-        Effect.withSpan("Storage.createCheckpoint"),
-      ),
-
-    getLatestCheckpoint: (branchId) =>
-      Effect.gen(function* () {
-        const rows =
-          yield* sql<CheckpointRow>`SELECT id, branch_id, _tag, summary, plan_path, first_kept_message_id, message_count, token_count, created_at FROM checkpoints WHERE branch_id = ${branchId} ORDER BY created_at DESC LIMIT 1`
-        const row = rows[0]
-        if (row === undefined) return undefined
-        if (row._tag === "CompactionCheckpoint") {
-          if (row.summary === null || row.first_kept_message_id === null) {
-            return yield* new StorageError({
-              message: "Corrupt CompactionCheckpoint: missing summary or firstKeptMessageId",
-            })
-          }
-          return new CompactionCheckpoint({
-            id: row.id,
-            branchId: row.branch_id,
-            summary: row.summary,
-            firstKeptMessageId: row.first_kept_message_id,
-            messageCount: row.message_count,
-            tokenCount: row.token_count,
-            createdAt: new Date(row.created_at),
-          })
-        } else {
-          if (row.plan_path === null) {
-            return yield* new StorageError({
-              message: "Corrupt PlanCheckpoint: missing planPath",
-            })
-          }
-          return new PlanCheckpoint({
-            id: row.id,
-            branchId: row.branch_id,
-            planPath: row.plan_path,
-            messageCount: row.message_count,
-            tokenCount: row.token_count,
-            createdAt: new Date(row.created_at),
-          })
-        }
-      }).pipe(
-        Effect.mapError(mapError("Failed to get latest checkpoint")),
-        Effect.withSpan("Storage.getLatestCheckpoint"),
-      ),
-
-    listMessagesAfter: (branchId, afterMessageId) =>
-      Effect.gen(function* () {
-        const afterMsgs = yield* sql<{
-          id: string
-          created_at: number
-        }>`SELECT id, created_at FROM messages WHERE id = ${afterMessageId}`
-        const afterMsg = afterMsgs[0]
-        if (afterMsg === undefined) return []
-        const rows =
-          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ${branchId} AND (created_at > ${afterMsg.created_at} OR (created_at = ${afterMsg.created_at} AND id > ${afterMsg.id})) ORDER BY created_at ASC, id ASC`
-        return yield* Effect.forEach(rows, (row) =>
-          Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
-        )
-      }).pipe(
-        Effect.mapError(mapError("Failed to list messages after")),
-        Effect.withSpan("Storage.listMessagesAfter"),
-      ),
-
-    listMessagesSince: (branchId, sinceTimestamp) =>
-      Effect.gen(function* () {
-        const rows =
-          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ${branchId} AND created_at > ${sinceTimestamp.getTime()} ORDER BY created_at ASC, id ASC`
-        return yield* Effect.forEach(rows, (row) =>
-          Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
-        )
-      }).pipe(
-        Effect.mapError(mapError("Failed to list messages since")),
-        Effect.withSpan("Storage.listMessagesSince"),
       ),
 
     // Todos

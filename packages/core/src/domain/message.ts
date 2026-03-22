@@ -105,32 +105,3 @@ export interface SessionTreeNode {
   session: Session
   children: readonly SessionTreeNode[]
 }
-
-// Checkpoint - discriminated union for context management
-
-const CheckpointBase = {
-  id: Schema.String,
-  branchId: BranchId,
-  messageCount: Schema.Number,
-  tokenCount: Schema.Number,
-  createdAt: DateFromNumber,
-}
-
-// Compaction checkpoint: summarizes history, keeps recent messages
-export class CompactionCheckpoint extends Schema.TaggedClass<CompactionCheckpoint>()(
-  "CompactionCheckpoint",
-  {
-    ...CheckpointBase,
-    summary: Schema.String,
-    firstKeptMessageId: MessageId,
-  },
-) {}
-
-// Plan checkpoint: hard reset, only plan file as context
-export class PlanCheckpoint extends Schema.TaggedClass<PlanCheckpoint>()("PlanCheckpoint", {
-  ...CheckpointBase,
-  planPath: Schema.String,
-}) {}
-
-export const Checkpoint = Schema.Union([CompactionCheckpoint, PlanCheckpoint])
-export type Checkpoint = typeof Checkpoint.Type
