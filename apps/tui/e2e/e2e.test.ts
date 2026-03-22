@@ -11,7 +11,8 @@ import { spawn, type IPty } from "bun-pty"
 import * as path from "node:path"
 import * as fs from "node:fs"
 import * as os from "node:os"
-import { AuthApi, AuthStore, AuthStorage } from "@gent/core"
+import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
+import { AuthStorage } from "@gent/core/domain/auth-storage"
 
 // Test timeout
 const TEST_TIMEOUT = 30_000
