@@ -1,5 +1,19 @@
 import type { Effect, Layer, Schema } from "effect"
 import type { AgentDefinition, AgentName } from "./agent"
+import type {
+  SessionStarted,
+  SessionEnded,
+  StreamStarted,
+  StreamEnded,
+  TurnCompleted,
+  ToolCallStarted,
+  ToolCallSucceeded,
+  ToolCallFailed,
+  MessageReceived,
+  AgentSwitched,
+  HandoffPresented,
+  HandoffConfirmed,
+} from "./event"
 import type { BranchId, SessionId } from "./ids"
 import type { ToolResultPart } from "./message"
 import type { PermissionResult } from "./permission"
@@ -109,50 +123,19 @@ export interface ExtensionHookMap {
   readonly "provider.request": Interceptor<ProviderRequestInput, ProviderRequest>
   readonly "permission.check": Interceptor<PermissionCheckInput, PermissionResult>
 
-  // Lifecycle observers — event types reused from domain/event.ts
-  readonly "session.start": Observer<{ sessionId: SessionId; branchId: BranchId }>
-  readonly "session.end": Observer<{ sessionId: SessionId }>
-  readonly "handoff.before": Observer<{ sessionId: SessionId; context: string }>
-  readonly "handoff.after": Observer<{ sessionId: SessionId; newSessionId: SessionId }>
-  readonly "agent.start": Observer<{ sessionId: SessionId; branchId: BranchId }>
-  readonly "agent.end": Observer<{ sessionId: SessionId; branchId: BranchId }>
-  readonly "agent.switch": Observer<{
-    sessionId: SessionId
-    branchId: BranchId
-    from: AgentName
-    to: AgentName
-  }>
-  readonly "turn.start": Observer<{ sessionId: SessionId; branchId: BranchId }>
-  readonly "turn.end": Observer<{
-    sessionId: SessionId
-    branchId: BranchId
-    durationMs: number
-  }>
-  readonly "stream.start": Observer<{ sessionId: SessionId; branchId: BranchId }>
-  readonly "stream.end": Observer<{
-    sessionId: SessionId
-    branchId: BranchId
-    usage?: { inputTokens: number; outputTokens: number }
-  }>
-  readonly "tool.call": Observer<{
-    sessionId: SessionId
-    branchId: BranchId
-    toolCallId: string
-    toolName: string
-  }>
-  readonly "tool.result": Observer<{
-    sessionId: SessionId
-    branchId: BranchId
-    toolCallId: string
-    toolName: string
-    isError: boolean
-  }>
-  readonly "message.received": Observer<{
-    sessionId: SessionId
-    branchId: BranchId
-    messageId: string
-    role: string
-  }>
+  // Lifecycle observers — reuse actual event class types from domain/event.ts
+  readonly "session.start": Observer<SessionStarted>
+  readonly "session.end": Observer<SessionEnded>
+  readonly "handoff.before": Observer<HandoffPresented>
+  readonly "handoff.after": Observer<HandoffConfirmed>
+  readonly "agent.switch": Observer<AgentSwitched>
+  readonly "stream.start": Observer<StreamStarted>
+  readonly "stream.end": Observer<StreamEnded>
+  readonly "turn.end": Observer<TurnCompleted>
+  readonly "tool.call": Observer<ToolCallStarted>
+  readonly "tool.succeeded": Observer<ToolCallSucceeded>
+  readonly "tool.failed": Observer<ToolCallFailed>
+  readonly "message.received": Observer<MessageReceived>
 }
 
 // Extension Setup — what an extension provides
