@@ -27,7 +27,7 @@ const AuthMethodSchema = Schema.Struct({
 
 const AuthorizationSchema = Schema.Struct({
   url: Schema.String,
-  method: Schema.Literals(["auto", "code"]),
+  method: Schema.Literals(["auto", "code", "done"]),
   authorizationId: Schema.String,
   instructions: Schema.optional(Schema.String),
 })

@@ -7,7 +7,7 @@ import {
 } from "../domain/auth-method.js"
 import { SUPPORTED_PROVIDERS, type ProviderId } from "../domain/model.js"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
-import { authorizeAnthropic } from "./oauth/anthropic-oauth"
+import { readClaudeCodeCredentials, refreshClaudeCodeCredentials } from "./oauth/anthropic-keychain"
 
 export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError>()(
   "ProviderAuthError",
@@ -40,7 +40,7 @@ export interface ProviderAuthProvider {
   >
 }
 
-const buildProviders = (): Record<ProviderId, ProviderAuthProvider> => {
+const buildProviders = (authStore: AuthStoreService): Record<ProviderId, ProviderAuthProvider> => {
   const methodsDefault = [new AuthMethod({ type: "api", label: "Manually enter API key" })]
 
   const openaiMethods = [
@@ -49,7 +49,7 @@ const buildProviders = (): Record<ProviderId, ProviderAuthProvider> => {
   ]
 
   const anthropicMethods = [
-    new AuthMethod({ type: "oauth", label: "Claude Pro/Max" }),
+    new AuthMethod({ type: "oauth", label: "Claude Code" }),
     new AuthMethod({ type: "api", label: "Manually enter API key" }),
   ]
 
@@ -57,29 +57,54 @@ const buildProviders = (): Record<ProviderId, ProviderAuthProvider> => {
     anthropic: {
       methods: anthropicMethods,
       authorize: (index) =>
-        Effect.tryPromise({
-          try: async () => {
-            if (index !== 0) return undefined
-            const { authorization, callback } = await authorizeAnthropic()
-            return {
-              authorization,
-              callback: (code?: string) =>
-                Effect.tryPromise({
-                  try: async () => callback(code),
-                  catch: (e) =>
-                    new ProviderAuthError({
-                      message: "Anthropic OAuth callback failed",
-                      cause: e,
-                    }),
-                }),
-            }
-          },
-          catch: (e) =>
-            new ProviderAuthError({
-              message: "Anthropic OAuth authorize failed",
-              cause: e,
-            }),
-        }),
+        Effect.gen(function* () {
+          if (index !== 0) return undefined
+          let creds = yield* readClaudeCodeCredentials()
+          if (creds.expiresAt < Date.now() + 60_000) {
+            yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
+            creds = yield* readClaudeCodeCredentials()
+          }
+          yield* authStore
+            .set(
+              "anthropic",
+              new AuthOauth({
+                type: "oauth",
+                access: creds.accessToken,
+                refresh: creds.refreshToken,
+                expires: creds.expiresAt,
+              }),
+            )
+            .pipe(
+              Effect.mapError(
+                (e) =>
+                  new ProviderAuthError({
+                    message: "Failed to store keychain credentials",
+                    cause: e,
+                  }),
+              ),
+            )
+          return {
+            authorization: {
+              url: "" as string,
+              method: "done" as const,
+            },
+            callback: () =>
+              Effect.succeed({
+                type: "oauth" as const,
+                access: creds.accessToken,
+                refresh: creds.refreshToken,
+                expires: creds.expiresAt,
+              }),
+          }
+        }).pipe(
+          Effect.mapError(
+            (e) =>
+              new ProviderAuthError({
+                message: `Claude Code keychain: ${e instanceof Error ? e.message : String(e)}`,
+                cause: e,
+              }),
+          ),
+        ),
     },
     openai: {
       methods: openaiMethods,
@@ -137,7 +162,7 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
     ProviderAuth,
     Effect.gen(function* () {
       const authStore = yield* AuthStore
-      return yield* makeProviderAuth(authStore, buildProviders())
+      return yield* makeProviderAuth(authStore, buildProviders(authStore))
     }),
   )
 

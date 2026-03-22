@@ -184,6 +184,11 @@ export function Auth(props: AuthProps) {
               )
               return
             }
+            if (authorization.method === "done") {
+              send(AuthEvent.ActionSucceeded)
+              loadAuth()
+              return
+            }
             send(
               AuthEvent.StartOAuth({
                 authorization,
@@ -194,11 +199,13 @@ export function Auth(props: AuthProps) {
             )
           }),
         ),
-        Effect.tap((authorization) =>
-          authorization === null ? Effect.void : openAuthorization(authorization.url),
-        ),
         Effect.tap((authorization) => {
-          if (authorization !== null && authorization.method === "auto") {
+          if (authorization === null || authorization.method === "done") return Effect.void
+          return openAuthorization(authorization.url)
+        }),
+        Effect.tap((authorization) => {
+          if (authorization === null || authorization.method === "done") return Effect.void
+          if (authorization.method === "auto") {
             return Effect.sync(() =>
               startAutoCallback(
                 authorization.authorizationId,

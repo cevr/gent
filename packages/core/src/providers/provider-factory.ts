@@ -10,7 +10,7 @@ import { AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-
 import { SUPPORTED_PROVIDERS } from "../domain/model.js"
 import { ProviderError } from "./provider"
 import { OPENAI_OAUTH_ALLOWED_MODELS, createOpenAIOAuthFetch } from "./oauth/openai-oauth"
-import { createAnthropicOAuthFetch } from "./oauth/anthropic-oauth"
+import { createAnthropicKeychainFetch } from "./oauth/anthropic-keychain"
 
 type ProviderApi =
   | "anthropic"
@@ -87,7 +87,7 @@ const createProviderClient = (
       if (auth?.type === "oauth") {
         return createAnthropic({
           apiKey: "oauth-placeholder",
-          fetch: createAnthropicOAuthFetch(authStore),
+          fetch: createAnthropicKeychainFetch(authStore),
         })
       }
       return createAnthropic(resolvedApiKey)

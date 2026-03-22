@@ -8,7 +8,7 @@ export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
   label: Schema.String,
 }) {}
 
-export const AuthAuthorizationMethod = Schema.Literals(["auto", "code"])
+export const AuthAuthorizationMethod = Schema.Literals(["auto", "code", "done"])
 export type AuthAuthorizationMethod = typeof AuthAuthorizationMethod.Type
 
 export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuthorization")({
