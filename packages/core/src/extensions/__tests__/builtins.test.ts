@@ -89,7 +89,16 @@ describe("BuiltinExtensions", () => {
     }
   })
 
-  test("extension count matches expected", () => {
-    expect(BuiltinExtensions.length).toBe(9)
+  test("covers all tools from AllTools", async () => {
+    const { AllTools } = await import("../../tools/index.js")
+    const results = await loadAll()
+    const extensionToolNames = new Set<string>(
+      results.flatMap((r) => (r.setup.tools ?? []).map((t) => t.name)),
+    )
+    // Every tool in AllTools must appear in extensions
+    // (extensions may have extras like loop_evaluation which AllTools doesn't include)
+    for (const tool of AllTools) {
+      expect(extensionToolNames.has(tool.name)).toBe(true)
+    }
   })
 })
