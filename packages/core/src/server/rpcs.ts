@@ -1,14 +1,14 @@
 import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "effect/unstable/rpc"
 import { Schema } from "effect"
-import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
-import { MessagePart } from "@gent/core/domain/message.js"
-import { EventEnvelope, PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
-import { AgentName, ReasoningEffort } from "@gent/core/domain/agent.js"
-import { Model } from "@gent/core/domain/model.js"
-import { PermissionDecision, PermissionRule } from "@gent/core/domain/permission.js"
-import { Task } from "@gent/core/domain/task.js"
-import { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
-import { AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
+import { SessionId, BranchId, MessageId } from "../domain/ids.js"
+import { MessagePart } from "../domain/message.js"
+import { EventEnvelope, PlanDecision, HandoffDecision } from "../domain/event.js"
+import { AgentName, ReasoningEffort } from "../domain/agent.js"
+import { Model } from "../domain/model.js"
+import { PermissionDecision, PermissionRule } from "../domain/permission.js"
+import { Task } from "../domain/task.js"
+import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
+import { AuthProviderInfo } from "../domain/auth-guard.js"
 import {
   ActorProcessMetrics,
   ActorProcessState,
@@ -16,7 +16,7 @@ import {
   InterruptPayload,
   SendToolResultPayload,
   SendUserMessagePayload,
-} from "@gent/core/runtime/actor-process.js"
+} from "../runtime/actor-process.js"
 import { GentRpcError } from "./errors.js"
 
 // ============================================================================

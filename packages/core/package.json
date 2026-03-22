@@ -7,7 +7,10 @@
     "./storage/*": "./src/storage/*",
     "./providers/*": "./src/providers/*",
     "./runtime/*": "./src/runtime/*",
-    "./tools/*": "./src/tools/*"
+    "./tools/*": "./src/tools/*",
+    "./server/*": "./src/server/*",
+    "./test-utils": "./src/test-utils/index.ts",
+    "./test-utils/*": "./src/test-utils/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -27,6 +30,7 @@
     "@effect/platform-bun": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "effect-bun-test": "catalog:"
   }
 }

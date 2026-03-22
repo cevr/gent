@@ -35,7 +35,6 @@
       "dependencies": {
         "@effect/platform-bun": "catalog:",
         "@gent/core": "workspace:*",
-        "@gent/server": "workspace:*",
         "msgpackr": "catalog:",
         "multipasta": "catalog:",
       },
@@ -54,7 +53,6 @@
         "@gent/atom-solid": "workspace:*",
         "@gent/core": "workspace:*",
         "@gent/sdk": "workspace:*",
-        "@gent/server": "workspace:*",
         "@opentui/core": "^0.1.88",
         "@opentui/solid": "^0.1.88",
         "beautiful-mermaid": "^1.1.3",
@@ -100,6 +98,7 @@
         "@effect/sql-pg": "catalog:",
         "@effect/sql-sqlite-bun": "catalog:",
         "effect": "catalog:",
+        "effect-bun-test": "catalog:",
       },
     },
     "packages/providers": {
@@ -115,7 +114,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
-        "@gent/server": "workspace:*",
       },
       "peerDependencies": {
         "effect": "catalog:",
@@ -124,12 +122,6 @@
     "packages/server": {
       "name": "@gent/server",
       "version": "0.0.0",
-      "dependencies": {
-        "@gent/core": "workspace:*",
-      },
-      "peerDependencies": {
-        "effect": "catalog:",
-      },
     },
     "packages/storage": {
       "name": "@gent/storage",
@@ -138,13 +130,6 @@
     "packages/test-utils": {
       "name": "@gent/test-utils",
       "version": "0.0.0",
-      "dependencies": {
-        "@gent/core": "workspace:*",
-      },
-      "peerDependencies": {
-        "effect": "catalog:",
-        "effect-bun-test": "catalog:",
-      },
     },
     "packages/tools": {
       "name": "@gent/tools",

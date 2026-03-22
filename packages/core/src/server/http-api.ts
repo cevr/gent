@@ -8,7 +8,7 @@ import {
   MessageInfo,
   SteerPayload,
 } from "./rpcs.js"
-import { SessionId, BranchId } from "@gent/core/domain/ids.js"
+import { SessionId, BranchId } from "../domain/ids.js"
 
 // Re-export schemas under HTTP-friendly names for backward compatibility
 export const SendMessageRequest = SendMessagePayload

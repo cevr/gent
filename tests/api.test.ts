@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
-import { SendMessagePayload } from "@gent/server"
+import { SendMessagePayload } from "@gent/core/server/rpcs"
 
 describe("SendMessage API", () => {
   test("SendMessagePayload decodes required fields", () => {

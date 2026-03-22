@@ -5,7 +5,7 @@ import {
   createRecordingTestLayer,
   assertSequence,
   mockTextResponse,
-} from "@gent/test-utils"
+} from "@gent/core/test-utils"
 import { Provider } from "@gent/core/providers/provider"
 import { EventStore, StreamStarted } from "@gent/core/domain/event"
 import { AskUserHandler } from "@gent/core/tools/ask-user"

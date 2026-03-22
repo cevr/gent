@@ -25,7 +25,7 @@ import { Permission } from "@gent/core/domain/permission"
 import { PermissionHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/test-utils"
+import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 
 describe("Retry Logic", () => {

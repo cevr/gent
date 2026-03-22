@@ -3,14 +3,11 @@ import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
 import { Effect, Layer, Schema } from "effect"
-import {
-  GentApi,
-  GentCore,
-  GentRpcs,
-  RpcHandlersLive,
-  createDependencies,
-  SteerCommand,
-} from "@gent/server"
+import { GentApi } from "@gent/core/server/http-api.js"
+import { GentCore, SteerCommand } from "@gent/core/server/core.js"
+import { GentRpcs } from "@gent/core/server/rpcs.js"
+import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
+import { createDependencies } from "@gent/core/server/index.js"
 
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>

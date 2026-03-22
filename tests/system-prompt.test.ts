@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT } from "@gent/server"
+import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT } from "@gent/core/server/system-prompt"
 
 describe("buildSystemPrompt", () => {
   const base = {

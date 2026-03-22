@@ -4,14 +4,14 @@ import { BunServices, BunRuntime } from "@effect/platform-bun"
 import { Config, Console, Effect, Layer, Option, Ref, Stream } from "effect"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "@gent/atom-solid"
+import { createDependencies } from "@gent/core/server/index.js"
 import {
-  createDependencies,
   GentCore,
   type GentCoreService,
   type GentCoreError,
   type SessionInfo,
   type BranchInfo,
-} from "@gent/server"
+} from "@gent/core/server/core.js"
 import { makeDirectGentClient, type GentClient } from "@gent/sdk"
 import { GentLogger } from "@gent/core/runtime/logger.js"
 import { UnifiedTracerLive } from "./utils/unified-tracer"

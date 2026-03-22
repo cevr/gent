@@ -3,14 +3,11 @@ import type { Stream, ServiceMap, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
-import {
-  GentRpcs,
-  RpcHandlersLive,
-  GentCore,
-  AskUserHandler,
-  type GentRpcsClient,
-  type GentRpcError,
-} from "@gent/server"
+import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
+import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
+import { GentCore } from "@gent/core/server/core.js"
+import { AskUserHandler } from "@gent/core/tools/ask-user.js"
+import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store.js"
 import { AuthGuard, type AuthProviderInfo } from "@gent/core/domain/auth-guard.js"

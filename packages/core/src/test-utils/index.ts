@@ -1,27 +1,23 @@
 import { ServiceMap, Effect, Layer, Ref, Stream } from "effect"
-import { Storage } from "@gent/core/storage/sqlite-storage.js"
+import { Storage } from "../storage/sqlite-storage.js"
 import {
   Provider,
   FinishChunk,
   TextChunk,
   ToolCallChunk,
   type StreamChunk,
-} from "@gent/core/providers/provider.js"
-import { ToolRegistry, type AnyToolDefinition } from "@gent/core/domain/tool.js"
-import { EventStore, EventEnvelope, matchesEventFilter } from "@gent/core/domain/event.js"
-import { Permission, type PermissionDecision } from "@gent/core/domain/permission.js"
-import {
-  PermissionHandler,
-  PlanHandler,
-  HandoffHandler,
-} from "@gent/core/domain/interaction-handlers.js"
-import type { PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
-import { PlanCheckpoint, type Checkpoint } from "@gent/core/domain/message.js"
-import type { BranchId } from "@gent/core/domain/ids.js"
-import { AskUserHandler } from "@gent/core/tools/ask-user.js"
-import { AllTools } from "@gent/core/tools/index.js"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.js"
-import { CheckpointService } from "@gent/core/runtime/checkpoint.js"
+} from "../providers/provider.js"
+import { ToolRegistry, type AnyToolDefinition } from "../domain/tool.js"
+import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.js"
+import { Permission, type PermissionDecision } from "../domain/permission.js"
+import { PermissionHandler, PlanHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import type { PlanDecision, HandoffDecision } from "../domain/event.js"
+import { PlanCheckpoint, type Checkpoint } from "../domain/message.js"
+import type { BranchId } from "../domain/ids.js"
+import { AskUserHandler } from "../tools/ask-user.js"
+import { AllTools } from "../tools/index.js"
+import { AgentLoop } from "../runtime/agent/agent-loop.js"
+import { CheckpointService } from "../runtime/checkpoint.js"
 
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"

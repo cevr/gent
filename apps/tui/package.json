@@ -17,7 +17,6 @@
     "@gent/atom-solid": "workspace:*",
     "@gent/core": "workspace:*",
     "@gent/sdk": "workspace:*",
-    "@gent/server": "workspace:*",
     "@opentui/core": "^0.1.88",
     "@opentui/solid": "^0.1.88",
     "beautiful-mermaid": "^1.1.3",

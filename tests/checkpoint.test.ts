@@ -11,7 +11,7 @@ import {
 } from "@gent/core/domain/message"
 import { EventStore, PlanConfirmed } from "@gent/core/domain/event"
 import { CheckpointService, estimateTokens } from "@gent/core/runtime/checkpoint"
-import { SequenceRecorder, createRecordingTestLayer, assertSequence } from "@gent/test-utils"
+import { SequenceRecorder, createRecordingTestLayer, assertSequence } from "@gent/core/test-utils"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
   Effect.runPromise(Effect.provide(effect, Storage.Test()))

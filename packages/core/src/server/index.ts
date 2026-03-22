@@ -1,44 +1,35 @@
 import type { PlatformError } from "effect"
 import { Config, Effect, Layer, Option, FileSystem, Path } from "effect"
-import { ToolRegistry } from "@gent/core/domain/tool.js"
-import { Permission } from "@gent/core/domain/permission.js"
-import {
-  PermissionHandler,
-  PlanHandler,
-  HandoffHandler,
-} from "@gent/core/domain/interaction-handlers.js"
-import { Skills } from "@gent/core/domain/skills.js"
-import { AuthGuard } from "@gent/core/domain/auth-guard.js"
-import { AuthStorage } from "@gent/core/domain/auth-storage.js"
-import { AuthStore } from "@gent/core/domain/auth-store.js"
-import { AgentRegistry } from "@gent/core/domain/agent.js"
-import type { SubagentRunnerService } from "@gent/core/domain/agent.js"
-import { FileLockService } from "@gent/core/domain/file-lock.js"
-import type { EventStore } from "@gent/core/domain/event.js"
-import { Storage } from "@gent/core/storage/sqlite-storage.js"
-import { Provider } from "@gent/core/providers/provider.js"
-import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
-import { ProviderFactory } from "@gent/core/providers/provider-factory.js"
-import {
-  AgentLoop,
-  SteerCommand,
-  AgentLoopError,
-  AgentActor,
-} from "@gent/core/runtime/agent/agent-loop.js"
+import { ToolRegistry } from "../domain/tool.js"
+import { Permission } from "../domain/permission.js"
+import { PermissionHandler, PlanHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import { Skills } from "../domain/skills.js"
+import { AuthGuard } from "../domain/auth-guard.js"
+import { AuthStorage } from "../domain/auth-storage.js"
+import { AuthStore } from "../domain/auth-store.js"
+import { AgentRegistry } from "../domain/agent.js"
+import type { SubagentRunnerService } from "../domain/agent.js"
+import { FileLockService } from "../domain/file-lock.js"
+import type { EventStore } from "../domain/event.js"
+import { Storage } from "../storage/sqlite-storage.js"
+import { Provider } from "../providers/provider.js"
+import { ProviderAuth } from "../providers/provider-auth.js"
+import { ProviderFactory } from "../providers/provider-factory.js"
+import { AgentLoop, SteerCommand, AgentLoopError, AgentActor } from "../runtime/agent/agent-loop.js"
 import {
   InProcessRunner,
   SubprocessRunner,
   SubagentRunnerConfig,
-} from "@gent/core/runtime/agent/subagent-runner.js"
-import { ToolRunner } from "@gent/core/runtime/agent/tool-runner.js"
-import { LocalActorProcessLive, type ActorProcess } from "@gent/core/runtime/actor-process.js"
-import { CheckpointService } from "@gent/core/runtime/checkpoint.js"
-import { ConfigService } from "@gent/core/runtime/config-service.js"
-import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
-import { FileTracker } from "@gent/core/runtime/file-tracker.js"
-import { TaskService } from "@gent/core/runtime/task-service.js"
-import { AllTools } from "@gent/core/tools/index.js"
-import { AskUserHandler, QuestionHandler } from "@gent/core/tools/ask-user.js"
+} from "../runtime/agent/subagent-runner.js"
+import { ToolRunner } from "../runtime/agent/tool-runner.js"
+import { LocalActorProcessLive, type ActorProcess } from "../runtime/actor-process.js"
+import { CheckpointService } from "../runtime/checkpoint.js"
+import { ConfigService } from "../runtime/config-service.js"
+import { ModelRegistry } from "../runtime/model-registry.js"
+import { FileTracker } from "../runtime/file-tracker.js"
+import { TaskService } from "../runtime/task-service.js"
+import { AllTools } from "../tools/index.js"
+import { AskUserHandler, QuestionHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
 import * as nodePath from "node:path"

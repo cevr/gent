@@ -1,6 +1,6 @@
 import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import { identity } from "effect/Function"
-import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
+import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import {
   Session,
   Branch,
@@ -8,7 +8,7 @@ import {
   TextPart,
   type MessagePart,
   type SessionTreeNode,
-} from "@gent/core/domain/message.js"
+} from "../domain/message.js"
 import {
   EventStore,
   type EventId,
@@ -21,30 +21,18 @@ import {
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
-} from "@gent/core/domain/event.js"
-import { AgentName, type ReasoningEffort } from "@gent/core/domain/agent.js"
-import {
-  Permission,
-  PermissionRule,
-  type PermissionDecision,
-} from "@gent/core/domain/permission.js"
-import {
-  PermissionHandler,
-  PlanHandler,
-  HandoffHandler,
-} from "@gent/core/domain/interaction-handlers.js"
-import type { Task } from "@gent/core/domain/task.js"
-import { Storage, StorageError } from "@gent/core/storage/sqlite-storage.js"
-import {
-  Provider,
-  type ProviderError,
-  type ProviderService,
-} from "@gent/core/providers/provider.js"
-import type { ProviderAuthError } from "@gent/core/providers/provider-auth.js"
-import { ActorProcess, type ActorProcessError } from "@gent/core/runtime/actor-process.js"
-import { SteerCommand, AgentLoopError } from "@gent/core/runtime/agent/agent-loop.js"
-import { CheckpointService } from "@gent/core/runtime/checkpoint.js"
-import { ConfigService } from "@gent/core/runtime/config-service.js"
+} from "../domain/event.js"
+import { AgentName, type ReasoningEffort } from "../domain/agent.js"
+import { Permission, PermissionRule, type PermissionDecision } from "../domain/permission.js"
+import { PermissionHandler, PlanHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import type { Task } from "../domain/task.js"
+import { Storage, StorageError } from "../storage/sqlite-storage.js"
+import { Provider, type ProviderError, type ProviderService } from "../providers/provider.js"
+import type { ProviderAuthError } from "../providers/provider-auth.js"
+import { ActorProcess, type ActorProcessError } from "../runtime/actor-process.js"
+import { SteerCommand, AgentLoopError } from "../runtime/agent/agent-loop.js"
+import { CheckpointService } from "../runtime/checkpoint.js"
+import { ConfigService } from "../runtime/config-service.js"
 import type { PlatformErrorSchema } from "./errors"
 import { NotFoundError } from "./errors"
 

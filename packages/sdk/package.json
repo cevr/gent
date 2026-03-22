@@ -10,8 +10,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@gent/core": "workspace:*",
-    "@gent/server": "workspace:*"
+    "@gent/core": "workspace:*"
   },
   "peerDependencies": {
     "effect": "catalog:"

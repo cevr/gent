@@ -2,7 +2,7 @@
  * System prompt construction
  */
 
-import { formatSkillsForPrompt, type Skill } from "@gent/core/domain/skills.js"
+import { formatSkillsForPrompt, type Skill } from "../domain/skills.js"
 
 export const DEFAULT_SYSTEM_PROMPT = `You are Gent, a coding assistant.
 
