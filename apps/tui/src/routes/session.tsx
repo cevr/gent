@@ -308,6 +308,18 @@ export function Session(props: SessionProps) {
         handleInputEvent({ _tag: "PromptPresented", event })
       } else if (event._tag === "HandoffPresented") {
         handleInputEvent({ _tag: "HandoffPresented", event })
+      } else if (event._tag === "ErrorOccurred") {
+        setStore(
+          produce((draft) => {
+            draft.events.push({
+              _tag: "event",
+              kind: "error",
+              error: event.error,
+              createdAt: Date.now(),
+              seq: eventSeq++,
+            })
+          }),
+        )
       }
       // Note: agent state (status, cost, error) is updated by ClientProvider
     })
@@ -553,7 +565,8 @@ export function Session(props: SessionProps) {
     }
   })
 
-  const borderColor = () => (client.isStreaming() ? theme.borderActive : theme.border)
+  const borderColor = () =>
+    client.isError() ? theme.error : client.isStreaming() ? theme.borderActive : theme.border
 
   const topLeftLabels = (): BorderLabelItem[] => {
     const c = client.cost()
@@ -609,7 +622,6 @@ export function Session(props: SessionProps) {
         bottomLeft={bottomLeftLabels()}
         bottomRight={bottomRightLabels()}
         borderColor={borderColor()}
-        error={client.error()}
       >
         <Input
           onSubmit={handleSubmit}

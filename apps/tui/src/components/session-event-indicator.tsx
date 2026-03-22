@@ -17,6 +17,13 @@ export type SessionEvent =
       createdAt: number
       seq: number
     }
+  | {
+      _tag: "event"
+      kind: "error"
+      error: string
+      createdAt: number
+      seq: number
+    }
 
 export interface SessionEventIndicatorProps {
   event: SessionEvent
@@ -30,6 +37,8 @@ const getLabel = (event: SessionEvent): string => {
       return `Worked for ${formatThinkTime(event.durationSeconds)}`
     case "interruption":
       return "Interrupted - what do you want to do instead?"
+    case "error":
+      return event.error
   }
 }
 
@@ -53,13 +62,22 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
     return truncate(getLabel(props.event), width)
   }
 
-  const isLineEvent = () => props.event.kind === "turn-ended"
+  const isLineEvent = () => props.event.kind === "turn-ended" || props.event.kind === "error"
+
+  const color = () => {
+    switch (props.event.kind) {
+      case "error":
+        return theme.error
+      case "interruption":
+        return theme.warning
+      default:
+        return theme.textMuted
+    }
+  }
 
   return (
     <box marginTop={1}>
-      <text style={{ fg: props.event.kind === "interruption" ? theme.warning : theme.textMuted }}>
-        {isLineEvent() ? line() : plain()}
-      </text>
+      <text style={{ fg: color() }}>{isLineEvent() ? line() : plain()}</text>
     </box>
   )
 }
