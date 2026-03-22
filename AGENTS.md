@@ -75,7 +75,7 @@ packages/core/src/       # Everything non-UI
   domain/                # Schemas + services (ids, message, event, tool, agent, etc.)
   storage/               # SQLite
   providers/             # AI SDK adapters
-  runtime/               # AgentLoop, ActorProcess, checkpoint, retry
+  runtime/               # AgentLoop, ActorProcess, context-estimation, retry
   tools/                 # Tool implementations
   server/                # GentCore, RPCs, event-store
   test-utils/            # Mock layers, sequence recording

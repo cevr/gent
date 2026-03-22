@@ -62,7 +62,7 @@ How data persists. Single file, no ORM.
 
 **Read:** `packages/storage/src/sqlite-storage.ts` (lines 84–157)
 
-Five tables: sessions, branches, messages, checkpoints, todos.
+Tables: sessions, branches, messages, todos, tasks.
 
 **Hint:** `parts` column stores JSON string. Must decode after parsing:
 
@@ -81,10 +81,8 @@ Service pattern: `Storage` is a `Context.Tag`, `Storage.Live(dbPath)` returns a 
 **Key operations:**
 
 - `createMessage` / `listMessages`
-- `createCheckpoint` / `getLatestCheckpoint`
 - `updateMessageTurnDuration`
-
-**Question:** Why does `listMessagesSince(branchId, date)` exist? (Hint: checkpoints)
+- `listTodos` / `replaceTodos`
 
 ---
 
@@ -132,7 +130,7 @@ This is the heart. Study it carefully.
 **Core algorithm:** `runLoop` (line ~187) is a recursive generator:
 
 1. Check steer queue (Cancel, Interrupt, Interject, SwitchAgent)
-2. Load messages (checkpoint-aware)
+2. Load all messages for the branch
 3. Build provider request (system prompt + history + tools)
 4. Stream from provider, accumulate chunks
 5. Process tool calls → execute → collect results
@@ -149,16 +147,11 @@ This is the heart. Study it carefully.
 
 **Question:** What happens if a tool throws? (Hint: `ToolError` part, loop continues)
 
-### 4.2 Checkpoints
+### 4.2 Context Management
 
-**Read:** `packages/runtime/src/checkpoint.ts`
+Context growth is managed via **handoff** — agent creates a child session with a summary, continuing work with fresh context. See `HandoffHandler` in `domain/interaction-handlers.ts`.
 
-Two types:
-
-- `CompactionCheckpoint` — summarizes old messages, keeps recent
-- `PlanCheckpoint` — hard reset, only plan file as context
-
-**Hint:** When loading messages, `getLatestCheckpoint` determines where to start. This enables long conversations without context overflow.
+Token estimation lives in `runtime/context-estimation.ts` — pure functions for estimating token counts and context usage percentage.
 
 ---
 
@@ -251,12 +244,12 @@ Maps RPC definitions to `GentCore` methods. Most are thin wrappers with `Effect.
 ```
 Storage → Provider → ToolRegistry → EventStore → Permission
                                             ↓
-                            CheckpointService → AskUserHandler
+                                   AskUserHandler → HandoffHandler
                                             ↓
                                          AgentLoop
 ```
 
-**Hint:** Layer order matters. AgentLoop needs CheckpointService, which needs Storage + Provider.
+**Hint:** Layer order matters. AgentLoop needs Storage, Provider, EventStore, HandoffHandler.
 
 ---
 
@@ -422,7 +415,7 @@ Provider layer:
 Runtime:
 
 - [ ] `packages/runtime/src/agent-loop.ts`
-- [ ] `packages/runtime/src/checkpoint.ts`
+- [ ] `packages/runtime/src/context-estimation.ts`
 
 Tools:
 
@@ -456,7 +449,7 @@ Testing:
 
 3. **Streaming:** Why does TUI rebuild messages on `MessageReceived` but append on `StreamChunk`?
 
-4. **Checkpoints:** How does `PlanCheckpoint` differ from `CompactionCheckpoint`? When is each used?
+4. **Context management:** How does handoff manage context growth? What triggers auto-handoff?
 
 5. **State machine:** What happens if `QuestionsAsked` event arrives while in shell mode?
 

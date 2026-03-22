@@ -24,7 +24,7 @@ BEAM-inspired, Effect-first, local-first with cluster support.
 
 - Primary: `cowork`, `deepwork`
 - Subagents: `explore`, `architect`
-- System: `compaction`, `title`
+- System: `title`
 
 Model selection is per-mode only. No user-facing model switching.
 Pricing metadata is sourced from models.dev (registry).
@@ -49,7 +49,7 @@ ToolActor (state machine)
 
 PlannerActor (state machine)
 
-- Plan tool lifecycle: write -> confirm -> checkpoint/continue
+- Plan tool lifecycle: write -> confirm -> continue
 
 SubagentActor (router)
 

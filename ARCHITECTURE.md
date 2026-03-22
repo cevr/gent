@@ -38,7 +38,7 @@ packages/
 │   ├── domain/      # Schemas + services: ids, message, event, tool, agent, permission, auth, etc.
 │   ├── storage/     # SQLite (bun:sqlite) - baked in
 │   ├── providers/   # Vercel AI SDK adapters
-│   ├── runtime/     # ActorProcess, AgentLoop, AgentActor, checkpoint, retry
+│   ├── runtime/     # ActorProcess, AgentLoop, AgentActor, context-estimation, retry
 │   ├── tools/       # Read, Write, Edit, Bash, Glob, Grep, etc.
 │   ├── server/      # GentCore, RPCs, EventStore, system prompt
 │   └── test-utils/  # Mock layers, sequence recording
@@ -93,7 +93,7 @@ AgentActor {
 1. Agent emits `plan` tool with markdown
 2. Plan saved to `.gent/plans/{session}-{toolCall}.md`
 3. UI shows markdown inline, user confirms/rejects
-4. On confirm, PlanCheckpoint can reset context
+4. On confirm, plan is available to agent as context
 
 **AskUser tool:** Used frequently for clarifying intent, validating assumptions, getting preferences. Not for approval.
 
@@ -150,7 +150,7 @@ Model is derived from agent/mode. No user-facing model switching. Pricing metada
 
 SQLite only. `.gent/data.db`. No configuration.
 
-Tables: Sessions, Branches, Messages, Compactions
+Tables: Sessions, Branches, Messages, Todos, Tasks
 
 ### Permissions
 
@@ -167,7 +167,7 @@ Typed events via EventStore (SQLite log + PubSub). Includes machine inspection
 
 ### Session Branching
 
-Fork at any message. Tree navigation. Independent compaction per branch.
+Fork at any message. Tree navigation. Handoff for context management.
 
 ## Configuration
 
@@ -183,7 +183,7 @@ Fork at any message. Tree navigation. Independent compaction per branch.
 
 - SQLite storage
 - All core tools enabled
-- Compaction at 100k tokens
+- Handoff for context management
 - Agent switching (cowork/deepwork)
 - Plans in `.gent/plans/`
 
