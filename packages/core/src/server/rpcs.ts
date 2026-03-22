@@ -14,6 +14,7 @@ import {
   ActorProcessState,
   ActorTarget,
   InterruptPayload,
+  InvokeToolPayload,
   SendToolResultPayload,
   SendUserMessagePayload,
 } from "../runtime/actor-process.js"
@@ -530,6 +531,10 @@ export class GentRpcs extends RpcGroup.make(
   }),
   Rpc.make("actorSendToolResult", {
     payload: SendToolResultPayload.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("actorInvokeTool", {
+    payload: InvokeToolPayload.fields,
     error: GentRpcError,
   }),
   Rpc.make("actorInterrupt", {

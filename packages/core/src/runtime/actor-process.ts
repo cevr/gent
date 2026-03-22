@@ -7,13 +7,15 @@ import {
   AgentRestarted,
   ErrorOccurred,
   EventStore,
+  ToolCallStarted,
   ToolCallSucceeded,
   ToolCallFailed,
 } from "../domain/event.js"
 import { BranchId, SessionId, type MessageId } from "../domain/ids.js"
-import { Message, TextPart, ToolResultPart } from "../domain/message.js"
+import { Message, TextPart, ToolCallPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import { ToolRunner } from "./agent/tool-runner"
 import { AgentLoop, SteerCommand } from "./agent"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
@@ -60,6 +62,14 @@ export const InterruptPayload = Schema.Struct({
 })
 export type InterruptPayload = typeof InterruptPayload.Type
 
+export const InvokeToolPayload = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  toolName: Schema.String,
+  input: Schema.Unknown,
+})
+export type InvokeToolPayload = typeof InvokeToolPayload.Type
+
 export const ActorProcessStatus = Schema.Literals(["idle", "running", "interrupted"])
 export type ActorProcessStatus = typeof ActorProcessStatus.Type
 
@@ -85,6 +95,7 @@ export interface ActorProcessService {
     input: SendUserMessagePayload,
   ) => Effect.Effect<void, ActorProcessError>
   readonly sendToolResult: (input: SendToolResultPayload) => Effect.Effect<void, ActorProcessError>
+  readonly invokeTool: (input: InvokeToolPayload) => Effect.Effect<void, ActorProcessError>
   readonly interrupt: (input: InterruptPayload) => Effect.Effect<void, ActorProcessError>
   readonly steerAgent: (command: SteerCommand) => Effect.Effect<void, ActorProcessError>
   readonly getState: (input: ActorTarget) => Effect.Effect<ActorProcessState, ActorProcessError>
@@ -98,6 +109,7 @@ export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessS
     Layer.succeed(ActorProcess, {
       sendUserMessage: () => Effect.void,
       sendToolResult: () => Effect.void,
+      invokeTool: () => Effect.void,
       interrupt: () => Effect.void,
       steerAgent: () => Effect.void,
       getState: () => Effect.succeed({ status: "idle" as const, queueDepth: 0 }),
@@ -114,13 +126,14 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
 export const LocalActorProcessLive: Layer.Layer<
   ActorProcess,
   never,
-  AgentLoop | Storage | EventStore
+  AgentLoop | Storage | EventStore | ToolRunner
 > = Layer.effect(
   ActorProcess,
   Effect.gen(function* () {
     const agentLoop = yield* AgentLoop
     const storage = yield* Storage
     const eventStore = yield* EventStore
+    const toolRunner = yield* ToolRunner
 
     return ActorProcess.of({
       sendUserMessage: (input) =>
@@ -213,6 +226,115 @@ export const LocalActorProcessLive: Layer.Layer<
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(wrapError("sendToolResult failed", cause))),
         ),
+
+      invokeTool: (input) =>
+        Effect.gen(function* () {
+          const session = yield* storage.getSession(input.sessionId)
+          const bypass = session?.bypass ?? true
+          const toolCallId = Bun.randomUUIDv7()
+
+          // Create synthetic assistant message with tool call
+          const callPart = new ToolCallPart({
+            type: "tool-call",
+            toolCallId,
+            toolName: input.toolName,
+            input: input.input,
+          })
+          const assistantMessage = new Message({
+            id: Bun.randomUUIDv7() as MessageId,
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            role: "assistant",
+            parts: [callPart],
+            createdAt: new Date(),
+          })
+          yield* storage.createMessage(assistantMessage)
+
+          // Emit tool call started event
+          yield* eventStore
+            .publish(
+              new ToolCallStarted({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                toolCallId,
+                toolName: input.toolName,
+                input: input.input,
+              }),
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
+
+          // Execute tool via ToolRunner
+          const ctx = {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            toolCallId,
+          }
+          const resultPart = yield* toolRunner.run(
+            { toolCallId, toolName: input.toolName, input: input.input },
+            ctx,
+            { bypass },
+          )
+
+          // Persist tool result message
+          const resultMessage = new Message({
+            id: Bun.randomUUIDv7() as MessageId,
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            role: "tool",
+            parts: [resultPart],
+            createdAt: new Date(),
+          })
+          yield* storage.createMessage(resultMessage)
+
+          // Emit tool call result event
+          const isError = resultPart.output.type === "error-json"
+          const toolCallFields = {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            toolCallId,
+            toolName: input.toolName,
+            summary: summarizeToolOutput(resultPart),
+            output: stringifyOutput(resultPart.output.value),
+          }
+          yield* eventStore
+            .publish(
+              isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
+
+          // Trigger a follow-up LLM turn to react to the tool result
+          const followUpMessage = new Message({
+            id: Bun.randomUUIDv7() as MessageId,
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            kind: "regular",
+            role: "user",
+            parts: [
+              new TextPart({
+                type: "text",
+                text: `Tool ${input.toolName} completed. Review the result and continue.`,
+              }),
+            ],
+            createdAt: new Date(),
+          })
+
+          yield* Effect.forkDetach(
+            agentLoop.run(followUpMessage, { bypass }).pipe(
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+                return eventStore
+                  .publish(
+                    new ErrorOccurred({
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                      error: Cause.pretty(cause),
+                    }),
+                  )
+                  .pipe(Effect.catchEager(() => Effect.void))
+              }),
+            ),
+          )
+        }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause)))),
 
       interrupt: (input) =>
         Effect.gen(function* () {
@@ -353,6 +475,10 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
         sendToolResult: (input) =>
           (client(input)["SendToolResult"](input) as Effect.Effect<void, ActorProcessError>).pipe(
             Effect.catchCause((cause) => Effect.fail(wrapError("SendToolResult failed", cause))),
+          ),
+        invokeTool: () =>
+          Effect.fail(
+            new ActorProcessError({ message: "invokeTool not supported in cluster mode" }),
           ),
         interrupt: (input) =>
           (client(input)["Interrupt"](input) as Effect.Effect<void, ActorProcessError>).pipe(

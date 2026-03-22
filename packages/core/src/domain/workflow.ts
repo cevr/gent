@@ -7,6 +7,11 @@ import { defineTool, type ToolDefinition } from "./tool"
 import type { runLoop } from "../runtime/loop"
 
 // Workflow Context — extended tool context for multi-agent orchestration
+//
+// Workflow execute functions receive WorkflowContext as their ctx parameter type.
+// The actual services (runner, presenter, etc.) are yielded from the Effect
+// context inside the execute function — WorkflowContext serves as a type-level
+// contract documenting what services are available to workflows.
 
 export interface WorkflowContext {
   readonly sessionId: SessionId

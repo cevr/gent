@@ -18,6 +18,7 @@ import { Provider } from "@gent/core/providers/provider"
 import { GentCore } from "@gent/core/server/core"
 import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
+import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 
 describe("Skills System", () => {
@@ -344,7 +345,12 @@ describe("GentCore → ActorProcess integration", () => {
     )
 
     const eventStoreLayer = EventStore.Test()
-    const storageDeps = Layer.mergeAll(Storage.Test(), eventStoreLayer, agentLoopLayer)
+    const storageDeps = Layer.mergeAll(
+      Storage.Test(),
+      eventStoreLayer,
+      agentLoopLayer,
+      ToolRunner.Test(),
+    )
     const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
     const baseWithActorProcess = Layer.mergeAll(
       storageDeps,
@@ -426,7 +432,12 @@ describe("GentCore → ActorProcess integration", () => {
     })
 
     const eventStoreLayer = EventStore.Test()
-    const storageDeps = Layer.mergeAll(Storage.Test(), eventStoreLayer, agentLoopLayer)
+    const storageDeps = Layer.mergeAll(
+      Storage.Test(),
+      eventStoreLayer,
+      agentLoopLayer,
+      ToolRunner.Test(),
+    )
     const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
     const baseWithActorProcess = Layer.mergeAll(
       storageDeps,

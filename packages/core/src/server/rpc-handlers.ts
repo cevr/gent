@@ -216,6 +216,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       actorSendToolResult: (input) => actorProcess.sendToolResult(input),
 
+      actorInvokeTool: (input) => actorProcess.invokeTool(input),
+
       actorInterrupt: (input) => actorProcess.interrupt(input),
 
       actorGetState: ({ sessionId, branchId }) => actorProcess.getState({ sessionId, branchId }),

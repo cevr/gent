@@ -797,7 +797,13 @@ describe("ActorProcess", () => {
   const makeActorProcessLayer = (agentLoopLayer: Layer.Layer<AgentLoop>) => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-    const deps = Layer.mergeAll(Storage.Test(), agentLoopLayer, eventStoreLayer, recorderLayer)
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      agentLoopLayer,
+      eventStoreLayer,
+      recorderLayer,
+      ToolRunner.Test(),
+    )
     return Layer.provideMerge(LocalActorProcessLive, deps)
   }
 

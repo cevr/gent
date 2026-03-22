@@ -7,6 +7,7 @@ import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { GentCore } from "@gent/core/server/core.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
+import { ActorProcess } from "@gent/core/runtime/actor-process.js"
 import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store.js"
@@ -313,6 +314,14 @@ export interface GentClient {
     after?: number
   }) => Stream.Stream<EventEnvelope, GentRpcError>
 
+  /** Invoke a tool directly (actor-serialized) */
+  invokeTool: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+    toolName: string
+    input: unknown
+  }) => Effect.Effect<void, GentRpcError>
+
   /** Send steering command */
   steer: (command: SteerCommand) => Effect.Effect<void, GentRpcError>
 
@@ -467,6 +476,8 @@ export function createClient(
       }),
 
     steer: (command) => rpcClient.steer({ command }),
+
+    invokeTool: (input) => rpcClient.actorInvokeTool(input),
 
     respondQuestions: (requestId, answers) =>
       rpcClient.respondQuestions({ requestId, answers: [...answers.map((a) => [...a])] }),
@@ -623,6 +634,7 @@ export const makeInProcessClient = <E, R>(
  */
 export type DirectGentClientContext =
   | GentCore
+  | ActorProcess
   | AskUserHandler
   | Permission
   | ConfigService
@@ -638,6 +650,7 @@ export type DirectGentClientContext =
 export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentClientContext> =
   Effect.gen(function* () {
     const core = yield* GentCore
+    const actorProcess = yield* ActorProcess
     const askUserHandler = yield* AskUserHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
@@ -749,6 +762,8 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
         core.subscribeEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
 
       steer: (command) => mapErr(core.steer(command)),
+
+      invokeTool: (input) => mapErr(actorProcess.invokeTool(input)),
 
       respondQuestions: (requestId, answers) => mapErr(askUserHandler.respond(requestId, answers)),
 
