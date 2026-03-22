@@ -33,6 +33,9 @@ import { executeSlashCommand, parseSlashCommand } from "../commands/slash-comman
 import { ClientError, formatError, type UiError } from "../utils/format-error"
 import { tuiEvent } from "../utils/unified-tracer"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
+import { expandSkillMentions } from "../utils/skill-expansion"
+import { usePromptHistory } from "../hooks/use-prompt-history"
+import { useSkills } from "../hooks/use-skills"
 import type { InputState, InputEvent, InputEffect } from "./input-state"
 
 interface InputContextValue {
@@ -104,6 +107,8 @@ export function Input(props: InputProps) {
   const renderer = useRenderer()
   const { cast } = useRuntime(client.client.services)
   const paste = createPasteManager()
+  const history = usePromptHistory()
+  const skillsHook = useSkills()
 
   let inputRef: TextareaRenderable | null = null
 
@@ -312,6 +317,27 @@ export function Input(props: InputProps) {
       setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
       return
     }
+
+    // Prompt history: up/down at cursor boundaries
+    if (
+      (e.name === "up" || e.name === "down") &&
+      effectiveMode() !== "prompt" &&
+      autocomplete() === null &&
+      inputRef !== null &&
+      !e.ctrl &&
+      !e.meta &&
+      !e.option &&
+      !e.shift
+    ) {
+      const cursorPos = inputRef.cursorOffset
+      const textLength = inputRef.plainText.length
+      const result = history.navigate(e.name, inputRef.plainText, cursorPos, textLength)
+      if (result.handled && result.text !== undefined) {
+        inputRef.replaceText(result.text)
+        inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
+        previousValue = result.text
+      }
+    }
   })
 
   const handleSubmit = () => {
@@ -320,6 +346,10 @@ export function Input(props: InputProps) {
     const expanded = paste.expandPlaceholders(value)
     const text = expanded.trim()
     if (text.length === 0) return
+
+    // Store expanded text in history (not raw placeholder markers)
+    history.add(text)
+    history.reset()
 
     // Close autocomplete
     setAutocomplete(null)
@@ -403,12 +433,24 @@ export function Input(props: InputProps) {
       return
     }
 
-    // 3. Normal message (may contain @file refs)
+    // 3. Normal message (may contain @file refs and $skill mentions)
     const mode = submitMode
     submitMode = "queue"
 
     cast(
       expandFileRefs(text, workspace.cwd).pipe(
+        Effect.map((expanded) => {
+          // Expand $skill-name tokens with preloaded skill content
+          if (expanded.includes("$")) {
+            const skills = skillsHook.skills()
+            return expandSkillMentions(
+              expanded,
+              (name) => skillsHook.getContent(name),
+              (name) => skills.find((s) => s.name === name)?.filePath ?? null,
+            )
+          }
+          return expanded
+        }),
         Effect.tap((expanded) =>
           Effect.sync(() => {
             clearInput()
@@ -493,6 +535,7 @@ export function Input(props: InputProps) {
                 { name: "return", action: "submit" },
                 { name: "linefeed", action: "submit" },
                 { name: "return", shift: true, action: "newline" },
+                { name: "backspace", meta: true, action: "delete-to-line-start" },
               ]}
               backgroundColor="transparent"
               focusedBackgroundColor="transparent"
