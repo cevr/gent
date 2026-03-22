@@ -88,7 +88,7 @@ export function formatToolInput(
   if (summary.length === 0) return ""
 
   // Apply truncatePath for path-heavy tools
-  if (name === "read" || name === "write" || name === "edit" || name === "look_at") {
+  if (name === "read" || name === "write" || name === "edit") {
     return truncatePath(summary)
   }
 

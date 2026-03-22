@@ -13,8 +13,6 @@ export { CounselToolRenderer } from "./counsel"
 export { CodeReviewToolRenderer } from "./code-review"
 export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
-export { LookAtToolRenderer } from "./look-at"
-
 import type { ToolRenderer } from "./types"
 import { ReadToolRenderer } from "./read"
 import { EditToolRenderer } from "./edit"
@@ -29,8 +27,6 @@ import { CounselToolRenderer } from "./counsel"
 import { CodeReviewToolRenderer } from "./code-review"
 import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
-import { LookAtToolRenderer } from "./look-at"
-
 export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   read: ReadToolRenderer,
   edit: EditToolRenderer,
@@ -46,5 +42,4 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   code_review: CodeReviewToolRenderer,
   search_sessions: SearchSessionsToolRenderer,
   read_session: ReadSessionToolRenderer,
-  look_at: LookAtToolRenderer,
 }

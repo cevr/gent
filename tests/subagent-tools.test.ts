@@ -3,7 +3,6 @@ import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FinderTool } from "@gent/core/tools/finder"
 import { CodeReviewTool } from "@gent/core/tools/code-review"
-import { LookAtTool } from "@gent/core/tools/look-at"
 import { HandoffTool } from "@gent/core/tools/handoff"
 import { CounselTool } from "@gent/core/tools/counsel"
 import { SubagentRunnerService } from "@gent/core/domain/agent"
@@ -136,35 +135,6 @@ describe("CodeReviewTool", () => {
   })
 })
 
-describe("LookAtTool", () => {
-  test("returns analysis output on success", async () => {
-    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const tmpDir = yield* fs.makeTempDirectory()
-        const filePath = `${tmpDir}/image.png`
-        yield* fs.writeFileString(filePath, "fake image data")
-
-        return yield* LookAtTool.execute({ path: filePath, objective: "describe this" }, ctx)
-      }).pipe(Effect.scoped, Effect.provide(layer)),
-    )
-    expect(result.output).toContain("response from")
-  })
-
-  test("errors on missing file", async () => {
-    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
-    const result = await Effect.runPromise(
-      Effect.result(
-        LookAtTool.execute({ path: "/nonexistent/file.png", objective: "analyze" }, ctx).pipe(
-          Effect.provide(layer),
-        ),
-      ),
-    )
-    expect(result._tag).toBe("Failure")
-  })
-})
-
 describe("HandoffTool", () => {
   test("returns handoff confirmed when user accepts", async () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer, HandoffHandler.Test(["confirm"]))
@@ -204,20 +174,6 @@ describe("Session refs in subagent output", () => {
       FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
     )
     expect(result.response).toContain("\n\nFull session: session://child-session")
-  })
-
-  test("LookAtTool appends session ref to output", async () => {
-    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const tmpDir = yield* fs.makeTempDirectory()
-        const filePath = `${tmpDir}/test.txt`
-        yield* fs.writeFileString(filePath, "test content")
-        return yield* LookAtTool.execute({ path: filePath, objective: "analyze" }, ctx)
-      }).pipe(Effect.scoped, Effect.provide(layer)),
-    )
-    expect(result.output).toContain("\n\nFull session: session://child-session")
   })
 
   test("CodeReviewTool includes session ref on structured output", async () => {

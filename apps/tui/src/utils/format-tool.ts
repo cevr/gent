@@ -129,10 +129,6 @@ export function toolArgSummary(toolName: string, args: Record<string, unknown>):
       const goal = typeof args["goal"] === "string" ? args["goal"] : ""
       return goal.length > 50 ? goal.slice(0, 50) + "…" : goal
     }
-    case "look_at": {
-      const path = typeof args["path"] === "string" ? args["path"] : ""
-      return path.length > 0 ? shortenPath(path) : ""
-    }
     case "handoff": {
       const reason = typeof args["reason"] === "string" ? args["reason"] : ""
       return reason.length > 50 ? reason.slice(0, 50) + "…" : reason

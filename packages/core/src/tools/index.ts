@@ -108,9 +108,6 @@ export {
   renderSessionTree,
 } from "./read-session"
 
-// Look At Tool
-export { LookAtTool, LookAtParams, LookAtError } from "./look-at"
-
 // Counsel Tool
 export { CounselTool, CounselParams, CounselError } from "./counsel"
 
@@ -142,7 +139,6 @@ import { FinderTool } from "./finder"
 import { CodeReviewTool } from "./code-review"
 import { SearchSessionsTool } from "./search-sessions"
 import { ReadSessionTool } from "./read-session"
-import { LookAtTool } from "./look-at"
 import { CounselTool } from "./counsel"
 import { TaskCreateTool } from "./task-create"
 import { TaskListTool } from "./task-list"
@@ -172,7 +168,6 @@ export const AllTools: AnyToolDefinition[] = [
   CodeReviewTool,
   SearchSessionsTool,
   ReadSessionTool,
-  LookAtTool,
   CounselTool,
   TaskCreateTool,
   TaskListTool,

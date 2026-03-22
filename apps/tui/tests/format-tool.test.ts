@@ -210,11 +210,6 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("read_session", { goal: "find the fix" })).toBe("find the fix")
   })
 
-  test("look_at: path", () => {
-    expect(toolArgSummary("look_at", { path: `${HOME}/src/app.ts` })).toBe("~/src/app.ts")
-    expect(toolArgSummary("look_at", {})).toBe("")
-  })
-
   test("handoff: reason", () => {
     expect(toolArgSummary("handoff", { reason: "need deeper analysis" })).toBe(
       "need deeper analysis",
