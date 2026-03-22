@@ -7,6 +7,7 @@ import {
   SubagentSpawned,
 } from "../../domain/event.js"
 import { SubagentError, SubagentRunnerService, type SubagentToolCall } from "../../domain/agent.js"
+import { ToolRegistry } from "../../domain/tool.js"
 import { Session, Branch } from "../../domain/message.js"
 import type { SessionId, BranchId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
@@ -139,7 +140,7 @@ const createSubagentSession = (
 export const InProcessRunner: Layer.Layer<
   SubagentRunnerService,
   never,
-  Storage | EventStore | AgentActor | SubagentRunnerConfig
+  Storage | EventStore | AgentActor | SubagentRunnerConfig | ToolRegistry
 > = Layer.effect(
   SubagentRunnerService,
   Effect.gen(function* () {
@@ -147,6 +148,7 @@ export const InProcessRunner: Layer.Layer<
     const eventStore = yield* EventStore
     const actor = yield* AgentActor
     const runnerConfig = yield* SubagentRunnerConfig
+    const toolRegistry = yield* ToolRegistry
 
     return {
       run: (params) =>
@@ -172,6 +174,20 @@ export const InProcessRunner: Layer.Layer<
                 }),
               )
 
+              // Register additional tools (e.g., signal tools) — compat until tools.visible hooks are wired
+              if (params.overrides?.additionalTools !== undefined) {
+                for (const tool of params.overrides.additionalTools) {
+                  yield* toolRegistry.register(tool)
+                }
+              }
+
+              const additionalToolNames =
+                params.overrides?.additionalTools?.map((t) => t.name) ?? []
+              const mergedAllowedTools =
+                additionalToolNames.length > 0
+                  ? [...(params.overrides?.allowedTools ?? []), ...additionalToolNames]
+                  : params.overrides?.allowedTools
+
               const runSubagent = actor.run({
                 sessionId,
                 branchId,
@@ -185,8 +201,8 @@ export const InProcessRunner: Layer.Layer<
                 ...(params.overrides?.allowedActions !== undefined
                   ? { overrideAllowedActions: [...params.overrides.allowedActions] }
                   : {}),
-                ...(params.overrides?.allowedTools !== undefined
-                  ? { overrideAllowedTools: [...params.overrides.allowedTools] }
+                ...(mergedAllowedTools !== undefined
+                  ? { overrideAllowedTools: [...mergedAllowedTools] }
                   : {}),
                 ...(params.overrides?.deniedTools !== undefined
                   ? { overrideDeniedTools: [...params.overrides.deniedTools] }
