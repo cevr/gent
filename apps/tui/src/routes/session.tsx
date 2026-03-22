@@ -2,7 +2,7 @@
  * Session route - message list, input, streaming
  */
 
-import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
+import { createSignal, createEffect, createMemo, on, onCleanup } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
@@ -154,13 +154,6 @@ export function Session(props: SessionProps) {
     )
   }
 
-  // Load messages when session becomes active
-  createEffect(() => {
-    if (!client.isActive()) return
-
-    loadMessages(props.branchId)
-  })
-
   const sendInitialPrompt = () => {
     if (props.initialPrompt === undefined || props.initialPrompt === "" || initialPromptSent) return
     initialPromptSent = true
@@ -182,156 +175,167 @@ export function Session(props: SessionProps) {
     )
   }
 
-  // Subscribe to agent events for message updates
-  createEffect(() => {
-    if (!client.isActive()) return
+  // Narrow reactive dependency: only re-run when session identity changes,
+  // not on every machine state mutation (UpdateBypass, UpdateReasoningLevel, etc.)
+  const activeSessionKey = createMemo(() => {
+    const s = client.session()
+    return s === null ? null : `${s.sessionId}:${s.branchId}`
+  })
+  const routeKey = () => `${props.sessionId}:${props.branchId}`
 
-    clientLog.info("session.subscribe", { sessionId: props.sessionId, branchId: props.branchId })
-    const unsubscribe = client.subscribeEvents((event) => {
-      if (event._tag === "MessageReceived") {
-        loadMessages(props.branchId)
-      } else if (event._tag === "BranchSwitched") {
-        if (event.toBranchId !== props.branchId) {
-          setStore({ messages: [], events: [] })
-          router.navigateToSession(event.sessionId, event.toBranchId)
-        }
-      } else if (event._tag === "StreamStarted") {
-        setTurnCount((n) => n + 1)
-        setActiveTool(undefined)
-        setStore(
-          produce((draft) => {
-            draft.messages.push({
-              _tag: "message",
-              id: crypto.randomUUID(),
-              role: "assistant",
-              kind: "regular",
-              content: "",
-              reasoning: "",
-              images: [],
-              createdAt: Date.now(),
-              toolCalls: undefined,
-            })
-          }),
-        )
-      } else if (event._tag === "StreamChunk") {
-        setStore(
-          produce((draft) => {
-            const last = draft.messages[draft.messages.length - 1]
-            if (last !== undefined && last.role === "assistant") {
-              last.content += event.chunk
-            } else {
+  // Load messages + subscribe to events when session becomes active
+  createEffect(
+    on([activeSessionKey, routeKey], ([active, route]) => {
+      if (active === null || active !== route) return
+
+      clientLog.info("session.activate", { sessionId: props.sessionId, branchId: props.branchId })
+      loadMessages(props.branchId)
+      const unsubscribe = client.subscribeEvents((event) => {
+        if (event._tag === "MessageReceived") {
+          loadMessages(props.branchId)
+        } else if (event._tag === "BranchSwitched") {
+          if (event.toBranchId !== props.branchId) {
+            setStore({ messages: [], events: [] })
+            router.navigateToSession(event.sessionId, event.toBranchId)
+          }
+        } else if (event._tag === "StreamStarted") {
+          setTurnCount((n) => n + 1)
+          setActiveTool(undefined)
+          setStore(
+            produce((draft) => {
               draft.messages.push({
                 _tag: "message",
                 id: crypto.randomUUID(),
                 role: "assistant",
                 kind: "regular",
-                content: event.chunk,
+                content: "",
                 reasoning: "",
                 images: [],
                 createdAt: Date.now(),
                 toolCalls: undefined,
               })
-            }
-          }),
-        )
-      } else if (event._tag === "TurnCompleted") {
-        // Server is source of truth for turn completion/interruption
-        const durationSeconds = Math.round(event.durationMs / 1000)
-        if (event.interrupted === true) {
-          setStore(
-            produce((draft) => {
-              draft.events.push({
-                _tag: "event",
-                kind: "interruption",
-                createdAt: Date.now(),
-                seq: eventSeq++,
-              })
             }),
           )
-        } else if (durationSeconds > 0) {
+        } else if (event._tag === "StreamChunk") {
+          setStore(
+            produce((draft) => {
+              const last = draft.messages[draft.messages.length - 1]
+              if (last !== undefined && last.role === "assistant") {
+                last.content += event.chunk
+              } else {
+                draft.messages.push({
+                  _tag: "message",
+                  id: crypto.randomUUID(),
+                  role: "assistant",
+                  kind: "regular",
+                  content: event.chunk,
+                  reasoning: "",
+                  images: [],
+                  createdAt: Date.now(),
+                  toolCalls: undefined,
+                })
+              }
+            }),
+          )
+        } else if (event._tag === "TurnCompleted") {
+          // Server is source of truth for turn completion/interruption
+          const durationSeconds = Math.round(event.durationMs / 1000)
+          if (event.interrupted === true) {
+            setStore(
+              produce((draft) => {
+                draft.events.push({
+                  _tag: "event",
+                  kind: "interruption",
+                  createdAt: Date.now(),
+                  seq: eventSeq++,
+                })
+              }),
+            )
+          } else if (durationSeconds > 0) {
+            setStore(
+              produce((draft) => {
+                draft.events.push({
+                  _tag: "event",
+                  kind: "turn-ended",
+                  durationSeconds,
+                  createdAt: Date.now(),
+                  seq: eventSeq++,
+                })
+              }),
+            )
+          }
+        } else if (event._tag === "ToolCallStarted") {
+          const inputSummary = formatToolInput(event.toolName, event.input)
+          setActiveTool(
+            inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
+          )
+          setStore(
+            produce((draft) => {
+              const last = draft.messages[draft.messages.length - 1]
+              if (last !== undefined && last.role === "assistant") {
+                if (last.toolCalls === undefined) last.toolCalls = []
+                last.toolCalls.push({
+                  id: event.toolCallId,
+                  toolName: event.toolName,
+                  status: "running" as const,
+                  input: event.input,
+                  summary: undefined,
+                  output: undefined,
+                })
+              }
+            }),
+          )
+        } else if (
+          event._tag === "ToolCallCompleted" ||
+          event._tag === "ToolCallSucceeded" ||
+          event._tag === "ToolCallFailed"
+        ) {
+          const isError =
+            event._tag === "ToolCallFailed" || (event._tag === "ToolCallCompleted" && event.isError)
+          setActiveTool(undefined)
+          setStore(
+            produce((draft) => {
+              const last = draft.messages[draft.messages.length - 1]
+              if (last !== undefined && last.role === "assistant" && last.toolCalls !== undefined) {
+                const tc = last.toolCalls.find((t) => t.id === event.toolCallId)
+                if (tc !== undefined) {
+                  tc.status = isError ? "error" : "completed"
+                  tc.summary = event.summary
+                  tc.output = event.output
+                }
+              }
+            }),
+          )
+        } else if (event._tag === "QuestionsAsked") {
+          handleInputEvent({ _tag: "QuestionsAsked", event })
+        } else if (event._tag === "PermissionRequested") {
+          handleInputEvent({ _tag: "PermissionRequested", event })
+        } else if (event._tag === "PromptPresented") {
+          handleInputEvent({ _tag: "PromptPresented", event })
+        } else if (event._tag === "HandoffPresented") {
+          handleInputEvent({ _tag: "HandoffPresented", event })
+        } else if (event._tag === "ErrorOccurred") {
+          clientLog.error("session.errorEvent", { error: event.error, eventSeq })
           setStore(
             produce((draft) => {
               draft.events.push({
                 _tag: "event",
-                kind: "turn-ended",
-                durationSeconds,
+                kind: "error",
+                error: event.error,
                 createdAt: Date.now(),
                 seq: eventSeq++,
               })
             }),
           )
         }
-      } else if (event._tag === "ToolCallStarted") {
-        const inputSummary = formatToolInput(event.toolName, event.input)
-        setActiveTool(
-          inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
-        )
-        setStore(
-          produce((draft) => {
-            const last = draft.messages[draft.messages.length - 1]
-            if (last !== undefined && last.role === "assistant") {
-              if (last.toolCalls === undefined) last.toolCalls = []
-              last.toolCalls.push({
-                id: event.toolCallId,
-                toolName: event.toolName,
-                status: "running" as const,
-                input: event.input,
-                summary: undefined,
-                output: undefined,
-              })
-            }
-          }),
-        )
-      } else if (
-        event._tag === "ToolCallCompleted" ||
-        event._tag === "ToolCallSucceeded" ||
-        event._tag === "ToolCallFailed"
-      ) {
-        const isError =
-          event._tag === "ToolCallFailed" || (event._tag === "ToolCallCompleted" && event.isError)
-        setActiveTool(undefined)
-        setStore(
-          produce((draft) => {
-            const last = draft.messages[draft.messages.length - 1]
-            if (last !== undefined && last.role === "assistant" && last.toolCalls !== undefined) {
-              const tc = last.toolCalls.find((t) => t.id === event.toolCallId)
-              if (tc !== undefined) {
-                tc.status = isError ? "error" : "completed"
-                tc.summary = event.summary
-                tc.output = event.output
-              }
-            }
-          }),
-        )
-      } else if (event._tag === "QuestionsAsked") {
-        handleInputEvent({ _tag: "QuestionsAsked", event })
-      } else if (event._tag === "PermissionRequested") {
-        handleInputEvent({ _tag: "PermissionRequested", event })
-      } else if (event._tag === "PromptPresented") {
-        handleInputEvent({ _tag: "PromptPresented", event })
-      } else if (event._tag === "HandoffPresented") {
-        handleInputEvent({ _tag: "HandoffPresented", event })
-      } else if (event._tag === "ErrorOccurred") {
-        clientLog.error("session.errorEvent", { error: event.error, eventSeq })
-        setStore(
-          produce((draft) => {
-            draft.events.push({
-              _tag: "event",
-              kind: "error",
-              error: event.error,
-              createdAt: Date.now(),
-              seq: eventSeq++,
-            })
-          }),
-        )
-      }
-      // Note: agent state (status, cost, error) is updated by ClientProvider
-    })
+        // Note: agent state (status, cost, error) is updated by ClientProvider
+      })
 
-    sendInitialPrompt()
+      sendInitialPrompt()
 
-    onCleanup(unsubscribe)
-  })
+      onCleanup(unsubscribe)
+    }),
+  )
 
   // Clear messages handler for /clear command
   const clearMessages = () => {
