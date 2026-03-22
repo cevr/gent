@@ -8,10 +8,17 @@ import {
   type AgentName as AgentNameType,
   type SubagentResult,
 } from "../domain/agent.js"
-import { EventStore, WorkflowPhaseStarted, WorkflowCompleted } from "../domain/event.js"
+import {
+  EventStore,
+  WorkflowPhaseStarted,
+  WorkflowCompleted,
+  type EventEnvelope,
+} from "../domain/event.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
+import { Storage } from "../storage/sqlite-storage.js"
 import { runLoop, type LoopVerdict } from "../runtime/loop.js"
+import { LoopEvaluationTool } from "./loop.js"
 
 // Audit concern — classified by the detection agent
 
@@ -193,19 +200,33 @@ Assess whether actionable issues remain. Consider:
 - Did fixes introduce new issues?
 - Are there remaining items not addressed?
 
-Respond with exactly one verdict line:
-VERDICT: done
-or
-VERDICT: continue`
+You MUST call the loop_evaluation tool with your verdict:
+- verdict: "done" if all issues are resolved
+- verdict: "continue" if further iteration is needed
+- summary: brief explanation of your decision`
 
-const parseVerdict = (result: SubagentResult): LoopVerdict => {
-  if (result._tag === "error") return "done" // hard error → stop
-  for (const line of result.text.split("\n")) {
+const extractVerdictFromEvents = (
+  envelopes: ReadonlyArray<EventEnvelope>,
+  resultText: string,
+): LoopVerdict => {
+  for (const envelope of envelopes) {
+    if (
+      envelope.event._tag === "ToolCallStarted" &&
+      envelope.event.toolName === "loop_evaluation" &&
+      envelope.event.input !== undefined
+    ) {
+      const input = envelope.event.input as Record<string, unknown>
+      if (input["verdict"] === "done") return "done"
+      if (input["verdict"] === "continue") return "continue"
+    }
+  }
+
+  for (const line of resultText.split("\n")) {
     const trimmed = line.trim().toLowerCase()
     if (trimmed === "verdict: done" || trimmed === "verdict:done") return "done"
     if (trimmed === "verdict: continue" || trimmed === "verdict:continue") return "continue"
   }
-  // No clear verdict → continue (maxIterations prevents infinite loops)
+
   return "continue"
 }
 
@@ -243,6 +264,7 @@ export const AuditTool = defineWorkflow({
     const presenter = yield* PromptPresenter
     const registry = yield* AgentRegistry
 
+    const storage = yield* Storage
     const maxIterations = params.maxIterations ?? 3
     const maxConcerns = params.maxConcerns ?? 5
     const mode = params.mode ?? "fix"
@@ -376,8 +398,24 @@ export const AuditTool = defineWorkflow({
           return Effect.succeed("done" as LoopVerdict)
         }
         return emitPhase("evaluate").pipe(
-          Effect.andThen(runAgent(architect, buildEvaluationPrompt(bodyOutput))),
-          Effect.map(parseVerdict),
+          Effect.andThen(
+            runner.run({
+              agent: architect,
+              prompt: buildEvaluationPrompt(bodyOutput),
+              parentSessionId: ctx.sessionId,
+              parentBranchId: ctx.branchId,
+              toolCallId: ctx.toolCallId,
+              cwd: process.cwd(),
+              overrides: { additionalTools: [LoopEvaluationTool] },
+            }),
+          ),
+          Effect.flatMap((evalResult) => {
+            if (evalResult._tag === "error") return Effect.succeed("done" as LoopVerdict)
+            return storage.listEvents({ sessionId: evalResult.sessionId }).pipe(
+              Effect.catchEager(() => Effect.succeed([] as ReadonlyArray<EventEnvelope>)),
+              Effect.map((envelopes) => extractVerdictFromEvents(envelopes, evalResult.text)),
+            )
+          }),
           Effect.catchEager(() => Effect.succeed("done" as LoopVerdict)),
         )
       },

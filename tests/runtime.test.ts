@@ -222,6 +222,7 @@ describe("AgentExecutionOverrides", () => {
           return Effect.void
         },
       }),
+      ToolRegistry.Test(),
       recorderLayer,
       eventStoreLayer,
     )
@@ -277,6 +278,7 @@ describe("Subagent Runner", () => {
       Layer.succeed(AgentActor, {
         run: () => Effect.void,
       }),
+      ToolRegistry.Test(),
       recorderLayer,
       eventStoreLayer,
     )
@@ -334,6 +336,7 @@ describe("Subagent Runner", () => {
       Layer.succeed(AgentActor, {
         run: () => Effect.fail(new SubagentError({ message: "permanent failure" })),
       }),
+      ToolRegistry.Test(),
       recorderLayer,
       eventStoreLayer,
     )
@@ -387,6 +390,7 @@ describe("Subagent Runner", () => {
         run: () => Effect.sleep("50 millis"),
       }),
       EventStore.Test(),
+      ToolRegistry.Test(),
     )
     const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)

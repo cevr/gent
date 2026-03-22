@@ -5,6 +5,7 @@ import { AuditTool } from "@gent/core/tools/audit"
 import { AgentRegistry, SubagentRunnerService, type SubagentResult } from "@gent/core/domain/agent"
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { EventStore } from "@gent/core/domain/event"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { ToolContext } from "@gent/core/domain/tool"
 
 const ctx: ToolContext = {
@@ -76,6 +77,7 @@ describe("Audit Workflow", () => {
       AgentRegistry.Live,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
+      Storage.Test(),
       BunServices.layer,
     )
 
@@ -133,6 +135,7 @@ describe("Audit Workflow", () => {
       AgentRegistry.Live,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
+      Storage.Test(),
       BunServices.layer,
     )
 
@@ -158,6 +161,7 @@ describe("Audit Workflow", () => {
       AgentRegistry.Live,
       PromptPresenter.Test(),
       EventStore.Test(),
+      Storage.Test(),
       BunServices.layer,
     )
 
@@ -186,6 +190,7 @@ describe("Audit Workflow", () => {
       AgentRegistry.Live,
       PromptPresenter.Test(["no"]),
       EventStore.Test(),
+      Storage.Test(),
       BunServices.layer,
     )
 
@@ -226,6 +231,7 @@ describe("Audit Workflow", () => {
       AgentRegistry.Live,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
+      Storage.Test(),
       BunServices.layer,
     )
 

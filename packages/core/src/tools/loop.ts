@@ -1,6 +1,13 @@
 import { Effect, Schema } from "effect"
-import { AgentName, SubagentRunnerService, type SubagentResult } from "../domain/agent.js"
-import { EventStore, WorkflowPhaseStarted, WorkflowCompleted } from "../domain/event.js"
+import { AgentName, SubagentRunnerService } from "../domain/agent.js"
+import {
+  EventStore,
+  WorkflowPhaseStarted,
+  WorkflowCompleted,
+  type EventEnvelope,
+} from "../domain/event.js"
+import { Storage } from "../storage/sqlite-storage.js"
+import { defineTool } from "../domain/tool.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
 import { runLoop, type LoopVerdict } from "../runtime/loop.js"
 
@@ -14,7 +21,7 @@ const LoopEvaluator = Schema.Struct({
   prompt: Schema.String.annotate({
     description:
       "Evaluator prompt. {output} is replaced with body output. " +
-      'Agent must respond with a verdict line: "VERDICT: done" or "VERDICT: continue".',
+      "Agent must call the loop_evaluation tool with its verdict.",
   }),
 })
 
@@ -29,40 +36,71 @@ export const LoopParams = Schema.Struct({
 })
 
 /**
- * Parse the evaluator agent's verdict from its response.
- *
- * The evaluator prompt instructs the agent to respond with a clear verdict line:
- *   VERDICT: done
- *   VERDICT: continue
- *
- * This structured-line approach avoids false positives from LLM negations
- * (e.g., "I should NOT stop" containing "done" elsewhere in free text).
+ * Signal tool for loop evaluation. Injected into the evaluator subagent's
+ * tool set via additionalTools override. The evaluator agent calls this tool
+ * to indicate whether the loop should continue or stop.
  */
-const parseEvaluatorVerdict = (result: SubagentResult): LoopVerdict => {
-  if (result._tag === "error") return "done"
+export const LoopEvaluationTool = defineTool({
+  name: "loop_evaluation",
+  action: "state",
+  concurrency: "serial",
+  description:
+    "Report your evaluation verdict. Call with verdict 'done' when the objective is met " +
+    "or 'continue' when more iterations are needed. You MUST call this tool.",
+  params: Schema.Struct({
+    verdict: Schema.Literals(["continue", "done"]).annotate({
+      description: "Whether to continue iterating or stop",
+    }),
+    summary: Schema.String.annotate({
+      description: "Brief summary of why this verdict was chosen",
+    }),
+  }),
+  execute: (params) => Effect.succeed(params),
+})
 
-  const lines = result.text.split("\n")
-  for (const line of lines) {
+/**
+ * Extract verdict from evaluator subagent events.
+ * Searches for loop_evaluation tool call, falls back to text parsing.
+ */
+const extractVerdictFromEvents = (
+  envelopes: ReadonlyArray<EventEnvelope>,
+  resultText: string,
+): LoopVerdict => {
+  // Primary: search for loop_evaluation tool call in events
+  for (const envelope of envelopes) {
+    if (
+      envelope.event._tag === "ToolCallStarted" &&
+      envelope.event.toolName === "loop_evaluation" &&
+      envelope.event.input !== undefined
+    ) {
+      const input = envelope.event.input as Record<string, unknown>
+      if (input["verdict"] === "done") return "done"
+      if (input["verdict"] === "continue") return "continue"
+    }
+  }
+
+  // Fallback: check text for verdict lines
+  for (const line of resultText.split("\n")) {
     const trimmed = line.trim().toLowerCase()
     if (trimmed === "verdict: done" || trimmed === "verdict:done") return "done"
     if (trimmed === "verdict: continue" || trimmed === "verdict:continue") return "continue"
   }
 
-  // Fallback: if no explicit verdict line, default to done (conservative — avoid infinite loops)
-  return "done"
+  return "continue"
 }
 
 export const LoopTool = defineWorkflow({
   name: "loop",
   description:
     "Iterate: run body agent, evaluate condition, repeat until done or max iterations. " +
-    "The evaluator agent decides whether to continue or stop.",
+    "The evaluator agent calls the loop_evaluation tool to report its verdict.",
   command: "loop",
   phases: ["body", "evaluate"] as const,
   params: LoopParams,
   execute: Effect.fn("LoopTool.execute")(function* (params, ctx: WorkflowContext) {
     const runner = yield* SubagentRunnerService
     const eventStore = yield* EventStore
+    const storage = yield* Storage
     const maxIterations = params.maxIterations ?? 5
 
     const result = yield* runLoop({
@@ -84,7 +122,7 @@ export const LoopTool = defineWorkflow({
         })
       },
 
-      evaluate: Effect.fn("LoopTool.evaluate")(function* (iteration, bodyOutput) {
+      evaluate: Effect.fn("LoopTool.evaluate")(function* (_iteration, bodyOutput) {
         const prompt = params.evaluator.prompt.replace(/\{output\}/g, bodyOutput)
 
         const evalResult = yield* runner.run({
@@ -94,9 +132,18 @@ export const LoopTool = defineWorkflow({
           parentBranchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
           cwd: process.cwd(),
+          overrides: {
+            additionalTools: [LoopEvaluationTool],
+          },
         })
 
-        return parseEvaluatorVerdict(evalResult)
+        if (evalResult._tag === "error") return "done" as LoopVerdict
+
+        const envelopes = yield* storage
+          .listEvents({ sessionId: evalResult.sessionId })
+          .pipe(Effect.catchEager(() => Effect.succeed([] as ReadonlyArray<EventEnvelope>)))
+
+        return extractVerdictFromEvents(envelopes, evalResult.text)
       }),
 
       onIteration: Effect.fn("LoopTool.onIteration")(function* (iteration, phase) {

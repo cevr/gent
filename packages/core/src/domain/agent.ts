@@ -2,7 +2,7 @@ import { ServiceMap, Effect, Layer, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId } from "./ids"
 import type { ModelId } from "./model"
-import type { ToolAction as ToolActionType } from "./tool"
+import type { ToolAction as ToolActionType, AnyToolDefinition } from "./tool"
 
 // Agent definitions
 
@@ -227,6 +227,8 @@ export interface AgentExecutionOverrides {
   readonly deniedTools?: ReadonlyArray<string>
   readonly reasoningEffort?: ReasoningEffort
   readonly systemPromptAddendum?: string
+  /** Additional tools injected into the subagent's tool set (e.g., signal tools for evaluation) */
+  readonly additionalTools?: ReadonlyArray<AnyToolDefinition>
 }
 
 export type BuiltinAgentName = keyof typeof Agents

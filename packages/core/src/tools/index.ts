@@ -112,7 +112,7 @@ export { TaskGetTool, TaskGetParams } from "./task-get"
 export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
 
 // Loop Workflow Tool
-export { LoopTool, LoopParams } from "./loop"
+export { LoopTool, LoopParams, LoopEvaluationTool } from "./loop"
 
 // Plan Workflow Tool
 export { PlanTool, PlanParams } from "./plan"
