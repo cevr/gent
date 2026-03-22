@@ -86,6 +86,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: "handoff", label: "/handoff", description: "Distill context into new session" },
   { id: "counsel", label: "/counsel", description: "Opposite-vendor peer review" },
   { id: "loop", label: "/loop", description: "Iterate until condition met" },
+  { id: "plan", label: "/plan", description: "Adversarial dual-model planning" },
 ]
 
 export interface AutocompletePopupProps {

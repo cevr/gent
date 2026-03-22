@@ -22,6 +22,7 @@ export type SlashCommandId =
   | "handoff"
   | "counsel"
   | "loop"
+  | "plan"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -156,6 +157,19 @@ export const executeSlashCommand = (
           )
         } else {
           ctx.sendMessage(`Use the loop tool: ${prompt}`)
+        }
+        return { handled: true }
+      })
+
+    case "plan":
+      return Effect.sync(() => {
+        const prompt = _args.trim()
+        if (prompt.length === 0) {
+          ctx.sendMessage(
+            "Use the plan tool to create an implementation plan for the current task using adversarial dual-model planning.",
+          )
+        } else {
+          ctx.sendMessage(`Use the plan tool to create an implementation plan for: ${prompt}`)
         }
         return { handled: true }
       })
