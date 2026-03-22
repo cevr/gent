@@ -30,6 +30,7 @@ import type {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import type { Task } from "@gent/core/domain/task.js"
+import { Skills, type SkillScope } from "@gent/core/domain/skills.js"
 import { ConfigService } from "@gent/core/runtime/config-service.js"
 import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
 import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
@@ -52,6 +53,18 @@ export type {
 
 // Re-export RPC types
 export type { GentRpcsClient, GentRpcError }
+export type { SkillScope }
+
+export interface SkillInfo {
+  name: string
+  description: string
+  scope: SkillScope
+  filePath: string
+}
+
+export interface SkillContent extends SkillInfo {
+  content: string
+}
 
 // RPC client type alias
 export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
@@ -397,6 +410,12 @@ export interface GentClient {
     code?: string,
   ) => Effect.Effect<void, GentRpcError>
 
+  /** List available skills (includes content for preloading) */
+  listSkills: () => Effect.Effect<readonly SkillContent[], GentRpcError>
+
+  /** Get skill content by name */
+  getSkillContent: (name: string) => Effect.Effect<SkillContent | null, GentRpcError>
+
   /** Get the services for this client */
   services: ServiceMap.ServiceMap<unknown>
 }
@@ -537,6 +556,10 @@ export function createClient(
         ...(code !== undefined ? { code } : {}),
       }),
 
+    listSkills: () => rpcClient.listSkills(),
+
+    getSkillContent: (name) => rpcClient.getSkillContent({ name }),
+
     services,
   }
 }
@@ -642,6 +665,7 @@ export type DirectGentClientContext =
   | AuthStore
   | AuthGuard
   | ProviderAuth
+  | Skills
 
 /**
  * Creates a GentClient that calls GentCore and services directly.
@@ -658,6 +682,7 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
     const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
+    const skillsService = yield* Skills
     const services = yield* Effect.services<never>()
 
     // Error mapping: GentCoreError → GentRpcError (structurally compatible)
@@ -832,6 +857,38 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
       callbackAuth: (sessionId, provider, method, authorizationId, code) =>
         mapErr(
           providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
+        ),
+
+      listSkills: () =>
+        mapErr(
+          skillsService.list().pipe(
+            Effect.map((list) =>
+              list.map((s) => ({
+                name: s.name,
+                description: s.description,
+                scope: s.scope,
+                filePath: s.filePath,
+                content: s.content,
+              })),
+            ),
+          ),
+        ),
+
+      getSkillContent: (name) =>
+        mapErr(
+          skillsService.get(name).pipe(
+            Effect.map((s) =>
+              s !== undefined
+                ? {
+                    name: s.name,
+                    description: s.description,
+                    scope: s.scope,
+                    filePath: s.filePath,
+                    content: s.content,
+                  }
+                : null,
+            ),
+          ),
         ),
 
       services: services as ServiceMap.ServiceMap<unknown>,

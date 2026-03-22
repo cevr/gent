@@ -7,6 +7,7 @@ import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
 import { Model, type ProviderId } from "../domain/model.js"
 import { Permission } from "../domain/permission.js"
+import { Skills } from "../domain/skills.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -20,6 +21,7 @@ import { OPENAI_OAUTH_ALLOWED_MODELS } from "../providers/oauth/openai-oauth.js"
 export const RpcHandlersLive = GentRpcs.toLayer(
   Effect.gen(function* () {
     const core = yield* GentCore
+    const skills = yield* Skills
     const askUserHandler = yield* AskUserHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
@@ -224,6 +226,34 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       actorGetMetrics: ({ sessionId, branchId }) =>
         actorProcess.getMetrics({ sessionId, branchId }),
+
+      listSkills: () =>
+        skills.list().pipe(
+          Effect.map((list) =>
+            list.map((s) => ({
+              name: s.name,
+              description: s.description,
+              scope: s.scope,
+              filePath: s.filePath,
+              content: s.content,
+            })),
+          ),
+        ),
+
+      getSkillContent: ({ name }) =>
+        skills.get(name).pipe(
+          Effect.map((s) =>
+            s !== undefined
+              ? {
+                  name: s.name,
+                  description: s.description,
+                  scope: s.scope,
+                  filePath: s.filePath,
+                  content: s.content,
+                }
+              : null,
+          ),
+        ),
     }
   }),
 )

@@ -18,6 +18,7 @@ import {
   SendToolResultPayload,
   SendUserMessagePayload,
 } from "../runtime/actor-process.js"
+import { SkillScope } from "../domain/skills.js"
 import { GentRpcError } from "./errors.js"
 
 // ============================================================================
@@ -345,6 +346,25 @@ export { AuthProviderInfo }
 export { EventEnvelope }
 
 // ============================================================================
+// Skills
+// ============================================================================
+
+export const SkillInfo = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  scope: SkillScope,
+  filePath: Schema.String,
+})
+
+export const SkillContent = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  scope: SkillScope,
+  filePath: Schema.String,
+  content: Schema.String,
+})
+
+// ============================================================================
 // RPC Definitions
 // ============================================================================
 
@@ -549,6 +569,17 @@ export class GentRpcs extends RpcGroup.make(
   Rpc.make("actorGetMetrics", {
     payload: ActorTarget.fields,
     success: ActorProcessMetrics,
+    error: GentRpcError,
+  }),
+
+  // Skills RPCs
+  Rpc.make("listSkills", {
+    success: Schema.Array(SkillContent),
+    error: GentRpcError,
+  }),
+  Rpc.make("getSkillContent", {
+    payload: { name: Schema.String },
+    success: Schema.NullOr(SkillContent),
     error: GentRpcError,
   }),
 ) {}

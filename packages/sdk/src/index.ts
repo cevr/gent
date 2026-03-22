@@ -58,3 +58,6 @@ export { makeDirectGentClient, type DirectGentClientContext } from "./client.js"
 
 // Session tree types
 export type { SessionTreeNode } from "./client.js"
+
+// Skill types
+export type { SkillInfo, SkillContent, SkillScope } from "./client.js"
