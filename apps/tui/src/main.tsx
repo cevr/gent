@@ -31,6 +31,10 @@ import { ClientProvider, type Session } from "./client/index"
 import { RouterProvider, Route } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
+import { clearClientLog } from "./utils/client-logger"
+
+// Clear client log on startup
+clearClientLog()
 
 // ============================================================================
 // Initial State - discriminated union for clarity

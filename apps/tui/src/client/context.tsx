@@ -23,6 +23,7 @@ import { calculateCost, type Model } from "@gent/core/domain/model.js"
 import type { AgentEvent, EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import { tuiError } from "../utils/unified-tracer"
+import { clientLog } from "../utils/client-logger"
 import { formatError } from "../utils/format-error"
 import { useMachine } from "../hooks/use-machine"
 
@@ -277,6 +278,12 @@ export function ClientProvider(props: ClientProviderProps) {
       const processEvent = (envelope: EventEnvelope): void => {
         if (cancelled) return
 
+        clientLog.debug("event.received", {
+          eventId: envelope.id,
+          tag: envelope.event._tag,
+          traceId: envelope.traceId,
+        })
+
         eventBuffer.push(envelope)
         if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
           eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
@@ -305,6 +312,7 @@ export function ClientProvider(props: ClientProviderProps) {
             break
 
           case "ErrorOccurred":
+            clientLog.error("agent.error", { error: event.error, eventId: envelope.id })
             setAgentStore({ status: AgentStatus.error(event.error) })
             break
 
@@ -435,6 +443,7 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       if (s === null) return
 
+      clientLog.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId })
       cast(
         client
           .sendMessage({
@@ -447,6 +456,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     createSession: (firstMessage) => {
+      clientLog.info("createSession", { hasFirstMessage: firstMessage !== undefined })
       sendMachine(SessionMachineEvent.CreateRequested)
       cast(
         client.createSession(firstMessage !== undefined ? { firstMessage } : undefined).pipe(

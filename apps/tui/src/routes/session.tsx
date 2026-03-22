@@ -48,6 +48,7 @@ import {
   type BorderLabelItem,
 } from "../components/bordered-input"
 import { buildTopRightLabels } from "../utils/session-labels"
+import { clientLog } from "../utils/client-logger"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -163,6 +164,7 @@ export function Session(props: SessionProps) {
   const sendInitialPrompt = () => {
     if (props.initialPrompt === undefined || props.initialPrompt === "" || initialPromptSent) return
     initialPromptSent = true
+    clientLog.info("sendInitialPrompt", { sessionId: props.sessionId, branchId: props.branchId })
     cast(
       client.client
         .sendMessage({
@@ -184,6 +186,7 @@ export function Session(props: SessionProps) {
   createEffect(() => {
     if (!client.isActive()) return
 
+    clientLog.info("session.subscribe", { sessionId: props.sessionId, branchId: props.branchId })
     const unsubscribe = client.subscribeEvents((event) => {
       if (event._tag === "MessageReceived") {
         loadMessages(props.branchId)
@@ -309,6 +312,7 @@ export function Session(props: SessionProps) {
       } else if (event._tag === "HandoffPresented") {
         handleInputEvent({ _tag: "HandoffPresented", event })
       } else if (event._tag === "ErrorOccurred") {
+        clientLog.error("session.errorEvent", { error: event.error, eventSeq })
         setStore(
           produce((draft) => {
             draft.events.push({
