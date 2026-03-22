@@ -20,7 +20,7 @@ import {
   type MessageInfoReadonly,
 } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
-import type { SessionEvent } from "../components/session-event-indicator"
+import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { clientLog } from "../utils/client-logger"
 import { formatError } from "../utils/format-error"
@@ -338,6 +338,22 @@ export function useSessionFeed(
 
       case "HandoffPresented":
         callbacks.onInputEvent({ _tag: "HandoffPresented", event })
+        break
+
+      case "ProviderRetrying":
+        setStore(
+          produce((draft) => {
+            draft.events.push({
+              _tag: "event",
+              kind: "retrying",
+              attempt: event.attempt,
+              maxAttempts: event.maxAttempts,
+              delayMs: event.delayMs,
+              createdAt: Date.now(),
+              seq: eventSeq++,
+            })
+          }),
+        )
         break
 
       case "ErrorOccurred":

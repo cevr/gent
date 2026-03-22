@@ -1,29 +1,8 @@
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
-import { formatThinkTime } from "./message-list-utils"
 import { truncate } from "../utils/truncate"
-
-export type SessionEvent =
-  | {
-      _tag: "event"
-      kind: "turn-ended"
-      durationSeconds: number
-      createdAt: number
-      seq: number
-    }
-  | {
-      _tag: "event"
-      kind: "interruption"
-      createdAt: number
-      seq: number
-    }
-  | {
-      _tag: "event"
-      kind: "error"
-      error: string
-      createdAt: number
-      seq: number
-    }
+import { useSpinnerClock } from "../hooks/use-spinner-clock"
+import { getSessionEventLabel, type SessionEvent } from "./session-event-label"
 
 export interface SessionEventIndicatorProps {
   event: SessionEvent
@@ -31,24 +10,15 @@ export interface SessionEventIndicatorProps {
 
 const LINE_CHAR = "\u2500"
 
-const getLabel = (event: SessionEvent): string => {
-  switch (event.kind) {
-    case "turn-ended":
-      return `Worked for ${formatThinkTime(event.durationSeconds)}`
-    case "interruption":
-      return "Interrupted - what do you want to do instead?"
-    case "error":
-      return event.error
-  }
-}
-
 export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const tick = useSpinnerClock()
 
   const line = () => {
+    tick()
     const width = Math.max(0, dimensions().width)
-    const label = getLabel(props.event)
+    const label = getSessionEventLabel(props.event)
     const prefix = `- ${label} `
     if (width <= 0) return ""
     if (prefix.length >= width) {
@@ -58,16 +28,22 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   }
 
   const plain = () => {
+    tick()
     const width = Math.max(0, dimensions().width)
-    return truncate(getLabel(props.event), width)
+    return truncate(getSessionEventLabel(props.event), width)
   }
 
-  const isLineEvent = () => props.event.kind === "turn-ended" || props.event.kind === "error"
+  const isLineEvent = () =>
+    props.event.kind === "turn-ended" ||
+    props.event.kind === "error" ||
+    props.event.kind === "retrying"
 
   const color = () => {
     switch (props.event.kind) {
       case "error":
         return theme.error
+      case "retrying":
+        return theme.warning
       case "interruption":
         return theme.warning
       default:
