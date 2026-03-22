@@ -114,6 +114,7 @@ export const Agents = {
     description: "General purpose - full tool access, can execute code changes",
     kind: "primary",
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
+    deniedTools: ["loop_evaluation"],
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
@@ -122,6 +123,7 @@ export const Agents = {
     description: "Deep reasoning mode - thorough analysis, slower/longer answers",
     kind: "primary",
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
+    deniedTools: ["loop_evaluation"],
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
   }),

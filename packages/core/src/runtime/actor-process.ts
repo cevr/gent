@@ -7,6 +7,7 @@ import {
   AgentRestarted,
   ErrorOccurred,
   EventStore,
+  MessageReceived,
   ToolCallStarted,
   ToolCallSucceeded,
   ToolCallFailed,
@@ -249,6 +250,16 @@ export const LocalActorProcessLive: Layer.Layer<
             createdAt: new Date(),
           })
           yield* storage.createMessage(assistantMessage)
+          yield* eventStore
+            .publish(
+              new MessageReceived({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                messageId: assistantMessage.id,
+                role: "assistant",
+              }),
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
 
           // Emit tool call started event
           yield* eventStore
@@ -285,6 +296,16 @@ export const LocalActorProcessLive: Layer.Layer<
             createdAt: new Date(),
           })
           yield* storage.createMessage(resultMessage)
+          yield* eventStore
+            .publish(
+              new MessageReceived({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                messageId: resultMessage.id,
+                role: "tool",
+              }),
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
 
           // Emit tool call result event
           const isError = resultPart.output.type === "error-json"

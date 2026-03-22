@@ -66,12 +66,24 @@ const extractVerdictFromEvents = (
   envelopes: ReadonlyArray<EventEnvelope>,
   resultText: string,
 ): LoopVerdict => {
-  // Primary: search for loop_evaluation tool call in events
+  // Primary: search for a successfully completed loop_evaluation tool call
+  const succeededCallIds = new Set<string>()
+  for (const envelope of envelopes) {
+    if (
+      (envelope.event._tag === "ToolCallSucceeded" ||
+        envelope.event._tag === "ToolCallCompleted") &&
+      envelope.event.toolName === "loop_evaluation"
+    ) {
+      succeededCallIds.add(envelope.event.toolCallId)
+    }
+  }
+  // Only trust input from tool calls that completed successfully
   for (const envelope of envelopes) {
     if (
       envelope.event._tag === "ToolCallStarted" &&
       envelope.event.toolName === "loop_evaluation" &&
-      envelope.event.input !== undefined
+      envelope.event.input !== undefined &&
+      succeededCallIds.has(envelope.event.toolCallId)
     ) {
       const input = envelope.event.input as Record<string, unknown>
       if (input["verdict"] === "done") return "done"

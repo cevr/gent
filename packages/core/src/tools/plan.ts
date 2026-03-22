@@ -3,6 +3,7 @@ import {
   Agents,
   AgentRegistry,
   getAdversarialModels,
+  SubagentError,
   SubagentRunnerService,
 } from "../domain/agent.js"
 import { EventStore, WorkflowPhaseStarted, WorkflowCompleted } from "../domain/event.js"
@@ -90,7 +91,7 @@ export const PlanTool = defineWorkflow({
     ) => {
       if (result._tag === "error") {
         const err = "error" in result ? String(result.error) : "unknown"
-        return Effect.die(new Error(`Plan ${label} failed: ${err}`))
+        return Effect.fail(new SubagentError({ message: `Plan ${label} failed: ${err}` }))
       }
       return Effect.succeed("text" in result ? String(result.text) : "")
     }
