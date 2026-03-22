@@ -88,13 +88,12 @@ export function DebugPlayground() {
         syntaxStyle={syntaxStyle}
         streaming={false}
         getChildSessions={(toolCallId) => [...(DEBUG_CHILD_SESSIONS[toolCallId] ?? [])]}
+        footer={
+          <Show when={showTasks()}>
+            <TaskWidget previewTasks={DEBUG_TASKS} />
+          </Show>
+        }
       />
-
-      <Show when={showTasks()}>
-        <box flexShrink={0}>
-          <TaskWidget previewTasks={DEBUG_TASKS} />
-        </box>
-      </Show>
 
       <BorderedInput
         topLeft={[{ text: "$0.14", color: theme.textMuted }]}

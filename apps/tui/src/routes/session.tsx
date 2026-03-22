@@ -376,11 +376,8 @@ export function Session(props: SessionProps) {
         syntaxStyle={syntaxStyle}
         streaming={client.isStreaming()}
         getChildSessions={getChildren}
+        footer={<TaskWidget sessionId={props.sessionId} branchId={props.branchId} />}
       />
-
-      <box flexShrink={0}>
-        <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
-      </box>
 
       {/* Bordered input */}
       <BorderedInput

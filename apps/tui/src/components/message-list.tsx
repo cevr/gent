@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js"
+import { createMemo, For, Show, type JSX } from "solid-js"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
@@ -177,6 +177,7 @@ interface MessageListProps {
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
+  footer?: JSX.Element
 }
 
 export function MessageList(props: MessageListProps) {
@@ -207,6 +208,7 @@ export function MessageList(props: MessageListProps) {
           )
         }
       </For>
+      <Show when={props.footer !== undefined}>{props.footer}</Show>
     </scrollbox>
   )
 }
