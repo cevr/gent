@@ -13,7 +13,7 @@ import {
   type BranchInfo,
 } from "@gent/server"
 import { makeDirectGentClient, type GentClient } from "@gent/sdk"
-import { GentLogger } from "@gent/runtime"
+import { GentLogger } from "@gent/core/runtime/logger.js"
 import { UnifiedTracerLive } from "./utils/unified-tracer"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"

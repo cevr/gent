@@ -16,7 +16,6 @@
     "@effect/platform-bun": "catalog:",
     "@gent/atom-solid": "workspace:*",
     "@gent/core": "workspace:*",
-    "@gent/runtime": "workspace:*",
     "@gent/sdk": "workspace:*",
     "@gent/server": "workspace:*",
     "@opentui/core": "^0.1.88",

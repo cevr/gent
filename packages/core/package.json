@@ -5,7 +5,8 @@
   "exports": {
     "./domain/*": "./src/domain/*",
     "./storage/*": "./src/storage/*",
-    "./providers/*": "./src/providers/*"
+    "./providers/*": "./src/providers/*",
+    "./runtime/*": "./src/runtime/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -15,9 +16,12 @@
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/mistral": "catalog:",
     "@ai-sdk/openai": "catalog:",
-    "ai": "catalog:"
+    "ai": "catalog:",
+    "effect-machine": "catalog:"
   },
   "peerDependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "effect": "catalog:"
   }

@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@gent/core": "workspace:*",
-    "@gent/runtime": "workspace:*",
     "@gent/server": "workspace:*"
   },
   "peerDependencies": {

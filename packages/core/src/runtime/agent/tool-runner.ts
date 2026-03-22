@@ -4,10 +4,10 @@ import {
   type ToolContext,
   type AnyToolDefinition,
   type ToolDefinition,
-} from "@gent/core/domain/tool.js"
-import { ToolResultPart } from "@gent/core/domain/message.js"
-import { Permission, type PermissionDecision } from "@gent/core/domain/permission.js"
-import { PermissionHandler } from "@gent/core/domain/interaction-handlers.js"
+} from "../../domain/tool.js"
+import { ToolResultPart } from "../../domain/message.js"
+import { Permission, type PermissionDecision } from "../../domain/permission.js"
+import { PermissionHandler } from "../../domain/interaction-handlers.js"
 import { formatSchemaError } from "../format-schema-error"
 
 export interface ToolRunnerService {

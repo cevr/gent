@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@gent/core": "workspace:*",
-    "@gent/runtime": "workspace:*",
     "@gent/tools": "workspace:*"
   },
   "peerDependencies": {

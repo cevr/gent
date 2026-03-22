@@ -16,7 +16,7 @@ import {
   InterruptPayload,
   SendToolResultPayload,
   SendUserMessagePayload,
-} from "@gent/runtime"
+} from "@gent/core/runtime/actor-process.js"
 import { GentRpcError } from "./errors.js"
 
 // ============================================================================

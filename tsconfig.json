@@ -17,7 +17,6 @@
       "@gent/core/*": ["packages/core/src/*"],
       "@gent/atom-solid": ["packages/atom-solid/src/index.ts"],
       "@gent/tools": ["packages/tools/src/index.ts"],
-      "@gent/runtime": ["packages/runtime/src/index.ts"],
       "@gent/server": ["packages/server/src/index.ts"],
       "@gent/sdk": ["packages/sdk/src/index.ts"],
       "@gent/test-utils": ["packages/test-utils/src/index.ts"]

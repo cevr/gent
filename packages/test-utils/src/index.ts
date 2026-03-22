@@ -19,7 +19,8 @@ import type { PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
 import { PlanCheckpoint, type Checkpoint } from "@gent/core/domain/message.js"
 import type { BranchId } from "@gent/core/domain/ids.js"
 import { AskUserHandler, AllTools } from "@gent/tools"
-import { AgentLoop, CheckpointService } from "@gent/runtime"
+import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.js"
+import { CheckpointService } from "@gent/core/runtime/checkpoint.js"
 
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"

@@ -32,7 +32,8 @@ import type {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import type { Task } from "@gent/core/domain/task.js"
-import { ConfigService, ModelRegistry } from "@gent/runtime"
+import { ConfigService } from "@gent/core/runtime/config-service.js"
+import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
 import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
 import { OPENAI_OAUTH_ALLOWED_MODELS } from "@gent/core/providers/oauth/openai-oauth.js"
 

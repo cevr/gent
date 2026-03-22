@@ -16,13 +16,10 @@ import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { GentCore } from "@gent/server"
-import {
-  ActorProcess,
-  AgentLoop,
-  LocalActorProcessLive,
-  CheckpointService,
-  ConfigService,
-} from "@gent/runtime"
+import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
+import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
+import { CheckpointService } from "@gent/core/runtime/checkpoint"
+import { ConfigService } from "@gent/core/runtime/config-service"
 
 describe("Skills System", () => {
   test("Skills.Test provides test skills", async () => {

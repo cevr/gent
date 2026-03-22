@@ -1,7 +1,7 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
-import { PlanCheckpoint, type Message, type Checkpoint } from "@gent/core/domain/message.js"
-import type { BranchId } from "@gent/core/domain/ids.js"
-import { Storage, type StorageError } from "@gent/core/storage/sqlite-storage.js"
+import { PlanCheckpoint, type Message, type Checkpoint } from "../domain/message.js"
+import type { BranchId } from "../domain/ids.js"
+import { Storage, type StorageError } from "../storage/sqlite-storage.js"
 
 // Checkpoint Error
 

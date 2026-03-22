@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { getRetryAfter, getRetryDelay, DEFAULT_RETRY_CONFIG } from "@gent/runtime"
+import { getRetryAfter, getRetryDelay, DEFAULT_RETRY_CONFIG } from "@gent/core/runtime/retry"
 
 describe("getRetryAfter", () => {
   test("returns undefined for null", () => {

@@ -1,19 +1,11 @@
 import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
-import {
-  isRetryable,
-  getRetryDelay,
-  DEFAULT_RETRY_CONFIG,
-  estimateTokens,
-  AgentLoop,
-  AgentActor,
-  InProcessRunner,
-  SubagentRunnerConfig,
-  ToolRunner,
-  CheckpointService,
-  LocalActorProcessLive,
-  ActorProcess,
-} from "@gent/runtime"
+import { isRetryable, getRetryDelay, DEFAULT_RETRY_CONFIG } from "@gent/core/runtime/retry"
+import { estimateTokens, CheckpointService } from "@gent/core/runtime/checkpoint"
+import { AgentLoop, AgentActor } from "@gent/core/runtime/agent/agent-loop"
+import { InProcessRunner, SubagentRunnerConfig } from "@gent/core/runtime/agent/subagent-runner"
+import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
 import {
   Provider,
   ProviderError,

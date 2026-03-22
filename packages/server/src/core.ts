@@ -41,14 +41,10 @@ import {
   type ProviderService,
 } from "@gent/core/providers/provider.js"
 import type { ProviderAuthError } from "@gent/core/providers/provider-auth.js"
-import {
-  ActorProcess,
-  type ActorProcessError,
-  SteerCommand,
-  AgentLoopError,
-  CheckpointService,
-  ConfigService,
-} from "@gent/runtime"
+import { ActorProcess, type ActorProcessError } from "@gent/core/runtime/actor-process.js"
+import { SteerCommand, AgentLoopError } from "@gent/core/runtime/agent/agent-loop.js"
+import { CheckpointService } from "@gent/core/runtime/checkpoint.js"
+import { ConfigService } from "@gent/core/runtime/config-service.js"
 import type { PlatformErrorSchema } from "./errors"
 import { NotFoundError } from "./errors"
 

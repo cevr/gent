@@ -5,7 +5,7 @@
 import { describe, it, expect } from "bun:test"
 import { Effect } from "effect"
 import { PermissionRule } from "@gent/core/domain/permission"
-import { ConfigService, UserConfig } from "@gent/runtime"
+import { ConfigService, UserConfig } from "@gent/core/runtime/config-service"
 
 describe("ConfigService", () => {
   describe("Test implementation", () => {

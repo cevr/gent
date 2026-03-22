@@ -8,7 +8,7 @@ import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { TaskService } from "@gent/runtime"
+import { TaskService } from "@gent/core/runtime/task-service"
 
 const platformLayer = BunServices.layer
 

@@ -1,20 +1,6 @@
 {
   "name": "@gent/runtime",
   "version": "0.0.0",
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@gent/core": "workspace:*",
-    "effect-machine": "catalog:"
-  },
-  "peerDependencies": {
-    "@effect/sql-pg": "catalog:",
-    "@effect/sql-sqlite-bun": "catalog:",
-    "effect": "catalog:"
-  }
+  "private": true,
+  "type": "module"
 }

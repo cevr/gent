@@ -2,18 +2,18 @@ import type { Sharding } from "effect/unstable/cluster"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Cause, ServiceMap, Effect, Layer, Schema } from "effect"
-import { AgentName } from "@gent/core/domain/agent.js"
+import { AgentName } from "../domain/agent.js"
 import {
   AgentRestarted,
   ErrorOccurred,
   EventStore,
   ToolCallSucceeded,
   ToolCallFailed,
-} from "@gent/core/domain/event.js"
-import { BranchId, SessionId, type MessageId } from "@gent/core/domain/ids.js"
-import { Message, TextPart, ToolResultPart } from "@gent/core/domain/message.js"
-import { summarizeToolOutput, stringifyOutput } from "@gent/core/domain/tool-output.js"
-import { Storage } from "@gent/core/storage/sqlite-storage.js"
+} from "../domain/event.js"
+import { BranchId, SessionId, type MessageId } from "../domain/ids.js"
+import { Message, TextPart, ToolResultPart } from "../domain/message.js"
+import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
+import { Storage } from "../storage/sqlite-storage.js"
 import { AgentLoop, SteerCommand } from "./agent"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(

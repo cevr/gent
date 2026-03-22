@@ -23,19 +23,20 @@ import {
   AgentLoop,
   SteerCommand,
   AgentLoopError,
-  LocalActorProcessLive,
-  CheckpointService,
-  ConfigService,
-  ModelRegistry,
   AgentActor,
+} from "@gent/core/runtime/agent/agent-loop.js"
+import {
   InProcessRunner,
   SubprocessRunner,
   SubagentRunnerConfig,
-  ToolRunner,
-  FileTracker,
-  TaskService,
-} from "@gent/runtime"
-import type { ActorProcess } from "@gent/runtime"
+} from "@gent/core/runtime/agent/subagent-runner.js"
+import { ToolRunner } from "@gent/core/runtime/agent/tool-runner.js"
+import { LocalActorProcessLive, type ActorProcess } from "@gent/core/runtime/actor-process.js"
+import { CheckpointService } from "@gent/core/runtime/checkpoint.js"
+import { ConfigService } from "@gent/core/runtime/config-service.js"
+import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
+import { FileTracker } from "@gent/core/runtime/file-tracker.js"
+import { TaskService } from "@gent/core/runtime/task-service.js"
 import { AllTools, AskUserHandler, QuestionHandler } from "@gent/tools"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"

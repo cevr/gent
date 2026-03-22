@@ -7,8 +7,8 @@
  */
 
 import { ServiceMap, Effect, Filter, Layer, Option, Schema, Stream } from "effect"
-import { EventStore, type EventStoreError } from "@gent/core/domain/event.js"
-import type { SessionId } from "@gent/core/domain/ids.js"
+import { EventStore, type EventStoreError } from "../domain/event.js"
+import type { SessionId } from "../domain/ids.js"
 
 // =============================================================================
 // Schema

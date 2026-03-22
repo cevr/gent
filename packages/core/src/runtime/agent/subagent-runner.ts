@@ -5,15 +5,11 @@ import {
   SubagentSucceeded,
   SubagentFailed,
   SubagentSpawned,
-} from "@gent/core/domain/event.js"
-import {
-  SubagentError,
-  SubagentRunnerService,
-  type SubagentToolCall,
-} from "@gent/core/domain/agent.js"
-import { Session, Branch } from "@gent/core/domain/message.js"
-import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
-import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage.js"
+} from "../../domain/event.js"
+import { SubagentError, SubagentRunnerService, type SubagentToolCall } from "../../domain/agent.js"
+import { Session, Branch } from "../../domain/message.js"
+import type { SessionId, BranchId } from "../../domain/ids.js"
+import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentActor } from "./agent-loop"
 
 interface ChildMetadata {

@@ -16,7 +16,11 @@ import {
   ImagePart,
 } from "@gent/core/domain/message"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
-import { estimateTokens, estimateContextPercent, getContextWindow } from "@gent/runtime"
+import {
+  estimateTokens,
+  estimateContextPercent,
+  getContextWindow,
+} from "@gent/core/runtime/checkpoint"
 
 // ============================================================================
 // HandoffHandler

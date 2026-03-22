@@ -1,5 +1,5 @@
 import { Effect, Schedule, Duration, Schema } from "effect"
-import { ProviderError } from "@gent/core/providers/provider.js"
+import { ProviderError } from "../providers/provider.js"
 
 // Retry Config Schema
 
