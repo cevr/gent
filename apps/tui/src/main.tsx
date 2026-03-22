@@ -15,7 +15,7 @@ import {
 } from "@gent/core/server/core.js"
 import { makeDirectGentClient, type GentClient } from "@gent/sdk"
 import { GentLogger } from "@gent/core/runtime/logger.js"
-import { GentTracerLive } from "@gent/core/runtime/tracer.js"
+import { GentTracerLive, clearTraceLogIfRoot } from "@gent/core/runtime/tracer.js"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
 import { OsService } from "@gent/core/domain/os-service.js"
@@ -181,7 +181,7 @@ const PlatformLayer = BunServices.layer
 const LoggerLayer = GentLogger
 
 // Tracer layer — span tracing to /tmp/gent-trace.log
-const TracerLayer = GentTracerLive
+const TracerLayer = Layer.merge(GentTracerLive, clearTraceLogIfRoot)
 
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 

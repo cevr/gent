@@ -144,12 +144,14 @@ export function makeGentTracer(): Tracer.Tracer {
   })
 }
 
-/** Provides the GentTracer as the Effect Tracer. Clears the trace log unless running as subprocess. */
-export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
+/** Provides the GentTracer as the Effect Tracer. */
+export const GentTracerLive: Layer.Layer<never> = Layer.succeed(Tracer.Tracer, makeGentTracer())
+
+/** Clear trace log — call at startup (not in subprocess mode). */
+export const clearTraceLogIfRoot: Layer.Layer<never> = Layer.unwrap(
   Effect.gen(function* () {
-    // Don't truncate when running as a subprocess — parent is writing to same file
     const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
     if (!isSubprocess) clearTraceLog()
-    return Layer.succeed(Tracer.Tracer, makeGentTracer())
-  }).pipe(Effect.catchEager(() => Effect.succeed(Layer.succeed(Tracer.Tracer, makeGentTracer())))),
+    return Layer.empty
+  }).pipe(Effect.catchEager(() => Effect.succeed(Layer.empty))),
 )
