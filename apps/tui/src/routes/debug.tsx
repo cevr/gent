@@ -16,6 +16,7 @@ import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { Effect } from "effect"
 import { DEBUG_CHILD_SESSIONS, DEBUG_ITEMS, DEBUG_TASKS } from "./debug-fixtures"
+import type { SessionItem } from "../components/message-list"
 
 export function DebugPlayground() {
   const { theme } = useTheme()
@@ -25,6 +26,24 @@ export function DebugPlayground() {
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
   const [toolsExpanded, setToolsExpanded] = createSignal(true)
   const [showTasks, setShowTasks] = createSignal(true)
+  const [items, setItems] = createSignal<SessionItem[]>([...DEBUG_ITEMS])
+
+  const handleSubmit = (content: string, mode?: "queue" | "interject") => {
+    setItems((current) => [
+      ...current,
+      {
+        _tag: "message",
+        id: crypto.randomUUID(),
+        role: "user",
+        kind: mode === "interject" ? "interjection" : "regular",
+        content,
+        reasoning: "",
+        images: [],
+        createdAt: Date.now(),
+        toolCalls: undefined,
+      },
+    ])
+  }
 
   const spinner = () => {
     const frames = ["·", "•", "*"]
@@ -83,7 +102,7 @@ export function DebugPlayground() {
       </box>
 
       <MessageList
-        items={[...DEBUG_ITEMS]}
+        items={items()}
         toolsExpanded={toolsExpanded()}
         syntaxStyle={syntaxStyle}
         streaming={false}
@@ -101,7 +120,7 @@ export function DebugPlayground() {
         bottomLeft={bottomLeft()}
         bottomRight={bottomRight()}
       >
-        <Input onSubmit={() => {}} onSlashCommand={() => Effect.void}>
+        <Input onSubmit={handleSubmit} onSlashCommand={() => Effect.void}>
           <Input.Autocomplete />
         </Input>
       </BorderedInput>

@@ -36,6 +36,8 @@ function UserMessage(props: {
   const isInterjection = () => props.kind === "interjection"
   const background = () => (isInterjection() ? theme.backgroundPanel : theme.backgroundElement)
   const textColor = () => (isInterjection() ? theme.warning : theme.text)
+  const label = () => (isInterjection() ? "steer" : "queue")
+  const labelColor = () => (isInterjection() ? theme.warning : theme.textMuted)
   const hasContent = () => props.content.length > 0 || props.images.length > 0
 
   return (
@@ -55,10 +57,10 @@ function UserMessage(props: {
           </For>
         </Show>
         <Show when={props.content.length > 0}>
-          <text style={{ fg: textColor() }}>
-            {isInterjection() ? "[!] " : ""}
-            {props.content}
-          </text>
+          <box flexDirection="column">
+            <text style={{ fg: labelColor() }}>[{label()}]</text>
+            <text style={{ fg: textColor() }}>{props.content}</text>
+          </box>
         </Show>
       </box>
     </Show>
