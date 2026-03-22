@@ -60,6 +60,9 @@ export {
 // WebFetch Tool
 export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch"
 
+// WebSearch Tool
+export { WebSearchTool, WebSearchParams, WebSearchResult, WebSearchError } from "./websearch"
+
 // Plan Tool
 export { PlanTool, PlanParams, PlanResult } from "./plan"
 
@@ -117,6 +120,7 @@ import { AskUserTool } from "./ask-user"
 import { RepoExplorerTool } from "./repo-explorer"
 import { TodoReadTool, TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
+import { WebSearchTool } from "./websearch"
 import { PlanTool } from "./plan"
 import { DelegateTool } from "./delegate"
 import { LibrarianTool } from "./librarian"
@@ -143,6 +147,7 @@ export const AllTools: AnyToolDefinition[] = [
   TodoReadTool,
   TodoWriteTool,
   WebFetchTool,
+  WebSearchTool,
   PlanTool,
   DelegateTool,
   LibrarianTool,
