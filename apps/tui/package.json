@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "@types/figlet": "^1.7.0",
-    "bun-pty": "^0.4.8"
+    "zigpty": "^0.0.4"
   },
   "peerDependencies": {
     "effect": "catalog:"
