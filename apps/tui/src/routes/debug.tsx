@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, Show } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
 import { useExit } from "../hooks/use-exit"
 import { MessageList } from "../components/message-list"
@@ -27,8 +27,10 @@ export function DebugPlayground() {
   const [toolsExpanded, setToolsExpanded] = createSignal(true)
   const [showTasks, setShowTasks] = createSignal(true)
   const [items, setItems] = createSignal<SessionItem[]>([...DEBUG_ITEMS])
+  const pendingReplies = new Set<ReturnType<typeof setTimeout>>()
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
+    const createdAt = Date.now()
     setItems((current) => [
       ...current,
       {
@@ -39,11 +41,43 @@ export function DebugPlayground() {
         content,
         reasoning: "",
         images: [],
-        createdAt: Date.now(),
+        createdAt,
         toolCalls: undefined,
       },
     ])
+
+    const timer = setTimeout(() => {
+      pendingReplies.delete(timer)
+      const replyMode = mode === "interject" ? "steer" : "queue"
+      const replyLead =
+        mode === "interject"
+          ? "Steer preview. Interjections cut the line and should feel immediate."
+          : "Queue preview. Standard sends wait their turn."
+      setItems((current) => [
+        ...current,
+        {
+          _tag: "message",
+          id: crypto.randomUUID(),
+          role: "assistant",
+          kind: "regular",
+          content: `${replyLead}\n\nEcho: ${content}\nMode: ${replyMode}`,
+          reasoning: "",
+          images: [],
+          createdAt: createdAt + 5000,
+          toolCalls: undefined,
+        },
+      ])
+    }, 5000)
+
+    pendingReplies.add(timer)
   }
+
+  onCleanup(() => {
+    for (const timer of pendingReplies) {
+      clearTimeout(timer)
+    }
+    pendingReplies.clear()
+  })
 
   const spinner = () => {
     const frames = ["·", "•", "*"]
