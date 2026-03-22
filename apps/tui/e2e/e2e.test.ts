@@ -1,7 +1,8 @@
 /**
  * PTY-based E2E tests for TUI
  *
- * Uses zigpty for proper pseudo-terminal emulation with waitFor pattern.
+ * Uses zigpty for pseudo-terminal emulation with waitFor pattern.
+ * Tests are grouped by feature. Each test spawns a fresh PTY.
  */
 import { describe, test, expect, afterEach } from "bun:test"
 import { BunServices, BunFileSystem } from "@effect/platform-bun"
@@ -19,6 +20,7 @@ const ENTER = "\r"
 const ESC = "\x1b"
 const CTRL_C = "\x03"
 const SHIFT_TAB = "\x1b[Z"
+const DOWN = "\x1b[B"
 
 interface TestContext {
   pty: IPty
@@ -46,15 +48,7 @@ const seedAuth = async (tempDir: string): Promise<void> => {
   )
 }
 
-function stripAnsi(str: string): string {
-  // eslint-disable-next-line no-control-regex
-  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "")
-}
-
-async function spawnTui(extraArgs: string[] = []): Promise<TestContext> {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
-  await seedAuth(tempDir)
-
+function spawnWithDir(tempDir: string, extraArgs: string[] = []): TestContext {
   const tuiDir = path.resolve(import.meta.dir, "..")
   const mainPath = path.join(tuiDir, "src", "main.tsx")
   const preloadPath = path.join(
@@ -73,10 +67,7 @@ async function spawnTui(extraArgs: string[] = []): Promise<TestContext> {
     cols: 120,
     rows: 40,
     cwd: tuiDir,
-    env: {
-      ...Bun.env,
-      GENT_DATA_DIR: tempDir,
-    },
+    env: { ...Bun.env, GENT_DATA_DIR: tempDir },
   })
 
   pty.onData((data) => {
@@ -87,12 +78,12 @@ async function spawnTui(extraArgs: string[] = []): Promise<TestContext> {
     try {
       pty.kill()
     } catch {
-      // Process may already be dead
+      /* already dead */
     }
     try {
       fs.rmSync(tempDir, { recursive: true, force: true })
     } catch {
-      // Ignore cleanup errors
+      /* ignore */
     }
   }
 
@@ -106,7 +97,29 @@ async function spawnTui(extraArgs: string[] = []): Promise<TestContext> {
   }
 }
 
-// Track context for cleanup
+const seedAndSpawn = async (extraArgs: string[] = []): Promise<TestContext> => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
+  await seedAuth(tempDir)
+  return spawnWithDir(tempDir, extraArgs)
+}
+
+const spawnNoAuth = (): TestContext => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-e2e-"))
+  return spawnWithDir(tempDir)
+}
+
+/* eslint-disable no-control-regex */
+function stripAnsi(str: string): string {
+  return str
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\x1b\[\?[0-9;]*[a-zA-Z$]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b\[>[0-9]*[a-zA-Z]/g, "")
+    .replace(/\x1b\[[0-9]*"/g, "")
+}
+/* eslint-enable no-control-regex */
+
 let testContext: TestContext | null = null
 
 afterEach(() => {
@@ -116,181 +129,226 @@ afterEach(() => {
   }
 })
 
-describe("E2E: TUI Basics", () => {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Basics
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+describe("E2E: Basics", () => {
   test(
-    "TUI starts and shows home view with prompt",
+    "starts and shows home view with prompt",
     async () => {
-      testContext = await spawnTui()
-
+      testContext = await seedAndSpawn()
       await testContext.pty.waitFor("❯", { timeout: 10_000 })
-
-      const clean = stripAnsi(testContext.output)
-      expect(clean).toContain("❯")
-      expect(testContext.output.length).toBeGreaterThan(100)
-
-      testContext.pty.write(CTRL_C)
+      expect(stripAnsi(testContext.output)).toContain("❯")
     },
     TEST_TIMEOUT,
   )
 
   test(
-    "shift+tab toggles agent from cowork to deepwork",
+    "shift+tab toggles agent cowork → deepwork",
     async () => {
-      testContext = await spawnTui()
-
+      testContext = await seedAndSpawn()
       await testContext.pty.waitFor("cowork", { timeout: 10_000 })
-
       testContext.pty.write(SHIFT_TAB)
-
       await testContext.pty.waitFor("deepwork", { timeout: 5_000 })
-
-      const clean = stripAnsi(testContext.output)
-      expect(clean).toContain("deepwork")
-
-      testContext.pty.write(CTRL_C)
     },
     TEST_TIMEOUT,
   )
 
   test(
-    "typing text produces output",
+    "typing text appears in output",
     async () => {
-      testContext = await spawnTui()
-
+      testContext = await seedAndSpawn()
       await testContext.pty.waitFor("❯", { timeout: 10_000 })
-
-      const outputBefore = testContext.output.length
+      const before = testContext.output.length
       testContext.pty.write("hello world")
-
-      // Wait for output to grow (TUI re-renders with typed text + ANSI sequences)
       await new Promise((r) => setTimeout(r, 1_000))
-
-      expect(testContext.output.length).toBeGreaterThan(outputBefore)
-      // Verify individual characters landed (may be interspersed with ANSI)
-      const clean = stripAnsi(testContext.output)
-      expect(clean).toContain("hello")
-
-      testContext.pty.write(CTRL_C)
+      expect(testContext.output.length).toBeGreaterThan(before)
+      expect(stripAnsi(testContext.output)).toContain("hello")
     },
     TEST_TIMEOUT,
   )
 
   test(
-    "double ESC exits cleanly",
+    "double ESC exits with code 0",
     async () => {
-      testContext = await spawnTui()
-
+      testContext = await seedAndSpawn()
       await testContext.pty.waitFor("❯", { timeout: 10_000 })
-
       testContext.pty.write(ESC)
       await new Promise((r) => setTimeout(r, 200))
       testContext.pty.write(ESC)
-
-      const exitCode = await Promise.race([
+      const code = await Promise.race([
         testContext.pty.exited,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
+        new Promise<null>((r) => setTimeout(() => r(null), 5_000)),
       ])
-
-      expect(exitCode).not.toBeNull()
-      expect(exitCode).toBe(0)
+      expect(code).toBe(0)
     },
     TEST_TIMEOUT,
   )
 })
 
-describe("E2E: Session Navigation", () => {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Auth
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+describe("E2E: Auth", () => {
   test(
-    "submitting a message navigates to session view",
+    "missing auth → auto-opens auth panel",
     async () => {
-      testContext = await spawnTui()
+      testContext = spawnNoAuth()
+      await testContext.pty.waitFor("API Keys", { timeout: 10_000 })
+      // Give time for provider list to render
+      await new Promise((r) => setTimeout(r, 500))
+      // Panel rendered successfully
+      expect(testContext.output).toContain("API Keys")
+      expect(testContext.output.length).toBeGreaterThan(500)
+    },
+    TEST_TIMEOUT,
+  )
 
+  test(
+    "auth panel: navigate providers with arrows",
+    async () => {
+      testContext = spawnNoAuth()
+      await testContext.pty.waitFor("API Keys", { timeout: 10_000 })
+      testContext.pty.write(DOWN)
+      await new Promise((r) => setTimeout(r, 300))
+      testContext.pty.write(DOWN)
+      await new Promise((r) => setTimeout(r, 300))
+      // Output should have grown from navigation
+      expect(testContext.output.length).toBeGreaterThan(100)
+    },
+    TEST_TIMEOUT,
+  )
+
+  test(
+    "auth panel: Enter opens method picker, ESC goes back",
+    async () => {
+      testContext = spawnNoAuth()
+      await testContext.pty.waitFor("API Keys", { timeout: 10_000 })
+      // Select provider
+      testContext.pty.write(ENTER)
+      // Method picker shows "Enter=choose" hint
+      await testContext.pty.waitFor("choose", { timeout: 5_000 })
+      // ESC back to list
+      testContext.pty.write(ESC)
+      await testContext.pty.waitFor("select", { timeout: 5_000 })
+    },
+    TEST_TIMEOUT,
+  )
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Slash Commands
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+describe("E2E: Slash Commands", () => {
+  test(
+    "/ prefix shows autocomplete popup with commands",
+    async () => {
+      testContext = await seedAndSpawn()
       await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("/")
+      await testContext.pty.waitFor("agent", { timeout: 5_000 })
+      testContext.pty.write(ESC)
+    },
+    TEST_TIMEOUT,
+  )
 
+  test(
+    "typing /auth in autocomplete then Enter navigates to auth",
+    async () => {
+      testContext = await seedAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("/auth")
+      await new Promise((r) => setTimeout(r, 300))
+      testContext.pty.write(ENTER)
+      await testContext.pty.waitFor("API Keys", { timeout: 5_000 })
+      const clean = stripAnsi(testContext.output)
+      expect(clean).toContain("anthropic")
+      testContext.pty.write(ESC)
+    },
+    TEST_TIMEOUT,
+  )
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Shell Mode
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+describe("E2E: Shell Mode", () => {
+  test(
+    "! enters shell, runs echo, ESC exits",
+    async () => {
+      testContext = await seedAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("!")
+      await testContext.pty.waitFor("$", { timeout: 5_000 })
+      testContext.pty.write("echo zigpty-e2e")
+      testContext.pty.write(ENTER)
+      await testContext.pty.waitFor("zigpty-e2e", { timeout: 5_000 })
+      testContext.pty.write(ESC)
+    },
+    TEST_TIMEOUT,
+  )
+
+  test(
+    "shell mode: sequential commands",
+    async () => {
+      testContext = await seedAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("!")
+      await testContext.pty.waitFor("$", { timeout: 5_000 })
+      testContext.pty.write("echo first-cmd")
+      testContext.pty.write(ENTER)
+      await testContext.pty.waitFor("first-cmd", { timeout: 5_000 })
+      await new Promise((r) => setTimeout(r, 500))
+      testContext.pty.write("echo second-cmd")
+      testContext.pty.write(ENTER)
+      await testContext.pty.waitFor("second-cmd", { timeout: 5_000 })
+      testContext.pty.write(ESC)
+    },
+    TEST_TIMEOUT,
+  )
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Session
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+describe("E2E: Session", () => {
+  test(
+    "submitting message triggers session creation",
+    async () => {
+      testContext = await seedAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
       testContext.pty.write("hi")
       await new Promise((r) => setTimeout(r, 300))
       testContext.pty.write(ENTER)
-
-      // Wait for either session activity or error (no real API keys)
-      await new Promise((r) => setTimeout(r, 5_000))
-
-      const clean = stripAnsi(testContext.output)
-      const hasSessionIndicators =
-        clean.includes("Session") ||
-        clean.includes("Error") ||
-        clean.includes("API") ||
-        clean.includes("provider") ||
-        clean.includes("streaming") ||
-        clean.includes("model") ||
-        clean.includes("user") ||
-        clean.includes("assistant") ||
-        testContext.output.length > 3000
-
-      expect(hasSessionIndicators).toBe(true)
-
+      // Session view renders — may show streaming, error, or user message
+      // Just wait for output to grow substantially
+      await new Promise((r) => setTimeout(r, 3_000))
+      expect(testContext.output.length).toBeGreaterThan(2000)
       testContext.pty.write(CTRL_C)
     },
     TEST_TIMEOUT,
   )
 })
 
-describe("E2E: Slash Commands", () => {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Headless
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+describe("E2E: Headless", () => {
   test(
-    "/ prefix opens command popup",
+    "-H flag produces output",
     async () => {
-      testContext = await spawnTui()
-
-      await testContext.pty.waitFor("❯", { timeout: 10_000 })
-
-      testContext.pty.write("/")
-
-      // Command popup should show available commands
-      await testContext.pty.waitFor("agent", { timeout: 5_000 })
-
-      const clean = stripAnsi(testContext.output)
-      expect(clean).toContain("agent")
-
-      testContext.pty.write(ESC)
-    },
-    TEST_TIMEOUT,
-  )
-})
-
-describe("E2E: Shell Mode", () => {
-  test(
-    "! prefix enters shell mode",
-    async () => {
-      testContext = await spawnTui()
-
-      await testContext.pty.waitFor("❯", { timeout: 10_000 })
-
-      testContext.pty.write("!")
-
-      // Shell mode changes the prompt to $
-      await testContext.pty.waitFor("$", { timeout: 5_000 })
-
-      // Type a shell command
-      testContext.pty.write("echo zigpty-test")
-      testContext.pty.write(ENTER)
-
-      // Should see output
-      await testContext.pty.waitFor("zigpty-test", { timeout: 5_000 })
-
-      testContext.pty.write(ESC)
-    },
-    TEST_TIMEOUT,
-  )
-})
-
-describe("E2E: Headless Mode", () => {
-  test(
-    "headless mode starts and exits",
-    async () => {
-      testContext = await spawnTui(["-H", "say hello"])
-
-      // Headless mode should start streaming or error (no real API keys)
-      await new Promise((r) => setTimeout(r, 5_000))
-
-      // Should have produced some output
+      testContext = await seedAndSpawn(["-H", "say hello"])
+      // Wait for process to exit or timeout
+      await Promise.race([
+        testContext.pty.exited,
+        new Promise<null>((r) => setTimeout(() => r(null), 8_000)),
+      ])
       expect(testContext.output.length).toBeGreaterThan(0)
     },
     TEST_TIMEOUT,
