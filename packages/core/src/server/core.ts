@@ -17,7 +17,6 @@ import {
   type PlanDecision,
   type HandoffDecision,
   SessionNameUpdated,
-  PlanConfirmed,
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
@@ -158,14 +157,6 @@ export type GentCoreError =
 // GentCore Service
 // ============================================================================
 
-export interface ApprovePlanInput {
-  sessionId: SessionId
-  branchId: BranchId
-  planPath: string
-  requestId?: string
-  emitEvent?: boolean
-}
-
 export interface GentCoreService {
   readonly createSession: (
     input: CreateSessionInput,
@@ -219,8 +210,6 @@ export interface GentCoreService {
   ) => Effect.Effect<ReadonlyArray<Task>, GentCoreError>
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
-
-  readonly approvePlan: (input: ApprovePlanInput) => Effect.Effect<void, GentCoreError>
 
   readonly getSessionState: (
     input: GetSessionStateInput,
@@ -811,21 +800,6 @@ ${conversation}`
 
         steer: (command) => actorProcess.steerAgent(command),
 
-        approvePlan: (input) =>
-          Effect.gen(function* () {
-            // Emit plan confirmed event
-            if (input.emitEvent !== false) {
-              yield* eventStore.publish(
-                new PlanConfirmed({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  requestId: input.requestId ?? Bun.randomUUIDv7(),
-                  planPath: input.planPath,
-                }),
-              )
-            }
-          }).pipe(Effect.withSpan("GentCore.approvePlan")),
-
         getSessionState: (input) =>
           Effect.gen(function* () {
             const session = yield* storage.getSession(input.sessionId)
@@ -934,17 +908,9 @@ ${conversation}`
           }).pipe(Effect.withSpan("GentCore.respondPermission")),
 
         respondPlan: (input) =>
-          Effect.gen(function* () {
-            const entry = yield* planHandler.respond(input.requestId, input.decision, input.reason)
-            if (input.decision !== "confirm" || entry?.planPath === undefined) return
-            yield* service.approvePlan({
-              sessionId: entry.sessionId,
-              branchId: entry.branchId,
-              planPath: entry.planPath,
-              requestId: input.requestId,
-              emitEvent: false,
-            })
-          }).pipe(Effect.withSpan("GentCore.respondPlan")),
+          planHandler
+            .respond(input.requestId, input.decision, input.reason)
+            .pipe(Effect.asVoid, Effect.withSpan("GentCore.respondPlan")),
 
         respondHandoff: (input) =>
           Effect.gen(function* () {
