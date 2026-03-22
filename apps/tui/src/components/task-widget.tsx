@@ -10,12 +10,12 @@ import { InlineChrome } from "./inline-chrome"
 
 const STATUS_ICONS: Record<string, string> = {
   pending: "◻",
-  in_progress: "⠋",
+  in_progress: "◰",
   completed: "✔",
   failed: "✗",
 }
 
-const IN_PROGRESS_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const
+const IN_PROGRESS_SPINNER = ["◰", "◳", "◲", "◱"] as const
 
 const MAX_DISPLAY = 10
 
