@@ -1,5 +1,5 @@
 // Read Tool
-export { ReadTool, ReadParams, ReadResult, ReadError, isSecretFile } from "./read"
+export { ReadTool, ReadParams, ReadResult, ReadError } from "./read"
 
 // Write Tool
 export { WriteTool, WriteParams, WriteResult, WriteError } from "./write"

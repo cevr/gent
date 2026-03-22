@@ -1,17 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "../domain/tool.js"
 
-// Secret file blocking
-
-const SECRET_PATTERNS = [/^\.env$/, /^\.env\..+$/]
-const SECRET_EXCEPTIONS = new Set([".env.example", ".env.sample", ".env.template"])
-
-export function isSecretFile(filePath: string): boolean {
-  const basename = filePath.split("/").pop() ?? ""
-  if (SECRET_EXCEPTIONS.has(basename)) return false
-  return SECRET_PATTERNS.some((p) => p.test(basename))
-}
-
 // Read Tool Error
 
 export class ReadError extends Schema.TaggedErrorClass<ReadError>()("ReadError", {
@@ -61,14 +50,6 @@ export const ReadTool = defineTool({
     const path = yield* Path.Path
 
     const filePath = path.resolve(params.path)
-
-    // Block secret files
-    if (isSecretFile(filePath)) {
-      return yield* new ReadError({
-        message: `Cannot read secret file. Use .env.example for templates.`,
-        path: filePath,
-      })
-    }
 
     // Check if path is a directory
     const stat = yield* fs.stat(filePath).pipe(
