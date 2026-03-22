@@ -7,7 +7,7 @@ import {
   ToolCallChunk,
   type StreamChunk,
 } from "../providers/provider.js"
-import { ToolRegistry, type AnyToolDefinition } from "../domain/tool.js"
+import type { AnyToolDefinition } from "../domain/tool.js"
 import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
 import { Agents } from "../domain/agent.js"
 import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.js"
@@ -15,7 +15,6 @@ import { Permission, type PermissionDecision } from "../domain/permission.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { PromptDecision, HandoffDecision } from "../domain/event.js"
 import { AskUserHandler } from "../tools/ask-user.js"
-import { AllTools } from "../tools/index.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 
 // Re-export effect-bun-test
@@ -180,19 +179,18 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const promptDecisions = config.promptDecisions ?? ["yes"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
-  const tools = config.tools ?? AllTools
+  const tools = config.tools ?? []
 
   return Layer.mergeAll(
     Storage.Test(),
     Provider.Test(providerResponses),
-    ToolRegistry.Live(tools),
     ExtensionRegistry.fromResolved(
       resolveExtensions([
         {
           manifest: { id: "test-agents" },
           kind: "builtin",
           sourcePath: "test",
-          setup: { agents: Object.values(Agents) },
+          setup: { agents: Object.values(Agents), tools: [...tools] },
         },
       ]),
     ),
@@ -216,20 +214,19 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const promptDecisions = config.promptDecisions ?? ["yes"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
-  const tools = config.tools ?? AllTools
+  const tools = config.tools ?? []
 
   return Layer.mergeAll(
     Storage.Test(),
     Permission.Test(),
     PermissionHandler.Test(permissionDecisions),
-    ToolRegistry.Live(tools),
     ExtensionRegistry.fromResolved(
       resolveExtensions([
         {
           manifest: { id: "test-agents" },
           kind: "builtin",
           sourcePath: "test",
-          setup: { agents: Object.values(Agents) },
+          setup: { agents: Object.values(Agents), tools: [...tools] },
         },
       ]),
     ),

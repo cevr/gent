@@ -62,7 +62,7 @@ import {
 } from "../../providers/provider.js"
 import { withRetry } from "../retry"
 import { estimateContextPercent } from "../context-estimation"
-import { ExtensionRegistry, filterToolsForAgent } from "../extensions/registry.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
 import { ToolRunner } from "./tool-runner"
 
 // Agent Loop Error
@@ -364,8 +364,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return interrupted
                 }
 
-                const allTools = yield* extensionRegistry.listTools()
-                const tools = filterToolsForAgent(allTools, agent)
+                const tools = yield* extensionRegistry.listToolsForAgent(agent, {
+                  sessionId,
+                  branchId,
+                  agentName: currentAgent,
+                })
 
                 const systemPrompt = buildSystemPrompt(config.systemPrompt, agent)
 
@@ -947,6 +950,7 @@ const AgentRunInputFields = {
   overrideDeniedTools: Schema.optional(Schema.Array(Schema.String)),
   overrideReasoningEffort: Schema.optional(ReasoningEffort),
   overrideSystemPromptAddendum: Schema.optional(Schema.String),
+  tags: Schema.optional(Schema.Array(Schema.String)),
 }
 
 const AgentRunInputSchema = Schema.Struct(AgentRunInputFields)
@@ -1120,8 +1124,12 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             }),
           )
 
-          const allTools = yield* extensionRegistry.listTools()
-          const tools = filterToolsForAgent(allTools, effectiveAgent)
+          const tools = yield* extensionRegistry.listToolsForAgent(effectiveAgent, {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            agentName: input.agentName,
+            tags: input.tags,
+          })
 
           const messages: Message[] = [userMessage]
           let continueLoop = true

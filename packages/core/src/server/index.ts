@@ -1,6 +1,5 @@
 import type { PlatformError } from "effect"
 import { Config, Effect, Layer, Option, FileSystem, Path } from "effect"
-import { ToolRegistry } from "../domain/tool.js"
 import { Permission } from "../domain/permission.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -8,7 +7,6 @@ import { Skills } from "../domain/skills.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
-import { AgentRegistry } from "../domain/agent.js"
 import type { SubagentRunnerService } from "../domain/agent.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { EventStore } from "../domain/event.js"
@@ -28,7 +26,6 @@ import { LocalActorProcessLive, type ActorProcess } from "../runtime/actor-proce
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { TaskService } from "../runtime/task-service.js"
-import { AllTools } from "../tools/index.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import type { LoadedExtension } from "../domain/extension.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -157,8 +154,6 @@ export const createDependencies = (
   | Storage
   | Provider
   | ProviderFactory
-  | ToolRegistry
-  | AgentRegistry
   | ExtensionRegistry
   | SubagentRunnerService
   | EventStore
@@ -237,8 +232,6 @@ export const createDependencies = (
     AuthStoreLive,
     AuthGuardLive,
     ProviderAuthLive,
-    ToolRegistry.Live(AllTools),
-    AgentRegistry.Live,
     ExtensionRegistryLive,
     EventStoreLayer,
     ConfigServiceLive,

@@ -105,7 +105,6 @@ export const Agents = {
     kind: "primary",
     model: "anthropic/claude-opus-4-6" as ModelId,
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
-    deniedTools: ["loop_evaluation"],
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
@@ -115,7 +114,6 @@ export const Agents = {
     kind: "primary",
     model: "openai/gpt-5.4" as ModelId,
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
-    deniedTools: ["loop_evaluation"],
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
   }),
@@ -220,7 +218,9 @@ export interface AgentExecutionOverrides {
   readonly deniedTools?: ReadonlyArray<string>
   readonly reasoningEffort?: ReasoningEffort
   readonly systemPromptAddendum?: string
-  /** Additional tools injected into the subagent's tool set (e.g., signal tools for evaluation) */
+  /** Tags passed to RunContext for tools.visible hook decisions */
+  readonly tags?: ReadonlyArray<string>
+  /** @deprecated Use tags + tools.visible hook instead */
   readonly additionalTools?: ReadonlyArray<AnyToolDefinition>
 }
 

@@ -145,7 +145,7 @@ export const LoopTool = defineWorkflow({
           toolCallId: ctx.toolCallId,
           cwd: process.cwd(),
           overrides: {
-            additionalTools: [LoopEvaluationTool],
+            tags: ["loop-evaluation"],
           },
         })
 

@@ -2,12 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { AuditTool } from "@gent/core/tools/audit"
-import {
-  AgentRegistry,
-  Agents,
-  SubagentRunnerService,
-  type SubagentResult,
-} from "@gent/core/domain/agent"
+import { Agents, SubagentRunnerService, type SubagentResult } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
 const TestExtRegistry = ExtensionRegistry.fromResolved(
@@ -91,7 +86,7 @@ describe("Audit Workflow", () => {
 
     const layer = Layer.mergeAll(
       runnerLayer,
-      AgentRegistry.Live,
+
       TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
@@ -150,7 +145,7 @@ describe("Audit Workflow", () => {
 
     const layer = Layer.mergeAll(
       runnerLayer,
-      AgentRegistry.Live,
+
       TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
@@ -177,7 +172,7 @@ describe("Audit Workflow", () => {
 
     const layer = Layer.mergeAll(
       runnerLayer,
-      AgentRegistry.Live,
+
       TestExtRegistry,
       PromptPresenter.Test(),
       EventStore.Test(),
@@ -207,7 +202,7 @@ describe("Audit Workflow", () => {
 
     const layer = Layer.mergeAll(
       runnerLayer,
-      AgentRegistry.Live,
+
       TestExtRegistry,
       PromptPresenter.Test(["no"]),
       EventStore.Test(),
@@ -249,7 +244,7 @@ describe("Audit Workflow", () => {
 
     const layer = Layer.mergeAll(
       runnerLayer,
-      AgentRegistry.Live,
+
       TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),

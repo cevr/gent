@@ -18,7 +18,6 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { runLoop, type LoopVerdict } from "../runtime/loop.js"
-import { LoopEvaluationTool } from "./loop.js"
 
 // Audit concern — classified by the detection agent
 
@@ -418,7 +417,7 @@ export const AuditTool = defineWorkflow({
               parentBranchId: ctx.branchId,
               toolCallId: ctx.toolCallId,
               cwd: process.cwd(),
-              overrides: { additionalTools: [LoopEvaluationTool] },
+              overrides: { tags: ["loop-evaluation"] },
             }),
           ),
           Effect.flatMap((evalResult) => {

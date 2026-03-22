@@ -6,7 +6,7 @@ import { TaskListTool } from "@gent/core/tools/task-list"
 import { TaskGetTool } from "@gent/core/tools/task-get"
 import { TaskUpdateTool } from "@gent/core/tools/task-update"
 import { DelegateTool } from "@gent/core/tools/delegate"
-import { SubagentRunnerService, AgentRegistry, Agents } from "@gent/core/domain/agent"
+import { SubagentRunnerService, Agents } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
@@ -47,7 +47,6 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
 const baseDeps = Layer.mergeAll(
   Storage.Test(),
   EventStore.Test(),
-  AgentRegistry.Live,
   TestExtRegistry,
   mockRunnerSuccess,
   platformLayer,

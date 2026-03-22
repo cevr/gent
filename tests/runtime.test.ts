@@ -22,13 +22,12 @@ import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
 import {
   Agents,
   AgentDefinition,
-  AgentRegistry,
   getAdversarialModels,
   resolveAgentModel,
   SubagentRunnerService,
   SubagentError,
 } from "@gent/core/domain/agent"
-import { defineTool, ToolRegistry, type AnyToolDefinition } from "@gent/core/domain/tool"
+import { defineTool, type AnyToolDefinition } from "@gent/core/domain/tool"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { ModelId } from "@gent/core/domain/model"
 import { Permission } from "@gent/core/domain/permission"
@@ -250,7 +249,7 @@ describe("AgentExecutionOverrides", () => {
           return Effect.void
         },
       }),
-      ToolRegistry.Test(),
+
       recorderLayer,
       eventStoreLayer,
     )
@@ -306,7 +305,7 @@ describe("Subagent Runner", () => {
       Layer.succeed(AgentActor, {
         run: () => Effect.void,
       }),
-      ToolRegistry.Test(),
+
       recorderLayer,
       eventStoreLayer,
     )
@@ -364,7 +363,7 @@ describe("Subagent Runner", () => {
       Layer.succeed(AgentActor, {
         run: () => Effect.fail(new SubagentError({ message: "permanent failure" })),
       }),
-      ToolRegistry.Test(),
+
       recorderLayer,
       eventStoreLayer,
     )
@@ -418,7 +417,6 @@ describe("Subagent Runner", () => {
         run: () => Effect.sleep("50 millis"),
       }),
       EventStore.Test(),
-      ToolRegistry.Test(),
     )
     const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -476,7 +474,7 @@ describe("AgentLoop actor model", () => {
       Storage.Test(),
       providerLayer,
       makeTestExtRegistry(),
-      AgentRegistry.Live,
+
       EventStore.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
@@ -594,7 +592,7 @@ describe("AgentActor", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
-      AgentRegistry.Live,
+
       recorderLayer,
       eventStoreLayer,
       toolDeps,
@@ -787,7 +785,7 @@ describe("Tool concurrency", () => {
       Provider.Test(providerResponses),
       makeTestExtRegistry([toolA, toolB]),
       EventStore.Test(),
-      AgentRegistry.Live,
+
       Permission.Test(),
       PermissionHandler.Test(["allow"]),
     )

@@ -53,8 +53,8 @@ describe("BuiltinExtensions", () => {
     for (const name of ["delegate", "handoff"]) {
       expect(allToolNames.has(name)).toBe(true)
     }
-    // Workflows + signal
-    for (const name of ["plan", "audit", "loop", "loop_evaluation"]) {
+    // Workflows
+    for (const name of ["plan", "audit", "loop"]) {
       expect(allToolNames.has(name)).toBe(true)
     }
   })
@@ -89,16 +89,13 @@ describe("BuiltinExtensions", () => {
     }
   })
 
-  test("covers all tools from AllTools", async () => {
-    const { AllTools } = await import("../../tools/index.js")
+  test("loop_evaluation injected via tools.visible hook", async () => {
     const results = await loadAll()
-    const extensionToolNames = new Set<string>(
-      results.flatMap((r) => (r.setup.tools ?? []).map((t) => t.name)),
-    )
-    // Every tool in AllTools must appear in extensions
-    // (extensions may have extras like loop_evaluation which AllTools doesn't include)
-    for (const tool of AllTools) {
-      expect(extensionToolNames.has(tool.name)).toBe(true)
-    }
+    const allToolNames = new Set(results.flatMap((r) => (r.setup.tools ?? []).map((t) => t.name)))
+    // loop_evaluation should NOT be in the base tool set — it's hook-injected
+    expect(allToolNames.has("loop_evaluation")).toBe(false)
+    // But the hooks should exist
+    const hookKeys = results.flatMap((r) => Object.keys(r.setup.hooks ?? {}))
+    expect(hookKeys).toContain("tools.visible")
   })
 })
