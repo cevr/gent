@@ -4,11 +4,11 @@
 
 RLM (Recursive Language Models — Zhang, Kraska, Khattab, MIT CSAIL 2026) is a divide-and-conquer pattern for processing inputs that exceed context windows. The core insight: treat files as symbols (metadata only in context, never raw content), delegate semantic work to sub-agents, recurse bounded by max depth.
 
-The reference implementation (`claude-rlm`) uses bash scripts, tmux sessions, and sentinel files. We don't need any of that — gent already has `TaskTool` (parallel + chain modes), `SubagentRunnerService`, `AgentActor`, and `BashTool`. The RLM value is the **programming model in the prompt**, not the scaffolding.
+The reference implementation (`claude-rlm`) uses bash scripts, tmux sessions, and sentinel files. We don't need any of that — gent already has `DelegateTool` (parallel + chain modes), `SubagentRunnerService`, `AgentActor`, and `BashTool`. The RLM value is the **programming model in the prompt**, not the scaffolding.
 
 ## Approach: Prompt-first + depth tracking
 
-Add an `"rlm"` agent whose `systemPromptAddendum` teaches the file-symbol mental model and decomposition strategies. The agent uses existing tools (`bash`, `task`, `read`, `write`, `glob`, `grep`) — no new tools needed. The one structural addition: depth propagation through the sub-agent pipeline so recursion is bounded.
+Add an `"rlm"` agent whose `systemPromptAddendum` teaches the file-symbol mental model and decomposition strategies. The agent uses existing tools (`bash`, `delegate`, `read`, `write`, `glob`, `grep`) — no new tools needed. The one structural addition: depth propagation through the sub-agent pipeline so recursion is bounded.
 
 ## Changes
 
@@ -18,7 +18,7 @@ Add an `"rlm"` agent whose `systemPromptAddendum` teaches the file-symbol mental
 
 - Add `"rlm"` to `AgentName` literal union
 - Add `RLM_PROMPT` constant with the programming model instructions (file-symbol protocol, decomposition strategy, workspace convention, depth awareness)
-- Add `rlm` to `Agents` object: `kind: "subagent"`, `allowedTools: ["read", "write", "bash", "glob", "grep", "task"]`, `canDelegateToAgents: ["rlm", "explore"]` (self-delegation = recursion)
+- Add `rlm` to `Agents` object: `kind: "subagent"`, `allowedTools: ["read", "write", "bash", "glob", "grep", "delegate"]`, `canDelegateToAgents: ["rlm", "explore"]` (self-delegation = recursion)
 - Add `rlm` to `AgentModels` with a sensible default (sonnet), but this is overridable — see step 2
 - Update `cowork.canDelegateToAgents` and `deepwork.canDelegateToAgents` to include `"rlm"`
 
@@ -32,7 +32,7 @@ Add to `SubagentRunner.run` params:
 - `rlmMaxDepth?: number` — max recursion depth
 - `rlmModel?: string` — model override for RLM sub-agents
 
-The model is **model-agnostic**: the caller picks it. The `TaskTool` params will accept an optional `model` field, and the RLM system prompt will teach the agent it can specify a model when delegating. The `AgentModels["rlm"]` entry serves as a fallback default only.
+The model is **model-agnostic**: the caller picks it. The `DelegateTool` params will accept an optional `model` field, and the RLM system prompt will teach the agent it can specify a model when delegating. The `AgentModels["rlm"]` entry serves as a fallback default only.
 
 ### 3. Extend `ToolContext` with depth + model
 
@@ -44,7 +44,7 @@ Add to `ToolContext`:
 - `rlmMaxDepth?: number`
 - `rlmModel?: string`
 
-This lets the task tool read the current depth/model from context (injected by AgentActor) rather than requiring the agent to manually track it.
+This lets the delegate tool read the current depth/model from context (injected by AgentActor) rather than requiring the agent to manually track it.
 
 ### 4. Add RLM defaults
 
@@ -74,9 +74,9 @@ rlmMaxDepth: 3
 
 In `InProcessRunner`, pass `rlmDepth`, `rlmMaxDepth`, and `rlmModel` from `params` through to `actor.run(...)`.
 
-### 7. Auto-increment depth in TaskTool + model passthrough
+### 7. Auto-increment depth in DelegateTool + model passthrough
 
-**File:** `packages/tools/src/task.ts`
+**File:** `packages/core/src/tools/delegate.ts`
 
 - Add optional `model` field to `TaskParams` and `TaskItem` schemas — allows the agent to specify which model sub-agents should use
 - When calling `runner.run` for an agent named `"rlm"`:
@@ -98,14 +98,14 @@ In `InProcessRunner`, pass `rlmDepth`, `rlmMaxDepth`, and `rlmModel` from `param
 
 ```
 Cowork: "Analyze this 50k-line codebase"
-  └─ task(agent: "rlm", task: "Analyze /path")
+  └─ delegate(agent: "rlm", task: "Analyze /path")
       └─ RLM depth=0/3
           ├─ bash: wc -l, head — inspects metadata
           ├─ bash: mkdir -p .rlm/analyze/{chunks,results}
           ├─ bash: split into chunks/
-          └─ task(tasks: [
-              {agent: "rlm", task: "Analyze chunk-01"},
-              {agent: "rlm", task: "Analyze chunk-02"},
+          └─ delegate(tasks: [
+              {agent: "rlm", prompt: "Analyze chunk-01"},
+              {agent: "rlm", prompt: "Analyze chunk-02"},
             ])
             ├─ RLM depth=1/3: reads chunk, writes result
             └─ RLM depth=1/3: reads chunk, writes result
@@ -114,9 +114,9 @@ Cowork: "Analyze this 50k-line codebase"
 
 ## Guardrails
 
-- **Depth bound**: `DEFAULTS.rlmMaxDepth = 3`. Hard stop in system prompt + could add enforcement in task tool.
-- **Concurrency bound**: existing `MAX_PARALLEL_TASKS=8`, `MAX_CONCURRENCY=4` in task.ts.
-- **Cost**: Model is caller's choice. Default fallback in `AgentModels` is sonnet. The agent or user can override per-invocation via the `model` field on task params.
+- **Depth bound**: `DEFAULTS.rlmMaxDepth = 3`. Hard stop in system prompt + could add enforcement in delegate tool.
+- **Concurrency bound**: existing `MAX_PARALLEL_TASKS=8`, `MAX_CONCURRENCY=4` in delegate.ts.
+- **Cost**: Model is caller's choice. Default fallback in `AgentModels` is sonnet. The agent or user can override per-invocation via the `model` field on delegate params.
 
 ## Verification
 

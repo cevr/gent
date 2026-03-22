@@ -96,6 +96,9 @@ export const DelegateTool = defineTool({
 
       if (hasTasks) {
         const tasks = params.tasks ?? []
+        if (tasks.length > MAX_PARALLEL_TASKS) {
+          return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
+        }
         const taskIds: string[] = []
         for (const item of tasks) {
           const resolved = yield* resolveAgent(item.agent)
