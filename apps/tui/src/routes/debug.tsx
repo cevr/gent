@@ -18,6 +18,7 @@ import { Effect } from "effect"
 import { DEBUG_CHILD_SESSIONS, DEBUG_ITEMS } from "./debug-fixtures"
 import type { SessionItem } from "../components/message-list"
 import type { TaskPreview } from "../components/task-widget"
+import type { SessionEvent } from "../components/session-event-label"
 
 const DEBUG_TASK_STAGES: readonly (readonly TaskPreview[])[] = [
   [
@@ -63,59 +64,95 @@ export function DebugPlayground() {
   const [showTasks, setShowTasks] = createSignal(true)
   const [items, setItems] = createSignal<SessionItem[]>([...DEBUG_ITEMS])
   const [taskStageIndex, setTaskStageIndex] = createSignal(0)
-  const pendingReplies = new Set<ReturnType<typeof setTimeout>>()
+  const pendingTimers = new Set<ReturnType<typeof setTimeout>>()
+  let eventSeq = 10_000
   const taskTimer = setInterval(() => {
     setTaskStageIndex((current) => (current + 1) % DEBUG_TASK_STAGES.length)
   }, 2500)
 
-  const handleSubmit = (content: string, mode?: "queue" | "interject") => {
-    const createdAt = Date.now()
-    setItems((current) => [
-      ...current,
-      {
-        _tag: "message",
-        id: crypto.randomUUID(),
-        role: "user",
-        kind: mode === "interject" ? "interjection" : "regular",
-        content,
-        reasoning: "",
-        images: [],
-        createdAt,
-        toolCalls: undefined,
-      },
-    ])
+  const appendItem = (item: SessionItem) => {
+    setItems((current) => [...current, item])
+  }
 
+  const schedule = (delayMs: number, fn: () => void) => {
     const timer = setTimeout(() => {
-      pendingReplies.delete(timer)
-      const replyMode = mode === "interject" ? "steer" : "queue"
-      const replyLead =
-        mode === "interject"
-          ? "Steer preview. Interjections cut the line and should feel immediate."
-          : "Queue preview. Standard sends wait their turn."
-      setItems((current) => [
-        ...current,
-        {
-          _tag: "message",
-          id: crypto.randomUUID(),
-          role: "assistant",
-          kind: "regular",
-          content: `${replyLead}\n\nEcho: ${content}\nMode: ${replyMode}`,
-          reasoning: "",
-          images: [],
-          createdAt: createdAt + 5000,
-          toolCalls: undefined,
-        },
-      ])
-    }, 5000)
+      pendingTimers.delete(timer)
+      fn()
+    }, delayMs)
+    pendingTimers.add(timer)
+  }
 
-    pendingReplies.add(timer)
+  const appendRetryEvent = (attempt: number, maxAttempts: number, delayMs: number) => {
+    const event: SessionEvent = {
+      _tag: "event",
+      kind: "retrying",
+      attempt,
+      maxAttempts,
+      delayMs,
+      createdAt: Date.now(),
+      seq: eventSeq++,
+    }
+    appendItem(event)
+  }
+
+  const appendAssistantReply = (content: string, mode?: "queue" | "interject") => {
+    const replyMode = mode === "interject" ? "steer" : "queue"
+    const replyLead =
+      mode === "interject"
+        ? "Steer preview. Interjections cut the line and should feel immediate."
+        : "Queue preview. Standard sends wait their turn."
+
+    appendItem({
+      _tag: "message",
+      id: crypto.randomUUID(),
+      role: "assistant",
+      kind: "regular",
+      content: `${replyLead}\n\nEcho: ${content}\nMode: ${replyMode}`,
+      reasoning: "",
+      images: [],
+      createdAt: Date.now(),
+      toolCalls: undefined,
+    })
+  }
+
+  const handleSubmit = (content: string, mode?: "queue" | "interject") => {
+    appendItem({
+      _tag: "message",
+      id: crypto.randomUUID(),
+      role: "user",
+      kind: mode === "interject" ? "interjection" : "regular",
+      content,
+      reasoning: "",
+      images: [],
+      createdAt: Date.now(),
+      toolCalls: undefined,
+    })
+
+    const shouldRetry = Math.random() < 0.5
+
+    if (!shouldRetry) {
+      schedule(5000, () => appendAssistantReply(content, mode))
+      return
+    }
+
+    const retryDelays = [3000, 2000, 1000]
+    const retryCount = Math.max(1, Math.floor(Math.random() * retryDelays.length) + 1)
+    let elapsedMs = 0
+
+    for (let index = 0; index < retryCount; index++) {
+      const delayMs = retryDelays[index] ?? 1000
+      schedule(elapsedMs, () => appendRetryEvent(index + 1, retryCount, delayMs))
+      elapsedMs += delayMs
+    }
+
+    schedule(elapsedMs, () => appendAssistantReply(content, mode))
   }
 
   onCleanup(() => {
-    for (const timer of pendingReplies) {
+    for (const timer of pendingTimers) {
       clearTimeout(timer)
     }
-    pendingReplies.clear()
+    pendingTimers.clear()
     clearInterval(taskTimer)
   })
 
