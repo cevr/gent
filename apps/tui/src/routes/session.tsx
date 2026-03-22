@@ -378,9 +378,6 @@ export function Session(props: SessionProps) {
         getChildSessions={getChildren}
       />
 
-      {/* Task widget */}
-      <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
-
       {/* Bordered input */}
       <BorderedInput
         topLeft={topLeftLabels()}
@@ -389,6 +386,7 @@ export function Session(props: SessionProps) {
         bottomRight={bottomRightLabels()}
         borderColor={borderColor()}
       >
+        <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
         <Input
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}

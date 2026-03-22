@@ -2,11 +2,9 @@ import { createMemo, For, Show } from "solid-js"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
-import { getSpinnerFrames, formatToolInput } from "./message-list-utils"
 import { SessionEventIndicator, type SessionEvent } from "./session-event-indicator"
 import type { ImageInfo } from "../client"
 import type { ChildSessionEntry } from "../hooks/use-child-sessions"
-import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { replaceMermaidBlocks } from "../utils/mermaid"
 
 export type { ToolCall }
@@ -147,68 +145,21 @@ function AssistantMessage(props: {
   )
 }
 
-function useSpinner(toolName: string) {
-  const frames = getSpinnerFrames(toolName)
-  const tick = useSpinnerClock()
-  return () => frames[tick() % frames.length] ?? frames[0]
-}
-
 function SingleToolCall(props: {
   toolCall: ToolCall
   expanded: boolean
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
-  const { theme } = useTheme()
-  const spinner = useSpinner(props.toolCall.toolName)
   const toolName = () => props.toolCall.toolName.toLowerCase()
-
-  const statusColor = () =>
-    props.toolCall.status === "running"
-      ? theme.warning
-      : props.toolCall.status === "error"
-        ? theme.error
-        : theme.success
-
-  const statusIcon = () =>
-    props.toolCall.status === "running"
-      ? spinner()
-      : props.toolCall.status === "error"
-        ? " x "
-        : " + "
-
-  const inputSummary = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
 
   const Renderer = () => TOOL_RENDERERS[toolName()] ?? GenericToolRenderer
 
   const childSessions = () => props.getChildSessions?.(props.toolCall.id)
-  const hasLiveChildren = () => {
-    const cs = childSessions()
-    return cs !== undefined && cs.length > 0
-  }
 
-  return (
-    <box flexDirection="column">
-      <text>
-        <span style={{ fg: statusColor() }}>[{statusIcon()}]</span>
-        <span style={{ fg: theme.info }}> {props.toolCall.toolName}</span>
-        <Show when={inputSummary().length > 0}>
-          <span style={{ fg: theme.textMuted }}>({inputSummary()})</span>
-        </Show>
-      </text>
-      <Show when={props.toolCall.status !== "running" || hasLiveChildren()}>
-        {(() => {
-          const R = Renderer()
-          return (
-            <R
-              toolCall={props.toolCall}
-              expanded={props.expanded}
-              childSessions={childSessions()}
-            />
-          )
-        })()}
-      </Show>
-    </box>
-  )
+  return (() => {
+    const R = Renderer()
+    return <R toolCall={props.toolCall} expanded={props.expanded} childSessions={childSessions()} />
+  })()
 }
 
 interface MessageListProps {

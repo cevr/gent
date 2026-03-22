@@ -4,6 +4,7 @@ import type { Task } from "@gent/core/domain/task.js"
 import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
 import { useClient } from "../client/context"
 import { useRuntime } from "../hooks/use-runtime"
+import { useTheme } from "../theme/index"
 
 const STATUS_ICONS: Record<string, string> = {
   pending: "◻",
@@ -12,18 +13,12 @@ const STATUS_ICONS: Record<string, string> = {
   failed: "✗",
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: "gray",
-  in_progress: "yellow",
-  completed: "green",
-  failed: "red",
-}
-
 const MAX_DISPLAY = 10
 
 export function TaskWidget(props: { sessionId: SessionId; branchId: BranchId }) {
   const client = useClient()
   const { cast } = useRuntime(client.client.services)
+  const { theme } = useTheme()
 
   const [tasks, setTasks] = createSignal<Task[]>([])
 
@@ -82,29 +77,42 @@ export function TaskWidget(props: { sessionId: SessionId; branchId: BranchId }) 
 
   const overflow = () => Math.max(0, tasks().length - MAX_DISPLAY)
 
+  const statusColor = (status: Task["status"]) => {
+    switch (status) {
+      case "in_progress":
+        return theme.warning
+      case "completed":
+        return theme.success
+      case "failed":
+        return theme.error
+      case "pending":
+        return theme.textMuted
+    }
+  }
+
   return (
     <Show when={tasks().length > 0}>
-      <box flexDirection="column" paddingLeft={1} paddingRight={1}>
+      <box flexDirection="column" paddingLeft={1} marginBottom={1}>
         <text>
-          <span style={{ fg: "cyan", bold: true }}>● </span>
-          <span style={{ dimmed: true }}>{summary()}</span>
+          <span style={{ fg: theme.border }}>{"·· "}</span>
+          <span style={{ fg: theme.info, bold: true }}>tasks</span>
+          <span style={{ fg: theme.textMuted }}> {summary()}</span>
         </text>
         <For each={displayTasks()}>
           {(task) => (
             <text>
-              <span style={{ fg: STATUS_COLORS[task.status] ?? "white" }}>
-                {"  "}
-                {STATUS_ICONS[task.status] ?? "?"}{" "}
+              <span style={{ fg: theme.border }}>{"   │ "}</span>
+              <span style={{ fg: statusColor(task.status) }}>
+                {STATUS_ICONS[task.status] ?? "?"}
               </span>
-              <span>{task.subject}</span>
+              <span style={{ fg: theme.text }}> {task.subject}</span>
             </text>
           )}
         </For>
         <Show when={overflow() > 0}>
           <text>
-            <span style={{ dimmed: true }}>
-              {"  "}+{overflow()} more
-            </span>
+            <span style={{ fg: theme.border }}>{"   ╰─ "}</span>
+            <span style={{ fg: theme.textMuted }}>+{overflow()} more</span>
           </text>
         </Show>
       </box>

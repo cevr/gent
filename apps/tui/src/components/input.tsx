@@ -535,7 +535,7 @@ export function Input(props: InputProps) {
                 { name: "return", action: "submit" },
                 { name: "linefeed", action: "submit" },
                 { name: "return", shift: true, action: "newline" },
-                { name: "backspace", meta: true, action: "delete-to-line-start" },
+                { name: "backspace", meta: true, action: "delete-word-backward" },
               ]}
               backgroundColor="transparent"
               focusedBackgroundColor="transparent"
