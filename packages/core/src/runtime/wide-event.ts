@@ -240,6 +240,7 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
                   case "PromptPresented":
                   case "PromptConfirmed":
                   case "PromptRejected":
+                  case "PromptEdited":
                   case "HandoffPresented":
                   case "HandoffConfirmed":
                   case "HandoffRejected":

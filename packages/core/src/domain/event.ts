@@ -131,6 +131,13 @@ export class PromptRejected extends Schema.TaggedClass<PromptRejected>()("Prompt
   reason: Schema.optional(Schema.String),
 }) {}
 
+export class PromptEdited extends Schema.TaggedClass<PromptEdited>()("PromptEdited", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: Schema.String,
+  path: Schema.optional(Schema.String),
+}) {}
+
 export const PromptDecision = Schema.Literals(["yes", "no", "edit"])
 export type PromptDecision = typeof PromptDecision.Type
 
@@ -367,6 +374,7 @@ export const AgentEvent = Schema.Union([
   PromptPresented,
   PromptConfirmed,
   PromptRejected,
+  PromptEdited,
   HandoffPresented,
   HandoffConfirmed,
   HandoffRejected,

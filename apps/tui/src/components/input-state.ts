@@ -265,7 +265,7 @@ const handoffQuestion = (event: typeof HandoffPresented.Type): Question => {
     question: `Handoff to new session?${reasonStr}`,
     header: "Handoff",
     markdown: summaryPreview,
-    options: [{ label: "Confirm" }, { label: "Reject" }],
+    options: [{ label: "Yes" }, { label: "No" }],
     multiple: false,
   }
 }

@@ -4,6 +4,7 @@ import {
   PermissionRequested,
   type EventStoreError,
   PromptConfirmed,
+  PromptEdited,
   PromptPresented,
   PromptRejected,
   type PromptDecision,
@@ -159,6 +160,11 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
 
       return {
         present: Effect.fn("PromptHandler.present")(function* (params) {
+          // Present mode auto-resolves — no event, no user interaction
+          if (params.mode === "present") {
+            return "yes" as PromptDecision
+          }
+
           const requestId = Bun.randomUUIDv7()
           const deferred = yield* Deferred.make<PromptDecision>()
           pending.set(requestId, {
@@ -183,13 +189,6 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
             }),
           )
 
-          // Present mode auto-resolves — no user interaction needed
-          if (params.mode === "present") {
-            yield* Deferred.succeed(deferred, "yes")
-            pending.delete(requestId)
-            return "yes" as PromptDecision
-          }
-
           const decision = yield* Deferred.await(deferred)
           pending.delete(requestId)
           return decision
@@ -202,6 +201,15 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
           if (decision === "yes") {
             yield* eventStore.publish(
               new PromptConfirmed({
+                sessionId: entry.sessionId,
+                branchId: entry.branchId,
+                requestId,
+                ...(entry.path !== undefined ? { path: entry.path } : {}),
+              }),
+            )
+          } else if (decision === "edit") {
+            yield* eventStore.publish(
+              new PromptEdited({
                 sessionId: entry.sessionId,
                 branchId: entry.branchId,
                 requestId,
