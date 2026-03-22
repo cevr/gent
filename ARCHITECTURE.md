@@ -77,7 +77,7 @@ ActorProcess {
 }
 
 AgentLoop {
-  run(message)      // Executes; tools can include plan
+  run(message)      // Executes; tools can include prompt
   steer(command)    // Interrupt mid-run
   followUp(message) // Queue for after completion
 }
@@ -88,14 +88,15 @@ AgentActor {
 }
 ```
 
-**Plan flow (tool-driven):**
+**Prompt flow (tool-driven):**
 
-1. Agent emits `plan` tool with markdown
-2. Plan saved to `.gent/plans/{session}-{toolCall}.md`
-3. UI shows markdown inline, user confirms/rejects
-4. On confirm, plan is available to agent as context
+Three modes via discriminated union:
 
-**AskUser tool:** Used frequently for clarifying intent, validating assumptions, getting preferences. Not for approval.
+- `present` — informational display, auto-resolves
+- `confirm` — yes/no gate
+- `review` — yes/no/edit, persists to `.gent/prompts/`
+
+**AskUser tool:** Used for short structured questions with options. Prompt is for longform markdown content review.
 
 ### Actor Protocol (Draft)
 
@@ -185,7 +186,7 @@ Fork at any message. Tree navigation. Handoff for context management.
 - All core tools enabled
 - Handoff for context management
 - Agent switching (cowork/deepwork)
-- Plans in `.gent/plans/`
+- Prompts in `.gent/prompts/`
 
 ## Testing
 

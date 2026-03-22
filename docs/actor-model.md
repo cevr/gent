@@ -49,7 +49,7 @@ ToolActor (state machine)
 
 PlannerActor (state machine)
 
-- Plan tool lifecycle: write -> confirm -> continue
+- Prompt tool lifecycle: present/confirm/review -> respond -> continue
 
 SubagentActor (router)
 
