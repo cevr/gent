@@ -9,7 +9,7 @@ import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
-import { EventStore } from "@gent/core/domain/event"
+import { EventStore, ToolCallStarted, ToolCallSucceeded } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
@@ -165,38 +165,59 @@ describe("CodeReviewTool", () => {
   test("fix mode tells executor to work findings in batches", async () => {
     const prompts: string[] = []
     const runner = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        prompts.push(params.prompt)
-        if (params.prompt.includes("Evaluate whether the review findings have been addressed")) {
-          return Effect.succeed({
+      run: (params) =>
+        Effect.gen(function* () {
+          prompts.push(params.prompt)
+          if (params.prompt.includes("Evaluate whether the review findings have been addressed")) {
+            const storage = yield* Storage
+            const sessionId = "eval" as SessionId
+            yield* storage.appendEvent(
+              new ToolCallStarted({
+                sessionId,
+                branchId: "test-branch",
+                toolCallId: "review-loop-eval-call",
+                toolName: "loop_evaluation",
+                input: { verdict: "done", summary: "complete" },
+              }),
+            )
+            yield* storage.appendEvent(
+              new ToolCallSucceeded({
+                sessionId,
+                branchId: "test-branch",
+                toolCallId: "review-loop-eval-call",
+                toolName: "loop_evaluation",
+                summary: "complete",
+              }),
+            )
+            return {
+              _tag: "success" as const,
+              text: "evaluation complete",
+              sessionId,
+              agentName: params.agent.name,
+            }
+          }
+          if (params.prompt.includes("Synthesize these adversarial reviews")) {
+            return {
+              _tag: "success" as const,
+              text: JSON.stringify([
+                {
+                  file: "src/auth.ts",
+                  severity: "high",
+                  type: "bug",
+                  text: "Missing null check",
+                },
+              ]),
+              sessionId: "synth" as SessionId,
+              agentName: params.agent.name,
+            }
+          }
+          return {
             _tag: "success" as const,
-            text: "VERDICT: done",
-            sessionId: "eval" as SessionId,
+            text: "[]",
+            sessionId: "child" as SessionId,
             agentName: params.agent.name,
-          })
-        }
-        if (params.prompt.includes("Synthesize these adversarial reviews")) {
-          return Effect.succeed({
-            _tag: "success" as const,
-            text: JSON.stringify([
-              {
-                file: "src/auth.ts",
-                severity: "high",
-                type: "bug",
-                text: "Missing null check",
-              },
-            ]),
-            sessionId: "synth" as SessionId,
-            agentName: params.agent.name,
-          })
-        }
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "[]",
-          sessionId: "child" as SessionId,
-          agentName: params.agent.name,
-        })
-      },
+          }
+        }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
     const result = await Effect.runPromise(

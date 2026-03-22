@@ -45,11 +45,11 @@ export interface ExtractedLoopEvaluation {
 
 /**
  * Extract loop evaluation from subagent events.
- * Searches for loop_evaluation tool call, falls back to text parsing.
+ * Trusts only a successfully completed loop_evaluation tool call.
  */
 export const extractLoopEvaluation = (
   envelopes: ReadonlyArray<EventEnvelope>,
-  resultText: string,
+  _resultText: string,
 ): ExtractedLoopEvaluation => {
   // Primary: search for a successfully completed loop_evaluation tool call
   const succeededCallIds = new Set<string>()
@@ -77,17 +77,6 @@ export const extractLoopEvaluation = (
           feedback: typeof input["summary"] === "string" ? input["summary"] : undefined,
         }
       }
-    }
-  }
-
-  // Fallback: check text for verdict lines
-  for (const line of resultText.split("\n")) {
-    const trimmed = line.trim().toLowerCase()
-    if (trimmed === "verdict: done" || trimmed === "verdict:done") {
-      return { verdict: "done" }
-    }
-    if (trimmed === "verdict: continue" || trimmed === "verdict:continue") {
-      return { verdict: "continue" }
     }
   }
 

@@ -16,7 +16,7 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
   ]),
 )
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
-import { EventStore } from "@gent/core/domain/event"
+import { EventStore, ToolCallStarted, ToolCallSucceeded } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { ToolContext } from "@gent/core/domain/tool"
 
@@ -183,35 +183,60 @@ describe("Plan Workflow", () => {
     const calls: string[] = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        calls.push(params.prompt)
-        if (params.prompt.includes("Evaluate whether the implementation is complete")) {
-          return Effect.succeed({
+      run: (params) =>
+        Effect.gen(function* () {
+          calls.push(params.prompt)
+          if (params.prompt.includes("Evaluate whether the implementation is complete")) {
+            const storage = yield* Storage
+            const sessionId = "eval-session" as SubagentResult & { _tag: "success" } extends {
+              sessionId: infer S
+            }
+              ? S
+              : never
+            yield* storage.appendEvent(
+              new ToolCallStarted({
+                sessionId,
+                branchId: "test-branch",
+                toolCallId: "loop-eval-call",
+                toolName: "loop_evaluation",
+                input: { verdict: "done", summary: "complete" },
+              }),
+            )
+            yield* storage.appendEvent(
+              new ToolCallSucceeded({
+                sessionId,
+                branchId: "test-branch",
+                toolCallId: "loop-eval-call",
+                toolName: "loop_evaluation",
+                summary: "complete",
+              }),
+            )
+            return {
+              _tag: "success" as const,
+              text: "evaluation complete",
+              sessionId,
+              agentName: params.agent.name,
+            } as SubagentResult & { _tag: "success" }
+          }
+          if (
+            params.prompt.includes(
+              "Synthesize these two revised implementation plans into one execution plan organized into batches",
+            )
+          ) {
+            return {
+              _tag: "success" as const,
+              text: "Batch 1: update auth\n- Files: src/auth.ts\n- Changes: add validation",
+              sessionId: "synth-session",
+              agentName: params.agent.name,
+            } as SubagentResult & { _tag: "success" }
+          }
+          return {
             _tag: "success" as const,
-            text: "VERDICT: done",
-            sessionId: "eval-session",
+            text: "ok",
+            sessionId: "s1",
             agentName: params.agent.name,
-          } as SubagentResult & { _tag: "success" })
-        }
-        if (
-          params.prompt.includes(
-            "Synthesize these two revised implementation plans into one execution plan organized into batches",
-          )
-        ) {
-          return Effect.succeed({
-            _tag: "success" as const,
-            text: "Batch 1: update auth\n- Files: src/auth.ts\n- Changes: add validation",
-            sessionId: "synth-session",
-            agentName: params.agent.name,
-          } as SubagentResult & { _tag: "success" })
-        }
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "ok",
-          sessionId: "s1",
-          agentName: params.agent.name,
-        } as SubagentResult & { _tag: "success" })
-      },
+          } as SubagentResult & { _tag: "success" }
+        }),
     })
 
     const layer = Layer.mergeAll(
