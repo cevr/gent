@@ -106,31 +106,33 @@ export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>
   },
 ) {}
 
-export class PlanPresented extends Schema.TaggedClass<PlanPresented>()("PlanPresented", {
+export class PromptPresented extends Schema.TaggedClass<PromptPresented>()("PromptPresented", {
   sessionId: SessionId,
   branchId: BranchId,
   requestId: Schema.String,
-  planPath: Schema.optional(Schema.String),
-  prompt: Schema.optional(Schema.String),
+  mode: Schema.Literals(["present", "confirm", "review"]),
+  path: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
 }) {}
 
-export class PlanConfirmed extends Schema.TaggedClass<PlanConfirmed>()("PlanConfirmed", {
+export class PromptConfirmed extends Schema.TaggedClass<PromptConfirmed>()("PromptConfirmed", {
   sessionId: SessionId,
   branchId: BranchId,
   requestId: Schema.String,
-  planPath: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
 }) {}
 
-export class PlanRejected extends Schema.TaggedClass<PlanRejected>()("PlanRejected", {
+export class PromptRejected extends Schema.TaggedClass<PromptRejected>()("PromptRejected", {
   sessionId: SessionId,
   branchId: BranchId,
   requestId: Schema.String,
-  planPath: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
 }) {}
 
-export const PlanDecision = Schema.Literals(["confirm", "reject"])
-export type PlanDecision = typeof PlanDecision.Type
+export const PromptDecision = Schema.Literals(["yes", "no", "edit"])
+export type PromptDecision = typeof PromptDecision.Type
 
 export class HandoffPresented extends Schema.TaggedClass<HandoffPresented>()("HandoffPresented", {
   sessionId: SessionId,
@@ -362,9 +364,9 @@ export const AgentEvent = Schema.Union([
   ToolCallSucceeded,
   ToolCallFailed,
   PermissionRequested,
-  PlanPresented,
-  PlanConfirmed,
-  PlanRejected,
+  PromptPresented,
+  PromptConfirmed,
+  PromptRejected,
   HandoffPresented,
   HandoffConfirmed,
   HandoffRejected,

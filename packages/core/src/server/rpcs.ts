@@ -2,7 +2,7 @@ import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "effe
 import { Schema } from "effect"
 import { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import { MessagePart } from "../domain/message.js"
-import { EventEnvelope, PlanDecision, HandoffDecision } from "../domain/event.js"
+import { EventEnvelope, PromptDecision, HandoffDecision } from "../domain/event.js"
 import { AgentName, ReasoningEffort } from "../domain/agent.js"
 import { Model } from "../domain/model.js"
 import { PermissionDecision, PermissionRule } from "../domain/permission.js"
@@ -282,10 +282,10 @@ export const UpdateSessionReasoningLevelSuccess = Schema.Struct({
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 
-export const RespondPlanPayload = Schema.Struct({
+export const RespondPromptPayload = Schema.Struct({
   requestId: Schema.String,
-  decision: PlanDecision,
-  reason: Schema.optional(Schema.String),
+  decision: PromptDecision,
+  content: Schema.optional(Schema.String),
 })
 
 export const RespondHandoffPayload = Schema.Struct({
@@ -446,9 +446,9 @@ export class GentRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
 
-  // Plans
-  Rpc.make("respondPlan", {
-    payload: RespondPlanPayload.fields,
+  // Prompts
+  Rpc.make("respondPrompt", {
+    payload: RespondPromptPayload.fields,
     error: GentRpcError,
   }),
 

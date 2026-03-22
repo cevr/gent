@@ -2,7 +2,7 @@ import type { PlatformError } from "effect"
 import { Config, Effect, Layer, Option, FileSystem, Path } from "effect"
 import { ToolRegistry } from "../domain/tool.js"
 import { Permission } from "../domain/permission.js"
-import { PermissionHandler, PlanHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import { Skills } from "../domain/skills.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
@@ -102,7 +102,7 @@ export {
   ForkBranchPayload,
   ForkBranchSuccess,
   RespondPermissionPayload,
-  RespondPlanPayload,
+  RespondPromptPayload,
   RespondHandoffPayload,
   RespondHandoffSuccess,
   UpdateSessionBypassPayload,
@@ -165,7 +165,7 @@ export const createDependencies = (
   | AgentLoop
   | ActorProcess
   | AskUserHandler
-  | PlanHandler
+  | PromptHandler
   | HandoffHandler
   | AuthStorage
   | AuthStore
@@ -254,8 +254,8 @@ export const createDependencies = (
     Layer.merge(BaseWithPermission, PermissionHandlerLive),
   )
 
-  // PlanHandler requires EventStore
-  const PlanHandlerLive = Layer.provide(PlanHandler.Live, BaseWithPermission)
+  // PromptHandler requires EventStore
+  const PromptHandlerLive = Layer.provide(PromptHandler.Live, BaseWithPermission)
 
   // HandoffHandler requires EventStore
   const HandoffHandlerLive = Layer.provide(HandoffHandler.Live, BaseWithPermission)
@@ -314,7 +314,7 @@ export const createDependencies = (
     AskUserHandlerLive,
     PermissionHandlerLive,
     ToolRunnerLive,
-    PlanHandlerLive,
+    PromptHandlerLive,
     HandoffHandlerLive,
   )
 

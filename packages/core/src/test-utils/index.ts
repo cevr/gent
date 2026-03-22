@@ -10,8 +10,8 @@ import {
 import { ToolRegistry, type AnyToolDefinition } from "../domain/tool.js"
 import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.js"
 import { Permission, type PermissionDecision } from "../domain/permission.js"
-import { PermissionHandler, PlanHandler, HandoffHandler } from "../domain/interaction-handlers.js"
-import type { PlanDecision, HandoffDecision } from "../domain/event.js"
+import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import type { PromptDecision, HandoffDecision } from "../domain/event.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AllTools } from "../tools/index.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
@@ -164,7 +164,7 @@ export interface TestLayerConfig {
   tools?: ReadonlyArray<AnyToolDefinition>
   recording?: boolean
   permissionDecisions?: ReadonlyArray<PermissionDecision>
-  planDecisions?: ReadonlyArray<PlanDecision>
+  promptDecisions?: ReadonlyArray<PromptDecision>
   handoffDecisions?: ReadonlyArray<HandoffDecision>
 }
 
@@ -176,7 +176,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
   ]
   const askUserResponses = config.askUserResponses ?? [["yes"]]
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
-  const planDecisions = config.planDecisions ?? ["confirm"]
+  const promptDecisions = config.promptDecisions ?? ["yes"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
   const tools = config.tools ?? AllTools
 
@@ -188,7 +188,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     Permission.Test(),
     PermissionHandler.Test(permissionDecisions),
     AskUserHandler.Test(askUserResponses),
-    PlanHandler.Test(planDecisions),
+    PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
     AgentLoop.Test(),
   )
@@ -202,7 +202,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   ]
   const askUserResponses = config.askUserResponses ?? [["yes"]]
   const permissionDecisions = config.permissionDecisions ?? ["allow"]
-  const planDecisions = config.planDecisions ?? ["confirm"]
+  const promptDecisions = config.promptDecisions ?? ["yes"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
   const tools = config.tools ?? AllTools
 
@@ -211,7 +211,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     Permission.Test(),
     PermissionHandler.Test(permissionDecisions),
     ToolRegistry.Live(tools),
-    PlanHandler.Test(planDecisions),
+    PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
     AgentLoop.Test(),
   ).pipe(

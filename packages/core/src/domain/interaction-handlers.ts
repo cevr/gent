@@ -3,10 +3,10 @@ import {
   EventStore,
   PermissionRequested,
   type EventStoreError,
-  PlanConfirmed,
-  PlanPresented,
-  PlanRejected,
-  type PlanDecision,
+  PromptConfirmed,
+  PromptPresented,
+  PromptRejected,
+  type PromptDecision,
   HandoffPresented,
   HandoffConfirmed,
   HandoffRejected,
@@ -113,94 +113,109 @@ export class PermissionHandler extends ServiceMap.Service<
   }
 }
 
-export interface PlanHandlerService {
+export interface PromptHandlerService {
   readonly present: (params: {
     sessionId: SessionId
     branchId: BranchId
-    planPath?: string
-    prompt?: string
-  }) => Effect.Effect<PlanDecision, EventStoreError>
+    mode: "present" | "confirm" | "review"
+    path?: string
+    content?: string
+    title?: string
+  }) => Effect.Effect<PromptDecision, EventStoreError>
   readonly respond: (
     requestId: string,
-    decision: PlanDecision,
-    reason?: string,
+    decision: PromptDecision,
+    content?: string,
   ) => Effect.Effect<
     | {
         sessionId: SessionId
         branchId: BranchId
-        planPath?: string
+        path?: string
       }
     | undefined,
     EventStoreError
   >
 }
 
-export class PlanHandler extends ServiceMap.Service<PlanHandler, PlanHandlerService>()(
-  "@gent/core/src/interaction-handlers/PlanHandler",
+export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandlerService>()(
+  "@gent/core/src/interaction-handlers/PromptHandler",
 ) {
-  static Live: Layer.Layer<PlanHandler, never, EventStore> = Layer.effect(
-    PlanHandler,
+  static Live: Layer.Layer<PromptHandler, never, EventStore> = Layer.effect(
+    PromptHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
       const pending = new Map<
         string,
         {
-          deferred: Deferred.Deferred<PlanDecision>
+          deferred: Deferred.Deferred<PromptDecision>
           sessionId: SessionId
           branchId: BranchId
-          planPath?: string
-          prompt?: string
+          mode: "present" | "confirm" | "review"
+          path?: string
+          content?: string
+          title?: string
         }
       >()
 
       return {
-        present: Effect.fn("PlanHandler.present")(function* (params) {
+        present: Effect.fn("PromptHandler.present")(function* (params) {
           const requestId = Bun.randomUUIDv7()
-          const deferred = yield* Deferred.make<PlanDecision>()
+          const deferred = yield* Deferred.make<PromptDecision>()
           pending.set(requestId, {
             deferred,
             sessionId: params.sessionId,
             branchId: params.branchId,
-            planPath: params.planPath,
-            prompt: params.prompt,
+            mode: params.mode,
+            path: params.path,
+            content: params.content,
+            title: params.title,
           })
 
           yield* eventStore.publish(
-            new PlanPresented({
+            new PromptPresented({
               sessionId: params.sessionId,
               branchId: params.branchId,
               requestId,
-              ...(params.planPath !== undefined ? { planPath: params.planPath } : {}),
-              ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+              mode: params.mode,
+              ...(params.path !== undefined ? { path: params.path } : {}),
+              ...(params.content !== undefined ? { content: params.content } : {}),
+              ...(params.title !== undefined ? { title: params.title } : {}),
             }),
           )
+
+          // Present mode auto-resolves — no user interaction needed
+          if (params.mode === "present") {
+            yield* Deferred.succeed(deferred, "yes")
+            pending.delete(requestId)
+            return "yes" as PromptDecision
+          }
 
           const decision = yield* Deferred.await(deferred)
           pending.delete(requestId)
           return decision
         }),
 
-        respond: Effect.fn("PlanHandler.respond")(function* (requestId, decision, reason) {
+        respond: Effect.fn("PromptHandler.respond")(function* (requestId, decision, content) {
           const entry = pending.get(requestId)
           if (entry === undefined) return undefined
 
-          if (decision === "confirm") {
+          if (decision === "yes") {
             yield* eventStore.publish(
-              new PlanConfirmed({
+              new PromptConfirmed({
                 sessionId: entry.sessionId,
                 branchId: entry.branchId,
                 requestId,
-                ...(entry.planPath !== undefined ? { planPath: entry.planPath } : {}),
+                ...(entry.path !== undefined ? { path: entry.path } : {}),
               }),
             )
           } else {
             yield* eventStore.publish(
-              new PlanRejected({
+              new PromptRejected({
                 sessionId: entry.sessionId,
                 branchId: entry.branchId,
                 requestId,
-                ...(entry.planPath !== undefined ? { planPath: entry.planPath } : {}),
-                ...(reason !== undefined ? { reason } : {}),
+                ...(entry.path !== undefined ? { path: entry.path } : {}),
+                ...(content !== undefined ? { reason: content } : {}),
               }),
             )
           }
@@ -210,7 +225,7 @@ export class PlanHandler extends ServiceMap.Service<PlanHandler, PlanHandlerServ
           return {
             sessionId: entry.sessionId,
             branchId: entry.branchId,
-            ...(entry.planPath !== undefined ? { planPath: entry.planPath } : {}),
+            ...(entry.path !== undefined ? { path: entry.path } : {}),
           }
         }),
       }
@@ -218,11 +233,11 @@ export class PlanHandler extends ServiceMap.Service<PlanHandler, PlanHandlerServ
   )
 
   static Test = (
-    decisions: ReadonlyArray<PlanDecision> = ["confirm"],
-  ): Layer.Layer<PlanHandler> => {
+    decisions: ReadonlyArray<PromptDecision> = ["yes"],
+  ): Layer.Layer<PromptHandler> => {
     let index = 0
-    return Layer.succeed(PlanHandler, {
-      present: () => Effect.succeed(decisions[index++] ?? "confirm"),
+    return Layer.succeed(PromptHandler, {
+      present: () => Effect.succeed(decisions[index++] ?? "yes"),
       respond: () => Effect.succeed(undefined),
     })
   }

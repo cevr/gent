@@ -8,7 +8,7 @@ import { EventStore, AgentSwitched } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import {
   PermissionHandler,
-  PlanHandler,
+  PromptHandler,
   HandoffHandler,
 } from "@gent/core/domain/interaction-handlers"
 import type { SessionId } from "@gent/core/domain/ids"
@@ -179,7 +179,7 @@ describe("Session State", () => {
     const deps = Layer.mergeAll(
       baseWithEventStore,
       Layer.provide(PermissionHandler.Live, baseWithEventStore),
-      Layer.provide(PlanHandler.Live, baseWithEventStore),
+      Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),
     )
     const testLayer = Layer.provideMerge(GentCore.Live, deps)
@@ -225,7 +225,7 @@ describe("Session Tree", () => {
     const deps = Layer.mergeAll(
       baseWithEventStore,
       Layer.provide(PermissionHandler.Live, baseWithEventStore),
-      Layer.provide(PlanHandler.Live, baseWithEventStore),
+      Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),
     )
     return Layer.provideMerge(GentCore.Live, deps)
@@ -357,7 +357,7 @@ describe("GentCore → ActorProcess integration", () => {
     const deps = Layer.mergeAll(
       baseWithActorProcess,
       Layer.provide(PermissionHandler.Live, baseWithActorProcess),
-      Layer.provide(PlanHandler.Live, baseWithActorProcess),
+      Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
     )
     return Layer.provideMerge(GentCore.Live, deps)
@@ -439,7 +439,7 @@ describe("GentCore → ActorProcess integration", () => {
     const deps = Layer.mergeAll(
       baseWithActorProcess,
       Layer.provide(PermissionHandler.Live, baseWithActorProcess),
-      Layer.provide(PlanHandler.Live, baseWithActorProcess),
+      Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
     )
     const layer = Layer.provideMerge(GentCore.Live, deps)

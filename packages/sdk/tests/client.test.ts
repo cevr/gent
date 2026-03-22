@@ -42,7 +42,7 @@ describe("createClient", () => {
       subscribeEvents: () => Effect.succeed([]),
       respondQuestions: () => Effect.void,
       respondPermission: () => Effect.void,
-      respondPlan: () => Effect.void,
+      respondPrompt: () => Effect.void,
       compactBranch: () => Effect.void,
       updateSessionBypass: () => Effect.succeed({ bypass: true }),
       getPermissionRules: () => Effect.succeed([]),
@@ -64,7 +64,7 @@ describe("createClient", () => {
     expect(typeof client.steer).toBe("function")
     expect(typeof client.respondQuestions).toBe("function")
     expect(typeof client.respondPermission).toBe("function")
-    expect(typeof client.respondPlan).toBe("function")
+    expect(typeof client.respondPrompt).toBe("function")
     expect(typeof client.listMessages).toBe("function")
     expect(typeof client.getSessionState).toBe("function")
     expect(typeof client.listBranches).toBe("function")

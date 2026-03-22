@@ -237,9 +237,9 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
                   case "SessionEnded":
                   case "StreamChunk":
                   case "PermissionRequested":
-                  case "PlanPresented":
-                  case "PlanConfirmed":
-                  case "PlanRejected":
+                  case "PromptPresented":
+                  case "PromptConfirmed":
+                  case "PromptRejected":
                   case "HandoffPresented":
                   case "HandoffConfirmed":
                   case "HandoffRejected":

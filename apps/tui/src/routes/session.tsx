@@ -304,8 +304,8 @@ export function Session(props: SessionProps) {
         handleInputEvent({ _tag: "QuestionsAsked", event })
       } else if (event._tag === "PermissionRequested") {
         handleInputEvent({ _tag: "PermissionRequested", event })
-      } else if (event._tag === "PlanPresented") {
-        handleInputEvent({ _tag: "PlanPresented", event })
+      } else if (event._tag === "PromptPresented") {
+        handleInputEvent({ _tag: "PromptPresented", event })
       } else if (event._tag === "HandoffPresented") {
         handleInputEvent({ _tag: "HandoffPresented", event })
       }
@@ -435,8 +435,8 @@ export function Session(props: SessionProps) {
             ),
           )
         } else if (effect.kind === "handoff") {
-          const { decision } = pickPlanDecision(effect.answers)
-          const handoffDecision = decision === "confirm" ? "confirm" : "reject"
+          const { decision } = pickPromptDecision(effect.answers)
+          const handoffDecision = decision === "yes" ? "confirm" : "reject"
           cast(
             Effect.gen(function* () {
               const result = yield* client.client.respondHandoff(effect.requestId, handoffDecision)
@@ -457,9 +457,9 @@ export function Session(props: SessionProps) {
             ),
           )
         } else {
-          const { decision, reason } = pickPlanDecision(effect.answers)
+          const { decision, content } = pickPromptDecision(effect.answers)
           cast(
-            client.client.respondPlan(effect.requestId, decision, reason).pipe(
+            client.client.respondPrompt(effect.requestId, decision, content).pipe(
               Effect.tapError((err) =>
                 Effect.sync(() => {
                   client.setError(formatError(err))
@@ -662,16 +662,17 @@ const pickPermissionDecision = (
   return { decision: "deny", persist: false }
 }
 
-const pickPlanDecision = (
+const pickPromptDecision = (
   answers: readonly (readonly string[])[],
-): { decision: "confirm" | "reject"; reason?: string } => {
+): { decision: "yes" | "no" | "edit"; content?: string } => {
   const selections = answers.flat().map((value) => value.trim())
   const normalized = selections.map((value) => value.toLowerCase())
-  if (normalized.includes("confirm")) return { decision: "confirm" }
-  if (normalized.includes("reject")) return { decision: "reject" }
-  const reason = selections[0]
+  if (normalized.includes("yes")) return { decision: "yes" }
+  if (normalized.includes("edit")) return { decision: "edit" }
+  if (normalized.includes("no")) return { decision: "no" }
+  const content = selections[0]
   return {
-    decision: "reject",
-    reason: reason !== undefined && reason.length > 0 ? reason : undefined,
+    decision: "no",
+    content: content !== undefined && content.length > 0 ? content : undefined,
   }
 }

@@ -6,11 +6,11 @@ import { GlobTool } from "@gent/core/tools/glob"
 import { GrepTool } from "@gent/core/tools/grep"
 import { TodoReadTool, TodoWriteTool, TodoHandler } from "@gent/core/tools/todo"
 import { AskUserTool, AskUserHandler } from "@gent/core/tools/ask-user"
-import { PlanTool } from "@gent/core/tools/plan"
+import { PromptTool } from "@gent/core/tools/prompt"
 import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { AgentRegistry, SubagentRunnerService } from "@gent/core/domain/agent"
-import { PlanHandler } from "@gent/core/domain/interaction-handlers"
+import { PromptHandler } from "@gent/core/domain/interaction-handlers"
 import { TodoItem } from "@gent/core/domain/todo"
 
 const ctx: ToolContext = {
@@ -230,16 +230,47 @@ describe("AskUser Tool", () => {
   })
 })
 
-describe("Plan Tool", () => {
-  test("writes plan and returns decision", async () => {
-    const layer = Layer.merge(PlanHandler.Test(["confirm"]), PlatformLayer)
+describe("Prompt Tool", () => {
+  test("review mode: writes content and returns decision", async () => {
+    const layer = Layer.merge(PromptHandler.Test(["yes"]), PlatformLayer)
 
     const result = await Effect.runPromise(
-      PlanTool.execute({ plan: "## Plan\\n- Step 1" }, ctx).pipe(Effect.provide(layer)),
+      PromptTool.execute({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
+        Effect.provide(layer),
+      ),
     )
 
-    expect(result.decision).toBe("confirm")
-    expect(result.planPath).toContain(".gent/plans/")
+    expect(result.mode).toBe("review")
+    if (result.mode === "review") {
+      expect(result.decision).toBe("yes")
+      expect(result.path).toContain(".gent/prompts/")
+    }
+  })
+
+  test("confirm mode: returns yes/no decision", async () => {
+    const layer = Layer.merge(PromptHandler.Test(["no"]), PlatformLayer)
+
+    const result = await Effect.runPromise(
+      PromptTool.execute({ mode: "confirm", content: "Proceed?" }, ctx).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.mode).toBe("confirm")
+    if (result.mode === "confirm") {
+      expect(result.decision).toBe("no")
+    }
+  })
+
+  test("present mode: returns shown status", async () => {
+    const layer = Layer.merge(PromptHandler.Test(), PlatformLayer)
+
+    const result = await Effect.runPromise(
+      PromptTool.execute({ mode: "present", content: "Info" }, ctx).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.mode).toBe("present")
+    if (result.mode === "present") {
+      expect(result.status).toBe("shown")
+    }
   })
 })
 

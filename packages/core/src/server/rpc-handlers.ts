@@ -130,11 +130,11 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       respondPermission: ({ requestId, decision, persist }) =>
         core.respondPermission({ requestId, decision, persist }),
 
-      respondPlan: ({ requestId, decision, reason }) =>
-        core.respondPlan({
+      respondPrompt: ({ requestId, decision, content }) =>
+        core.respondPrompt({
           requestId,
           decision,
-          ...(reason !== undefined ? { reason } : {}),
+          ...(content !== undefined ? { content } : {}),
         }),
 
       respondHandoff: ({ requestId, decision, reason }) =>

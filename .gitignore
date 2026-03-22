@@ -9,3 +9,4 @@ bin/
 *.d.ts.map
 .gent/data.db
 .gent/plans/
+.gent/prompts/

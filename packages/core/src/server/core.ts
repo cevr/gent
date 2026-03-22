@@ -14,7 +14,7 @@ import {
   type EventId,
   type EventEnvelope,
   type EventStoreError,
-  type PlanDecision,
+  type PromptDecision,
   type HandoffDecision,
   SessionNameUpdated,
   BranchCreated,
@@ -23,7 +23,7 @@ import {
 } from "../domain/event.js"
 import { AgentName, type ReasoningEffort } from "../domain/agent.js"
 import { Permission, PermissionRule, type PermissionDecision } from "../domain/permission.js"
-import { PermissionHandler, PlanHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { Task } from "../domain/task.js"
 import { Storage, StorageError } from "../storage/sqlite-storage.js"
 import { Provider, type ProviderError, type ProviderService } from "../providers/provider.js"
@@ -236,10 +236,10 @@ export interface GentCoreService {
     persist?: boolean
   }) => Effect.Effect<void, GentCoreError>
 
-  readonly respondPlan: (input: {
+  readonly respondPrompt: (input: {
     requestId: string
-    decision: PlanDecision
-    reason?: string
+    decision: PromptDecision
+    content?: string
   }) => Effect.Effect<void, GentCoreError>
 
   readonly respondHandoff: (input: {
@@ -308,7 +308,7 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
     | EventStore
     | Provider
     | PermissionHandler
-    | PlanHandler
+    | PromptHandler
     | HandoffHandler
     | Permission
     | ConfigService
@@ -320,7 +320,7 @@ export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
       const eventStore = yield* EventStore
       const provider = yield* Provider
       const permissionHandler = yield* PermissionHandler
-      const planHandler = yield* PlanHandler
+      const promptHandler = yield* PromptHandler
       const handoffHandler = yield* HandoffHandler
       const permission = yield* Permission
       const configService = yield* ConfigService
@@ -907,10 +907,10 @@ ${conversation}`
             }
           }).pipe(Effect.withSpan("GentCore.respondPermission")),
 
-        respondPlan: (input) =>
-          planHandler
-            .respond(input.requestId, input.decision, input.reason)
-            .pipe(Effect.asVoid, Effect.withSpan("GentCore.respondPlan")),
+        respondPrompt: (input) =>
+          promptHandler
+            .respond(input.requestId, input.decision, input.content)
+            .pipe(Effect.asVoid, Effect.withSpan("GentCore.respondPrompt")),
 
         respondHandoff: (input) =>
           Effect.gen(function* () {

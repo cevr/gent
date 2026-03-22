@@ -5,7 +5,7 @@
 import type {
   QuestionsAsked,
   PermissionRequested,
-  PlanPresented,
+  PromptPresented,
   HandoffPresented,
   Question,
 } from "@gent/core/domain/event.js"
@@ -32,7 +32,7 @@ export interface PromptState {
   readonly answers: readonly (readonly string[])[]
 }
 
-export type PromptKind = "questions" | "permission" | "plan" | "handoff"
+export type PromptKind = "questions" | "permission" | "prompt" | "handoff"
 
 // ============================================================================
 // Input State Union
@@ -73,12 +73,12 @@ export const InputState = {
       answers: [],
     },
   }),
-  fromPlan: (event: typeof PlanPresented.Type): InputState => ({
+  fromPrompt: (event: typeof PromptPresented.Type): InputState => ({
     _tag: "prompt",
     prompt: {
       requestId: event.requestId,
-      kind: "plan",
-      questions: [planQuestion(event)],
+      kind: "prompt",
+      questions: [promptQuestion(event)],
       currentIndex: 0,
       answers: [],
     },
@@ -112,7 +112,7 @@ export type InputEvent =
   | { readonly _tag: "CloseAutocomplete" }
   | { readonly _tag: "QuestionsAsked"; readonly event: typeof QuestionsAsked.Type }
   | { readonly _tag: "PermissionRequested"; readonly event: typeof PermissionRequested.Type }
-  | { readonly _tag: "PlanPresented"; readonly event: typeof PlanPresented.Type }
+  | { readonly _tag: "PromptPresented"; readonly event: typeof PromptPresented.Type }
   | { readonly _tag: "HandoffPresented"; readonly event: typeof HandoffPresented.Type }
   | { readonly _tag: "SubmitAnswer"; readonly selections: readonly string[] }
 
@@ -163,8 +163,8 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
           return { state: InputState.fromQuestions(event.event) }
         case "PermissionRequested":
           return { state: InputState.fromPermission(event.event) }
-        case "PlanPresented":
-          return { state: InputState.fromPlan(event.event) }
+        case "PromptPresented":
+          return { state: InputState.fromPrompt(event.event) }
         case "HandoffPresented":
           return { state: InputState.fromHandoff(event.event) }
         default:
@@ -182,8 +182,8 @@ export function transition(state: InputState, event: InputEvent): TransitionResu
           return { state: InputState.fromQuestions(event.event) }
         case "PermissionRequested":
           return { state: InputState.fromPermission(event.event) }
-        case "PlanPresented":
-          return { state: InputState.fromPlan(event.event) }
+        case "PromptPresented":
+          return { state: InputState.fromPrompt(event.event) }
         case "HandoffPresented":
           return { state: InputState.fromHandoff(event.event) }
         default:
@@ -270,20 +270,17 @@ const handoffQuestion = (event: typeof HandoffPresented.Type): Question => {
   }
 }
 
-const planQuestion = (event: typeof PlanPresented.Type): Question => {
-  const base =
-    event.planPath !== undefined && event.planPath.length > 0
-      ? `Plan ready: ${event.planPath}`
-      : "Plan ready"
-  const question =
-    event.prompt !== undefined && event.prompt.length > 0
-      ? "Review plan and confirm?"
-      : `${base} Confirm?`
+const promptQuestion = (event: typeof PromptPresented.Type): Question => {
+  const title = event.title ?? (event.path !== undefined ? `Review: ${event.path}` : "Review")
+  const options =
+    event.mode === "review"
+      ? [{ label: "Yes" }, { label: "No" }, { label: "Edit" }]
+      : [{ label: "Yes" }, { label: "No" }]
   return {
-    question,
-    header: "Plan",
-    ...(event.prompt !== undefined && event.prompt.length > 0 ? { markdown: event.prompt } : {}),
-    options: [{ label: "Confirm" }, { label: "Reject" }],
+    question: title,
+    header: "Prompt",
+    ...(event.content !== undefined && event.content.length > 0 ? { markdown: event.content } : {}),
+    options,
     multiple: false,
   }
 }

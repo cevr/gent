@@ -20,7 +20,7 @@ import { Model, type ProviderId } from "@gent/core/domain/model.js"
 import type { AgentName, ReasoningEffort } from "@gent/core/domain/agent.js"
 import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
-import type { EventEnvelope, PlanDecision, HandoffDecision } from "@gent/core/domain/event.js"
+import type { EventEnvelope, PromptDecision, HandoffDecision } from "@gent/core/domain/event.js"
 import type {
   MessagePart,
   TextPart,
@@ -329,11 +329,11 @@ export interface GentClient {
     persist?: boolean,
   ) => Effect.Effect<void, GentRpcError>
 
-  /** Respond to plan prompt */
-  respondPlan: (
+  /** Respond to prompt */
+  respondPrompt: (
     requestId: string,
-    decision: PlanDecision,
-    reason?: string,
+    decision: PromptDecision,
+    content?: string,
   ) => Effect.Effect<void, GentRpcError>
 
   /** Respond to handoff prompt */
@@ -478,11 +478,11 @@ export function createClient(
         ...(persist !== undefined ? { persist } : {}),
       }),
 
-    respondPlan: (requestId, decision, reason) =>
-      rpcClient.respondPlan({
+    respondPrompt: (requestId, decision, content) =>
+      rpcClient.respondPrompt({
         requestId,
         decision,
-        ...(reason !== undefined ? { reason } : {}),
+        ...(content !== undefined ? { content } : {}),
       }),
 
     respondHandoff: (requestId, decision, reason) =>
@@ -580,7 +580,7 @@ export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
  * - GentCore
  * - AskUserHandler
  * - PermissionHandler
- * - PlanHandler
+ * - PromptHandler
  * - Permission
  * - ConfigService
  * - AuthStore
@@ -755,12 +755,12 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
       respondPermission: (requestId, decision, persist) =>
         mapErr(core.respondPermission({ requestId, decision, persist })),
 
-      respondPlan: (requestId, decision, reason) =>
+      respondPrompt: (requestId, decision, content) =>
         mapErr(
-          core.respondPlan({
+          core.respondPrompt({
             requestId,
             decision,
-            ...(reason !== undefined ? { reason } : {}),
+            ...(content !== undefined ? { content } : {}),
           }),
         ),
 
