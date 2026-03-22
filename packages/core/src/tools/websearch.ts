@@ -21,9 +21,8 @@ export const WebSearchParams = Schema.Struct({
     }),
   ),
   type: Schema.optional(
-    Schema.Literals(["auto", "fast", "deep"]).annotate({
-      description:
-        "Search type — auto: balanced (default), fast: quick results, deep: comprehensive",
+    Schema.Literals(["auto", "fast"]).annotate({
+      description: "Search type — auto: balanced (default), fast: quick results",
     }),
   ),
 })
@@ -41,7 +40,7 @@ const EXA_MCP_URL = "https://mcp.exa.ai/mcp"
 const DEFAULT_NUM_RESULTS = 8
 const TIMEOUT_MS = 25000
 
-interface McpSearchRequest {
+interface McpRequest {
   jsonrpc: string
   id: number
   method: string
@@ -51,19 +50,31 @@ interface McpSearchRequest {
       query: string
       numResults: number
       livecrawl: "fallback"
-      type: "auto" | "fast" | "deep"
+      type: "auto" | "fast"
     }
   }
 }
 
-interface McpSearchResponse {
+interface McpResponse {
   jsonrpc: string
-  result: {
+  result?: {
     content: Array<{
       type: string
       text: string
     }>
+    isError?: boolean
   }
+  error?: {
+    code: number
+    message: string
+  }
+}
+
+/** Extract search result text from an MCP response object */
+function extractResult(data: McpResponse): string | undefined {
+  if (data.error !== undefined) return undefined
+  if (data.result?.isError === true) return undefined
+  return data.result?.content?.[0]?.text
 }
 
 // WebSearch Tool
@@ -74,11 +85,11 @@ export const WebSearchTool = defineTool({
   idempotent: true,
   get description() {
     const year = new Date().getFullYear()
-    return `Search the web using Exa AI. Returns content from the most relevant websites. The current year is ${year} — use this year when searching for recent information. Supports configurable result counts and search depth.`
+    return `Search the web using Exa AI. Returns content from the most relevant websites. The current year is ${year} — use this year when searching for recent information.`
   },
   params: WebSearchParams,
   execute: Effect.fn("WebSearchTool.execute")(function* (params) {
-    const searchRequest: McpSearchRequest = {
+    const searchRequest: McpRequest = {
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
@@ -116,16 +127,24 @@ export const WebSearchTool = defineTool({
             throw new Error(`Search error (${response.status}): ${errorText}`)
           }
 
+          const contentType = response.headers.get("content-type") ?? ""
           const responseText = await response.text()
 
-          // Parse SSE response
-          const lines = responseText.split("\n")
-          for (const line of lines) {
+          // Handle JSON response
+          if (contentType.includes("application/json")) {
+            const data = JSON.parse(responseText) as McpResponse
+            const text = extractResult(data)
+            if (text !== undefined) return text
+            const errMsg = data.error?.message ?? "Unknown error"
+            throw new Error(`Exa MCP error: ${errMsg}`)
+          }
+
+          // Handle SSE response
+          for (const line of responseText.split("\n")) {
             if (line.startsWith("data: ")) {
-              const data: McpSearchResponse = JSON.parse(line.substring(6))
-              if (data.result?.content?.[0]?.text !== undefined) {
-                return data.result.content[0].text
-              }
+              const data = JSON.parse(line.substring(6)) as McpResponse
+              const text = extractResult(data)
+              if (text !== undefined) return text
             }
           }
 

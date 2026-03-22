@@ -18,7 +18,7 @@ const DESTRUCTIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\bgit\s+reset\s+--hard\b/, "git reset --hard"],
   [/\bgit\s+push\s+.*--force\b/, "git push --force"],
   [/\bgit\s+push\s+-f\b/, "git push -f"],
-  [/\bgit\s+clean\s+-[fd]/, "git clean"],
+  [/\bgit\s+clean\b/, "git clean"],
   [/\bgit\s+checkout\s+--?\s/, "git checkout -- (discard changes)"],
   [/\bgit\s+restore\s+--staged\b/, "git restore --staged"],
   [/\bdrop\s+table\b/i, "DROP TABLE"],
@@ -37,17 +37,18 @@ const EXTERNAL_PATTERNS: Array<[RegExp, string]> = [
   [/\bdocker\s+push\b/, "docker push"],
   [/\bgit\s+push\b(?!.*--force)(?!.*-f)/, "git push"],
   [/\bpip\s+upload\b/, "pip upload"],
-  [/\bnpx\s+/, "npx (remote package execution)"],
 ]
 
+// Sensitive patterns only match write-context commands, not read-only tools
+// like grep/rg/cat/less/head/tail that may reference these filenames
+const READ_ONLY_PREFIX = /^\s*(cat|less|head|tail|grep|rg|ag|ack|wc|file|stat|ls|bat|find)\b/
 const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
-  [/\.env\b/, "touches .env file"],
-  [/credentials/i, "touches credentials"],
-  [/\bsecrets?\b/i, "touches secrets"],
-  [/\bid_rsa\b/, "touches SSH key"],
-  [/\.pem\b/, "touches .pem file"],
-  [/\.key\b/, "touches .key file"],
-  [/password/i, "touches password file"],
+  [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*\.env\b/, "modifies .env file"],
+  [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*credentials/i, "modifies credentials"],
+  [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*\bsecrets?\b/i, "modifies secrets"],
+  [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*\bid_rsa\b/, "modifies SSH key"],
+  [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*\.pem\b/, "modifies .pem file"],
+  [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*\.key\b/, "modifies .key file"],
 ]
 
 const SAFE: BashRisk = { level: "safe", reason: "" }
@@ -65,9 +66,12 @@ export function classify(command: string): BashRisk {
     }
   }
 
-  for (const [pattern, reason] of SENSITIVE_PATTERNS) {
-    if (pattern.test(command)) {
-      return { level: "sensitive", reason }
+  // Skip sensitive check for read-only commands
+  if (!READ_ONLY_PREFIX.test(command)) {
+    for (const [pattern, reason] of SENSITIVE_PATTERNS) {
+      if (pattern.test(command)) {
+        return { level: "sensitive", reason }
+      }
     }
   }
 
