@@ -117,6 +117,9 @@ export { LoopTool, LoopParams } from "./loop"
 // Plan Workflow Tool
 export { PlanTool, PlanParams } from "./plan"
 
+// Audit Workflow Tool
+export { AuditTool, AuditParams } from "./audit"
+
 // All Tools
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ReadTool } from "./read"
@@ -145,6 +148,7 @@ import { TaskGetTool } from "./task-get"
 import { TaskUpdateTool } from "./task-update"
 import { LoopTool } from "./loop"
 import { PlanTool } from "./plan"
+import { AuditTool } from "./audit"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -174,4 +178,5 @@ export const AllTools: AnyToolDefinition[] = [
   TaskUpdateTool,
   LoopTool,
   PlanTool,
+  AuditTool,
 ]

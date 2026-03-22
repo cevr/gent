@@ -23,6 +23,7 @@ export type SlashCommandId =
   | "counsel"
   | "loop"
   | "plan"
+  | "audit"
 
 export interface SlashCommandContext {
   openPalette: () => void
@@ -170,6 +171,19 @@ export const executeSlashCommand = (
           )
         } else {
           ctx.sendMessage(`Use the plan tool to create an implementation plan for: ${prompt}`)
+        }
+        return { handled: true }
+      })
+
+    case "audit":
+      return Effect.sync(() => {
+        const prompt = _args.trim()
+        if (prompt.length === 0) {
+          ctx.sendMessage(
+            "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes.",
+          )
+        } else {
+          ctx.sendMessage(`Use the audit tool to audit: ${prompt}`)
         }
         return { handled: true }
       })
