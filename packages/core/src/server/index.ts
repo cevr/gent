@@ -23,11 +23,14 @@ import {
   SubagentRunnerConfig,
 } from "../runtime/agent/subagent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { LocalActorProcessLive, type ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { TaskService } from "../runtime/task-service.js"
 import { AllTools } from "../tools/index.js"
+import { BuiltinExtensions } from "../extensions/index.js"
+import type { LoadedExtension } from "../domain/extension.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
@@ -156,6 +159,7 @@ export const createDependencies = (
   | ProviderFactory
   | ToolRegistry
   | AgentRegistry
+  | ExtensionRegistry
   | SubagentRunnerService
   | EventStore
   | Permission
@@ -177,6 +181,17 @@ export const createDependencies = (
   PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > => {
+  // Build ExtensionRegistry from builtins (loaded synchronously)
+  const builtinLoaded: LoadedExtension[] = BuiltinExtensions.map((ext) => ({
+    manifest: ext.manifest,
+    kind: "builtin" as const,
+    sourcePath: "builtin",
+    setup: Effect.runSync(
+      ext.setup({ cwd: config.cwd, config: undefined as never, source: "builtin" }),
+    ),
+  }))
+  const ExtensionRegistryLive = ExtensionRegistry.Live(builtinLoaded)
+
   const StorageLive = Storage.Live(config.dbPath ?? ".gent/data.db")
 
   const EventStoreLayer = Layer.provide(EventStoreLive, StorageLive)
@@ -224,6 +239,7 @@ export const createDependencies = (
     ProviderAuthLive,
     ToolRegistry.Live(AllTools),
     AgentRegistry.Live,
+    ExtensionRegistryLive,
     EventStoreLayer,
     ConfigServiceLive,
     ModelRegistry.Live,

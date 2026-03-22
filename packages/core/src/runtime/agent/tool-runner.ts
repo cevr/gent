@@ -1,10 +1,6 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
-import {
-  ToolRegistry,
-  type ToolContext,
-  type AnyToolDefinition,
-  type ToolDefinition,
-} from "../../domain/tool.js"
+import { type ToolContext, type AnyToolDefinition, type ToolDefinition } from "../../domain/tool.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
 import { ToolResultPart } from "../../domain/message.js"
 import { Permission, type PermissionDecision } from "../../domain/permission.js"
 import { PermissionHandler } from "../../domain/interaction-handlers.js"
@@ -32,17 +28,19 @@ const errorResult = (toolCall: { toolCallId: string; toolName: string }, message
 export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService>()(
   "@gent/runtime/src/agent/tool-runner/ToolRunner",
 ) {
-  static Live: Layer.Layer<ToolRunner, never, ToolRegistry | Permission | PermissionHandler> =
+  static Live: Layer.Layer<ToolRunner, never, ExtensionRegistry | Permission | PermissionHandler> =
     Layer.effect(
       ToolRunner,
       Effect.gen(function* () {
-        const toolRegistry = yield* ToolRegistry
+        const extensionRegistry = yield* ExtensionRegistry
         const permission = yield* Permission
         const permissionHandler = yield* PermissionHandler
 
         return ToolRunner.of({
           run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, options) {
-            const tool: AnyToolDefinition | undefined = yield* toolRegistry.get(toolCall.toolName)
+            const tool: AnyToolDefinition | undefined = yield* extensionRegistry.getTool(
+              toolCall.toolName,
+            )
             if (tool === undefined) {
               return errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`)
             }

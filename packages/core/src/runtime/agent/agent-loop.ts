@@ -22,7 +22,6 @@ import {
 import {
   AgentDefinition,
   AgentName,
-  AgentRegistry,
   Agents,
   ReasoningEffort,
   resolveAgentModel,
@@ -50,12 +49,7 @@ import {
 } from "../../domain/event.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId } from "../../domain/ids.js"
-import {
-  ToolRegistry,
-  type AnyToolDefinition,
-  type ToolAction,
-  type ToolContext,
-} from "../../domain/tool.js"
+import { type ToolAction, type ToolContext } from "../../domain/tool.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { HandoffHandler } from "../../domain/interaction-handlers.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -68,44 +62,8 @@ import {
 } from "../../providers/provider.js"
 import { withRetry } from "../retry"
 import { estimateContextPercent } from "../context-estimation"
+import { ExtensionRegistry, filterToolsForAgent } from "../extensions/registry.js"
 import { ToolRunner } from "./tool-runner"
-
-// Tool filtering — resolves allowedActions + allowedTools + deniedTools
-
-/** @internal — exported for testing */
-export const filterTools = (
-  allTools: ReadonlyArray<AnyToolDefinition>,
-  agent: AgentDefinition,
-): AnyToolDefinition[] => {
-  const hasAllowList = agent.allowedActions !== undefined || agent.allowedTools !== undefined
-
-  // If any allow-list is set, start from empty — only explicitly allowed tools pass.
-  // If no allow-list is set, start from all tools (primary agents).
-  let tools: AnyToolDefinition[] = hasAllowList ? [] : [...allTools]
-
-  if (hasAllowList) {
-    const actions = agent.allowedActions !== undefined ? new Set(agent.allowedActions) : undefined
-    const names = agent.allowedTools !== undefined ? new Set(agent.allowedTools) : undefined
-    const included = new Set<string>()
-
-    for (const t of allTools) {
-      const byAction = actions !== undefined && actions.has(t.action)
-      const byName = names !== undefined && names.has(t.name)
-      if ((byAction || byName) && !included.has(t.name)) {
-        tools.push(t)
-        included.add(t.name)
-      }
-    }
-  }
-
-  // deniedTools always wins
-  if (agent.deniedTools !== undefined) {
-    const denied = new Set(agent.deniedTools)
-    tools = tools.filter((t) => !denied.has(t.name))
-  }
-
-  return tools
-}
 
 // Agent Loop Error
 
@@ -208,15 +166,14 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
   }): Layer.Layer<
     AgentLoop,
     never,
-    Storage | Provider | ToolRegistry | AgentRegistry | EventStore | HandoffHandler | ToolRunner
+    Storage | Provider | ExtensionRegistry | EventStore | HandoffHandler | ToolRunner
   > =>
     Layer.effect(
       AgentLoop,
       Effect.gen(function* () {
         const storage = yield* Storage
         const provider = yield* Provider
-        const toolRegistry = yield* ToolRegistry
-        const agentRegistry = yield* AgentRegistry
+        const extensionRegistry = yield* ExtensionRegistry
         const eventStore = yield* EventStore
         const handoffHandler = yield* HandoffHandler
         const toolRunner = yield* ToolRunner
@@ -268,7 +225,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               const previous = yield* resolveCurrentAgent()
               const next: AgentNameType = Schema.is(AgentName)(cmd.agent) ? cmd.agent : "cowork"
-              const resolved = yield* agentRegistry.get(next)
+              const resolved = yield* extensionRegistry.getAgent(next)
               if (resolved === undefined) return
 
               yield* Ref.set(currentAgentRef, next)
@@ -395,7 +352,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   (yield* storage.listMessages(branchId).pipe(Effect.map((m) => [...m])))
                 if (cachedMessages === undefined) cachedMessages = messages
 
-                const agent = yield* agentRegistry.get(currentAgent)
+                const agent = yield* extensionRegistry.getAgent(currentAgent)
                 if (agent === undefined) {
                   yield* publishEvent(
                     new ErrorOccurred({
@@ -407,8 +364,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return interrupted
                 }
 
-                const allTools = yield* toolRegistry.list()
-                const tools = filterTools(allTools, agent)
+                const allTools = yield* extensionRegistry.listTools()
+                const tools = filterToolsForAgent(allTools, agent)
 
                 const systemPrompt = buildSystemPrompt(config.systemPrompt, agent)
 
@@ -672,7 +629,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                           agentName: currentAgent,
                         }
                         const run = toolRunner.run(toolCall, ctx, { bypass })
-                        const tool = yield* toolRegistry.get(toolCall.toolName)
+                        const tool = yield* extensionRegistry.getTool(toolCall.toolName)
                         const result = yield* tool?.concurrency === "serial"
                           ? bashSemaphore.withPermits(1)(run)
                           : run
@@ -756,7 +713,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 } else {
                   const allMessages = yield* storage.listMessages(branchId)
                   const currentAgent = yield* resolveCurrentAgent()
-                  const currentAgentDef = yield* agentRegistry.get(currentAgent)
+                  const currentAgentDef = yield* extensionRegistry.getAgent(currentAgent)
                   const modelId = resolveAgentModel(currentAgentDef ?? Agents.cowork)
                   const contextPercent = estimateContextPercent(allMessages, modelId)
                   if (contextPercent >= DEFAULTS.handoffThresholdPercent) {
@@ -1040,15 +997,14 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
   static Live: Layer.Layer<
     AgentActor,
     never,
-    Storage | Provider | ToolRegistry | EventStore | AgentRegistry | ToolRunner
+    Storage | Provider | ExtensionRegistry | EventStore | ToolRunner
   > = Layer.effect(
     AgentActor,
     Effect.gen(function* () {
       const storage = yield* Storage
       const provider = yield* Provider
-      const toolRegistry = yield* ToolRegistry
+      const extensionRegistry = yield* ExtensionRegistry
       const eventStore = yield* EventStore
-      const agentRegistry = yield* AgentRegistry
       const toolRunner = yield* ToolRunner
       const bashSemaphore = yield* Semaphore.make(1)
 
@@ -1097,7 +1053,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
         "AgentActor.runEffect",
       )((input: AgentRunInput) =>
         Effect.gen(function* () {
-          const agent = yield* agentRegistry.get(input.agentName)
+          const agent = yield* extensionRegistry.getAgent(input.agentName)
           if (agent === undefined) {
             yield* eventStore.publish(
               new ErrorOccurred({
@@ -1164,8 +1120,8 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             }),
           )
 
-          const allTools = yield* toolRegistry.list()
-          const tools = filterTools(allTools, effectiveAgent)
+          const allTools = yield* extensionRegistry.listTools()
+          const tools = filterToolsForAgent(allTools, effectiveAgent)
 
           const messages: Message[] = [userMessage]
           let continueLoop = true
@@ -1273,7 +1229,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                       }),
                     )
 
-                    const tool = yield* toolRegistry.get(toolCall.toolName)
+                    const tool = yield* extensionRegistry.getTool(toolCall.toolName)
                     const ctx: ToolContext = {
                       sessionId: input.sessionId,
                       branchId: input.branchId,

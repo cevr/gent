@@ -8,6 +8,7 @@ import {
   type StreamChunk,
 } from "../providers/provider.js"
 import { ToolRegistry, type AnyToolDefinition } from "../domain/tool.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.js"
 import { Permission, type PermissionDecision } from "../domain/permission.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
@@ -184,6 +185,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     Storage.Test(),
     Provider.Test(providerResponses),
     ToolRegistry.Live(tools),
+    ExtensionRegistry.Test(),
     EventStore.Test(),
     Permission.Test(),
     PermissionHandler.Test(permissionDecisions),
@@ -211,6 +213,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     Permission.Test(),
     PermissionHandler.Test(permissionDecisions),
     ToolRegistry.Live(tools),
+    ExtensionRegistry.Test(),
     PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
     AgentLoop.Test(),

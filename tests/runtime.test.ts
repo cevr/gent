@@ -2,7 +2,12 @@ import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { isRetryable, getRetryDelay, DEFAULT_RETRY_CONFIG } from "@gent/core/runtime/retry"
 import { estimateTokens } from "@gent/core/runtime/context-estimation"
-import { AgentLoop, AgentActor, filterTools } from "@gent/core/runtime/agent/agent-loop"
+import { AgentLoop, AgentActor } from "@gent/core/runtime/agent/agent-loop"
+import {
+  filterToolsForAgent,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, SubagentRunnerConfig } from "@gent/core/runtime/agent/subagent-runner"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
@@ -23,7 +28,7 @@ import {
   SubagentRunnerService,
   SubagentError,
 } from "@gent/core/domain/agent"
-import { defineTool, ToolRegistry } from "@gent/core/domain/tool"
+import { defineTool, ToolRegistry, type AnyToolDefinition } from "@gent/core/domain/tool"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { ModelId } from "@gent/core/domain/model"
 import { Permission } from "@gent/core/domain/permission"
@@ -32,6 +37,28 @@ import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
+
+const makeTestExtRegistry = (tools: AnyToolDefinition[] = []) =>
+  ExtensionRegistry.fromResolved(
+    resolveExtensions([
+      {
+        manifest: { id: "agents" },
+        kind: "builtin" as const,
+        sourcePath: "test",
+        setup: { agents: Object.values(Agents) },
+      },
+      ...(tools.length > 0
+        ? [
+            {
+              manifest: { id: "tools" },
+              kind: "builtin" as const,
+              sourcePath: "test",
+              setup: { tools },
+            },
+          ]
+        : []),
+    ]),
+  )
 
 describe("Retry Logic", () => {
   test("isRetryable detects rate limits", () => {
@@ -100,7 +127,7 @@ describe("Token Estimation", () => {
   })
 })
 
-describe("filterTools", () => {
+describe("filterToolsForAgent", () => {
   const makeTool = (
     name: string,
     action: "read" | "edit" | "exec" | "delegate" | "interact" | "network" | "state",
@@ -128,16 +155,16 @@ describe("filterTools", () => {
     makeTool("todo_read", "state"),
   ]
 
-  const names = (tools: ReturnType<typeof filterTools>) => tools.map((t) => t.name).sort()
+  const names = (tools: ReturnType<typeof filterToolsForAgent>) => tools.map((t) => t.name).sort()
 
   test("no allow-list → all tools", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
-    expect(names(filterTools(allTools, agent))).toEqual(names(allTools))
+    expect(names(filterToolsForAgent(allTools, agent))).toEqual(names(allTools))
   })
 
   test("allowedActions filters by action", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedActions: ["read"] })
-    expect(names(filterTools(allTools, agent))).toEqual(["glob", "grep", "read"])
+    expect(names(filterToolsForAgent(allTools, agent))).toEqual(["glob", "grep", "read"])
   })
 
   test("allowedActions + allowedTools unions", () => {
@@ -147,12 +174,12 @@ describe("filterTools", () => {
       allowedActions: ["read"],
       allowedTools: ["bash"],
     })
-    expect(names(filterTools(allTools, agent))).toEqual(["bash", "glob", "grep", "read"])
+    expect(names(filterToolsForAgent(allTools, agent))).toEqual(["bash", "glob", "grep", "read"])
   })
 
   test("allowedTools: [] means no tools", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedTools: [] })
-    expect(filterTools(allTools, agent)).toEqual([])
+    expect(filterToolsForAgent(allTools, agent)).toEqual([])
   })
 
   test("deniedTools removes from result", () => {
@@ -162,7 +189,7 @@ describe("filterTools", () => {
       allowedActions: ["read"],
       deniedTools: ["grep"],
     })
-    expect(names(filterTools(allTools, agent))).toEqual(["glob", "read"])
+    expect(names(filterToolsForAgent(allTools, agent))).toEqual(["glob", "read"])
   })
 
   test("multiple actions", () => {
@@ -171,7 +198,7 @@ describe("filterTools", () => {
       kind: "primary",
       allowedActions: ["read", "network"],
     })
-    expect(names(filterTools(allTools, agent))).toEqual([
+    expect(names(filterToolsForAgent(allTools, agent))).toEqual([
       "glob",
       "grep",
       "read",
@@ -448,7 +475,7 @@ describe("AgentLoop actor model", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       providerLayer,
-      ToolRegistry.Test(),
+      makeTestExtRegistry(),
       AgentRegistry.Live,
       EventStore.Test(),
       HandoffHandler.Test(),
@@ -557,8 +584,9 @@ describe("AgentActor", () => {
   test("publishes machine inspection + task events", async () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const extRegistry = makeTestExtRegistry()
     const toolDeps = Layer.mergeAll(
-      ToolRegistry.Live([]),
+      extRegistry,
       Permission.Test(),
       PermissionHandler.Test(["allow"]),
     )
@@ -632,7 +660,16 @@ describe("ToolRunner", () => {
     })
 
     const deps = Layer.mergeAll(
-      ToolRegistry.Live([FailTool]),
+      ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "test" },
+            kind: "builtin",
+            sourcePath: "test",
+            setup: { tools: [FailTool] },
+          },
+        ]),
+      ),
       Permission.Test(),
       PermissionHandler.Test(["allow"]),
     )
@@ -664,7 +701,16 @@ describe("ToolRunner", () => {
     })
 
     const deps = Layer.mergeAll(
-      ToolRegistry.Live([StrictTool]),
+      ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "test" },
+            kind: "builtin",
+            sourcePath: "test",
+            setup: { tools: [StrictTool] },
+          },
+        ]),
+      ),
       Permission.Test(),
       PermissionHandler.Test(["allow"]),
     )
@@ -739,7 +785,7 @@ describe("Tool concurrency", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       Provider.Test(providerResponses),
-      ToolRegistry.Live([toolA, toolB]),
+      makeTestExtRegistry([toolA, toolB]),
       EventStore.Test(),
       AgentRegistry.Live,
       Permission.Test(),
