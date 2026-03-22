@@ -7,7 +7,7 @@ import { GrepTool } from "@gent/core/tools/grep"
 import { TodoReadTool, TodoWriteTool, TodoHandler } from "@gent/core/tools/todo"
 import { QuestionTool, QuestionHandler } from "@gent/core/tools/ask-user"
 import { PlanTool } from "@gent/core/tools/plan"
-import { TaskTool } from "@gent/core/tools/task"
+import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { AgentRegistry, SubagentRunnerService } from "@gent/core/domain/agent"
 import { PlanHandler } from "@gent/core/domain/interaction-handlers"
@@ -243,7 +243,7 @@ describe("Plan Tool", () => {
   })
 })
 
-describe("Task Tool", () => {
+describe("Delegate Tool", () => {
   test("delegates to subagent and returns output", async () => {
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
@@ -258,7 +258,7 @@ describe("Task Tool", () => {
     const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
 
     const result = await Effect.runPromise(
-      TaskTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(Effect.provide(layer)),
+      DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(Effect.provide(layer)),
     )
 
     expect(result.output).toBe("explore:hello\n\nFull session: session://child-session")
@@ -279,7 +279,7 @@ describe("Task Tool", () => {
     })
     const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
     const result = await Effect.runPromise(
-      TaskTool.execute(
+      DelegateTool.execute(
         {
           chain: [
             { agent: "explore", task: "first" },
@@ -307,7 +307,7 @@ describe("Task Tool", () => {
     })
     const layer = Layer.mergeAll(runnerLayer, AgentRegistry.Live)
     const result = await Effect.runPromise(
-      TaskTool.execute(
+      DelegateTool.execute(
         {
           tasks: [
             { agent: "explore", task: "a" },

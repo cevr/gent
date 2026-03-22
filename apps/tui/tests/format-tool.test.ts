@@ -144,12 +144,12 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("repo_explorer", {})).toBe("")
   })
 
-  test("task: single/parallel/chain modes", () => {
-    expect(toolArgSummary("task", { agent: "explore", task: "find the bug" })).toBe(
+  test("delegate: single/parallel/chain modes", () => {
+    expect(toolArgSummary("delegate", { agent: "explore", task: "find the bug" })).toBe(
       "explore:find the bug",
     )
     expect(
-      toolArgSummary("task", {
+      toolArgSummary("delegate", {
         tasks: [
           { agent: "a", task: "x" },
           { agent: "b", task: "y" },
@@ -157,7 +157,7 @@ describe("toolArgSummary", () => {
       }),
     ).toBe("2 parallel")
     expect(
-      toolArgSummary("task", {
+      toolArgSummary("delegate", {
         chain: [
           { agent: "a", task: "x" },
           { agent: "b", task: "y" },
@@ -165,12 +165,12 @@ describe("toolArgSummary", () => {
         ],
       }),
     ).toBe("3 chain")
-    expect(toolArgSummary("task", { agent: "explore" })).toBe("explore")
+    expect(toolArgSummary("delegate", { agent: "explore" })).toBe("explore")
   })
 
-  test("task: truncates long task text", () => {
+  test("delegate: truncates long task text", () => {
     const longTask = "a".repeat(60)
-    const result = toolArgSummary("task", { agent: "explore", task: longTask })
+    const result = toolArgSummary("delegate", { agent: "explore", task: longTask })
     expect(result).toBe(`explore:${"a".repeat(40)}…`)
   })
 

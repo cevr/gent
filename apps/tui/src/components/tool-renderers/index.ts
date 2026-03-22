@@ -6,7 +6,7 @@ export { WriteToolRenderer } from "./write"
 export { GrepToolRenderer } from "./grep"
 export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
-export { TaskToolRenderer } from "./task"
+export { DelegateToolRenderer } from "./delegate"
 export { GenericToolRenderer } from "./generic"
 export { FinderToolRenderer } from "./finder"
 export { CounselToolRenderer } from "./counsel"
@@ -21,7 +21,7 @@ import { WriteToolRenderer } from "./write"
 import { GrepToolRenderer } from "./grep"
 import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
-import { TaskToolRenderer } from "./task"
+import { DelegateToolRenderer } from "./delegate"
 import { FinderToolRenderer } from "./finder"
 import { CounselToolRenderer } from "./counsel"
 import { CodeReviewToolRenderer } from "./code-review"
@@ -35,8 +35,8 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   grep: GrepToolRenderer,
   glob: GlobToolRenderer,
   webfetch: WebfetchToolRenderer,
-  task: TaskToolRenderer,
-  librarian: TaskToolRenderer,
+  delegate: DelegateToolRenderer,
+  librarian: DelegateToolRenderer,
   finder: FinderToolRenderer,
   counsel: CounselToolRenderer,
   code_review: CodeReviewToolRenderer,

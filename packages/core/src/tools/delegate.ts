@@ -7,31 +7,38 @@ import {
   type SubagentResult,
   type SubagentError,
 } from "../domain/agent.js"
+import { TaskService } from "../runtime/task-service.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
 
-const TaskItem = Schema.Struct({
+const DelegateItem = Schema.Struct({
   agent: AgentName,
   task: Schema.String,
 })
-type TaskItemType = typeof TaskItem.Type
+type DelegateItemType = typeof DelegateItem.Type
 
-export const TaskParams = Schema.Struct({
+export const DelegateParams = Schema.Struct({
   agent: Schema.optional(AgentName),
   task: Schema.optional(Schema.String),
-  tasks: Schema.optional(Schema.Array(TaskItem)),
-  chain: Schema.optional(Schema.Array(TaskItem)),
+  tasks: Schema.optional(Schema.Array(DelegateItem)),
+  chain: Schema.optional(Schema.Array(DelegateItem)),
   description: Schema.optional(Schema.String),
+  background: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Run in the background via TaskService. Returns immediately with taskId. Poll with task_get.",
+    }),
+  ),
 })
 
-export const TaskTool = defineTool({
-  name: "task",
+export const DelegateTool = defineTool({
+  name: "delegate",
   concurrency: "serial",
   description:
-    "Delegate work to specialized subagents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}).",
-  params: TaskParams,
-  execute: Effect.fn("TaskTool.execute")(function* (params, ctx) {
+    "Delegate work to specialized subagents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
+  params: DelegateParams,
+  execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
     const registry = yield* AgentRegistry
 
@@ -67,6 +74,50 @@ export const TaskTool = defineTool({
         }),
       )
 
+    // Background mode: create durable task and fire-and-forget
+    if (params.background === true) {
+      const taskService = yield* TaskService
+
+      if (hasSingle) {
+        const resolved = yield* resolveAgent(params.agent ?? "")
+        if (!resolved.ok) return { error: resolved.error }
+
+        const task = yield* taskService.create({
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          subject: params.description ?? params.task ?? "background task",
+          agentType: resolved.agent.name,
+          prompt: params.task,
+          cwd: process.cwd(),
+        })
+        const result = yield* taskService.run(task.id)
+        return { taskId: result.taskId, status: result.status }
+      }
+
+      if (hasTasks) {
+        const tasks = params.tasks ?? []
+        const taskIds: string[] = []
+        for (const item of tasks) {
+          const resolved = yield* resolveAgent(item.agent)
+          if (!resolved.ok) return { error: resolved.error }
+          const task = yield* taskService.create({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            subject: item.task.length > 60 ? item.task.slice(0, 60) + "…" : item.task,
+            agentType: resolved.agent.name,
+            prompt: item.task,
+            cwd: process.cwd(),
+          })
+          yield* taskService.run(task.id)
+          taskIds.push(task.id)
+        }
+        return { taskIds, status: "running", count: taskIds.length }
+      }
+
+      return { error: "Background mode only supports single and parallel modes, not chain" }
+    }
+
+    // Foreground mode: blocking subagent dispatch
     if (hasChain) {
       const results: SubagentResult[] = []
       let previousOutput = ""
@@ -110,7 +161,9 @@ export const TaskTool = defineTool({
         return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
       }
 
-      const runTask = (task: TaskItemType): Effect.Effect<SubagentResult, SubagentError, never> =>
+      const runTask = (
+        task: DelegateItemType,
+      ): Effect.Effect<SubagentResult, SubagentError, never> =>
         resolveAgent(task.agent).pipe(
           Effect.flatMap((resolved) => {
             if (!resolved.ok) {

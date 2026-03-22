@@ -18,7 +18,7 @@ interface SubagentResultJson {
   toolCalls?: ReadonlyArray<{ toolName: string; args: Record<string, unknown>; isError: boolean }>
 }
 
-interface TaskOutput {
+interface DelegateOutput {
   output?: string
   error?: string
   metadata?: {
@@ -35,16 +35,16 @@ interface TaskOutput {
   }
 }
 
-function parseTaskOutput(output: string | undefined): TaskOutput | undefined {
+function parseDelegateOutput(output: string | undefined): DelegateOutput | undefined {
   if (output === undefined) return undefined
   try {
-    return JSON.parse(output) as TaskOutput
+    return JSON.parse(output) as DelegateOutput
   } catch {
     return undefined
   }
 }
 
-function parseTaskInput(input: unknown):
+function parseDelegateInput(input: unknown):
   | {
       agent?: string
       task?: string
@@ -67,29 +67,29 @@ const STATUS_ICONS = {
   error: "✕",
 } as const
 
-export function TaskToolRenderer(props: ToolRendererProps) {
+export function DelegateToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const taskInput = () => parseTaskInput(props.toolCall.input)
-  const taskOutput = () => parseTaskOutput(props.toolCall.output)
+  const delegateInput = () => parseDelegateInput(props.toolCall.input)
+  const delegateOutput = () => parseDelegateOutput(props.toolCall.output)
 
   const title = () => {
-    const inp = taskInput()
-    if (inp?.agent !== undefined) return `task → ${inp.agent}`
-    if (inp?.tasks !== undefined) return `task → ${inp.tasks.length} parallel`
-    if (inp?.chain !== undefined) return `task → ${inp.chain.length} chain`
-    return "task"
+    const inp = delegateInput()
+    if (inp?.agent !== undefined) return `delegate → ${inp.agent}`
+    if (inp?.tasks !== undefined) return `delegate → ${inp.tasks.length} parallel`
+    if (inp?.chain !== undefined) return `delegate → ${inp.chain.length} chain`
+    return "delegate"
   }
 
   const subtitle = () => {
-    const inp = taskInput()
+    const inp = delegateInput()
     if (inp?.task !== undefined)
       return inp.task.length > 60 ? inp.task.slice(0, 60) + "…" : inp.task
     return undefined
   }
 
   const results = (): SubagentResultJson[] => {
-    const out = taskOutput()
+    const out = delegateOutput()
     if (out?.metadata?.results !== undefined) return out.metadata.results
     return []
   }
@@ -172,14 +172,14 @@ export function TaskToolRenderer(props: ToolRendererProps) {
 
       <Show when={props.toolCall.status !== "running" && results().length === 0}>
         <text style={{ fg: theme.textMuted }}>
-          {taskOutput()?.output ?? taskOutput()?.error ?? props.toolCall.summary ?? ""}
+          {delegateOutput()?.output ?? delegateOutput()?.error ?? props.toolCall.summary ?? ""}
         </text>
-        <Show when={taskOutput()?.metadata?.toolCalls}>
+        <Show when={delegateOutput()?.metadata?.toolCalls}>
           {(calls) => <ToolCallTree toolCalls={calls()} collapsed={!props.expanded} />}
         </Show>
       </Show>
 
-      <Show when={taskOutput()?.metadata?.usage}>
+      <Show when={delegateOutput()?.metadata?.usage}>
         {(usage) => <text style={{ fg: theme.textMuted }}>{formatUsageStats(usage())}</text>}
       </Show>
     </ToolBox>

@@ -72,8 +72,8 @@ export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./w
 // Plan Tool
 export { PlanTool, PlanParams, PlanResult } from "./plan"
 
-// Task Tool
-export { TaskTool, TaskParams } from "./task"
+// Delegate Tool
+export { DelegateTool, DelegateParams } from "./delegate"
 
 // Librarian Tool
 export { LibrarianTool, LibrarianParams, LibrarianError } from "./librarian"
@@ -113,7 +113,6 @@ export { TaskCreateTool, TaskCreateParams } from "./task-create"
 export { TaskListTool, TaskListParams } from "./task-list"
 export { TaskGetTool, TaskGetParams } from "./task-get"
 export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
-export { TaskRunTool, TaskRunParams } from "./task-run"
 
 // All Tools
 import type { AnyToolDefinition } from "../domain/tool.js"
@@ -128,7 +127,7 @@ import { RepoExplorerTool } from "./repo-explorer"
 import { TodoReadTool, TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { PlanTool } from "./plan"
-import { TaskTool } from "./task"
+import { DelegateTool } from "./delegate"
 import { LibrarianTool } from "./librarian"
 import { HandoffTool } from "./handoff"
 import { FinderTool } from "./finder"
@@ -140,7 +139,6 @@ import { TaskCreateTool } from "./task-create"
 import { TaskListTool } from "./task-list"
 import { TaskGetTool } from "./task-get"
 import { TaskUpdateTool } from "./task-update"
-import { TaskRunTool } from "./task-run"
 
 export const AllTools: AnyToolDefinition[] = [
   ReadTool,
@@ -156,7 +154,7 @@ export const AllTools: AnyToolDefinition[] = [
   QuestionTool,
   WebFetchTool,
   PlanTool,
-  TaskTool,
+  DelegateTool,
   LibrarianTool,
   HandoffTool,
   FinderTool,
@@ -168,5 +166,4 @@ export const AllTools: AnyToolDefinition[] = [
   TaskListTool,
   TaskGetTool,
   TaskUpdateTool,
-  TaskRunTool,
 ]

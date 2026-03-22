@@ -5,7 +5,7 @@ import { TaskCreateTool } from "@gent/core/tools/task-create"
 import { TaskListTool } from "@gent/core/tools/task-list"
 import { TaskGetTool } from "@gent/core/tools/task-get"
 import { TaskUpdateTool } from "@gent/core/tools/task-update"
-import { TaskRunTool } from "@gent/core/tools/task-run"
+import { DelegateTool } from "@gent/core/tools/delegate"
 import { SubagentRunnerService, AgentRegistry } from "@gent/core/domain/agent"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
@@ -172,20 +172,19 @@ describe("TaskUpdateTool", () => {
   })
 })
 
-describe("TaskRunTool", () => {
-  test("returns running status", async () => {
+describe("DelegateTool background mode", () => {
+  test("returns running status via background param", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         yield* setup
-        const created = yield* TaskCreateTool.execute(
+        return yield* DelegateTool.execute(
           {
-            subject: "Run analysis",
             agent: "explore" as const,
-            prompt: "analyze the codebase",
+            task: "analyze the codebase",
+            background: true,
           },
           ctx,
         )
-        return yield* TaskRunTool.execute({ taskId: created.taskId }, ctx)
       }).pipe(Effect.provide(layer)),
     )
     expect(result.taskId).toBeDefined()

@@ -187,12 +187,12 @@ describe("formatToolInput", () => {
     expect(formatToolInput("glob", { pattern: {}, path: "/foo" })).toBe("")
   })
 
-  test("formats task with correct fields", () => {
-    expect(formatToolInput("task", { agent: "explore", task: "find the bug" })).toBe(
+  test("formats delegate with correct fields", () => {
+    expect(formatToolInput("delegate", { agent: "explore", task: "find the bug" })).toBe(
       "explore:find the bug",
     )
     expect(
-      formatToolInput("task", {
+      formatToolInput("delegate", {
         tasks: [
           { agent: "a", task: "x" },
           { agent: "b", task: "y" },

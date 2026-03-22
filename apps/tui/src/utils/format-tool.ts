@@ -88,7 +88,7 @@ export function toolArgSummary(toolName: string, args: Record<string, unknown>):
       const action = typeof args["action"] === "string" ? args["action"] : ""
       return spec.length > 0 ? `${action} ${spec}`.trim() : action
     }
-    case "task": {
+    case "delegate": {
       const agent = typeof args["agent"] === "string" ? args["agent"] : undefined
       const task = typeof args["task"] === "string" ? args["task"] : undefined
       const tasks = Array.isArray(args["tasks"]) ? args["tasks"] : undefined
