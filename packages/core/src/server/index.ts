@@ -3,6 +3,7 @@ import { Config, Effect, Layer, Option, FileSystem, Path } from "effect"
 import { ToolRegistry } from "../domain/tool.js"
 import { Permission } from "../domain/permission.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { Skills } from "../domain/skills.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
@@ -166,6 +167,7 @@ export const createDependencies = (
   | ActorProcess
   | AskUserHandler
   | PromptHandler
+  | PromptPresenter
   | HandoffHandler
   | AuthStorage
   | AuthStore
@@ -257,6 +259,12 @@ export const createDependencies = (
   // PromptHandler requires EventStore
   const PromptHandlerLive = Layer.provide(PromptHandler.Live, BaseWithPermission)
 
+  // PromptPresenter requires PromptHandler + FileSystem + Path (from BunServices)
+  const PromptPresenterLive = Layer.provide(
+    PromptPresenter.Live,
+    Layer.merge(PromptHandlerLive, BaseWithPermission),
+  )
+
   // HandoffHandler requires EventStore
   const HandoffHandlerLive = Layer.provide(HandoffHandler.Live, BaseWithPermission)
 
@@ -315,6 +323,7 @@ export const createDependencies = (
     PermissionHandlerLive,
     ToolRunnerLive,
     PromptHandlerLive,
+    PromptPresenterLive,
     HandoffHandlerLive,
   )
 

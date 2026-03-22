@@ -1,6 +1,6 @@
-import { Effect, Schema, FileSystem, Path } from "effect"
+import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { PromptHandler } from "../domain/interaction-handlers.js"
+import { PromptPresenter } from "../domain/prompt-presenter.js"
 
 // Prompt Params — discriminated union on mode
 
@@ -57,18 +57,6 @@ const ReviewResult = Schema.Struct({
 
 export const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewResult])
 
-const slugify = (text: string): string =>
-  text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 40)
-
-const defaultPromptPath = (title: string | undefined, toolCallId: string) => {
-  const slug = title !== undefined ? slugify(title) : "prompt"
-  return `${process.cwd()}/.gent/prompts/${slug}-${toolCallId}.md`
-}
-
 export const PromptTool = defineTool({
   name: "prompt",
   action: "interact",
@@ -80,13 +68,12 @@ export const PromptTool = defineTool({
     "mode=review for content that should be persisted and can be edited by the user.",
   params: PromptParams,
   execute: Effect.fn("PromptTool.execute")(function* (params, ctx) {
-    const promptHandler = yield* PromptHandler
+    const presenter = yield* PromptPresenter
 
     if (params.mode === "present") {
-      yield* promptHandler.present({
+      yield* presenter.present({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
-        mode: "present",
         content: params.content,
         title: params.title,
       })
@@ -94,56 +81,27 @@ export const PromptTool = defineTool({
     }
 
     if (params.mode === "confirm") {
-      const decision = yield* promptHandler.present({
+      const decision = yield* presenter.confirm({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
-        mode: "confirm",
         content: params.content,
         title: params.title,
       })
-      return {
-        mode: "confirm" as const,
-        decision: decision === "yes" ? ("yes" as const) : ("no" as const),
-      }
+      return { mode: "confirm" as const, decision }
     }
 
-    // review mode — persist to disk
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-
-    const resolvedPath = path.resolve(defaultPromptPath(params.title, ctx.toolCallId))
-    const text =
-      params.title !== undefined ? `# ${params.title}\n\n${params.content}` : params.content
-
-    yield* fs.makeDirectory(path.dirname(resolvedPath), { recursive: true })
-    yield* fs.writeFileString(resolvedPath, text)
-
-    const decision = yield* promptHandler.present({
+    // review mode
+    const result = yield* presenter.review({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
-      mode: "review",
-      path: resolvedPath,
-      content: text,
+      content: params.content,
       title: params.title,
+      fileNameSeed: ctx.toolCallId,
     })
-
-    if (decision === "edit") {
-      // Read back the edited file
-      const editedContent = yield* fs
-        .readFileString(resolvedPath)
-        .pipe(Effect.catchEager(() => Effect.succeed(text)))
-      return {
-        mode: "review" as const,
-        decision: "edit" as const,
-        path: resolvedPath,
-        content: editedContent,
-      }
-    }
 
     return {
       mode: "review" as const,
-      decision: decision === "yes" ? ("yes" as const) : ("no" as const),
-      path: resolvedPath,
+      ...result,
     }
   }),
 })

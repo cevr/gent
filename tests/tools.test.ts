@@ -10,7 +10,7 @@ import { PromptTool } from "@gent/core/tools/prompt"
 import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { AgentRegistry, SubagentRunnerService } from "@gent/core/domain/agent"
-import { PromptHandler } from "@gent/core/domain/interaction-handlers"
+import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { TodoItem } from "@gent/core/domain/todo"
 
 const ctx: ToolContext = {
@@ -191,7 +191,7 @@ describe("AskUser Tool", () => {
 
 describe("Prompt Tool", () => {
   test("review mode: writes content and returns decision", async () => {
-    const layer = Layer.merge(PromptHandler.Test(["yes"]), PlatformLayer)
+    const layer = Layer.merge(PromptPresenter.Test([], ["yes"]), PlatformLayer)
 
     const result = await Effect.runPromise(
       PromptTool.execute({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
@@ -202,12 +202,12 @@ describe("Prompt Tool", () => {
     expect(result.mode).toBe("review")
     if (result.mode === "review") {
       expect(result.decision).toBe("yes")
-      expect(result.path).toContain(".gent/prompts/")
+      expect(result.path).toBe("/tmp/test-prompt.md")
     }
   })
 
   test("confirm mode: returns yes/no decision", async () => {
-    const layer = Layer.merge(PromptHandler.Test(["no"]), PlatformLayer)
+    const layer = Layer.merge(PromptPresenter.Test(["no"]), PlatformLayer)
 
     const result = await Effect.runPromise(
       PromptTool.execute({ mode: "confirm", content: "Proceed?" }, ctx).pipe(Effect.provide(layer)),
@@ -220,7 +220,7 @@ describe("Prompt Tool", () => {
   })
 
   test("present mode: returns shown status", async () => {
-    const layer = Layer.merge(PromptHandler.Test(), PlatformLayer)
+    const layer = Layer.merge(PromptPresenter.Test(), PlatformLayer)
 
     const result = await Effect.runPromise(
       PromptTool.execute({ mode: "present", content: "Info" }, ctx).pipe(Effect.provide(layer)),
