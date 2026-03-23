@@ -112,17 +112,18 @@ export interface PermissionCheckInput {
   readonly input: unknown
 }
 
-// Extension Hook Map
+// Hook maps
 
-export interface ExtensionHookMap {
+export interface ExtensionInterceptorMap {
   readonly "prompt.system": Interceptor<SystemPromptInput, string>
   readonly "agent.resolve": Interceptor<AgentResolveInput, AgentDefinition>
   readonly "tools.visible": Interceptor<ToolsVisibleInput, ReadonlyArray<AnyToolDefinition>>
   readonly "tool.execute": Interceptor<ToolExecuteInput, unknown>
   readonly "provider.request": Interceptor<ProviderRequestInput, ProviderRequest>
   readonly "permission.check": Interceptor<PermissionCheckInput, PermissionResult>
+}
 
-  // Lifecycle observers — reuse actual event class types from domain/event.ts
+export interface ExtensionObserverMap {
   readonly "session.start": Observer<SessionStarted>
   readonly "session.end": Observer<SessionEnded>
   readonly "handoff.before": Observer<HandoffPresented>
@@ -137,13 +138,18 @@ export interface ExtensionHookMap {
   readonly "message.received": Observer<MessageReceived>
 }
 
+export interface ExtensionHooks {
+  readonly interceptors?: Partial<ExtensionInterceptorMap>
+  readonly observers?: Partial<ExtensionObserverMap>
+}
+
 // Extension Setup — what an extension provides
 
 export interface ExtensionSetup {
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly promptFragments?: ReadonlyArray<SystemPromptFragment>
-  readonly hooks?: Partial<ExtensionHookMap>
+  readonly hooks?: ExtensionHooks
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly layer?: Layer.Layer<any, any, any>
 }

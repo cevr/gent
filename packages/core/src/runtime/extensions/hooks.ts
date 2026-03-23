@@ -1,41 +1,149 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Effect } from "effect"
 import type {
+  ExtensionHooks,
+  ExtensionInterceptorMap,
   ExtensionKind,
-  ExtensionHookMap,
-  Interceptor,
+  ExtensionObserverMap,
   LoadedExtension,
-  Observer,
 } from "../../domain/extension.js"
 
-// Compiled Hook Map — pre-built middleware chains and observer dispatchers
-//
-// Uses `any` for runtime dispatch since hooks are heterogeneous.
-// Type safety is enforced at the registration site (defineExtension / ExtensionHookMap).
-
 export interface CompiledHookMap {
-  readonly runInterceptor: <K extends keyof ExtensionHookMap>(
+  readonly runInterceptor: <K extends keyof ExtensionInterceptorMap>(
     key: K,
-    input: Parameters<ExtensionHookMap[K]>[0],
-    base: (input: Parameters<ExtensionHookMap[K]>[0]) => ReturnType<ExtensionHookMap[K]>,
-  ) => ReturnType<ExtensionHookMap[K]>
+    input: Parameters<ExtensionInterceptorMap[K]>[0],
+    base: (
+      input: Parameters<ExtensionInterceptorMap[K]>[0],
+    ) => ReturnType<ExtensionInterceptorMap[K]>,
+  ) => ReturnType<ExtensionInterceptorMap[K]>
 
-  readonly notifyObservers: <K extends keyof ExtensionHookMap>(
+  readonly notifyObservers: <K extends keyof ExtensionObserverMap>(
     key: K,
-    event: Parameters<ExtensionHookMap[K]>[0],
+    event: Parameters<ExtensionObserverMap[K]>[0],
   ) => Effect.Effect<void, never, never>
 }
 
 const SCOPE_ORDER: Record<ExtensionKind, number> = { builtin: 0, user: 1, project: 2 }
 
-const INTERCEPTOR_KEYS = new Set<string>([
+const INTERCEPTOR_KEYS = [
   "prompt.system",
   "agent.resolve",
   "tools.visible",
   "tool.execute",
   "provider.request",
   "permission.check",
-])
+] as const satisfies ReadonlyArray<keyof ExtensionInterceptorMap>
+
+const OBSERVER_KEYS = [
+  "session.start",
+  "session.end",
+  "handoff.before",
+  "handoff.after",
+  "agent.switch",
+  "stream.start",
+  "stream.end",
+  "turn.end",
+  "tool.call",
+  "tool.succeeded",
+  "tool.failed",
+  "message.received",
+] as const satisfies ReadonlyArray<keyof ExtensionObserverMap>
+
+const emptyInterceptors = (): {
+  [K in keyof ExtensionInterceptorMap]: Array<ExtensionInterceptorMap[K]>
+} => ({
+  "prompt.system": [],
+  "agent.resolve": [],
+  "tools.visible": [],
+  "tool.execute": [],
+  "provider.request": [],
+  "permission.check": [],
+})
+
+const emptyObservers = (): {
+  [K in keyof ExtensionObserverMap]: Array<ExtensionObserverMap[K]>
+} => ({
+  "session.start": [],
+  "session.end": [],
+  "handoff.before": [],
+  "handoff.after": [],
+  "agent.switch": [],
+  "stream.start": [],
+  "stream.end": [],
+  "turn.end": [],
+  "tool.call": [],
+  "tool.succeeded": [],
+  "tool.failed": [],
+  "message.received": [],
+})
+
+const appendHooks = (
+  hooks: ExtensionHooks | undefined,
+  interceptors: ReturnType<typeof emptyInterceptors>,
+  observers: ReturnType<typeof emptyObservers>,
+) => {
+  const interceptorMap = hooks?.interceptors
+  if (interceptorMap !== undefined) {
+    for (const key of INTERCEPTOR_KEYS) {
+      const hook = interceptorMap[key]
+      if (hook !== undefined) addInterceptor(interceptors, key, hook)
+    }
+  }
+
+  const observerMap = hooks?.observers
+  if (observerMap !== undefined) {
+    for (const key of OBSERVER_KEYS) {
+      const hook = observerMap[key]
+      if (hook !== undefined) addObserver(observers, key, hook)
+    }
+  }
+}
+
+const addInterceptor = <K extends keyof ExtensionInterceptorMap>(
+  interceptors: ReturnType<typeof emptyInterceptors>,
+  key: K,
+  hook: ExtensionInterceptorMap[K],
+) => {
+  interceptors[key].push(hook)
+}
+
+const addObserver = <K extends keyof ExtensionObserverMap>(
+  observers: ReturnType<typeof emptyObservers>,
+  key: K,
+  hook: ExtensionObserverMap[K],
+) => {
+  observers[key].push(hook)
+}
+
+const composeInterceptors = <K extends keyof ExtensionInterceptorMap>(
+  chain: Array<ExtensionInterceptorMap[K]>,
+  base: (
+    input: Parameters<ExtensionInterceptorMap[K]>[0],
+  ) => ReturnType<ExtensionInterceptorMap[K]>,
+) => {
+  let composed: (
+    input: Parameters<ExtensionInterceptorMap[K]>[0],
+  ) => ReturnType<ExtensionInterceptorMap[K]> = base
+  for (const interceptor of chain) {
+    const prev = composed
+    composed = ((nextInput) =>
+      interceptor(nextInput as never, prev as never) as ReturnType<
+        ExtensionInterceptorMap[K]
+      >) as typeof composed
+  }
+  return composed
+}
+
+const notifyObserverList = <K extends keyof ExtensionObserverMap>(
+  list: Array<ExtensionObserverMap[K]>,
+  event: Parameters<ExtensionObserverMap[K]>[0],
+) =>
+  Effect.forEach(
+    list as Array<
+      (input: Parameters<ExtensionObserverMap[K]>[0]) => Effect.Effect<void, never, never>
+    >,
+    (observer) => observer(event).pipe(Effect.catchDefect(() => Effect.void)),
+    { discard: true },
+  )
 
 /**
  * Compile hooks from loaded extensions into a CompiledHookMap.
@@ -50,54 +158,32 @@ export const compileHooks = (extensions: ReadonlyArray<LoadedExtension>): Compil
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-  const interceptorChains = new Map<string, Array<Interceptor<unknown, unknown, never, never>>>()
-  const observerLists = new Map<string, Array<Observer<unknown, never, never>>>()
+  const interceptorChains = emptyInterceptors()
+  const observerLists = emptyObservers()
 
   for (const ext of sorted) {
-    const hooks = ext.setup.hooks
-    if (hooks === undefined) continue
-
-    for (const [key, hook] of Object.entries(hooks)) {
-      if (hook === undefined) continue
-      if (INTERCEPTOR_KEYS.has(key)) {
-        const chain = interceptorChains.get(key) ?? []
-        chain.push(hook as Interceptor<unknown, unknown, never, never>)
-        interceptorChains.set(key, chain)
-      } else {
-        const list = observerLists.get(key) ?? []
-        list.push(hook as Observer<unknown, never, never>)
-        observerLists.set(key, list)
-      }
-    }
+    appendHooks(ext.setup.hooks, interceptorChains, observerLists)
   }
 
-  const runInterceptor = <K extends keyof ExtensionHookMap>(
+  const runInterceptor = <K extends keyof ExtensionInterceptorMap>(
     key: K,
-    input: Parameters<ExtensionHookMap[K]>[0],
-    base: (input: Parameters<ExtensionHookMap[K]>[0]) => ReturnType<ExtensionHookMap[K]>,
-  ): ReturnType<ExtensionHookMap[K]> => {
-    const chain = interceptorChains.get(key)
-    if (chain === undefined || chain.length === 0) return base(input)
-    // Left fold: builtin wraps base, project wraps that → project outermost
-    let composed = base as (i: unknown) => Effect.Effect<unknown, never, never>
-    for (const interceptor of chain) {
-      const prev = composed
-      composed = (i: unknown) => interceptor(i, prev) as Effect.Effect<unknown, never, never>
-    }
-    return composed(input) as ReturnType<ExtensionHookMap[K]>
+    input: Parameters<ExtensionInterceptorMap[K]>[0],
+    base: (
+      input: Parameters<ExtensionInterceptorMap[K]>[0],
+    ) => ReturnType<ExtensionInterceptorMap[K]>,
+  ): ReturnType<ExtensionInterceptorMap[K]> => {
+    const chain = interceptorChains[key] as Array<ExtensionInterceptorMap[K]>
+    if (chain.length === 0) return base(input)
+    return composeInterceptors(chain, base)(input)
   }
 
-  const notifyObservers = <K extends keyof ExtensionHookMap>(
+  const notifyObservers = <K extends keyof ExtensionObserverMap>(
     key: K,
-    event: Parameters<ExtensionHookMap[K]>[0],
+    event: Parameters<ExtensionObserverMap[K]>[0],
   ): Effect.Effect<void, never, never> => {
-    const list = observerLists.get(key)
-    if (list === undefined || list.length === 0) return Effect.void
-    return Effect.forEach(
-      list,
-      (observer) => observer(event).pipe(Effect.catchDefect(() => Effect.void)),
-      { discard: true },
-    )
+    const list = observerLists[key] as Array<ExtensionObserverMap[K]>
+    if (list.length === 0) return Effect.void
+    return notifyObserverList(list, event)
   }
 
   return { runInterceptor, notifyObservers }

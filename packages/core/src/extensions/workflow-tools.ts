@@ -11,14 +11,16 @@ export const WorkflowToolsExtension = defineExtension({
     Effect.succeed({
       tools: [LoopTool, PlanTool, AuditTool],
       hooks: {
-        "tools.visible": (
-          input: ToolsVisibleInput,
-          next: (i: ToolsVisibleInput) => Effect.Effect<ReadonlyArray<AnyToolDefinition>>,
-        ) => {
-          if (input.runContext.tags?.includes("loop-evaluation")) {
-            return next({ ...input, tools: [...input.tools, LoopEvaluationTool] })
-          }
-          return next(input)
+        interceptors: {
+          "tools.visible": (
+            input: ToolsVisibleInput,
+            next: (i: ToolsVisibleInput) => Effect.Effect<ReadonlyArray<AnyToolDefinition>>,
+          ) => {
+            if (input.runContext.tags?.includes("loop-evaluation")) {
+              return next({ ...input, tools: [...input.tools, LoopEvaluationTool] })
+            }
+            return next(input)
+          },
         },
       },
     }),

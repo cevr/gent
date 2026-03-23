@@ -95,7 +95,7 @@ describe("BuiltinExtensions", () => {
     // loop_evaluation should NOT be in the base tool set — it's hook-injected
     expect(allToolNames.has("loop_evaluation")).toBe(false)
     // But the hooks should exist
-    const hookKeys = results.flatMap((r) => Object.keys(r.setup.hooks ?? {}))
+    const hookKeys = results.flatMap((r) => Object.keys(r.setup.hooks?.interceptors ?? {}))
     expect(hookKeys).toContain("tools.visible")
   })
 })

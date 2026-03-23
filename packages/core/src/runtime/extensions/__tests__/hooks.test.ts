@@ -3,18 +3,22 @@ import { Effect, Ref } from "effect"
 import { Agents } from "../../../domain/agent.js"
 import { SessionStarted } from "../../../domain/event.js"
 import type { BranchId, SessionId } from "../../../domain/ids.js"
-import type { LoadedExtension } from "../../../domain/extension.js"
+import type {
+  ExtensionHooks,
+  LoadedExtension,
+  SystemPromptInput,
+} from "../../../domain/extension.js"
 import { compileHooks } from "../hooks.js"
 
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
-  hooks: Record<string, unknown>,
+  hooks: ExtensionHooks,
 ): LoadedExtension => ({
   manifest: { id },
   kind,
   sourcePath: `/test/${id}`,
-  setup: { hooks: hooks as never },
+  setup: { hooks },
 })
 
 describe("compileHooks", () => {
@@ -33,10 +37,12 @@ describe("compileHooks", () => {
 
     test("single interceptor wraps base", async () => {
       const ext = makeExt("a", "builtin", {
-        "prompt.system": (
-          input: { basePrompt: string },
-          next: (i: typeof input) => Effect.Effect<string>,
-        ) => next({ ...input, basePrompt: `[wrapped] ${input.basePrompt}` }),
+        interceptors: {
+          "prompt.system": (
+            input: SystemPromptInput,
+            next: (i: SystemPromptInput) => Effect.Effect<string>,
+          ) => next({ ...input, basePrompt: `[wrapped] ${input.basePrompt}` }),
+        },
       })
 
       const compiled = compileHooks([ext])
@@ -54,26 +60,36 @@ describe("compileHooks", () => {
       const log: string[] = []
 
       const builtinExt = makeExt("a-builtin", "builtin", {
-        "prompt.system": (input: unknown, next: (i: unknown) => Effect.Effect<string>) => {
-          log.push("builtin-before")
-          return next(input).pipe(
-            Effect.map((r) => {
-              log.push("builtin-after")
-              return r
-            }),
-          )
+        interceptors: {
+          "prompt.system": (
+            input: SystemPromptInput,
+            next: (i: SystemPromptInput) => Effect.Effect<string>,
+          ) => {
+            log.push("builtin-before")
+            return next(input).pipe(
+              Effect.map((r) => {
+                log.push("builtin-after")
+                return r
+              }),
+            )
+          },
         },
       })
 
       const projectExt = makeExt("b-project", "project", {
-        "prompt.system": (input: unknown, next: (i: unknown) => Effect.Effect<string>) => {
-          log.push("project-before")
-          return next(input).pipe(
-            Effect.map((r) => {
-              log.push("project-after")
-              return r
-            }),
-          )
+        interceptors: {
+          "prompt.system": (
+            input: SystemPromptInput,
+            next: (i: SystemPromptInput) => Effect.Effect<string>,
+          ) => {
+            log.push("project-before")
+            return next(input).pipe(
+              Effect.map((r) => {
+                log.push("project-after")
+                return r
+              }),
+            )
+          },
         },
       })
 
@@ -92,16 +108,26 @@ describe("compileHooks", () => {
       const log: string[] = []
 
       const extB = makeExt("b", "builtin", {
-        "prompt.system": (input: unknown, next: (i: unknown) => Effect.Effect<string>) => {
-          log.push("b")
-          return next(input)
+        interceptors: {
+          "prompt.system": (
+            input: SystemPromptInput,
+            next: (i: SystemPromptInput) => Effect.Effect<string>,
+          ) => {
+            log.push("b")
+            return next(input)
+          },
         },
       })
 
       const extA = makeExt("a", "builtin", {
-        "prompt.system": (input: unknown, next: (i: unknown) => Effect.Effect<string>) => {
-          log.push("a")
-          return next(input)
+        interceptors: {
+          "prompt.system": (
+            input: SystemPromptInput,
+            next: (i: SystemPromptInput) => Effect.Effect<string>,
+          ) => {
+            log.push("a")
+            return next(input)
+          },
         },
       })
 
@@ -135,13 +161,17 @@ describe("compileHooks", () => {
       const ref = await Effect.runPromise(Ref.make<string[]>([]))
 
       const ext1 = makeExt("a", "builtin", {
-        "session.start": (event: { sessionId: string }) =>
-          Ref.update(ref, (arr) => [...arr, `a:${event.sessionId}`]),
+        observers: {
+          "session.start": (event: { sessionId: string }) =>
+            Ref.update(ref, (arr) => [...arr, `a:${event.sessionId}`]),
+        },
       })
 
       const ext2 = makeExt("b", "user", {
-        "session.start": (event: { sessionId: string }) =>
-          Ref.update(ref, (arr) => [...arr, `b:${event.sessionId}`]),
+        observers: {
+          "session.start": (event: { sessionId: string }) =>
+            Ref.update(ref, (arr) => [...arr, `b:${event.sessionId}`]),
+        },
       })
 
       const compiled = compileHooks([ext1, ext2])
@@ -163,11 +193,15 @@ describe("compileHooks", () => {
       const ref = await Effect.runPromise(Ref.make<string[]>([]))
 
       const extBad = makeExt("bad", "builtin", {
-        "session.start": () => Effect.die("boom"),
+        observers: {
+          "session.start": () => Effect.die("boom"),
+        },
       })
 
       const extGood = makeExt("good", "user", {
-        "session.start": () => Ref.update(ref, (arr) => [...arr, "good"]),
+        observers: {
+          "session.start": () => Ref.update(ref, (arr) => [...arr, "good"]),
+        },
       })
 
       const compiled = compileHooks([extBad, extGood])
