@@ -211,6 +211,7 @@ const makeDebugCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
         dbPath,
         persistenceMode: options?.debug === true ? "memory" : "disk",
         providerMode: options?.debug === true ? "debug-scripted" : "live",
+        actorRuntime: "local",
         ...(authFilePath !== undefined ? { authFilePath } : {}),
         ...(authKeyPath !== undefined ? { authKeyPath } : {}),
       }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))

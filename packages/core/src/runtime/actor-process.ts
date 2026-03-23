@@ -453,6 +453,11 @@ const SendToolResultRpc = Rpc.make("SendToolResult", {
   success: Schema.Void,
   error: ActorProcessError,
 })
+const InvokeToolRpc = Rpc.make("InvokeTool", {
+  payload: InvokeToolPayload.fields,
+  success: Schema.Void,
+  error: ActorProcessError,
+})
 const InterruptRpc = Rpc.make("Interrupt", {
   payload: InterruptPayload.fields,
   success: Schema.Void,
@@ -487,6 +492,7 @@ const GetMetricsRpc = Rpc.make("GetMetrics", {
 const actorProcessRpcGroup = RpcGroup.make(
   SendUserMessageRpc,
   SendToolResultRpc,
+  InvokeToolRpc,
   InterruptRpc,
   DrainQueuedMessagesRpc,
   GetQueuedMessagesRpc,
@@ -505,6 +511,7 @@ export const SessionActorEntityLive = SessionActorEntity.toLayer(
     return SessionActorEntity.of({
       SendUserMessage: (envelope) => actorProcess.sendUserMessage(envelope.payload),
       SendToolResult: (envelope) => actorProcess.sendToolResult(envelope.payload),
+      InvokeTool: (envelope) => actorProcess.invokeTool(envelope.payload),
       Interrupt: (envelope) => actorProcess.interrupt(envelope.payload),
       DrainQueuedMessages: (envelope) => actorProcess.drainQueuedMessages(envelope.payload),
       GetQueuedMessages: (envelope) => actorProcess.getQueuedMessages(envelope.payload),
@@ -536,9 +543,9 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
           (client(input)["SendToolResult"](input) as Effect.Effect<void, ActorProcessError>).pipe(
             Effect.catchCause((cause) => Effect.fail(wrapError("SendToolResult failed", cause))),
           ),
-        invokeTool: () =>
-          Effect.fail(
-            new ActorProcessError({ message: "invokeTool not supported in cluster mode" }),
+        invokeTool: (input) =>
+          (client(input)["InvokeTool"](input) as Effect.Effect<void, ActorProcessError>).pipe(
+            Effect.catchCause((cause) => Effect.fail(wrapError("InvokeTool failed", cause))),
           ),
         interrupt: (input) =>
           (client(input)["Interrupt"](input) as Effect.Effect<void, ActorProcessError>).pipe(

@@ -35,6 +35,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     port: Number.isFinite(parsedPort) ? parsedPort : 3000,
     cwd: Option.getOrElse(cwdOpt, () => process.cwd()),
     home,
+    dataDir,
     dbPath: Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db")),
     authFilePath: joinPath(dataDir, "auth.json.enc"),
     authKeyPath: joinPath(dataDir, "auth.key"),
@@ -117,6 +118,10 @@ const program = Effect.gen(function* () {
     authKeyPath: config.authKeyPath,
     persistenceMode: config.persistenceMode,
     providerMode: config.providerMode,
+    actorRuntime: "cluster" as const,
+    clusterDbPath:
+      config.persistenceMode === "memory" ? ":memory:" : joinPath(config.dataDir, "cluster.db"),
+    clusterStorage: config.persistenceMode === "memory" ? ("memory" as const) : ("sql" as const),
   }).pipe(
     Layer.provide(PlatformLayer),
     Layer.provide(GentLogger),

@@ -1,6 +1,4 @@
-import type { PlatformError } from "effect"
 import { Effect, FileSystem, Layer, Path } from "effect"
-import type { SubagentRunnerService } from "../domain/agent.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -22,13 +20,19 @@ import {
   SubagentRunnerConfig,
   SubprocessRunner,
 } from "../runtime/agent/subagent-runner.js"
+import { ClusterSingleLive, type ClusterStorage } from "../runtime/cluster-layer.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
-import { LocalActorProcessLive, type ActorProcess } from "../runtime/actor-process.js"
+import {
+  ClusterActorProcessLive,
+  LocalActorProcessLive,
+  SessionActorEntityLocalLive,
+} from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { SqliteClientLive } from "../runtime/sql-client.js"
 import { TaskService } from "../runtime/task-service.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -46,6 +50,9 @@ export interface DependenciesConfig {
   skillsDirs?: ReadonlyArray<string>
   persistenceMode?: "disk" | "memory"
   providerMode?: "live" | "debug-scripted"
+  actorRuntime?: "local" | "cluster"
+  clusterDbPath?: string
+  clusterStorage?: ClusterStorage
 }
 
 const loadBuiltinExtensions = (cwd: string): LoadedExtension[] =>
@@ -83,36 +90,7 @@ const makeExtensionRegistryLive = (config: DependenciesConfig) =>
     }),
   )
 
-export const createDependencies = (
-  config: DependenciesConfig,
-): Layer.Layer<
-  | Storage
-  | Provider
-  | ProviderFactory
-  | ExtensionRegistry
-  | SubagentRunnerService
-  | EventStore
-  | Permission
-  | Skills
-  | ConfigService
-  | ModelRegistry
-  | TaskService
-  | PermissionHandler
-  | AgentLoop
-  | ActorProcess
-  | AskUserHandler
-  | PromptHandler
-  | PromptPresenter
-  | HandoffHandler
-  | AuthStorage
-  | AuthStore
-  | AuthGuard
-  | ProviderAuth
-  | FileLockService
-  | RuntimePlatform,
-  PlatformError.PlatformError,
-  FileSystem.FileSystem | Path.Path
-> => {
+export const createDependencies = (config: DependenciesConfig) => {
   const runtimePlatformLive = RuntimePlatform.Live({
     cwd: config.cwd,
     home: config.home,
@@ -121,6 +99,7 @@ export const createDependencies = (
 
   const persistenceMode = config.persistenceMode ?? "disk"
   const providerMode = config.providerMode ?? "live"
+  const actorRuntime = config.actorRuntime ?? "local"
 
   const storageLive =
     persistenceMode === "memory" ? Storage.Memory() : Storage.Live(config.dbPath ?? ".gent/data.db")
@@ -253,7 +232,24 @@ export const createDependencies = (
 
   const taskServiceLive = Layer.provide(TaskService.Live, Layer.merge(allDeps, agentRuntimeLive))
   const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, taskServiceLive)
-  const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
 
+  if (actorRuntime === "cluster") {
+    const clusterSqliteLive = SqliteClientLive({
+      filename:
+        config.clusterDbPath ?? (persistenceMode === "memory" ? ":memory:" : ".gent/cluster.db"),
+    })
+    const clusterRuntimeLive = ClusterSingleLive({
+      runnerStorage: config.clusterStorage ?? (persistenceMode === "memory" ? "memory" : "sql"),
+    }).pipe(Layer.provide(clusterSqliteLive))
+    const entityLive = SessionActorEntityLocalLive.pipe(
+      Layer.provide(allWithRuntime),
+      Layer.provideMerge(clusterRuntimeLive),
+    )
+    const clusterSupportLive = Layer.merge(clusterRuntimeLive, entityLive)
+    const actorProcessLive = Layer.provide(ClusterActorProcessLive, clusterSupportLive)
+    return Layer.mergeAll(allWithRuntime, clusterSupportLive, actorProcessLive)
+  }
+
+  const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
   return Layer.mergeAll(allWithRuntime, actorProcessLive)
 }

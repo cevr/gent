@@ -11,16 +11,22 @@ import {
   PromptHandler,
   HandoffHandler,
 } from "@gent/core/domain/interaction-handlers"
-import type { SessionId } from "@gent/core/domain/ids"
-import type { Message } from "@gent/core/domain/message"
+import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { Branch, type Message, Session, ToolResultPart } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
 import { SessionQueries } from "@gent/core/server/session-queries"
 import { SessionCommands } from "@gent/core/server/session-commands"
-import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
+import {
+  ActorProcess,
+  ClusterActorProcessLive,
+  LocalActorProcessLive,
+  SessionActorEntityLocalLive,
+} from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { ClusterMemoryLive } from "@gent/core/runtime/cluster-layer"
 import { ConfigService } from "@gent/core/runtime/config-service"
 
 describe("Skills System", () => {
@@ -326,7 +332,26 @@ describe("Session Tree", () => {
 })
 
 describe("SessionCommands → ActorProcess integration", () => {
-  const makeIntegrationLayer = (runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>) => {
+  const makeActorProcessLayer = (
+    storageDeps: Layer.Layer<Storage | EventStore | AgentLoop | ToolRunner, never, never>,
+    mode: "local" | "cluster",
+  ) => {
+    if (mode === "cluster") {
+      const entityLive = SessionActorEntityLocalLive.pipe(
+        Layer.provide(storageDeps),
+        Layer.provideMerge(ClusterMemoryLive),
+      )
+      const clusterSupport = Layer.merge(ClusterMemoryLive, entityLive)
+      const actorProcessLayer = Layer.provide(ClusterActorProcessLive, clusterSupport)
+      return Layer.merge(clusterSupport, actorProcessLayer)
+    }
+    return Layer.provide(LocalActorProcessLive, storageDeps)
+  }
+
+  const makeIntegrationLayer = (
+    runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>,
+    mode: "local" | "cluster" = "local",
+  ) => {
     const agentLoopLayer = Layer.effect(
       AgentLoop,
       Effect.gen(function* () {
@@ -357,7 +382,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       agentLoopLayer,
       ToolRunner.Test(),
     )
-    const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
+    const actorProcessLayer = makeActorProcessLayer(storageDeps, mode)
     const baseWithActorProcess = Layer.mergeAll(
       storageDeps,
       actorProcessLayer,
@@ -394,6 +419,31 @@ describe("SessionCommands → ActorProcess integration", () => {
         expect(entries.length).toBe(1)
         expect(entries[0]!.sessionId).toBe(session.sessionId)
         expect(entries[0]!.content).toBe("hello from createSession")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("sendMessage reaches AgentLoop.run through cluster actor", async () => {
+    const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
+    const layer = makeIntegrationLayer(runLog, "cluster")
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const session = yield* commands.createSession({ name: "Cluster Send Test" })
+
+        yield* commands.sendMessage({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          content: "hello from clustered sendMessage",
+        })
+
+        yield* Effect.sleep("50 millis")
+
+        const entries = yield* Ref.get(runLog)
+        expect(entries.length).toBe(1)
+        expect(entries[0]!.sessionId).toBe(session.sessionId)
+        expect(entries[0]!.content).toBe("hello from clustered sendMessage")
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -474,6 +524,81 @@ describe("SessionCommands → ActorProcess integration", () => {
         })
 
         expect(steered).toBe(true)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("invokeTool works through cluster actor", async () => {
+    let toolCalls = 0
+
+    const eventStoreLayer = EventStore.Test()
+    const storageLayer = Storage.Test()
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+    })
+    const toolRunnerLayer = Layer.succeed(ToolRunner, {
+      run: (toolCall) =>
+        Effect.succeed(
+          new ToolResultPart({
+            type: "tool-result",
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            output: { type: "json", value: { ok: true } },
+          }),
+        ).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              toolCalls += 1
+            }),
+          ),
+        ),
+    })
+    const storageDeps = Layer.mergeAll(
+      storageLayer,
+      eventStoreLayer,
+      agentLoopLayer,
+      toolRunnerLayer,
+    )
+    const actorProcessLayer = makeActorProcessLayer(storageDeps, "cluster")
+    const layer = Layer.mergeAll(storageDeps, actorProcessLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const actorProcess = yield* ActorProcess
+
+        const session = new Session({
+          id: "session-cluster" as SessionId,
+          name: "Cluster Invoke Test",
+          cwd: process.cwd(),
+          bypass: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        const branch = new Branch({
+          id: "branch-cluster" as BranchId,
+          sessionId: session.id,
+          createdAt: new Date(),
+        })
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        yield* actorProcess.invokeTool({
+          sessionId: session.id,
+          branchId: branch.id,
+          toolName: "todo_read",
+          input: {},
+        })
+
+        yield* Effect.sleep("50 millis")
+
+        const messages = yield* storage.listMessages(branch.id)
+        expect(toolCalls).toBe(1)
+        expect(messages.some((message) => message.role === "assistant")).toBe(true)
+        expect(messages.some((message) => message.role === "tool")).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
   })
