@@ -1,7 +1,7 @@
 import { Effect, Schedule, Schema } from "effect"
 import * as os from "node:os"
 import { ProviderAuthError } from "../provider-auth"
-import { AuthOauth, type AuthStoreService } from "../../domain/auth-store.js"
+import { AuthOauth } from "../../domain/auth-store.js"
 
 // ── Claude Code Keychain Reader ──
 
@@ -506,8 +506,8 @@ let cachedCredentialsAt = 0
 const isCredentialUsable = (creds: ClaudeCredentials): boolean =>
   creds.expiresAt > Date.now() + 60_000
 
-const getCachedCredentials = (
-  authStore: AuthStoreService,
+export const getCachedCredentials = (
+  persistOauth: (auth: AuthOauth) => Effect.Effect<void>,
 ): Effect.Effect<ClaudeCredentials | null> =>
   Effect.gen(function* () {
     const now = Date.now()
@@ -541,17 +541,14 @@ const getCachedCredentials = (
         return null
       }
       // Update store with refreshed creds
-      yield* authStore
-        .set(
-          "anthropic",
-          new AuthOauth({
-            type: "oauth",
-            access: refreshed.accessToken,
-            refresh: refreshed.refreshToken,
-            expires: refreshed.expiresAt,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
+      yield* persistOauth(
+        new AuthOauth({
+          type: "oauth",
+          access: refreshed.accessToken,
+          refresh: refreshed.refreshToken,
+          expires: refreshed.expiresAt,
+        }),
+      ).pipe(Effect.catchEager(() => Effect.void))
       cachedCredentials = refreshed
       cachedCredentialsAt = now
       return refreshed
@@ -562,9 +559,11 @@ const getCachedCredentials = (
     return result
   })
 
-export const createAnthropicKeychainFetch = (authStore: AuthStoreService): typeof fetch => {
+export const createAnthropicKeychainFetch = (
+  loadCredentials: () => Promise<ClaudeCredentials | null>,
+): typeof fetch => {
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const latest = await Effect.runPromise(getCachedCredentials(authStore))
+    const latest = await loadCredentials()
     if (latest === null) {
       throw new Error(
         "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",

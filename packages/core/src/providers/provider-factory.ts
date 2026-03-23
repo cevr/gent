@@ -6,11 +6,19 @@ import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createMistral } from "@ai-sdk/mistral"
 import { fromIni } from "@aws-sdk/credential-providers"
-import { AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
+import { AuthStore, type AuthInfo } from "../domain/auth-store.js"
 import { SUPPORTED_PROVIDERS } from "../domain/model.js"
 import { ProviderError } from "./provider"
-import { OPENAI_OAUTH_ALLOWED_MODELS, createOpenAIOAuthFetch } from "./oauth/openai-oauth"
-import { createAnthropicKeychainFetch, initAnthropicKeychainEnv } from "./oauth/anthropic-keychain"
+import {
+  OPENAI_OAUTH_ALLOWED_MODELS,
+  createOpenAIOAuthFetch,
+  loadOpenAIOAuth,
+} from "./oauth/openai-oauth"
+import {
+  createAnthropicKeychainFetch,
+  getCachedCredentials,
+  initAnthropicKeychainEnv,
+} from "./oauth/anthropic-keychain"
 
 type ProviderApi =
   | "anthropic"
@@ -37,7 +45,7 @@ export interface ProviderFactoryService {
 }
 
 // Test auth storage (no-op)
-const testAuthStorage: AuthStoreService = {
+const testAuthStorage = {
   get: () => Effect.sync(() => undefined as AuthInfo | undefined),
   set: () => Effect.void,
   remove: () => Effect.void,
@@ -63,28 +71,19 @@ export class ProviderFactory extends ServiceMap.Service<ProviderFactory, Provide
       const cliVersion = yield* readEnv("ANTHROPIC_CLI_VERSION")
       const userAgent = yield* readEnv("ANTHROPIC_USER_AGENT")
       initAnthropicKeychainEnv({ betaFlags, cliVersion, userAgent })
-
-      const authStore = yield* AuthStore
-      return makeProviderFactory(authStore)
+      return yield* makeProviderFactory()
     }),
   )
 
-  static Test: Layer.Layer<ProviderFactory> = Layer.succeed(
-    ProviderFactory,
-    makeProviderFactory(testAuthStorage),
+  static Test: Layer.Layer<ProviderFactory> = Layer.provide(
+    Layer.effect(ProviderFactory, makeProviderFactory()),
+    Layer.succeed(AuthStore, testAuthStorage),
   )
 }
 
-// Resolve auth: AuthStore only (curated, no env override)
-const resolveAuth = (
-  providerName: string,
-  auth: AuthStoreService,
-): Effect.Effect<AuthInfo | undefined> =>
-  auth
-    .get(providerName)
-    .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
-
 type ProviderClient = (modelName: string) => LanguageModel
+type AnthropicCredentialLoader = Parameters<typeof createAnthropicKeychainFetch>[0]
+type OpenAioAuthLoader = Parameters<typeof createOpenAIOAuthFetch>[0]
 
 const createOpenAICompatibleClient = (
   baseUrl: string | undefined,
@@ -111,28 +110,28 @@ const createBedrockClient = (region: string | undefined) =>
   })
 
 const createAnthropicClient = (
-  authStore: AuthStoreService,
+  loadCredentials: AnthropicCredentialLoader,
   auth: AuthInfo | undefined,
   apiKey: { apiKey: string } | undefined,
 ) => {
   if (auth?.type === "oauth") {
     return createAnthropic({
       apiKey: "oauth-placeholder",
-      fetch: createAnthropicKeychainFetch(authStore),
+      fetch: createAnthropicKeychainFetch(loadCredentials),
     })
   }
   return createAnthropic(apiKey)
 }
 
 const createOpenAIClient = (
-  authStore: AuthStoreService,
+  loadOauth: OpenAioAuthLoader,
   auth: AuthInfo | undefined,
   apiKey: { apiKey: string } | undefined,
 ) => {
   if (auth?.type === "oauth") {
     const oauthClient = createOpenAI({
       apiKey: "oauth",
-      fetch: createOpenAIOAuthFetch(authStore),
+      fetch: createOpenAIOAuthFetch(loadOauth),
       headers: {
         originator: "gent",
       },
@@ -145,7 +144,8 @@ const createOpenAIClient = (
 // Create AI SDK provider client
 const createProviderClient = (
   api: ProviderApi,
-  authStore: AuthStoreService,
+  loadCredentials: AnthropicCredentialLoader,
+  loadOauth: OpenAioAuthLoader,
   auth: AuthInfo | undefined,
   apiKey: string | undefined,
   baseUrl: string | undefined,
@@ -154,9 +154,9 @@ const createProviderClient = (
   const resolvedApiKey = apiKey !== undefined && apiKey !== "" ? { apiKey } : undefined
   switch (api) {
     case "anthropic":
-      return createAnthropicClient(authStore, auth, resolvedApiKey)
+      return createAnthropicClient(loadCredentials, auth, resolvedApiKey)
     case "openai":
-      return createOpenAIClient(authStore, auth, resolvedApiKey)
+      return createOpenAIClient(loadOauth, auth, resolvedApiKey)
     case "openai-compatible":
       return createOpenAICompatibleClient(baseUrl, resolvedApiKey)
     case "azure-openai":
@@ -196,54 +196,90 @@ const getBuiltinApi = (providerId: string): ProviderApi | undefined => {
 }
 
 // Factory implementation
-function makeProviderFactory(auth: AuthStoreService): ProviderFactoryService {
-  return {
-    getModel: Effect.fn("ProviderFactory.getModel")(function* (modelId: string) {
-      const parsed = parseModelId(modelId)
-      if (parsed === undefined) {
-        return yield* new ProviderError({
-          message: "Invalid model id (expected provider/model)",
-          model: modelId,
-        })
-      }
-      const [providerName, modelName] = parsed
+function makeProviderFactory(): Effect.Effect<ProviderFactoryService, never, AuthStore> {
+  return Effect.gen(function* () {
+    const authStore = yield* AuthStore
+    const resolveAuthFromStore = (providerName: string) =>
+      authStore
+        .get(providerName)
+        .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
 
-      const api = getBuiltinApi(providerName)
-      if (api === undefined) {
-        return yield* new ProviderError({
-          message: `Unknown provider: ${providerName}`,
-          model: modelId,
-        })
-      }
+    const loadAnthropicCredentials: AnthropicCredentialLoader = () =>
+      Effect.runPromise(
+        getCachedCredentials((auth) =>
+          authStore.set("anthropic", auth).pipe(Effect.catchEager(() => Effect.void)),
+        ),
+      )
 
-      const authInfo = yield* resolveAuth(providerName, auth)
-      const apiKey = authInfo?.type === "api" ? authInfo.key : undefined
+    const loadOpenAiOauth: OpenAioAuthLoader = () =>
+      loadOpenAIOAuth({
+        getCurrent: async () => {
+          const auth = await Effect.runPromise(
+            authStore.get("openai").pipe(Effect.catchEager(() => Effect.void)),
+          )
+          return auth?.type === "oauth" ? auth : undefined
+        },
+        setCurrent: (auth) => Effect.runPromise(authStore.set("openai", auth)),
+      })
 
-      if (authInfo?.type === "oauth" && providerName === "openai") {
-        if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
+    return {
+      getModel: Effect.fn("ProviderFactory.getModel")(function* (modelId: string) {
+        const parsed = parseModelId(modelId)
+        if (parsed === undefined) {
           return yield* new ProviderError({
-            message: "Model not available with ChatGPT OAuth",
+            message: "Invalid model id (expected provider/model)",
             model: modelId,
           })
         }
-      }
-      const region = api === "bedrock" ? ((yield* readEnv("AWS_REGION")) ?? "us-east-1") : undefined
-      const client = createProviderClient(api, auth, authInfo, apiKey, undefined, region)
-      if (client === undefined) {
-        return yield* new ProviderError({
-          message: "Provider client unavailable",
-          model: modelId,
-        })
-      }
+        const [providerName, modelName] = parsed
 
-      return client(modelName)
-    }),
+        const api = getBuiltinApi(providerName)
+        if (api === undefined) {
+          return yield* new ProviderError({
+            message: `Unknown provider: ${providerName}`,
+            model: modelId,
+          })
+        }
 
-    listProviders: () =>
-      Effect.succeed(
-        SUPPORTED_PROVIDERS.map(
-          (provider) => new ProviderInfo({ id: provider.id, name: provider.name, isCustom: false }),
+        const authInfo = yield* resolveAuthFromStore(providerName)
+        const apiKey = authInfo?.type === "api" ? authInfo.key : undefined
+
+        if (authInfo?.type === "oauth" && providerName === "openai") {
+          if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
+            return yield* new ProviderError({
+              message: "Model not available with ChatGPT OAuth",
+              model: modelId,
+            })
+          }
+        }
+        const region =
+          api === "bedrock" ? ((yield* readEnv("AWS_REGION")) ?? "us-east-1") : undefined
+        const client = createProviderClient(
+          api,
+          loadAnthropicCredentials,
+          loadOpenAiOauth,
+          authInfo,
+          apiKey,
+          undefined,
+          region,
+        )
+        if (client === undefined) {
+          return yield* new ProviderError({
+            message: "Provider client unavailable",
+            model: modelId,
+          })
+        }
+
+        return client(modelName)
+      }),
+
+      listProviders: () =>
+        Effect.succeed(
+          SUPPORTED_PROVIDERS.map(
+            (provider) =>
+              new ProviderInfo({ id: provider.id, name: provider.name, isCustom: false }),
+          ),
         ),
-      ),
-  }
+    }
+  })
 }

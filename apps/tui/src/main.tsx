@@ -5,12 +5,11 @@ import { Config, Console, Effect, Layer, Option, Ref, Stream, Tracer } from "eff
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
-import { createDependencies } from "@gent/core/server/index.js"
-import { GentCore, type GentCoreError } from "@gent/core/server/core.js"
+import { AppServicesLive, createDependencies } from "@gent/core/server/index.js"
+import type { AppServiceError } from "@gent/core/server/errors.js"
 import { SessionQueries, type SessionQueriesService } from "@gent/core/server/session-queries.js"
 import { SessionCommands, type SessionCommandsService } from "@gent/core/server/session-commands.js"
 import { SessionEvents, type SessionEventsService } from "@gent/core/server/session-events.js"
-import { InteractionCommands } from "@gent/core/server/interaction-commands.js"
 import { makeDirectGentClient, type GentClient, type SessionInfo, type BranchInfo } from "@gent/sdk"
 import { GentLogger } from "@gent/core/runtime/logger.js"
 import { GentTracerLive, clearTraceLogIfRoot } from "@gent/core/runtime/tracer.js"
@@ -63,7 +62,7 @@ const resolveInitialState = (input: {
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
   bypass: boolean
-}): Effect.Effect<InitialState, GentCoreError> =>
+}): Effect.Effect<InitialState, AppServiceError> =>
   Effect.gen(function* () {
     const {
       queries,
@@ -231,13 +230,7 @@ const makeCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
         ...(authFilePath !== undefined ? { authFilePath } : {}),
         ...(authKeyPath !== undefined ? { authKeyPath } : {}),
       }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))
-      const gentCoreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
-      const coreLive = Layer.mergeAll(
-        SessionQueries.Live,
-        SessionCommands.Live,
-        SessionEvents.Live,
-        InteractionCommands.Live,
-      ).pipe(Layer.provideMerge(gentCoreLive), Layer.provide(serverDeps))
+      const coreLive = AppServicesLive.pipe(Layer.provide(serverDeps))
       return Layer.mergeAll(coreLive, serverDeps, LinkLayer)
     }),
   )
@@ -250,7 +243,7 @@ const runHeadless = (
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
-): Effect.Effect<void, GentCoreError, never> =>
+): Effect.Effect<void, AppServiceError, never> =>
   Effect.gen(function* () {
     // Subscribe to events before sending message
     const eventStream = events.subscribeEvents({ sessionId, branchId })

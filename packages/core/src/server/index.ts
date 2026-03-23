@@ -1,4 +1,5 @@
 import { AgentLoopError, SteerCommand } from "../runtime/agent/agent-loop.js"
+import { Layer } from "effect"
 import { GentCore, type GentCoreError, type GentCoreService, StorageError } from "./core.js"
 import { createDependencies, type DependenciesConfig } from "./dependencies.js"
 import { SessionQueries, type SessionQueriesService } from "./session-queries.js"
@@ -20,6 +21,16 @@ import type {
 } from "./transport-contract.js"
 
 export { DEFAULT_SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt"
+
+const BaseAppServicesLive = Layer.mergeAll(
+  SessionQueries.Live,
+  SessionCommands.Live,
+  SessionEvents.Live,
+)
+export const AppServicesLive = Layer.merge(
+  BaseAppServicesLive,
+  InteractionCommands.Live.pipe(Layer.provideMerge(BaseAppServicesLive)),
+)
 
 export { SteerCommand, AgentLoopError, StorageError, createDependencies, type DependenciesConfig }
 export {

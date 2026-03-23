@@ -30,6 +30,8 @@ export type GentRpcError =
   | EventStoreError
   | NotFoundError
 
+export type AppServiceError = GentRpcError
+
 export const GentRpcError = Schema.Union([
   StorageError,
   ActorProcessError,

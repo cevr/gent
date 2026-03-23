@@ -1,5 +1,4 @@
-import { Effect } from "effect"
-import { AuthOauth, type AuthStoreService } from "../../domain/auth-store.js"
+import { AuthOauth } from "../../domain/auth-store.js"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
 
@@ -397,10 +396,13 @@ export const refreshOpenAIOauth = async (refreshToken: string) => {
   }
 }
 
-const loadOpenAIOAuth = async (authStore: AuthStoreService): Promise<AuthOauth> => {
-  const current = await Effect.runPromise(
-    authStore.get("openai").pipe(Effect.catchEager(() => Effect.void)),
-  )
+type OpenAIOAuthStore = {
+  readonly getCurrent: () => Promise<AuthOauth | undefined>
+  readonly setCurrent: (auth: AuthOauth) => Promise<void>
+}
+
+export const loadOpenAIOAuth = async (store: OpenAIOAuthStore): Promise<AuthOauth> => {
+  const current = await store.getCurrent()
   if (current === undefined || current.type !== "oauth") {
     throw new Error("OpenAI OAuth credentials missing")
   }
@@ -409,7 +411,7 @@ const loadOpenAIOAuth = async (authStore: AuthStoreService): Promise<AuthOauth> 
 
   const refreshed = await refreshOpenAIOauth(auth.refresh)
   const next = new AuthOauth({ type: "oauth", ...refreshed })
-  await Effect.runPromise(authStore.set("openai", next))
+  await store.setCurrent(next)
   return next
 }
 
@@ -499,9 +501,9 @@ const rewriteCodexBody = (body: BodyInit | null | undefined): BodyInit | null | 
   }
 }
 
-export const createOpenAIOAuthFetch = (authStore: AuthStoreService): typeof fetch => {
+export const createOpenAIOAuthFetch = (loadAuth: () => Promise<AuthOauth>): typeof fetch => {
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const auth = await loadOpenAIOAuth(authStore)
+    const auth = await loadAuth()
     const { url, shouldRewrite } = resolveRequestTarget(input)
     const headers = createAuthHeaders(init?.headers, auth)
     if (shouldRewrite && !headers.has("OpenAI-Beta")) {

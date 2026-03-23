@@ -1,5 +1,5 @@
 import { ServiceMap, Effect, Layer, Ref, Schema } from "effect"
-import { AuthApi, AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
+import { AuthApi, AuthOauth, AuthStore } from "../domain/auth-store.js"
 import {
   AuthMethod,
   AuthAuthorization,
@@ -40,7 +40,9 @@ export interface ProviderAuthProvider {
   >
 }
 
-const buildProviders = (authStore: AuthStoreService): Record<ProviderId, ProviderAuthProvider> => {
+const buildProviders = (
+  setAuth: (provider: ProviderId, auth: AuthOauth) => Effect.Effect<void, ProviderAuthError>,
+): Record<ProviderId, ProviderAuthProvider> => {
   const methodsDefault = [new AuthMethod({ type: "api", label: "Manually enter API key" })]
 
   const openaiMethods = [
@@ -64,25 +66,15 @@ const buildProviders = (authStore: AuthStoreService): Record<ProviderId, Provide
             yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
             creds = yield* readClaudeCodeCredentials()
           }
-          yield* authStore
-            .set(
-              "anthropic",
-              new AuthOauth({
-                type: "oauth",
-                access: creds.accessToken,
-                refresh: creds.refreshToken,
-                expires: creds.expiresAt,
-              }),
-            )
-            .pipe(
-              Effect.mapError(
-                (e) =>
-                  new ProviderAuthError({
-                    message: "Failed to store keychain credentials",
-                    cause: e,
-                  }),
-              ),
-            )
+          yield* setAuth(
+            "anthropic",
+            new AuthOauth({
+              type: "oauth",
+              access: creds.accessToken,
+              refresh: creds.refreshToken,
+              expires: creds.expiresAt,
+            }),
+          )
           return {
             authorization: {
               url: "" as string,
@@ -198,7 +190,17 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
     ProviderAuth,
     Effect.gen(function* () {
       const authStore = yield* AuthStore
-      return yield* makeProviderAuth(authStore, buildProviders(authStore))
+      const setOauth = (provider: ProviderId, auth: AuthOauth) =>
+        authStore.set(provider, auth).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAuthError({
+                message: "Failed to store OAuth credentials",
+                cause,
+              }),
+          ),
+        )
+      return yield* makeProviderAuth(buildProviders(setOauth))
     }),
   )
 
@@ -208,17 +210,17 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
     Layer.effect(
       ProviderAuth,
       Effect.gen(function* () {
-        const authStore = yield* AuthStore
-        return yield* makeProviderAuth(authStore, providers)
+        yield* AuthStore
+        return yield* makeProviderAuth(providers)
       }),
     )
 }
 
 const makeProviderAuth = (
-  authStore: AuthStoreService,
   providers: Record<ProviderId, ProviderAuthProvider>,
-): Effect.Effect<ProviderAuthService, never> =>
+): Effect.Effect<ProviderAuthService, never, AuthStore> =>
   Effect.gen(function* () {
+    const authStore = yield* AuthStore
     const pending = yield* Ref.make<Map<string, PendingCallback>>(new Map())
 
     const listMethods = Effect.fn("ProviderAuth.listMethods")(() =>

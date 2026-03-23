@@ -7,14 +7,12 @@ import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
 import { Effect, Layer, Schema } from "effect"
 import * as os from "node:os"
 import { GentApi } from "@gent/core/server/http-api.js"
-import { GentCore, SteerCommand } from "@gent/core/server/core.js"
+import { SteerCommand } from "@gent/core/server/core.js"
 import { SessionQueries } from "@gent/core/server/session-queries.js"
 import { SessionCommands } from "@gent/core/server/session-commands.js"
-import { SessionEvents } from "@gent/core/server/session-events.js"
-import { InteractionCommands } from "@gent/core/server/interaction-commands.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
-import { createDependencies } from "@gent/core/server/index.js"
+import { AppServicesLive, createDependencies } from "@gent/core/server/index.js"
 
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
@@ -85,15 +83,6 @@ const DepsLive = createDependencies({
   Layer.provide(GentTracerLive),
 )
 
-const GentCoreLive = GentCore.Live.pipe(Layer.provide(DepsLive))
-
-const AppServicesLive = Layer.mergeAll(
-  SessionQueries.Live,
-  SessionCommands.Live,
-  SessionEvents.Live,
-  InteractionCommands.Live,
-).pipe(Layer.provideMerge(GentCoreLive), Layer.provide(DepsLive))
-
 // Combined layer for RPC handlers
 const CoreWithDeps = Layer.merge(AppServicesLive, DepsLive)
 
@@ -137,6 +126,7 @@ const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJso
 const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
   Layer.provide(AppServicesLive),
+  Layer.provide(DepsLive),
   Layer.provide(BunFileSystem.layer),
 )
 
