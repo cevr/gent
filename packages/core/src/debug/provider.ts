@@ -1,4 +1,4 @@
-import { Effect, Layer, Stream } from "effect"
+import { Duration, Effect, Layer, Stream } from "effect"
 import {
   FinishChunk,
   Provider,
@@ -45,6 +45,28 @@ const buildReply = (request: ProviderRequest, latestUserText: string): string =>
   ].join(" ")
 }
 
+const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
+  const chunks = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
+  const stream = Stream.fromIterable([
+    ...chunks.map((text) => new TextChunk({ text: `${text} ` })),
+    new FinishChunk({
+      finishReason: "stop",
+      usage: {
+        inputTokens: Math.max(1, Math.ceil(latestUserText.length / 4)),
+        outputTokens: Math.max(1, Math.ceil(reply.length / 4)),
+      },
+    }),
+  ])
+
+  if (delayMs <= 0) return stream
+
+  return stream.pipe(
+    Stream.flatMap((chunk) =>
+      Stream.fromEffect(Effect.sleep(Duration.millis(delayMs)).pipe(Effect.as(chunk))),
+    ),
+  )
+}
+
 export const DebugProvider = Layer.effect(
   Provider,
   Effect.sync(() => {
@@ -68,20 +90,7 @@ export const DebugProvider = Layer.effect(
 
       attempts.delete(key)
       const reply = buildReply(request, latestUserText)
-      const chunks = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
-
-      return Effect.succeed(
-        Stream.fromIterable([
-          ...chunks.map((text) => new TextChunk({ text: `${text} ` })),
-          new FinishChunk({
-            finishReason: "stop",
-            usage: {
-              inputTokens: Math.max(1, Math.ceil(latestUserText.length / 4)),
-              outputTokens: Math.max(1, Math.ceil(reply.length / 4)),
-            },
-          }),
-        ]),
-      )
+      return Effect.succeed(makeReplyStream(latestUserText, reply))
     }
 
     const generate = (_request: GenerateRequest) => Effect.succeed("debug scenario")
@@ -92,3 +101,23 @@ export const DebugProvider = Layer.effect(
     }
   }),
 )
+
+export const DebugFailingProvider = Layer.succeed(Provider, {
+  stream: (request) =>
+    Effect.fail(
+      new ProviderError({
+        message: "provider exploded",
+        model: request.model,
+      }),
+    ),
+  generate: () => Effect.succeed("debug failure"),
+})
+
+export const DebugSlowProvider = Layer.succeed(Provider, {
+  stream: (request) => {
+    const latestUserText = extractLatestUserText(request.messages)
+    const reply = buildReply(request, latestUserText)
+    return Effect.succeed(makeReplyStream(latestUserText, reply, 150))
+  },
+  generate: () => Effect.succeed("debug slow"),
+})

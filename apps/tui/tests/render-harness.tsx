@@ -12,6 +12,8 @@ import { CommandProvider } from "../src/command"
 import { EnvProvider } from "../src/env/context"
 import { WorkspaceProvider } from "../src/workspace"
 import { ClientProvider, type GentClient } from "../src/client"
+import { RouterProvider, Route, type AppRoute } from "../src/router"
+import type { WorkerSupervisor } from "../src/worker/supervisor"
 import type {
   MessageInfoReadonly,
   QueueSnapshotReadonly,
@@ -150,6 +152,8 @@ export const renderWithProviders = async (
   options?: {
     client?: GentClient
     initialSession?: SessionInfo
+    supervisor?: WorkerSupervisor
+    initialRoute?: AppRoute
     width?: number
     height?: number
     cwd?: string
@@ -165,11 +169,20 @@ export const renderWithProviders = async (
           <ThemeProvider mode="dark">
             <EnvProvider env={{ visual: undefined, editor: undefined }}>
               <CommandProvider>
-                <ClientProvider client={client} initialSession={options?.initialSession}>
-                  <WorkspaceProvider cwd={options?.cwd ?? defaultWorkspaceCwd} services={services}>
-                    {node()}
-                  </WorkspaceProvider>
-                </ClientProvider>
+                <RouterProvider initialRoute={options?.initialRoute ?? Route.home()}>
+                  <ClientProvider
+                    client={client}
+                    initialSession={options?.initialSession}
+                    supervisor={options?.supervisor}
+                  >
+                    <WorkspaceProvider
+                      cwd={options?.cwd ?? defaultWorkspaceCwd}
+                      services={services}
+                    >
+                      {node()}
+                    </WorkspaceProvider>
+                  </ClientProvider>
+                </RouterProvider>
               </CommandProvider>
             </EnvProvider>
           </ThemeProvider>

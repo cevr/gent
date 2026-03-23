@@ -9,7 +9,7 @@ import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/inte
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { Skills } from "../domain/skills.js"
-import { DebugProvider } from "../debug/provider.js"
+import { DebugFailingProvider, DebugProvider, DebugSlowProvider } from "../debug/provider.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -50,7 +50,7 @@ export interface DependenciesConfig {
   authKeyPath?: string
   skillsDirs?: ReadonlyArray<string>
   persistenceMode?: "disk" | "memory"
-  providerMode?: "live" | "debug-scripted"
+  providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   actorRuntime?: "local" | "cluster"
   clusterDbPath?: string
   clusterStorage?: ClusterStorage
@@ -128,10 +128,10 @@ export const createDependencies = (config: DependenciesConfig) => {
   const fileLockServiceLive = FileLockService.layer
 
   const providerFactoryLive = Layer.provide(ProviderFactory.Live, authStoreLive)
-  const providerLive =
-    providerMode === "debug-scripted"
-      ? DebugProvider
-      : Layer.provide(Provider.Live, providerFactoryLive)
+  let providerLive = Layer.provide(Provider.Live, providerFactoryLive)
+  if (providerMode === "debug-scripted") providerLive = DebugProvider
+  else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
+  else if (providerMode === "debug-slow") providerLive = DebugSlowProvider
 
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,

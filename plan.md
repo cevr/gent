@@ -7,7 +7,7 @@ Status: in progress.
 - [x] Batch 1 — Shared contract harness
 - [x] Batch 2 — Event stream parity
 - [x] Batch 3 — Worker boundary tests
-- [ ] Batch 4 — Session feed projection tests
+- [x] Batch 4 — Session feed projection tests
 - [ ] Batch 5 — Queue and resume semantics across boundaries
 - [ ] Batch 6 — Structural guards
 
@@ -212,12 +212,12 @@ Gate:
 
 Checklist:
 
-- [ ] real transport-backed feed harness
-- [ ] thinking indicator projection
-- [ ] assistant message projection
-- [ ] queue widget projection
-- [ ] error-to-session-event projection
-- [ ] `bun run gate`
+- [x] real transport-backed feed harness
+- [x] thinking indicator projection
+- [x] assistant message projection
+- [x] queue widget projection
+- [x] error-to-session-event projection
+- [x] `bun run gate`
 
 Goal:
 

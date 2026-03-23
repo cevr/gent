@@ -19,6 +19,13 @@ import { AppServicesLive } from "@gent/core/server/index.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
+const resolveProviderMode = (value: string | undefined) => {
+  if (value === "debug-scripted") return "debug-scripted" as const
+  if (value === "debug-failing") return "debug-failing" as const
+  if (value === "debug-slow") return "debug-slow" as const
+  return "live" as const
+}
+
 const resolveRuntimeConfig = Effect.gen(function* () {
   const portRaw = yield* Config.option(Config.string("GENT_PORT"))
   const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
@@ -46,10 +53,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     authKeyPath: Option.getOrUndefined(authKeyPathOpt),
     persistenceMode:
       Option.getOrUndefined(persistenceOpt) === "memory" ? ("memory" as const) : ("disk" as const),
-    providerMode:
-      Option.getOrUndefined(providerOpt) === "debug-scripted"
-        ? ("debug-scripted" as const)
-        : ("live" as const),
+    providerMode: resolveProviderMode(Option.getOrUndefined(providerOpt)),
     isWorker: Option.getOrUndefined(serverModeOpt) === "worker",
     isDebug: Option.getOrUndefined(debugModeOpt) === "1",
   }
