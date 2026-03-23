@@ -119,7 +119,7 @@ export function useSessionController(props: {
   const { getChildren } = useChildSessions(client)
 
   const [uiState, setUiState] = createSignal(SessionUiState.initial())
-  const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.normal())
+  const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
   const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
   const [composerText, setComposerText] = createSignal("")
   const [restoreTextRequest, setRestoreTextRequest] = createSignal<RestoreTextRequest>(undefined)
@@ -157,8 +157,6 @@ export function useSessionController(props: {
   const handleComposerEffect = (effect: ReturnType<typeof transition>["effect"]) => {
     if (effect === undefined) return
     switch (effect._tag) {
-      case "ClearInput":
-        break
       case "RespondPrompt":
         if (effect.kind === "questions") {
           cast(
