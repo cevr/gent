@@ -2,7 +2,7 @@ import type { Effect, Schema } from "effect"
 import type { AgentName, SubagentRunner } from "./agent"
 import type { PromptPresenterService } from "./prompt-presenter"
 import type { EventStoreError } from "./event"
-import type { BranchId, SessionId } from "./ids"
+import type { BranchId, SessionId, ToolCallId } from "./ids"
 import { defineTool, type ToolDefinition } from "./tool"
 import type { runLoop } from "../runtime/loop"
 
@@ -16,7 +16,7 @@ import type { runLoop } from "../runtime/loop"
 export interface WorkflowContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly toolCallId: string
+  readonly toolCallId: ToolCallId
   readonly agentName?: AgentName
   readonly runner: SubagentRunner
   readonly presenter: PromptPresenterService

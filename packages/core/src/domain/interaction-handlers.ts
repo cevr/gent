@@ -13,7 +13,7 @@ import {
   HandoffRejected,
   type HandoffDecision,
 } from "./event"
-import type { BranchId, SessionId } from "./ids"
+import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { ToolContext } from "./tool"
 import type { PermissionDecision } from "./permission"
 import { makeInteractionService } from "./interaction-request"
@@ -25,14 +25,14 @@ import { makeInteractionService } from "./interaction-request"
 interface PermissionParams {
   sessionId: SessionId
   branchId: BranchId
-  toolCallId: string
+  toolCallId: ToolCallId
   toolName: string
   input: unknown
 }
 
 export interface PermissionHandlerService {
   readonly request: (
-    params: { toolCallId: string; toolName: string; input: unknown },
+    params: { toolCallId: ToolCallId; toolName: string; input: unknown },
     ctx: ToolContext,
   ) => Effect.Effect<PermissionDecision, EventStoreError>
   readonly respond: (

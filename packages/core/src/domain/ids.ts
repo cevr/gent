@@ -11,3 +11,6 @@ export type MessageId = typeof MessageId.Type
 
 export const TaskId = Schema.String.pipe(Schema.brand("TaskId"))
 export type TaskId = typeof TaskId.Type
+
+export const ToolCallId = Schema.String.pipe(Schema.brand("ToolCallId"))
+export type ToolCallId = typeof ToolCallId.Type

@@ -15,7 +15,7 @@ import {
   type AgentExecutionOverrides,
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
-import type { SessionId, BranchId } from "../../domain/ids.js"
+import type { SessionId, BranchId, ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentActor } from "./agent-loop"
 
@@ -40,7 +40,7 @@ const createChildMetadataAccumulator = (): ChildMetadataAccumulator => ({
 
 const appendFinishedToolCall = (
   state: ChildMetadataAccumulator,
-  toolCallId: string,
+  toolCallId: ToolCallId,
   toolName: string,
   isError: boolean,
 ) => {
@@ -167,7 +167,7 @@ const publishSubagentSpawned = (
   params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
-    toolCallId?: string
+    toolCallId?: ToolCallId
     sessionId: SessionId
     agentName: string
     prompt: string
@@ -206,7 +206,7 @@ const publishSubagentSucceeded = (
   params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
-    toolCallId?: string
+    toolCallId?: ToolCallId
     sessionId: SessionId
     agentName: string
   },
@@ -226,7 +226,7 @@ const publishSubagentFailed = (
   params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
-    toolCallId?: string
+    toolCallId?: ToolCallId
     sessionId: SessionId
     agentName: string
   },
@@ -290,7 +290,7 @@ const withSubagentFailureHandling = <E>(
   params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
-    toolCallId?: string
+    toolCallId?: ToolCallId
     sessionId: SessionId
     agentName: string
     spanName: string

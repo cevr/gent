@@ -1,6 +1,6 @@
 import { ServiceMap, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
-import { BranchId, MessageId, SessionId, TaskId } from "./ids"
+import { BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
 
 // Event Types
 
@@ -54,7 +54,7 @@ export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnComp
 export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("ToolCallStarted", {
   sessionId: SessionId,
   branchId: BranchId,
-  toolCallId: Schema.String,
+  toolCallId: ToolCallId,
   toolName: Schema.String,
   input: Schema.optional(Schema.Unknown),
 }) {}
@@ -65,7 +65,7 @@ export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
   {
     sessionId: SessionId,
     branchId: BranchId,
-    toolCallId: Schema.String,
+    toolCallId: ToolCallId,
     toolName: Schema.String,
     isError: Schema.Boolean,
     summary: Schema.optional(Schema.String),
@@ -78,7 +78,7 @@ export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
   {
     sessionId: SessionId,
     branchId: BranchId,
-    toolCallId: Schema.String,
+    toolCallId: ToolCallId,
     toolName: Schema.String,
     summary: Schema.optional(Schema.String),
     output: Schema.optional(Schema.String),
@@ -88,7 +88,7 @@ export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
 export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCallFailed", {
   sessionId: SessionId,
   branchId: BranchId,
-  toolCallId: Schema.String,
+  toolCallId: ToolCallId,
   toolName: Schema.String,
   summary: Schema.optional(Schema.String),
   output: Schema.optional(Schema.String),
@@ -100,7 +100,7 @@ export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>
     sessionId: SessionId,
     branchId: BranchId,
     requestId: Schema.String,
-    toolCallId: Schema.String,
+    toolCallId: ToolCallId,
     toolName: Schema.String,
     input: Schema.optional(Schema.Unknown),
   },
@@ -296,7 +296,7 @@ export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("Suba
   childSessionId: SessionId,
   agentName: Schema.String,
   prompt: Schema.String,
-  toolCallId: Schema.optional(Schema.String),
+  toolCallId: Schema.optional(ToolCallId),
   branchId: Schema.optional(BranchId),
 }) {}
 
@@ -317,7 +317,7 @@ export class SubagentSucceeded extends Schema.TaggedClass<SubagentSucceeded>()(
     parentSessionId: SessionId,
     childSessionId: SessionId,
     agentName: Schema.String,
-    toolCallId: Schema.optional(Schema.String),
+    toolCallId: Schema.optional(ToolCallId),
     branchId: Schema.optional(BranchId),
   },
 ) {}
@@ -326,7 +326,7 @@ export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("Subage
   parentSessionId: SessionId,
   childSessionId: SessionId,
   agentName: Schema.String,
-  toolCallId: Schema.optional(Schema.String),
+  toolCallId: Schema.optional(ToolCallId),
   branchId: Schema.optional(BranchId),
 }) {}
 

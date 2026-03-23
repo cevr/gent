@@ -1,5 +1,5 @@
 import { Schema, SchemaGetter as Getter } from "effect"
-import { SessionId, BranchId, MessageId } from "./ids"
+import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
 
 // v4: DateFromNumber was removed — define locally
@@ -25,7 +25,7 @@ export class ImagePart extends Schema.Class<ImagePart>("ImagePart")({
 
 export class ToolCallPart extends Schema.Class<ToolCallPart>("ToolCallPart")({
   type: Schema.Literal("tool-call"),
-  toolCallId: Schema.String,
+  toolCallId: ToolCallId,
   toolName: Schema.String,
   input: Schema.Unknown, // AI SDK v6 uses 'input' not 'args'
 }) {}
@@ -33,7 +33,7 @@ export class ToolCallPart extends Schema.Class<ToolCallPart>("ToolCallPart")({
 // Simplified ToolResultOutput - just JSON for now
 export class ToolResultPart extends Schema.Class<ToolResultPart>("ToolResultPart")({
   type: Schema.Literal("tool-result"),
-  toolCallId: Schema.String,
+  toolCallId: ToolCallId,
   toolName: Schema.String,
   output: Schema.Struct({
     type: Schema.Literals(["json", "error-json"]),

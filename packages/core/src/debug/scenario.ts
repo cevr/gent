@@ -22,7 +22,7 @@ import {
   ToolCallPart,
   ToolResultPart,
 } from "../domain/message.js"
-import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { TaskService } from "../runtime/task-service.js"
 
@@ -34,7 +34,9 @@ export interface DebugScenarioParams {
 
 const makeText = (text: string) => new TextPart({ type: "text", text })
 
-const makeJsonResult = (toolCallId: string, toolName: string, value: unknown) =>
+const asToolCallId = (value: string) => value as ToolCallId
+
+const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
   new ToolResultPart({
     type: "tool-result",
     toolCallId,
@@ -45,10 +47,10 @@ const makeJsonResult = (toolCallId: string, toolName: string, value: unknown) =>
 const createParentTurnMessages = (
   params: DebugScenarioParams,
   iteration: number,
-  delegateToolCallId: string,
-  codeReviewToolCallId: string,
-  searchSessionsToolCallId: string,
-  readSessionToolCallId: string,
+  delegateToolCallId: ToolCallId,
+  codeReviewToolCallId: ToolCallId,
+  searchSessionsToolCallId: ToolCallId,
+  readSessionToolCallId: ToolCallId,
 ) => {
   const now = new Date()
 
@@ -222,12 +224,16 @@ const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
     return { sessionId, branchId }
   })
 
-const runDelegateScenario = (params: DebugScenarioParams, iteration: number, toolCallId: string) =>
+const runDelegateScenario = (
+  params: DebugScenarioParams,
+  iteration: number,
+  toolCallId: ToolCallId,
+) =>
   Effect.gen(function* () {
     const eventStore = yield* EventStore
     const child = yield* createChildSession(params, iteration)
-    const childReadToolCallId = `dbg-child-read-${iteration}`
-    const childGrepToolCallId = `dbg-child-grep-${iteration}`
+    const childReadToolCallId = asToolCallId(`dbg-child-read-${iteration}`)
+    const childGrepToolCallId = asToolCallId(`dbg-child-grep-${iteration}`)
 
     yield* eventStore.publish(
       new SubagentSpawned({
@@ -312,10 +318,10 @@ const runDelegateScenario = (params: DebugScenarioParams, iteration: number, too
 const persistDebugTurn = (
   params: DebugScenarioParams,
   iteration: number,
-  delegateToolCallId: string,
-  codeReviewToolCallId: string,
-  searchSessionsToolCallId: string,
-  readSessionToolCallId: string,
+  delegateToolCallId: ToolCallId,
+  codeReviewToolCallId: ToolCallId,
+  searchSessionsToolCallId: ToolCallId,
+  readSessionToolCallId: ToolCallId,
 ) =>
   Effect.gen(function* () {
     const storage = yield* Storage
@@ -352,10 +358,10 @@ const persistDebugTurn = (
 const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
     const eventStore = yield* EventStore
-    const delegateToolCallId = `dbg-live-delegate-${iteration}`
-    const codeReviewToolCallId = `dbg-live-code-review-${iteration}`
-    const searchSessionsToolCallId = `dbg-live-search-sessions-${iteration}`
-    const readSessionToolCallId = `dbg-live-read-session-${iteration}`
+    const delegateToolCallId = asToolCallId(`dbg-live-delegate-${iteration}`)
+    const codeReviewToolCallId = asToolCallId(`dbg-live-code-review-${iteration}`)
+    const searchSessionsToolCallId = asToolCallId(`dbg-live-search-sessions-${iteration}`)
+    const readSessionToolCallId = asToolCallId(`dbg-live-read-session-${iteration}`)
     const agent = iteration % 2 === 0 ? "deepwork" : "cowork"
     const previousAgent = iteration % 2 === 0 ? "cowork" : "deepwork"
     const startedAt = Date.now()

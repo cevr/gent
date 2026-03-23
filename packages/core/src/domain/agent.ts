@@ -1,6 +1,6 @@
 import { ServiceMap, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
-import type { BranchId, SessionId } from "./ids"
+import type { BranchId, SessionId, ToolCallId } from "./ids"
 import { ModelId } from "./model"
 import type { ToolAction as ToolActionType, AnyToolDefinition } from "./tool"
 
@@ -261,7 +261,7 @@ export interface SubagentRunner {
     prompt: string
     parentSessionId: SessionId
     parentBranchId: BranchId
-    toolCallId?: string
+    toolCallId?: ToolCallId
     cwd: string
     overrides?: AgentExecutionOverrides
   }) => EffectNs.Effect<SubagentResult, SubagentError>

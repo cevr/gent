@@ -8,14 +8,14 @@
 import { Effect, FiberSet, PubSub, Ref, Stream } from "effect"
 import type { Scope } from "effect"
 import { EventStore, type AgentEvent, type EventEnvelope } from "../domain/event.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+import type { SessionId, BranchId, ToolCallId } from "../domain/ids.js"
 
 // =============================================================================
 // Types (live projection — not durable domain schemas)
 // =============================================================================
 
 export interface ChildToolCall {
-  toolCallId: string
+  toolCallId: ToolCallId
   toolName: string
   status: "running" | "completed" | "error"
   input?: unknown
@@ -23,7 +23,7 @@ export interface ChildToolCall {
 
 export interface ChildSessionEntry {
   childSessionId: string
-  toolCallId: string
+  toolCallId: ToolCallId
   agentName: string
   status: "running" | "completed" | "error"
   toolCalls: ChildToolCall[]
@@ -44,7 +44,7 @@ export interface ChildSessionTrackerService {
   /** Stop tracking, interrupt all child fibers */
   readonly stop: () => Effect.Effect<void>
   /** Get children for a specific tool call */
-  readonly getChildren: (toolCallId: string) => Effect.Effect<ReadonlyArray<ChildSessionEntry>>
+  readonly getChildren: (toolCallId: ToolCallId) => Effect.Effect<ReadonlyArray<ChildSessionEntry>>
   /** Get all tracked children */
   readonly getAll: () => Effect.Effect<ReadonlyMap<string, ChildSessionEntry>>
   /** Stream of child state changes for reactive consumers */

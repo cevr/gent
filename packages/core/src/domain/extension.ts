@@ -14,7 +14,7 @@ import type {
   HandoffPresented,
   HandoffConfirmed,
 } from "./event"
-import type { BranchId, SessionId } from "./ids"
+import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { ToolResultPart } from "./message"
 import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition } from "./tool"
@@ -96,7 +96,7 @@ export interface ToolsVisibleInput {
 }
 
 export interface ToolExecuteInput {
-  readonly toolCallId: string
+  readonly toolCallId: ToolCallId
   readonly toolName: string
   readonly input: unknown
   readonly sessionId: SessionId

@@ -295,7 +295,7 @@ export const mockTextResponse = (text: string): StreamChunk[] => [
 ]
 
 export const mockToolCallResponse = (
-  toolCallId: string,
+  toolCallId: ToolCallId,
   toolName: string,
   input: unknown,
 ): StreamChunk[] => [
@@ -329,3 +329,4 @@ export const runTestWithRecording = <A, E>(
       }),
     ),
   )
+import type { ToolCallId } from "../domain/ids.js"

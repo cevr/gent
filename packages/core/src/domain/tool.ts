@@ -1,6 +1,6 @@
 import type { Effect, Schema } from "effect"
 import type { AgentName } from "./agent"
-import type { BranchId, SessionId } from "./ids"
+import type { BranchId, SessionId, ToolCallId } from "./ids"
 
 // Tool Action — classifies what a tool does for agent filtering
 
@@ -33,7 +33,7 @@ export interface ToolDefinition<
 export interface ToolContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly toolCallId: string
+  readonly toolCallId: ToolCallId
   readonly agentName?: AgentName
 }
 

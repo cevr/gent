@@ -1,6 +1,7 @@
 import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
+import { ToolCallId, type ToolCallId as ToolCallIdType } from "../domain/ids.js"
 import {
   streamText,
   generateText,
@@ -32,7 +33,7 @@ export class TextChunk extends Schema.TaggedClass<TextChunk>()("TextChunk", {
 }) {}
 
 export class ToolCallChunk extends Schema.TaggedClass<ToolCallChunk>()("ToolCallChunk", {
-  toolCallId: Schema.String,
+  toolCallId: ToolCallId,
   toolName: Schema.String,
   input: Schema.Unknown,
 }) {}
@@ -189,7 +190,7 @@ export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
               case "tool-call":
                 return Effect.succeed<StreamChunk>(
                   new ToolCallChunk({
-                    toolCallId: part.toolCallId,
+                    toolCallId: part.toolCallId as ToolCallIdType,
                     toolName: part.toolName,
                     input: part.input,
                   }),
@@ -343,7 +344,12 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
     if (msg.role === "assistant") {
       const content: Array<
         | { type: "text"; text: string }
-        | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown }
+        | {
+            type: "tool-call"
+            toolCallId: typeof ToolCallId.Type
+            toolName: string
+            input: unknown
+          }
       > = []
 
       for (const part of parts) {

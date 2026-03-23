@@ -16,7 +16,7 @@ import type { SessionId } from "../domain/ids.js"
 
 const ToolCallSummary = Schema.Struct({
   toolName: Schema.String,
-  toolCallId: Schema.String,
+  toolCallId: ToolCallId,
   isError: Schema.Boolean,
   durationMs: Schema.optional(Schema.Number),
 })
@@ -45,7 +45,7 @@ export class TurnWideEvent extends Schema.Class<TurnWideEvent>("TurnWideEvent")(
 
 type ToolCallEntry = {
   toolName: string
-  toolCallId: string
+  toolCallId: typeof ToolCallId.Type
   isError: boolean
   startedAt: number
   durationMs?: number
@@ -180,7 +180,7 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
 
           const updateToolCall = (
             branchId: string,
-            toolCallId: string,
+            toolCallId: typeof ToolCallId.Type,
             createdAt: number,
             isError: boolean,
           ) => {
@@ -279,3 +279,4 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
       subscribe: (_sessionId) => Stream.empty,
     })
 }
+import { ToolCallId } from "../domain/ids.js"

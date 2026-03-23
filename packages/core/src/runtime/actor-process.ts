@@ -12,7 +12,7 @@ import {
   ToolCallSucceeded,
   ToolCallFailed,
 } from "../domain/event.js"
-import { BranchId, SessionId, type MessageId } from "../domain/ids.js"
+import { BranchId, SessionId, ToolCallId, type MessageId } from "../domain/ids.js"
 import { Message, TextPart, ToolCallPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -45,7 +45,7 @@ export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 export const SendToolResultPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
-  toolCallId: Schema.String,
+  toolCallId: ToolCallId,
   toolName: Schema.String,
   output: Schema.Unknown,
   isError: Schema.optional(Schema.Boolean),
@@ -240,7 +240,7 @@ export const LocalActorProcessLive: Layer.Layer<
         Effect.gen(function* () {
           const session = yield* storage.getSession(input.sessionId)
           const bypass = session?.bypass ?? true
-          const toolCallId = Bun.randomUUIDv7()
+          const toolCallId = Bun.randomUUIDv7() as typeof ToolCallId.Type
 
           // Create synthetic assistant message with tool call
           const callPart = new ToolCallPart({

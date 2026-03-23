@@ -8,13 +8,13 @@ import { formatSchemaError } from "../format-schema-error"
 
 export interface ToolRunnerService {
   readonly run: (
-    toolCall: { toolCallId: string; toolName: string; input: unknown },
+    toolCall: { toolCallId: ToolCallId; toolName: string; input: unknown },
     ctx: ToolContext,
     options?: { bypass?: boolean },
   ) => Effect.Effect<ToolResultPart, never>
 }
 
-const errorResult = (toolCall: { toolCallId: string; toolName: string }, message: string) =>
+const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
   new ToolResultPart({
     type: "tool-result",
     toolCallId: toolCall.toolCallId,
@@ -141,3 +141,4 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
         ),
     })
 }
+import type { ToolCallId } from "../../domain/ids.js"

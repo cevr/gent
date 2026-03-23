@@ -7,7 +7,7 @@ import type { ModelId } from "../domain/model.js"
 import { SubagentError } from "../domain/agent.js"
 import type { AgentDefinition, SubagentResult, SubagentRunner } from "../domain/agent.js"
 import { EventStore, WorkflowPhaseStarted, type EventEnvelope } from "../domain/event.js"
-import type { BranchId, SessionId } from "../domain/ids.js"
+import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import type { LoopVerdict } from "../runtime/loop.js"
 
 type LoopExitReason = "done" | "error" | "max_reached"
@@ -18,7 +18,7 @@ type WorkflowResult = "success" | "rejected" | "error" | "max_iterations"
 export interface WorkflowRunContext {
   parentSessionId: SessionId
   parentBranchId: BranchId
-  toolCallId?: string
+  toolCallId?: ToolCallId
   cwd: string
 }
 

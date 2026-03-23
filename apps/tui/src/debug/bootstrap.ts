@@ -10,12 +10,14 @@ import {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import { Task } from "@gent/core/domain/task.js"
-import type { BranchId, SessionId, MessageId, TaskId } from "@gent/core/domain/ids.js"
+import type { BranchId, SessionId, MessageId, TaskId, ToolCallId } from "@gent/core/domain/ids.js"
 import type { Session as ClientSession } from "../client/index"
 
 const makeText = (text: string) => new TextPart({ type: "text", text })
 
-const makeJsonResult = (toolCallId: string, toolName: string, value: unknown) =>
+const asToolCallId = (value: string) => value as ToolCallId
+
+const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
   new ToolResultPart({
     type: "tool-result",
     toolCallId,
@@ -71,31 +73,31 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
         makeText("Inspected the relevant files and compared the renderer chrome paths."),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-read",
+          toolCallId: asToolCallId("dbg-read"),
           toolName: "read",
           input: { path: `${cwd}/apps/tui/src/routes/session.tsx` },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-grep",
+          toolCallId: asToolCallId("dbg-grep"),
           toolName: "grep",
           input: { pattern: "ToolFrame", path: `${cwd}/apps/tui/src` },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-glob",
+          toolCallId: asToolCallId("dbg-glob"),
           toolName: "glob",
           input: { pattern: "**/*.tsx", path: `${cwd}/apps/tui/src` },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-bash",
+          toolCallId: asToolCallId("dbg-bash"),
           toolName: "bash",
           input: { command: "bun run typecheck" },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-edit",
+          toolCallId: asToolCallId("dbg-edit"),
           toolName: "edit",
           input: {
             path: `${cwd}/apps/tui/src/components/message-list.tsx`,
@@ -105,7 +107,7 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-write",
+          toolCallId: asToolCallId("dbg-write"),
           toolName: "write",
           input: { path: `${cwd}/apps/tui/src/debug/bootstrap.ts` },
         }),
@@ -119,14 +121,14 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
       branchId,
       role: "tool",
       parts: [
-        makeJsonResult("dbg-read", "read", {
+        makeJsonResult(asToolCallId("dbg-read"), "read", {
           path: `${cwd}/apps/tui/src/routes/session.tsx`,
           lineCount: 18,
           truncated: false,
           content:
             "const [toolsExpanded, setToolsExpanded] = createSignal(false)\nconst [inputState, setInputState] = createSignal(...)",
         }),
-        makeJsonResult("dbg-grep", "grep", {
+        makeJsonResult(asToolCallId("dbg-grep"), "grep", {
           matches: [
             {
               file: `${cwd}/apps/tui/src/components/tool-renderers/generic.tsx`,
@@ -136,7 +138,7 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
           ],
           truncated: false,
         }),
-        makeJsonResult("dbg-glob", "glob", {
+        makeJsonResult(asToolCallId("dbg-glob"), "glob", {
           files: [
             "apps/tui/src/app.tsx",
             "apps/tui/src/routes/session.tsx",
@@ -144,17 +146,17 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
           ],
           truncated: false,
         }),
-        makeJsonResult("dbg-bash", "bash", {
+        makeJsonResult(asToolCallId("dbg-bash"), "bash", {
           stdout: "$ turbo run typecheck\nTasks: 4 successful, 4 total",
           stderr: "",
           exitCode: 0,
         }),
-        makeJsonResult("dbg-edit", "edit", {
+        makeJsonResult(asToolCallId("dbg-edit"), "edit", {
           path: `${cwd}/apps/tui/src/components/message-list.tsx`,
           oldString: "<text>[ x ] tool_call</text>",
           newString: "<ToolFrame />",
         }),
-        makeJsonResult("dbg-write", "write", {
+        makeJsonResult(asToolCallId("dbg-write"), "write", {
           path: `${cwd}/apps/tui/src/debug/bootstrap.ts`,
           bytesWritten: 7421,
         }),
@@ -215,43 +217,43 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
         makeText("Pulled adjacent context and kicked off review helpers."),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-webfetch",
+          toolCallId: asToolCallId("dbg-webfetch"),
           toolName: "webfetch",
           input: { url: "https://example.com/docs/tool-renderers" },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-delegate",
+          toolCallId: asToolCallId("dbg-delegate"),
           toolName: "delegate",
           input: { tasks: [{ agent: "reviewer", task: "Inspect the TUI tool chrome" }] },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-finder",
+          toolCallId: asToolCallId("dbg-finder"),
           toolName: "finder",
           input: { query: "Where is the double-border coming from?" },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-counsel",
+          toolCallId: asToolCallId("dbg-counsel"),
           toolName: "counsel",
           input: { prompt: "Sanity-check the debug session bootstrap." },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-code-review",
+          toolCallId: asToolCallId("dbg-code-review"),
           toolName: "code_review",
           input: { description: "Review the debug bootstrap" },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-search-sessions",
+          toolCallId: asToolCallId("dbg-search-sessions"),
           toolName: "search_sessions",
           input: { query: "tool renderer" },
         }),
         new ToolCallPart({
           type: "tool-call",
-          toolCallId: "dbg-read-session",
+          toolCallId: asToolCallId("dbg-read-session"),
           toolName: "read_session",
           input: {
             sessionId: "019debug1-session",
@@ -268,18 +270,18 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
       branchId,
       role: "tool",
       parts: [
-        makeJsonResult("dbg-webfetch", "webfetch", {
+        makeJsonResult(asToolCallId("dbg-webfetch"), "webfetch", {
           url: "https://example.com/docs/tool-renderers",
           title: "Tool Renderer Guidelines",
           content: "# Tool Renderer Guidelines\n\nUse chrome-based boxes for consistency.",
         }),
-        makeJsonResult("dbg-finder", "finder", {
+        makeJsonResult(asToolCallId("dbg-finder"), "finder", {
           found: true,
           response:
             "The old header lived in message-list.tsx while bash/edit already wrapped themselves in ToolFrame.",
           metadata: { usage: { input: 451, output: 92, cost: 0.01 } },
         }),
-        makeJsonResult("dbg-code-review", "code_review", {
+        makeJsonResult(asToolCallId("dbg-code-review"), "code_review", {
           summary: { critical: 0, high: 1, medium: 1, low: 0 },
           comments: [
             {
@@ -291,7 +293,7 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
             },
           ],
         }),
-        makeJsonResult("dbg-search-sessions", "search_sessions", {
+        makeJsonResult(asToolCallId("dbg-search-sessions"), "search_sessions", {
           totalMatches: 3,
           sessions: [
             {
@@ -305,7 +307,7 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
             },
           ],
         }),
-        makeJsonResult("dbg-read-session", "read_session", {
+        makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
           sessionId: "019debug1-session",
           extracted: true,
           goal: "Understand the renderer cleanup thread",
