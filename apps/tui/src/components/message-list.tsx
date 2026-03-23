@@ -1,4 +1,4 @@
-import { createMemo, For, Show, type JSX } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
@@ -175,49 +175,41 @@ interface MessageListProps {
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
-  footer?: JSX.Element
 }
 
 export function MessageList(props: MessageListProps) {
   return (
     <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
-      <box flexDirection="column">
-        <For each={props.items}>
-          {(item, index) =>
-            item._tag === "event" ? (
-              <SessionEventIndicator event={item} />
-            ) : (
-              <Show
-                when={item.role === "user"}
-                fallback={
-                  <AssistantMessage
-                    content={item.content}
-                    reasoning={item.reasoning}
-                    images={item.images}
-                    toolCalls={item.toolCalls}
-                    expanded={props.toolsExpanded}
-                    syntaxStyle={props.syntaxStyle}
-                    streaming={props.streaming && index() === props.items.length - 1}
-                    getChildSessions={props.getChildSessions}
-                  />
-                }
-              >
-                <UserMessage
+      <For each={props.items}>
+        {(item, index) =>
+          item._tag === "event" ? (
+            <SessionEventIndicator event={item} />
+          ) : (
+            <Show
+              when={item.role === "user"}
+              fallback={
+                <AssistantMessage
                   content={item.content}
+                  reasoning={item.reasoning}
                   images={item.images}
-                  kind={item.kind}
-                  pendingMode={item.pendingMode}
+                  toolCalls={item.toolCalls}
+                  expanded={props.toolsExpanded}
+                  syntaxStyle={props.syntaxStyle}
+                  streaming={props.streaming && index() === props.items.length - 1}
+                  getChildSessions={props.getChildSessions}
                 />
-              </Show>
-            )
-          }
-        </For>
-        <Show when={props.footer !== undefined}>
-          <box flexDirection="column" flexShrink={0}>
-            {props.footer}
-          </box>
-        </Show>
-      </box>
+              }
+            >
+              <UserMessage
+                content={item.content}
+                images={item.images}
+                kind={item.kind}
+                pendingMode={item.pendingMode}
+              />
+            </Show>
+          )
+        }
+      </For>
     </scrollbox>
   )
 }

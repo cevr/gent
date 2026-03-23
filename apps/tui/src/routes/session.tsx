@@ -548,16 +548,15 @@ export function Session(props: SessionProps) {
         syntaxStyle={syntaxStyle}
         streaming={client.isStreaming()}
         getChildSessions={getChildren}
-        footer={
-          <box flexDirection="column">
-            <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
-            <QueueWidget
-              queuedMessage={pendingQueuedMessage()}
-              steerMessages={pendingSteerMessages()}
-            />
-          </box>
-        }
       />
+
+      <box flexDirection="column" flexShrink={0}>
+        <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
+        <QueueWidget
+          queuedMessage={pendingQueuedMessage()}
+          steerMessages={pendingSteerMessages()}
+        />
+      </box>
 
       {/* Bordered input */}
       <BorderedInput
