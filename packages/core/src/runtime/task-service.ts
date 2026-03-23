@@ -1,6 +1,13 @@
 import { ServiceMap, Effect, Layer } from "effect"
 import { Task, type TaskStatus } from "../domain/task.js"
-import { EventStore, TaskCreated, TaskUpdated, TaskCompleted, TaskFailed } from "../domain/event.js"
+import {
+  EventStore,
+  TaskCreated,
+  TaskUpdated,
+  TaskCompleted,
+  TaskFailed,
+  TaskDeleted,
+} from "../domain/event.js"
 import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import type { TaskId, SessionId, BranchId } from "../domain/ids.js"
@@ -210,19 +217,64 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           Effect.gen(function* () {
             const updated = yield* storage.updateTask(id, fields)
             if (updated !== undefined && fields.status !== undefined) {
-              yield* eventStore.publish(
-                new TaskUpdated({
-                  sessionId: updated.sessionId,
-                  branchId: updated.branchId,
-                  taskId: id,
-                  status: fields.status,
-                }),
-              )
+              if (fields.status === "completed") {
+                yield* eventStore.publish(
+                  new TaskCompleted({
+                    sessionId: updated.sessionId,
+                    branchId: updated.branchId,
+                    taskId: id,
+                    owner: updated.owner,
+                  }),
+                )
+              } else if (fields.status === "failed") {
+                const error =
+                  updated.metadata !== null &&
+                  updated.metadata !== undefined &&
+                  typeof updated.metadata === "object" &&
+                  "error" in updated.metadata &&
+                  typeof updated.metadata.error === "string"
+                    ? updated.metadata.error
+                    : undefined
+                yield* eventStore.publish(
+                  new TaskFailed({
+                    sessionId: updated.sessionId,
+                    branchId: updated.branchId,
+                    taskId: id,
+                    ...(error !== undefined ? { error } : {}),
+                  }),
+                )
+              } else {
+                yield* eventStore.publish(
+                  new TaskUpdated({
+                    sessionId: updated.sessionId,
+                    branchId: updated.branchId,
+                    taskId: id,
+                    status: fields.status,
+                  }),
+                )
+              }
             }
             return updated
           }).pipe(Effect.orDie),
 
-        remove: (id) => storage.deleteTask(id).pipe(Effect.orDie),
+        remove: (id) =>
+          Effect.gen(function* () {
+            const existing = yield* storage.getTask(id).pipe(Effect.orDie)
+            if (existing === undefined) {
+              yield* storage.deleteTask(id).pipe(Effect.orDie)
+              return
+            }
+            yield* storage.deleteTask(id).pipe(Effect.orDie)
+            yield* eventStore
+              .publish(
+                new TaskDeleted({
+                  sessionId: existing.sessionId,
+                  branchId: existing.branchId,
+                  taskId: id,
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+          }),
 
         run: (id) =>
           Effect.gen(function* () {

@@ -76,6 +76,7 @@ export function TaskWidget(props: TaskWidgetProps) {
         case "TaskUpdated":
         case "TaskCompleted":
         case "TaskFailed":
+        case "TaskDeleted":
           loadTasks()
           break
       }

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TaskCreateTool } from "@gent/core/tools/task-create"
 import { TaskListTool } from "@gent/core/tools/task-list"
@@ -46,7 +46,7 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
 )
 const baseDeps = Layer.mergeAll(
   Storage.Test(),
-  EventStore.Test(),
+  EventStore.Memory,
   TestExtRegistry,
   mockRunnerSuccess,
   platformLayer,
@@ -180,6 +180,51 @@ describe("TaskUpdateTool", () => {
       }).pipe(Effect.provide(layer)),
     )
     expect(result.status).toBe("completed")
+  })
+
+  test("publishes completed event when status becomes completed", async () => {
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* setup
+        const eventStore = yield* EventStore
+        const created = yield* TaskCreateTool.execute({ subject: "Ship it" }, ctx)
+        yield* TaskUpdateTool.execute(
+          {
+            taskId: created.taskId,
+            status: "completed",
+          },
+          ctx,
+        )
+        const envelopes = yield* eventStore
+          .subscribe({ sessionId: "s1" as SessionId })
+          .pipe(Stream.take(2), Stream.runCollect)
+        return Array.from(envelopes, (envelope) => envelope.event._tag)
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(events).toContain("TaskCompleted")
+  })
+})
+
+describe("TaskService.remove", () => {
+  test("publishes deleted event", async () => {
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* setup
+        const eventStore = yield* EventStore
+        const taskService = yield* TaskService
+        const created = yield* taskService.create({
+          sessionId: "s1" as SessionId,
+          branchId: "b1",
+          subject: "Ephemeral debug task",
+        })
+        yield* taskService.remove(created.id)
+        const envelopes = yield* eventStore
+          .subscribe({ sessionId: "s1" as SessionId })
+          .pipe(Stream.take(2), Stream.runCollect)
+        return Array.from(envelopes, (envelope) => envelope.event._tag)
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(events).toContain("TaskDeleted")
   })
 })
 

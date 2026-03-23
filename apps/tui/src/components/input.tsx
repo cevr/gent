@@ -91,6 +91,7 @@ export interface InputProps {
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
   clearMessages?: () => void
+  debugMode?: boolean
   children?: JSX.Element
   /** Input state from parent (optional - for state machine mode) */
   inputState?: InputState
@@ -518,6 +519,11 @@ export function Input(props: InputProps) {
           <text style={{ fg: effectiveMode() === "shell" ? theme.warning : theme.primary }}>
             {promptSymbol()}
           </text>
+          <Show when={props.debugMode === true}>
+            <box paddingRight={1}>
+              <text style={{ fg: theme.warning }}>debug</text>
+            </box>
+          </Show>
           <box flexGrow={1}>
             <textarea
               ref={(r) => {

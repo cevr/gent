@@ -165,6 +165,7 @@ export const createDependencies = (
   | Skills
   | ConfigService
   | ModelRegistry
+  | TaskService
   | PermissionHandler
   | AgentLoop
   | ActorProcess

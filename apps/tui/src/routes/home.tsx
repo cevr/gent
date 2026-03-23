@@ -22,6 +22,7 @@ const LOGOS = getLogos()
 
 export interface HomeProps {
   initialPrompt?: string
+  debugMode?: boolean
 }
 
 type HomeState =
@@ -199,7 +200,11 @@ export function Home(props: HomeProps) {
         topRight={[{ text: client.agent(), color: theme.textMuted }] satisfies BorderLabelItem[]}
         bottomRight={[{ text: cwdGitLabel(), color: theme.textMuted }]}
       >
-        <Input onSubmit={handleSubmit} onSlashCommand={handleSlashCommand}>
+        <Input
+          onSubmit={handleSubmit}
+          onSlashCommand={handleSlashCommand}
+          debugMode={props.debugMode}
+        >
           <Input.Autocomplete />
         </Input>
       </BorderedInput>

@@ -19,6 +19,7 @@ export interface Message {
   id: string
   role: "user" | "assistant" | "system" | "tool"
   kind: "regular" | "interjection"
+  pendingMode?: "queued" | "steer"
   content: string
   reasoning: string
   images: ImageInfo[]
@@ -32,12 +33,13 @@ function UserMessage(props: {
   content: string
   images: ImageInfo[]
   kind: "regular" | "interjection"
+  pendingMode?: "queued" | "steer"
 }) {
   const { theme } = useTheme()
   const isInterjection = () => props.kind === "interjection"
   const background = () => (isInterjection() ? theme.backgroundPanel : theme.backgroundElement)
   const textColor = () => (isInterjection() ? theme.warning : theme.text)
-  const label = () => (isInterjection() ? "steer" : "queue")
+  const label = () => props.pendingMode
   const labelColor = () => (isInterjection() ? theme.warning : theme.textMuted)
   const hasContent = () => props.content.length > 0 || props.images.length > 0
 
@@ -59,7 +61,9 @@ function UserMessage(props: {
         </Show>
         <Show when={props.content.length > 0}>
           <box flexDirection="column">
-            <text style={{ fg: labelColor() }}>[{label()}]</text>
+            <Show when={label()}>
+              {(value) => <text style={{ fg: labelColor() }}>[{value()}]</text>}
+            </Show>
             <text style={{ fg: textColor() }}>{props.content}</text>
           </box>
         </Show>
@@ -204,7 +208,12 @@ export function MessageList(props: MessageListProps) {
                 />
               }
             >
-              <UserMessage content={item.content} images={item.images} kind={item.kind} />
+              <UserMessage
+                content={item.content}
+                images={item.images}
+                kind={item.kind}
+                pendingMode={item.pendingMode}
+              />
             </Show>
           )
         }

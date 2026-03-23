@@ -36,7 +36,7 @@ function AppContent(props: AppProps) {
     <box flexDirection="column" width="100%" height="100%">
       <Switch>
         <Match when={isRoute.home(router.route())}>
-          <Home initialPrompt={props.initialPrompt} />
+          <Home initialPrompt={props.initialPrompt} debugMode={props.debugMode} />
         </Match>
         <Match when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}>
           {(r) => {
@@ -47,6 +47,7 @@ function AppContent(props: AppProps) {
                 sessionId={route.sessionId}
                 branchId={route.branchId}
                 initialPrompt={prompt}
+                debugMode={props.debugMode}
               />
             )
           }}

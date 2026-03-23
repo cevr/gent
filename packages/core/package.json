@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./domain/*": "./src/domain/*",
+    "./debug/*": "./src/debug/*",
     "./storage/*": "./src/storage/*",
     "./providers/*": "./src/providers/*",
     "./runtime/*": "./src/runtime/*",

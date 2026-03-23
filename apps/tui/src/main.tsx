@@ -33,6 +33,7 @@ import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
 import { seedDebugSession } from "./debug/bootstrap"
+import { startDebugScenario } from "@gent/core/debug/scenario.js"
 
 // Clear client log on startup
 clearClientLog()
@@ -431,6 +432,11 @@ const main = Command.make(
 
         if (state._tag === "debug") {
           const debugSession = yield* seedDebugSession(cwd)
+          yield* startDebugScenario({
+            sessionId: debugSession.sessionId,
+            branchId: debugSession.branchId,
+            cwd,
+          })
           initialSession = debugSession
           initialRoute = Route.session(debugSession.sessionId, debugSession.branchId)
           debugMode = true

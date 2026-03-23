@@ -42,6 +42,7 @@ export interface SessionProps {
   sessionId: SessionId
   branchId: BranchId
   initialPrompt?: string
+  debugMode?: boolean
 }
 
 type OverlayState =
@@ -70,6 +71,12 @@ export function Session(props: SessionProps) {
     content: string
     createdAt: number
   } | null>(null)
+  const [pendingSteerMessages, setPendingSteerMessages] = createSignal<
+    ReadonlyArray<{
+      content: string
+      createdAt: number
+    }>
+  >([])
 
   // Handle input state transitions
   const handleInputEvent = (event: InputEvent) => {
@@ -97,21 +104,37 @@ export function Session(props: SessionProps) {
 
   const items = createMemo<SessionItem[]>(() => {
     const pending = pendingQueuedMessage()
-    if (pending === null) return feed.items()
-    return [
-      ...feed.items(),
-      {
-        _tag: "message",
-        id: `pending-queue-${pending.createdAt}`,
-        role: "user",
-        kind: "regular",
-        content: pending.content,
-        reasoning: "",
-        images: [],
-        createdAt: pending.createdAt,
-        toolCalls: undefined,
-      },
-    ]
+    const pendingSteers = pendingSteerMessages().map((message) => ({
+      _tag: "message" as const,
+      id: `pending-steer-${message.createdAt}`,
+      role: "user" as const,
+      kind: "interjection" as const,
+      pendingMode: "steer" as const,
+      content: message.content,
+      reasoning: "",
+      images: [],
+      createdAt: message.createdAt,
+      toolCalls: undefined,
+    }))
+    const pendingQueue =
+      pending === null
+        ? []
+        : [
+            {
+              _tag: "message" as const,
+              id: `pending-queue-${pending.createdAt}`,
+              role: "user" as const,
+              kind: "regular" as const,
+              pendingMode: "queued" as const,
+              content: pending.content,
+              reasoning: "",
+              images: [],
+              createdAt: pending.createdAt,
+              toolCalls: undefined,
+            },
+          ]
+
+    return [...feed.items(), ...pendingSteers, ...pendingQueue]
   })
 
   createEffect(() => {
@@ -131,6 +154,25 @@ export function Session(props: SessionProps) {
     if (matched) {
       setPendingQueuedMessage(null)
     }
+  })
+
+  createEffect(() => {
+    const pending = pendingSteerMessages()
+    if (pending.length === 0) return
+
+    setPendingSteerMessages((current) =>
+      current.filter((message) => {
+        return !feed
+          .messages()
+          .some(
+            (item) =>
+              item.role === "user" &&
+              item.kind === "interjection" &&
+              item.content === message.content &&
+              item.createdAt >= message.createdAt,
+          )
+      }),
+    )
   })
 
   // ── Elapsed timer ──
@@ -218,6 +260,7 @@ export function Session(props: SessionProps) {
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
     if (mode === "interject" && client.isStreaming()) {
+      setPendingSteerMessages((current) => [...current, { content, createdAt: Date.now() }])
       client.steer({ _tag: "Interject", message: content, agent: client.agent() })
       return
     }
@@ -441,6 +484,7 @@ export function Session(props: SessionProps) {
         <Input
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
+          debugMode={props.debugMode}
           clearMessages={feed.clear}
           inputState={inputState()}
           onInputEvent={handleInputEvent}

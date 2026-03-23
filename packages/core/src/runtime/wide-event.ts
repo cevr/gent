@@ -263,6 +263,7 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
                   case "TaskUpdated":
                   case "TaskCompleted":
                   case "TaskFailed":
+                  case "TaskDeleted":
                   case "AgentRestarted":
                   case "WorkflowPhaseStarted":
                   case "WorkflowCompleted":
