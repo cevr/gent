@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Layer, Option, Ref, Stream, Tracer } from "effect"
+import { Config, Console, Effect, Layer, Option, Tracer } from "effect"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
@@ -9,46 +9,30 @@ import { AppServicesLive, createDependencies } from "@gent/core/server/index.js"
 import type { AppServiceError } from "@gent/core/server/errors.js"
 import { SessionQueries, type SessionQueriesService } from "@gent/core/server/session-queries.js"
 import { SessionCommands, type SessionCommandsService } from "@gent/core/server/session-commands.js"
-import { SessionEvents, type SessionEventsService } from "@gent/core/server/session-events.js"
-import { makeDirectGentClient, type GentClient, type SessionInfo, type BranchInfo } from "@gent/sdk"
+import { SessionEvents } from "@gent/core/server/session-events.js"
+import { makeDirectGentClient, type GentClient, type SessionInfo } from "@gent/sdk"
 import { GentLogger } from "@gent/core/runtime/logger.js"
 import { GentTracerLive, clearTraceLogIfRoot } from "@gent/core/runtime/tracer.js"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
 import { OsService } from "@gent/core/domain/os-service.js"
-import type { HandoffPresented } from "@gent/core/domain/event.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
-import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
+import type { SessionId } from "@gent/core/domain/ids.js"
 import * as os from "node:os"
 
 import { render } from "@opentui/solid"
 import { App } from "./app"
-import { ClientProvider, type Session } from "./client/index"
-import { RouterProvider, Route } from "./router/index"
+import { ClientProvider } from "./client/index"
+import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
-import { prepareDebugSession } from "@gent/core/debug/session.js"
 import { joinPath } from "./platform/path-runtime"
+import { resolveAppBootstrap, type InitialState } from "./app-bootstrap"
+import { runHeadless } from "./headless-runner"
 
 // Clear client log on startup
 clearClientLog()
-
-// ============================================================================
-// Initial State - discriminated union for clarity
-// ============================================================================
-
-type InitialState =
-  | { _tag: "home" }
-  | { _tag: "debug" }
-  | { _tag: "session"; session: SessionInfo; prompt?: string }
-  | {
-      _tag: "branchPicker"
-      session: SessionInfo
-      branches: readonly BranchInfo[]
-      prompt?: string
-    }
-  | { _tag: "headless"; session: SessionInfo; prompt: string }
 
 // Pure function for state resolution
 const resolveInitialState = (input: {
@@ -235,93 +219,6 @@ const makeCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
     }),
   )
 
-// Headless runner - streams events to stdout
-const runHeadless = (
-  commands: SessionCommandsService,
-  events: SessionEventsService,
-  client: GentClient,
-  sessionId: SessionId,
-  branchId: BranchId,
-  promptText: string,
-): Effect.Effect<void, AppServiceError, never> =>
-  Effect.gen(function* () {
-    // Subscribe to events before sending message
-    const eventStream = events.subscribeEvents({ sessionId, branchId })
-
-    // Send the message
-    yield* commands
-      .sendMessage({ sessionId, branchId, content: promptText })
-      .pipe(Effect.withSpan("Headless.sendMessage"))
-
-    // Stream events until turn completes (with handoff support)
-    // TurnCompleted fires before HandoffPresented, so we can't use simple takeUntil.
-    // Track state with Refs for concurrency safety.
-    const doneRef = yield* Ref.make(false)
-    const handoffPendingRef = yield* Ref.make(false)
-
-    yield* eventStream.pipe(
-      Stream.tap((envelope) =>
-        Effect.gen(function* () {
-          const event = envelope.event
-          switch (event._tag) {
-            case "StreamChunk":
-              process.stdout.write(event.chunk)
-              break
-            case "ToolCallStarted":
-              process.stdout.write(`\n[tool: ${event.toolName}]\n`)
-              break
-            case "ToolCallCompleted":
-              process.stdout.write(
-                `[tool done: ${event.toolName}${event.isError ? " (error)" : ""}]\n`,
-              )
-              break
-            case "ToolCallSucceeded":
-              process.stdout.write(`[tool done: ${event.toolName}]\n`)
-              break
-            case "ToolCallFailed":
-              process.stdout.write(`[tool done: ${event.toolName} (error)]\n`)
-              break
-            case "StreamEnded":
-              process.stdout.write("\n")
-              break
-            case "ErrorOccurred":
-              process.stderr.write(`\nError: ${event.error}\n`)
-              yield* Ref.set(doneRef, true)
-              break
-            case "TurnCompleted":
-              // Don't exit yet — handoff check runs after this in the agent loop
-              break
-            case "HandoffPresented": {
-              yield* Ref.set(handoffPendingRef, true)
-              const hp = event as typeof HandoffPresented.Type
-              process.stdout.write(`\n[handoff: auto-confirming]\n`)
-              yield* client
-                .respondHandoff(hp.requestId, "confirm")
-                .pipe(Effect.catchEager(() => Effect.void))
-              break
-            }
-            case "HandoffConfirmed":
-              yield* Ref.set(handoffPendingRef, false)
-              yield* Ref.set(doneRef, true)
-              break
-            case "HandoffRejected":
-              yield* Ref.set(handoffPendingRef, false)
-              break
-          }
-
-          // After TurnCompleted, wait briefly for HandoffPresented to arrive
-          if (event._tag === "TurnCompleted") {
-            yield* Effect.sleep("50 millis")
-            const pending = yield* Ref.get(handoffPendingRef)
-            if (!pending) yield* Ref.set(doneRef, true)
-          }
-        }),
-      ),
-      Stream.takeUntilEffect(() => Ref.get(doneRef)),
-      Stream.runDrain,
-    )
-  })
-
 // Main command - launches TUI or runs headless
 const main = Command.make(
   "gent",
@@ -420,7 +317,7 @@ const main = Command.make(
                       sampled: true,
                     })
                   : undefined
-              const headlessEffect = runHeadless(
+              yield* runHeadless(
                 commands,
                 events,
                 gentClient,
@@ -431,48 +328,15 @@ const main = Command.make(
                 Effect.withSpan("Headless.run"),
                 parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
               )
-              yield* headlessEffect
               return process.exit(0)
             }
 
             const uiServices = (yield* Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
-
-            let initialSession: Session | undefined
-            let initialRoute = Route.home()
-            let initialPrompt: string | undefined
-            let debugMode = false
-            const missingAuthProviders =
-              !debug && missingProviders.length > 0
-                ? (missingProviders as readonly ProviderId[])
-                : undefined
-
-            if (state._tag === "debug") {
-              const debugSession = yield* prepareDebugSession(cwd)
-              initialSession = debugSession
-              initialRoute = Route.session(debugSession.sessionId, debugSession.branchId)
-              debugMode = true
-            }
-
-            if (state._tag === "session" && state.session.branchId !== undefined) {
-              initialSession = {
-                sessionId: state.session.id,
-                branchId: state.session.branchId,
-                name: state.session.name ?? "Unnamed",
-                bypass: state.session.bypass ?? true,
-                reasoningLevel: state.session.reasoningLevel,
-              }
-              initialRoute = Route.session(state.session.id, state.session.branchId)
-              initialPrompt = state.prompt
-            }
-
-            if (state._tag === "branchPicker") {
-              initialRoute = Route.branchPicker(
-                state.session.id,
-                state.session.name ?? "Unnamed",
-                state.branches,
-                state.prompt,
-              )
-            }
+            const bootstrap = yield* resolveAppBootstrap(state, {
+              cwd,
+              debug,
+              missingProviders: missingProviders as readonly ProviderId[],
+            })
 
             const visualOpt = yield* Config.option(Config.string("VISUAL"))
             const editorOpt = yield* Config.option(Config.string("EDITOR"))
@@ -486,12 +350,12 @@ const main = Command.make(
                 <EnvProvider env={env}>
                   <WorkspaceProvider cwd={cwd} services={uiServices}>
                     <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                      <ClientProvider client={gentClient} initialSession={initialSession}>
-                        <RouterProvider initialRoute={initialRoute}>
+                      <ClientProvider client={gentClient} initialSession={bootstrap.initialSession}>
+                        <RouterProvider initialRoute={bootstrap.initialRoute}>
                           <App
-                            initialPrompt={initialPrompt}
-                            missingAuthProviders={missingAuthProviders}
-                            debugMode={debugMode}
+                            initialPrompt={bootstrap.initialPrompt}
+                            missingAuthProviders={bootstrap.missingAuthProviders}
+                            debugMode={bootstrap.debugMode}
                           />
                         </RouterProvider>
                       </ClientProvider>
