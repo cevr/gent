@@ -42,6 +42,23 @@ function createMockClient() {
         return Effect.void
       })
     },
+    subscribeLiveEvents: (_input: { sessionId: string }) =>
+      Stream.async<EventEnvelope>((emit) => {
+        eventCallback = (envelope) => {
+          emit.single(envelope)
+        }
+        return Effect.void
+      }),
+    watchSessionState: () =>
+      Stream.make({
+        sessionId: "s1",
+        branchId: "b1",
+        messages: [],
+        lastEventId: null,
+        isStreaming: false,
+        agent: "cowork" as const,
+      }),
+    watchQueue: () => Stream.make({ steering: [], followUp: [] }),
     sendMessage: mock(() => Effect.void),
     listMessages: mock(() => Effect.succeed([])),
     getSessionState: mock(() =>
@@ -60,6 +77,8 @@ function createMockClient() {
     createSession: mock(() => Effect.succeed({ sessionId: "s1", branchId: "b1", name: "Test" })),
     createBranch: mock(() => Effect.succeed("new-branch")),
     steer: mock(() => Effect.void),
+    getQueuedMessages: mock(() => Effect.succeed({ steering: [], followUp: [] })),
+    drainQueuedMessages: mock(() => Effect.succeed({ steering: [], followUp: [] })),
     services: ServiceMap.empty(),
   }
 }

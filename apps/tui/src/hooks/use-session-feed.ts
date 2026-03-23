@@ -8,7 +8,7 @@
 
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
-import { Effect } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import type { AgentEvent } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import {
@@ -242,27 +242,6 @@ export function useSessionFeed(
     })
   })
 
-  const loadMessages = (branch: BranchId, key: string) => {
-    cast(
-      client.client.listMessages(branch).pipe(
-        Effect.map((msgs) => buildMessages(msgs)),
-        Effect.tap((msgs) =>
-          Effect.sync(() => {
-            // Drop stale results if identity changed while async was in flight
-            if (currentKey !== key) return
-            setStore("messages", msgs)
-          }),
-        ),
-        Effect.catchEager((err) =>
-          Effect.sync(() => {
-            if (currentKey !== key) return
-            client.setError(formatError(err))
-          }),
-        ),
-      ),
-    )
-  }
-
   // Keyed subscription — re-runs only when sessionId:branchId identity changes
   const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
 
@@ -288,7 +267,28 @@ export function useSessionFeed(
       const branch = branchId()
       const session = sessionId()
       clientLog.info("sessionFeed.activate", { key })
-      loadMessages(branch, key)
+
+      const watchFiber = Effect.runForkWith(client.client.services)(
+        client.client
+          .watchSessionState({
+            sessionId: session,
+            branchId: branch,
+          })
+          .pipe(
+            Stream.runForEach((state) =>
+              Effect.sync(() => {
+                if (currentKey !== key) return
+                setStore("messages", buildMessages(state.messages))
+              }),
+            ),
+            Effect.catchEager((err) =>
+              Effect.sync(() => {
+                if (currentKey !== key) return
+                client.setError(formatError(err))
+              }),
+            ),
+          ),
+      )
 
       const unsubscribe = client.subscribeEvents((event) => {
         // Guard: only process events for our session/branch
@@ -321,7 +321,10 @@ export function useSessionFeed(
         )
       }
 
-      onCleanup(unsubscribe)
+      onCleanup(() => {
+        unsubscribe()
+        Effect.runFork(Fiber.interrupt(watchFiber))
+      })
     }),
   )
 
@@ -342,7 +345,6 @@ export function useSessionFeed(
 
     switch (event._tag) {
       case "MessageReceived":
-        loadMessages(branch, key)
         break
 
       case "BranchSwitched":

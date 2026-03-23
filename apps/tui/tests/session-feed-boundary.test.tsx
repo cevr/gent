@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Deferred, Effect, Option, Stream } from "effect"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
@@ -15,29 +15,55 @@ import {
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-session-feed-")
 
-const waitForFrame = async (
+const waitForFrame = (
   setup: Awaited<ReturnType<typeof renderWithProviders>>,
+  worker: Awaited<Effect.Effect.Success<ReturnType<typeof startWorkerWithClient>>>,
+  session: { sessionId: string; branchId: string },
   predicate: (frame: string) => boolean,
   label: string,
   timeoutMs = 5_000,
-): Promise<string> => {
-  const deadline = Date.now() + timeoutMs
-  let lastFrame = ""
+): Effect.Effect<string, Error> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const match = yield* Deferred.make<string>()
+      let lastFrame = ""
 
-  const poll = async (): Promise<string> => {
-    await setup.renderOnce()
-    const frame = renderFrame(setup)
-    lastFrame = frame
-    if (predicate(frame)) return frame
-    if (Date.now() >= deadline) {
-      throw new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`)
-    }
-    await Bun.sleep(25)
-    return poll()
-  }
+      const renderAndMatch = Effect.gen(function* () {
+        yield* Effect.sleep("10 millis")
+        yield* Effect.promise(() => setup.renderOnce())
+        const frame = renderFrame(setup)
+        lastFrame = frame
+        if (predicate(frame)) {
+          yield* Deferred.succeed(match, frame).pipe(Effect.ignore)
+        }
+      })
 
-  return poll()
-}
+      yield* renderAndMatch
+
+      yield* Effect.forkScoped(
+        worker.client.watchSessionState(session).pipe(Stream.runForEach(() => renderAndMatch)),
+      )
+      yield* Effect.forkScoped(
+        worker.client.watchQueue(session).pipe(Stream.runForEach(() => renderAndMatch)),
+      )
+      yield* Effect.forkScoped(
+        worker.client.subscribeEvents(session).pipe(Stream.runForEach(() => renderAndMatch)),
+      )
+
+      return yield* Deferred.await(match).pipe(
+        Effect.timeoutOption(`${timeoutMs} millis`),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`),
+              ),
+            onSome: Effect.succeed,
+          }),
+        ),
+      )
+    }),
+  )
 
 const makeSessionState = (created: {
   sessionId: string
@@ -91,18 +117,23 @@ describe("session feed boundary", () => {
             content: "queued",
           })
 
-          const thinkingFrame = yield* Effect.promise(() =>
-            waitForFrame(setup, (frame) => frame.includes("thinking"), "thinking label", 10_000),
+          const thinkingFrame = yield* waitForFrame(
+            setup,
+            worker,
+            created,
+            (frame) => frame.includes("thinking"),
+            "thinking label",
+            10_000,
           )
           expect(thinkingFrame).toContain("thinking")
 
-          const responseFrame = yield* Effect.promise(() =>
-            waitForFrame(
-              setup,
-              (frame) => frame.includes("debug response"),
-              "assistant debug response",
-              10_000,
-            ),
+          const responseFrame = yield* waitForFrame(
+            setup,
+            worker,
+            created,
+            (frame) => frame.includes("debug response"),
+            "assistant debug response",
+            10_000,
           )
           expect(responseFrame).toContain("debug response")
         }),
@@ -153,16 +184,16 @@ describe("session feed boundary", () => {
             content: "queued follow-up",
           })
 
-          const frame = yield* Effect.promise(() =>
-            waitForFrame(
-              setup,
-              (next) =>
-                next.includes("queue") &&
-                next.includes("[queued 1]") &&
-                next.includes("queued follow-up"),
-              "queue widget",
-              10_000,
-            ),
+          const frame = yield* waitForFrame(
+            setup,
+            worker,
+            created,
+            (next) =>
+              next.includes("queue") &&
+              next.includes("[queued 1]") &&
+              next.includes("queued follow-up"),
+            "queue widget",
+            10_000,
           )
 
           expect(frame).toContain("queue")
@@ -210,13 +241,13 @@ describe("session feed boundary", () => {
             content: "boom",
           })
 
-          const frame = yield* Effect.promise(() =>
-            waitForFrame(
-              setup,
-              (next) => next.includes("provider exploded"),
-              "error event",
-              10_000,
-            ),
+          const frame = yield* waitForFrame(
+            setup,
+            worker,
+            created,
+            (next) => next.includes("provider exploded"),
+            "error event",
+            10_000,
           )
 
           expect(frame).toContain("provider exploded")

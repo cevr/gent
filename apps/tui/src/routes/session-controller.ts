@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
@@ -136,22 +136,6 @@ export function useSessionController(props: {
     for (const effect of result.effects) handleSessionUiEffect(effect)
   }
 
-  const syncQueueState = () =>
-    cast(
-      client.getQueuedMessages().pipe(
-        Effect.tap((next) =>
-          Effect.sync(() => {
-            setQueueState(next)
-          }),
-        ),
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            client.setError(formatError(error))
-          }),
-        ),
-      ),
-    )
-
   const handleComposerEffect = (effect: ReturnType<typeof transition>["effect"]) => {
     if (effect === undefined) return
     switch (effect._tag) {
@@ -245,26 +229,31 @@ export function useSessionController(props: {
   createEffect(() => {
     void props.sessionId
     void props.branchId
-    syncQueueState()
-  })
-
-  createEffect(() => {
     const restartCount = client.workerRestartCount()
     void restartCount
     if (!client.isActive()) return
-    syncQueueState()
-  })
-
-  createEffect(() => {
-    const queue = queueState()
-    const shouldPoll =
-      client.isStreaming() || queue.steering.length > 0 || queue.followUp.length > 0
-    if (!shouldPoll) return
-
-    const interval = setInterval(() => {
-      syncQueueState()
-    }, 250)
-    onCleanup(() => clearInterval(interval))
+    const fiber = Effect.runForkWith(client.client.services)(
+      client.client
+        .watchQueue({
+          sessionId: props.sessionId,
+          branchId: props.branchId,
+        })
+        .pipe(
+          Stream.runForEach((next) =>
+            Effect.sync(() => {
+              setQueueState(next)
+            }),
+          ),
+          Effect.catchEager((error) =>
+            Effect.sync(() => {
+              client.setError(formatError(error))
+            }),
+          ),
+        ),
+    )
+    onCleanup(() => {
+      Effect.runFork(Fiber.interrupt(fiber))
+    })
   })
 
   const activity = () => {

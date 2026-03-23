@@ -65,13 +65,16 @@ export const waitFor = <A>(
   effect: Effect.Effect<A, unknown>,
   predicate: (value: A) => boolean,
   timeoutMs = 5_000,
+  label = "condition",
 ): Effect.Effect<A, Error> => {
   const deadline = Date.now() + timeoutMs
 
   const loop: Effect.Effect<A, Error> = Effect.gen(function* () {
     const value = yield* effect.pipe(Effect.mapError((error) => new Error(String(error))))
     if (predicate(value)) return value
-    if (Date.now() >= deadline) return yield* Effect.fail(new Error("timed out waiting"))
+    if (Date.now() >= deadline) {
+      return yield* Effect.fail(new Error(`timed out waiting for ${label}`))
+    }
     yield* Effect.sleep("100 millis")
     return yield* loop
   })
