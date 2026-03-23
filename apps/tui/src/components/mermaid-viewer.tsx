@@ -158,14 +158,17 @@ export function MermaidViewer(props: MermaidViewerProps) {
 /**
  * Collect all renderable mermaid diagrams from message content.
  */
-export function collectDiagrams(messages: Array<{ content: string }>): MermaidDiagram[] {
+export function collectDiagrams(
+  messages: Array<{ content: string }>,
+  width: number,
+): MermaidDiagram[] {
   const diagrams: MermaidDiagram[] = []
-  const width = process.stdout.columns ?? 120
+  const renderWidth = width > 0 ? width : 120
 
   for (const msg of messages) {
     const blocks = extractMermaidBlocks(msg.content)
     for (const block of blocks) {
-      const rendered = renderMermaidToAscii(block.source, width)
+      const rendered = renderMermaidToAscii(block.source, renderWidth)
       if (rendered !== undefined) {
         diagrams.push({ source: block.source, rendered })
       }

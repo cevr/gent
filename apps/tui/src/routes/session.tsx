@@ -3,13 +3,14 @@
  */
 
 import { createMemo } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList } from "../components/message-list"
 import { Composer } from "../components/composer"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
-import { MermaidViewer } from "../components/mermaid-viewer"
+import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { TaskWidget } from "../components/task-widget"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/index"
@@ -32,11 +33,17 @@ export interface SessionProps {
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const workspace = useWorkspace()
   const controller = useSessionController(props)
   const client = controller.client
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
+  const mermaidDiagrams = createMemo(() =>
+    controller.uiState().overlay._tag === "mermaid"
+      ? collectDiagrams(controller.messages(), dimensions().width)
+      : [],
+  )
 
   const borderColor = () => {
     if (client.isError()) return theme.error
@@ -140,7 +147,7 @@ export function Session(props: SessionProps) {
 
       <MermaidViewer
         open={controller.uiState().overlay._tag === "mermaid"}
-        diagrams={controller.mermaidDiagrams()}
+        diagrams={mermaidDiagrams()}
         onClose={controller.closeOverlay}
       />
 

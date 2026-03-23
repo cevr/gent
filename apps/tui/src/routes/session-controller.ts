@@ -2,7 +2,6 @@ import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { Effect } from "effect"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
-import { collectDiagrams } from "../components/mermaid-viewer"
 import type { Message, SessionItem } from "../components/message-list"
 import { promptSearchEventFromKey } from "../components/prompt-search-palette"
 import { getPromptSearchItems } from "../components/prompt-search-state"
@@ -50,7 +49,6 @@ export interface SessionController {
   restoreTextRequest: () => RestoreTextRequest
   toolsExpanded: () => boolean
   treeOverlay: () => ReturnType<typeof getTreeOverlay>
-  mermaidDiagrams: () => ReturnType<typeof collectDiagrams>
   activity: () =>
     | { phase: "idle"; turn: number }
     | { phase: "thinking"; turn: number }
@@ -541,8 +539,6 @@ export function useSessionController(props: {
     restoreTextRequest,
     toolsExpanded: () => uiState().toolsExpanded,
     treeOverlay: () => getTreeOverlay(uiState().overlay),
-    mermaidDiagrams: () =>
-      uiState().overlay._tag === "mermaid" ? collectDiagrams(feed.messages()) : [],
     activity,
     spinner,
     phaseLabel,

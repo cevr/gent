@@ -25,8 +25,7 @@ import { RouterProvider, Route } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
-import { seedDebugSession } from "./debug/bootstrap"
-import { startDebugScenario } from "@gent/core/debug/scenario.js"
+import { prepareDebugSession } from "@gent/core/debug/session.js"
 import { joinPath } from "./platform/path-runtime"
 
 // Clear client log on startup
@@ -428,12 +427,7 @@ const main = Command.make(
                 : undefined
 
             if (state._tag === "debug") {
-              const debugSession = yield* seedDebugSession(cwd)
-              yield* startDebugScenario({
-                sessionId: debugSession.sessionId,
-                branchId: debugSession.branchId,
-                cwd,
-              })
+              const debugSession = yield* prepareDebugSession(cwd)
               initialSession = debugSession
               initialRoute = Route.session(debugSession.sessionId, debugSession.branchId)
               debugMode = true

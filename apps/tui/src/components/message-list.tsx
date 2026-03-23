@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js"
 import type { SyntaxStyle } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
 import { SessionEventIndicator } from "./session-event-indicator"
@@ -78,6 +79,7 @@ function AssistantMessage(props: {
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const visibleToolCalls = createMemo(() =>
     (props.toolCalls ?? []).filter(
       (toolCall) => !toolCall.toolName.toLowerCase().startsWith("task_"),
@@ -92,9 +94,7 @@ function AssistantMessage(props: {
   // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
   // Use adaptive presets based on terminal width
   const processedContent = createMemo(() =>
-    props.streaming
-      ? props.content
-      : replaceMermaidBlocks(props.content, process.stdout.columns ?? 80),
+    props.streaming ? props.content : replaceMermaidBlocks(props.content, dimensions().width),
   )
 
   return (
