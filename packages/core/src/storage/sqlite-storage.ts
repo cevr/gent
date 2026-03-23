@@ -197,6 +197,10 @@ export interface StorageService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<AgentLoopCheckpointRecord | undefined, StorageError>
+  readonly listAgentLoopCheckpoints: () => Effect.Effect<
+    ReadonlyArray<AgentLoopCheckpointRecord>,
+    StorageError
+  >
   readonly deleteAgentLoopCheckpoint: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -1242,6 +1246,15 @@ const makeStorage = Effect.gen(function* () {
         return row === undefined ? undefined : agentLoopCheckpointFromRow(row)
       },
       Effect.mapError(mapError("Failed to get agent loop checkpoint")),
+    ),
+
+    listAgentLoopCheckpoints: Effect.fn("Storage.listAgentLoopCheckpoints")(
+      function* () {
+        const rows =
+          yield* sql<AgentLoopCheckpointRow>`SELECT session_id, branch_id, version, state_tag, state_json, updated_at FROM agent_loop_checkpoints ORDER BY updated_at ASC`
+        return rows.map(agentLoopCheckpointFromRow)
+      },
+      Effect.mapError(mapError("Failed to list agent loop checkpoints")),
     ),
 
     deleteAgentLoopCheckpoint: Effect.fn("Storage.deleteAgentLoopCheckpoint")(

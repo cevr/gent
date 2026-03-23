@@ -787,6 +787,28 @@ export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTran
 
       yield* recoverPending
 
+      const wakeCheckpointedLoops = storage.listAgentLoopCheckpoints().pipe(
+        Effect.mapError((cause) =>
+          wrapError("loop checkpoint recovery scan failed", Cause.fail(cause)),
+        ),
+        Effect.flatMap((records) =>
+          Effect.forEach(
+            records,
+            (record) =>
+              transport
+                .getQueuedMessages({
+                  sessionId: record.sessionId,
+                  branchId: record.branchId,
+                })
+                .pipe(Effect.asVoid),
+            { concurrency: 1 },
+          ),
+        ),
+        Effect.catchEager((error) => Effect.logWarning("loop checkpoint recovery failed", error)),
+      )
+
+      yield* wakeCheckpointedLoops
+
       const submit = (
         params: {
           commandId: ActorCommandId

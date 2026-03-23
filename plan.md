@@ -248,11 +248,11 @@ Gate:
 
 Checklist:
 
-- [ ] active-turn queue visibility
-- [ ] steer beats follow-up
-- [ ] drain matches UI restore semantics
-- [ ] restart while queued work exists converges correctly
-- [ ] `bun run gate`
+- [x] active-turn queue visibility
+- [x] steer beats follow-up
+- [x] drain matches UI restore semantics
+- [x] restart while queued work exists converges correctly
+- [x] `bun run gate`
 
 Goal:
 

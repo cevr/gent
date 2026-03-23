@@ -12,7 +12,7 @@ import { AuthStore } from "@gent/core/domain/auth-store.js"
 import { EventStore } from "@gent/core/domain/event.js"
 import { Permission } from "@gent/core/domain/permission.js"
 import { Skills } from "@gent/core/domain/skills.js"
-import { DebugProvider } from "@gent/core/debug/provider.js"
+import { DebugProvider, DebugSlowProvider } from "@gent/core/debug/provider.js"
 import {
   HandoffHandler,
   PermissionHandler,
@@ -55,7 +55,9 @@ export interface TransportCase {
   readonly run: <A>(assertion: (client: GentClient) => Effect.Effect<A, Error>) => Promise<A>
 }
 
-const baseLocalLayer = () => {
+type HarnessProviderMode = "debug-scripted" | "debug-slow"
+
+const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") => {
   const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
   const authGuardLive = Layer.provide(AuthGuard.Live, authStoreLive)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authStoreLive)
@@ -70,10 +72,12 @@ const baseLocalLayer = () => {
     ]),
   )
 
+  const providerLive = providerMode === "debug-slow" ? DebugSlowProvider : DebugProvider
+
   const baseDeps = Layer.mergeAll(
     Storage.Memory(),
     EventStore.Memory,
-    DebugProvider,
+    providerLive,
     extensionRegistryLive,
     Permission.Test(),
     PermissionHandler.Test(["allow"]),
@@ -104,23 +108,29 @@ const baseLocalLayer = () => {
   )
 }
 
-const makeDirectCase = (): TransportCase => ({
+const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
   name: "direct",
   run: (assertion) =>
     Effect.runPromise(
       Effect.scoped(
-        Effect.flatMap(makeDirectGentClient, assertion).pipe(Effect.provide(baseLocalLayer())),
+        Effect.flatMap(makeDirectGentClient, assertion).pipe(
+          Effect.provide(baseLocalLayer(providerMode)),
+        ),
       ),
     ),
 })
 
-const makeInProcessCase = (): TransportCase => ({
+const makeInProcessCase = (
+  providerMode: HarnessProviderMode = "debug-scripted",
+): TransportCase => ({
   name: "in-process-rpc",
   run: (assertion) =>
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const context = yield* Layer.build(Layer.provide(RpcHandlersLive, baseLocalLayer()))
+          const context = yield* Layer.build(
+            Layer.provide(RpcHandlersLive, baseLocalLayer(providerMode)),
+          )
           const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
           const services = yield* Effect.services<never>()
           const client = createClient(
@@ -133,7 +143,7 @@ const makeInProcessCase = (): TransportCase => ({
     ),
 })
 
-const makeWorkerCase = (): TransportCase => {
+const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => {
   return {
     name: "worker-http",
     run: (assertion) =>
@@ -148,7 +158,7 @@ const makeWorkerCase = (): TransportCase => {
               startupTimeoutMs: 20_000,
               env: {
                 GENT_DATA_DIR: dataDir,
-                GENT_PROVIDER_MODE: "debug-scripted",
+                GENT_PROVIDER_MODE: providerMode,
                 GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
                 GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
               },
@@ -160,7 +170,14 @@ const makeWorkerCase = (): TransportCase => {
   }
 }
 
-export const transportCases = [makeDirectCase(), makeInProcessCase(), makeWorkerCase()]
+const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted") => [
+  makeDirectCase(providerMode),
+  makeInProcessCase(providerMode),
+  makeWorkerCase(providerMode),
+]
+
+export const transportCases = makeTransportCases()
+export const queueTransportCases = [makeWorkerCase("debug-slow")]
 
 export const waitFor = <A>(
   effect: Effect.Effect<A, unknown>,

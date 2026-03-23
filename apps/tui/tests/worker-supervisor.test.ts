@@ -3,6 +3,7 @@ import { Deferred, Effect, Option, Stream } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { extractText } from "@gent/sdk"
 import {
   startWorkerSupervisor,
   type WorkerLifecycleState,
@@ -243,7 +244,7 @@ describe("worker supervisor", () => {
     )
   })
 
-  test("restart preserves queued follow-up visibility while the active turn is retrying", async () => {
+  test("restart with steer and follow-up queued converges to steer before follow-up", async () => {
     const root = makeTempDir()
     const dataDir = path.join(root, "data")
     fs.mkdirSync(dataDir, { recursive: true })
@@ -256,7 +257,7 @@ describe("worker supervisor", () => {
             startupTimeoutMs: 20_000,
             env: {
               GENT_DATA_DIR: dataDir,
-              GENT_PROVIDER_MODE: "debug-scripted",
+              GENT_PROVIDER_MODE: "debug-slow",
               GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
               GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
             },
@@ -270,13 +271,29 @@ describe("worker supervisor", () => {
           yield* worker.client.sendMessage({
             sessionId: created.sessionId,
             branchId: created.branchId,
-            content: "first",
+            content: "first turn",
           })
+
+          yield* waitFor(
+            worker.client.getSessionState({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            (state) => state.isStreaming,
+            10_000,
+          )
 
           yield* worker.client.sendMessage({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "queued follow-up",
+          })
+
+          yield* worker.client.steer({
+            _tag: "Interject",
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            message: "urgent steer",
           })
 
           const queuedBeforeRestart = yield* waitFor(
@@ -285,10 +302,13 @@ describe("worker supervisor", () => {
               branchId: created.branchId,
             }),
             (snapshot) =>
+              snapshot.steering.some((entry) => entry.content.includes("urgent steer")) &&
               snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
             10_000,
           )
-          expect(queuedBeforeRestart.followUp).toHaveLength(1)
+
+          expect(queuedBeforeRestart.steering[0]?.content).toContain("urgent steer")
+          expect(queuedBeforeRestart.followUp[0]?.content).toContain("queued follow-up")
 
           const pid = worker.pid()
           expect(pid).not.toBeNull()
@@ -296,17 +316,39 @@ describe("worker supervisor", () => {
 
           yield* Effect.promise(() => waitForRunning(worker, 1))
 
-          const queuedAfterRestart = yield* waitFor(
+          const messages = yield* waitFor(
+            worker.client.listMessages(created.branchId),
+            (items) => {
+              const userTexts = items
+                .filter((message) => message.role === "user")
+                .map((message) => extractText(message.parts))
+              return (
+                userTexts.includes("first turn") &&
+                userTexts.includes("urgent steer") &&
+                userTexts.includes("queued follow-up")
+              )
+            },
+            20_000,
+          )
+
+          const userTexts = messages
+            .filter((message) => message.role === "user")
+            .map((message) => extractText(message.parts))
+            .filter((text) => ["first turn", "urgent steer", "queued follow-up"].includes(text))
+
+          expect(userTexts).toEqual(["first turn", "urgent steer", "queued follow-up"])
+
+          const settledQueue = yield* waitFor(
             worker.client.getQueuedMessages({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
-            (snapshot) =>
-              snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
+            (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
             10_000,
           )
-          expect(queuedAfterRestart.followUp).toHaveLength(1)
-          expect(queuedAfterRestart.followUp[0]?.content).toContain("queued follow-up")
+
+          expect(settledQueue.steering).toEqual([])
+          expect(settledQueue.followUp).toEqual([])
         }),
       ),
     )
