@@ -9,7 +9,7 @@ import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import type { SubagentRunnerService } from "../domain/agent.js"
 import { FileLockService } from "../domain/file-lock.js"
-import type { EventStore } from "../domain/event.js"
+import { EventStore } from "../domain/event.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -32,6 +32,7 @@ import type { LoadedExtension } from "../domain/extension.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
+import { DebugProvider } from "../debug/provider.js"
 import * as nodePath from "node:path"
 import * as os from "node:os"
 import {
@@ -144,6 +145,8 @@ export interface DependenciesConfig {
   authFilePath?: string
   authKeyPath?: string
   skillsDirs?: ReadonlyArray<string>
+  persistenceMode?: "disk" | "memory"
+  providerMode?: "live" | "debug-scripted"
 }
 
 /**
@@ -209,9 +212,13 @@ export const createDependencies = (
     }),
   )
 
-  const StorageLive = Storage.Live(config.dbPath ?? ".gent/data.db")
+  const persistenceMode = config.persistenceMode ?? "disk"
+  const providerMode = config.providerMode ?? "live"
+  const StorageLive =
+    persistenceMode === "memory" ? Storage.Memory() : Storage.Live(config.dbPath ?? ".gent/data.db")
 
-  const EventStoreLayer = Layer.provide(EventStoreLive, StorageLive)
+  const EventStoreLayer =
+    persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, StorageLive)
 
   const ConfigServiceLive = ConfigService.Live
   const home = Effect.runSync(
@@ -266,7 +273,10 @@ export const createDependencies = (
   const ProviderFactoryLive = Layer.provide(ProviderFactory.Live, AuthStoreLive)
 
   // Provider depends on ProviderFactory
-  const ProviderLive = Layer.provide(Provider.Live, ProviderFactoryLive)
+  const ProviderLive =
+    providerMode === "debug-scripted"
+      ? DebugProvider
+      : Layer.provide(Provider.Live, ProviderFactoryLive)
 
   // Build base services with provider layers on top
   const BaseServicesLive = Layer.merge(

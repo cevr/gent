@@ -32,6 +32,7 @@ import { RouterProvider, Route } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
+import { seedDebugSession } from "./debug/bootstrap"
 
 // Clear client log on startup
 clearClientLog()
@@ -195,28 +196,33 @@ const TracerLayer = Layer.merge(GentTracerLive, clearTraceLogIfRoot)
 
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 
-const CoreLayer = Layer.unwrap(
-  Effect.gen(function* () {
-    const cwd = process.cwd()
-    const homeOpt = yield* Config.option(Config.string("HOME"))
-    const home = Option.getOrElse(homeOpt, () => os.homedir())
-    const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
-    const dataDir = Option.getOrElse(dataDirOpt, () => path.join(home, ".gent"))
-    const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
-    const dbPath = Option.getOrElse(dbPathOpt, () => path.join(dataDir, "data.db"))
-    const authFilePath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.json.enc") : undefined
-    const authKeyPath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.key") : undefined
+const makeCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const cwd = options?.cwd ?? process.cwd()
+      const homeOpt = yield* Config.option(Config.string("HOME"))
+      const home = Option.getOrElse(homeOpt, () => os.homedir())
+      const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
+      const dataDir = Option.getOrElse(dataDirOpt, () => path.join(home, ".gent"))
+      const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
+      const dbPath = Option.getOrElse(dbPathOpt, () => path.join(dataDir, "data.db"))
+      const authFilePath = Option.isSome(dataDirOpt)
+        ? path.join(dataDir, "auth.json.enc")
+        : undefined
+      const authKeyPath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.key") : undefined
 
-    const serverDeps = createDependencies({
-      cwd,
-      dbPath,
-      ...(authFilePath !== undefined ? { authFilePath } : {}),
-      ...(authKeyPath !== undefined ? { authKeyPath } : {}),
-    }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))
-    const coreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
-    return Layer.mergeAll(coreLive, serverDeps, PlatformLayer, OsService.Live, LinkLayer)
-  }),
-)
+      const serverDeps = createDependencies({
+        cwd,
+        dbPath,
+        persistenceMode: options?.debug === true ? "memory" : "disk",
+        providerMode: options?.debug === true ? "debug-scripted" : "live",
+        ...(authFilePath !== undefined ? { authFilePath } : {}),
+        ...(authKeyPath !== undefined ? { authKeyPath } : {}),
+      }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))
+      const coreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
+      return Layer.mergeAll(coreLive, serverDeps, PlatformLayer, OsService.Live, LinkLayer)
+    }),
+  )
 
 // Headless runner - streams events to stdout
 const runHeadless = (
@@ -345,6 +351,7 @@ const main = Command.make(
     Effect.gen(function* () {
       // Get core service for direct access (headless, session management)
       const cwd = process.cwd()
+      const runtimeLayer = makeCoreLayer({ cwd, debug })
 
       const program = Effect.gen(function* () {
         const core = yield* GentCore
@@ -423,7 +430,9 @@ const main = Command.make(
             : undefined
 
         if (state._tag === "debug") {
-          initialRoute = Route.debug()
+          const debugSession = yield* seedDebugSession(cwd)
+          initialSession = debugSession
+          initialRoute = Route.session(debugSession.sessionId, debugSession.branchId)
           debugMode = true
         }
 
@@ -479,7 +488,7 @@ const main = Command.make(
 
         // Keep process alive until TUI exits
         return yield* Effect.never
-      }).pipe(Effect.scoped)
+      }).pipe(Effect.scoped, Effect.provide(runtimeLayer))
 
       return yield* program
     }),
@@ -501,7 +510,7 @@ const sessions = Command.make("sessions", {}, () =>
       const date = new Date(s.updatedAt).toISOString()
       yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
     }
-  }),
+  }).pipe(Effect.provide(makeCoreLayer({ cwd: process.cwd() }))),
 )
 
 // Root command with subcommands
@@ -515,10 +524,11 @@ const cli = Command.run(command, {
   version: "0.0.0",
 })
 
-// Base runtime layer for CLI — CoreLayer + logger replacement
-const CliLayer = Layer.provide(CoreLayer, LoggerLayer)
-
-// Run with base layers; command handlers provide core layers as needed
-const MainLayer = Layer.effectDiscard(cli).pipe(Layer.provide(CliLayer))
+// Run with base platform layers; command handlers provide core layers as needed
+const MainLayer = Layer.effectDiscard(cli).pipe(
+  Layer.provide(PlatformLayer),
+  Layer.provide(LoggerLayer),
+  Layer.provide(TracerLayer),
+)
 
 BunRuntime.runMain(Layer.launch(MainLayer).pipe(Effect.provide(LoggerLayer)))

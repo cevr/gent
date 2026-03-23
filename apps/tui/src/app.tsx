@@ -9,7 +9,6 @@ import { Session } from "./routes/session"
 import { BranchPicker } from "./routes/branch-picker"
 import { Permissions } from "./routes/permissions"
 import { Auth } from "./routes/auth"
-import { DebugPlayground } from "./routes/debug"
 
 type SessionRoute = Extract<AppRoute, { _tag: "session" }>
 type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
@@ -28,7 +27,7 @@ function AppContent(props: AppProps) {
   )
 
   createEffect(() => {
-    if (authGateActive() && !isRoute.auth(router.route()) && !isRoute.debug(router.route())) {
+    if (authGateActive() && !isRoute.auth(router.route())) {
       router.navigateToAuth()
     }
   })
@@ -38,9 +37,6 @@ function AppContent(props: AppProps) {
       <Switch>
         <Match when={isRoute.home(router.route())}>
           <Home initialPrompt={props.initialPrompt} />
-        </Match>
-        <Match when={isRoute.debug(router.route())}>
-          <DebugPlayground />
         </Match>
         <Match when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}>
           {(r) => {

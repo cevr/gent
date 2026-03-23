@@ -119,16 +119,44 @@ export const makeRetrySchedule = (config: RetryConfig = DEFAULT_RETRY_CONFIG) =>
     Schedule.both(Schedule.recurs(config["maxAttempts"] - 1)),
   )
 
+export interface RetryAttemptInfo {
+  readonly attempt: number
+  readonly maxAttempts: number
+  readonly delayMs: number
+  readonly error: ProviderError
+}
+
 // Retry wrapper for provider calls
 
-export const withRetry = <A, R>(
+export const withRetry = <A, R, R2 = never>(
   effect: Effect.Effect<A, ProviderError, R>,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
-): Effect.Effect<A, ProviderError, R> =>
-  effect.pipe(
-    Effect.retry({
-      schedule: makeRetrySchedule(config),
-      while: isRetryable,
-    }),
-    Effect.withSpan("withRetry"),
-  )
+  options?: {
+    readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
+  },
+): Effect.Effect<A, ProviderError, R | R2> => {
+  const loop = (attempt: number): Effect.Effect<A, ProviderError, R | R2> =>
+    effect.pipe(
+      Effect.catchTag("ProviderError", (error) => {
+        if (attempt >= config.maxAttempts - 1 || !isRetryable(error)) {
+          return Effect.fail(error)
+        }
+
+        const delayMs = getRetryDelay(attempt, error, config)
+        return Effect.gen(function* () {
+          if (options?.onRetry !== undefined) {
+            yield* options.onRetry({
+              attempt: attempt + 1,
+              maxAttempts: config.maxAttempts,
+              delayMs,
+              error,
+            })
+          }
+          yield* Effect.sleep(Duration.millis(delayMs))
+          return yield* loop(attempt + 1)
+        })
+      }),
+    )
+
+  return loop(0).pipe(Effect.withSpan("withRetry"))
+}

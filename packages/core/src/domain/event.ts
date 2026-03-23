@@ -172,6 +172,15 @@ export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOcc
   error: Schema.String,
 }) {}
 
+export class ProviderRetrying extends Schema.TaggedClass<ProviderRetrying>()("ProviderRetrying", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  attempt: Schema.Int,
+  maxAttempts: Schema.Int,
+  delayMs: Schema.Int,
+  error: Schema.String,
+}) {}
+
 export const MachineInspectionType = Schema.Literals([
   "@machine.spawn",
   "@machine.event",
@@ -404,6 +413,7 @@ export const AgentEvent = Schema.Union([
   HandoffConfirmed,
   HandoffRejected,
   ErrorOccurred,
+  ProviderRetrying,
   MachineInspected,
   MachineTaskSucceeded,
   MachineTaskFailed,
@@ -477,7 +487,7 @@ export const matchesEventFilter = (
 export class EventStore extends ServiceMap.Service<EventStore, EventStoreService>()(
   "@gent/core/src/event/EventStore",
 ) {
-  static Live: Layer.Layer<EventStore> = Layer.effect(
+  static Memory: Layer.Layer<EventStore> = Layer.effect(
     EventStore,
     Effect.gen(function* () {
       const pubsub = yield* PubSub.unbounded<EventEnvelope>()
@@ -523,6 +533,8 @@ export class EventStore extends ServiceMap.Service<EventStore, EventStoreService
       }
     }),
   )
+
+  static Live: Layer.Layer<EventStore> = EventStore.Memory
 
   static Test = (): Layer.Layer<EventStore> =>
     Layer.succeed(EventStore, {

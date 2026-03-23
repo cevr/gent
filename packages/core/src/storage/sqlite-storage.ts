@@ -1064,8 +1064,10 @@ export class Storage extends ServiceMap.Service<Storage, StorageService>()(
       }),
     ).pipe(Layer.provide(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
 
-  static Test = (): Layer.Layer<Storage> =>
+  static Memory = (): Layer.Layer<Storage> =>
     Layer.effect(Storage, makeStorage).pipe(
       Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
     )
+
+  static Test = (): Layer.Layer<Storage> => Storage.Memory()
 }
