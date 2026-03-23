@@ -19,10 +19,14 @@ export {
   InterruptPayload,
   ActorProcessState,
   ActorProcessMetrics,
+  ActorTransport,
+  DurableActorProcessLive,
+  LocalActorTransportLive,
   LocalActorProcessLive,
   SessionActorEntity,
   SessionActorEntityLive,
   SessionActorEntityLocalLive,
+  ClusterActorTransportLive,
   ClusterActorProcessLive,
 } from "./actor-process"
 

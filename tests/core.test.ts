@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import * as fs from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
 import { Skills, Skill, formatSkillsForPrompt } from "@gent/core/domain/skills"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
@@ -11,8 +15,8 @@ import {
   PromptHandler,
   HandoffHandler,
 } from "@gent/core/domain/interaction-handlers"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
-import { Branch, type Message, Session, ToolResultPart } from "@gent/core/domain/message"
+import type { ActorCommandId, BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
@@ -21,7 +25,9 @@ import { SessionCommands } from "@gent/core/server/session-commands"
 import {
   ActorProcess,
   ClusterActorProcessLive,
+  DurableActorProcessLive,
   LocalActorProcessLive,
+  LocalActorTransportLive,
   SessionActorEntityLocalLive,
 } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
@@ -601,5 +607,207 @@ describe("SessionCommands → ActorProcess integration", () => {
         expect(messages.some((message) => message.role === "tool")).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
+  })
+})
+
+describe("Durable actor inbox", () => {
+  const makeDurableActorLayer = (
+    runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>,
+  ) => {
+    const agentLoopLayer = Layer.effect(
+      AgentLoop,
+      Effect.gen(function* () {
+        const log = yield* Effect.succeed(runLog)
+        return {
+          run: (message: Message) =>
+            Ref.update(log, (entries) => [
+              ...entries,
+              {
+                sessionId: message.sessionId,
+                content: message.parts
+                  .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                  .map((p) => p.text)
+                  .join(""),
+              },
+            ]),
+          steer: () => Effect.void,
+          followUp: () => Effect.void,
+          isRunning: () => Effect.succeed(false),
+        }
+      }),
+    )
+
+    const storageDeps = Layer.mergeAll(
+      Storage.Test(),
+      EventStore.Test(),
+      agentLoopLayer,
+      ToolRunner.Test(),
+    )
+    const actorTransportLayer = Layer.provide(LocalActorTransportLive, storageDeps)
+    const actorProcessLayer = Layer.provide(
+      DurableActorProcessLive,
+      Layer.merge(storageDeps, actorTransportLayer),
+    )
+    return Layer.mergeAll(storageDeps, actorTransportLayer, actorProcessLayer)
+  }
+
+  test("repeating the same command id only dispatches once", async () => {
+    const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
+    const layer = makeDurableActorLayer(runLog)
+    const commandId = "command-dedupe" as ActorCommandId
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const actorProcess = yield* ActorProcess
+        const storage = yield* Storage
+
+        const session = new Session({
+          id: "session-dedupe" as SessionId,
+          name: "Dedupe Test",
+          cwd: process.cwd(),
+          bypass: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        const branch = new Branch({
+          id: "branch-dedupe" as BranchId,
+          sessionId: session.id,
+          createdAt: new Date(),
+        })
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        yield* actorProcess.sendUserMessage({
+          commandId,
+          sessionId: session.id,
+          branchId: branch.id,
+          content: "only once",
+        })
+        yield* actorProcess.sendUserMessage({
+          commandId,
+          sessionId: session.id,
+          branchId: branch.id,
+          content: "only once",
+        })
+
+        yield* Effect.sleep("50 millis")
+
+        const entries = yield* Ref.get(runLog)
+        const completed = yield* storage.listActorInboxRecordsByStatus(["completed"])
+        expect(entries).toEqual([{ sessionId: session.id, content: "only once" }])
+        expect(completed.filter((record) => record.commandId === commandId)).toHaveLength(1)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("recovery marks a running command completed when its receipt already exists", async () => {
+    const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
+    const commandId = "command-replay" as ActorCommandId
+    const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-actor-inbox-"))
+    const dbPath = path.join(dbDir, "data.db")
+
+    const makeFileBackedLayer = (withDurableActor: boolean) => {
+      const agentLoopLayer = Layer.effect(
+        AgentLoop,
+        Effect.gen(function* () {
+          const log = yield* Effect.succeed(runLog)
+          return {
+            run: (message: Message) =>
+              Ref.update(log, (entries) => [
+                ...entries,
+                {
+                  sessionId: message.sessionId,
+                  content: message.parts
+                    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                    .map((p) => p.text)
+                    .join(""),
+                },
+              ]),
+            steer: () => Effect.void,
+            followUp: () => Effect.void,
+            isRunning: () => Effect.succeed(false),
+          }
+        }),
+      )
+
+      const storageDeps = Layer.mergeAll(
+        Storage.Live(dbPath),
+        EventStore.Test(),
+        agentLoopLayer,
+        ToolRunner.Test(),
+      ).pipe(Layer.provide(BunFileSystem.layer), Layer.provide(BunServices.layer))
+      const actorTransportLayer = Layer.provide(LocalActorTransportLive, storageDeps)
+      if (!withDurableActor) return Layer.mergeAll(storageDeps, actorTransportLayer)
+      const actorProcessLayer = Layer.provide(
+        DurableActorProcessLive,
+        Layer.merge(storageDeps, actorTransportLayer),
+      )
+      return Layer.mergeAll(storageDeps, actorTransportLayer, actorProcessLayer)
+    }
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+
+          const session = new Session({
+            id: "session-replay" as SessionId,
+            name: "Replay Test",
+            cwd: process.cwd(),
+            bypass: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          const branch = new Branch({
+            id: "branch-replay" as BranchId,
+            sessionId: session.id,
+            createdAt: new Date(),
+          })
+          const userMessage = new Message({
+            id: commandId as unknown as MessageId,
+            sessionId: session.id,
+            branchId: branch.id,
+            kind: "regular",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "already accepted" })],
+            createdAt: new Date(),
+          })
+
+          yield* storage.createSession(session)
+          yield* storage.createBranch(branch)
+          yield* storage.createMessageIfAbsent(userMessage)
+          yield* storage.createActorInboxRecord({
+            commandId,
+            sessionId: session.id,
+            branchId: branch.id,
+            kind: "send-user-message",
+            payloadJson: JSON.stringify({
+              commandId,
+              sessionId: session.id,
+              branchId: branch.id,
+              content: "already accepted",
+            }),
+            status: "running",
+            attempts: 1,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            startedAt: Date.now(),
+          })
+        }).pipe(Effect.provide(makeFileBackedLayer(false))),
+      )
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const records = yield* storage.listActorInboxRecordsByStatus(["completed"])
+          const entries = yield* Ref.get(runLog)
+
+          expect(entries).toHaveLength(0)
+          expect(records.some((record) => record.commandId === commandId)).toBe(true)
+        }).pipe(Effect.provide(makeFileBackedLayer(true))),
+      )
+    } finally {
+      fs.rmSync(dbDir, { recursive: true, force: true })
+    }
   })
 })

@@ -23,7 +23,8 @@ import {
 import { ClusterSingleLive, type ClusterStorage } from "../runtime/cluster-layer.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import {
-  ClusterActorProcessLive,
+  ClusterActorTransportLive,
+  DurableActorProcessLive,
   LocalActorProcessLive,
   SessionActorEntityLocalLive,
 } from "../runtime/actor-process.js"
@@ -246,7 +247,11 @@ export const createDependencies = (config: DependenciesConfig) => {
       Layer.provideMerge(clusterRuntimeLive),
     )
     const clusterSupportLive = Layer.merge(clusterRuntimeLive, entityLive)
-    const actorProcessLive = Layer.provide(ClusterActorProcessLive, clusterSupportLive)
+    const actorTransportLive = Layer.provide(ClusterActorTransportLive, clusterSupportLive)
+    const actorProcessLive = Layer.provide(
+      DurableActorProcessLive,
+      Layer.merge(allWithRuntime, actorTransportLive),
+    )
     return Layer.mergeAll(allWithRuntime, clusterSupportLive, actorProcessLive)
   }
 

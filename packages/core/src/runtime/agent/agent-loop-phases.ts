@@ -418,7 +418,7 @@ export const resolveTurnPhase = (params: {
   systemPrompt: string
 }) =>
   Effect.gen(function* () {
-    yield* params.storage.createMessage(params.message)
+    yield* params.storage.createMessageIfAbsent(params.message)
     yield* params
       .publishEvent(
         new MessageReceived({

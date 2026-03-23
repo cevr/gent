@@ -13,10 +13,11 @@ import {
   ToolCallSucceeded,
   ToolCallFailed,
 } from "../domain/event.js"
-import { BranchId, SessionId, ToolCallId, type MessageId } from "../domain/ids.js"
+import { ActorCommandId, BranchId, SessionId, ToolCallId, type MessageId } from "../domain/ids.js"
 import { Message, TextPart, ToolCallPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import type { ActorInboxRecord } from "./actor-inbox.schema.js"
 import { ToolRunner } from "./agent/tool-runner"
 import { AgentLoop, SteerCommand } from "./agent"
 
@@ -35,6 +36,7 @@ export const ActorTarget = Schema.Struct({
 export type ActorTarget = typeof ActorTarget.Type
 
 export const SendUserMessagePayload = Schema.Struct({
+  commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
   content: Schema.String,
@@ -44,6 +46,7 @@ export const SendUserMessagePayload = Schema.Struct({
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
 export const SendToolResultPayload = Schema.Struct({
+  commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
   toolCallId: ToolCallId,
@@ -57,6 +60,7 @@ export const InterruptKind = Schema.Literals(["cancel", "interrupt", "interject"
 export type InterruptKind = typeof InterruptKind.Type
 
 export const InterruptPayload = Schema.Struct({
+  commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
   kind: InterruptKind,
@@ -65,6 +69,7 @@ export const InterruptPayload = Schema.Struct({
 export type InterruptPayload = typeof InterruptPayload.Type
 
 export const InvokeToolPayload = Schema.Struct({
+  commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
   toolName: Schema.String,
@@ -128,28 +133,43 @@ export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessS
     })
 }
 
+export class ActorTransport extends ServiceMap.Service<ActorTransport, ActorProcessService>()(
+  "@gent/core/src/runtime/actor-process/ActorTransport",
+) {}
+
 const toEntityId = (input: ActorTarget) => `${input.sessionId}:${input.branchId}`
 
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new ActorProcessError({ message, cause })
 
-export const LocalActorProcessLive: Layer.Layer<
-  ActorProcess,
+const makeCommandId = () => Bun.randomUUIDv7() as ActorCommandId
+const userMessageIdForCommand = (commandId: ActorCommandId) => commandId as unknown as MessageId
+const toolCallIdForCommand = (commandId: ActorCommandId) => commandId as unknown as ToolCallId
+const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
+  `${commandId}:assistant` as MessageId
+const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
+  `${commandId}:tool-result` as MessageId
+const followUpMessageIdForCommand = (commandId: ActorCommandId) =>
+  `${commandId}:follow-up` as MessageId
+
+export const LocalActorTransportLive: Layer.Layer<
+  ActorTransport,
   never,
   AgentLoop | Storage | EventStore | ToolRunner
 > = Layer.effect(
-  ActorProcess,
+  ActorTransport,
   Effect.gen(function* () {
     const agentLoop = yield* AgentLoop
     const storage = yield* Storage
     const eventStore = yield* EventStore
     const toolRunner = yield* ToolRunner
 
-    return ActorProcess.of({
+    return ActorTransport.of({
       sendUserMessage: (input) =>
         Effect.gen(function* () {
           const session = yield* storage.getSession(input.sessionId)
           const bypass = input.bypass ?? session?.bypass ?? true
+          const commandId = input.commandId ?? makeCommandId()
 
           if (input.mode !== undefined) {
             yield* agentLoop.steer({
@@ -161,7 +181,7 @@ export const LocalActorProcessLive: Layer.Layer<
           }
 
           const message = new Message({
-            id: Bun.randomUUIDv7() as MessageId,
+            id: userMessageIdForCommand(commandId),
             sessionId: input.sessionId,
             branchId: input.branchId,
             kind: "regular",
@@ -203,6 +223,7 @@ export const LocalActorProcessLive: Layer.Layer<
 
       sendToolResult: (input) =>
         Effect.gen(function* () {
+          const commandId = input.commandId ?? makeCommandId()
           const outputType = input.isError === true ? "error-json" : "json"
           const part = new ToolResultPart({
             type: "tool-result",
@@ -212,7 +233,7 @@ export const LocalActorProcessLive: Layer.Layer<
           })
 
           const message = new Message({
-            id: Bun.randomUUIDv7() as MessageId,
+            id: toolResultMessageIdForCommand(commandId),
             sessionId: input.sessionId,
             branchId: input.branchId,
             role: "tool",
@@ -220,7 +241,7 @@ export const LocalActorProcessLive: Layer.Layer<
             createdAt: new Date(),
           })
 
-          yield* storage.createMessage(message)
+          yield* storage.createMessageIfAbsent(message)
           const isError = input.isError ?? false
           const toolCallFields = {
             sessionId: input.sessionId,
@@ -241,7 +262,8 @@ export const LocalActorProcessLive: Layer.Layer<
         Effect.gen(function* () {
           const session = yield* storage.getSession(input.sessionId)
           const bypass = session?.bypass ?? true
-          const toolCallId = Bun.randomUUIDv7() as typeof ToolCallId.Type
+          const commandId = input.commandId ?? makeCommandId()
+          const toolCallId = toolCallIdForCommand(commandId)
 
           // Create synthetic assistant message with tool call
           const callPart = new ToolCallPart({
@@ -251,14 +273,14 @@ export const LocalActorProcessLive: Layer.Layer<
             input: input.input,
           })
           const assistantMessage = new Message({
-            id: Bun.randomUUIDv7() as MessageId,
+            id: assistantMessageIdForCommand(commandId),
             sessionId: input.sessionId,
             branchId: input.branchId,
             role: "assistant",
             parts: [callPart],
             createdAt: new Date(),
           })
-          yield* storage.createMessage(assistantMessage)
+          yield* storage.createMessageIfAbsent(assistantMessage)
           yield* eventStore
             .publish(
               new MessageReceived({
@@ -297,14 +319,14 @@ export const LocalActorProcessLive: Layer.Layer<
 
           // Persist tool result message
           const resultMessage = new Message({
-            id: Bun.randomUUIDv7() as MessageId,
+            id: toolResultMessageIdForCommand(commandId),
             sessionId: input.sessionId,
             branchId: input.branchId,
             role: "tool",
             parts: [resultPart],
             createdAt: new Date(),
           })
-          yield* storage.createMessage(resultMessage)
+          yield* storage.createMessageIfAbsent(resultMessage)
           yield* eventStore
             .publish(
               new MessageReceived({
@@ -334,7 +356,7 @@ export const LocalActorProcessLive: Layer.Layer<
 
           // Trigger a follow-up LLM turn to react to the tool result
           const followUpMessage = new Message({
-            id: Bun.randomUUIDv7() as MessageId,
+            id: followUpMessageIdForCommand(commandId),
             sessionId: input.sessionId,
             branchId: input.branchId,
             kind: "regular",
@@ -443,6 +465,20 @@ export const LocalActorProcessLive: Layer.Layer<
   }),
 )
 
+const ActorProcessFromTransportLive: Layer.Layer<ActorProcess, never, ActorTransport> =
+  Layer.effect(
+    ActorProcess,
+    Effect.gen(function* () {
+      return yield* ActorTransport
+    }),
+  )
+
+export const LocalActorProcessLive: Layer.Layer<
+  ActorProcess,
+  never,
+  AgentLoop | Storage | EventStore | ToolRunner
+> = Layer.provide(ActorProcessFromTransportLive, LocalActorTransportLive)
+
 const SendUserMessageRpc = Rpc.make("SendUserMessage", {
   payload: SendUserMessagePayload.fields,
   success: Schema.Void,
@@ -527,14 +563,14 @@ export const SessionActorEntityLocalLive = Layer.provide(
   LocalActorProcessLive,
 )
 
-export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.Sharding> =
+export const ClusterActorTransportLive: Layer.Layer<ActorTransport, never, Sharding.Sharding> =
   Layer.effect(
-    ActorProcess,
+    ActorTransport,
     Effect.gen(function* () {
       const clientFor = yield* SessionActorEntity.client
       const client = (input: ActorTarget) => clientFor(toEntityId(input))
 
-      return ActorProcess.of({
+      return ActorTransport.of({
         sendUserMessage: (input) =>
           (client(input)["SendUserMessage"](input) as Effect.Effect<void, ActorProcessError>).pipe(
             Effect.catchCause((cause) => Effect.fail(wrapError("SendUserMessage failed", cause))),
@@ -586,6 +622,306 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
               ActorProcessError
             >
           ).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("GetMetrics failed", cause)))),
+      })
+    }),
+  )
+
+export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.Sharding> =
+  Layer.provide(ActorProcessFromTransportLive, ClusterActorTransportLive)
+
+const parseJson = (json: string): unknown => JSON.parse(json)
+
+const payloadMismatchError = (commandId: ActorCommandId) =>
+  new ActorProcessError({ message: `actor command payload mismatch for ${commandId}` })
+
+const receiptExistsForRecord = (
+  storage: typeof Storage.Service,
+  record: ActorInboxRecord,
+): Effect.Effect<boolean, ActorProcessError> =>
+  Effect.gen(function* () {
+    switch (record.kind) {
+      case "send-user-message":
+        return (
+          (yield* storage
+            .getMessage(userMessageIdForCommand(record.commandId))
+            .pipe(
+              Effect.mapError((cause) =>
+                wrapError("reconcile send-user-message failed", Cause.fail(cause)),
+              ),
+            )) !== undefined
+        )
+      case "send-tool-result":
+      case "invoke-tool":
+        return (
+          (yield* storage
+            .getMessage(toolResultMessageIdForCommand(record.commandId))
+            .pipe(
+              Effect.mapError((cause) =>
+                wrapError(`reconcile ${record.kind} failed`, Cause.fail(cause)),
+              ),
+            )) !== undefined
+        )
+      case "interrupt":
+      case "steer-agent":
+        return false
+    }
+  })
+
+const markActorCommand = (
+  storage: typeof Storage.Service,
+  commandId: ActorCommandId,
+  fields: Parameters<(typeof Storage.Service)["updateActorInboxRecord"]>[1],
+) =>
+  storage.updateActorInboxRecord(commandId, fields).pipe(
+    Effect.flatMap((record) =>
+      record !== undefined
+        ? Effect.succeed(record)
+        : Effect.fail(new ActorProcessError({ message: `actor command not found: ${commandId}` })),
+    ),
+    Effect.mapError((cause) => wrapError("actor inbox update failed", Cause.fail(cause))),
+  )
+
+const storeActorCommand = (storage: typeof Storage.Service, record: ActorInboxRecord) =>
+  storage
+    .createActorInboxRecord(record)
+    .pipe(Effect.mapError((cause) => wrapError("actor inbox create failed", Cause.fail(cause))))
+
+const loadActorCommand = (storage: typeof Storage.Service, commandId: ActorCommandId) =>
+  storage
+    .getActorInboxRecord(commandId)
+    .pipe(Effect.mapError((cause) => wrapError("actor inbox load failed", Cause.fail(cause))))
+
+const replayStoredCommand = (
+  transport: typeof ActorTransport.Service,
+  storage: typeof Storage.Service,
+  record: ActorInboxRecord,
+): Effect.Effect<void, ActorProcessError> =>
+  Effect.gen(function* () {
+    const hasReceipt = yield* receiptExistsForRecord(storage, record)
+    if (hasReceipt) {
+      yield* markActorCommand(storage, record.commandId, {
+        status: "completed",
+        updatedAt: Date.now(),
+        completedAt: Date.now(),
+        lastError: null,
+      })
+      return
+    }
+
+    yield* markActorCommand(storage, record.commandId, {
+      status: "running",
+      attempts: record.attempts + 1,
+      updatedAt: Date.now(),
+      startedAt: Date.now(),
+      lastError: null,
+    })
+
+    const exit = yield* Effect.exit(
+      Effect.gen(function* () {
+        switch (record.kind) {
+          case "send-user-message":
+            return yield* transport.sendUserMessage(
+              yield* Schema.decodeUnknownEffect(SendUserMessagePayload)(
+                parseJson(record.payloadJson),
+              ),
+            )
+          case "send-tool-result":
+            return yield* transport.sendToolResult(
+              yield* Schema.decodeUnknownEffect(SendToolResultPayload)(
+                parseJson(record.payloadJson),
+              ),
+            )
+          case "invoke-tool":
+            return yield* transport.invokeTool(
+              yield* Schema.decodeUnknownEffect(InvokeToolPayload)(parseJson(record.payloadJson)),
+            )
+          case "interrupt":
+            return yield* transport.interrupt(
+              yield* Schema.decodeUnknownEffect(InterruptPayload)(parseJson(record.payloadJson)),
+            )
+          case "steer-agent":
+            return yield* transport.steerAgent(
+              yield* Schema.decodeUnknownEffect(SteerCommand)(parseJson(record.payloadJson)),
+            )
+        }
+      }),
+    )
+
+    if (exit._tag === "Success") {
+      yield* markActorCommand(storage, record.commandId, {
+        status: "completed",
+        updatedAt: Date.now(),
+        completedAt: Date.now(),
+        lastError: null,
+      })
+      return
+    }
+
+    const message = Cause.pretty(exit.cause)
+    yield* markActorCommand(storage, record.commandId, {
+      status: "failed",
+      updatedAt: Date.now(),
+      lastError: message,
+    })
+    return yield* wrapError("actor command replay failed", exit.cause)
+  })
+
+export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTransport | Storage> =
+  Layer.effect(
+    ActorProcess,
+    Effect.gen(function* () {
+      const transport = yield* ActorTransport
+      const storage = yield* Storage
+
+      const recoverPending = storage.listActorInboxRecordsByStatus(["pending", "running"]).pipe(
+        Effect.mapError((cause) =>
+          wrapError("actor inbox recovery scan failed", Cause.fail(cause)),
+        ),
+        Effect.flatMap((records) =>
+          Effect.forEach(records, (record) => replayStoredCommand(transport, storage, record), {
+            concurrency: 1,
+          }),
+        ),
+        Effect.catchEager((error) => Effect.logWarning("actor inbox recovery failed", error)),
+      )
+
+      yield* recoverPending
+
+      const submit = (
+        params: {
+          commandId: ActorCommandId
+          sessionId: SessionId
+          branchId: BranchId
+          kind: ActorInboxRecord["kind"]
+          payloadJson: string
+        },
+        dispatch: Effect.Effect<void, ActorProcessError>,
+      ): Effect.Effect<void, ActorProcessError> =>
+        Effect.gen(function* () {
+          const existing = yield* loadActorCommand(storage, params.commandId)
+          if (existing !== undefined) {
+            if (existing.kind !== params.kind || existing.payloadJson !== params.payloadJson) {
+              return yield* payloadMismatchError(params.commandId)
+            }
+            if (existing.status === "completed") return
+            return yield* replayStoredCommand(transport, storage, existing)
+          }
+
+          const now = Date.now()
+          yield* storeActorCommand(storage, {
+            commandId: params.commandId,
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            kind: params.kind,
+            payloadJson: params.payloadJson,
+            status: "pending",
+            attempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          })
+
+          yield* markActorCommand(storage, params.commandId, {
+            status: "running",
+            attempts: 1,
+            updatedAt: Date.now(),
+            startedAt: Date.now(),
+            lastError: null,
+          })
+
+          const exit = yield* Effect.exit(dispatch)
+          if (exit._tag === "Success") {
+            yield* markActorCommand(storage, params.commandId, {
+              status: "completed",
+              updatedAt: Date.now(),
+              completedAt: Date.now(),
+              lastError: null,
+            })
+            return
+          }
+
+          const message = Cause.pretty(exit.cause)
+          yield* markActorCommand(storage, params.commandId, {
+            status: "failed",
+            updatedAt: Date.now(),
+            lastError: message,
+          })
+          return yield* wrapError("actor command failed", exit.cause)
+        })
+
+      return ActorProcess.of({
+        sendUserMessage: (input) => {
+          const commandId = input.commandId ?? makeCommandId()
+          const payload = { ...input, commandId }
+          return submit(
+            {
+              commandId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              kind: "send-user-message",
+              payloadJson: JSON.stringify(payload),
+            },
+            transport.sendUserMessage(payload),
+          )
+        },
+        sendToolResult: (input) => {
+          const commandId = input.commandId ?? makeCommandId()
+          const payload = { ...input, commandId }
+          return submit(
+            {
+              commandId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              kind: "send-tool-result",
+              payloadJson: JSON.stringify(payload),
+            },
+            transport.sendToolResult(payload),
+          )
+        },
+        invokeTool: (input) => {
+          const commandId = input.commandId ?? makeCommandId()
+          const payload = { ...input, commandId }
+          return submit(
+            {
+              commandId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              kind: "invoke-tool",
+              payloadJson: JSON.stringify(payload),
+            },
+            transport.invokeTool(payload),
+          )
+        },
+        interrupt: (input) => {
+          const commandId = input.commandId ?? makeCommandId()
+          const payload = { ...input, commandId }
+          return submit(
+            {
+              commandId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              kind: "interrupt",
+              payloadJson: JSON.stringify(payload),
+            },
+            transport.interrupt(payload),
+          )
+        },
+        steerAgent: (command) => {
+          const commandId = makeCommandId()
+          return submit(
+            {
+              commandId,
+              sessionId: command.sessionId,
+              branchId: command.branchId,
+              kind: "steer-agent",
+              payloadJson: JSON.stringify(command),
+            },
+            transport.steerAgent(command),
+          )
+        },
+        drainQueuedMessages: transport.drainQueuedMessages,
+        getQueuedMessages: transport.getQueuedMessages,
+        getState: transport.getState,
+        getMetrics: transport.getMetrics,
       })
     }),
   )

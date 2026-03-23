@@ -4,10 +4,11 @@ import { Message, Session, Branch, MessagePart } from "../domain/message.js"
 import { TodoItem } from "../domain/todo.js"
 import { Task } from "../domain/task.js"
 import { AgentEvent, EventEnvelope, getEventSessionId } from "../domain/event.js"
-import type { SessionId, BranchId, MessageId, TaskId } from "../domain/ids.js"
+import type { ActorCommandId, SessionId, BranchId, MessageId, TaskId } from "../domain/ids.js"
 import type { ReasoningEffort } from "../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
+import type { ActorCommandStatus, ActorInboxRecord } from "../runtime/actor-inbox.schema.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
@@ -58,6 +59,7 @@ export interface StorageService {
 
   // Messages
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
+  readonly createMessageIfAbsent: (message: Message) => Effect.Effect<Message, StorageError>
   readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
   readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
   readonly deleteMessages: (
@@ -163,6 +165,28 @@ export interface StorageService {
     }>,
     StorageError
   >
+
+  // Durable actor inbox
+  readonly createActorInboxRecord: (
+    record: ActorInboxRecord,
+  ) => Effect.Effect<ActorInboxRecord, StorageError>
+  readonly getActorInboxRecord: (
+    commandId: ActorCommandId,
+  ) => Effect.Effect<ActorInboxRecord | undefined, StorageError>
+  readonly listActorInboxRecordsByStatus: (
+    statuses: ReadonlyArray<ActorCommandStatus>,
+  ) => Effect.Effect<ReadonlyArray<ActorInboxRecord>, StorageError>
+  readonly updateActorInboxRecord: (
+    commandId: ActorCommandId,
+    fields: Partial<{
+      status: ActorCommandStatus
+      attempts: number
+      updatedAt: number
+      startedAt: number | null
+      completedAt: number | null
+      lastError: string | null
+    }>,
+  ) => Effect.Effect<ActorInboxRecord | undefined, StorageError>
 }
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
@@ -206,6 +230,21 @@ interface EventRow {
   event_json: string
   created_at: number
   trace_id: string | null
+}
+
+interface ActorInboxRow {
+  command_id: ActorCommandId
+  session_id: SessionId
+  branch_id: BranchId
+  command_kind: string
+  payload_json: string
+  status: string
+  attempts: number
+  created_at: number
+  updated_at: number
+  started_at: number | null
+  completed_at: number | null
+  last_error: string | null
 }
 
 const VALID_REASONING = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
@@ -256,6 +295,21 @@ const safeJsonParse = (s: string): unknown => {
     return undefined
   }
 }
+
+const actorInboxRecordFromRow = (row: ActorInboxRow): ActorInboxRecord => ({
+  commandId: row.command_id,
+  sessionId: row.session_id,
+  branchId: row.branch_id,
+  kind: row.command_kind as ActorInboxRecord["kind"],
+  payloadJson: row.payload_json,
+  status: row.status as ActorInboxRecord["status"],
+  attempts: row.attempts,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
+  ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
+  ...(row.last_error !== null ? { lastError: row.last_error } : {}),
+})
 
 interface TaskRow {
   id: TaskId
@@ -364,6 +418,24 @@ const initSchema = Effect.gen(function* () {
   yield* sql.unsafe(`ALTER TABLE events ADD COLUMN trace_id TEXT`).pipe(Effect.ignoreCause)
 
   yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS actor_inbox (
+      command_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      command_kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      completed_at INTEGER,
+      last_error TEXT,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `)
+
+  yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS todos (
       id TEXT PRIMARY KEY,
       branch_id TEXT NOT NULL,
@@ -415,6 +487,12 @@ const initSchema = Effect.gen(function* () {
   )
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_events_session_tag ON events(session_id, event_tag, id)`,
+  )
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_actor_inbox_status ON actor_inbox(status, updated_at)`,
+  )
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_actor_inbox_target ON actor_inbox(session_id, branch_id, status)`,
   )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
@@ -605,6 +683,16 @@ const makeStorage = Effect.gen(function* () {
         return message
       },
       Effect.mapError(mapError("Failed to create message")),
+    ),
+
+    createMessageIfAbsent: Effect.fn("Storage.createMessageIfAbsent")(
+      function* (message) {
+        const partsJson = yield* encodeMessageParts([...message.parts])
+        yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null})`
+        yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
+        return message
+      },
+      Effect.mapError(mapError("Failed to create message if absent")),
     ),
 
     getMessage: Effect.fn("Storage.getMessage")(
@@ -1021,6 +1109,73 @@ const makeStorage = Effect.gen(function* () {
         }))
       },
       Effect.mapError(mapError("Failed to search messages")),
+    ),
+
+    createActorInboxRecord: Effect.fn("Storage.createActorInboxRecord")(
+      function* (record) {
+        yield* sql`INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error) VALUES (${record.commandId}, ${record.sessionId}, ${record.branchId}, ${record.kind}, ${record.payloadJson}, ${record.status}, ${record.attempts}, ${record.createdAt}, ${record.updatedAt}, ${record.startedAt ?? null}, ${record.completedAt ?? null}, ${record.lastError ?? null})`
+        return record
+      },
+      Effect.mapError(mapError("Failed to create actor inbox record")),
+    ),
+
+    getActorInboxRecord: Effect.fn("Storage.getActorInboxRecord")(
+      function* (commandId) {
+        const rows =
+          yield* sql<ActorInboxRow>`SELECT command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error FROM actor_inbox WHERE command_id = ${commandId}`
+        const row = rows[0]
+        return row === undefined ? undefined : actorInboxRecordFromRow(row)
+      },
+      Effect.mapError(mapError("Failed to get actor inbox record")),
+    ),
+
+    listActorInboxRecordsByStatus: Effect.fn("Storage.listActorInboxRecordsByStatus")(
+      function* (statuses) {
+        if (statuses.length === 0) return []
+        const rows =
+          yield* sql<ActorInboxRow>`SELECT command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error FROM actor_inbox WHERE status IN ${sql.in(statuses)} ORDER BY created_at ASC`
+        return rows.map(actorInboxRecordFromRow)
+      },
+      Effect.mapError(mapError("Failed to list actor inbox records")),
+    ),
+
+    updateActorInboxRecord: Effect.fn("Storage.updateActorInboxRecord")(
+      function* (commandId, fields) {
+        const current =
+          yield* sql<ActorInboxRow>`SELECT command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error FROM actor_inbox WHERE command_id = ${commandId}`
+        const row = current[0]
+        if (row === undefined) return undefined
+        const next = {
+          commandId: row.command_id,
+          sessionId: row.session_id,
+          branchId: row.branch_id,
+          kind: row.command_kind,
+          payloadJson: row.payload_json,
+          status: fields.status ?? row.status,
+          attempts: fields.attempts ?? row.attempts,
+          createdAt: row.created_at,
+          updatedAt: fields.updatedAt ?? row.updated_at,
+          startedAt: fields.startedAt === undefined ? row.started_at : fields.startedAt,
+          completedAt: fields.completedAt === undefined ? row.completed_at : fields.completedAt,
+          lastError: fields.lastError === undefined ? row.last_error : fields.lastError,
+        }
+        yield* sql`UPDATE actor_inbox SET status = ${next.status}, attempts = ${next.attempts}, updated_at = ${next.updatedAt}, started_at = ${next.startedAt}, completed_at = ${next.completedAt}, last_error = ${next.lastError} WHERE command_id = ${commandId}`
+        return {
+          commandId: next.commandId,
+          sessionId: next.sessionId,
+          branchId: next.branchId,
+          kind: next.kind as ActorInboxRecord["kind"],
+          payloadJson: next.payloadJson,
+          status: next.status as ActorInboxRecord["status"],
+          attempts: next.attempts,
+          createdAt: next.createdAt,
+          updatedAt: next.updatedAt,
+          ...(next.startedAt !== null ? { startedAt: next.startedAt } : {}),
+          ...(next.completedAt !== null ? { completedAt: next.completedAt } : {}),
+          ...(next.lastError !== null ? { lastError: next.lastError } : {}),
+        } satisfies ActorInboxRecord
+      },
+      Effect.mapError(mapError("Failed to update actor inbox record")),
     ),
   } satisfies StorageService
 })
