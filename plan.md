@@ -1,376 +1,357 @@
-# Codebase Improvement Plan
+# TUI Worker Supervision And Durable Turns
 
-Status: complete.
+## Summary
 
-All 11 batches in this plan have been implemented. `ARCHITECTURE.md` is the source of truth for the resulting end state. This file is now a historical receipt for why the cuts were made.
+Move the TUI onto a supervised worker-hosted app runtime.
 
-## Audit Synthesis
+Do not use a Bun `Worker` thread as the architectural target. Use a child process.
 
-### Effect v4
+Reason:
 
-- Strong: `ServiceMap.Service`, schemas, typed ids, machine/actor work.
-- Weak: boundary discipline, startup/layer composition, ambient Bun/Node access, and runtime escape hatches like nested `Effect.runSync` / `Effect.runPromise`.
-- Biggest Effect win is simplification, not “more Effect”.
+- BEAM/OTP value is crash isolation plus supervision.
+- Thread workers do not buy a hard enough failure boundary.
+- We already have the right inner abstraction:
+  - transport contract
+  - actor-process boundary
+  - cluster-shaped actor entity
 
-### Architecture
+So the target architecture is:
 
-- Core runtime/eventing is directionally disciplined.
-- The real boundary issue is not in-process vs out-of-process. It is that the transport contract is not singular enough yet.
-- Transport DTOs are triplicated across `core`, RPC, and SDK.
-- `GentCore` and `createDependencies` are still god-shaped.
+- TUI shell process
+  - owns terminal, renderer, input, local UX state
+  - supervises one child app worker
+- app worker process
+  - hosts app services
+  - exposes the shared transport contract
+  - runs `ActorProcess` through Effect cluster / entity semantics
+- durable actor state
+  - queued turns and in-flight turn recovery survive worker restarts
 
-### OpenTUI
+This is not just “make crashes less bad.” It is a shift to a more OTP-shaped topology.
 
-- Good primitives and state-machine direction in several places.
-- Biggest TUI smells:
-  - keyboard ownership split across multiple input systems
-  - `Session` route still acts like a god-controller
-  - tests are logic-heavy, renderer-light
-  - debug boot is too app-owned
-  - one render-path process global leak remains
+## Design Principles
 
-### Simplification
+- Redesign from first principles:
+  - if we had known from day one that the TUI should survive app crashes, we would never have booted the app graph inside `apps/tui/src/main.tsx`.
+- Serialize shared-state mutations structurally:
+  - one owner for turn state
+  - one durable log for actor commands/checkpoints
+  - no “best effort” reconstruction from incidental UI state
+- Boundary discipline:
+  - TUI owns presentation
+  - worker owns application/runtime
+  - transport contract is the seam
+- Subtract before adding:
+  - kill in-process TUI app hosting once the worker path exists
+  - do not keep two first-class runtime topologies forever
 
-- Repeated pattern: too many owners for one piece of state.
-- Repeated pattern: structure is declared in docs/principles, but not encoded strongly enough in code.
-- Repeated pattern: transport and orchestration seams are duplicated by hand.
+## Principle Audit
 
-## Non-Goals
+This plan is intentionally shaped around the brain principles.
 
-- No feature cuts.
-- No speculative platform rewrite.
-- No nested machine explosion.
-- No cluster/distribution work.
+### Boundary Discipline
+
+- good:
+  - TUI shell vs worker ownership is explicit
+  - transport contract stays singular
+  - `EventStore` is not overloaded into recovery truth
+- rule for implementation:
+  - validation stays at worker transport / RPC boundaries
+  - recovery logic stays in durable actor runtime code, not in TUI heuristics
+
+### Serialize Shared-State Mutations
+
+- good:
+  - turn state has one owner: the worker-hosted actor runtime
+  - queue state is not reconstructed from UI state
+- required:
+  - one durable inbox
+  - one checkpoint store
+  - one recovery coordinator on worker boot
+
+### Subtract Before You Add
+
+- required ordering:
+  - add worker topology
+  - migrate callers
+  - delete production in-process hosting
+- anti-goal:
+  - no permanent dual-topology runtime
+
+### Make Operations Idempotent
+
+- this was underspecified in the first draft
+- now required:
+  - every durable command has a stable command id
+  - inbox replay is explicitly idempotent
+  - checkpoints reconcile partial prior runs
+  - recovery converges after repeated crashes
+
+### Migrate Callers Then Delete Legacy APIs
+
+- this was too soft in the first draft
+- now required:
+  - once worker transport is the right path, migrate all production TUI callers
+  - delete production direct-hosting path in the same refactor wave
+  - keep only test/debug scaffolding that is structurally fenced off
+
+### Prove It Works
+
+- compile/lint is insufficient here
+- every batch must include direct runtime proof:
+  - kill worker
+  - observe restart
+  - verify rehydration
+  - verify queue/turn recovery behavior
+
+### Encode Lessons In Structure
+
+- do not leave “remember to use worker transport” as a doc rule
+- encode end-state invariants in structure:
+  - explicit worker bootstrap entrypoint
+  - TUI production path cannot import app dependency wiring directly
+  - tests assert restart/recovery semantics
+
+## Target Architecture
+
+```text
+TUI shell process
+    │
+    ▼
+supervisor
+    │
+    ▼
+app worker process
+    │
+    ▼
+worker transport adapter
+    │
+    ▼
+shared transport contract
+    │
+    ▼
+ActorProcess / SessionActorEntity
+    │
+    ▼
+durable inbox + checkpoints + projections
+```
+
+### Ownership
+
+- TUI shell owns:
+  - renderer lifecycle
+  - keyboard and route state
+  - reconnect logic
+  - restart UX
+- worker owns:
+  - storage
+  - providers
+  - event store
+  - actor runtime
+  - queue state
+  - turn execution
+- durable turn state owns:
+  - what should resume after a crash
+
+## Execution Rules
+
+These apply to every batch without exception.
+
+- each batch gets its own commit
+- each batch adds or updates the tests that prove that batch
+- no batch is done until `bun run gate` passes
+- when a batch introduces a new runtime seam, verify the actual runtime seam directly, not just unit tests
+
+## Key Decisions
+
+### 1. Child process, not thread worker
+
+Use a child process for real isolation.
+
+Do not treat `Worker` as the guiding star.
+
+### 2. Transport contract stays singular
+
+The worker must expose the same client contract as direct / HTTP.
+
+No worker-specific DTO layer.
+
+### 3. Use Effect cluster where it helps
+
+`ActorProcess` is already cluster-shaped:
+
+- `SessionActorEntity`
+- `SessionActorEntityLive`
+- `ClusterActorProcessLive`
+- `ClusterSingleLive`
+
+Use that.
+
+But use it for actor routing and supervision semantics inside the worker, not as an excuse to distribute the whole app immediately.
+
+Practical target:
+
+- worker boots `ClusterSingleLive`
+- worker uses `ClusterActorProcessLive`
+- session/branch actors live behind the entity boundary
+
+### 4. Turn durability is required for the real win
+
+Without durability, worker supervision only gives:
+
+- TUI survives crash
+- worker restarts
+- session can reconnect
+
+But current in-memory turn queue and in-flight run still die with the worker.
+
+That is not enough.
+
+### 5. Use journaled commands + checkpoints, not naive full event sourcing
+
+Do not pretend every stream chunk needs to be event-sourced.
+
+Best cut:
+
+- durable actor inbox / command journal
+- durable turn checkpoints
+- projections stay derivable
+- existing `EventStore` remains diagnostic / UI-facing event stream
+
+So the source of truth becomes:
+
+- commands
+- queue mutations
+- turn phase checkpoints
+
+Not:
+
+- ad hoc machine locals
+- incidental UI state
+- replaying every provider token forever
+
+## Durability Model
+
+### Durable Records
+
+Add durable records for:
+
+- actor inbox entries
+  - `SendUserMessage`
+  - `Interrupt`
+  - `SteerAgent`
+  - `SendToolResult`
+- queue snapshot or queue mutation log
+- active turn checkpoint
+  - current phase
+  - sessionId / branchId
+  - current message id
+  - agent
+  - startedAt
+  - interrupt flags
+  - persisted assistant draft id, if any
+  - pending tool calls, if any
+- worker supervision metadata
+  - restart count
+  - last crash reason
+
+### Recovery Semantics
+
+On worker restart:
+
+1. restore durable inbox / queue state
+2. restore actor checkpoints
+3. for each actor:
+   - if idle, no-op
+   - if queued, resume draining
+   - if in-flight streaming, mark interrupted-by-crash and continue from a safe phase
+
+### Safe Resume Policy
+
+Be explicit. Do not fake transparency.
+
+Recommended policy:
+
+- if crash occurs before assistant message persistence:
+  - re-run the turn from the last durable pre-stream checkpoint
+- if crash occurs after partial assistant persistence but before finalization:
+  - finalize interrupted state
+  - continue queue drain
+- if crash occurs during tool execution:
+  - only auto-resume idempotent tools
+  - otherwise persist interrupted/failed state and require a follow-up turn
+
+This is closer to OTP reality:
+
+- supervision restarts processes
+- work replay depends on durable mailbox/state
+- side effects need explicit idempotency policy
 
 ## Commit Batches
 
-### Batch 1 — Make the Transport Boundary Explicit
+### Batch 1 — Introduce Worker Topology
 
 Justification:
 
-- Highest architectural inconsistency in the repo.
-- Every other batch gets easier once this is explicit.
-- First-principles answer is not “pick a process.” It is “pick one contract.”
+- First-principles cut.
+- The TUI shell should stop booting app services directly.
 
-Decision:
+Target:
 
-- Keep in-process RPC if we want it.
-- But make it an adapter over the same authoritative transport contract the remote client uses.
-- One contract surface. Multiple transports:
-  - direct / in-process
-  - remote / HTTP
-- The architectural rule becomes:
-  - clients talk to the app through transport contracts
-  - transport implementation may be in-process or out-of-process
-  - DTOs and semantics are shared either way
+- add an app worker entrypoint
+- add TUI supervisor process management
+- keep behavior unchanged from the user’s perspective
 
 Task list:
 
-- write the boundary rule into `ARCHITECTURE.md`
-- define the single contract entrypoint and ban transport-local DTO remodeling
-- make direct/in-process and HTTP clients implement the same contract shape
-- delete client-specific contract glue that only exists because the boundary is fuzzy
-- run gate before moving to Batch 2
+- create worker bootstrap entrypoint that hosts app services
+- define shell ↔ worker lifecycle states
+- start/stop/restart worker from the TUI shell
+- fence direct hosting behind test/debug-only scaffolding immediately
+- update docs to reflect the new topology
+- add one end-to-end proof:
+  - TUI starts
+  - worker boots
+  - session home/session render still works
 
 Relevant skills:
 
 - `architecture`
 - `effect-v4`
 - `bun`
+- `opentui`
 
 Primary files:
 
-- `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/index.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts`
-
-### Batch 2 — Unify Transport Contracts
-
-Justification:
-
-- Current DTO duplication across `core`, RPC, and SDK is a drift factory.
-- Schema is supposed to be source of truth; it is not here.
-- Boundary discipline says schemas/codecs live at the edge once, not redefined per layer.
-
-Target:
-
-- Define transport DTO schemas/codecs once.
-- Derive server handler types and SDK client types from them.
-- Stop hand-maintaining parallel shapes for sessions, branches, session trees, session state, steer commands, and message projections.
-- Keep direct/in-process transport as a transport adapter, not a second contract surface.
-
-Task list:
-
-- inventory duplicated transport DTOs across `core`, RPC, and SDK
-- choose one schema/codecs module as the source of truth
-- derive handler and client input/output types from that source
-- delete parallel DTO/type aliases after migration
-- update docs/examples to point at the singular contract surface
-
-Relevant skills:
-
-- `architecture`
-- `effect-v4`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/core.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
-
-### Batch 3 — Split the Startup/Layer Graph
-
-Justification:
-
-- `createDependencies` is doing too much real work during layer assembly.
-- Startup semantics are opaque, over-composed, and harder to test than they need to be.
-- Subtract before adding: remove the blob before inventing more helper layers.
-
-Target:
-
-- Separate:
-  - platform/home/cwd resolution
-  - storage/event-store/auth wiring
-  - extension/skills discovery
-  - provider stack
-  - runtime/interaction handlers
-- Reduce `Layer.merge/provide` soup into a few explicit composites.
-
-Task list:
-
-- map current startup responsibilities by concern
-- extract stable composite layers with one responsibility each
-- move effectful discovery/config work to explicit startup boundaries
-- delete now-redundant merge/provide indirection
-- verify both server and TUI boot through the same cleaned startup seams
-
-Relevant skills:
-
-- `effect-v4`
-- `architecture`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/index.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/app.tsx`
 - `/Users/cvr/Developer/personal/gent/apps/server/src/main.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
 
-### Batch 4 — Encode Runtime Platform Boundaries
-
-Justification:
-
-- Core still reaches for ambient Bun/Node/OS state in too many places.
-- That weakens portability, testability, and boundary discipline.
-- Ambient runtime access is boundary leakage, not convenience.
-
-Target:
-
-- Introduce a thin runtime platform service for:
-  - cwd/home/platform
-  - stdout/stderr sinks
-  - trace/log file writes
-- Eliminate direct `process`, `os`, and naked `Bun.write` access from core runtime code where practical.
-
-Task list:
-
-- inventory core runtime touches of `process`, `os`, `Bun`, and direct file sinks
-- define the minimum platform service surface needed by core
-- migrate callers to that service
-- delete leftover ambient runtime reads from core
-- keep app entrypoints as the only place allowed to bind concrete platform behavior
-
-Relevant skills:
-
-- `effect-v4`
-- `architecture`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/index.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/config-service.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/tracer.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/logger.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/tools/repo-explorer.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/tools/librarian.ts`
-
-### Batch 5 — Collapse TUI Session Ownership
+### Batch 2 — Add Worker Transport
 
 Justification:
 
-- The TUI still has too many orchestration owners for one session.
-- This is the root cause behind several UI synchronization and keyboard bugs.
-- Serialize shared UI state mutations structurally: one owner, not conventions.
+- Worker supervision is worthless if the transport seam forks into a second contract.
 
 Target:
 
-- Build one session controller surface that owns:
-  - feed projection
-  - queue sync
-  - agent status
-  - overlay/input mode
-- Keep `Session` mostly presentation + scoped command dispatch.
+- one worker transport adapter over the shared contract
 
 Task list:
 
-- inventory all current session-state owners and what each mutates
-- choose one authoritative session controller surface
-- move feed/queue/status/overlay state under that controller
-- delete duplicated route/local/session-machine coordination
-- keep render components dumb where possible
-
-Relevant skills:
-
-- `opentui`
-- `architecture`
-- `react`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/session-machine.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-session-feed.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-ui-state.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/input-state.ts`
-
-### Batch 6 — Unify Keyboard Ownership
-
-Justification:
-
-- Keyboard handling is still split across route handlers, stack/capture routing, and textarea-local suppression.
-- This is a known bug farm.
-- Shared input state without exclusive ownership is serialized-state failure in miniature.
-
-Target:
-
-- One route-local keyboard command surface per screen.
-- Overlays/composer/palette/question flows become explicit submodes, not overlapping listeners.
-
-Task list:
-
-- inventory every active keyboard subscription per screen
-- choose one owner for screen-level command dispatch
-- model overlays/composer/palette as submodes under that owner
-- delete overlapping listeners and suppression hacks
-- add regression tests for enter/escape/focus capture
-
-Relevant skills:
-
-- `opentui`
-- `react`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/keyboard/context.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/input.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/prompt-search-palette.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/home.tsx`
-
-### Batch 7 — Add Real OpenTUI Renderer Tests
-
-Justification:
-
-- Current TUI tests prove logic, not renderer behavior.
-- That leaves focus, layout, scroll, and keyboard-capture regressions to manual discovery.
-- OpenTUI already ships the renderer tooling we need. Not using it is self-inflicted blindness.
-
-Target:
-
-- Add renderer-backed tests for:
-  - message list
-  - composer/input
-  - prompt search
-  - task/queue widgets
-  - keyboard capture and overlay focus
-- Use the actual OpenTUI testing surface:
-  - `@opentui/core/testing#createTestRenderer`
-  - `@opentui/solid#testRender`
-- Mirror OpenTUI's own testing style:
-  - renderer input and capture tests at core level
-  - Solid snapshot/layout tests for textarea-like surfaces
-
-Task list:
-
-- add one reusable renderer test harness for gent TUI
-- cover focus/capture/layout cases that logic tests miss today
-- migrate the highest-risk session/composer/prompt-search tests first
-- add widget rendering assertions for queue/task/message surfaces
-- delete redundant low-signal tests once renderer coverage makes them obsolete
-
-Relevant skills:
-
-- `opentui`
-- `test`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/session-render.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/input-textarea.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/message-list.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/input.tsx`
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/core/src/testing.ts`
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/core/src/tests/renderer.input.test.ts`
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/solid/index.ts`
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/solid/tests/textarea.test.tsx`
-
-### Batch 8 — Shrink Debug/App Boot Surfaces
-
-Justification:
-
-- Debug mode is useful, but too much of it lives in the app shell instead of a reusable scenario layer.
-- First-principles answer is not “move some helpers.” It is “make app boot thin and scenario assembly explicit.”
-
-Target:
-
-- Delete app-owned debug orchestration that does not belong in the shell.
-- Make debug scenario assembly a core-side service or scenario module.
-- Keep TUI boot to “request debug session + navigate”.
-- Remove render-path dependence on `process.stdout` for component sizing.
-
-Task list:
-
-- separate debug scenario assembly from app boot
-- move reusable debug wiring into core-side modules
-- reduce TUI boot to composition plus navigation
-- remove stdout-based render sizing leaks from components
-- delete debug-only shell glue left behind
-
-Relevant skills:
-
-- `opentui`
-- `architecture`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/debug/bootstrap.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/message-list.tsx`
-
-### Batch 9 — Decompose GentCore Into Command/Query Seams
-
-Justification:
-
-- `GentCore` is still absorbing too many responsibilities.
-- Thin RPC handlers are good, but not if the service behind them is the whole app.
-- “Decompose” is not enough; the god service has to stop existing as the architectural center.
-
-Target:
-
-- Replace `GentCore` as the main façade with explicit command and query services.
-- Keep handlers thin without routing everything through one god surface.
-- Delete compatibility methods that only preserve the old façade shape.
-
-Task list:
-
-- inventory `GentCore` methods by command/query/projection concern
-- design the minimal service seams needed by handlers and clients
-- migrate handlers to the new command/query services
-- delete `GentCore` façade methods as their callers disappear
-- update docs to reflect the new application service layout
+- define worker transport protocol
+  - likely NDJSON RPC over stdio
+- implement transport adapter in SDK or adjacent transport module
+- make TUI client creation pick worker transport
+- keep the same `GentClient` surface
+- ensure event subscription works over the worker channel
+- migrate production TUI callers to the worker transport immediately
+- prove the full chain:
+  - request
+  - worker transport
+  - app service
+  - response/event stream
 
 Relevant skills:
 
@@ -379,176 +360,321 @@ Relevant skills:
 
 Primary files:
 
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/core.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`
-
-### Batch 10 — Re-encode Extension Hook Structure
-
-Justification:
-
-- Current hook composition still relies on string keys and `any` at the most important plugin seam.
-- Boundary discipline says plugin shape should be validated once at registration, not interpreted ad hoc later.
-
-Target:
-
-- Move from stringly interceptor/observer classification to typed hook descriptors or explicit hook registries.
-- Encode hook kind in structure, not conventions.
-
-Task list:
-
-- inventory current hook kinds and registration paths
-- define typed hook descriptors or explicit registries
-- validate hook shape at registration time
-- migrate runtime dispatch to the typed structure
-- delete stringly classification helpers and `any` escape hatches
-
-Relevant skills:
-
-- `architecture`
-- `effect-v4`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/hooks.ts`
-
-### Batch 11 — Redesign the End-State Architecture
-
-Justification:
-
-- Final batch should not be a compatibility-minded cleanup pass.
-- Brain says:
-  - redesign from first principles
-  - subtract before you add
-  - tighten boundaries
-- So this batch is the end-state pass: if we were building gent today with everything we now know, what would we actually keep?
-
-Target:
-
-- No backward-compat wrappers.
-- No transitional duplicate seams.
-- Choose the simplest target architecture and cut to it.
-- Likely end state:
-  - one schema-first transport contract package or module
-  - thin transport adapters for in-process and HTTP clients
-  - command/query seams instead of `GentCore` as the whole app
-  - one TUI session controller per screen, presentation below it
-  - core runtime owning orchestration, platform/runtime edges pushed to explicit services
-  - extension hooks encoded structurally, not stringly
-- Delete transitional glue introduced by earlier batches once the target shape is clear.
-
-Task list:
-
-- redraw the final package/service map with no compatibility assumptions
-- identify transitional modules introduced in earlier batches
-- delete the ones that no longer earn their keep
-- rewrite `ARCHITECTURE.md` to describe the actual end state, not the migration history
-- run full gate and a final audit pass against the brain principles
-
-Relevant skills:
-
-- `effect-v4`
-- `architecture`
-- `opentui`
-
-Primary files:
-
-- `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/core.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts`
 - `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session.tsx`
+
+### Batch 3 — Host ActorProcess Through Effect Cluster
+
+Justification:
+
+- We already have `SessionActorEntity`.
+- Re-inventing another supervision boundary would be self-harm.
+
+Target:
+
+- worker uses cluster-backed actor routing as the runtime default
+
+Task list:
+
+- wire worker runtime through `ClusterSingleLive`
+- provide `ClusterActorProcessLive` instead of local actor process where appropriate
+- ensure session actors are addressed by `sessionId:branchId`
+- keep non-cluster local/test layers for tests only
+- document the new runtime path
+- add a direct verification test that two session actors isolate queue state under the cluster-backed path
+
+Relevant skills:
+
+- `effect-v4`
+- `architecture`
+
+Primary files:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/cluster-layer.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
+
+### Batch 4 — Add Durable Actor Inbox
+
+Justification:
+
+- Supervision without a durable inbox is restart theater.
+
+Target:
+
+- commands to actors are durably recorded before execution
+
+Task list:
+
+- define durable inbox schema/tables
+- include stable command ids / idempotency keys
+- persist actor-targeted commands before dispatch
+- mark command lifecycle:
+  - pending
+  - running
+  - completed
+  - failed
+- restore pending/running commands on worker boot
+- keep inbox ownership in the worker, not the TUI
+- add reconciliation rules for duplicate command replay
+- prove convergence when the same command is replayed after crash
+
+Relevant skills:
+
+- `effect-v4`
+- `architecture`
+
+Primary files:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/queue.ts`
+
+### Batch 5 — Add Turn Checkpoints
+
+Justification:
+
+- Queue durability alone is insufficient.
+- In-flight turn state currently dies in memory.
+
+Target:
+
+- `AgentLoop` persists phase checkpoints at stable boundaries
+
+Task list:
+
+- define checkpoint schema:
+  - resolving
+  - streaming
+  - executing-tools
+  - finalizing
+- checkpoint queue state and active turn identity
+- checkpoint persisted assistant draft references where needed
+- checkpoint pending tool executions / replay policy metadata
+- restore loop state from checkpoints on worker restart
+- define checkpoint versioning / invalidation rules
+- add crash-at-each-phase tests, not just happy-path recovery
+
+Relevant skills:
+
+- `effect-v4`
+- `architecture`
+
+Primary files:
+
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.utils.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts`
 
-## Recommended Order
+### Batch 6 — Define Crash Recovery Semantics
 
-1. Batch 1 — Make the Transport Boundary Explicit
-2. Batch 2 — Unify Transport Contracts
-3. Batch 3 — Split the Startup/Layer Graph
-4. Batch 4 — Encode Runtime Platform Boundaries
-5. Batch 5 — Collapse TUI Session Ownership
-6. Batch 6 — Unify Keyboard Ownership
-7. Batch 7 — Add Real OpenTUI Renderer Tests
-8. Batch 8 — Shrink Debug/App Boot Surfaces
-9. Batch 9 — Decompose GentCore Into Command/Query Seams
-10. Batch 10 — Re-encode Extension Hook Structure
-11. Batch 11 — Redesign the End-State Architecture
+Justification:
+
+- “Resume after crash” is meaningless unless phase-by-phase semantics are explicit.
+
+Target:
+
+- crash behavior becomes a designed policy, not emergent behavior
+
+Task list:
+
+- define replay/resume rules for each phase
+- define idempotent vs non-idempotent tool behavior
+- define what gets surfaced to the user after recovery
+- publish restart/recovery events into the session stream
+- ensure queues continue draining after recovery
+- explicitly reject “best effort” silent recovery where correctness is ambiguous
+- require a recovery matrix in docs/tests:
+  - crash point
+  - persisted state
+  - resumed action
+  - user-visible outcome
+
+Relevant skills:
+
+- `architecture`
+- `effect-v4`
+
+Primary files:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
+
+### Batch 7 — Reconnect And Heal In The TUI
+
+Justification:
+
+- Worker restarts are only valuable if the shell reconnects cleanly.
+
+Target:
+
+- TUI shell survives worker crash and rehydrates state
+
+Task list:
+
+- detect worker death
+- show restart/reconnecting state in the TUI
+- restart worker under supervision policy
+- reconnect transport
+- rehydrate:
+  - session state
+  - queue snapshot
+  - latest branch messages
+  - event subscription after last event id
+- prove it end-to-end by killing the worker during an active session and observing recovery directly
+
+Relevant skills:
+
+- `opentui`
+- `react`
+- `architecture`
+
+Primary files:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session.tsx`
+
+### Batch 8 — Delete Transitional In-Process Hosting
+
+Justification:
+
+- Keeping two first-class topologies forever is architectural cowardice.
+
+Target:
+
+- TUI uses worker-hosted app runtime by default
+- direct hosting is test-only or intentionally debug-only
+
+Task list:
+
+- migrate remaining production callers first
+- remove production in-process app boot from TUI in the same wave
+- prune compatibility helpers that only supported dual topology
+- simplify docs and startup paths to one real default
+- keep the minimum test scaffolding needed for local/in-memory tests
+- encode the end-state in structure:
+  - no production import path from TUI shell to app dependency wiring
+  - tests or lint/grep guard against regression
+
+Relevant skills:
+
+- `architecture`
+- `effect-v4`
+
+Primary files:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`
+- `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
+- `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
+
+## Test Plan
+
+### Worker supervision
+
+- TUI starts worker and reaches home/session successfully
+- worker crash triggers restart
+- TUI reconnects automatically
+- active session view rehydrates after restart
+- repeated crash/restart converges to the same shell state
+
+### Durable inbox
+
+- queued follow-up survives worker crash
+- steering command survives worker crash
+- inbox replay is idempotent on repeated restart
+- duplicate command delivery converges, not duplicates
+
+### Turn checkpoints
+
+- crash during resolving resumes correctly
+- crash during streaming yields interrupted/replayed semantics as designed
+- crash during tool execution respects idempotency rules
+- crash during finalizing does not strand queue state
+- crash twice at the same phase still converges
+
+### Cluster-backed actor routing
+
+- `SessionActorEntity` routes by `sessionId:branchId`
+- multiple sessions isolate queue state correctly
+- worker restart restores entity-backed actor state from durability layer
+
+### Full gate after each batch
+
+- `bun run lint`
+- `bun run typecheck`
+- `bun run test`
+- `bun run build`
+
+## Structural End-State Invariants
+
+These should be encoded, not remembered:
+
+- production TUI shell does not host app dependencies in-process
+- production TUI talks only through worker transport
+- worker owns actor runtime and durable recovery
+- `EventStore` is not the sole recovery truth
+- command replay and recovery are idempotent by design
+
+## Open Questions
+
+These should be answered during implementation, not hand-waved away now.
+
+### Should existing `EventStore` be the source of truth?
+
+Probably no.
+
+Reason:
+
+- current event stream is diagnostic/UI-facing
+- not every event is the right persistence unit for recovery
+- provider chunk replay is too noisy
+
+Better:
+
+- keep `EventStore` for domain + diagnostic events
+- add a dedicated durable inbox/checkpoint store
+- optionally derive projections from that plus storage state
+
+### Should we fully event-source turns?
+
+Probably not.
+
+Best cut:
+
+- event-source commands and durable phase transitions
+- checkpoint rich runtime state at stable boundaries
+- do not store every token chunk as the canonical recovery mechanism
+
+### Should cluster be cross-process/networked immediately?
+
+No.
+
+Use `ClusterSingleLive` inside one worker process first.
+
+That already gives:
+
+- entity routing
+- better supervision semantics
+- a path to future distribution without forcing it now
 
 ## Source Receipts
 
-### Brain Principles
-
-- `/Users/cvr/.brain/principles/redesign-from-first-principles.md`
-- `/Users/cvr/.brain/principles/serialize-shared-state-mutations.md`
-- `/Users/cvr/.brain/principles/boundary-discipline.md`
-- `/Users/cvr/.brain/principles/subtract-before-you-add.md`
-- `/Users/cvr/.brain/principles/encode-lessons-in-structure.md`
-- `/Users/cvr/.brain/principles/fix-root-causes.md`
-
-### Skills
-
-- `/Users/cvr/Developer/personal/dotfiles/skills/effect-v4/SKILL.md`
-- `/Users/cvr/Developer/personal/dotfiles/skills/architecture/SKILL.md`
-- `/Users/cvr/Developer/personal/dotfiles/skills/opentui/SKILL.md`
-- `/Users/cvr/Developer/personal/dotfiles/skills/opentui/references/solid/REFERENCE.md`
-- `/Users/cvr/Developer/personal/dotfiles/skills/opentui/references/keyboard/REFERENCE.md`
-- `/Users/cvr/Developer/personal/dotfiles/skills/opentui/references/testing/REFERENCE.md`
-
-### Codebase
-
-- `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
-- `/Users/cvr/Developer/personal/gent/apps/server/src/main.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/AGENTS.md`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/debug/bootstrap.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/session-machine.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-session-feed.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-machine.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/keyboard/context.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/home.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-ui-state.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/input.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/input-state.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/prompt-search-state.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/prompt-search-palette.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/message-list.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/queue-widget.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/task-widget.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/inline-chrome.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/tool-frame.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/session-render.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/input-textarea.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/index.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/core.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/event-store.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider-factory.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
+- `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/config-service.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/task-service.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/tracer.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/logger.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/hooks.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.utils.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/tools/repo-explorer.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/tools/librarian.ts`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
-
-### External Receipts
-
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/core/src/testing.ts`
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/core/src/tests/renderer.input.test.ts`
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/solid/index.ts`
-- `/Users/cvr/.cache/repo/anomalyco/opentui/packages/solid/tests/textarea.test.tsx`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/cluster-layer.ts`
+- `/Users/cvr/.brain/principles/redesign-from-first-principles.md`
+- `/Users/cvr/.brain/principles/serialize-shared-state-mutations.md`
