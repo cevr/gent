@@ -35,7 +35,6 @@ export type WorkerLifecycleState =
     }
 
 export interface WorkerSupervisor {
-  readonly client: GentClient
   readonly url: string
   readonly port: number
   readonly pid: () => number | null
@@ -50,6 +49,10 @@ export interface WorkerSupervisorOptions {
   readonly env?: Record<string, string | undefined>
   readonly startupTimeoutMs?: number
   readonly mode?: "default" | "debug"
+}
+
+export interface WorkerTransportTarget {
+  readonly url: string
 }
 
 const SERVER_ENTRY_PATH = new URL("../../../server/src/main.ts", import.meta.url).pathname
@@ -205,8 +208,6 @@ export const startWorkerSupervisor = (
             }),
         ),
       )
-      const url = `http://${WORKER_HOST}:${assignedPort}/rpc`
-      const client = yield* makeHttpGentClient({ url })
       const listeners = new Set<(state: WorkerLifecycleState) => void>()
       let restartCount = 0
       let stopped = false
@@ -310,8 +311,7 @@ export const startWorkerSupervisor = (
       }).pipe(Effect.catchEager(() => Effect.void))
 
       return {
-        client,
-        url,
+        url: `http://${WORKER_HOST}:${assignedPort}/rpc`,
         port: assignedPort,
         pid: () => (state._tag === "running" ? state.pid : null),
         getState: () => state,
@@ -328,6 +328,10 @@ export const startWorkerSupervisor = (
     }),
     (supervisor) => supervisor.stop,
   )
+
+export const makeWorkerHttpClient = (
+  target: WorkerTransportTarget,
+): Effect.Effect<GentClient, never, Scope.Scope> => makeHttpGentClient({ url: target.url })
 
 export const WorkerSupervisorInternal = {
   resolveWorkerLaunch,

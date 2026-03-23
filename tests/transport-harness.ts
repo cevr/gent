@@ -31,7 +31,7 @@ import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
 import { createClient, makeDirectGentClient, type GentClient, type GentRpcClient } from "@gent/sdk"
-import { startWorkerSupervisor } from "../apps/tui/src/worker/supervisor"
+import { makeWorkerHttpClient, startWorkerSupervisor } from "../apps/tui/src/worker/supervisor"
 
 const repoRoot = path.resolve(import.meta.dir, "..")
 
@@ -163,7 +163,8 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
                 GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
               },
             })
-            return yield* assertion(worker.client)
+            const client = yield* makeWorkerHttpClient(worker)
+            return yield* assertion(client)
           }),
         ),
       ),

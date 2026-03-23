@@ -20,7 +20,7 @@ import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
 import { resolveAppBootstrap, type InitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
-import { startWorkerSupervisor } from "./worker/supervisor"
+import { makeWorkerHttpClient, startWorkerSupervisor } from "./worker/supervisor"
 
 // Clear client log on startup
 clearClientLog()
@@ -236,7 +236,7 @@ const main = Command.make(
       }
 
       const supervisor = yield* startWorkerSupervisor({ cwd, mode: debug ? "debug" : "default" })
-      const gentClient = supervisor.client
+      const gentClient = yield* makeWorkerHttpClient(supervisor)
 
       const authProviders = yield* gentClient.listAuthProviders()
       const missingProviders = authProviders
@@ -319,7 +319,8 @@ const main = Command.make(
 const sessions = Command.make("sessions", {}, () =>
   Effect.gen(function* () {
     const worker = yield* startWorkerSupervisor({ cwd: process.cwd() })
-    const allSessions = yield* worker.client.listSessions()
+    const client = yield* makeWorkerHttpClient(worker)
+    const allSessions = yield* client.listSessions()
 
     if (allSessions.length === 0) {
       yield* Console.log("No sessions found.")

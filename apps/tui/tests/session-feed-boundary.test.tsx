@@ -7,7 +7,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
-import { startWorkerSupervisor } from "../src/worker/supervisor"
+import { makeWorkerHttpClient, startWorkerSupervisor } from "../src/worker/supervisor"
 import { renderFrame, renderWithProviders } from "./render-harness"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
@@ -64,6 +64,13 @@ const makeSessionState = (created: {
   reasoningLevel: undefined,
 })
 
+const startWorkerWithClient = (options: Parameters<typeof startWorkerSupervisor>[0]) =>
+  Effect.gen(function* () {
+    const worker = yield* startWorkerSupervisor(options)
+    const client = yield* makeWorkerHttpClient(worker)
+    return { ...worker, client }
+  })
+
 describe("session feed boundary", () => {
   test("projects thinking state and assistant output from worker transport", async () => {
     const root = makeTempDir()
@@ -73,7 +80,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerSupervisor({
+          const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
             env: {
@@ -137,7 +144,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerSupervisor({
+          const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
             env: {
@@ -206,7 +213,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerSupervisor({
+          const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
             env: {
