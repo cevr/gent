@@ -1,244 +1,198 @@
 # Gent Architecture
 
-Minimal, opinionated agent harness.
+Minimal agent harness. Effect-first. Small seams. One owner per concern.
 
-## Philosophy
+## Rules
 
-- **Minimal**: Small surface area, entire codebase understandable
-- **Opinionated**: One way to do things, no configuration bloat
-- **Built with Effect**: Services, Layers, Schema, Stream, Ref
+- Schema-first transport contract.
+- Thin transport adapters.
+- Command/query services, not god facades.
+- Runtime owns orchestration.
+- Platform edges stay explicit.
+- TUI routes own screen state; components render and dispatch.
+- Extension hooks are structural descriptors, not stringly maps.
 
-## Overview
+## Package Map
 
+```text
+apps/
+├── tui/       # OpenTUI client over the shared transport contract
+└── server/    # HTTP + RPC adapter over the same app services
+
+packages/
+├── core/
+│   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
+│   ├── storage/   # SQLite persistence
+│   ├── providers/ # Model/provider/auth adapters
+│   ├── runtime/   # actor-process, agent-loop, task/runtime services
+│   ├── tools/     # tool definitions + handlers
+│   ├── extensions/# builtin extensions
+│   ├── server/    # transport contract, handlers, commands, queries, startup wiring
+│   └── test-utils/# test layers, recorders, fixtures
+└── sdk/           # direct + HTTP transports over one client contract
 ```
-TUI / SDK / HTTP Client
+
+## System Shape
+
+```text
+TUI / SDK / HTTP client
           │
           ▼
-  Gent transport contract
+  transport contract
           │
    ┌──────┴──────┐
    │             │
    ▼             ▼
-in-process    RPC / HTTP
- transport     transport
+direct        RPC / HTTP
+adapter        adapter
    │             │
    └──────┬──────┘
           ▼
-     App services
+   app services
           │
    ┌──────┴──────┐
    ▼             ▼
- Runtime      Boundaries
-          (storage/tools/providers/events)
+commands      queries/events
+          │
+          ▼
+   runtime + boundaries
 ```
 
-## Packages
-
-```
-packages/
-├── core/src/
-│   ├── domain/      # Schemas + services: ids, message, event, tool, agent, permission, auth, etc.
-│   ├── storage/     # SQLite (bun:sqlite) - baked in
-│   ├── providers/   # Vercel AI SDK adapters
-│   ├── runtime/     # ActorProcess, AgentLoop, AgentActor, context-estimation, retry
-│   ├── tools/       # Read, Write, Edit, Bash, Glob, Grep, etc.
-│   ├── server/      # GentCore, RPCs, EventStore, system prompt
-│   └── test-utils/  # Mock layers, sequence recording
-└── sdk/             # Transport adapters over one shared client contract
-
-apps/
-├── tui/             # @opentui/solid client over the shared transport contract
-└── server/          # BunHttpServer + SSE
-```
-
-No barrel files. `@gent/core` uses subpath exports (`@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop`, etc.). Internal imports use relative paths.
+Process topology is secondary. In-process direct transport is still server-first if it obeys the same contract.
 
 ## Transport Boundary
 
-One client contract. Multiple transports.
+Source of truth:
 
-- The authoritative client contract lives in `packages/core/src/server/transport-contract.ts`.
-- SDK provides adapters for that contract:
-  - direct / in-process
-  - RPC / HTTP
-- Process topology is not the architectural boundary.
-- The boundary is the transport contract and its schemas/semantics.
+- `packages/core/src/server/transport-contract.ts`
+
+That module owns:
+
+- client-facing types
+- queue/session/message projections
+- contract semantics
+
+Adapters:
+
+- `packages/sdk/src/client.ts`
+- `packages/core/src/server/rpcs.ts`
+- `packages/core/src/server/http-api.ts`
 
 Rule:
 
-- clients talk to the app through the shared transport contract
-- transports adapt that contract
-- app services do not grow client-specific DTO surfaces
+- no client-specific DTO remodeling
+- no parallel contract surfaces
+- handlers and adapters derive from the same contract types
 
-## Core Concepts
+## App Services
 
-## Actor Model
+The app surface is split by concern:
 
-### Messages
+- `SessionCommands`
+- `SessionQueries`
+- `SessionEvents`
+- `InteractionCommands`
 
-Discriminated union parts:
+`packages/core/src/server/index.ts` is intentionally small. It only assembles `AppServicesLive`.
 
-```typescript
-MessagePart = TextPart | ToolCallPart | ToolResultPart | ReasoningPart | ImagePart
-Message = { id, sessionId, branchId, role, parts[], createdAt }
-```
+`packages/core/src/server/dependencies.ts` owns startup wiring:
 
-### ActorProcess + Agent Loop + Agents
+- runtime platform
+- storage/event store
+- auth/config/model registry
+- provider stack
+- extension loading
+- actor/runtime services
 
-GentCore routes all agent work through ActorProcess (single entry point). LocalActorProcessLive delegates to AgentLoop. Defects are surfaced via AgentRestarted events.
+It is the composition boundary. Not the domain boundary.
 
-```typescript
-ActorProcess {
-  sendUserMessage(payload)  // Constructs Message, forkDetach agentLoop.run
-  sendToolResult(payload)   // Manual tool result injection
-  interrupt(payload)        // Cancel/interrupt/interject
-  steerAgent(command)       // Switch agent, etc.
-}
+## Runtime
 
-AgentLoop {
-  run(message)      // Executes; tools can include prompt
-  steer(command)    // Interrupt mid-run
-  followUp(message) // Queue for after completion
-}
+Core orchestration lives in:
 
-AgentActor {
-  task(run)         // State-scoped task; emits MachineTaskSucceeded/Failed
-  inspection        // @machine.* events into EventStore
-}
-```
+- `packages/core/src/runtime/actor-process.ts`
+- `packages/core/src/runtime/agent/agent-loop.ts`
+- `packages/core/src/runtime/agent/agent-loop.state.ts`
+- `packages/core/src/runtime/agent/agent-loop.utils.ts`
+- `packages/core/src/runtime/agent/agent-loop-phases.ts`
 
-**Prompt flow (tool-driven):**
+Shape:
 
-Three modes via discriminated union:
+- `ActorProcess` is the single command entry for session/branch actor work.
+- `AgentLoop` is a flat machine-owned control plane.
+- queue ownership is structural
+- turn phases are explicit
+- machine inspection events are published as diagnostics
 
-- `present` — informational display, auto-resolves
-- `confirm` — yes/no gate
-- `review` — yes/no/edit, persists to `.gent/prompts/`
+Do not rebuild business logic from inspection events. They are receipts, not inputs.
 
-**AskUser tool:** Used for short structured questions with options. Prompt is for longform markdown content review.
+## Platform Boundaries
 
-### Actor Protocol (Draft)
+Core runtime should not reach for ambient process state unless the app shell is the real owner.
 
-AgentProcess RPC + mailbox contract (local + cluster):
+Explicit platform/runtime seams:
 
-```
-SendUserMessage { sessionId, branchId, content, mode } -> { messageId, turnId }
-SendToolResult  { toolCallId, output, isError }      -> { ack: true }
-Interrupt       { kind: cancel|interrupt|interject, message? } -> { ack: true }
-GetState        {} -> { status, agent, queueDepth, lastError? }
-GetMetrics      {} -> { tokens, cost, toolCalls, durations, retries }
-```
+- `RuntimePlatform`
+- tracer/logger services
+- file system / path / OS services
 
-Mailbox semantics:
+App entrypoints bind concrete Bun/OS behavior:
 
-- FIFO per session/branch
-- Tool results must match toolCallId
-- Interrupt preempts current run; interject enqueues next message
+- `apps/tui/src/main.tsx`
+- `apps/server/src/main.ts`
 
-Cluster mapping: use @effect/cluster Entity + RpcGroup; same RPC surface, sharded by sessionId.
+## TUI
 
-### Supervision Policy (Draft)
+TUI is a client over the shared contract, not a parallel app.
 
-Per-mode policy (one-for-one):
+Main boundaries:
 
-- cowork: retry provider errors with DEFAULT_RETRY_CONFIG (maxAttempts=3). No retry on tool errors, permission denies, or user interrupts.
-- deepwork: retry provider errors with extended backoff (maxAttempts=5, maxDelay=60s). Tool retries only if tool is marked safe/idempotent.
+- `apps/tui/src/client/context.tsx` for client/session/event state
+- `apps/tui/src/routes/session-controller.ts` for session-screen orchestration
+- route state machines for modal/session surfaces
+- components like `composer.tsx`, `message-list.tsx`, `queue-widget.tsx` as presentation + local interaction
 
-See `packages/core/src/runtime/retry.ts` for current defaults.
+Rules:
 
-### Tools as Effect Services
+- one screen-level owner for session state
+- one keyboard owner per route surface
+- overlays/composer flows modeled explicitly
+- renderer tests cover critical capture/focus paths
 
-```typescript
-defineTool({
-  name: "read",
-  params: Schema,
-  execute: (params, ctx) => Effect<Result, Error, Deps>,
-})
-```
+## Extensions
 
-Each tool has `Live` + `Test` layers.
+Extension shape lives in:
 
-**Core tools:** Read, Write, Edit, Bash, Glob, Grep, RepoExplorer, AskUser
+- `packages/core/src/domain/extension.ts`
+- `packages/core/src/runtime/extensions/hooks.ts`
+- `packages/core/src/runtime/extensions/registry.ts`
 
-### Providers (Model Agnostic)
+Rules:
 
-Vercel AI SDK. Format: `provider/model`
-
-Model is derived from agent/mode. No user-facing model switching. Pricing metadata comes from models.dev.
-
-### Storage
-
-SQLite only. `.gent/data.db`. No configuration.
-
-Tables: Sessions, Branches, Messages, Todos, Tasks
-
-### Permissions
-
-Allow-by-default + rules:
-
-```json
-{ "tool": "bash", "pattern": "rm -rf *", "action": "deny" }
-```
-
-### Events + Hooks
-
-Typed events via EventStore (SQLite log + PubSub). Includes machine inspection
-(@machine.\*) + task success/failure for traceability.
-
-Machine inspection events are intentional, not debug leakage:
-
-- TUI/debug tooling can render real actor transitions from the same session event stream.
-- Queue/interrupt/tool timing bugs leave receipts after the fact; message history alone is too lossy.
-- We avoid a second observability transport just for actor internals.
-
-Rule: inspection events are diagnostic. Do not make business logic depend on them.
-
-### Session Branching
-
-Fork at any message. Tree navigation. Handoff for context management.
-
-## Configuration
-
-`.gent/config.json`:
-
-```json
-{
-  "permissions": []
-}
-```
-
-**Baked in (not configurable):**
-
-- SQLite storage
-- All core tools enabled
-- Handoff for context management
-- Agent switching (cowork/deepwork)
-- Prompts in `.gent/prompts/`
+- hooks are typed descriptors
+- registration shape is structural
+- dispatch compiles once, then runs from typed hook maps
+- extension hook boundaries are where plugin typing must stay strict
 
 ## Testing
 
-Mock services with sequence recording:
+Use the smallest honest boundary:
 
-```typescript
-const testLayer = createTestLayer({
-  providerResponses: [{ text: "Hello!" }],
-  files: { "/test.txt": "content" },
-})
+- pure helpers: unit tests
+- transport/app services: Effect tests
+- TUI render/capture: OpenTUI renderer tests
+- runtime ordering/turn semantics: recording layers + runtime tests
 
-assertSequence(calls, [
-  { service: "provider", method: "stream" },
-  { service: "read", method: "execute" },
-])
-```
+Important files:
 
-## Influences
+- `packages/core/src/test-utils/index.ts`
+- `tests/runtime.test.ts`
+- `apps/tui/tests/render-harness.tsx`
 
-- **pi-mono**: Lazy LLM adaptation, dual-queue steering, transform pipeline
-- **opencode**: Named agent configs, file-based storage, permission rules
-- **repo**: Effect service + Layer composition, mock factories, @effect/cli
+## Non-Goals
 
-## Actor Roadmap
+- No cluster/distribution roadmap in this document.
+- No compatibility notes for deleted facades.
+- No process-purity dogma. Same-process direct transport is fine.
 
-Potential future: map subagents to `@effect/cluster` Entity + Sharding for BEAM-like
-mailboxes, idle reaping, and defect retry policies. See `packages/cluster/src/Entity.ts`
-and `packages/cluster/src/ShardingConfig.ts` in Effect for the knobs we can mirror.
+This doc describes the architecture we want to keep, not the migration history we already paid for.

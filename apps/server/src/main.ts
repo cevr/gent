@@ -12,7 +12,8 @@ import { SessionQueries } from "@gent/core/server/session-queries.js"
 import { SessionCommands } from "@gent/core/server/session-commands.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
-import { AppServicesLive, createDependencies } from "@gent/core/server/index.js"
+import { createDependencies } from "@gent/core/server/dependencies.js"
+import { AppServicesLive } from "@gent/core/server/index.js"
 
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>

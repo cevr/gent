@@ -77,7 +77,7 @@ packages/core/src/       # Everything non-UI
   providers/             # AI SDK adapters
   runtime/               # AgentLoop, ActorProcess, context-estimation, retry
   tools/                 # Tool implementations
-  server/                # GentCore, RPCs, event-store
+  server/                # transport contract, commands, queries, handlers, startup wiring
   test-utils/            # Mock layers, sequence recording
 packages/sdk/            # Client wrappers
 apps/tui/                # @opentui/solid TUI
@@ -97,13 +97,14 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 ## Key Files
 
-| File                                            | Purpose                                        |
-| ----------------------------------------------- | ---------------------------------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`   | `decodeMessageParts` for JSON→Schema roundtrip |
-| `packages/core/src/test-utils/index.ts`         | `SequenceRecorder`, recording layers           |
-| `packages/core/src/server/index.ts`             | `createDependencies` — full layer wiring       |
-| `packages/core/src/runtime/agent/agent-loop.ts` | Agent loop — recursive, largest single file    |
-| `apps/tui/tsconfig.json`                        | `jsxImportSource: "@opentui/solid"` required   |
+| File                                             | Purpose                                        |
+| ------------------------------------------------ | ---------------------------------------------- |
+| `packages/core/src/storage/sqlite-storage.ts`    | `decodeMessageParts` for JSON→Schema roundtrip |
+| `packages/core/src/test-utils/index.ts`          | `SequenceRecorder`, recording layers           |
+| `packages/core/src/server/dependencies.ts`       | startup wiring + dependency graph              |
+| `packages/core/src/server/transport-contract.ts` | shared client contract                         |
+| `packages/core/src/runtime/agent/agent-loop.ts`  | flat loop machine assembly                     |
+| `apps/tui/tsconfig.json`                         | `jsxImportSource: "@opentui/solid"` required   |
 
 ## Documentation
 

@@ -60,17 +60,20 @@ Ported from opencode. Key patterns:
 Providers wrap app in `main.tsx`:
 
 ```
-ThemeProvider → CommandProvider → AgentStateProvider → RouterProvider → ClientProvider
+RegistryProvider → WorkspaceProvider → RouterProvider → ClientProvider → App
 ```
 
-| Provider             | Purpose                                          |
-| -------------------- | ------------------------------------------------ |
-| `WorkspaceProvider`  | cwd, gitRoot, gitStatus - static workspace info  |
-| `AgentStateProvider` | mode, status, cost, error - reactive agent state |
-| `RouterProvider`     | route, navigate - discriminated union routes     |
-| `ClientProvider`     | RPC client, event subscriptions                  |
+| Provider            | Purpose                                         |
+| ------------------- | ----------------------------------------------- |
+| `WorkspaceProvider` | cwd, gitRoot, gitStatus - static workspace info |
+| `RouterProvider`    | route, navigate - discriminated union routes    |
+| `ClientProvider`    | transport client, session state, event stream   |
 
-Routes: `home-view.tsx` (logo, first message) → `session-view.tsx` (messages, streaming)
+Routes:
+
+- `src/routes/home.tsx`
+- `src/routes/session.tsx`
+- `src/routes/session-controller.ts`
 
 ## Compound Components
 
@@ -133,14 +136,17 @@ Special prefixes at input start trigger different modes:
 | `/fork`     | Fork from a message      |
 | `/bypass`   | Toggle permission bypass |
 
-## Key Files (Input System)
+## Key Files (Composer + Session)
 
-| File                                    | Purpose                           |
-| --------------------------------------- | --------------------------------- |
-| `src/routes/session-view.tsx`           | Input mode state, prefix handling |
-| `src/components/autocomplete-popup.tsx` | Popup component for $, @, /       |
-| `src/hooks/use-skills.ts`               | Skill dir scanning + caching      |
-| `src/hooks/use-file-search.ts`          | Glob + fuzzy file search          |
-| `src/utils/shell.ts`                    | Shell execution + truncation      |
-| `src/utils/file-refs.ts`                | @file#line expansion              |
-| `src/commands/slash-commands.ts`        | Slash command handlers            |
+| File                                        | Purpose                           |
+| ------------------------------------------- | --------------------------------- |
+| `src/routes/session-controller.ts`          | session-screen orchestration      |
+| `src/routes/session.tsx`                    | session presentation + route keys |
+| `src/components/composer.tsx`               | composer render surface           |
+| `src/components/use-composer-controller.ts` | composer interaction wiring       |
+| `src/components/autocomplete-popup.tsx`     | Popup component for $, @, /       |
+| `src/hooks/use-skills.ts`                   | Skill dir scanning + caching      |
+| `src/hooks/use-file-search.ts`              | Glob + fuzzy file search          |
+| `src/utils/shell.ts`                        | Shell execution + truncation      |
+| `src/utils/file-refs.ts`                    | @file#line expansion              |
+| `src/commands/slash-commands.ts`            | Slash command handlers            |

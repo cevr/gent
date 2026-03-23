@@ -1,5 +1,9 @@
 # Codebase Improvement Plan
 
+Status: complete.
+
+All 11 batches in this plan have been implemented. `ARCHITECTURE.md` is the source of truth for the resulting end state. This file is now a historical receipt for why the cuts were made.
+
 ## Audit Synthesis
 
 ### Effect v4
