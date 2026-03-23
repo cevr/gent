@@ -567,6 +567,7 @@ export function Session(props: SessionProps) {
           onSlashCommand={handleSlashCommand}
           clearMessages={feed.clear}
           onRestoreQueue={restoreQueuedMessages}
+          suspended={promptSearchOpen()}
           onTextChange={setComposerText}
           restoreTextRequest={restoreTextRequest()}
           inputState={inputState()}

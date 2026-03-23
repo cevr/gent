@@ -93,6 +93,7 @@ export interface InputProps {
   onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
   clearMessages?: () => void
   onRestoreQueue?: () => void
+  suspended?: boolean
   onTextChange?: (text: string) => void
   restoreTextRequest?: { token: number; text: string }
   children?: JSX.Element
@@ -230,6 +231,8 @@ export function Input(props: InputProps) {
   }
 
   useKeyboard((e) => {
+    if (props.suspended === true) return
+
     const isShiftTab =
       (e.name === "tab" && e.shift === true) ||
       e.name === "backtab" ||
@@ -502,7 +505,8 @@ export function Input(props: InputProps) {
   const promptSymbol = () => (effectiveMode() === "shell" ? "$ " : "❯ ")
 
   // Input stays focused unless command palette is open or in prompt mode
-  const inputFocused = () => !command.paletteOpen() && effectiveMode() !== "prompt"
+  const inputFocused = () =>
+    !command.paletteOpen() && props.suspended !== true && effectiveMode() !== "prompt"
 
   const contextValue: InputContextValue = {
     autocomplete,
