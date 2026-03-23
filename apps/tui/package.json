@@ -9,7 +9,8 @@
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests",
+    "test": "echo 'No unit tests in @gent/tui; run bun run test:integration'",
+    "test:integration": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests integration",
     "test:e2e": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts e2e"
   },
   "dependencies": {

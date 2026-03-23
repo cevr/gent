@@ -5,7 +5,7 @@ import { Deferred, Effect, Option, Stream } from "effect"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
-import { renderFrame, renderWithProviders } from "./render-harness"
+import { renderFrame, renderWithProviders } from "../tests/render-harness"
 import {
   createTempDirFixture,
   createWorkerEnv,

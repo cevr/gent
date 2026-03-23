@@ -1,6 +1,17 @@
-# Seam Tests
+# Test Lanes
 
-Fast seam parity:
+Unit:
+
+- `bun run gate`
+- pure unit tests only
+- no TUI suites
+- no transport, worker, bootstrap, or boundary coverage
+
+Integration:
+
+- `bun run test:integration`
+
+Root seam and boundary coverage:
 
 - `tests/transport-contract.test.ts`
   - shared client contract
@@ -12,14 +23,20 @@ Fast seam parity:
   - watched current-value state semantics
 - `tests/queue-contract.test.ts`
   - queue-specific contract and restore semantics
+- `tests/core-boundary.test.ts`
+  - `SessionCommands` / `ActorProcess` / durable inbox seams
+- `tests/tui-boundary.test.ts`
+  - structural production TUI boundary guard
 
-Worker and TUI boundary:
+TUI integration coverage:
 
-- `apps/tui/tests/worker-supervisor.test.ts`
+- `apps/tui/tests/*`
+  - all TUI tests run in the integration lane
+- `apps/tui/integration/worker-supervisor.test.ts`
   - hosting and supervision behavior
-- `apps/tui/tests/session-feed-boundary.test.tsx`
+- `apps/tui/integration/session-feed-boundary.test.tsx`
   - real worker-backed feed projection
-- `apps/tui/tests/app-bootstrap-boundary.test.ts`
+- `apps/tui/integration/app-bootstrap-boundary.test.ts`
   - bootstrap decisions against the real worker-backed client
 
 Rule:
