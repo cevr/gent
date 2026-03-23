@@ -34,23 +34,20 @@ import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
 import { DebugProvider } from "../debug/provider.js"
 import * as os from "node:os"
-import {
-  GentCore,
-  type GentCoreService,
-  type GentCoreError,
-  type CreateSessionInput,
-  type CreateSessionOutput,
-  type CreateBranchInput,
-  type CreateBranchOutput,
-  type SendMessageInput,
-  type SubscribeEventsInput,
-  type GetSessionStateInput,
-  type SessionState,
-  type SessionInfo,
-  type BranchInfo,
-  type MessageInfo,
-  StorageError,
-} from "./core.js"
+import { GentCore, type GentCoreService, type GentCoreError, StorageError } from "./core.js"
+import type {
+  CreateSessionInput,
+  CreateSessionResult as CreateSessionOutput,
+  CreateBranchInput,
+  CreateBranchOutput,
+  SendMessageInput,
+  SubscribeEventsInput,
+  GetSessionStateInput,
+  SessionState,
+  SessionInfo,
+  BranchInfo,
+  MessageInfoReadonly as MessageInfo,
+} from "./transport-contract.js"
 
 // System prompt
 export { DEFAULT_SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt"

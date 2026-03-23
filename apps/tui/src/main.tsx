@@ -6,14 +6,8 @@ import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
 import { createDependencies } from "@gent/core/server/index.js"
-import {
-  GentCore,
-  type GentCoreService,
-  type GentCoreError,
-  type SessionInfo,
-  type BranchInfo,
-} from "@gent/core/server/core.js"
-import { makeDirectGentClient, type GentClient } from "@gent/sdk"
+import { GentCore, type GentCoreService, type GentCoreError } from "@gent/core/server/core.js"
+import { makeDirectGentClient, type GentClient, type SessionInfo, type BranchInfo } from "@gent/sdk"
 import { GentLogger } from "@gent/core/runtime/logger.js"
 import { GentTracerLive, clearTraceLogIfRoot } from "@gent/core/runtime/tracer.js"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"

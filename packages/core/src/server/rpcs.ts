@@ -1,15 +1,9 @@
 import { Rpc, RpcGroup, type RpcClient, type RpcGroup as RpcGroupNs } from "effect/unstable/rpc"
 import { Schema } from "effect"
-import { SessionId, BranchId, MessageId } from "../domain/ids.js"
-import { MessagePart } from "../domain/message.js"
-import { EventEnvelope, PromptDecision, HandoffDecision } from "../domain/event.js"
-import { AgentName, ReasoningEffort } from "../domain/agent.js"
+import { SessionId, BranchId } from "../domain/ids.js"
 import { Model } from "../domain/model.js"
-import { PermissionDecision, PermissionRule } from "../domain/permission.js"
+import { PermissionRule } from "../domain/permission.js"
 import { Task } from "../domain/task.js"
-import { QueueSnapshot } from "../domain/queue.js"
-import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
-import { AuthProviderInfo } from "../domain/auth-guard.js"
 import {
   ActorProcessMetrics,
   ActorProcessState,
@@ -19,369 +13,104 @@ import {
   SendToolResultPayload,
   SendUserMessagePayload,
 } from "../runtime/actor-process.js"
-import { SkillScope } from "../domain/skills.js"
 import { GentRpcError } from "./errors.js"
-
-// ============================================================================
-// Session Operations
-// ============================================================================
-
-export const CreateSessionPayload = Schema.Struct({
-  name: Schema.optional(Schema.String),
-  firstMessage: Schema.optional(Schema.String),
-  cwd: Schema.optional(Schema.String),
-  bypass: Schema.optional(Schema.Boolean),
-  parentSessionId: Schema.optional(SessionId),
-  parentBranchId: Schema.optional(BranchId),
-})
-
-export const CreateSessionSuccess = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  name: Schema.String,
-  bypass: Schema.Boolean,
-})
-
-export const SessionInfo = Schema.Struct({
-  id: SessionId,
-  name: Schema.optional(Schema.String),
-  cwd: Schema.optional(Schema.String),
-  bypass: Schema.optional(Schema.Boolean),
-  reasoningLevel: Schema.optional(ReasoningEffort),
-  branchId: Schema.optional(BranchId),
-  parentSessionId: Schema.optional(SessionId),
-  parentBranchId: Schema.optional(BranchId),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
-})
-
-// ============================================================================
-// Session Tree
-// ============================================================================
-
-export interface SessionTreeNodeType {
-  id: SessionId
-  name?: string
-  cwd?: string
-  bypass?: boolean
-  parentSessionId?: SessionId
-  parentBranchId?: BranchId
-  createdAt: number
-  updatedAt: number
-  children: readonly SessionTreeNodeType[]
-}
-
-interface SessionTreeNodeEncoded {
-  id: string
-  name?: string
-  cwd?: string
-  bypass?: boolean
-  parentSessionId?: string
-  parentBranchId?: string
-  createdAt: number
-  updatedAt: number
-  children: readonly SessionTreeNodeEncoded[]
-}
-
-export const SessionTreeNodeSchema: Schema.Codec<SessionTreeNodeType, SessionTreeNodeEncoded> =
-  Schema.Struct({
-    id: SessionId,
-    name: Schema.optional(Schema.String),
-    cwd: Schema.optional(Schema.String),
-    bypass: Schema.optional(Schema.Boolean),
-    parentSessionId: Schema.optional(SessionId),
-    parentBranchId: Schema.optional(BranchId),
-    createdAt: Schema.Number,
-    updatedAt: Schema.Number,
-    children: Schema.Array(Schema.suspend(() => SessionTreeNodeSchema)),
-  })
-
-export const GetChildSessionsPayload = Schema.Struct({
-  parentSessionId: SessionId,
-})
-
-export const GetSessionTreePayload = Schema.Struct({
-  sessionId: SessionId,
-})
-
-// ============================================================================
-// Branch Operations
-// ============================================================================
-
-export const BranchInfo = Schema.Struct({
-  id: BranchId,
-  sessionId: SessionId,
-  parentBranchId: Schema.optional(BranchId),
-  parentMessageId: Schema.optional(MessageId),
-  name: Schema.optional(Schema.String),
-  summary: Schema.optional(Schema.String),
-  createdAt: Schema.Number,
-})
-
-export const ListBranchesPayload = Schema.Struct({
-  sessionId: SessionId,
-})
-
-export const CreateBranchPayload = Schema.Struct({
-  sessionId: SessionId,
-  name: Schema.optional(Schema.String),
-})
-
-export const CreateBranchSuccess = Schema.Struct({
-  branchId: BranchId,
-})
-
-export interface BranchTreeNode {
-  id: BranchId
-  name?: string
-  summary?: string
-  parentMessageId?: MessageId
-  messageCount: number
-  createdAt: number
-  children: readonly BranchTreeNode[]
-}
-
-interface BranchTreeNodeEncoded {
-  id: string
-  name?: string
-  summary?: string
-  parentMessageId?: string
-  messageCount: number
-  createdAt: number
-  children: readonly BranchTreeNodeEncoded[]
-}
-
-export const BranchTreeNodeSchema: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> =
-  Schema.Struct({
-    id: BranchId,
-    name: Schema.optional(Schema.String),
-    summary: Schema.optional(Schema.String),
-    parentMessageId: Schema.optional(MessageId),
-    messageCount: Schema.Number,
-    createdAt: Schema.Number,
-    children: Schema.Array(Schema.suspend(() => BranchTreeNodeSchema)),
-  })
-
-export const GetBranchTreePayload = Schema.Struct({
-  sessionId: SessionId,
-})
-
-export const SwitchBranchPayload = Schema.Struct({
-  sessionId: SessionId,
-  fromBranchId: BranchId,
-  toBranchId: BranchId,
-  summarize: Schema.optional(Schema.Boolean),
-})
-
-export const ForkBranchPayload = Schema.Struct({
-  sessionId: SessionId,
-  fromBranchId: BranchId,
-  atMessageId: MessageId,
-  name: Schema.optional(Schema.String),
-})
-
-export const ForkBranchSuccess = Schema.Struct({
-  branchId: BranchId,
-})
-
-// ============================================================================
-// Message Operations
-// ============================================================================
-
-export const SendMessagePayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  content: Schema.String,
-})
-
-export const MessageInfo = Schema.Struct({
-  id: MessageId,
-  sessionId: SessionId,
-  branchId: BranchId,
-  kind: Schema.optional(Schema.Literals(["regular", "interjection"])),
-  role: Schema.Literals(["user", "assistant", "system", "tool"]),
-  parts: Schema.Array(MessagePart),
-  createdAt: Schema.Number,
-  turnDurationMs: Schema.optional(Schema.Number),
-})
-
-export const ListMessagesPayload = Schema.Struct({
-  branchId: BranchId,
-})
-
-export const GetSessionStatePayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-})
-
-export const SessionState = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  messages: Schema.Array(MessageInfo),
-  lastEventId: Schema.NullOr(Schema.Number),
-  isStreaming: Schema.Boolean,
-  agent: AgentName,
-  bypass: Schema.optional(Schema.Boolean),
-  reasoningLevel: Schema.optional(ReasoningEffort),
-})
-
-// ============================================================================
-// Steer Operations
-// ============================================================================
-
-const SteerTargetFields = {
-  sessionId: SessionId,
-  branchId: BranchId,
-}
-
-export const SteerPayload = Schema.Union([
-  Schema.TaggedStruct("Cancel", SteerTargetFields),
-  Schema.TaggedStruct("Interrupt", SteerTargetFields),
-  Schema.TaggedStruct("Interject", {
-    ...SteerTargetFields,
-    message: Schema.String,
-    agent: Schema.optional(AgentName),
-  }),
-  Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
-])
-export type SteerPayload = typeof SteerPayload.Type
-
-export const DrainQueuedMessagesPayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-})
-
-export const DrainQueuedMessagesSuccess = QueueSnapshot
-
-export const GetQueuedMessagesPayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-})
-
-export const GetQueuedMessagesSuccess = QueueSnapshot
-
-// ============================================================================
-// Event Operations
-// ============================================================================
-
-export const SubscribeEventsPayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: Schema.optional(BranchId),
-  after: Schema.optional(Schema.Number),
-})
-
-// ============================================================================
-// Question Response Operations
-// ============================================================================
-
-export const RespondQuestionsPayload = Schema.Struct({
-  requestId: Schema.String,
-  answers: Schema.Array(Schema.Array(Schema.String)),
-})
-
-export const RespondPermissionPayload = Schema.Struct({
-  requestId: Schema.String,
-  decision: PermissionDecision,
-  persist: Schema.optional(Schema.Boolean),
-})
-
-export const UpdateSessionBypassPayload = Schema.Struct({
-  sessionId: SessionId,
-  bypass: Schema.Boolean,
-})
-
-export const UpdateSessionBypassSuccess = Schema.Struct({
-  bypass: Schema.Boolean,
-})
-
-export const UpdateSessionReasoningLevelPayload = Schema.Struct({
-  sessionId: SessionId,
-  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
-})
-
-export const UpdateSessionReasoningLevelSuccess = Schema.Struct({
-  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
-})
-
-export const RespondPromptPayload = Schema.Struct({
-  requestId: Schema.String,
-  decision: PromptDecision,
-  content: Schema.optional(Schema.String),
-})
-
-export const RespondHandoffPayload = Schema.Struct({
-  requestId: Schema.String,
-  decision: HandoffDecision,
-  reason: Schema.optional(Schema.String),
-})
-
-export const RespondHandoffSuccess = Schema.Struct({
-  childSessionId: Schema.optional(SessionId),
-  childBranchId: Schema.optional(BranchId),
-})
-
-// ============================================================================
-// Permission Operations
-// ============================================================================
-
-export const DeletePermissionRulePayload = Schema.Struct({
-  tool: Schema.String,
-  pattern: Schema.optional(Schema.String),
-})
-
-// ============================================================================
-// Auth Operations
-// ============================================================================
-
-export const SetAuthKeyPayload = Schema.Struct({
-  provider: Schema.String,
-  key: Schema.String,
-})
-
-export const DeleteAuthKeyPayload = Schema.Struct({
-  provider: Schema.String,
-})
-
-export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
-
-export const AuthorizeAuthPayload = Schema.Struct({
-  sessionId: Schema.String,
-  provider: Schema.String,
-  method: Schema.Number,
-})
-
-export const AuthorizeAuthSuccess = Schema.NullOr(AuthAuthorization)
-
-export const CallbackAuthPayload = Schema.Struct({
-  sessionId: Schema.String,
-  provider: Schema.String,
-  method: Schema.Number,
-  authorizationId: Schema.String,
-  code: Schema.optional(Schema.String),
-})
-
-export { AuthProviderInfo }
-
-export { EventEnvelope }
-
-// ============================================================================
-// Skills
-// ============================================================================
-
-export const SkillInfo = Schema.Struct({
-  name: Schema.String,
-  description: Schema.String,
-  scope: SkillScope,
-  filePath: Schema.String,
-})
-
-export const SkillContent = Schema.Struct({
-  name: Schema.String,
-  description: Schema.String,
-  scope: SkillScope,
-  filePath: Schema.String,
-  content: Schema.String,
-})
+import {
+  CreateSessionPayload,
+  CreateSessionSuccess,
+  SessionInfo,
+  SessionTreeNodeSchema,
+  GetChildSessionsPayload,
+  GetSessionTreePayload,
+  BranchInfo,
+  ListBranchesPayload,
+  CreateBranchPayload,
+  CreateBranchSuccess,
+  BranchTreeNodeSchema,
+  GetBranchTreePayload,
+  SwitchBranchPayload,
+  ForkBranchPayload,
+  ForkBranchSuccess,
+  SendMessagePayload,
+  MessageInfo,
+  ListMessagesPayload,
+  GetSessionStatePayload,
+  SessionState,
+  SteerPayload,
+  DrainQueuedMessagesPayload,
+  DrainQueuedMessagesSuccess,
+  GetQueuedMessagesPayload,
+  GetQueuedMessagesSuccess,
+  SubscribeEventsPayload,
+  RespondQuestionsPayload,
+  RespondPermissionPayload,
+  UpdateSessionBypassPayload,
+  UpdateSessionBypassSuccess,
+  UpdateSessionReasoningLevelPayload,
+  UpdateSessionReasoningLevelSuccess,
+  RespondPromptPayload,
+  RespondHandoffPayload,
+  RespondHandoffSuccess,
+  DeletePermissionRulePayload,
+  SetAuthKeyPayload,
+  DeleteAuthKeyPayload,
+  ListAuthMethodsSuccess,
+  AuthorizeAuthPayload,
+  AuthorizeAuthSuccess,
+  CallbackAuthPayload,
+  AuthProviderInfo,
+  EventEnvelope,
+  SkillInfo,
+  SkillContent,
+} from "./transport-contract.js"
+export {
+  CreateSessionPayload,
+  CreateSessionSuccess,
+  SessionInfo,
+  SessionTreeNodeSchema,
+  type SessionTreeNodeType,
+  GetChildSessionsPayload,
+  GetSessionTreePayload,
+  BranchInfo,
+  ListBranchesPayload,
+  CreateBranchPayload,
+  CreateBranchSuccess,
+  BranchTreeNodeSchema,
+  GetBranchTreePayload,
+  SwitchBranchPayload,
+  ForkBranchPayload,
+  ForkBranchSuccess,
+  SendMessagePayload,
+  MessageInfo,
+  ListMessagesPayload,
+  GetSessionStatePayload,
+  SessionState,
+  SteerPayload,
+  DrainQueuedMessagesPayload,
+  DrainQueuedMessagesSuccess,
+  GetQueuedMessagesPayload,
+  GetQueuedMessagesSuccess,
+  SubscribeEventsPayload,
+  RespondQuestionsPayload,
+  RespondPermissionPayload,
+  UpdateSessionBypassPayload,
+  UpdateSessionBypassSuccess,
+  UpdateSessionReasoningLevelPayload,
+  UpdateSessionReasoningLevelSuccess,
+  RespondPromptPayload,
+  RespondHandoffPayload,
+  RespondHandoffSuccess,
+  DeletePermissionRulePayload,
+  SetAuthKeyPayload,
+  DeleteAuthKeyPayload,
+  ListAuthMethodsSuccess,
+  AuthorizeAuthPayload,
+  AuthorizeAuthSuccess,
+  CallbackAuthPayload,
+  AuthProviderInfo,
+  EventEnvelope,
+  SkillInfo,
+  SkillContent,
+} from "./transport-contract.js"
 
 // ============================================================================
 // RPC Definitions

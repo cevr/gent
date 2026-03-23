@@ -1,28 +1,19 @@
 import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import { identity } from "effect/Function"
 import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
-import {
-  Session,
-  Branch,
-  Message,
-  TextPart,
-  type MessagePart,
-  type SessionTreeNode,
-} from "../domain/message.js"
+import { Session, Branch, Message, TextPart, type SessionTreeNode } from "../domain/message.js"
 import {
   EventStore,
   type EventId,
   type EventEnvelope,
   type EventStoreError,
-  type PromptDecision,
-  type HandoffDecision,
   SessionNameUpdated,
   BranchCreated,
   BranchSwitched,
   BranchSummarized,
 } from "../domain/event.js"
-import { AgentName, type ReasoningEffort } from "../domain/agent.js"
-import { Permission, PermissionRule, type PermissionDecision } from "../domain/permission.js"
+import { AgentName } from "../domain/agent.js"
+import { Permission, PermissionRule } from "../domain/permission.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { Task } from "../domain/task.js"
 import type { QueueSnapshot } from "../domain/queue.js"
@@ -34,114 +25,38 @@ import { SteerCommand, AgentLoopError } from "../runtime/agent/agent-loop.js"
 import { ConfigService } from "../runtime/config-service.js"
 import type { PlatformErrorSchema } from "./errors"
 import { NotFoundError } from "./errors"
+import type {
+  CreateSessionInput,
+  CreateSessionResult as CreateSessionOutput,
+  CreateBranchInput,
+  CreateBranchResult as CreateBranchOutput,
+  SendMessageInput,
+  SubscribeEventsInput,
+  GetSessionStateInput,
+  SessionState,
+  SessionInfo,
+  BranchInfo,
+  BranchTreeNode as TransportBranchTreeNode,
+  MessageInfoReadonly as MessageInfo,
+  SwitchBranchInput,
+  ForkBranchInput,
+  UpdateSessionBypassInput,
+  UpdateSessionBypassResult,
+  UpdateSessionReasoningLevelInput,
+  UpdateSessionReasoningLevelResult,
+  RespondPermissionInput,
+  RespondPromptInput,
+  RespondHandoffInput,
+  RespondHandoffResult,
+} from "./transport-contract.js"
 
 // Re-export for consumers
 export { SteerCommand, AgentLoopError }
 export { StorageError }
 export { NotFoundError }
 
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface CreateSessionInput {
-  name?: string
-  cwd?: string
-  firstMessage?: string
-  bypass?: boolean
-  parentSessionId?: SessionId
-  parentBranchId?: BranchId
-}
-
-export interface CreateSessionOutput {
-  sessionId: SessionId
-  branchId: BranchId
-  name: string
-  bypass: boolean
-}
-
-export interface CreateBranchInput {
-  sessionId: SessionId
-  name?: string
-}
-
-export interface CreateBranchOutput {
-  branchId: BranchId
-}
-
-export interface SendMessageInput {
-  sessionId: SessionId
-  branchId: BranchId
-  content: string
-}
-
-export interface SubscribeEventsInput {
-  sessionId: SessionId
-  branchId?: BranchId
-  after?: number
-}
-
-export interface GetSessionStateInput {
-  sessionId: SessionId
-  branchId: BranchId
-}
-
-export interface SessionState {
-  sessionId: SessionId
-  branchId: BranchId
-  messages: MessageInfo[]
-  lastEventId: number | null
-  isStreaming: boolean
-  agent: AgentName
-  bypass: boolean | undefined
-}
-
-export interface SessionInfo {
-  id: SessionId
-  name: string | undefined
-  cwd: string | undefined
-  bypass: boolean | undefined
-  reasoningLevel: ReasoningEffort | undefined
-  branchId: BranchId | undefined
-  parentSessionId: SessionId | undefined
-  parentBranchId: BranchId | undefined
-  createdAt: number
-  updatedAt: number
-}
-
-export interface BranchInfo {
-  id: BranchId
-  sessionId: SessionId
-  parentBranchId: BranchId | undefined
-  parentMessageId: MessageId | undefined
-  name: string | undefined
-  summary: string | undefined
-  createdAt: number
-}
-
-export interface BranchTreeNode {
-  id: BranchId
-  name: string | undefined
-  summary: string | undefined
-  parentMessageId: MessageId | undefined
-  messageCount: number
-  createdAt: number
-  children: readonly BranchTreeNode[]
-}
-
-type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
+type MutableBranchTreeNode = Omit<TransportBranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
-}
-
-export interface MessageInfo {
-  id: MessageId
-  sessionId: SessionId
-  branchId: BranchId
-  kind: "regular" | "interjection" | undefined
-  role: "user" | "assistant" | "system" | "tool"
-  parts: readonly MessagePart[]
-  createdAt: number
-  turnDurationMs: number | undefined
 }
 
 export type GentCoreError =
@@ -183,21 +98,13 @@ export interface GentCoreService {
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchOutput, GentCoreError>
 
-  readonly getBranchTree: (sessionId: SessionId) => Effect.Effect<BranchTreeNode[], GentCoreError>
+  readonly getBranchTree: (
+    sessionId: SessionId,
+  ) => Effect.Effect<TransportBranchTreeNode[], GentCoreError>
 
-  readonly switchBranch: (input: {
-    sessionId: SessionId
-    fromBranchId: BranchId
-    toBranchId: BranchId
-    summarize?: boolean
-  }) => Effect.Effect<void, GentCoreError>
+  readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, GentCoreError>
 
-  readonly forkBranch: (input: {
-    sessionId: SessionId
-    fromBranchId: BranchId
-    atMessageId: MessageId
-    name?: string
-  }) => Effect.Effect<{ branchId: BranchId }, GentCoreError>
+  readonly forkBranch: (input: ForkBranchInput) => Effect.Effect<CreateBranchOutput, GentCoreError>
 
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentCoreError>
 
@@ -230,37 +137,22 @@ export interface GentCoreService {
     input: SubscribeEventsInput,
   ) => Stream.Stream<EventEnvelope, EventStoreError>
 
-  readonly updateSessionBypass: (input: {
-    sessionId: SessionId
-    bypass: boolean
-  }) => Effect.Effect<{ bypass: boolean }, GentCoreError>
+  readonly updateSessionBypass: (
+    input: UpdateSessionBypassInput,
+  ) => Effect.Effect<UpdateSessionBypassResult, GentCoreError>
 
-  readonly updateSessionReasoningLevel: (input: {
-    sessionId: SessionId
-    reasoningLevel: ReasoningEffort | undefined
-  }) => Effect.Effect<{ reasoningLevel: ReasoningEffort | undefined }, GentCoreError>
+  readonly updateSessionReasoningLevel: (
+    input: UpdateSessionReasoningLevelInput,
+  ) => Effect.Effect<UpdateSessionReasoningLevelResult, GentCoreError>
 
   // Interaction response methods (centralized business logic)
-  readonly respondPermission: (input: {
-    requestId: string
-    decision: PermissionDecision
-    persist?: boolean
-  }) => Effect.Effect<void, GentCoreError>
+  readonly respondPermission: (input: RespondPermissionInput) => Effect.Effect<void, GentCoreError>
 
-  readonly respondPrompt: (input: {
-    requestId: string
-    decision: PromptDecision
-    content?: string
-  }) => Effect.Effect<void, GentCoreError>
+  readonly respondPrompt: (input: RespondPromptInput) => Effect.Effect<void, GentCoreError>
 
-  readonly respondHandoff: (input: {
-    requestId: string
-    decision: HandoffDecision
-    reason?: string
-  }) => Effect.Effect<
-    { childSessionId: SessionId | undefined; childBranchId: BranchId | undefined },
-    GentCoreError
-  >
+  readonly respondHandoff: (
+    input: RespondHandoffInput,
+  ) => Effect.Effect<RespondHandoffResult, GentCoreError>
 }
 
 // Name generation model - using haiku for speed/cost
@@ -622,7 +514,7 @@ ${conversation}`
           }
 
           const sortNodes = (list: MutableBranchTreeNode[]) => {
-            list.sort((a, b) => a.createdAt - b.createdAt)
+            list.sort((a, b) => a["createdAt"] - b["createdAt"])
             for (const node of list) {
               if (node.children.length > 0) sortNodes(node.children)
             }
