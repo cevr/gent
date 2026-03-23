@@ -17,7 +17,7 @@ import {
 import { Effect } from "effect"
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import type { Question } from "@gent/core/domain/event.js"
-import { useKeyboard, useRenderer } from "@opentui/solid"
+import { useRenderer } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { useWorkspace } from "../workspace/index"
 import { useCommand } from "../command/index"
@@ -39,6 +39,7 @@ import { expandSkillMentions } from "../utils/skill-expansion"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useSkills } from "../hooks/use-skills"
 import type { InputState, InputEvent, InputEffect } from "./input-state"
+import { useScopedKeyboard } from "../keyboard/context"
 
 interface InputContextValue {
   autocomplete: Accessor<AutocompleteState | null>
@@ -230,8 +231,36 @@ export function Input(props: InputProps) {
     }
   }
 
-  useKeyboard((e) => {
-    if (props.suspended === true) return
+  const handleTextareaKeyDown = (event: {
+    name?: string
+    shift?: boolean
+    ctrl?: boolean
+    meta?: boolean
+    super?: boolean
+    preventDefault: () => void
+  }) => {
+    const isEnterKey = event.name === "return" || event.name === "linefeed"
+    if (!isEnterKey) return
+
+    if (props.suspended === true || effectiveMode() === "prompt") {
+      event.preventDefault()
+      return
+    }
+
+    if (event.shift === true || event.ctrl === true) return
+
+    if (autocomplete() !== null) {
+      event.preventDefault()
+      return
+    }
+
+    event.preventDefault()
+    submitMode = event.super === true || event.meta === true ? "interject" : "queue"
+    handleSubmit()
+  }
+
+  useScopedKeyboard((e) => {
+    if (props.suspended === true) return false
 
     const isShiftTab =
       (e.name === "tab" && e.shift === true) ||
@@ -241,7 +270,7 @@ export function Input(props: InputProps) {
     if (isShiftTab) {
       const nextAgent = client.agent() === "deepwork" ? "cowork" : "deepwork"
       client.steer({ _tag: "SwitchAgent", agent: nextAgent })
-      return
+      return true
     }
 
     // Ctrl+G: open external editor
@@ -266,34 +295,26 @@ export function Input(props: InputProps) {
         .catch((err: unknown) => {
           client.setError(`Editor error: ${err}`)
         })
-      return
+      return true
     }
 
     if ((e.meta === true || e.super === true) && e.name === "up") {
       props.onRestoreQueue?.()
-      return
+      return true
     }
 
-    if (
-      e.name === "return" &&
-      effectiveMode() !== "prompt" &&
-      effectiveMode() !== "shell" &&
-      autocomplete() === null
-    ) {
-      submitMode = e.super === true || e.meta === true ? "interject" : "queue"
-    }
     // Handle autocomplete keyboard first
     if (autocomplete() !== null) {
       if (e.name === "escape") {
         setAutocomplete(null)
-        return
+        return true
       }
       // Let autocomplete popup handle up/down/enter/tab
       if (["up", "down", "return", "tab"].includes(e.name)) {
-        return
+        return false
       }
       if (e.ctrl === true && (e.name === "p" || e.name === "n")) {
-        return
+        return false
       }
     }
 
@@ -305,7 +326,7 @@ export function Input(props: InputProps) {
       autocomplete() === null
     ) {
       setInternalState({ _tag: "shell" })
-      return
+      return true
     }
 
     // Exit shell mode on ESC or backspace at position 0
@@ -313,12 +334,12 @@ export function Input(props: InputProps) {
       if (e.name === "escape") {
         setInternalState({ _tag: "normal", autocomplete: null })
         if (inputRef !== null) inputRef.setText("")
-        return
+        return true
       }
       // Backspace at position 0 or 1 exits shell mode (like deleting the implicit !)
       if (e.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
         setInternalState({ _tag: "normal", autocomplete: null })
-        return
+        return true
       }
     }
 
@@ -330,7 +351,7 @@ export function Input(props: InputProps) {
       autocomplete() === null
     ) {
       setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
-      return
+      return true
     }
 
     // Prompt history: up/down at cursor boundaries (normal mode only)
@@ -351,8 +372,10 @@ export function Input(props: InputProps) {
         inputRef.replaceText(result.text)
         inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
         previousValue = result.text
+        return true
       }
     }
+    return false
   })
 
   const handleSubmit = () => {
@@ -554,12 +577,11 @@ export function Input(props: InputProps) {
                 }
               }}
               focused={inputFocused()}
-              onSubmit={handleSubmit}
+              onKeyDown={handleTextareaKeyDown}
               wrapMode="word"
               minHeight={1}
               maxHeight={8}
               keyBindings={[
-                { name: "return", action: "submit" },
                 { name: "return", shift: true, action: "newline" },
                 { name: "linefeed", action: "newline" },
                 { name: "linefeed", shift: true, action: "newline" },
@@ -621,21 +643,21 @@ function PromptUI(props: PromptUIProps) {
   // Focus count = options + freeform input
   const focusableCount = () => options().length + 1
 
-  useKeyboard((e) => {
+  useScopedKeyboard((e) => {
     // Navigation
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
       setFocusIndex((i) => (i - 1 + focusableCount()) % focusableCount())
-      return
+      return true
     }
     if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
       setFocusIndex((i) => (i + 1) % focusableCount())
-      return
+      return true
     }
 
     // Selection with space (when focused on option)
     if (e.name === "space" && focusIndex() < options().length) {
       const opt = options()[focusIndex()]
-      if (opt === undefined) return
+      if (opt === undefined) return true
       const label = opt.label
 
       if (isMultiple()) {
@@ -653,14 +675,15 @@ function PromptUI(props: PromptUIProps) {
         // Single select - replace
         setSelected(new Set([label]))
       }
-      return
+      return true
     }
 
     // Submit with Enter
     if (e.name === "return") {
       submitAnswer()
-      return
+      return true
     }
+    return false
   })
 
   const submitAnswer = () => {

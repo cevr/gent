@@ -3,7 +3,6 @@
  */
 
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import { type SessionInfo, type SessionTreeNode, useClient } from "../client/index"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
@@ -40,6 +39,7 @@ import { buildTopRightLabels } from "../utils/session-labels"
 import { useSessionFeed } from "../hooks/use-session-feed"
 import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
+import { useScopedKeyboard } from "../keyboard/context"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -51,6 +51,12 @@ export interface SessionProps {
 type QueueState = {
   steering: readonly string[]
   followUp: readonly string[]
+}
+
+const appendQueuedFollowUp = (queue: readonly string[], content: string): readonly string[] => {
+  const last = queue[queue.length - 1]
+  if (last === undefined) return [content]
+  return [...queue.slice(0, -1), `${last}\n${content}`]
 }
 
 type OverlayState =
@@ -109,6 +115,22 @@ export function Session(props: SessionProps) {
         ),
       ),
     )
+
+  const pushQueuedMessage = (mode: "queue" | "interject", content: string) => {
+    setQueueState((current) => {
+      if (mode === "interject") {
+        return {
+          ...current,
+          steering: [...current.steering, content],
+        }
+      }
+
+      return {
+        ...current,
+        followUp: appendQueuedFollowUp(current.followUp, content),
+      }
+    })
+  }
 
   // Handle input state transitions
   const handleInputEvent = (event: InputEvent) => {
@@ -210,11 +232,11 @@ export function Session(props: SessionProps) {
     setOverlay({ _tag: "fork" })
   }
 
-  useKeyboard((e) => {
+  useScopedKeyboard((e) => {
     // Let command system handle keybinds first
-    if (command.handleKeybind(e)) return
+    if (command.handleKeybind(e)) return true
 
-    if (overlay() !== null) return
+    if (overlay() !== null) return false
 
     const clearComposer = () => {
       setRestoreTextRequest({ token: Date.now(), text: "" })
@@ -242,60 +264,61 @@ export function Session(props: SessionProps) {
       if (promptSearchOpen()) {
         setOverlay(null)
         quitChain.reset()
-        return
+        return true
       }
 
       if (command.paletteOpen()) {
         command.closePalette()
         quitChain.reset()
-        return
+        return true
       }
 
       if (client.isStreaming()) {
         client.steer({ _tag: "Cancel" })
         quitChain.reset()
-        return
+        return true
       }
 
       handleQuitKey("escape")
-      return
+      return true
     }
 
     // Ctrl+C: clear composer first, then quit
     if (e.ctrl === true && e.name === "c") {
       handleQuitKey("ctrl+c")
-      return
+      return true
     }
 
     if (e.ctrl === true && e.name === "r") {
       setOverlay({ _tag: "prompt-search", draftBeforeOpen: composerText() })
       quitChain.reset()
-      return
+      return true
     }
 
     // Ctrl+O: toggle tool output expansion
     if (e.ctrl === true && e.name === "o") {
       setToolsExpanded((prev) => !prev)
-      return
+      return true
     }
 
     // Ctrl+Shift+M: open mermaid viewer
     if (e.ctrl === true && e.shift === true && e.name === "m") {
       setOverlay({ _tag: "mermaid" })
-      return
+      return true
     }
+    return false
   })
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
     if (mode === "interject" && client.isStreaming()) {
+      pushQueuedMessage("interject", content)
       client.steer({ _tag: "Interject", message: content, agent: client.agent() })
-      setTimeout(syncQueueState, 0)
       return
     }
 
     if (client.isStreaming()) {
+      pushQueuedMessage("queue", content)
       client.sendMessage(content)
-      setTimeout(syncQueueState, 0)
       return
     }
 

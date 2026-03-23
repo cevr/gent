@@ -7,7 +7,7 @@
 
 import { createSignal, createEffect, onMount, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
+import { usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { Machine } from "effect-machine"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
@@ -21,6 +21,7 @@ import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
 import { tuiEvent, tuiError } from "../utils/unified-tracer"
 import { AuthState, AuthEvent, authMachine } from "./auth-machine"
+import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
   client: GentClient
@@ -298,21 +299,21 @@ export function Auth(props: AuthProps) {
 
   // ── Keyboard ──
 
-  useKeyboard((e) => {
+  useScopedKeyboard((e) => {
     const current = state()
 
     if (current._tag === "Key") {
       if (e.name === "escape") {
         send(AuthEvent.Cancel)
-        return
+        return true
       }
       if (e.name === "return") {
         submitKey()
-        return
+        return true
       }
       if (e.name === "backspace") {
         send(AuthEvent.BackspaceKey)
-        return
+        return true
       }
       if (
         e.sequence !== undefined &&
@@ -321,22 +322,23 @@ export function Auth(props: AuthProps) {
         e.meta !== true
       ) {
         send(AuthEvent.TypeKey({ char: e.sequence }))
+        return true
       }
-      return
+      return false
     }
 
     if (current._tag === "OAuth") {
       if (e.name === "escape") {
         send(AuthEvent.Cancel)
-        return
+        return true
       }
       if (e.name === "return") {
         submitOauth()
-        return
+        return true
       }
       if (e.name === "backspace") {
         send(AuthEvent.BackspaceCode)
-        return
+        return true
       }
       if (
         e.sequence !== undefined &&
@@ -345,66 +347,68 @@ export function Auth(props: AuthProps) {
         e.meta !== true
       ) {
         send(AuthEvent.TypeCode({ char: e.sequence }))
+        return true
       }
-      return
+      return false
     }
 
     if (current._tag === "Method") {
       if (e.name === "escape") {
         send(AuthEvent.Cancel)
-        return
+        return true
       }
       const provider = current.providers[current.providerIndex]
       const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
-      if (methods.length === 0) return
+      if (methods.length === 0) return false
       if (e.name === "up") {
         const next = current.methodIndex > 0 ? current.methodIndex - 1 : methods.length - 1
         send(AuthEvent.SelectMethod({ index: next }))
-        return
+        return true
       }
       if (e.name === "down") {
         const next = current.methodIndex < methods.length - 1 ? current.methodIndex + 1 : 0
         send(AuthEvent.SelectMethod({ index: next }))
-        return
+        return true
       }
       if (e.name === "return") {
         startMethod()
-        return
+        return true
       }
-      return
+      return false
     }
 
     // List state
     if (e.name === "escape") {
       router.back()
-      return
+      return true
     }
 
-    if (current._tag !== "List" || current.providers.length === 0) return
+    if (current._tag !== "List" || current.providers.length === 0) return false
 
     if (e.name === "up") {
       const next =
         current.providerIndex > 0 ? current.providerIndex - 1 : current.providers.length - 1
       send(AuthEvent.SelectProvider({ index: next }))
-      return
+      return true
     }
 
     if (e.name === "down") {
       const next =
         current.providerIndex < current.providers.length - 1 ? current.providerIndex + 1 : 0
       send(AuthEvent.SelectProvider({ index: next }))
-      return
+      return true
     }
 
     if (e.name === "return" || e.name === "a") {
       send(AuthEvent.OpenMethod)
-      return
+      return true
     }
 
     if (e.name === "d") {
       deleteSelected()
-      return
+      return true
     }
+    return false
   })
 
   usePaste((event) => {

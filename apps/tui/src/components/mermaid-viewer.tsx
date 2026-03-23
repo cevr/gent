@@ -4,9 +4,10 @@
  */
 
 import { createSignal, Show, createMemo } from "solid-js"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { renderMermaidToAscii, extractMermaidBlocks } from "../utils/mermaid"
+import { useScopedKeyboard } from "../keyboard/context"
 
 export interface MermaidDiagram {
   source: string
@@ -59,53 +60,55 @@ export function MermaidViewer(props: MermaidViewerProps) {
       .join("\n")
   })
 
-  useKeyboard((e) => {
-    if (!props.open) return
+  useScopedKeyboard(
+    (e) => {
+      if (e.name === "escape" || (e.ctrl === true && e.name === "m" && e.shift === true)) {
+        props.onClose()
+        return true
+      }
 
-    if (e.name === "escape" || (e.ctrl === true && e.name === "m" && e.shift === true)) {
-      props.onClose()
-      return
-    }
+      // Panning
+      if (e.name === "left") {
+        setPanX((x) => Math.max(0, x - PAN_STEP_X))
+        return true
+      }
+      if (e.name === "right") {
+        setPanX((x) => x + PAN_STEP_X)
+        return true
+      }
+      if (e.name === "up") {
+        setPanY((y) => Math.max(0, y - PAN_STEP_Y))
+        return true
+      }
+      if (e.name === "down") {
+        setPanY((y) => y + PAN_STEP_Y)
+        return true
+      }
 
-    // Panning
-    if (e.name === "left") {
-      setPanX((x) => Math.max(0, x - PAN_STEP_X))
-      return
-    }
-    if (e.name === "right") {
-      setPanX((x) => x + PAN_STEP_X)
-      return
-    }
-    if (e.name === "up") {
-      setPanY((y) => Math.max(0, y - PAN_STEP_Y))
-      return
-    }
-    if (e.name === "down") {
-      setPanY((y) => y + PAN_STEP_Y)
-      return
-    }
+      // Diagram cycling
+      if (e.sequence === "[") {
+        setDiagramIndex((i) => Math.max(0, i - 1))
+        setPanX(0)
+        setPanY(0)
+        return true
+      }
+      if (e.sequence === "]") {
+        setDiagramIndex((i) => Math.min(props.diagrams.length - 1, i + 1))
+        setPanX(0)
+        setPanY(0)
+        return true
+      }
 
-    // Diagram cycling
-    if (e.sequence === "[") {
-      setDiagramIndex((i) => Math.max(0, i - 1))
-      setPanX(0)
-      setPanY(0)
-      return
-    }
-    if (e.sequence === "]") {
-      setDiagramIndex((i) => Math.min(props.diagrams.length - 1, i + 1))
-      setPanX(0)
-      setPanY(0)
-      return
-    }
-
-    // Home/End for quick navigation
-    if (e.name === "home") {
-      setPanX(0)
-      setPanY(0)
-      return
-    }
-  })
+      // Home/End for quick navigation
+      if (e.name === "home") {
+        setPanX(0)
+        setPanY(0)
+        return true
+      }
+      return false
+    },
+    { when: () => props.open },
+  )
 
   return (
     <Show when={props.open && props.diagrams.length > 0}>

@@ -868,7 +868,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               const nextSteer = steeringItems[0]
               if (nextSteer !== undefined) {
                 yield* Ref.update(steeringMessageQueue, (items) => items.slice(1))
-                const nextInterrupted = yield* runLoop(
+                const nextInterrupted = yield* runLoopRecovering(
                   nextSteer.message,
                   nextSteer.bypass,
                   nextSteer.agentOverride,
@@ -882,7 +882,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               const nextItem = queue[0]
               if (nextItem !== undefined) {
                 yield* Ref.update(followUpQueue, (items) => items.slice(1))
-                const nextInterrupted = yield* runLoop(
+                const nextInterrupted = yield* runLoopRecovering(
                   restampQueuedMessage(nextItem.message),
                   nextItem.bypass,
                 )
@@ -891,6 +891,55 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               return interrupted
             })
+
+            let runLoopRecovering: (
+              message: Message,
+              bypass: boolean,
+              agentOverride?: AgentNameType,
+            ) => Effect.Effect<
+              boolean,
+              AgentLoopError | StorageError | ProviderError | EventStoreError
+            >
+
+            const runQueuedAfterFailure: () => Effect.Effect<
+              void,
+              AgentLoopError | StorageError | ProviderError | EventStoreError
+            > = Effect.fn("AgentLoop.runQueuedAfterFailure")(function* () {
+              const steeringItems = yield* Ref.get(steeringMessageQueue)
+              const nextSteer = steeringItems[0]
+              if (nextSteer !== undefined) {
+                yield* Ref.update(steeringMessageQueue, (items) => items.slice(1))
+                yield* runLoopRecovering(
+                  nextSteer.message,
+                  nextSteer.bypass,
+                  nextSteer.agentOverride,
+                )
+                return
+              }
+
+              const queue = yield* Ref.get(followUpQueue)
+              const nextItem = queue[0]
+              if (nextItem !== undefined) {
+                yield* Ref.update(followUpQueue, (items) => items.slice(1))
+                yield* runLoopRecovering(restampQueuedMessage(nextItem.message), nextItem.bypass)
+              }
+            })
+
+            runLoopRecovering = (
+              message: Message,
+              bypass: boolean,
+              agentOverride?: AgentNameType,
+            ) =>
+              runLoop(message, bypass, agentOverride).pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.failCause(cause)
+                    : Effect.gen(function* () {
+                        yield* runQueuedAfterFailure()
+                        return yield* Effect.failCause(cause)
+                      }),
+                ),
+              )
 
             const loopMachine = Machine.make({
               state: AgentLoopState,
@@ -915,7 +964,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               .task(
                 AgentLoopState.Running,
                 ({ state }) =>
-                  runLoop(state.message, state.bypass).pipe(
+                  runLoopRecovering(state.message, state.bypass).pipe(
                     Effect.annotateLogs({ sessionId, branchId }),
                     Effect.withSpan("AgentLoop.run"),
                     Effect.tapCause((cause) =>

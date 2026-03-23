@@ -1,12 +1,13 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import type { SessionId } from "@gent/core/domain/ids.js"
 import type { SessionTreeNode } from "../client"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncate } from "../utils/truncate"
+import { useScopedKeyboard } from "../keyboard/context"
 
 interface FlatNode {
   id: SessionId
@@ -104,47 +105,50 @@ export function SessionTree(props: SessionTreeProps) {
     setSelectedIndex(currentIndex >= 0 ? currentIndex : 0)
   })
 
-  useKeyboard((e) => {
-    if (!props.open) return
-
-    if (e.name === "escape") {
-      props.onClose()
-      return
-    }
-
-    if (e.name === "backspace") {
-      setQuery((current) => current.slice(0, -1))
-      setSelectedIndex(0)
-      return
-    }
-
-    const visible = items()
-    if (visible.length === 0) return
-
-    if (e.name === "return") {
-      const next = visible[selectedIndex()]
-      if (next !== undefined) props.onSelect(next.id)
-      return
-    }
-
-    if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-      setSelectedIndex((index) => (index > 0 ? index - 1 : visible.length - 1))
-      return
-    }
-
-    if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-      setSelectedIndex((index) => (index < visible.length - 1 ? index + 1 : 0))
-      return
-    }
-
-    if (e.sequence !== undefined && e.sequence.length === 1) {
-      const char = e.sequence
-      if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-        setQuery((current) => current + char)
-        setSelectedIndex(0)
+  useScopedKeyboard(
+    (e) => {
+      if (e.name === "escape") {
+        props.onClose()
+        return true
       }
-    }
-  })
+
+      if (e.name === "backspace") {
+        setQuery((current) => current.slice(0, -1))
+        setSelectedIndex(0)
+        return true
+      }
+
+      const visible = items()
+      if (visible.length === 0) return false
+
+      if (e.name === "return") {
+        const next = visible[selectedIndex()]
+        if (next !== undefined) props.onSelect(next.id)
+        return true
+      }
+
+      if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
+        setSelectedIndex((index) => (index > 0 ? index - 1 : visible.length - 1))
+        return true
+      }
+
+      if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
+        setSelectedIndex((index) => (index < visible.length - 1 ? index + 1 : 0))
+        return true
+      }
+
+      if (e.sequence !== undefined && e.sequence.length === 1) {
+        const char = e.sequence
+        if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
+          setQuery((current) => current + char)
+          setSelectedIndex(0)
+          return true
+        }
+      }
+      return false
+    },
+    { when: () => props.open },
+  )
 
   const panelWidth = () => Math.min(90, dimensions().width - 6)
   const panelHeight = () => Math.min(20, dimensions().height - 6)

@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
@@ -13,6 +13,7 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { PermissionRule, GentClient } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { formatError } from "../utils/format-error"
+import { useScopedKeyboard } from "../keyboard/context"
 
 export interface PermissionsProps {
   client: GentClient
@@ -126,14 +127,14 @@ export function Permissions(props: PermissionsProps) {
     )
   }
 
-  useKeyboard((e) => {
+  useScopedKeyboard((e) => {
     if (e.name === "escape") {
       router.back()
-      return
+      return true
     }
 
     const current = state()
-    if (current._tag !== "ready" || current.rules.length === 0) return
+    if (current._tag !== "ready" || current.rules.length === 0) return false
 
     if (e.name === "up") {
       setState((prev) => {
@@ -141,7 +142,7 @@ export function Permissions(props: PermissionsProps) {
         const next = prev.selectedIndex > 0 ? prev.selectedIndex - 1 : prev.rules.length - 1
         return { _tag: "ready", rules: prev.rules, selectedIndex: next, error: prev.error }
       })
-      return
+      return true
     }
 
     if (e.name === "down") {
@@ -150,13 +151,14 @@ export function Permissions(props: PermissionsProps) {
         const next = prev.selectedIndex < prev.rules.length - 1 ? prev.selectedIndex + 1 : 0
         return { _tag: "ready", rules: prev.rules, selectedIndex: next, error: prev.error }
       })
-      return
+      return true
     }
 
     if (e.name === "d") {
       deleteSelected()
-      return
+      return true
     }
+    return false
   })
 
   const panelWidth = () => Math.min(70, dimensions().width - 6)

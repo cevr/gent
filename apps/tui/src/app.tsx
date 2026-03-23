@@ -9,6 +9,7 @@ import { Session } from "./routes/session"
 import { BranchPicker } from "./routes/branch-picker"
 import { Permissions } from "./routes/permissions"
 import { Auth } from "./routes/auth"
+import { KeyboardScopeProvider } from "./keyboard/context"
 
 type SessionRoute = Extract<AppRoute, { _tag: "session" }>
 type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
@@ -100,9 +101,11 @@ export function App(props: AppProps) {
       )}
     >
       <ThemeProvider mode={undefined}>
-        <CommandProvider>
-          <AppContent {...props} />
-        </CommandProvider>
+        <KeyboardScopeProvider>
+          <CommandProvider>
+            <AppContent {...props} />
+          </CommandProvider>
+        </KeyboardScopeProvider>
       </ThemeProvider>
     </ErrorBoundary>
   )

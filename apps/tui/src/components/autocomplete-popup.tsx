@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useWorkspace } from "../workspace/index"
@@ -12,6 +12,7 @@ import { useSkills } from "../hooks/use-skills"
 import { useFileSearch } from "../hooks/use-file-search"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncatePath } from "./message-list-utils"
+import { useScopedKeyboard } from "../keyboard/context"
 
 /** Get file type tag from extension */
 function getFileTag(path: string): string {
@@ -163,13 +164,13 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   })
 
   // Handle keyboard navigation
-  useKeyboard((e) => {
+  useScopedKeyboard((e) => {
     const list = items()
-    if (list.length === 0) return
+    if (list.length === 0) return false
 
     if (e.name === "escape") {
       props.onClose()
-      return
+      return true
     }
 
     if (e.name === "return" || e.name === "tab") {
@@ -177,18 +178,19 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       if (item !== undefined) {
         props.onSelect(item.id)
       }
-      return
+      return true
     }
 
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
       setSelectedIndex((i) => (i > 0 ? i - 1 : list.length - 1))
-      return
+      return true
     }
 
     if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
       setSelectedIndex((i) => (i < list.length - 1 ? i + 1 : 0))
-      return
+      return true
     }
+    return false
   })
 
   const dimensions = useTerminalDimensions()

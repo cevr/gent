@@ -4,7 +4,7 @@
 
 import { createEffect, createSignal, For } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { useTheme } from "../theme/index"
 import { useClient } from "../client/index"
@@ -16,6 +16,7 @@ import type { BranchInfo, BranchTreeNode } from "../client"
 import type { SessionId } from "@gent/core/domain/ids.js"
 import { formatError } from "../utils/format-error"
 import { truncate } from "../utils/truncate"
+import { useScopedKeyboard } from "../keyboard/context"
 
 export interface BranchPickerProps {
   sessionId: SessionId
@@ -115,14 +116,14 @@ export function BranchPicker(props: BranchPickerProps) {
     }
   })
 
-  useKeyboard((e) => {
+  useScopedKeyboard((e) => {
     if (e.name === "escape") {
       router.navigateToHome()
-      return
+      return true
     }
 
     const current = state()
-    if (current._tag !== "ready" || props.branches.length === 0) return
+    if (current._tag !== "ready" || props.branches.length === 0) return false
 
     if (e.name === "return") {
       const branch = props.branches[current.selectedIndex]
@@ -130,7 +131,7 @@ export function BranchPicker(props: BranchPickerProps) {
         client.switchSession(props.sessionId, branch.id, props.sessionName)
         router.navigateToSession(props.sessionId, branch.id, props.prompt)
       }
-      return
+      return true
     }
 
     if (e.name === "up") {
@@ -144,7 +145,7 @@ export function BranchPicker(props: BranchPickerProps) {
           error: prev.error,
         }
       })
-      return
+      return true
     }
 
     if (e.name === "down") {
@@ -158,8 +159,9 @@ export function BranchPicker(props: BranchPickerProps) {
           error: prev.error,
         }
       })
-      return
+      return true
     }
+    return false
   })
 
   const panelWidth = () => Math.min(70, dimensions().width - 6)

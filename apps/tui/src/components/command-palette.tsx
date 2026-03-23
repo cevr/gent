@@ -1,6 +1,6 @@
 import { createSignal, createEffect, createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { Agents } from "@gent/core/domain/agent.js"
 import { ChromePanel } from "./chrome-panel"
@@ -12,6 +12,7 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useRuntime } from "../hooks/use-runtime"
 import type { SessionInfo } from "../client"
 import { formatError } from "../utils/format-error"
+import { useScopedKeyboard } from "../keyboard/context"
 
 interface MenuItem {
   id: string
@@ -381,84 +382,86 @@ export function CommandPalette() {
     }))
   }
 
-  useKeyboard((e) => {
-    if (!command.paletteOpen()) return
-
-    if (e.name === "escape") {
-      if (state().search._tag === "active") {
-        setState((current) => ({
-          ...current,
-          search: { _tag: "idle" },
-          selectedIndex: 0,
-        }))
-        return
-      }
-      popLevel()
-      return
-    }
-
-    if (e.name === "left") {
-      popLevel()
-      return
-    }
-
-    if (e.name === "backspace") {
-      const currentSearch = state().search
-      if (currentSearch._tag === "active") {
-        const next = currentSearch.query.slice(0, -1)
-        setState((current) => ({
-          ...current,
-          search: next.length > 0 ? { _tag: "active", query: next } : { _tag: "idle" },
-          selectedIndex: 0,
-        }))
-        return
-      }
-      if (state().levelStack.length > 0) {
-        popLevel()
-        return
-      }
-      return
-    }
-
-    if (e.name === "return" || e.name === "right") {
-      handleSelect()
-      return
-    }
-
-    const items = filteredItems()
-    if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-      setState((current) => ({
-        ...current,
-        selectedIndex: current.selectedIndex > 0 ? current.selectedIndex - 1 : items.length - 1,
-      }))
-      return
-    }
-
-    if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-      setState((current) => ({
-        ...current,
-        selectedIndex: current.selectedIndex < items.length - 1 ? current.selectedIndex + 1 : 0,
-      }))
-      return
-    }
-
-    // Handle search input — all levels searchable unless explicitly disabled
-    const level = currentLevel()
-    if (level.searchable !== false && e.sequence !== undefined && e.sequence.length === 1) {
-      const char = e.sequence
-      if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-        setState((current) => {
-          const query = current.search._tag === "active" ? current.search.query : ""
-          return {
+  useScopedKeyboard(
+    (e) => {
+      if (e.name === "escape") {
+        if (state().search._tag === "active") {
+          setState((current) => ({
             ...current,
-            search: { _tag: "active", query: query + char },
+            search: { _tag: "idle" },
             selectedIndex: 0,
-          }
-        })
-        return
+          }))
+          return true
+        }
+        popLevel()
+        return true
       }
-    }
-  })
+
+      if (e.name === "left") {
+        popLevel()
+        return true
+      }
+
+      if (e.name === "backspace") {
+        const currentSearch = state().search
+        if (currentSearch._tag === "active") {
+          const next = currentSearch.query.slice(0, -1)
+          setState((current) => ({
+            ...current,
+            search: next.length > 0 ? { _tag: "active", query: next } : { _tag: "idle" },
+            selectedIndex: 0,
+          }))
+          return true
+        }
+        if (state().levelStack.length > 0) {
+          popLevel()
+          return true
+        }
+        return false
+      }
+
+      if (e.name === "return" || e.name === "right") {
+        handleSelect()
+        return true
+      }
+
+      const items = filteredItems()
+      if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
+        setState((current) => ({
+          ...current,
+          selectedIndex: current.selectedIndex > 0 ? current.selectedIndex - 1 : items.length - 1,
+        }))
+        return true
+      }
+
+      if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
+        setState((current) => ({
+          ...current,
+          selectedIndex: current.selectedIndex < items.length - 1 ? current.selectedIndex + 1 : 0,
+        }))
+        return true
+      }
+
+      // Handle search input — all levels searchable unless explicitly disabled
+      const level = currentLevel()
+      if (level.searchable !== false && e.sequence !== undefined && e.sequence.length === 1) {
+        const char = e.sequence
+        if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
+          setState((current) => {
+            const query = current.search._tag === "active" ? current.search.query : ""
+            return {
+              ...current,
+              search: { _tag: "active", query: query + char },
+              selectedIndex: 0,
+            }
+          })
+          return true
+        }
+      }
+      return false
+    },
+    { when: () => command.paletteOpen() },
+  )
 
   // Reset palette state when it opens
   createEffect(() => {

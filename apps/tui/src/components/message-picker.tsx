@@ -1,12 +1,13 @@
 import { createEffect, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
 import type { MessageId } from "@gent/core/domain/ids.js"
 import { truncate } from "../utils/truncate"
+import { useScopedKeyboard } from "../keyboard/context"
 
 interface PickerItem {
   id: string
@@ -49,34 +50,36 @@ export function MessagePicker(props: MessagePickerProps) {
     }
   })
 
-  useKeyboard((e) => {
-    if (!props.open) return
+  useScopedKeyboard(
+    (e) => {
+      if (e.name === "escape") {
+        props.onClose()
+        return true
+      }
 
-    if (e.name === "escape") {
-      props.onClose()
-      return
-    }
+      const list = items()
+      if (list.length === 0) return false
 
-    const list = items()
-    if (list.length === 0) return
+      if (e.name === "return") {
+        const item = list[selectedIndex()]
+        // SAFETY: PickerItem.id originates from MessageInfoReadonly.id which is a MessageId
+        if (item !== undefined) props.onSelect(item.id as MessageId)
+        return true
+      }
 
-    if (e.name === "return") {
-      const item = list[selectedIndex()]
-      // SAFETY: PickerItem.id originates from MessageInfoReadonly.id which is a MessageId
-      if (item !== undefined) props.onSelect(item.id as MessageId)
-      return
-    }
+      if (e.name === "up") {
+        setSelectedIndex((i) => (i > 0 ? i - 1 : list.length - 1))
+        return true
+      }
 
-    if (e.name === "up") {
-      setSelectedIndex((i) => (i > 0 ? i - 1 : list.length - 1))
-      return
-    }
-
-    if (e.name === "down") {
-      setSelectedIndex((i) => (i < list.length - 1 ? i + 1 : 0))
-      return
-    }
-  })
+      if (e.name === "down") {
+        setSelectedIndex((i) => (i < list.length - 1 ? i + 1 : 0))
+        return true
+      }
+      return false
+    },
+    { when: () => props.open },
+  )
 
   const panelWidth = () => Math.min(70, dimensions().width - 6)
   const panelHeight = () => Math.min(16, dimensions().height - 6)

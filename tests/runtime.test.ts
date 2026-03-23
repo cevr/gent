@@ -808,6 +808,79 @@ describe("AgentLoop actor model", () => {
       ),
     )
   })
+
+  test("flushes queued follow-ups after provider failure", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    const calls: string[] = []
+    let streamCalls = 0
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: ({ messages }) => {
+        const latestUserText =
+          messages
+            .slice()
+            .reverse()
+            .flatMap((message) => message.parts)
+            .find((part): part is TextPart => part.type === "text")?.text ?? ""
+
+        calls.push(latestUserText)
+        streamCalls += 1
+
+        if (streamCalls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.flatMap(() =>
+                Stream.fail(
+                  new ProviderError({
+                    message: "provider exploded",
+                    model: "test",
+                  }),
+                ),
+              ),
+            ),
+          )
+        }
+
+        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+      },
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const layer = makeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const first = makeMessage("s1", "b1", "first")
+          const queued = makeMessage("s1", "b1", "queued after failure")
+
+          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          yield* Effect.sleep("10 millis")
+          yield* agentLoop.run(queued)
+
+          const snapshotWhileRunning = yield* agentLoop.getQueue({
+            sessionId: "s1",
+            branchId: "b1",
+          })
+          expect(snapshotWhileRunning.followUp).toEqual(["queued after failure"])
+
+          yield* Deferred.succeed(gate, undefined)
+
+          yield* Fiber.join(fiber).pipe(Effect.exit)
+
+          expect(calls).toEqual(["first", "queued after failure"])
+
+          const snapshotAfterFailure = yield* agentLoop.getQueue({
+            sessionId: "s1",
+            branchId: "b1",
+          })
+          expect(snapshotAfterFailure).toEqual({ steering: [], followUp: [] })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
 })
 
 describe("AgentActor", () => {

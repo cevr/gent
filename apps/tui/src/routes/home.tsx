@@ -3,7 +3,6 @@
  */
 
 import { createEffect, createMemo, createSignal, onMount, Show } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
 import { getLogos } from "../logo.macro.js" with { type: "macro" }
 import { useTheme } from "../theme/index"
@@ -20,6 +19,7 @@ import { BorderedInput, formatCwdGit, type BorderLabelItem } from "../components
 import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { buildTopRightLabels } from "../utils/session-labels"
+import { useScopedKeyboard } from "../keyboard/context"
 
 const LOGOS = getLogos()
 
@@ -121,9 +121,9 @@ export function Home(props: HomeProps) {
     router.navigateToSession(session.sessionId, session.branchId, current.prompt)
   })
 
-  useKeyboard((e) => {
+  useScopedKeyboard((e) => {
     // Let command system handle keybinds first
-    if (command.handleKeybind(e)) return
+    if (command.handleKeybind(e)) return true
 
     const clearComposer = () => {
       setRestoreTextRequest({ token: Date.now(), text: "" })
@@ -153,30 +153,31 @@ export function Home(props: HomeProps) {
         setState((prev) => ({ ...prev, overlay: null }))
         setRestoreTextRequest({ token: Date.now(), text: draftBeforeSearch })
         quitChain.reset()
-        return
+        return true
       }
 
       if (command.paletteOpen()) {
         command.closePalette()
         quitChain.reset()
-        return
+        return true
       }
 
       handleQuitKey("escape")
-      return
+      return true
     }
 
     // Ctrl+C: clear composer first, then quit
     if (e.ctrl === true && e.name === "c") {
       handleQuitKey("ctrl+c")
-      return
+      return true
     }
 
     if (e.ctrl === true && e.name === "r") {
       setState((prev) => ({ ...prev, overlay: "prompt-search", draftBeforeSearch: composerText() }))
       quitChain.reset()
-      return
+      return true
     }
+    return false
   })
 
   const createNewSession = (): Effect.Effect<void, UiError> =>
