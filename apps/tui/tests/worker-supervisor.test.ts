@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Deferred, Effect, Option, Stream } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -161,6 +161,61 @@ describe("worker supervisor", () => {
           const sessions = yield* worker.client.listSessions()
           expect(sessions.length).toBeGreaterThanOrEqual(1)
           expect(sessions.some((session) => session.name === "debug scenario")).toBe(true)
+        }),
+      ),
+    )
+  }, 15_000)
+
+  test("delivers live events after subscribeEvents is established", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerSupervisor({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+          })
+
+          const firstLiveEvent = yield* Deferred.make<string>()
+
+          yield* worker.client
+            .subscribeEvents({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            })
+            .pipe(
+              Stream.runForEach((envelope) =>
+                envelope.event._tag === "MessageReceived" || envelope.event._tag === "StreamStarted"
+                  ? Deferred.succeed(firstLiveEvent, envelope.event._tag).pipe(Effect.ignore)
+                  : Effect.void,
+              ),
+              Effect.forkScoped,
+            )
+
+          yield* worker.client.sendMessage({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "hello",
+          })
+
+          const tag = yield* Deferred.await(firstLiveEvent).pipe(
+            Effect.timeoutOption("5 seconds"),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new Error("worker did not deliver a live event after sendMessage")),
+                onSome: Effect.succeed,
+              }),
+            ),
+          )
+
+          expect(["MessageReceived", "StreamStarted"]).toContain(tag)
         }),
       ),
     )

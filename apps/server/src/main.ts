@@ -5,8 +5,7 @@ import { SteerCommand } from "@gent/core/runtime/agent/agent-loop.js"
 import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
-import { Config, Effect, Layer, Option, Schema } from "effect"
-import type { ServiceMap } from "effect"
+import { Config, Effect, Layer, Option, Schema, ServiceMap } from "effect"
 import * as os from "node:os"
 import { GentApi } from "@gent/core/server/http-api.js"
 import { seedDebugSession } from "@gent/core/debug/session.js"
@@ -138,8 +137,13 @@ const program = Effect.scoped(
       Layer.provide(GentTracerLive),
     )
 
-    // Combined layer for RPC handlers
-    const CoreWithDeps = Layer.merge(AppServicesLive, depsLive)
+    const depsServices = yield* Layer.buildWithScope(depsLive, scope)
+    const appServices = yield* Layer.buildWithScope(
+      AppServicesLive.pipe(Layer.provide(Layer.succeedServices(depsServices))),
+      scope,
+    )
+    const coreServices = ServiceMap.merge(depsServices, appServices)
+    const coreServicesLive = Layer.succeedServices(coreServices)
 
     // RPC-over-HTTP routes with ndjson for streaming
     const RpcRoutes = RpcServer.layerHttp({
@@ -149,12 +153,12 @@ const program = Effect.scoped(
     }).pipe(
       Layer.provide(RpcSerialization.layerNdjson),
       Layer.provide(RpcHandlersLive),
-      Layer.provide(CoreWithDeps),
+      Layer.provide(coreServicesLive),
     )
 
     // API Groups Layer (REST endpoints)
     const HttpGroupsLive = Layer.provideMerge(SessionsApiLive, MessagesApiLive).pipe(
-      Layer.provide(AppServicesLive),
+      Layer.provide(coreServicesLive),
     )
 
     // API Routes
@@ -180,24 +184,19 @@ const program = Effect.scoped(
     // Server
     const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
       Layer.provide(BunHttpServer.layer({ port: config.port })),
-      Layer.provide(AppServicesLive),
-      Layer.provide(depsLive),
+      Layer.provide(coreServicesLive),
       Layer.provide(BunFileSystem.layer),
     )
 
     const baseUrl = `http://localhost:${config.port}`
     if (config.isWorker && config.isDebug) {
-      const services = (yield* Layer.buildWithScope(
-        depsLive,
-        scope,
-      )) as ServiceMap.ServiceMap<unknown>
-      const seeded = yield* seedDebugSession(config.cwd).pipe(Effect.provide(services))
+      const seeded = yield* seedDebugSession(config.cwd).pipe(Effect.provide(coreServices))
       yield* Effect.forkDetach(
         startDebugScenario({
           sessionId: seeded.sessionId,
           branchId: seeded.branchId,
           cwd: config.cwd,
-        }).pipe(Effect.provide(services)),
+        }).pipe(Effect.provide(coreServices)),
       )
     }
     if (config.isWorker) {
