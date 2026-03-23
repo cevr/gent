@@ -9,6 +9,7 @@ import type { ReasoningEffort } from "../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import type { ActorCommandStatus, ActorInboxRecord } from "../runtime/actor-inbox.schema.js"
+import type { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
@@ -187,6 +188,19 @@ export interface StorageService {
       lastError: string | null
     }>,
   ) => Effect.Effect<ActorInboxRecord | undefined, StorageError>
+
+  // Durable loop checkpoints
+  readonly upsertAgentLoopCheckpoint: (
+    record: AgentLoopCheckpointRecord,
+  ) => Effect.Effect<AgentLoopCheckpointRecord, StorageError>
+  readonly getAgentLoopCheckpoint: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<AgentLoopCheckpointRecord | undefined, StorageError>
+  readonly deleteAgentLoopCheckpoint: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<void, StorageError>
 }
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
@@ -245,6 +259,15 @@ interface ActorInboxRow {
   started_at: number | null
   completed_at: number | null
   last_error: string | null
+}
+
+interface AgentLoopCheckpointRow {
+  session_id: SessionId
+  branch_id: BranchId
+  version: number
+  state_tag: string
+  state_json: string
+  updated_at: number
 }
 
 const VALID_REASONING = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
@@ -309,6 +332,15 @@ const actorInboxRecordFromRow = (row: ActorInboxRow): ActorInboxRecord => ({
   ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
   ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
   ...(row.last_error !== null ? { lastError: row.last_error } : {}),
+})
+
+const agentLoopCheckpointFromRow = (row: AgentLoopCheckpointRow): AgentLoopCheckpointRecord => ({
+  sessionId: row.session_id,
+  branchId: row.branch_id,
+  version: row.version,
+  stateTag: row.state_tag,
+  stateJson: row.state_json,
+  updatedAt: row.updated_at,
 })
 
 interface TaskRow {
@@ -436,6 +468,19 @@ const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS agent_loop_checkpoints (
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      state_tag TEXT NOT NULL,
+      state_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, branch_id),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `)
+
+  yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS todos (
       id TEXT PRIMARY KEY,
       branch_id TEXT NOT NULL,
@@ -493,6 +538,9 @@ const initSchema = Effect.gen(function* () {
   )
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_actor_inbox_target ON actor_inbox(session_id, branch_id, status)`,
+  )
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_agent_loop_checkpoints_updated ON agent_loop_checkpoints(updated_at)`,
   )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
@@ -1176,6 +1224,31 @@ const makeStorage = Effect.gen(function* () {
         } satisfies ActorInboxRecord
       },
       Effect.mapError(mapError("Failed to update actor inbox record")),
+    ),
+
+    upsertAgentLoopCheckpoint: Effect.fn("Storage.upsertAgentLoopCheckpoint")(
+      function* (record) {
+        yield* sql`INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (${record.sessionId}, ${record.branchId}, ${record.version}, ${record.stateTag}, ${record.stateJson}, ${record.updatedAt}) ON CONFLICT(session_id, branch_id) DO UPDATE SET version = excluded.version, state_tag = excluded.state_tag, state_json = excluded.state_json, updated_at = excluded.updated_at`
+        return record
+      },
+      Effect.mapError(mapError("Failed to upsert agent loop checkpoint")),
+    ),
+
+    getAgentLoopCheckpoint: Effect.fn("Storage.getAgentLoopCheckpoint")(
+      function* (input) {
+        const rows =
+          yield* sql<AgentLoopCheckpointRow>`SELECT session_id, branch_id, version, state_tag, state_json, updated_at FROM agent_loop_checkpoints WHERE session_id = ${input.sessionId} AND branch_id = ${input.branchId}`
+        const row = rows[0]
+        return row === undefined ? undefined : agentLoopCheckpointFromRow(row)
+      },
+      Effect.mapError(mapError("Failed to get agent loop checkpoint")),
+    ),
+
+    deleteAgentLoopCheckpoint: Effect.fn("Storage.deleteAgentLoopCheckpoint")(
+      function* (input) {
+        yield* sql`DELETE FROM agent_loop_checkpoints WHERE session_id = ${input.sessionId} AND branch_id = ${input.branchId}`
+      },
+      Effect.mapError(mapError("Failed to delete agent loop checkpoint")),
     ),
   } satisfies StorageService
 })

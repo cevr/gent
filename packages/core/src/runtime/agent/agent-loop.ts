@@ -1,4 +1,15 @@
-import { Cause, ServiceMap, Deferred, Effect, Layer, Ref, Schema, Semaphore, Stream } from "effect"
+import {
+  Cause,
+  ServiceMap,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect"
 import {
   type AnyInspectionEvent,
   combineInspectors,
@@ -31,6 +42,7 @@ import {
   MessageReceived,
   ErrorOccurred,
   ProviderRetrying,
+  TurnRecoveryApplied,
   MachineInspected,
   MachineTaskFailed,
   MachineTaskSucceeded,
@@ -41,11 +53,11 @@ import { SessionId, BranchId, type MessageId } from "../../domain/ids.js"
 import { type ToolAction, type ToolContext } from "../../domain/tool.js"
 import { HandoffHandler } from "../../domain/interaction-handlers.js"
 import { DEFAULTS } from "../../domain/defaults.js"
-import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
+import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
 import { Provider, type FinishChunk } from "../../providers/provider.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withRetry } from "../retry"
-import { ExtensionRegistry } from "../extensions/registry.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ToolRunner } from "./tool-runner"
 import {
   type ActiveStreamHandle,
@@ -54,6 +66,13 @@ import {
   resolveTurnPhase,
   streamTurnPhase,
 } from "./agent-loop-phases.js"
+import {
+  AGENT_LOOP_CHECKPOINT_VERSION,
+  buildLoopCheckpointRecord,
+  decodeLoopCheckpointState,
+  shouldRetainLoopCheckpoint,
+  type AgentLoopCheckpointRecord,
+} from "./agent-loop.checkpoint.js"
 import {
   AgentLoopEvent,
   AgentLoopState,
@@ -82,7 +101,14 @@ import {
   type ResolvingState,
   type StreamingState,
 } from "./agent-loop.state.js"
-import { buildSystemPrompt, messageText, resolveReasoning } from "./agent-loop.utils.js"
+import {
+  assistantDraftFromMessage,
+  assistantMessageIdForTurn,
+  buildSystemPrompt,
+  messageText,
+  resolveReasoning,
+  toolResultMessageIdForTurn,
+} from "./agent-loop.utils.js"
 
 // Agent Loop Error
 
@@ -239,6 +265,248 @@ const makePublishingInspector = (params: {
     ),
   )
 
+const persistLoopCheckpoint = (params: {
+  storage: StorageService
+  sessionId: SessionId
+  branchId: BranchId
+  state: LoopState
+}) =>
+  Effect.gen(function* () {
+    if (!shouldRetainLoopCheckpoint(params.state)) {
+      yield* params.storage.deleteAgentLoopCheckpoint({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+      })
+      return
+    }
+
+    const record = yield* buildLoopCheckpointRecord(params)
+    yield* params.storage.upsertAgentLoopCheckpoint(record)
+  })
+
+const makeCheckpointInspector = (params: {
+  storage: StorageService
+  sessionId: SessionId
+  branchId: BranchId
+}) =>
+  makeInspectorEffect<{ readonly _tag: string }, { readonly _tag: string }>((event) => {
+    switch (event.type) {
+      case "@machine.spawn":
+        return persistLoopCheckpoint({
+          storage: params.storage,
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          state: event.initialState as LoopState,
+        }).pipe(
+          Effect.catchEager((error) =>
+            Effect.logWarning("failed to persist loop checkpoint", error),
+          ),
+        )
+      case "@machine.transition":
+        return persistLoopCheckpoint({
+          storage: params.storage,
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          state: event.toState as LoopState,
+        }).pipe(
+          Effect.catchEager((error) =>
+            Effect.logWarning("failed to persist loop checkpoint", error),
+          ),
+        )
+      case "@machine.stop":
+        return persistLoopCheckpoint({
+          storage: params.storage,
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          state: event.finalState as LoopState,
+        }).pipe(
+          Effect.catchEager((error) =>
+            Effect.logWarning("failed to persist loop checkpoint", error),
+          ),
+        )
+      default:
+        return Effect.void
+    }
+  })
+
+type LoopRecoveryDecision = {
+  state: LoopState
+  recovery?: {
+    phase: "Idle" | "Resolving" | "Streaming" | "ExecutingTools" | "Finalizing"
+    action:
+      | "resume-queued-turn"
+      | "replay-resolving"
+      | "replay-streaming"
+      | "reuse-persisted-assistant"
+      | "replay-idempotent-tools"
+      | "reuse-persisted-tool-results"
+      | "abort-non-idempotent-tools"
+      | "replay-finalizing"
+    detail?: string
+  }
+}
+
+const restoreCheckpointState = (params: {
+  checkpoint: AgentLoopCheckpointRecord
+  storage: StorageService
+  extensionRegistry: ExtensionRegistryService
+  currentAgent: AgentNameType
+}): Effect.Effect<LoopRecoveryDecision | undefined, StorageError> =>
+  Effect.gen(function* () {
+    if (params.checkpoint.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
+      yield* params.storage.deleteAgentLoopCheckpoint({
+        sessionId: params.checkpoint.sessionId,
+        branchId: params.checkpoint.branchId,
+      })
+      return undefined
+    }
+
+    const state = Option.getOrUndefined(
+      yield* Effect.option(decodeLoopCheckpointState(params.checkpoint.stateJson)),
+    )
+    if (state === undefined) {
+      yield* params.storage.deleteAgentLoopCheckpoint({
+        sessionId: params.checkpoint.sessionId,
+        branchId: params.checkpoint.branchId,
+      })
+      return undefined
+    }
+
+    if (state._tag === "Idle") {
+      const { queue, nextItem } = takeNextQueuedTurn(state.queue)
+      if (nextItem !== undefined) {
+        return {
+          state: buildResolvingState(
+            {
+              queue,
+              currentAgent: state.currentAgent ?? params.currentAgent,
+              handoffSuppress: state.handoffSuppress,
+            },
+            nextItem,
+          ),
+          recovery: {
+            phase: "Idle",
+            action: "resume-queued-turn",
+          },
+        }
+      }
+      return {
+        state:
+          state.currentAgent === undefined
+            ? updateCurrentAgentOnState(state, params.currentAgent)
+            : state,
+      }
+    }
+
+    if (state._tag === "Resolving") {
+      return {
+        state,
+        recovery: {
+          phase: "Resolving",
+          action: "replay-resolving",
+        },
+      }
+    }
+
+    if (state._tag === "Streaming") {
+      const assistantMessage = yield* params.storage.getMessage(
+        assistantMessageIdForTurn(state.message.id),
+      )
+      if (assistantMessage !== undefined) {
+        const draft = assistantDraftFromMessage(assistantMessage)
+        return {
+          state:
+            draft.toolCalls.length === 0
+              ? toFinalizingState({
+                  state,
+                  currentTurnAgent: state.currentTurnAgent,
+                  streamFailed: false,
+                  turnInterrupted: state.turnInterrupted,
+                })
+              : toExecutingToolsState({
+                  state,
+                  currentTurnAgent: state.currentTurnAgent,
+                  draft,
+                }),
+          recovery: {
+            phase: "Streaming",
+            action: "reuse-persisted-assistant",
+          },
+        }
+      }
+      return {
+        state,
+        recovery: {
+          phase: "Streaming",
+          action: "replay-streaming",
+        },
+      }
+    }
+
+    if (state._tag === "ExecutingTools") {
+      const toolResultMessage = yield* params.storage.getMessage(
+        toolResultMessageIdForTurn(state.message.id),
+      )
+      if (toolResultMessage !== undefined) {
+        return {
+          state: toFinalizingState({
+            state,
+            currentTurnAgent: state.currentTurnAgent,
+            usage: state.draft.usage,
+            streamFailed: false,
+            turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
+          }),
+          recovery: {
+            phase: "ExecutingTools",
+            action: "reuse-persisted-tool-results",
+          },
+        }
+      }
+
+      const canReplay = yield* Effect.forEach(
+        state.draft.toolCalls,
+        (toolCall) =>
+          params.extensionRegistry
+            .getTool(toolCall.toolName)
+            .pipe(Effect.map((tool) => tool?.idempotent === true)),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map((results) => results.every(Boolean)))
+
+      if (canReplay) {
+        return {
+          state,
+          recovery: {
+            phase: "ExecutingTools",
+            action: "replay-idempotent-tools",
+          },
+        }
+      }
+
+      return {
+        state: toFinalizingState({
+          state,
+          currentTurnAgent: state.currentTurnAgent,
+          usage: state.draft.usage,
+          streamFailed: true,
+          turnInterrupted: true,
+        }),
+        recovery: {
+          phase: "ExecutingTools",
+          action: "abort-non-idempotent-tools",
+          detail: "Skipped replay for non-idempotent tool calls after crash",
+        },
+      }
+    }
+
+    return {
+      state,
+      recovery: {
+        phase: "Finalizing",
+        action: "replay-finalizing",
+      },
+    }
+  })
+
 // Agent Loop Service
 
 export interface AgentLoopService {
@@ -301,11 +569,57 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
-            const inspector = makePublishingInspector({
-              publishEvent: publishEventOrDie,
-              sessionId,
-              branchId,
-            })
+            const checkpoint = Option.getOrUndefined(
+              yield* Effect.option(storage.getAgentLoopCheckpoint({ sessionId, branchId })),
+            )
+            const restored = Option.getOrUndefined(
+              yield* checkpoint === undefined
+                ? Effect.succeed(Option.none<LoopRecoveryDecision>())
+                : Effect.option(
+                    restoreCheckpointState({
+                      checkpoint,
+                      storage,
+                      extensionRegistry,
+                      currentAgent,
+                    }),
+                  ),
+            )
+            const initialState = restored?.state ?? buildIdleState({ currentAgent })
+            const inspector = combineInspectors(
+              makePublishingInspector({
+                publishEvent: publishEventOrDie,
+                sessionId,
+                branchId,
+              }),
+              makeCheckpointInspector({
+                storage,
+                sessionId,
+                branchId,
+              }),
+            )
+
+            if (restored?.recovery !== undefined) {
+              yield* publishEventOrDie(
+                new TurnRecoveryApplied({
+                  sessionId,
+                  branchId,
+                  phase: restored.recovery.phase,
+                  action: restored.recovery.action,
+                  ...(restored.recovery.detail !== undefined
+                    ? { detail: restored.recovery.detail }
+                    : {}),
+                }),
+              )
+              if (restored.recovery.action === "abort-non-idempotent-tools") {
+                yield* publishEventOrDie(
+                  new ErrorOccurred({
+                    sessionId,
+                    branchId,
+                    error: restored.recovery.detail ?? "Skipped ambiguous tool replay after crash",
+                  }),
+                )
+              }
+            }
 
             function switchAgentOnState(
               state: IdleState,
@@ -387,6 +701,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               yield* Ref.set(activeStreamRef, activeStream)
               const collected = yield* streamTurnPhase({
+                messageId: state.message.id,
                 resolved: {
                   currentTurnAgent: state.currentTurnAgent,
                   messages: state.messages,
@@ -426,6 +741,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               state: ExecutingToolsState,
             ) {
               yield* executeToolsPhase({
+                messageId: state.message.id,
                 draft: state.draft,
                 publishEvent: publishEventOrDie,
                 sessionId,
@@ -468,7 +784,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const loopMachine = Machine.make({
               state: AgentLoopState,
               event: AgentLoopEvent,
-              initial: buildIdleState({ currentAgent }),
+              initial: initialState,
             })
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
                 buildResolvingState(state, event.item),
@@ -742,6 +1058,21 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           return loops.get(key)
         })
 
+        const findOrRestoreLoop = Effect.fn("AgentLoop.findOrRestoreLoop")(function* (
+          sessionId: SessionId,
+          branchId: BranchId,
+        ) {
+          const existing = yield* findLoop(sessionId, branchId)
+          if (existing !== undefined) return existing
+
+          const checkpoint = Option.getOrUndefined(
+            yield* Effect.option(storage.getAgentLoopCheckpoint({ sessionId, branchId })),
+          )
+          if (checkpoint === undefined) return undefined
+
+          return yield* getLoop(sessionId, branchId)
+        })
+
         const service: AgentLoopService = {
           run: Effect.fn("AgentLoop.run")(function* (
             message: Message,
@@ -832,7 +1163,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
           drainQueue: (input) =>
             Effect.gen(function* () {
-              const loop = yield* findLoop(input.sessionId, input.branchId)
+              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
                 return { steering: [], followUp: [] }
               }
@@ -848,7 +1179,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
           getQueue: (input) =>
             Effect.gen(function* () {
-              const loop = yield* findLoop(input.sessionId, input.branchId)
+              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
                 return { steering: [], followUp: [] }
               }
@@ -858,7 +1189,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
           isRunning: (input) =>
             Effect.gen(function* () {
-              const loop = yield* findLoop(input.sessionId, input.branchId)
+              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) return false
               return (yield* loop.actor.snapshot)._tag !== "Idle"
             }),

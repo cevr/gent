@@ -51,6 +51,38 @@ export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnComp
   interrupted: Schema.optional(Schema.Boolean),
 }) {}
 
+export const RecoveryPhase = Schema.Literals([
+  "Idle",
+  "Resolving",
+  "Streaming",
+  "ExecutingTools",
+  "Finalizing",
+])
+export type RecoveryPhase = typeof RecoveryPhase.Type
+
+export const RecoveryAction = Schema.Literals([
+  "resume-queued-turn",
+  "replay-resolving",
+  "replay-streaming",
+  "reuse-persisted-assistant",
+  "replay-idempotent-tools",
+  "reuse-persisted-tool-results",
+  "abort-non-idempotent-tools",
+  "replay-finalizing",
+])
+export type RecoveryAction = typeof RecoveryAction.Type
+
+export class TurnRecoveryApplied extends Schema.TaggedClass<TurnRecoveryApplied>()(
+  "TurnRecoveryApplied",
+  {
+    sessionId: SessionId,
+    branchId: BranchId,
+    phase: RecoveryPhase,
+    action: RecoveryAction,
+    detail: Schema.optional(Schema.String),
+  },
+) {}
+
 export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("ToolCallStarted", {
   sessionId: SessionId,
   branchId: BranchId,
@@ -417,6 +449,7 @@ export const AgentEvent = Schema.Union([
   StreamChunk,
   StreamEnded,
   TurnCompleted,
+  TurnRecoveryApplied,
   ToolCallStarted,
   ToolCallCompleted,
   ToolCallSucceeded,

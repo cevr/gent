@@ -35,7 +35,12 @@ import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { withRetry } from "../retry"
 import { type ToolRunnerService } from "./tool-runner"
 import { type AssistantDraft, type ResolvedTurn } from "./agent-loop.state.js"
-import { buildSystemPrompt, resolveReasoning } from "./agent-loop.utils.js"
+import {
+  assistantMessageIdForTurn,
+  buildSystemPrompt,
+  resolveReasoning,
+  toolResultMessageIdForTurn,
+} from "./agent-loop.utils.js"
 
 const formatStreamErrorMessage = (streamError: unknown) => {
   if (streamError instanceof Error) return streamError.message
@@ -77,6 +82,7 @@ const persistAssistantText = (params: {
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
+  messageId: MessageId
   text: string
   reasoning: string
   createdAt?: Date
@@ -93,7 +99,7 @@ const persistAssistantText = (params: {
     }
 
     const message = new Message({
-      id: Bun.randomUUIDv7() as MessageId,
+      id: params.messageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "assistant",
@@ -101,7 +107,10 @@ const persistAssistantText = (params: {
       createdAt: params.createdAt ?? new Date(),
     })
 
-    yield* params.storage.createMessage(message)
+    const existing = yield* params.storage.getMessage(message.id)
+    if (existing !== undefined) return existing
+
+    yield* params.storage.createMessageIfAbsent(message)
     yield* params
       .publishEvent(
         new MessageReceived({
@@ -271,6 +280,7 @@ const persistAssistantTurn = (params: {
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
+  messageId: MessageId
   draft: AssistantDraft
 }) =>
   Effect.gen(function* () {
@@ -284,7 +294,7 @@ const persistAssistantTurn = (params: {
     assistantParts.push(...params.draft.toolCalls)
 
     const assistantMessage = new Message({
-      id: Bun.randomUUIDv7() as MessageId,
+      id: params.messageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "assistant",
@@ -292,7 +302,10 @@ const persistAssistantTurn = (params: {
       createdAt: new Date(),
     })
 
-    yield* params.storage.createMessage(assistantMessage)
+    const existing = yield* params.storage.getMessage(assistantMessage.id)
+    if (existing !== undefined) return
+
+    yield* params.storage.createMessageIfAbsent(assistantMessage)
     yield* params
       .publishEvent(
         new MessageReceived({
@@ -418,17 +431,20 @@ export const resolveTurnPhase = (params: {
   systemPrompt: string
 }) =>
   Effect.gen(function* () {
-    yield* params.storage.createMessageIfAbsent(params.message)
-    yield* params
-      .publishEvent(
-        new MessageReceived({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          messageId: params.message.id,
-          role: "user",
-        }),
-      )
-      .pipe(Effect.orDie)
+    const existing = yield* params.storage.getMessage(params.message.id)
+    if (existing === undefined) {
+      yield* params.storage.createMessageIfAbsent(params.message)
+      yield* params
+        .publishEvent(
+          new MessageReceived({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            messageId: params.message.id,
+            role: "user",
+          }),
+        )
+        .pipe(Effect.orDie)
+    }
 
     const resolved = yield* resolveTurnContext(params)
     if (resolved === undefined) return undefined
@@ -444,6 +460,7 @@ export const resolveTurnPhase = (params: {
   })
 
 export const streamTurnPhase = (params: {
+  messageId: MessageId
   resolved: ResolvedTurn
   provider: ProviderService
   extensionRegistry: ExtensionRegistryService
@@ -460,6 +477,7 @@ export const streamTurnPhase = (params: {
         publishEvent: params.publishEvent,
         sessionId: params.sessionId,
         branchId: params.branchId,
+        messageId: assistantMessageIdForTurn(params.messageId),
         text,
         reasoning,
         createdAt,
@@ -569,6 +587,7 @@ export const streamTurnPhase = (params: {
       publishEvent: params.publishEvent,
       sessionId: params.sessionId,
       branchId: params.branchId,
+      messageId: assistantMessageIdForTurn(params.messageId),
       draft: collected.draft,
     })
 
@@ -576,6 +595,7 @@ export const streamTurnPhase = (params: {
   })
 
 export const executeToolsPhase = (params: {
+  messageId: MessageId
   draft: AssistantDraft
   publishEvent: PublishEvent
   sessionId: SessionId
@@ -590,16 +610,20 @@ export const executeToolsPhase = (params: {
   Effect.gen(function* () {
     if (params.draft.toolCalls.length === 0) return
 
+    const toolResultMessageId = toolResultMessageIdForTurn(params.messageId)
+    const existing = yield* params.storage.getMessage(toolResultMessageId)
+    if (existing !== undefined) return
+
     const toolResults = yield* executeToolCalls(params)
     const toolResultMessage = new Message({
-      id: Bun.randomUUIDv7() as MessageId,
+      id: toolResultMessageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "tool",
       parts: toolResults,
       createdAt: new Date(),
     })
-    yield* params.storage.createMessage(toolResultMessage)
+    yield* params.storage.createMessageIfAbsent(toolResultMessage)
   })
 
 export const finalizeTurnPhase = (params: {
@@ -616,6 +640,11 @@ export const finalizeTurnPhase = (params: {
   handoffHandler: HandoffHandlerService
 }) =>
   Effect.gen(function* () {
+    const existingMessage = yield* params.storage.getMessage(params.messageId)
+    if (existingMessage?.turnDurationMs !== undefined) {
+      return params.handoffSuppress
+    }
+
     const turnEndTime = yield* DateTime.now
     const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 

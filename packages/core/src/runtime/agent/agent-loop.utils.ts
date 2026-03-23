@@ -1,6 +1,14 @@
 import type { AgentDefinition } from "../../domain/agent.js"
-import type { Message, TextPart } from "../../domain/message.js"
+import {
+  type ReasoningPart,
+  type Message,
+  type TextPart,
+  type ToolCallPart,
+  type ToolResultPart,
+} from "../../domain/message.js"
+import type { MessageId } from "../../domain/ids.js"
 import type { ProviderRequest } from "../../providers/provider.js"
+import type { AssistantDraft } from "./agent-loop.state.js"
 
 const VALID_REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
 
@@ -35,3 +43,24 @@ export const messageText = (message: Message): string =>
     .filter((part): part is TextPart => part.type === "text")
     .map((part) => part.text)
     .join("\n")
+
+export const assistantMessageIdForTurn = (messageId: MessageId): MessageId =>
+  `${messageId}:assistant` as MessageId
+
+export const toolResultMessageIdForTurn = (messageId: MessageId): MessageId =>
+  `${messageId}:tool-result` as MessageId
+
+export const assistantDraftFromMessage = (message: Message): AssistantDraft => ({
+  text: message.parts
+    .filter((part): part is TextPart => part.type === "text")
+    .map((part) => part.text)
+    .join(""),
+  reasoning: message.parts
+    .filter((part): part is ReasoningPart => part.type === "reasoning")
+    .map((part) => part.text)
+    .join(""),
+  toolCalls: message.parts.filter((part): part is ToolCallPart => part.type === "tool-call"),
+})
+
+export const toolResultsFromMessage = (message: Message): ReadonlyArray<ToolResultPart> =>
+  message.parts.filter((part): part is ToolResultPart => part.type === "tool-result")
