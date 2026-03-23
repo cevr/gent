@@ -63,34 +63,6 @@ type QueueState = {
   followUp: readonly QueueEntryInfo[]
 }
 
-const appendQueuedFollowUp = (
-  queue: readonly QueueEntryInfo[],
-  content: string,
-): readonly QueueEntryInfo[] => {
-  const last = queue[queue.length - 1]
-  if (last === undefined) return [makeOptimisticQueueEntry("follow-up", content)]
-  return [
-    ...queue.slice(0, -1),
-    {
-      ...last,
-      content: `${last.content}\n${content}`,
-    },
-  ]
-}
-
-const makeOptimisticQueueEntry = (
-  kind: "steering" | "follow-up",
-  content: string,
-  agentOverride?: QueueEntryInfo["agentOverride"],
-): QueueEntryInfo => ({
-  id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}` as MessageId,
-  kind,
-  content,
-  createdAt: Date.now(),
-  bypass: true,
-  ...(agentOverride !== undefined ? { agentOverride } : {}),
-})
-
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
   const command = useCommand()
@@ -146,25 +118,6 @@ export function Session(props: SessionProps) {
         ),
       ),
     )
-
-  const pushQueuedMessage = (mode: "queue" | "interject", content: string) => {
-    setQueueState((current) => {
-      if (mode === "interject") {
-        return {
-          ...current,
-          steering: [
-            ...current.steering,
-            makeOptimisticQueueEntry("steering", content, client.agent()),
-          ],
-        }
-      }
-
-      return {
-        ...current,
-        followUp: appendQueuedFollowUp(current.followUp, content),
-      }
-    })
-  }
 
   // Handle input state transitions
   const handleInputEvent = (event: InputEvent) => {
@@ -353,13 +306,11 @@ export function Session(props: SessionProps) {
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
     if (mode === "interject" && client.isStreaming()) {
-      pushQueuedMessage("interject", content)
       client.steer({ _tag: "Interject", message: content, agent: client.agent() })
       return
     }
 
     if (client.isStreaming()) {
-      pushQueuedMessage("queue", content)
       client.sendMessage(content)
       return
     }
