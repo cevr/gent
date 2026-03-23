@@ -166,6 +166,14 @@ Allow-by-default + rules:
 Typed events via EventStore (SQLite log + PubSub). Includes machine inspection
 (@machine.\*) + task success/failure for traceability.
 
+Machine inspection events are intentional, not debug leakage:
+
+- TUI/debug tooling can render real actor transitions from the same session event stream.
+- Queue/interrupt/tool timing bugs leave receipts after the fact; message history alone is too lossy.
+- We avoid a second observability transport just for actor internals.
+
+Rule: inspection events are diagnostic. Do not make business logic depend on them.
+
 ### Session Branching
 
 Fork at any message. Tree navigation. Handoff for context management.

@@ -26,6 +26,27 @@ const writeLine = (line: string) => {
   }
 }
 
+const formatTraceValue = (value: unknown): string => {
+  if (typeof value === "string") return value
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value)
+  }
+  if (value === null || value === undefined) return String(value)
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return "[unserializable]"
+  }
+}
+
+const formatTraceFields = (fields: Iterable<readonly [string, unknown]>): string => {
+  const parts: string[] = []
+  for (const [key, value] of fields) {
+    parts.push(`${key}=${formatTraceValue(value)}`)
+  }
+  return parts.join(" ")
+}
+
 function randomHex(length: number): string {
   const chars = "abcdef0123456789"
   let result = ""
@@ -115,15 +136,21 @@ class GentSpan implements Tracer.Span {
 
     const durationMs = Number(endTime - this.status.startTime) / 1_000_000
     const durationStr = durationMs < 1 ? `${durationMs.toFixed(2)}ms` : `${durationMs.toFixed(0)}ms`
+    const attributes = formatTraceFields(this.attributes.entries())
+    const extra = attributes.length > 0 ? `attrs{${attributes}}` : undefined
 
     if (Exit.isSuccess(exit)) {
-      this.log("END", this.name, `(${durationStr})`)
+      this.log("END", this.name, [durationStr, extra].filter(Boolean).join(" "))
     } else {
       const cause = exit.cause
       const message = Cause.hasInterruptsOnly(cause)
         ? "interrupted"
         : (Cause.pretty(cause).split("\n")[0] ?? "unknown error")
-      this.log("ERROR", this.name, `(${durationStr}) - ${message}`)
+      this.log(
+        "ERROR",
+        this.name,
+        [`(${durationStr})`, "-", message, extra].filter(Boolean).join(" "),
+      )
     }
   }
 
@@ -133,7 +160,8 @@ class GentSpan implements Tracer.Span {
 
   event(name: string, startTime: bigint, attributes?: Record<string, unknown>): void {
     this.events.push([name, startTime, attributes ?? {}])
-    this.log("EVENT", this.name, `[${name}]`)
+    const details = formatTraceFields(Object.entries(attributes ?? {}))
+    this.log("EVENT", this.name, [`[${name}]`, details].filter((part) => part.length > 0).join(" "))
   }
 
   addLinks(links: ReadonlyArray<Tracer.SpanLink>): void {

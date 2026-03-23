@@ -191,6 +191,16 @@ export const MachineInspectionType = Schema.Literals([
 ])
 export type MachineInspectionType = typeof MachineInspectionType.Type
 
+/**
+ * Machine inspection events are published to the EventStore on purpose.
+ *
+ * Why:
+ * - They let the TUI/debug surfaces observe real actor transitions without bespoke debug channels.
+ * - They give us post-hoc receipts for queue/turn/task bugs that normal message history loses.
+ * - They bridge machine internals into the same session-scoped event stream the rest of Gent already uses.
+ *
+ * They are observability events, not business events. Consumers should treat them as optional diagnostics.
+ */
 export class MachineInspected extends Schema.TaggedClass<MachineInspected>()("MachineInspected", {
   sessionId: SessionId,
   branchId: BranchId,
