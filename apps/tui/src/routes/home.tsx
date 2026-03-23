@@ -20,12 +20,8 @@ import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { useScopedKeyboard } from "../keyboard/context"
-import {
-  PromptSearchState,
-  transitionPromptSearch,
-  type PromptSearchEvent,
-} from "../components/prompt-search-state"
 import { usePromptHistory } from "../hooks/use-prompt-history"
+import { transitionHome, type HomeEffect, type HomeEvent, type HomeState } from "./home-state"
 
 const LOGOS = getLogos()
 
@@ -33,19 +29,6 @@ export interface HomeProps {
   initialPrompt?: string
   debugMode?: boolean
 }
-
-type HomeState =
-  | {
-      _tag: "idle"
-      showWelcome: boolean
-      promptSearch: PromptSearchState
-    }
-  | {
-      _tag: "pending"
-      prompt: string
-      showWelcome: boolean
-      promptSearch: PromptSearchState
-    }
 
 export function Home(props: HomeProps) {
   const { theme } = useTheme()
@@ -67,8 +50,8 @@ export function Home(props: HomeProps) {
   const [state, setState] = createSignal<HomeState>({
     _tag: "idle",
     showWelcome: false,
-    promptSearch: PromptSearchState.closed(),
-  })
+    promptSearch: { _tag: "closed" },
+  } satisfies HomeState)
   const [authProviders, setAuthProviders] = createSignal<
     { hasKey: boolean; provider: string; required: boolean }[]
   >([])
@@ -79,6 +62,28 @@ export function Home(props: HomeProps) {
   const promptSearchState = () => state().promptSearch
   const promptSearchOpen = () => promptSearchState()._tag === "open"
 
+  const handleHomeEffect = (effect: HomeEffect) => {
+    switch (effect._tag) {
+      case "RestoreComposer":
+        setRestoreTextRequest({ token: Date.now(), text: effect.text })
+        break
+      case "CreateSession":
+        client.createSession()
+        break
+      case "NavigateToSession":
+        router.navigateToSession(effect.sessionId, effect.branchId, effect.prompt)
+        break
+    }
+  }
+
+  const dispatchHome = (event: HomeEvent) => {
+    const result = transitionHome(state(), event)
+    setState(result.state)
+    for (const effect of result.effects) {
+      handleHomeEffect(effect)
+    }
+  }
+
   const needsAuth = createMemo(() => {
     const providers = authProviders()
     if (providers.length === 0) return false
@@ -86,33 +91,7 @@ export function Home(props: HomeProps) {
   })
 
   const setShowWelcome = (showWelcome: boolean) => {
-    setState((prev) => {
-      switch (prev._tag) {
-        case "idle":
-          return {
-            _tag: "idle",
-            showWelcome,
-            promptSearch: prev.promptSearch,
-          }
-        case "pending":
-          return {
-            _tag: "pending",
-            prompt: prev.prompt,
-            showWelcome,
-            promptSearch: prev.promptSearch,
-          }
-      }
-    })
-  }
-
-  const dispatchPromptSearch = (event: PromptSearchEvent) => {
-    const result = transitionPromptSearch(promptSearchState(), event, history.entries())
-    setState((prev) => ({ ...prev, promptSearch: result.state }))
-    for (const effect of result.effects) {
-      if (effect._tag === "Preview") {
-        setRestoreTextRequest({ token: Date.now(), text: effect.text })
-      }
-    }
+    dispatchHome({ _tag: "SetShowWelcome", showWelcome })
   }
 
   // Navigate when session becomes active after pending prompt
@@ -121,16 +100,11 @@ export function Home(props: HomeProps) {
     if (current._tag !== "pending") return
     const session = client.session()
     if (session === null) return
-    setState((prev) =>
-      prev._tag === "pending"
-        ? {
-            _tag: "idle",
-            showWelcome: prev.showWelcome,
-            promptSearch: prev.promptSearch,
-          }
-        : prev,
-    )
-    router.navigateToSession(session.sessionId, session.branchId, current.prompt)
+    dispatchHome({
+      _tag: "SessionActivated",
+      sessionId: session.sessionId,
+      branchId: session.branchId,
+    })
   })
 
   useScopedKeyboard((e) => {
@@ -161,7 +135,11 @@ export function Home(props: HomeProps) {
     // ESC: double-tap to quit
     if (e.name === "escape") {
       if (promptSearchOpen()) {
-        dispatchPromptSearch({ _tag: "Cancel" })
+        dispatchHome({
+          _tag: "PromptSearch",
+          event: { _tag: "Cancel" },
+          entries: history.entries(),
+        })
         quitChain.reset()
         return true
       }
@@ -183,7 +161,11 @@ export function Home(props: HomeProps) {
     }
 
     if (e.ctrl === true && e.name === "r") {
-      dispatchPromptSearch({ _tag: "Open", draftBeforeOpen: composerText() })
+      dispatchHome({
+        _tag: "PromptSearch",
+        event: { _tag: "Open", draftBeforeOpen: composerText() },
+        entries: history.entries(),
+      })
       quitChain.reset()
       return true
     }
@@ -232,27 +214,13 @@ export function Home(props: HomeProps) {
     )
 
   const handleSubmit = (content: string, _mode?: "queue" | "interject") => {
-    // Create session, navigate with pending prompt for session route to send
-    setState((prev) => ({
-      _tag: "pending",
-      prompt: content,
-      showWelcome: prev.showWelcome,
-      promptSearch: prev.promptSearch,
-    }))
-    client.createSession()
+    dispatchHome({ _tag: "SubmitPrompt", prompt: content })
   }
 
   // Handle initial prompt on mount
   onMount(() => {
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
-      const prompt = props.initialPrompt
-      setState((prev) => ({
-        _tag: "pending",
-        prompt,
-        showWelcome: prev.showWelcome,
-        promptSearch: prev.promptSearch,
-      }))
-      client.createSession()
+      dispatchHome({ _tag: "InitialPrompt", prompt: props.initialPrompt })
     }
   })
 
@@ -333,7 +301,13 @@ export function Home(props: HomeProps) {
       <PromptSearchPalette
         state={promptSearchState()}
         entries={history.entries()}
-        onEvent={dispatchPromptSearch}
+        onEvent={(event) =>
+          dispatchHome({
+            _tag: "PromptSearch",
+            event,
+            entries: history.entries(),
+          })
+        }
       />
     </box>
   )

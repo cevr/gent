@@ -3,11 +3,12 @@
  * Supports arrow key panning and [/] for diagram cycling.
  */
 
-import { createSignal, Show, createMemo } from "solid-js"
+import { createSignal, Show, createMemo, createEffect } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { renderMermaidToAscii, extractMermaidBlocks } from "../utils/mermaid"
 import { useScopedKeyboard } from "../keyboard/context"
+import { MermaidViewerState, transitionMermaidViewer } from "./mermaid-viewer-state"
 
 export interface MermaidDiagram {
   source: string
@@ -27,12 +28,15 @@ export function MermaidViewer(props: MermaidViewerProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
-  const [diagramIndex, setDiagramIndex] = createSignal(0)
-  const [panX, setPanX] = createSignal(0)
-  const [panY, setPanY] = createSignal(0)
+  const [state, setState] = createSignal(MermaidViewerState.initial())
+
+  createEffect(() => {
+    if (!props.open) return
+    setState(transitionMermaidViewer(state(), { _tag: "Open" }))
+  })
 
   const currentDiagram = createMemo(() => {
-    const idx = diagramIndex()
+    const idx = state().diagramIndex
     return props.diagrams[idx]
   })
 
@@ -41,8 +45,8 @@ export function MermaidViewer(props: MermaidViewerProps) {
     if (diagram === undefined) return ""
 
     const lines = diagram.rendered.split("\n")
-    const startLine = panY()
-    const startCol = panX()
+    const startLine = state().panY
+    const startCol = state().panX
     const viewHeight = dimensions().height - 3 // Leave room for header/footer
     const viewWidth = dimensions().width
 
@@ -69,40 +73,46 @@ export function MermaidViewer(props: MermaidViewerProps) {
 
       // Panning
       if (e.name === "left") {
-        setPanX((x) => Math.max(0, x - PAN_STEP_X))
+        setState((current) =>
+          transitionMermaidViewer(current, { _tag: "PanLeft", step: PAN_STEP_X }),
+        )
         return true
       }
       if (e.name === "right") {
-        setPanX((x) => x + PAN_STEP_X)
+        setState((current) =>
+          transitionMermaidViewer(current, { _tag: "PanRight", step: PAN_STEP_X }),
+        )
         return true
       }
       if (e.name === "up") {
-        setPanY((y) => Math.max(0, y - PAN_STEP_Y))
+        setState((current) => transitionMermaidViewer(current, { _tag: "PanUp", step: PAN_STEP_Y }))
         return true
       }
       if (e.name === "down") {
-        setPanY((y) => y + PAN_STEP_Y)
+        setState((current) =>
+          transitionMermaidViewer(current, { _tag: "PanDown", step: PAN_STEP_Y }),
+        )
         return true
       }
 
       // Diagram cycling
       if (e.sequence === "[") {
-        setDiagramIndex((i) => Math.max(0, i - 1))
-        setPanX(0)
-        setPanY(0)
+        setState((current) => transitionMermaidViewer(current, { _tag: "PrevDiagram" }))
         return true
       }
       if (e.sequence === "]") {
-        setDiagramIndex((i) => Math.min(props.diagrams.length - 1, i + 1))
-        setPanX(0)
-        setPanY(0)
+        setState((current) =>
+          transitionMermaidViewer(current, {
+            _tag: "NextDiagram",
+            diagramCount: props.diagrams.length,
+          }),
+        )
         return true
       }
 
       // Home/End for quick navigation
       if (e.name === "home") {
-        setPanX(0)
-        setPanY(0)
+        setState((current) => transitionMermaidViewer(current, { _tag: "ResetPan" }))
         return true
       }
       return false
@@ -124,7 +134,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
         {/* Header */}
         <box paddingLeft={1} paddingRight={1} flexShrink={0}>
           <text style={{ fg: theme.info }}>
-            Mermaid Viewer ({diagramIndex() + 1}/{props.diagrams.length})
+            Mermaid Viewer ({state().diagramIndex + 1}/{props.diagrams.length})
             <span style={{ fg: theme.textMuted }}> — arrows: pan, [/]: cycle, esc: close</span>
           </text>
         </box>
@@ -137,7 +147,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
         {/* Footer */}
         <box paddingLeft={1} flexShrink={0}>
           <text style={{ fg: theme.textMuted }}>
-            pan: ({panX()}, {panY()})
+            pan: ({state().panX}, {state().panY})
           </text>
         </box>
       </box>

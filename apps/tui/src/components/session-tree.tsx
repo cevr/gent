@@ -8,6 +8,7 @@ import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncate } from "../utils/truncate"
 import { useScopedKeyboard } from "../keyboard/context"
+import { SessionTreeState, transitionSessionTree } from "./session-tree-state"
 
 interface FlatNode {
   id: SessionId
@@ -86,23 +87,26 @@ export interface SessionTreeProps {
 export function SessionTree(props: SessionTreeProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
-  const [query, setQuery] = createSignal("")
+  const [state, setState] = createSignal(SessionTreeState.initial())
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
   const items = createMemo(() => {
     const tree = props.tree
     if (tree === null) return [] as FlatNode[]
-    return buildTreeLines(tree, props.currentSessionId, query().trim())
+    return buildTreeLines(tree, props.currentSessionId, state().query.trim())
   })
 
-  useScrollSync(() => `session-tree-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(() => `session-tree-${state().selectedIndex}`, { getRef: () => scrollRef })
 
   createEffect(() => {
     if (!props.open) return
-    setQuery("")
     const currentIndex = items().findIndex((item) => item.isCurrent)
-    setSelectedIndex(currentIndex >= 0 ? currentIndex : 0)
+    setState(
+      transitionSessionTree(state(), {
+        _tag: "Open",
+        selectedIndex: currentIndex >= 0 ? currentIndex : 0,
+      }),
+    )
   })
 
   useScopedKeyboard(
@@ -113,8 +117,7 @@ export function SessionTree(props: SessionTreeProps) {
       }
 
       if (e.name === "backspace") {
-        setQuery((current) => current.slice(0, -1))
-        setSelectedIndex(0)
+        setState((current) => transitionSessionTree(current, { _tag: "Backspace" }))
         return true
       }
 
@@ -122,26 +125,29 @@ export function SessionTree(props: SessionTreeProps) {
       if (visible.length === 0) return false
 
       if (e.name === "return") {
-        const next = visible[selectedIndex()]
+        const next = visible[state().selectedIndex]
         if (next !== undefined) props.onSelect(next.id)
         return true
       }
 
       if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-        setSelectedIndex((index) => (index > 0 ? index - 1 : visible.length - 1))
+        setState((current) =>
+          transitionSessionTree(current, { _tag: "MoveUp", itemCount: visible.length }),
+        )
         return true
       }
 
       if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-        setSelectedIndex((index) => (index < visible.length - 1 ? index + 1 : 0))
+        setState((current) =>
+          transitionSessionTree(current, { _tag: "MoveDown", itemCount: visible.length }),
+        )
         return true
       }
 
       if (e.sequence !== undefined && e.sequence.length === 1) {
         const char = e.sequence
         if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-          setQuery((current) => current + char)
-          setSelectedIndex(0)
+          setState((current) => transitionSessionTree(current, { _tag: "TypeChar", char }))
           return true
         }
       }
@@ -167,7 +173,7 @@ export function SessionTree(props: SessionTreeProps) {
         <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
             <span style={{ fg: theme.textMuted }}>› </span>
-            {query()}
+            {state().query}
             <span style={{ fg: theme.primary }}>│</span>
           </text>
         </ChromePanel.Section>
@@ -175,7 +181,7 @@ export function SessionTree(props: SessionTreeProps) {
         <ChromePanel.Body ref={scrollRef}>
           <For each={items()}>
             {(item, index) => {
-              const selected = () => selectedIndex() === index()
+              const selected = () => state().selectedIndex === index()
               return (
                 <box
                   id={`session-tree-${index()}`}

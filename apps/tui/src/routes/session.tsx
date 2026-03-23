@@ -4,7 +4,7 @@
 
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
 import { Effect } from "effect"
-import { type SessionInfo, type SessionTreeNode, useClient } from "../client/index"
+import { useClient } from "../client/index"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList, type SessionItem } from "../components/message-list"
 import { Input } from "../components/input"
@@ -40,12 +40,15 @@ import { useSessionFeed } from "../hooks/use-session-feed"
 import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { useScopedKeyboard } from "../keyboard/context"
-import {
-  PromptSearchState,
-  transitionPromptSearch,
-  type PromptSearchEvent,
-} from "../components/prompt-search-state"
 import { usePromptHistory } from "../hooks/use-prompt-history"
+import {
+  SessionUiState,
+  getPromptSearchState,
+  promptSearchOpen,
+  transitionSessionUi,
+  type SessionUiEffect,
+  type SessionUiEvent,
+} from "./session-ui-state"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -65,13 +68,6 @@ const appendQueuedFollowUp = (queue: readonly string[], content: string): readon
   return [...queue.slice(0, -1), `${last}\n${content}`]
 }
 
-type OverlayState =
-  | null
-  | { _tag: "tree"; tree: SessionTreeNode; sessions: readonly SessionInfo[] }
-  | { _tag: "fork" }
-  | { _tag: "mermaid" }
-  | { _tag: "prompt-search"; state: Extract<PromptSearchState, { _tag: "open" }> }
-
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
   const command = useCommand()
@@ -87,35 +83,28 @@ export function Session(props: SessionProps) {
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
-  const [toolsExpanded, setToolsExpanded] = createSignal(false)
+  const [uiState, setUiState] = createSignal(SessionUiState.initial())
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
-  const [overlay, setOverlay] = createSignal<OverlayState>(null)
   const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
   const [composerText, setComposerText] = createSignal("")
   const [restoreTextRequest, setRestoreTextRequest] = createSignal<
     { token: number; text: string } | undefined
   >(undefined)
-  const promptSearchState = () => {
-    const current = overlay()
-    return current?._tag === "prompt-search" ? current.state : PromptSearchState.closed()
-  }
-  const promptSearchOpen = () => promptSearchState()._tag === "open"
 
-  const dispatchPromptSearch = (event: PromptSearchEvent) => {
-    const result = transitionPromptSearch(promptSearchState(), event, history.entries())
+  const promptSearchState = () => getPromptSearchState(uiState())
+  const promptSearchOpenNow = () => promptSearchOpen(uiState())
 
-    if (result.state._tag === "open") {
-      setOverlay({ _tag: "prompt-search", state: result.state })
-    } else if (overlay()?._tag === "prompt-search") {
-      setOverlay(null)
+  const handleSessionUiEffect = (effect: SessionUiEffect) => {
+    if (effect._tag === "RestoreComposer") {
+      setRestoreTextRequest({ token: Date.now(), text: effect.text })
     }
+  }
 
+  const dispatchSessionUi = (event: SessionUiEvent) => {
+    const result = transitionSessionUi(uiState(), event)
+    setUiState(result.state)
     for (const effect of result.effects) {
-      if (effect._tag === "Preview") {
-        setRestoreTextRequest({ token: Date.now(), text: effect.text })
-        continue
-      }
-      setOverlay(null)
+      handleSessionUiEffect(effect)
     }
   }
 
@@ -231,7 +220,7 @@ export function Session(props: SessionProps) {
 
         const tree = yield* client.getSessionTree(rootId)
         yield* Effect.sync(() => {
-          setOverlay({ _tag: "tree", tree, sessions })
+          dispatchSessionUi({ _tag: "OpenTree", tree, sessions })
         })
       }).pipe(
         Effect.catchEager((err) =>
@@ -248,14 +237,14 @@ export function Session(props: SessionProps) {
       client.setError("No messages to fork")
       return
     }
-    setOverlay({ _tag: "fork" })
+    dispatchSessionUi({ _tag: "OpenFork" })
   }
 
   useScopedKeyboard((e) => {
     // Let command system handle keybinds first
     if (command.handleKeybind(e)) return true
 
-    if (overlay() !== null) return false
+    if (uiState().overlay._tag !== "none") return false
 
     const clearComposer = () => {
       setRestoreTextRequest({ token: Date.now(), text: "" })
@@ -280,8 +269,12 @@ export function Session(props: SessionProps) {
 
     // ESC: cancel if streaming, double-tap to quit when idle
     if (e.name === "escape") {
-      if (promptSearchOpen()) {
-        dispatchPromptSearch({ _tag: "Cancel" })
+      if (promptSearchOpenNow()) {
+        dispatchSessionUi({
+          _tag: "PromptSearch",
+          event: { _tag: "Cancel" },
+          entries: history.entries(),
+        })
         quitChain.reset()
         return true
       }
@@ -309,20 +302,24 @@ export function Session(props: SessionProps) {
     }
 
     if (e.ctrl === true && e.name === "r") {
-      dispatchPromptSearch({ _tag: "Open", draftBeforeOpen: composerText() })
+      dispatchSessionUi({
+        _tag: "PromptSearch",
+        event: { _tag: "Open", draftBeforeOpen: composerText() },
+        entries: history.entries(),
+      })
       quitChain.reset()
       return true
     }
 
     // Ctrl+O: toggle tool output expansion
     if (e.ctrl === true && e.name === "o") {
-      setToolsExpanded((prev) => !prev)
+      dispatchSessionUi({ _tag: "ToggleTools" })
       return true
     }
 
     // Ctrl+Shift+M: open mermaid viewer
     if (e.ctrl === true && e.shift === true && e.name === "m") {
-      setOverlay({ _tag: "mermaid" })
+      dispatchSessionUi({ _tag: "OpenMermaid" })
       return true
     }
     return false
@@ -477,9 +474,9 @@ export function Session(props: SessionProps) {
     )
 
   const handleSessionTreeSelect = (sessionId: SessionId) => {
-    const current = overlay()
-    setOverlay(null)
-    if (current?._tag !== "tree") return
+    const current = uiState().overlay
+    dispatchSessionUi({ _tag: "CloseOverlay" })
+    if (current._tag !== "tree") return
     const next = current.sessions.find((session) => session.id === sessionId)
     const branchId = next?.branchId
     if (next === undefined || branchId === undefined) {
@@ -491,7 +488,7 @@ export function Session(props: SessionProps) {
   }
 
   const handleForkSelect = (messageId: MessageId) => {
-    setOverlay(null)
+    dispatchSessionUi({ _tag: "CloseOverlay" })
     cast(
       client.forkBranch(messageId).pipe(
         Effect.tap((branchId) =>
@@ -509,8 +506,8 @@ export function Session(props: SessionProps) {
   }
 
   const overlayTree = () => {
-    const current = overlay()
-    return current?._tag === "tree" ? current.tree : null
+    const current = uiState().overlay
+    return current._tag === "tree" ? current.tree : null
   }
 
   const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
@@ -588,7 +585,7 @@ export function Session(props: SessionProps) {
         <box flexDirection="column">
           <MessageList
             items={items()}
-            toolsExpanded={toolsExpanded()}
+            toolsExpanded={uiState().toolsExpanded}
             syntaxStyle={syntaxStyle}
             streaming={client.isStreaming()}
             getChildSessions={getChildren}
@@ -615,7 +612,7 @@ export function Session(props: SessionProps) {
           onSlashCommand={handleSlashCommand}
           clearMessages={feed.clear}
           onRestoreQueue={restoreQueuedMessages}
-          suspended={promptSearchOpen()}
+          suspended={promptSearchOpenNow()}
           onTextChange={setComposerText}
           restoreTextRequest={restoreTextRequest()}
           inputState={inputState()}
@@ -627,30 +624,36 @@ export function Session(props: SessionProps) {
       </BorderedInput>
 
       <SessionTree
-        open={overlay()?._tag === "tree"}
+        open={uiState().overlay._tag === "tree"}
         tree={overlayTree()}
         currentSessionId={props.sessionId}
         onSelect={handleSessionTreeSelect}
-        onClose={() => setOverlay(null)}
+        onClose={() => dispatchSessionUi({ _tag: "CloseOverlay" })}
       />
 
       <MessagePicker
-        open={overlay()?._tag === "fork"}
+        open={uiState().overlay._tag === "fork"}
         messages={feed.messages()}
         onSelect={handleForkSelect}
-        onClose={() => setOverlay(null)}
+        onClose={() => dispatchSessionUi({ _tag: "CloseOverlay" })}
       />
 
       <MermaidViewer
-        open={overlay()?._tag === "mermaid"}
-        diagrams={overlay()?._tag === "mermaid" ? collectDiagrams(feed.messages()) : []}
-        onClose={() => setOverlay(null)}
+        open={uiState().overlay._tag === "mermaid"}
+        diagrams={uiState().overlay._tag === "mermaid" ? collectDiagrams(feed.messages()) : []}
+        onClose={() => dispatchSessionUi({ _tag: "CloseOverlay" })}
       />
 
       <PromptSearchPalette
         state={promptSearchState()}
         entries={history.entries()}
-        onEvent={dispatchPromptSearch}
+        onEvent={(event) =>
+          dispatchSessionUi({
+            _tag: "PromptSearch",
+            event,
+            entries: history.entries(),
+          })
+        }
       />
     </box>
   )
