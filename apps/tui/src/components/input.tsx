@@ -92,6 +92,7 @@ export interface InputProps {
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
   clearMessages?: () => void
+  onRestoreQueue?: () => void
   onTextChange?: (text: string) => void
   restoreTextRequest?: { token: number; text: string }
   children?: JSX.Element
@@ -262,6 +263,11 @@ export function Input(props: InputProps) {
         .catch((err: unknown) => {
           client.setError(`Editor error: ${err}`)
         })
+      return
+    }
+
+    if ((e.meta === true || e.super === true) && e.name === "up") {
+      props.onRestoreQueue?.()
       return
     }
 

@@ -38,12 +38,32 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
     return entries.filter((entry) => fuzzyMatch(entry, currentQuery))
   })
 
+  const selectedPrompt = createMemo(() => {
+    const visible = items()
+    if (visible.length === 0) return undefined
+    const index = Math.min(selectedIndex(), visible.length - 1)
+    return visible[index]
+  })
+
   useScrollSync(() => `prompt-search-${selectedIndex()}`, { getRef: () => scrollRef })
 
   createEffect(() => {
     if (!props.open) return
     setSelectedIndex(0)
     setQuery("")
+  })
+
+  createEffect(() => {
+    const visible = items()
+    if (visible.length === 0) {
+      setSelectedIndex(0)
+      return
+    }
+
+    const nextIndex = Math.min(selectedIndex(), visible.length - 1)
+    if (nextIndex !== selectedIndex()) {
+      setSelectedIndex(nextIndex)
+    }
   })
 
   useKeyboard((e) => {
@@ -60,12 +80,13 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
       return
     }
 
-    const visible = items()
     if (e.name === "return") {
-      const next = visible[selectedIndex()]
+      const next = selectedPrompt()
       if (next !== undefined) props.onSelect(next)
       return
     }
+
+    const visible = items()
 
     if (visible.length > 0 && (e.name === "up" || (e.ctrl === true && e.name === "p"))) {
       setSelectedIndex((index) => (index > 0 ? index - 1 : visible.length - 1))
@@ -77,7 +98,14 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
       return
     }
 
-    if (e.sequence !== undefined && e.sequence.length === 1) {
+    if (
+      e.sequence !== undefined &&
+      e.sequence.length === 1 &&
+      e.ctrl !== true &&
+      e.meta !== true &&
+      e.super !== true &&
+      e.option !== true
+    ) {
       const char = e.sequence
       if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
         setQuery((current) => current + char)

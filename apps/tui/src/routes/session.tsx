@@ -83,6 +83,10 @@ export function Session(props: SessionProps) {
     { token: number; text: string } | undefined
   >(undefined)
   const promptSearchOpen = () => overlay()?._tag === "prompt-search"
+  const closePromptSearch = () => {
+    setOverlay(null)
+    setRestoreTextRequest({ token: Date.now(), text: "" })
+  }
 
   const syncQueueState = () =>
     cast(
@@ -257,30 +261,6 @@ export function Session(props: SessionProps) {
       return
     }
 
-    if (e.meta === true && e.name === "up") {
-      cast(
-        client.drainQueuedMessages().pipe(
-          Effect.tap(({ steering, followUp }) =>
-            Effect.sync(() => {
-              const all = [...steering, ...followUp]
-              if (all.length === 0) return
-              setRestoreTextRequest({
-                token: Date.now(),
-                text: all.join("\n"),
-              })
-              setQueueState({ steering: [], followUp: [] })
-            }),
-          ),
-          Effect.catchEager((err) =>
-            Effect.sync(() => {
-              client.setError(formatError(err))
-            }),
-          ),
-        ),
-      )
-      return
-    }
-
     if (e.ctrl === true && e.name === "r") {
       setOverlay({ _tag: "prompt-search" })
       quitChain.reset()
@@ -314,6 +294,29 @@ export function Session(props: SessionProps) {
     }
 
     client.sendMessage(content)
+  }
+
+  const restoreQueuedMessages = () => {
+    cast(
+      client.drainQueuedMessages().pipe(
+        Effect.tap(({ steering, followUp }) =>
+          Effect.sync(() => {
+            const all = [...steering, ...followUp]
+            if (all.length === 0) return
+            setRestoreTextRequest({
+              token: Date.now(),
+              text: all.join("\n"),
+            })
+            setQueueState({ steering: [], followUp: [] })
+          }),
+        ),
+        Effect.catchEager((err) =>
+          Effect.sync(() => {
+            client.setError(formatError(err))
+          }),
+        ),
+      ),
+    )
   }
 
   // Handle input effects (side effects from state transitions)
@@ -563,6 +566,7 @@ export function Session(props: SessionProps) {
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
           clearMessages={feed.clear}
+          onRestoreQueue={restoreQueuedMessages}
           onTextChange={setComposerText}
           restoreTextRequest={restoreTextRequest()}
           inputState={inputState()}
@@ -596,7 +600,7 @@ export function Session(props: SessionProps) {
 
       <PromptSearchPalette
         open={promptSearchOpen()}
-        onClose={() => setOverlay(null)}
+        onClose={closePromptSearch}
         onSelect={(prompt) => {
           setRestoreTextRequest({ token: Date.now(), text: prompt })
           setOverlay(null)
