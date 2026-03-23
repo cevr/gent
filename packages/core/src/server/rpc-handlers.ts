@@ -15,6 +15,7 @@ import { OPENAI_OAUTH_ALLOWED_MODELS } from "../providers/oauth/openai-oauth.js"
 import { SessionQueries } from "./session-queries.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionEvents } from "./session-events.js"
+import { SessionSubscriptions } from "./session-subscriptions.js"
 import { InteractionCommands } from "./interaction-commands.js"
 
 // ============================================================================
@@ -26,6 +27,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const queries = yield* SessionQueries
     const commands = yield* SessionCommands
     const events = yield* SessionEvents
+    const subscriptions = yield* SessionSubscriptions
     const interactions = yield* InteractionCommands
     const skills = yield* Skills
     const askUserHandler = yield* AskUserHandler
@@ -139,6 +141,17 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(branchId !== undefined ? { branchId } : {}),
           ...(after !== undefined ? { after } : {}),
         }),
+
+      subscribeLiveEvents: ({ sessionId, branchId }) =>
+        events.subscribeLiveEvents({
+          sessionId,
+          ...(branchId !== undefined ? { branchId } : {}),
+        }),
+
+      watchSessionState: ({ sessionId, branchId }) =>
+        subscriptions.watchSessionState({ sessionId, branchId }),
+
+      watchQueue: ({ sessionId, branchId }) => subscriptions.watchQueue({ sessionId, branchId }),
 
       respondQuestions: ({ requestId, answers }) => askUserHandler.respond(requestId, answers),
 

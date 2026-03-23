@@ -289,6 +289,21 @@ export const SubscribeEventsInput = Schema.Struct({
 export type SubscribeEventsInput = typeof SubscribeEventsInput.Type
 export const SubscribeEventsPayload = SubscribeEventsInput
 
+export const SubscribeLiveEventsInput = Schema.Struct({
+  sessionId: SessionId,
+  branchId: Schema.optional(BranchId),
+})
+export type SubscribeLiveEventsInput = typeof SubscribeLiveEventsInput.Type
+export const SubscribeLiveEventsPayload = SubscribeLiveEventsInput
+
+export const WatchSessionStateInput = GetSessionStateInput
+export type WatchSessionStateInput = typeof WatchSessionStateInput.Type
+export const WatchSessionStatePayload = WatchSessionStateInput
+
+export const WatchQueueInput = QueueTarget
+export type WatchQueueInput = typeof WatchQueueInput.Type
+export const WatchQueuePayload = WatchQueueInput
+
 export const RespondQuestionsInput = Schema.Struct({
   requestId: Schema.String,
   answers: Schema.Array(Schema.Array(Schema.String)),
@@ -457,6 +472,11 @@ export interface GentClient {
   forkBranch: (input: ForkBranchInput) => Effect.Effect<ForkBranchResult, GentRpcError>
 
   subscribeEvents: (input: SubscribeEventsInput) => Stream.Stream<EventEnvelope, GentRpcError>
+  subscribeLiveEvents: (
+    input: SubscribeLiveEventsInput,
+  ) => Stream.Stream<EventEnvelope, GentRpcError>
+  watchSessionState: (input: WatchSessionStateInput) => Stream.Stream<SessionState, GentRpcError>
+  watchQueue: (input: WatchQueueInput) => Stream.Stream<QueueSnapshotReadonly, GentRpcError>
 
   invokeTool: (input: {
     sessionId: SessionId

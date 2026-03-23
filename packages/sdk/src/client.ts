@@ -19,11 +19,15 @@ import type {
   SessionState,
   SessionTreeNode,
   CreateSessionResult,
+  SubscribeLiveEventsInput,
+  WatchQueueInput,
+  WatchSessionStateInput,
 } from "@gent/core/server/transport-contract.js"
 import { SessionQueries } from "@gent/core/server/session-queries.js"
 import { SessionCommands } from "@gent/core/server/session-commands.js"
 import { InteractionCommands } from "@gent/core/server/interaction-commands.js"
 import { SessionEvents } from "@gent/core/server/session-events.js"
+import { SessionSubscriptions } from "@gent/core/server/session-subscriptions.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
 import { ActorProcess } from "@gent/core/runtime/actor-process.js"
 import type { GentRpcError } from "@gent/core/server/errors.js"
@@ -250,6 +254,15 @@ export function createClient(
         ...(branchId !== undefined ? { branchId } : {}),
         ...(after !== undefined ? { after } : {}),
       }),
+    subscribeLiveEvents: ({ sessionId, branchId }: SubscribeLiveEventsInput) =>
+      rpcClient.subscribeLiveEvents({
+        sessionId,
+        ...(branchId !== undefined ? { branchId } : {}),
+      }),
+    watchSessionState: ({ sessionId, branchId }: WatchSessionStateInput) =>
+      rpcClient.watchSessionState({ sessionId, branchId }),
+    watchQueue: ({ sessionId, branchId }: WatchQueueInput) =>
+      rpcClient.watchQueue({ sessionId, branchId }),
 
     steer: (command) => rpcClient.steer({ command }),
     drainQueuedMessages: (input) => rpcClient.drainQueuedMessages(input),
@@ -433,6 +446,7 @@ export type DirectGentClientContext =
   | SessionCommands
   | InteractionCommands
   | SessionEvents
+  | SessionSubscriptions
   | ActorProcess
   | AskUserHandler
   | Permission
@@ -453,6 +467,7 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
     const commands = yield* SessionCommands
     const interactions = yield* InteractionCommands
     const events = yield* SessionEvents
+    const subscriptions = yield* SessionSubscriptions
     const actorProcess = yield* ActorProcess
     const askUserHandler = yield* AskUserHandler
     const permission = yield* Permission
@@ -564,6 +579,12 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
 
       subscribeEvents: (input) =>
         events.subscribeEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
+      subscribeLiveEvents: (input) =>
+        events.subscribeLiveEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
+      watchSessionState: (input) =>
+        subscriptions.watchSessionState(input) as Stream.Stream<SessionState, GentRpcError>,
+      watchQueue: (input) =>
+        subscriptions.watchQueue(input) as Stream.Stream<QueueSnapshotReadonly, GentRpcError>,
 
       steer: (command) => mapErr(commands.steer(command)),
       drainQueuedMessages: ({ sessionId, branchId }) =>
