@@ -1,15 +1,4 @@
-import {
-  Cause,
-  ServiceMap,
-  DateTime,
-  Deferred,
-  Effect,
-  Layer,
-  Ref,
-  Schema,
-  Semaphore,
-  Stream,
-} from "effect"
+import { Cause, ServiceMap, Deferred, Effect, Layer, Ref, Schema, Semaphore, Stream } from "effect"
 import {
   type ActorRef,
   Event,
@@ -21,7 +10,6 @@ import {
 import {
   AgentDefinition,
   AgentName,
-  Agents,
   ReasoningEffort,
   resolveAgentModel,
   SubagentError,
@@ -35,7 +23,6 @@ import {
   StreamStarted,
   StreamChunk as EventStreamChunk,
   StreamEnded,
-  TurnCompleted,
   ToolCallStarted,
   ToolCallSucceeded,
   ToolCallFailed,
@@ -50,22 +37,24 @@ import {
 } from "../../domain/event.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId } from "../../domain/ids.js"
-import { type AnyToolDefinition, type ToolAction, type ToolContext } from "../../domain/tool.js"
-import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
-import { HandoffHandler, type HandoffHandlerService } from "../../domain/interaction-handlers.js"
+import { type ToolAction, type ToolContext } from "../../domain/tool.js"
+import { HandoffHandler } from "../../domain/interaction-handlers.js"
 import { DEFAULTS } from "../../domain/defaults.js"
-import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
-import {
-  Provider,
-  type ProviderError,
-  FinishChunk,
-  type ProviderRequest,
-  type StreamChunk as ProviderStreamChunk,
-} from "../../providers/provider.js"
+import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
+import { Provider, type FinishChunk } from "../../providers/provider.js"
+import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withRetry } from "../retry"
-import { estimateContextPercent } from "../context-estimation"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { ToolRunner, type ToolRunnerService } from "./tool-runner"
+import { ExtensionRegistry } from "../extensions/registry.js"
+import { ToolRunner } from "./tool-runner"
+import {
+  type ActiveStreamHandle,
+  type AssistantDraft,
+  type ResolvedTurn,
+  executeToolsPhase,
+  finalizeTurnPhase,
+  resolveTurnPhase,
+  streamTurnPhase,
+} from "./agent-loop-phases.js"
 
 // Agent Loop Error
 
@@ -84,9 +73,9 @@ const VALID_REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "hig
 const resolveReasoning = (
   agent: AgentDefinition,
   sessionOverride?: string,
-): ProviderRequest["reasoning"] | undefined => {
+): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined => {
   if (sessionOverride !== undefined && VALID_REASONING_LEVELS.has(sessionOverride)) {
-    return sessionOverride as ProviderRequest["reasoning"]
+    return sessionOverride as "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
   }
   return agent.reasoningEffort
 }
@@ -129,12 +118,6 @@ const LoopQueueState = Schema.Struct({
   followUp: Schema.Array(QueuedTurnItem),
 })
 type LoopQueueState = typeof LoopQueueState.Type
-
-type ActiveStreamHandle = {
-  abortController: AbortController
-  interruptDeferred: Deferred.Deferred<void>
-  interruptedRef: Ref.Ref<boolean>
-}
 
 const getSingleText = (message: Message): string | undefined => {
   if (message.parts.length !== 1) return undefined
@@ -192,14 +175,6 @@ const messageText = (message: Message): string =>
     .map((part) => part.text)
     .join("\n")
 
-const formatStreamErrorMessage = (streamError: unknown) => {
-  if (streamError instanceof Error) return streamError.message
-  if ("message" in (streamError as Record<string, unknown>)) {
-    return String((streamError as Record<string, unknown>)["message"])
-  }
-  return String(streamError)
-}
-
 const toQueueEntry = (
   kind: "steering" | "follow-up",
   item: QueuedTurnItem,
@@ -229,46 +204,6 @@ const toQueueSnapshot = (
     return entry === undefined ? [] : [entry]
   }),
 })
-
-const persistAssistantText = (params: {
-  storage: StorageService
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  sessionId: SessionId
-  branchId: BranchId
-  text: string
-  reasoning: string
-  createdAt?: Date
-}) =>
-  Effect.gen(function* () {
-    if (params.text === "" && params.reasoning === "") return undefined
-
-    const parts: Array<TextPart | ReasoningPart> = []
-    if (params.reasoning !== "") {
-      parts.push(new ReasoningPart({ type: "reasoning", text: params.reasoning }))
-    }
-    if (params.text !== "") {
-      parts.push(new TextPart({ type: "text", text: params.text }))
-    }
-
-    const message = new Message({
-      id: Bun.randomUUIDv7() as MessageId,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      role: "assistant",
-      parts,
-      createdAt: params.createdAt ?? new Date(),
-    })
-    yield* params.storage.createMessage(message)
-    yield* params.publishEvent(
-      new MessageReceived({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        messageId: message.id,
-        role: "assistant",
-      }),
-    )
-    return message
-  })
 
 const emptyLoopQueueState = (): LoopQueueState => ({
   steering: [],
@@ -338,64 +273,6 @@ const resolveStoredAgent = (params: {
     return Schema.is(AgentName)(raw) ? raw : "cowork"
   })
 
-const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
-  const recentText = messages
-    .slice(-20)
-    .map((m) => {
-      const text = m.parts
-        .filter((p): p is typeof TextPart.Type => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
-      return text !== "" ? `${m.role}: ${text}` : ""
-    })
-    .filter((line) => line.length > 0)
-    .join("\n\n")
-  return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
-}
-
-const runAutoHandoffIfNeeded = (params: {
-  turnInterrupted: boolean
-  handoffSuppress: number
-  storage: StorageService
-  branchId: BranchId
-  currentAgent: AgentNameType
-  extensionRegistry: ExtensionRegistryService
-  sessionId: SessionId
-  handoffHandler: HandoffHandlerService
-}) =>
-  Effect.gen(function* () {
-    if (params.turnInterrupted) return params.handoffSuppress
-
-    if (params.handoffSuppress > 0) return params.handoffSuppress - 1
-
-    const allMessages = yield* params.storage.listMessages(params.branchId)
-    const currentAgentDef = yield* params.extensionRegistry.getAgent(params.currentAgent)
-    const modelId = resolveAgentModel(currentAgentDef ?? Agents.cowork)
-    const contextPercent = estimateContextPercent(allMessages, modelId)
-    if (contextPercent < DEFAULTS.handoffThresholdPercent) return params.handoffSuppress
-
-    yield* Effect.logInfo("auto-handoff.threshold").pipe(
-      Effect.annotateLogs({
-        contextPercent,
-        threshold: DEFAULTS.handoffThresholdPercent,
-      }),
-    )
-    const decision = yield* params.handoffHandler
-      .present({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        summary: summarizeRecentMessages(allMessages),
-        reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
-      })
-      .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
-
-    if (decision === "reject") {
-      return 5
-    }
-
-    return params.handoffSuppress
-  })
-
 const applyAgentOverrides = (agent: AgentDefinition, input: AgentRunInput): AgentDefinition => {
   if (
     input.overrideAllowedActions === undefined &&
@@ -432,301 +309,6 @@ const applyAgentOverrides = (agent: AgentDefinition, input: AgentRunInput): Agen
   })
 }
 
-interface CollectedStreamResponse {
-  textParts: string[]
-  reasoningParts: string[]
-  toolCalls: ReadonlyArray<ToolCallPart>
-  lastFinishChunk?: FinishChunk
-  streamFailed: boolean
-  interrupted: boolean
-}
-
-interface ResolvedTurnContext {
-  currentAgent: AgentNameType
-  messages: Message[]
-  agent: AgentDefinition
-  tools: ReadonlyArray<AnyToolDefinition>
-  systemPrompt: string
-  modelId: ModelId
-  reasoning: ProviderRequest["reasoning"] | undefined
-}
-
-const collectStreamResponse = (params: {
-  streamEffect: Stream.Stream<ProviderStreamChunk, ProviderError>
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  sessionId: SessionId
-  branchId: BranchId
-  activeStream: ActiveStreamHandle
-  persistAssistantText: (
-    text: string,
-    reasoning: string,
-    createdAt?: Date,
-  ) => Effect.Effect<Message | undefined, StorageError | AgentLoopError>
-}) =>
-  Effect.gen(function* () {
-    const textParts: string[] = []
-    const reasoningParts: string[] = []
-    const toolCalls: ToolCallPart[] = []
-    let lastFinishChunk: FinishChunk | undefined
-
-    const streamFailed = yield* Stream.runForEach(
-      params.streamEffect.pipe(
-        Stream.interruptWhen(Deferred.await(params.activeStream.interruptDeferred)),
-      ),
-      (chunk) =>
-        Effect.gen(function* () {
-          if (chunk._tag === "TextChunk") {
-            textParts.push(chunk.text)
-            yield* params.publishEvent(
-              new EventStreamChunk({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                chunk: chunk.text,
-              }),
-            )
-            return
-          }
-          if (chunk._tag === "ReasoningChunk") {
-            reasoningParts.push(chunk.text)
-            return
-          }
-          if (chunk._tag === "ToolCallChunk") {
-            toolCalls.push(
-              new ToolCallPart({
-                type: "tool-call",
-                toolCallId: chunk.toolCallId,
-                toolName: chunk.toolName,
-                input: chunk.input,
-              }),
-            )
-            return
-          }
-          if (chunk._tag === "FinishChunk") {
-            lastFinishChunk = chunk
-          }
-        }),
-    ).pipe(
-      Effect.as(false),
-      Effect.catchEager((streamError) =>
-        Effect.gen(function* () {
-          const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-          if (interrupted) return false
-          yield* Effect.logWarning("stream error, persisting partial output", streamError)
-          yield* params.persistAssistantText(textParts.join(""), reasoningParts.join(""))
-          yield* params.publishEvent(
-            new StreamEnded({ sessionId: params.sessionId, branchId: params.branchId }),
-          )
-          yield* params.publishEvent(
-            new ErrorOccurred({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              error: formatStreamErrorMessage(streamError),
-            }),
-          )
-          return true
-        }),
-      ),
-    )
-
-    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-    return { textParts, reasoningParts, toolCalls, lastFinishChunk, streamFailed, interrupted }
-  })
-
-const persistAssistantTurn = (params: {
-  storage: StorageService
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  sessionId: SessionId
-  branchId: BranchId
-  textParts: ReadonlyArray<string>
-  reasoningParts: ReadonlyArray<string>
-  toolCalls: ReadonlyArray<ToolCallPart>
-}) =>
-  Effect.gen(function* () {
-    const assistantParts: Array<TextPart | ReasoningPart | ToolCallPart> = []
-    const reasoningText = params.reasoningParts.join("")
-    if (reasoningText !== "") {
-      assistantParts.push(new ReasoningPart({ type: "reasoning", text: reasoningText }))
-    }
-    const fullText = params.textParts.join("")
-    if (fullText !== "") {
-      assistantParts.push(new TextPart({ type: "text", text: fullText }))
-    }
-    assistantParts.push(...params.toolCalls)
-
-    const assistantMessage = new Message({
-      id: Bun.randomUUIDv7() as MessageId,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      role: "assistant",
-      parts: assistantParts,
-      createdAt: new Date(),
-    })
-
-    yield* params.storage.createMessage(assistantMessage)
-    yield* params.publishEvent(
-      new MessageReceived({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        messageId: assistantMessage.id,
-        role: "assistant",
-      }),
-    )
-
-    return assistantMessage
-  })
-
-const executeToolCalls = (params: {
-  toolCalls: ReadonlyArray<ToolCallPart>
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  sessionId: SessionId
-  branchId: BranchId
-  currentAgent: AgentNameType
-  bypass: boolean
-  toolRunner: ToolRunnerService
-  extensionRegistry: ExtensionRegistryService
-  bashSemaphore: SemaphoreType
-}) =>
-  Effect.forEach(
-    params.toolCalls,
-    (toolCall) =>
-      Effect.gen(function* () {
-        yield* params.publishEvent(
-          new ToolCallStarted({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            input: toolCall.input,
-          }),
-        )
-
-        const ctx: ToolContext = {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          toolCallId: toolCall.toolCallId,
-          agentName: params.currentAgent,
-        }
-        const run = params.toolRunner.run(toolCall, ctx, { bypass: params.bypass })
-        const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
-        const result = yield* tool?.concurrency === "serial"
-          ? params.bashSemaphore.withPermits(1)(run)
-          : run
-
-        const outputSummary = summarizeToolOutput(result)
-        const isError = result.output.type === "error-json"
-        const toolCallFields = {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          toolCallId: toolCall.toolCallId,
-          toolName: toolCall.toolName,
-          summary: outputSummary,
-          output: stringifyOutput(result.output.value),
-        }
-        yield* params.publishEvent(
-          isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
-        )
-        yield* Effect.logInfo("tool.completed").pipe(
-          Effect.annotateLogs({
-            toolName: toolCall.toolName,
-            toolCallId: toolCall.toolCallId,
-            isError,
-          }),
-        )
-
-        return result
-      }),
-    { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
-  )
-
-const resolveTurnContext = (params: {
-  agentOverride?: AgentNameType
-  currentAgent?: AgentNameType
-  storage: StorageService
-  branchId: BranchId
-  extensionRegistry: ExtensionRegistryService
-  sessionId: SessionId
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  systemPrompt: string
-}): Effect.Effect<ResolvedTurnContext | undefined, AgentLoopError | StorageError> =>
-  Effect.gen(function* () {
-    const currentAgent = params.agentOverride ?? params.currentAgent ?? "cowork"
-    const messages = yield* params.storage
-      .listMessages(params.branchId)
-      .pipe(Effect.map((m) => [...m]))
-    const agent = yield* params.extensionRegistry.getAgent(currentAgent)
-    if (agent === undefined) {
-      yield* params.publishEvent(
-        new ErrorOccurred({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          error: `Unknown agent: ${currentAgent}`,
-        }),
-      )
-      return undefined
-    }
-
-    const tools = yield* params.extensionRegistry.listToolsForAgent(agent, {
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      agentName: currentAgent,
-    })
-    const systemPrompt = yield* params.extensionRegistry.hooks.runInterceptor(
-      "prompt.system",
-      { basePrompt: buildSystemPrompt(params.systemPrompt, agent), agent },
-      (input) => Effect.succeed(input.basePrompt),
-    )
-    const session = yield* params.storage
-      .getSession(params.sessionId)
-      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
-    return {
-      currentAgent,
-      messages,
-      agent,
-      tools,
-      systemPrompt,
-      modelId: resolveAgentModel(agent),
-      reasoning: resolveReasoning(agent, session?.reasoningLevel),
-    }
-  })
-
-const storeToolResultsIfAny = (params: {
-  collected: CollectedStreamResponse
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  sessionId: SessionId
-  branchId: BranchId
-  currentAgent: AgentNameType
-  bypass: boolean
-  toolRunner: ToolRunnerService
-  extensionRegistry: ExtensionRegistryService
-  bashSemaphore: SemaphoreType
-  storage: StorageService
-}) =>
-  Effect.gen(function* () {
-    if (params.collected.toolCalls.length === 0) return false
-    const toolResults = yield* executeToolCalls({
-      toolCalls: params.collected.toolCalls,
-      publishEvent: params.publishEvent,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      currentAgent: params.currentAgent,
-      bypass: params.bypass,
-      toolRunner: params.toolRunner,
-      extensionRegistry: params.extensionRegistry,
-      bashSemaphore: params.bashSemaphore,
-    })
-
-    const toolResultMessage = new Message({
-      id: Bun.randomUUIDv7() as MessageId,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      role: "tool",
-      parts: toolResults,
-      createdAt: new Date(),
-    })
-    yield* params.storage.createMessage(toolResultMessage)
-    return true
-  })
-
 const LoopStateBaseFields = {
   queue: LoopQueueState,
   currentAgent: Schema.optional(AgentName),
@@ -758,15 +340,6 @@ const AssistantDraftSchema = Schema.Struct({
   toolCalls: Schema.Array(ToolCallPart),
   usage: Schema.optional(UsageSchema),
 })
-type AssistantDraft = typeof AssistantDraftSchema.Type
-type ResolvedTurn = {
-  currentTurnAgent: AgentNameType
-  messages: ReadonlyArray<Message>
-  systemPrompt: string
-  modelId: ModelId
-  reasoning?: ReasoningEffort
-  temperature?: number
-}
 
 // Agent Loop Machine
 
@@ -1090,17 +663,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runResolvingState = Effect.fn("AgentLoop.runResolvingState")(function* (
               state: ResolvingState,
             ) {
-              yield* storage.createMessage(state.message)
-              yield* publishEvent(
-                new MessageReceived({
-                  sessionId,
-                  branchId,
-                  messageId: state.message.id,
-                  role: "user",
-                }),
-              )
-
-              const resolved = yield* resolveTurnContext({
+              const resolved = yield* resolveTurnPhase({
+                message: state.message,
                 agentOverride: state.agentOverride,
                 currentAgent: state.currentAgent,
                 storage,
@@ -1114,109 +678,38 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 return AgentLoopEvent.PhaseFailed
               }
 
-              return AgentLoopEvent.Resolved({
-                currentTurnAgent: resolved.currentAgent,
-                messages: resolved.messages,
-                systemPrompt: resolved.systemPrompt,
-                modelId: resolved.modelId,
-                reasoning: resolved.reasoning,
-                temperature: resolved.agent.temperature,
-              })
+              return AgentLoopEvent.Resolved(resolved)
             })
 
             const runStreamingState = Effect.fn("AgentLoop.runStreamingState")(function* (
               state: StreamingState,
             ) {
-              const persistAssistantTextLocal = (
-                text: string,
-                reasoning: string,
-                createdAt?: Date,
-              ) =>
-                persistAssistantText({
-                  storage,
-                  publishEvent,
-                  sessionId,
-                  branchId,
-                  text,
-                  reasoning,
-                  createdAt,
-                })
-
-              const agent = yield* extensionRegistry.getAgent(state.currentTurnAgent)
-              if (agent === undefined) {
-                return AgentLoopEvent.StreamFailed({
-                  currentTurnAgent: state.currentTurnAgent,
-                })
-              }
-
-              const tools = yield* extensionRegistry.listToolsForAgent(agent, {
-                sessionId,
-                branchId,
-                agentName: state.currentTurnAgent,
-              })
-
-              yield* publishEvent(new StreamStarted({ sessionId, branchId }))
-              yield* Effect.logInfo("stream.start").pipe(
-                Effect.annotateLogs({
-                  agent: state.currentTurnAgent,
-                  model: state.modelId,
-                }),
-              )
-
               const activeStream: ActiveStreamHandle = {
                 abortController: new AbortController(),
                 interruptDeferred: yield* Deferred.make<void>(),
                 interruptedRef: yield* Ref.make(false),
               }
 
-              const streamEffect = yield* withRetry(
-                provider.stream({
-                  model: state.modelId,
-                  messages: [...state.messages],
-                  tools: [...tools],
-                  systemPrompt: state.systemPrompt,
-                  abortSignal: activeStream.abortController.signal,
-                  ...(state.temperature !== undefined ? { temperature: state.temperature } : {}),
-                  ...(state.reasoning !== undefined ? { reasoning: state.reasoning } : {}),
-                }),
-                undefined,
-                {
-                  onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-                    publishEvent(
-                      new ProviderRetrying({
-                        sessionId,
-                        branchId,
-                        attempt,
-                        maxAttempts,
-                        delayMs,
-                        error: error.message,
-                      }),
-                    ).pipe(Effect.orDie),
-                },
-              ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
-
               yield* Ref.set(activeStreamRef, activeStream)
-              const collected: CollectedStreamResponse = yield* collectStreamResponse({
-                streamEffect,
+              const collected = yield* streamTurnPhase({
+                resolved: {
+                  currentTurnAgent: state.currentTurnAgent,
+                  messages: state.messages,
+                  systemPrompt: state.systemPrompt,
+                  modelId: state.modelId,
+                  ...(state.reasoning !== undefined ? { reasoning: state.reasoning } : {}),
+                  ...(state.temperature !== undefined ? { temperature: state.temperature } : {}),
+                },
+                provider,
+                extensionRegistry,
                 publishEvent,
+                storage,
                 sessionId,
                 branchId,
                 activeStream,
-                persistAssistantText: persistAssistantTextLocal,
               }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined)))
 
               if (collected.interrupted) {
-                yield* publishEvent(
-                  new StreamEnded({
-                    sessionId,
-                    branchId,
-                    interrupted: true,
-                  }),
-                )
-                yield* persistAssistantTextLocal(
-                  collected.textParts.join(""),
-                  collected.reasoningParts.join(""),
-                )
                 return AgentLoopEvent.StreamInterrupted({
                   currentTurnAgent: state.currentTurnAgent,
                 })
@@ -1228,64 +721,21 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 })
               }
 
-              yield* publishEvent(
-                new StreamEnded({
-                  sessionId,
-                  branchId,
-                  usage: collected.lastFinishChunk?.usage,
-                }),
-              )
-              yield* Effect.logInfo("stream.end").pipe(
-                Effect.annotateLogs({
-                  inputTokens: collected.lastFinishChunk?.usage?.inputTokens ?? 0,
-                  outputTokens: collected.lastFinishChunk?.usage?.outputTokens ?? 0,
-                  toolCallCount: collected.toolCalls.length,
-                }),
-              )
-
-              yield* persistAssistantTurn({
-                storage,
-                publishEvent,
-                sessionId,
-                branchId,
-                textParts: collected.textParts,
-                reasoningParts: collected.reasoningParts,
-                toolCalls: collected.toolCalls,
-              })
-
               return AgentLoopEvent.StreamFinished({
                 currentTurnAgent: state.currentTurnAgent,
-                draft: {
-                  text: collected.textParts.join(""),
-                  reasoning: collected.reasoningParts.join(""),
-                  toolCalls: [...collected.toolCalls],
-                  usage: collected.lastFinishChunk?.usage,
-                },
+                draft: collected.draft,
               })
             })
 
             const runExecutingToolsState = Effect.fn("AgentLoop.runExecutingToolsState")(function* (
               state: ExecutingToolsState,
             ) {
-              yield* storeToolResultsIfAny({
-                collected: {
-                  textParts: state.draft.text === "" ? [] : [state.draft.text],
-                  reasoningParts: state.draft.reasoning === "" ? [] : [state.draft.reasoning],
-                  toolCalls: state.draft.toolCalls,
-                  lastFinishChunk:
-                    state.draft.usage !== undefined
-                      ? new FinishChunk({
-                          finishReason: "tool-calls",
-                          usage: state.draft.usage,
-                        })
-                      : undefined,
-                  streamFailed: false,
-                  interrupted: false,
-                },
+              yield* executeToolsPhase({
+                draft: state.draft,
                 publishEvent,
                 sessionId,
                 branchId,
-                currentAgent: state.currentTurnAgent,
+                currentTurnAgent: state.currentTurnAgent,
                 bypass: state.bypass,
                 toolRunner,
                 extensionRegistry,
@@ -1298,33 +748,17 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runFinalizingState = Effect.fn("AgentLoop.runFinalizingState")(function* (
               state: FinalizingState,
             ) {
-              const turnEndTime = yield* DateTime.now
-              const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - state.startedAtMs
-
-              yield* storage.updateMessageTurnDuration(state.message.id, turnDurationMs)
-              yield* publishEvent(
-                new TurnCompleted({
-                  sessionId,
-                  branchId,
-                  durationMs: Number(turnDurationMs),
-                  ...(state.turnInterrupted ? { interrupted: true } : {}),
-                }),
-              )
-              yield* Effect.logInfo("turn.completed").pipe(
-                Effect.annotateLogs({
-                  durationMs: Number(turnDurationMs),
-                  interrupted: state.turnInterrupted,
-                }),
-              )
-
-              const nextHandoffSuppress = yield* runAutoHandoffIfNeeded({
+              const nextHandoffSuppress = yield* finalizeTurnPhase({
+                storage,
+                publishEvent,
+                sessionId,
+                branchId,
+                startedAtMs: state.startedAtMs,
+                messageId: state.message.id,
                 turnInterrupted: state.turnInterrupted,
                 handoffSuppress: state.handoffSuppress,
-                storage,
-                branchId,
                 currentAgent: state.currentAgent ?? state.currentTurnAgent ?? "cowork",
                 extensionRegistry,
-                sessionId,
                 handoffHandler,
               })
 
