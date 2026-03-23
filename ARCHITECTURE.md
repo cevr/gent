@@ -11,23 +11,25 @@ Minimal, opinionated agent harness.
 ## Overview
 
 ```
-TUI (@opentui/solid) ←── SSE ──→ Server (HttpApi)
-                                      │
-                              ┌───────▼───────┐
-                              │    Runtime    │
-                              │ ActorProcess  │
-                              │  AgentLoop    │
-                              │  AgentActor   │
-                              │  EventStore   │
-                              └───────┬───────┘
-                                      │
-              ┌───────────────────────┼───────────────────────┐
-              │                       │                       │
-        ┌─────▼─────┐          ┌─────▼─────┐          ┌─────▼─────┐
-        │  Storage  │          │   Tools   │          │ Providers │
-        │  SQLite   │          │  Effect   │          │  ai-sdk   │
-        └───────────┘          │ Services  │          └───────────┘
-                               └───────────┘
+TUI / SDK / HTTP Client
+          │
+          ▼
+  Gent transport contract
+          │
+   ┌──────┴──────┐
+   │             │
+   ▼             ▼
+in-process    RPC / HTTP
+ transport     transport
+   │             │
+   └──────┬──────┘
+          ▼
+     App services
+          │
+   ┌──────┴──────┐
+   ▼             ▼
+ Runtime      Boundaries
+          (storage/tools/providers/events)
 ```
 
 ## Packages
@@ -42,14 +44,31 @@ packages/
 │   ├── tools/       # Read, Write, Edit, Bash, Glob, Grep, etc.
 │   ├── server/      # GentCore, RPCs, EventStore, system prompt
 │   └── test-utils/  # Mock layers, sequence recording
-└── sdk/             # Client wrappers (RPC + HTTP transport)
+└── sdk/             # Transport adapters over one shared client contract
 
 apps/
-├── tui/             # @opentui/solid TUI client
+├── tui/             # @opentui/solid client over the shared transport contract
 └── server/          # BunHttpServer + SSE
 ```
 
 No barrel files. `@gent/core` uses subpath exports (`@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop`, etc.). Internal imports use relative paths.
+
+## Transport Boundary
+
+One client contract. Multiple transports.
+
+- The authoritative client contract lives in `packages/core/src/server/transport-contract.ts`.
+- SDK provides adapters for that contract:
+  - direct / in-process
+  - RPC / HTTP
+- Process topology is not the architectural boundary.
+- The boundary is the transport contract and its schemas/semantics.
+
+Rule:
+
+- clients talk to the app through the shared transport contract
+- transports adapt that contract
+- app services do not grow client-specific DTO surfaces
 
 ## Core Concepts
 

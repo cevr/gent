@@ -74,6 +74,21 @@ export {
   type MessageInfo,
 }
 export { GentRpcError, NotFoundError } from "./errors.js"
+export type {
+  GentClient,
+  SkillInfo,
+  SkillContent,
+  MessageInfoReadonly,
+  SteerCommand as TransportSteerCommand,
+  SessionInfo as TransportSessionInfo,
+  BranchInfo as TransportBranchInfo,
+  BranchTreeNode as TransportBranchTreeNode,
+  QueueEntryInfoReadonly,
+  QueueSnapshotReadonly,
+  SessionState as TransportSessionState,
+  SessionTreeNode as TransportSessionTreeNode,
+  CreateSessionResult,
+} from "./transport-contract.js"
 
 // Re-export RPC handlers
 export { RpcHandlersLive } from "./rpc-handlers"

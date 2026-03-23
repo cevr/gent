@@ -5,6 +5,21 @@ import type { RpcGroup } from "effect/unstable/rpc"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
+import type {
+  GentClient,
+  SkillInfo,
+  SkillContent,
+  MessageInfoReadonly,
+  SteerCommand,
+  SessionInfo,
+  BranchInfo,
+  BranchTreeNode,
+  QueueEntryInfoReadonly,
+  QueueSnapshotReadonly,
+  SessionState,
+  SessionTreeNode,
+  CreateSessionResult,
+} from "@gent/core/server/transport-contract.js"
 import { GentCore } from "@gent/core/server/core.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
 import { ActorProcess } from "@gent/core/runtime/actor-process.js"
@@ -12,16 +27,11 @@ import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
 import { AuthApi, AuthStore, type AuthInfo } from "@gent/core/domain/auth-store.js"
 import { AuthGuard, type AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
-import {
-  Permission,
-  type PermissionDecision,
-  type PermissionRule,
-} from "@gent/core/domain/permission.js"
+import { Permission, type PermissionRule } from "@gent/core/domain/permission.js"
 import { Model, type ProviderId } from "@gent/core/domain/model.js"
-import type { AgentName, ReasoningEffort } from "@gent/core/domain/agent.js"
 import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
-import type { EventEnvelope, PromptDecision, HandoffDecision } from "@gent/core/domain/event.js"
+import type { EventEnvelope } from "@gent/core/domain/event.js"
 import type {
   MessagePart,
   TextPart,
@@ -29,7 +39,6 @@ import type {
   ToolCallPart,
   ToolResultPart,
 } from "@gent/core/domain/message.js"
-import type { Task } from "@gent/core/domain/task.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import { Skills, type SkillScope } from "@gent/core/domain/skills.js"
 import { ConfigService } from "@gent/core/runtime/config-service.js"
@@ -53,21 +62,25 @@ export type {
   QueueEntryInfo,
   QueueSnapshot,
 }
+export type {
+  GentClient,
+  SkillInfo,
+  SkillContent,
+  MessageInfoReadonly,
+  SteerCommand,
+  SessionInfo,
+  BranchInfo,
+  BranchTreeNode,
+  QueueEntryInfoReadonly,
+  QueueSnapshotReadonly,
+  SessionState,
+  SessionTreeNode,
+  CreateSessionResult,
+}
 
 // Re-export RPC types
 export type { GentRpcsClient, GentRpcError }
 export type { SkillScope }
-
-export interface SkillInfo {
-  name: string
-  description: string
-  scope: SkillScope
-  filePath: string
-}
-
-export interface SkillContent extends SkillInfo {
-  content: string
-}
 
 // RPC client type alias
 export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
@@ -162,291 +175,8 @@ export function extractToolCallsWithResults(
     })
 }
 
-// Message type returned from RPC (readonly)
-export interface MessageInfoReadonly {
-  readonly id: MessageId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly kind?: "regular" | "interjection"
-  readonly role: "user" | "assistant" | "system" | "tool"
-  readonly parts: readonly MessagePart[]
-  readonly createdAt: number
-  readonly turnDurationMs?: number
-}
-
-// Steer command types
-export type SteerCommand =
-  | { _tag: "Cancel"; sessionId: SessionId; branchId: BranchId }
-  | { _tag: "Interrupt"; sessionId: SessionId; branchId: BranchId }
-  | {
-      _tag: "Interject"
-      sessionId: SessionId
-      branchId: BranchId
-      message: string
-      agent?: AgentName
-    }
-  | { _tag: "SwitchAgent"; sessionId: SessionId; branchId: BranchId; agent: AgentName }
-
-// Session info (minimal for client)
-export interface SessionInfo {
-  id: SessionId
-  name?: string
-  cwd?: string
-  bypass?: boolean
-  reasoningLevel?: ReasoningEffort
-  branchId?: BranchId
-  parentSessionId?: SessionId
-  parentBranchId?: BranchId
-  createdAt: number
-  updatedAt: number
-}
-
-export interface BranchInfo {
-  id: BranchId
-  sessionId: SessionId
-  parentBranchId?: BranchId
-  parentMessageId?: MessageId
-  name?: string
-  summary?: string
-  createdAt: number
-}
-
-export interface BranchTreeNode {
-  id: BranchId
-  name?: string
-  summary?: string
-  parentMessageId?: MessageId
-  messageCount: number
-  createdAt: number
-  children: readonly BranchTreeNode[]
-}
-
-export type QueueEntryInfoReadonly = QueueEntryInfo
-export type QueueSnapshotReadonly = QueueSnapshot
-
-export interface SessionState {
-  sessionId: SessionId
-  branchId: BranchId
-  messages: readonly MessageInfoReadonly[]
-  lastEventId: number | null
-  isStreaming: boolean
-  agent: AgentName
-  bypass?: boolean
-  reasoningLevel?: ReasoningEffort
-}
-
-export interface SessionTreeNode {
-  id: SessionId
-  name?: string
-  cwd?: string
-  bypass?: boolean
-  parentSessionId?: SessionId
-  parentBranchId?: BranchId
-  createdAt: number
-  updatedAt: number
-  children: readonly SessionTreeNode[]
-}
-
-export interface CreateSessionResult {
-  sessionId: SessionId
-  branchId: BranchId
-  name: string
-  bypass: boolean
-}
-
-// =============================================================================
-// GentClient - Returns Effects for all operations
-// =============================================================================
-
-export interface GentClient {
-  /** Send a message to active session */
-  sendMessage: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-    content: string
-  }) => Effect.Effect<void, GentRpcError>
-
-  /** Create a new session */
-  createSession: (input?: {
-    firstMessage?: string
-    cwd?: string
-    bypass?: boolean
-    parentSessionId?: SessionId
-    parentBranchId?: BranchId
-  }) => Effect.Effect<CreateSessionResult, GentRpcError>
-
-  /** List messages for a branch */
-  listMessages: (branchId: BranchId) => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
-
-  /** Get session state snapshot */
-  getSessionState: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<SessionState, GentRpcError>
-
-  /** Get a session by ID */
-  getSession: (sessionId: SessionId) => Effect.Effect<SessionInfo | null, GentRpcError>
-
-  /** List all sessions */
-  listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
-
-  /** Get direct child sessions of a parent */
-  getChildSessions: (
-    parentSessionId: SessionId,
-  ) => Effect.Effect<readonly SessionInfo[], GentRpcError>
-
-  /** Get full session tree rooted at a session */
-  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentRpcError>
-
-  /** List available model metadata (pricing) */
-  listModels: () => Effect.Effect<readonly Model[], GentRpcError>
-
-  /** List branches for a session */
-  listBranches: (sessionId: SessionId) => Effect.Effect<readonly BranchInfo[], GentRpcError>
-
-  /** List tasks for a session */
-  listTasks: (
-    sessionId: SessionId,
-    branchId?: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Task>, GentRpcError>
-
-  /** Get branch tree for a session */
-  getBranchTree: (sessionId: SessionId) => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
-
-  /** Create a new branch */
-  createBranch: (sessionId: SessionId, name?: string) => Effect.Effect<BranchId, GentRpcError>
-
-  /** Switch branches within a session */
-  switchBranch: (input: {
-    sessionId: SessionId
-    fromBranchId: BranchId
-    toBranchId: BranchId
-    summarize?: boolean
-  }) => Effect.Effect<void, GentRpcError>
-
-  /** Fork a new branch from a message */
-  forkBranch: (input: {
-    sessionId: SessionId
-    fromBranchId: BranchId
-    atMessageId: MessageId
-    name?: string
-  }) => Effect.Effect<{ branchId: string }, GentRpcError>
-
-  /** Subscribe to events - returns Stream */
-  subscribeEvents: (input: {
-    sessionId: SessionId
-    branchId?: BranchId
-    after?: number
-  }) => Stream.Stream<EventEnvelope, GentRpcError>
-
-  /** Invoke a tool directly (actor-serialized) */
-  invokeTool: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-    toolName: string
-    input: unknown
-  }) => Effect.Effect<void, GentRpcError>
-
-  /** Send steering command */
-  steer: (command: SteerCommand) => Effect.Effect<void, GentRpcError>
-
-  /** Remove queued steer/follow-up messages and return their contents */
-  drainQueuedMessages: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<QueueSnapshotReadonly, GentRpcError>
-
-  /** Read queued steer/follow-up messages without mutating queue state */
-  getQueuedMessages: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<QueueSnapshotReadonly, GentRpcError>
-
-  /** Respond to questions from agent */
-  respondQuestions: (
-    requestId: string,
-    answers: ReadonlyArray<ReadonlyArray<string>>,
-  ) => Effect.Effect<void, GentRpcError>
-
-  /** Respond to permission request */
-  respondPermission: (
-    requestId: string,
-    decision: PermissionDecision,
-    persist?: boolean,
-  ) => Effect.Effect<void, GentRpcError>
-
-  /** Respond to prompt */
-  respondPrompt: (
-    requestId: string,
-    decision: PromptDecision,
-    content?: string,
-  ) => Effect.Effect<void, GentRpcError>
-
-  /** Respond to handoff prompt */
-  respondHandoff: (
-    requestId: string,
-    decision: HandoffDecision,
-    reason?: string,
-  ) => Effect.Effect<{ childSessionId?: SessionId; childBranchId?: BranchId }, GentRpcError>
-
-  /** Update session bypass */
-  updateSessionBypass: (
-    sessionId: SessionId,
-    bypass: boolean,
-  ) => Effect.Effect<{ bypass: boolean }, GentRpcError>
-
-  updateSessionReasoningLevel: (
-    sessionId: SessionId,
-    reasoningLevel: ReasoningEffort | undefined,
-  ) => Effect.Effect<{ reasoningLevel: ReasoningEffort | undefined }, GentRpcError>
-
-  /** Get permission rules */
-  getPermissionRules: () => Effect.Effect<readonly PermissionRule[], GentRpcError>
-
-  /** Delete permission rule */
-  deletePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void, GentRpcError>
-
-  /** List auth providers with their key status */
-  listAuthProviders: () => Effect.Effect<readonly AuthProviderInfo[], GentRpcError>
-
-  /** Set auth key for a provider */
-  setAuthKey: (provider: string, key: string) => Effect.Effect<void, GentRpcError>
-
-  /** Delete auth key for a provider */
-  deleteAuthKey: (provider: string) => Effect.Effect<void, GentRpcError>
-
-  /** List auth methods per provider */
-  listAuthMethods: () => Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>, GentRpcError>
-
-  /** Begin OAuth flow for provider + method */
-  authorizeAuth: (
-    sessionId: string,
-    provider: string,
-    method: number,
-  ) => Effect.Effect<AuthAuthorization | null, GentRpcError>
-
-  /** Complete OAuth flow */
-  callbackAuth: (
-    sessionId: string,
-    provider: string,
-    method: number,
-    authorizationId: string,
-    code?: string,
-  ) => Effect.Effect<void, GentRpcError>
-
-  /** List available skills (includes content for preloading) */
-  listSkills: () => Effect.Effect<readonly SkillContent[], GentRpcError>
-
-  /** Get skill content by name */
-  getSkillContent: (name: string) => Effect.Effect<SkillContent | null, GentRpcError>
-
-  /** Get the services for this client */
-  services: ServiceMap.ServiceMap<unknown>
-}
-
 /**
- * Creates a GentClient from an RPC client.
- * Returns Effects for all operations - caller decides how to run.
+ * Creates the shared Gent transport contract from an RPC adapter.
  */
 export function createClient(
   rpcClient: GentRpcClient,
@@ -595,8 +325,8 @@ export function createClient(
 // =============================================================================
 
 /**
- * Creates a GentClient from RPC protocol layers.
- * Use with HttpTransport or other protocol layers.
+ * Creates the shared Gent transport contract from RPC protocol layers.
+ * Use with HTTP or other RPC transport adapters.
  *
  * @example
  * ```ts
@@ -674,12 +404,11 @@ export const makeInProcessClient = <E, R>(
   })
 
 // =============================================================================
-// Direct in-process client (no RPC layer, no scope issues)
+// Direct in-process transport adapter
 // =============================================================================
 
 /**
- * Context required to create a direct GentClient.
- * Use this for embedded TUI where client and server are in the same process.
+ * Context required to create an in-process transport adapter.
  */
 export type DirectGentClientContext =
   | GentCore
@@ -694,8 +423,8 @@ export type DirectGentClientContext =
   | Skills
 
 /**
- * Creates a GentClient that calls GentCore and services directly.
- * No RPC layer, no scope issues. Use for embedded/in-process mode.
+ * Creates the shared Gent transport contract using direct in-process calls.
+ * Same contract as RPC/HTTP clients. Only the transport adapter differs.
  */
 export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentClientContext> =
   Effect.gen(function* () {

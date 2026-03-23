@@ -1,6 +1,22 @@
-// Client
+// Shared transport contract
+export type {
+  GentClient,
+  MessageInfoReadonly,
+  SessionInfo,
+  BranchInfo,
+  BranchTreeNode,
+  SessionState,
+  CreateSessionResult,
+  SteerCommand,
+  QueueEntryInfoReadonly,
+  QueueSnapshotReadonly,
+  SessionTreeNode,
+  SkillInfo,
+  SkillContent,
+} from "@gent/core/server/transport-contract.js"
+
+// Transport adapters
 export {
-  type GentClient,
   type GentRpcClient,
   type GentRpcError,
   type GentRpcsClient,
@@ -16,13 +32,6 @@ export { HttpTransport, type HttpTransportConfig } from "./client.js"
 
 // Message types
 export type {
-  MessageInfoReadonly,
-  SessionInfo,
-  BranchInfo,
-  BranchTreeNode,
-  SessionState,
-  CreateSessionResult,
-  SteerCommand,
   QueueEntryInfo,
   QueueSnapshot,
   AuthProviderInfo,
@@ -55,11 +64,6 @@ export {
   type ExtractedToolCall,
 } from "./client.js"
 
-// Direct GentClient (in-process, no RPC layer)
+// Direct in-process transport adapter
 export { makeDirectGentClient, type DirectGentClientContext } from "./client.js"
-
-// Session tree types
-export type { SessionTreeNode } from "./client.js"
-
-// Skill types
-export type { SkillInfo, SkillContent, SkillScope } from "./client.js"
+export type { SkillScope } from "./client.js"
