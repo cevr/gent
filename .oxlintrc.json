@@ -34,8 +34,8 @@
     "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
 
     // Readability
-    "no-nested-ternary": "warn",
-    "complexity": ["warn", 35],
+    "no-nested-ternary": "error",
+    "complexity": ["error", 35],
 
     // Disabled — false positives with TS enums, type imports, etc.
     "no-shadow": "off"
