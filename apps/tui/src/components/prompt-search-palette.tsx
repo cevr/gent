@@ -18,6 +18,30 @@ export interface PromptSearchPaletteProps {
   onEvent: (event: PromptSearchEvent) => void
 }
 
+const isPromptSearchChar = (sequence: string | undefined) => {
+  if (sequence === undefined || sequence.length !== 1) return false
+  const code = sequence.charCodeAt(0)
+  return code >= 32 && code <= 126
+}
+
+const handlePromptSearchNav = (
+  name: string,
+  ctrl: boolean | undefined,
+  hasItems: boolean,
+  onEvent: (event: PromptSearchEvent) => void,
+) => {
+  if (!hasItems) return false
+  if (name === "up" || (ctrl === true && name === "p")) {
+    onEvent({ _tag: "MoveUp" })
+    return true
+  }
+  if (name === "down" || (ctrl === true && name === "n")) {
+    onEvent({ _tag: "MoveDown" })
+    return true
+  }
+  return false
+}
+
 export function PromptSearchPalette(props: PromptSearchPaletteProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -46,31 +70,19 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
         return true
       }
 
-      const visible = items()
-
-      if (visible.length > 0 && (e.name === "up" || (e.ctrl === true && e.name === "p"))) {
-        props.onEvent({ _tag: "MoveUp" })
-        return true
-      }
-
-      if (visible.length > 0 && (e.name === "down" || (e.ctrl === true && e.name === "n"))) {
-        props.onEvent({ _tag: "MoveDown" })
+      if (handlePromptSearchNav(e.name, e.ctrl, items().length > 0, props.onEvent)) {
         return true
       }
 
       if (
-        e.sequence !== undefined &&
-        e.sequence.length === 1 &&
+        isPromptSearchChar(e.sequence) &&
         e.ctrl !== true &&
         e.meta !== true &&
         e.super !== true &&
         e.option !== true
       ) {
-        const char = e.sequence
-        if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-          props.onEvent({ _tag: "TypeChar", char })
-          return true
-        }
+        props.onEvent({ _tag: "TypeChar", char: e.sequence })
+        return true
       }
       return false
     },
