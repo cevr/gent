@@ -82,7 +82,7 @@ export function useChildSessions(client: ClientContextValue): UseChildSessionsRe
           yield* tracker.track({ sessionId, branchId })
 
           // Block forever — keeps the scope alive until fiber is interrupted
-          yield* Effect.never
+          return yield* Effect.never
         }),
       ).pipe(Effect.catchEager(() => Effect.void)),
     )

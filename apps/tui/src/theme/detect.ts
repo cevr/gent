@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process"
 import { Config, Effect, Option } from "effect"
 
 /**
@@ -26,17 +25,14 @@ export function detectColorScheme(): "dark" | "light" {
 
   // Check macOS system appearance
   if (process.platform === "darwin") {
-    try {
-      execSync("defaults read -g AppleInterfaceStyle 2>/dev/null", {
-        encoding: "utf-8",
-        timeout: 500,
-      })
-      // If the command succeeds and returns "Dark", we're in dark mode
+    const proc = Bun.spawnSync(["defaults", "read", "-g", "AppleInterfaceStyle"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    if (proc.exitCode === 0) {
       return "dark"
-    } catch {
-      // If key doesn't exist (command fails), macOS is in light mode
-      return "light"
     }
+    return "light"
   }
 
   // Default to dark

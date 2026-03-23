@@ -10,7 +10,7 @@ import { AskUserHandler } from "@gent/core/tools/ask-user.js"
 import { ActorProcess } from "@gent/core/runtime/actor-process.js"
 import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
-import { AuthApi, AuthStore } from "@gent/core/domain/auth-store.js"
+import { AuthApi, AuthStore, type AuthInfo } from "@gent/core/domain/auth-store.js"
 import { AuthGuard, type AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
 import {
   Permission,
@@ -768,7 +768,7 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
             const models = yield* modelRegistry.list()
             const authInfo = yield* authStore
               .get("openai")
-              .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+              .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
             if (authInfo?.type !== "oauth") return models
 
             return models

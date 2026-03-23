@@ -3,7 +3,7 @@
  * GentTracer is now in @gent/core/runtime/tracer.
  */
 
-import { appendFileSync } from "node:fs"
+import { appendFileString } from "../platform/fs-runtime"
 
 // Re-export the core tracer for backward compat
 export {
@@ -19,11 +19,7 @@ const timestamp = () => {
 }
 
 const writeLine = (line: string) => {
-  try {
-    appendFileSync(LOG_PATH, line + "\n")
-  } catch {
-    // ignore write errors
-  }
+  void appendFileString(LOG_PATH, line + "\n").catch(() => {})
 }
 
 export const tuiLog = (msg: string) => writeLine(`${timestamp()} [tui] ${msg}`)

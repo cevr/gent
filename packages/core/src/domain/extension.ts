@@ -15,7 +15,6 @@ import type {
   HandoffConfirmed,
 } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
-import type { ToolResultPart } from "./message"
 import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition } from "./tool"
 import type { ProviderRequest } from "../providers/provider"
@@ -119,7 +118,7 @@ export interface ExtensionHookMap {
   readonly "prompt.system": Interceptor<SystemPromptInput, string>
   readonly "agent.resolve": Interceptor<AgentResolveInput, AgentDefinition>
   readonly "tools.visible": Interceptor<ToolsVisibleInput, ReadonlyArray<AnyToolDefinition>>
-  readonly "tool.execute": Interceptor<ToolExecuteInput, ToolResultPart>
+  readonly "tool.execute": Interceptor<ToolExecuteInput, unknown>
   readonly "provider.request": Interceptor<ProviderRequestInput, ProviderRequest>
   readonly "permission.check": Interceptor<PermissionCheckInput, PermissionResult>
 

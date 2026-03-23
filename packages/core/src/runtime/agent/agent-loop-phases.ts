@@ -83,7 +83,7 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
-type PublishEvent = (event: AgentEvent) => Effect.Effect<void, unknown>
+type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never>
 
 export type ActiveStreamHandle = {
   abortController: AbortController
@@ -190,7 +190,7 @@ const resolveTurnContext = (params: {
     )
     const session = yield* params.storage
       .getSession(params.sessionId)
-      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+      .pipe(Effect.catchEager(() => Effect.void))
 
     return {
       currentTurnAgent: currentAgent,

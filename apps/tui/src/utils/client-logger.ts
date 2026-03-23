@@ -5,26 +5,18 @@
  * errors) as structured JSON for debugging client-server interactions.
  */
 
-import { appendFileSync, writeFileSync } from "node:fs"
+import { appendFileString, writeFileString } from "../platform/fs-runtime"
 
 const LOG_PATH = "/tmp/gent-client.log"
 
 const isoNow = () => new Date().toISOString()
 
 const writeLine = (line: string) => {
-  try {
-    appendFileSync(LOG_PATH, line + "\n")
-  } catch {
-    // ignore
-  }
+  void appendFileString(LOG_PATH, line + "\n").catch(() => {})
 }
 
 export const clearClientLog = () => {
-  try {
-    writeFileSync(LOG_PATH, "")
-  } catch {
-    // ignore
-  }
+  void writeFileString(LOG_PATH, "").catch(() => {})
 }
 
 type LogLevel = "debug" | "info" | "warn" | "error"

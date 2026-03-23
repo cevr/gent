@@ -156,7 +156,7 @@ export interface WideEventService {
 }
 
 export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()(
-  "@gent/runtime/WideEvent",
+  "@gent/core/src/runtime/wide-event/WideEvent",
 ) {
   static Live: Layer.Layer<WideEvent, never, EventStore> = Layer.effect(
     WideEvent,

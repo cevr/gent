@@ -65,7 +65,7 @@ export interface ModelRegistryService {
 }
 
 export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegistryService>()(
-  "@gent/runtime/src/model-registry/ModelRegistry",
+  "@gent/core/src/runtime/model-registry/ModelRegistry",
 ) {
   static Live: Layer.Layer<ModelRegistry, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
     ModelRegistry,

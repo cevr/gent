@@ -110,7 +110,7 @@ export interface ExtensionRegistryService {
 export class ExtensionRegistry extends ServiceMap.Service<
   ExtensionRegistry,
   ExtensionRegistryService
->()("@gent/core/runtime/extensions/ExtensionRegistry") {
+>()("@gent/core/src/runtime/extensions/registry/ExtensionRegistry") {
   static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(ExtensionRegistry, {
       getTool: (name) => Effect.succeed(resolved.tools.get(name)),

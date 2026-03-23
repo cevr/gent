@@ -7,23 +7,24 @@
 
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import { Glob } from "bun"
-import { readFile, access } from "fs/promises"
-import { join, dirname } from "path"
 import { Effect, Exit, Fiber } from "effect"
 import { atom, state, useAtomSet, useAtomValue } from "../atom-solid"
+import { dirnamePath, joinPath } from "../platform/path-runtime"
 
 const FILE_GLOB = new Glob("**/*")
 const MAX_PARENT_TRAVERSAL = 10
 
 const exists = (path: string): Effect.Effect<boolean> =>
-  Effect.tryPromise(() => access(path).then(() => true)).pipe(
+  Effect.tryPromise(() => Bun.file(path).exists()).pipe(
     Effect.catchEager(() => Effect.succeed(false)),
   )
 
 const readFileIfExists = (path: string): Effect.Effect<string | null> =>
-  Effect.tryPromise(() => readFile(path, "utf-8")).pipe(
-    Effect.catchEager(() => Effect.succeed(null)),
-  )
+  Effect.tryPromise(async () => {
+    const file = Bun.file(path)
+    if (!(await file.exists())) return null
+    return file.text()
+  }).pipe(Effect.catchEager(() => Effect.succeed(null)))
 
 const loadGitignorePatterns = (cwd: string): Effect.Effect<Set<string>> =>
   Effect.gen(function* () {
@@ -32,7 +33,7 @@ const loadGitignorePatterns = (cwd: string): Effect.Effect<Set<string>> =>
     let traversals = 0
 
     while (traversals < MAX_PARENT_TRAVERSAL) {
-      const gitignorePath = join(dir, ".gitignore")
+      const gitignorePath = joinPath(dir, ".gitignore")
       const content = yield* readFileIfExists(gitignorePath)
       if (content !== null && content.length > 0) {
         for (const line of content.split("\n")) {
@@ -43,11 +44,11 @@ const loadGitignorePatterns = (cwd: string): Effect.Effect<Set<string>> =>
         }
       }
 
-      const gitDir = join(dir, ".git")
+      const gitDir = joinPath(dir, ".git")
       const isRoot = yield* exists(gitDir)
       if (isRoot) break
 
-      const parent = dirname(dir)
+      const parent = dirnamePath(dir)
       if (parent === dir) break
       dir = parent
       traversals++

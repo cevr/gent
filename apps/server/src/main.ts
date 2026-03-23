@@ -122,9 +122,10 @@ const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJso
 const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
   Layer.provide(GentCoreLive),
+  Layer.provide(BunFileSystem.layer),
 )
 
 // Main
 console.log("Gent server starting on http://localhost:3000")
 console.log("Swagger UI: http://localhost:3000/docs")
-BunRuntime.runMain(Layer.launch(HttpServerLive))
+BunRuntime.runMain(Effect.scoped(Layer.launch(HttpServerLive)))

@@ -111,7 +111,7 @@ export interface ActorProcessService {
 }
 
 export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessService>()(
-  "@gent/runtime/src/actor-process/ActorProcess",
+  "@gent/core/src/runtime/actor-process/ActorProcess",
 ) {
   static Test = (): Layer.Layer<ActorProcess> =>
     Layer.succeed(ActorProcess, {

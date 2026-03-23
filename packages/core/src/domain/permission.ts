@@ -45,7 +45,7 @@ export interface PermissionService {
 }
 
 export class Permission extends ServiceMap.Service<Permission, PermissionService>()(
-  "@gent/core/src/permission",
+  "@gent/core/src/domain/permission",
 ) {
   static Live = (
     initialRules: ReadonlyArray<PermissionRule> = [],

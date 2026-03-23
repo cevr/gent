@@ -68,7 +68,7 @@ export interface AskUserHandlerService {
 }
 
 export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
-  "@gent/tools/src/ask-user/AskUserHandler",
+  "@gent/core/src/tools/ask-user/AskUserHandler",
 ) {
   static Live: Layer.Layer<AskUserHandler, never, EventStore> = Layer.effect(
     AskUserHandler,

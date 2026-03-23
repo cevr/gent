@@ -1,4 +1,4 @@
-import { Effect, Ref } from "effect"
+import { Effect, Ref, Schema } from "effect"
 import {
   AgentSwitched,
   EventStore,
@@ -35,6 +35,8 @@ export interface DebugScenarioParams {
 const makeText = (text: string) => new TextPart({ type: "text", text })
 
 const asToolCallId = (value: string) => value as ToolCallId
+const DebugJson = Schema.fromJsonString(Schema.Unknown)
+const encodeDebugJson = Schema.encodeSync(DebugJson)
 
 const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
   new ToolResultPart({
@@ -264,7 +266,7 @@ const runDelegateScenario = (
         toolCallId: childReadToolCallId,
         toolName: "read",
         summary: "182 lines from message-list.tsx",
-        output: JSON.stringify({
+        output: encodeDebugJson({
           path: `${params.cwd}/apps/tui/src/components/message-list.tsx`,
           lineCount: 182,
           truncated: false,
@@ -290,7 +292,7 @@ const runDelegateScenario = (
         toolCallId: childGrepToolCallId,
         toolName: "grep",
         summary: "3 matches in 2 files",
-        output: JSON.stringify({
+        output: encodeDebugJson({
           matches: [
             {
               file: `${params.cwd}/apps/tui/src/components/message-list.tsx`,
@@ -418,7 +420,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         toolCallId: delegateToolCallId,
         toolName: "delegate",
         summary: "1 sub-agent completed",
-        output: JSON.stringify({
+        output: encodeDebugJson({
           output: "Reviewer finished.",
           metadata: {
             mode: "parallel",
@@ -453,7 +455,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         toolCallId: codeReviewToolCallId,
         toolName: "code_review",
         summary: "1 comment",
-        output: JSON.stringify({
+        output: encodeDebugJson({
           summary: { critical: 0, high: 0, medium: 1, low: 0 },
           comments: [
             {
@@ -486,7 +488,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         toolCallId: searchSessionsToolCallId,
         toolName: "search_sessions",
         summary: "2 matches in 1 session",
-        output: JSON.stringify({
+        output: encodeDebugJson({
           totalMatches: 2,
           sessions: [
             {
@@ -520,7 +522,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         toolCallId: readSessionToolCallId,
         toolName: "read_session",
         summary: "Extracted session summary",
-        output: JSON.stringify({
+        output: encodeDebugJson({
           sessionId: "019debug1-session",
           extracted: true,
           goal: "Understand the renderer cleanup thread",
@@ -616,8 +618,9 @@ const runTurnLifecycle = (params: DebugScenarioParams) =>
     }
   })
 
-export const startDebugScenario = (params: DebugScenarioParams) =>
-  Effect.gen(function* () {
-    yield* Effect.forkDetach(runTaskLifecycle(params))
-    yield* Effect.forkDetach(runTurnLifecycle(params))
-  }).pipe(Effect.withSpan("DebugScenario.start"))
+export const startDebugScenario = Effect.fn("DebugScenario.start")(function* (
+  params: DebugScenarioParams,
+) {
+  yield* Effect.forkDetach(runTaskLifecycle(params))
+  yield* Effect.forkDetach(runTurnLifecycle(params))
+})

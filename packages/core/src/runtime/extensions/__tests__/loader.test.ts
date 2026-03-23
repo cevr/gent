@@ -18,7 +18,7 @@ const makeLoaded = (
       action: "read" as const,
       description: `test tool ${name}`,
       params: {} as never,
-      execute: () => Effect.succeed(undefined),
+      execute: () => Effect.void,
     })),
     agents:
       agentNames.length > 0

@@ -26,7 +26,7 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
   })
 
 export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService>()(
-  "@gent/runtime/src/agent/tool-runner/ToolRunner",
+  "@gent/core/src/runtime/agent/tool-runner/ToolRunner",
 ) {
   static Live: Layer.Layer<ToolRunner, never, ExtensionRegistry | Permission | PermissionHandler> =
     Layer.effect(

@@ -5,9 +5,8 @@
  * to show nesting. Used by both TUI (embedded) and standalone server.
  */
 
-import { appendFileSync, writeFileSync } from "node:fs"
-import type { ServiceMap } from "effect"
-import { Config, Effect, Layer, Option, Tracer, Exit, Cause } from "effect"
+import type { ServiceMap, PlatformError, Scope } from "effect"
+import { Config, Effect, FileSystem, Layer, Option, Tracer, Exit, Cause } from "effect"
 
 const LOG_PATH = "/tmp/gent-trace.log"
 
@@ -16,14 +15,8 @@ const timestamp = () => {
   return `[${d.toTimeString().slice(0, 8)}.${String(d.getMilliseconds()).padStart(3, "0")}]`
 }
 
-export const clearTraceLog = () => writeFileSync(LOG_PATH, "")
-
-const writeLine = (line: string) => {
-  try {
-    appendFileSync(LOG_PATH, line + "\n")
-  } catch {
-    // ignore write errors
-  }
+export const clearTraceLog = () => {
+  void Bun.write(LOG_PATH, "")
 }
 
 const formatTraceValue = (value: unknown): string => {
@@ -74,15 +67,18 @@ class GentSpan implements Tracer.Span {
 
   private depth: number
 
-  constructor(options: {
-    readonly name: string
-    readonly parent: Option.Option<Tracer.AnySpan>
-    readonly annotations: ServiceMap.ServiceMap<never>
-    readonly links: Array<Tracer.SpanLink>
-    readonly startTime: bigint
-    readonly kind: Tracer.SpanKind
-    readonly sampled: boolean
-  }) {
+  constructor(
+    options: {
+      readonly name: string
+      readonly parent: Option.Option<Tracer.AnySpan>
+      readonly annotations: ServiceMap.ServiceMap<never>
+      readonly links: Array<Tracer.SpanLink>
+      readonly startTime: bigint
+      readonly kind: Tracer.SpanKind
+      readonly sampled: boolean
+    },
+    private readonly writeLine: (line: string) => void,
+  ) {
     this.name = options.name
     this.parent = options.parent
     this.annotations = options.annotations
@@ -119,7 +115,7 @@ class GentSpan implements Tracer.Span {
     if (event === "START") icon = ">"
     else if (event === "END") icon = "<"
     else if (event === "ERROR") icon = "!"
-    writeLine(
+    this.writeLine(
       `${timestamp()} [${traceShort}] ${indent}${icon} ${message}${
         extra !== undefined && extra.length > 0 ? ` ${extra}` : ""
       }`,
@@ -169,20 +165,38 @@ class GentSpan implements Tracer.Span {
   }
 }
 
-export function makeGentTracer(): Tracer.Tracer {
+export function makeGentTracer(writeLine: (line: string) => void): Tracer.Tracer {
   return Tracer.make({
-    span: (options) => new GentSpan(options),
+    span: (options) => new GentSpan(options, writeLine),
   })
 }
 
 /** Provides the GentTracer as the Effect Tracer. */
-export const GentTracerLive: Layer.Layer<never> = Layer.succeed(Tracer.Tracer, makeGentTracer())
+export const GentTracerLive: Layer.Layer<
+  never,
+  PlatformError.PlatformError,
+  FileSystem.FileSystem | Scope.Scope
+> = Layer.effect(
+  Tracer.Tracer,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const traceFile = yield* fs.open(LOG_PATH, { flag: "a+" })
+    const encoder = new TextEncoder()
+    const writeLine = (line: string) => {
+      void Effect.runFork(Effect.ignore(traceFile.write(encoder.encode(line + "\n"))))
+    }
+    return makeGentTracer(writeLine)
+  }),
+)
 
 /** Clear trace log — call at startup (not in subprocess mode). */
-export const clearTraceLogIfRoot: Layer.Layer<never> = Layer.unwrap(
+export const clearTraceLogIfRoot: Layer.Layer<never, never, FileSystem.FileSystem> = Layer.unwrap(
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
     const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
-    if (!isSubprocess) clearTraceLog()
+    if (!isSubprocess) {
+      yield* Effect.ignore(fs.writeFileString(LOG_PATH, ""))
+    }
     return Layer.empty
   }).pipe(Effect.catchEager(() => Effect.succeed(Layer.empty))),
 )

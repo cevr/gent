@@ -2,6 +2,7 @@
 import { Effect } from "effect"
 import type {
   ExtensionKind,
+  ExtensionHookMap,
   Interceptor,
   LoadedExtension,
   Observer,
@@ -13,13 +14,16 @@ import type {
 // Type safety is enforced at the registration site (defineExtension / ExtensionHookMap).
 
 export interface CompiledHookMap {
-  readonly runInterceptor: (
-    key: string,
-    input: any,
-    base: (input: any) => Effect.Effect<any>,
-  ) => Effect.Effect<any>
+  readonly runInterceptor: <K extends keyof ExtensionHookMap>(
+    key: K,
+    input: Parameters<ExtensionHookMap[K]>[0],
+    base: (input: Parameters<ExtensionHookMap[K]>[0]) => ReturnType<ExtensionHookMap[K]>,
+  ) => ReturnType<ExtensionHookMap[K]>
 
-  readonly notifyObservers: (key: string, event: any) => Effect.Effect<void>
+  readonly notifyObservers: <K extends keyof ExtensionHookMap>(
+    key: K,
+    event: Parameters<ExtensionHookMap[K]>[0],
+  ) => Effect.Effect<void, never, never>
 }
 
 const SCOPE_ORDER: Record<ExtensionKind, number> = { builtin: 0, user: 1, project: 2 }
@@ -46,8 +50,8 @@ export const compileHooks = (extensions: ReadonlyArray<LoadedExtension>): Compil
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-  const interceptorChains = new Map<string, Array<Interceptor<any, any, any, any>>>()
-  const observerLists = new Map<string, Array<Observer<any, any, any>>>()
+  const interceptorChains = new Map<string, Array<Interceptor<unknown, unknown, never, never>>>()
+  const observerLists = new Map<string, Array<Observer<unknown, never, never>>>()
 
   for (const ext of sorted) {
     const hooks = ext.setup.hooks
@@ -57,39 +61,41 @@ export const compileHooks = (extensions: ReadonlyArray<LoadedExtension>): Compil
       if (hook === undefined) continue
       if (INTERCEPTOR_KEYS.has(key)) {
         const chain = interceptorChains.get(key) ?? []
-        chain.push(hook as Interceptor<any, any, any, any>)
+        chain.push(hook as Interceptor<unknown, unknown, never, never>)
         interceptorChains.set(key, chain)
       } else {
         const list = observerLists.get(key) ?? []
-        list.push(hook as Observer<any, any, any>)
+        list.push(hook as Observer<unknown, never, never>)
         observerLists.set(key, list)
       }
     }
   }
 
-  const runInterceptor = (
-    key: string,
-    input: any,
-    base: (input: any) => Effect.Effect<any>,
-  ): Effect.Effect<any> => {
+  const runInterceptor = <K extends keyof ExtensionHookMap>(
+    key: K,
+    input: Parameters<ExtensionHookMap[K]>[0],
+    base: (input: Parameters<ExtensionHookMap[K]>[0]) => ReturnType<ExtensionHookMap[K]>,
+  ): ReturnType<ExtensionHookMap[K]> => {
     const chain = interceptorChains.get(key)
     if (chain === undefined || chain.length === 0) return base(input)
     // Left fold: builtin wraps base, project wraps that → project outermost
-    let composed: (i: any) => Effect.Effect<any, any, any> = base
+    let composed = base as (i: unknown) => Effect.Effect<unknown, never, never>
     for (const interceptor of chain) {
       const prev = composed
-      composed = (i: any) => interceptor(i, prev) as Effect.Effect<any, any, any>
+      composed = (i: unknown) => interceptor(i, prev) as Effect.Effect<unknown, never, never>
     }
-    return composed(input) as Effect.Effect<any>
+    return composed(input) as ReturnType<ExtensionHookMap[K]>
   }
 
-  const notifyObservers = (key: string, event: any): Effect.Effect<void> => {
+  const notifyObservers = <K extends keyof ExtensionHookMap>(
+    key: K,
+    event: Parameters<ExtensionHookMap[K]>[0],
+  ): Effect.Effect<void, never, never> => {
     const list = observerLists.get(key)
     if (list === undefined || list.length === 0) return Effect.void
     return Effect.forEach(
       list,
-      (observer: Observer<any, any, any>) =>
-        observer(event).pipe(Effect.catchDefect(() => Effect.void)) as Effect.Effect<void>,
+      (observer) => observer(event).pipe(Effect.catchDefect(() => Effect.void)),
       { discard: true },
     )
   }

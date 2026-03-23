@@ -133,9 +133,45 @@ const buildProviders = (authStore: AuthStoreService): Record<ProviderId, Provide
             }),
         }),
     },
-    bedrock: { methods: methodsDefault, authorize: () => Effect.succeed(undefined) },
-    google: { methods: methodsDefault, authorize: () => Effect.succeed(undefined) },
-    mistral: { methods: methodsDefault, authorize: () => Effect.succeed(undefined) },
+    bedrock: {
+      methods: methodsDefault,
+      authorize: () =>
+        Effect.sync(
+          () =>
+            undefined as
+              | {
+                  authorization: AuthorizationInput
+                  callback: PendingCallback
+                }
+              | undefined,
+        ),
+    },
+    google: {
+      methods: methodsDefault,
+      authorize: () =>
+        Effect.sync(
+          () =>
+            undefined as
+              | {
+                  authorization: AuthorizationInput
+                  callback: PendingCallback
+                }
+              | undefined,
+        ),
+    },
+    mistral: {
+      methods: methodsDefault,
+      authorize: () =>
+        Effect.sync(
+          () =>
+            undefined as
+              | {
+                  authorization: AuthorizationInput
+                  callback: PendingCallback
+                }
+              | undefined,
+        ),
+    },
   } as const
 }
 
@@ -156,7 +192,7 @@ export interface ProviderAuthService {
 }
 
 export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthService>()(
-  "@gent/providers/src/provider-auth/ProviderAuth",
+  "@gent/core/src/providers/provider-auth/ProviderAuth",
 ) {
   static Live: Layer.Layer<ProviderAuth, never, AuthStore> = Layer.effect(
     ProviderAuth,

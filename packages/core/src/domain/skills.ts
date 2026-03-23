@@ -24,7 +24,9 @@ export interface SkillsService {
 
 // Skills Service Tag
 
-export class Skills extends ServiceMap.Service<Skills, SkillsService>()("@gent/core/src/skills") {
+export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
+  "@gent/core/src/domain/skills",
+) {
   static Live = (options: {
     cwd: string
     globalDir: string

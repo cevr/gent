@@ -107,7 +107,7 @@ export class SubagentRunnerConfig extends ServiceMap.Service<
     readonly systemPrompt: string
     readonly timeoutMs?: number
   }
->()("@gent/runtime/src/agent/subagent-runner/SubagentRunnerConfig") {
+>()("@gent/core/src/runtime/agent/subagent-runner/SubagentRunnerConfig") {
   static Live = (config: {
     subprocessBinaryPath?: string
     dbPath?: string

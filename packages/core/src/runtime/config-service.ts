@@ -20,7 +20,7 @@ export interface ConfigServiceService {
 }
 
 export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServiceService>()(
-  "@gent/runtime/src/config-service/ConfigService",
+  "@gent/core/src/runtime/config-service/ConfigService",
 ) {
   /** Relative path from $HOME for user config */
   static USER_CONFIG_RELATIVE = ".gent/config.json"
@@ -106,43 +106,39 @@ export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServi
       yield* loadConfig
 
       const service: ConfigServiceService = {
-        get: () =>
-          Effect.gen(function* () {
-            const user = yield* Ref.get(userConfigRef)
-            const project = yield* Ref.get(projectConfigRef)
-            return mergeConfigs(user, project)
-          }).pipe(Effect.withSpan("ConfigService.get")),
+        get: Effect.fn("ConfigService.get")(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return mergeConfigs(user, project)
+        }),
 
-        set: (partial) =>
-          Effect.gen(function* () {
-            const current = yield* Ref.get(userConfigRef)
-            const updated = new UserConfig({
-              permissions: partial.permissions ?? current.permissions,
-            })
-            yield* Ref.set(userConfigRef, updated)
-            yield* saveUserConfig(updated)
-          }).pipe(Effect.withSpan("ConfigService.set")),
+        set: Effect.fn("ConfigService.set")(function* (partial) {
+          const current = yield* Ref.get(userConfigRef)
+          const updated = new UserConfig({
+            permissions: partial.permissions ?? current.permissions,
+          })
+          yield* Ref.set(userConfigRef, updated)
+          yield* saveUserConfig(updated)
+        }),
 
-        getPermissionRules: () =>
-          Effect.gen(function* () {
-            const user = yield* Ref.get(userConfigRef)
-            const project = yield* Ref.get(projectConfigRef)
-            return [...(project.permissions ?? []), ...(user.permissions ?? [])]
-          }).pipe(Effect.withSpan("ConfigService.getPermissionRules")),
+        getPermissionRules: Effect.fn("ConfigService.getPermissionRules")(function* () {
+          const user = yield* Ref.get(userConfigRef)
+          const project = yield* Ref.get(projectConfigRef)
+          return [...(project.permissions ?? []), ...(user.permissions ?? [])]
+        }),
 
-        addPermissionRule: (rule) =>
-          Effect.gen(function* () {
-            const current = yield* Ref.get(userConfigRef)
-            const permissions = [...(current.permissions ?? []), rule]
-            const updated = new UserConfig({
-              permissions,
-            })
-            yield* Ref.set(userConfigRef, updated)
-            yield* saveUserConfig(updated)
-          }).pipe(Effect.withSpan("ConfigService.addPermissionRule")),
+        addPermissionRule: Effect.fn("ConfigService.addPermissionRule")(function* (rule) {
+          const current = yield* Ref.get(userConfigRef)
+          const permissions = [...(current.permissions ?? []), rule]
+          const updated = new UserConfig({
+            permissions,
+          })
+          yield* Ref.set(userConfigRef, updated)
+          yield* saveUserConfig(updated)
+        }),
 
-        removePermissionRule: (tool, pattern) =>
-          Effect.gen(function* () {
+        removePermissionRule: Effect.fn("ConfigService.removePermissionRule")(
+          function* (tool, pattern) {
             const current = yield* Ref.get(userConfigRef)
             const permissions = (current.permissions ?? []).filter(
               (r) => !(r.tool === tool && r.pattern === pattern),
@@ -152,52 +148,52 @@ export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServi
             })
             yield* Ref.set(userConfigRef, updated)
             yield* saveUserConfig(updated)
-          }).pipe(Effect.withSpan("ConfigService.removePermissionRule")),
+          },
+        ),
 
-        loadInstructions: (cwd) =>
-          Effect.gen(function* () {
-            const readIfExists = (filePath: string): Effect.Effect<string> =>
-              fs.exists(filePath).pipe(
-                Effect.flatMap((exists) =>
-                  exists ? fs.readFileString(filePath) : Effect.succeed(""),
-                ),
-                Effect.map((content) => content.trim()),
-                Effect.catchEager(() => Effect.succeed("")),
-              )
+        loadInstructions: Effect.fn("ConfigService.loadInstructions")(function* (cwd) {
+          const readIfExists = (filePath: string): Effect.Effect<string> =>
+            fs.exists(filePath).pipe(
+              Effect.flatMap((exists) =>
+                exists ? fs.readFileString(filePath) : Effect.succeed(""),
+              ),
+              Effect.map((content) => content.trim()),
+              Effect.catchEager(() => Effect.succeed("")),
+            )
 
-            const readWithFallback = (primary: string, fallback: string): Effect.Effect<string> =>
-              readIfExists(primary).pipe(
-                Effect.flatMap((content) =>
-                  content.length > 0 ? Effect.succeed(content) : readIfExists(fallback),
-                ),
-              )
+          const readWithFallback = (primary: string, fallback: string): Effect.Effect<string> =>
+            readIfExists(primary).pipe(
+              Effect.flatMap((content) =>
+                content.length > 0 ? Effect.succeed(content) : readIfExists(fallback),
+              ),
+            )
 
-            const locations = [
-              {
-                primary: path.join(home, ".gent", "AGENTS.md"),
-                fallback: path.join(home, ".gent", "CLAUDE.md"),
-              },
-              { primary: path.join(cwd, "AGENTS.md"), fallback: path.join(cwd, "CLAUDE.md") },
-              {
-                primary: path.join(cwd, ".gent", "AGENTS.md"),
-                fallback: path.join(cwd, ".gent", "CLAUDE.md"),
-              },
-            ]
+          const locations = [
+            {
+              primary: path.join(home, ".gent", "AGENTS.md"),
+              fallback: path.join(home, ".gent", "CLAUDE.md"),
+            },
+            { primary: path.join(cwd, "AGENTS.md"), fallback: path.join(cwd, "CLAUDE.md") },
+            {
+              primary: path.join(cwd, ".gent", "AGENTS.md"),
+              fallback: path.join(cwd, ".gent", "CLAUDE.md"),
+            },
+          ]
 
-            const contents: string[] = []
-            for (const loc of locations) {
-              const content = yield* readWithFallback(loc.primary, loc.fallback)
-              if (content.length > 0) contents.push(content)
-            }
+          const contents: string[] = []
+          for (const loc of locations) {
+            const content = yield* readWithFallback(loc.primary, loc.fallback)
+            if (content.length > 0) contents.push(content)
+          }
 
-            if (contents.length === 0) {
-              const globalFallback = path.join(home, ".claude", "CLAUDE.md")
-              const content = yield* readIfExists(globalFallback)
-              if (content.length > 0) contents.push(content)
-            }
+          if (contents.length === 0) {
+            const globalFallback = path.join(home, ".claude", "CLAUDE.md")
+            const content = yield* readIfExists(globalFallback)
+            if (content.length > 0) contents.push(content)
+          }
 
-            return contents.join("\n---\n")
-          }).pipe(Effect.withSpan("ConfigService.loadInstructions")),
+          return contents.join("\n---\n")
+        }),
       }
 
       return service

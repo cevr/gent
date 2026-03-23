@@ -1,8 +1,6 @@
-import { Effect, Schema } from "effect"
+import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { Agents, SubagentRunnerService } from "../domain/agent.js"
-import * as path from "node:path"
-import * as fs from "node:fs/promises"
 import { $ } from "bun"
 import * as os from "node:os"
 
@@ -65,7 +63,7 @@ function parseSpec(spec: string): ParsedSpec {
   return { type: "github", name: spec, version: undefined }
 }
 
-function getCachePath(cacheDir: string, spec: string): string {
+function getCachePath(path: Path.Path, cacheDir: string, spec: string): string {
   const parsed = parseSpec(spec)
   switch (parsed.type) {
     case "github":
@@ -91,30 +89,29 @@ export const LibrarianTool = defineTool({
   params: LibrarianParams,
   execute: Effect.fn("LibrarianTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
 
     const home = os.homedir()
     const cacheDir = path.join(home, ".cache", "repo")
-    const cachePath = getCachePath(cacheDir, params.spec)
+    const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
     // Ensure repo is cached
-    const exists = yield* Effect.tryPromise({
-      try: () =>
-        fs
-          .access(cachePath)
-          .then(() => true)
-          .catch(() => false),
-      catch: () =>
-        new LibrarianError({
-          message: "Failed to check cache",
-          spec: params.spec,
-        }),
-    })
+    const exists = yield* fs.exists(cachePath).pipe(
+      Effect.mapError(
+        () =>
+          new LibrarianError({
+            message: "Failed to check cache",
+            spec: params.spec,
+          }),
+      ),
+    )
 
     if (!exists && parsed.type === "github") {
       yield* Effect.tryPromise({
         try: async () => {
-          await fs.mkdir(path.dirname(cachePath), { recursive: true })
+          await Effect.runPromise(fs.makeDirectory(path.dirname(cachePath), { recursive: true }))
           const url = `https://github.com/${parsed.name}.git`
           const args = ["git", "clone", "--depth", "100"]
           if (parsed.version !== undefined) {

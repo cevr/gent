@@ -503,7 +503,7 @@ export const matchesEventFilter = (
 // EventStore Service
 
 export class EventStore extends ServiceMap.Service<EventStore, EventStoreService>()(
-  "@gent/core/src/event/EventStore",
+  "@gent/core/src/domain/event/EventStore",
 ) {
   static Memory: Layer.Layer<EventStore> = Layer.effect(
     EventStore,

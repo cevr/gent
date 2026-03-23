@@ -32,7 +32,7 @@ const REQUIRED_PROVIDERS: readonly ProviderId[] = (() => {
 })()
 
 export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()(
-  "@gent/core/src/auth-guard/AuthGuard",
+  "@gent/core/src/domain/auth-guard/AuthGuard",
 ) {
   static Live: Layer.Layer<AuthGuard, never, AuthStore> = Layer.effect(
     AuthGuard,
@@ -45,7 +45,7 @@ export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()
         for (const provider of SUPPORTED_PROVIDERS) {
           const storedInfo = yield* authStore
             .get(provider.id)
-            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+            .pipe(Effect.catchEager(() => Effect.void))
           const hasStored = storedInfo !== undefined
           const required = requiredSet.has(provider.id)
 

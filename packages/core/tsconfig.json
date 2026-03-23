@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../tsconfig.lsp.json",
   "compilerOptions": {
     "noEmit": true
   },

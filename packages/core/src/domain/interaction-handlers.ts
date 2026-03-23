@@ -44,7 +44,7 @@ export interface PermissionHandlerService {
 export class PermissionHandler extends ServiceMap.Service<
   PermissionHandler,
   PermissionHandlerService
->()("@gent/core/src/interaction-handlers/PermissionHandler") {
+>()("@gent/core/src/domain/interaction-handlers/PermissionHandler") {
   static Live: Layer.Layer<PermissionHandler, never, EventStore> = Layer.effect(
     PermissionHandler,
     Effect.gen(function* () {
@@ -86,7 +86,7 @@ export class PermissionHandler extends ServiceMap.Service<
     let index = 0
     return Layer.succeed(PermissionHandler, {
       request: () => Effect.succeed(decisions[index++] ?? "allow"),
-      respond: () => Effect.succeed(undefined),
+      respond: () => Effect.sync(() => undefined as PermissionParams | undefined),
     })
   }
 }
@@ -114,7 +114,7 @@ export interface PromptHandlerService {
 }
 
 export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandlerService>()(
-  "@gent/core/src/interaction-handlers/PromptHandler",
+  "@gent/core/src/domain/interaction-handlers/PromptHandler",
 ) {
   static Live: Layer.Layer<PromptHandler, never, EventStore> = Layer.effect(
     PromptHandler,
@@ -183,7 +183,7 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
     let index = 0
     return Layer.succeed(PromptHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "yes"),
-      respond: () => Effect.succeed(undefined),
+      respond: () => Effect.sync(() => undefined as PromptParams | undefined),
     })
   }
 }
@@ -212,7 +212,7 @@ export interface HandoffHandlerService {
 }
 
 export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHandlerService>()(
-  "@gent/core/src/interaction-handlers/HandoffHandler",
+  "@gent/core/src/domain/interaction-handlers/HandoffHandler",
 ) {
   static Live: Layer.Layer<HandoffHandler, never, EventStore> = Layer.effect(
     HandoffHandler,
@@ -260,7 +260,9 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
 
         claim: (requestId) => {
           const params = interaction.peek(requestId)
-          if (params === undefined || claimed.has(requestId)) return Effect.succeed(undefined)
+          if (params === undefined || claimed.has(requestId)) {
+            return Effect.sync(() => undefined as HandoffParams | undefined)
+          }
           claimed.add(requestId)
           return Effect.succeed(params)
         },
@@ -282,9 +284,9 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
     let index = 0
     return Layer.succeed(HandoffHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "confirm"),
-      peek: () => Effect.succeed(undefined),
-      claim: () => Effect.succeed(undefined),
-      respond: () => Effect.succeed(undefined),
+      peek: () => Effect.sync(() => undefined as HandoffParams | undefined),
+      claim: () => Effect.sync(() => undefined as HandoffParams | undefined),
+      respond: () => Effect.sync(() => undefined as HandoffParams | undefined),
     })
   }
 }

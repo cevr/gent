@@ -132,7 +132,7 @@ function buildProviderOptions(
 }
 
 export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
-  "@gent/providers/src/provider",
+  "@gent/core/src/providers/provider",
 ) {
   static Live: Layer.Layer<Provider, never, ProviderFactory> = Layer.effect(
     Provider,

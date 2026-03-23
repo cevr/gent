@@ -48,7 +48,7 @@ const defaultPromptPath = (title: string | undefined, fileNameSeed: string) => {
 }
 
 export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptPresenterService>()(
-  "@gent/core/src/domain/PromptPresenter",
+  "@gent/core/src/domain/prompt-presenter/PromptPresenter",
 ) {
   static Live: Layer.Layer<
     PromptPresenter,

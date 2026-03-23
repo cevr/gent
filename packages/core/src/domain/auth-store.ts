@@ -40,7 +40,7 @@ export interface AuthStoreService {
 }
 
 export class AuthStore extends ServiceMap.Service<AuthStore, AuthStoreService>()(
-  "@gent/core/src/auth-store/AuthStore",
+  "@gent/core/src/domain/auth-store/AuthStore",
 ) {
   static Live: Layer.Layer<AuthStore, never, AuthStorage> = Layer.effect(
     AuthStore,
@@ -76,9 +76,11 @@ export class AuthStore extends ServiceMap.Service<AuthStore, AuthStoreService>()
       return AuthStore.of({
         get: (provider) =>
           storage.get(provider).pipe(
-            Effect.catchEager(() => Effect.succeed(undefined)),
+            Effect.catchEager(() => Effect.sync(() => undefined as string | undefined)),
             Effect.flatMap((raw) =>
-              raw !== undefined && raw.length > 0 ? decode(raw) : Effect.succeed(undefined),
+              raw !== undefined && raw.length > 0
+                ? decode(raw)
+                : Effect.sync(() => undefined as AuthInfo | undefined),
             ),
             Effect.withSpan("AuthStore.get"),
           ),
@@ -114,7 +116,7 @@ export class AuthStore extends ServiceMap.Service<AuthStore, AuthStoreService>()
                 providers,
                 (provider) =>
                   storage.get(provider).pipe(
-                    Effect.catchEager(() => Effect.succeed(undefined)),
+                    Effect.catchEager(() => Effect.sync(() => undefined as string | undefined)),
                     Effect.flatMap((raw) =>
                       raw !== undefined && raw.length > 0
                         ? decode(raw).pipe(Effect.map((info) => [provider, info] as const))

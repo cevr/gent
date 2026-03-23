@@ -1,7 +1,5 @@
-import { Effect, Schema } from "effect"
+import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import * as path from "node:path"
-import * as fs from "node:fs/promises"
 import { $ } from "bun"
 import * as os from "node:os"
 
@@ -89,7 +87,7 @@ function parseSpec(spec: string): ParsedSpec {
 }
 
 // Get cache path for spec
-function getCachePath(cacheDir: string, spec: string): string {
+function getCachePath(path: Path.Path, cacheDir: string, spec: string): string {
   const parsed = parseSpec(spec)
   switch (parsed.type) {
     case "github":
@@ -114,27 +112,27 @@ export const RepoExplorerTool = defineTool({
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, get paths.",
   params: RepoExplorerParams,
   execute: Effect.fn("RepoExplorerTool.execute")(function* (params) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
     const home = os.homedir()
     const cacheDir = path.join(home, ".cache", "repo")
-    const cachePath = getCachePath(cacheDir, params.spec)
+    const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
     switch (params.action) {
       case "fetch": {
         yield* Effect.tryPromise({
           try: async () => {
-            await fs.mkdir(path.dirname(cachePath), { recursive: true })
+            await Effect.runPromise(fs.makeDirectory(path.dirname(cachePath), { recursive: true }))
 
             if (parsed.type === "github") {
-              // Check if already exists
-              try {
-                await fs.access(cachePath)
+              const exists = await Effect.runPromise(fs.exists(cachePath))
+              if (exists) {
                 if (params.update === true) {
                   await $`git -C ${cachePath} pull --ff-only`.quiet()
                 }
                 return
-              } catch {
-                // Clone
+              } else {
                 const url = `https://github.com/${parsed.name}.git`
                 const args = ["git", "clone", "--depth", "100"]
                 if (parsed.version !== undefined) {
@@ -147,7 +145,7 @@ export const RepoExplorerTool = defineTool({
               // Use npm pack to download
               await $`npm pack ${parsed.name}${parsed.version !== undefined ? `@${parsed.version}` : ""} --pack-destination ${cachePath}`.quiet()
               // Extract
-              const tarballs = await fs.readdir(cachePath)
+              const tarballs = await Effect.runPromise(fs.readDirectory(cachePath))
               const tarball = tarballs.find((f) => f.endsWith(".tgz"))
               if (tarball !== undefined) {
                 await $`tar -xzf ${path.join(cachePath, tarball)} -C ${cachePath}`.quiet()
@@ -166,18 +164,15 @@ export const RepoExplorerTool = defineTool({
       }
 
       case "path": {
-        const exists = yield* Effect.tryPromise({
-          try: () =>
-            fs
-              .access(cachePath)
-              .then(() => true)
-              .catch(() => false),
-          catch: () =>
-            new RepoExplorerError({
-              message: "Failed to check path",
-              spec: params.spec,
-            }),
-        })
+        const exists = yield* fs.exists(cachePath).pipe(
+          Effect.mapError(
+            () =>
+              new RepoExplorerError({
+                message: "Failed to check path",
+                spec: params.spec,
+              }),
+          ),
+        )
         if (!exists) {
           return yield* new RepoExplorerError({
             message: "Not cached. Use fetch first.",
@@ -194,18 +189,15 @@ export const RepoExplorerTool = defineTool({
             spec: params.spec,
           })
         }
-        const exists = yield* Effect.tryPromise({
-          try: () =>
-            fs
-              .access(cachePath)
-              .then(() => true)
-              .catch(() => false),
-          catch: () =>
-            new RepoExplorerError({
-              message: "Failed to check path",
-              spec: params.spec,
-            }),
-        })
+        const exists = yield* fs.exists(cachePath).pipe(
+          Effect.mapError(
+            () =>
+              new RepoExplorerError({
+                message: "Failed to check path",
+                spec: params.spec,
+              }),
+          ),
+        )
         if (!exists) {
           return yield* new RepoExplorerError({
             message: "Not cached. Use fetch first.",

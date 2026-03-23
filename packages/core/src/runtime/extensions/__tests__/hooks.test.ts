@@ -1,5 +1,8 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Ref } from "effect"
+import { Agents } from "../../../domain/agent.js"
+import { SessionStarted } from "../../../domain/event.js"
+import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import { compileHooks } from "../hooks.js"
 
@@ -19,7 +22,11 @@ describe("compileHooks", () => {
     test("runs base when no interceptors registered", async () => {
       const compiled = compileHooks([])
       const result = await Effect.runPromise(
-        compiled.runInterceptor("prompt.system", "hello", (input) => Effect.succeed(input)),
+        compiled.runInterceptor(
+          "prompt.system",
+          { basePrompt: "hello", agent: Agents.cowork },
+          (input) => Effect.succeed(input.basePrompt),
+        ),
       )
       expect(result).toBe("hello")
     })
@@ -36,8 +43,8 @@ describe("compileHooks", () => {
       const result = await Effect.runPromise(
         compiled.runInterceptor(
           "prompt.system",
-          { basePrompt: "hello" },
-          (input: { basePrompt: string }) => Effect.succeed(input.basePrompt),
+          { basePrompt: "hello", agent: Agents.cowork },
+          (input) => Effect.succeed(input.basePrompt),
         ),
       )
       expect(result).toBe("[wrapped] hello")
@@ -72,7 +79,9 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([builtinExt, projectExt])
       await Effect.runPromise(
-        compiled.runInterceptor("prompt.system", "test", () => Effect.succeed("base")),
+        compiled.runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
+          Effect.succeed("base"),
+        ),
       )
 
       // Project is outermost (left fold: builtin wraps base, project wraps that)
@@ -98,7 +107,9 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([extB, extA])
       await Effect.runPromise(
-        compiled.runInterceptor("prompt.system", "test", () => Effect.succeed("base")),
+        compiled.runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
+          Effect.succeed("base"),
+        ),
       )
 
       // Sorted: [a, b]. Left fold: a wraps base, b wraps a. b is outermost.
@@ -109,7 +120,15 @@ describe("compileHooks", () => {
   describe("observers", () => {
     test("no observers = no-op", async () => {
       const compiled = compileHooks([])
-      await Effect.runPromise(compiled.notifyObservers("session.start", {}))
+      await Effect.runPromise(
+        compiled.notifyObservers(
+          "session.start",
+          new SessionStarted({
+            sessionId: "s1" as SessionId,
+            branchId: "b1" as BranchId,
+          }),
+        ),
+      )
     })
 
     test("fires all observers", async () => {
@@ -127,7 +146,13 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([ext1, ext2])
       await Effect.runPromise(
-        compiled.notifyObservers("session.start", { sessionId: "s1", branchId: "b1" }),
+        compiled.notifyObservers(
+          "session.start",
+          new SessionStarted({
+            sessionId: "s1" as SessionId,
+            branchId: "b1" as BranchId,
+          }),
+        ),
       )
 
       const result = await Effect.runPromise(Ref.get(ref))
@@ -146,7 +171,15 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([extBad, extGood])
-      await Effect.runPromise(compiled.notifyObservers("session.start", {}))
+      await Effect.runPromise(
+        compiled.notifyObservers(
+          "session.start",
+          new SessionStarted({
+            sessionId: "s1" as SessionId,
+            branchId: "b1" as BranchId,
+          }),
+        ),
+      )
 
       const result = await Effect.runPromise(Ref.get(ref))
       expect(result).toEqual(["good"])

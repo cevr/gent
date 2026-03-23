@@ -4,7 +4,7 @@
 
 import { FileSystem, Effect } from "effect"
 import { homedir } from "os"
-import { join } from "path"
+import { joinPath } from "../platform/path-runtime"
 
 const MAX_LINES = 2000
 const MAX_BYTES = 50 * 1024 // 50KB
@@ -13,6 +13,10 @@ export interface ShellResult {
   output: string
   truncated: boolean
   savedPath?: string
+}
+
+export class ShellCommandError extends Error {
+  readonly _tag = "ShellCommandError"
 }
 
 /**
@@ -66,18 +70,18 @@ const runCommand = (
       await proc.exited
       return { stdout, stderr }
     },
-    catch: (e) => e as Error,
+    catch: (e) => new ShellCommandError(e instanceof Error ? e.message : String(e)),
   }).pipe(Effect.orDie)
 
 const saveFullOutput = (output: string, command: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const toolOutputDir = join(homedir(), "tool-output")
+    const toolOutputDir = joinPath(homedir(), "tool-output")
     yield* fs.makeDirectory(toolOutputDir, { recursive: true })
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
     const filename = `shell_${timestamp}.txt`
-    const filepath = join(toolOutputDir, filename)
+    const filepath = joinPath(toolOutputDir, filename)
 
     const header = `# Command: ${command}\n# Timestamp: ${new Date().toISOString()}\n\n`
     yield* fs.writeFileString(filepath, header + output)

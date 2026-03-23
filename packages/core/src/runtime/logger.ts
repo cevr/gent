@@ -8,10 +8,10 @@
  * Uses Effect.withLogSpan for timing data.
  */
 
-import { Cause, Config, Effect, Layer, Logger, Option, ServiceMap } from "effect"
+import { Cause, Config, Effect, FileSystem, Layer, Logger, Option, ServiceMap } from "effect"
+import type { PlatformError, Scope } from "effect"
 import type { LogLevel } from "effect/LogLevel"
 import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
-import { appendFileSync, writeFileSync } from "node:fs"
 
 // =============================================================================
 // Helpers
@@ -151,8 +151,8 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
 // JSON File Logger
 // =============================================================================
 
-const makeJsonFileLogger = (path: string): Logger.Logger<unknown, void> =>
-  Logger.make(({ logLevel, message, fiber, date, cause }) => {
+const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
+  ({ logLevel, message, fiber, date, cause }) => {
     const msg = extractMessage(message)
     const annotations = fiber.getRef(CurrentLogAnnotations)
     const spans = fiber.getRef(CurrentLogSpans)
@@ -183,11 +183,25 @@ const makeJsonFileLogger = (path: string): Logger.Logger<unknown, void> =>
       entry["cause"] = Cause.pretty(cause).split("\n")[0] ?? "unknown error"
     }
 
-    try {
-      appendFileSync(path, JSON.stringify(entry) + "\n")
-    } catch {
-      // ignore write errors
-    }
+    return JSON.stringify(entry)
+  },
+)
+
+const makeJsonFileLogger = (
+  path: string,
+): Effect.Effect<
+  Logger.Logger<unknown, void>,
+  PlatformError.PlatformError,
+  FileSystem.FileSystem | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const logFile = yield* fs.open(path, { flag: "a+" })
+    const encoder = new TextEncoder()
+    return yield* Logger.batched(formatJsonLogger, {
+      window: 250,
+      flush: (output) => Effect.ignore(logFile.write(encoder.encode(output.join("\n") + "\n"))),
+    })
   })
 
 // =============================================================================
@@ -196,20 +210,22 @@ const makeJsonFileLogger = (path: string): Logger.Logger<unknown, void> =>
 
 const DEFAULT_LOG_FILE = "/tmp/gent.log"
 
-const clearLogFile = (path: string): void => {
-  try {
-    writeFileSync(path, "")
-  } catch {
-    // ignore
-  }
-}
+const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* Effect.ignore(fs.writeFileString(path, ""))
+  })
 
 // =============================================================================
 // Exported Layers
 // =============================================================================
 
 /** JSON (file) logger by default. Set GENT_LOG_FORMAT=pretty|both for stderr output. */
-export const GentLogger: Layer.Layer<never> = Layer.unwrap(
+export const GentLogger: Layer.Layer<
+  never,
+  PlatformError.PlatformError,
+  FileSystem.FileSystem | Scope.Scope
+> = Layer.unwrap(
   Effect.gen(function* () {
     const formatOpt = yield* Config.option(Config.string("GENT_LOG_FORMAT"))
     const format = Option.getOrElse(formatOpt, () => "json")
@@ -223,28 +239,45 @@ export const GentLogger: Layer.Layer<never> = Layer.unwrap(
     }
 
     if (format === "both") {
-      if (!isSubprocess) clearLogFile(logFile)
-      return Logger.layer([prettyLogger, makeJsonFileLogger(logFile)])
+      if (!isSubprocess) yield* clearLogFile(logFile)
+      const jsonLogger = yield* makeJsonFileLogger(logFile)
+      return Logger.layer([prettyLogger, jsonLogger])
     }
 
     // json (default)
-    if (!isSubprocess) clearLogFile(logFile)
-    return Logger.layer([makeJsonFileLogger(logFile)])
+    if (!isSubprocess) yield* clearLogFile(logFile)
+    const jsonLogger = yield* makeJsonFileLogger(logFile)
+    return Logger.layer([jsonLogger])
   }).pipe(
-    Effect.catchEager(() => Effect.succeed(Logger.layer([makeJsonFileLogger(DEFAULT_LOG_FILE)]))),
+    Effect.catchEager(() =>
+      makeJsonFileLogger(DEFAULT_LOG_FILE).pipe(
+        Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
+        Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
+      ),
+    ),
   ),
 )
 
 /** JSON-only logger layer (for headless/prod). */
-export const GentLoggerJson: Layer.Layer<never> = Layer.unwrap(
+export const GentLoggerJson: Layer.Layer<
+  never,
+  PlatformError.PlatformError,
+  FileSystem.FileSystem | Scope.Scope
+> = Layer.unwrap(
   Effect.gen(function* () {
     const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
     const logFile = Option.getOrElse(logFileOpt, () => DEFAULT_LOG_FILE)
     const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
-    if (!isSubprocess) clearLogFile(logFile)
-    return Logger.layer([makeJsonFileLogger(logFile)])
+    if (!isSubprocess) yield* clearLogFile(logFile)
+    const jsonLogger = yield* makeJsonFileLogger(logFile)
+    return Logger.layer([jsonLogger])
   }).pipe(
-    Effect.catchEager(() => Effect.succeed(Logger.layer([makeJsonFileLogger(DEFAULT_LOG_FILE)]))),
+    Effect.catchEager(() =>
+      makeJsonFileLogger(DEFAULT_LOG_FILE).pipe(
+        Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
+        Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
+      ),
+    ),
   ),
 )
 

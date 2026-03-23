@@ -399,7 +399,7 @@ export const refreshOpenAIOauth = async (refreshToken: string) => {
 
 const loadOpenAIOAuth = async (authStore: AuthStoreService): Promise<AuthOauth> => {
   const current = await Effect.runPromise(
-    authStore.get("openai").pipe(Effect.catchEager(() => Effect.succeed(undefined))),
+    authStore.get("openai").pipe(Effect.catchEager(() => Effect.void)),
   )
   if (current === undefined || current.type !== "oauth") {
     throw new Error("OpenAI OAuth credentials missing")

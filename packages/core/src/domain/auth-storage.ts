@@ -25,7 +25,7 @@ export interface AuthStorageService {
 // Auth Storage Service Tag
 
 export class AuthStorage extends ServiceMap.Service<AuthStorage, AuthStorageService>()(
-  "@gent/core/src/auth-storage/AuthStorage",
+  "@gent/core/src/domain/auth-storage/AuthStorage",
 ) {
   static LiveSystem = (
     options: {
@@ -102,7 +102,7 @@ export class AuthStorage extends ServiceMap.Service<AuthStorage, AuthStorageServ
           get: (provider) =>
             execSecurity(["find-generic-password", "-s", serviceName, "-a", provider, "-w"]).pipe(
               Effect.map((key) => (key.length > 0 ? key : undefined)),
-              Effect.catchEager(() => Effect.succeed(undefined)),
+              Effect.catchEager(() => Effect.sync(() => undefined as string | undefined)),
             ),
 
           set: (provider, key) =>
@@ -368,7 +368,7 @@ export class AuthStorage extends ServiceMap.Service<AuthStorage, AuthStorageServ
         const readData = (key: CryptoKey): Effect.Effect<AuthData, AuthStorageError> =>
           fs.exists(filePath).pipe(
             Effect.flatMap((exists) => {
-              if (!exists) return Effect.succeed(undefined)
+              if (!exists) return Effect.sync(() => undefined as string | undefined)
               return fs.readFileString(filePath).pipe(Effect.map((content) => content.trim()))
             }),
             Effect.flatMap((content) => {

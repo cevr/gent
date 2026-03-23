@@ -191,19 +191,15 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
 
     const service: ChildSessionTrackerService = {
       track: ({ sessionId, branchId }) =>
-        Effect.gen(function* () {
-          // Subscribe to parent event stream — replays all past events,
-          // so completed children appear via SubagentSpawned/Succeeded replay.
-          yield* FiberSet.run(fiberSet)(
-            Stream.runForEach(
-              eventStore.subscribe({
-                sessionId,
-                branchId,
-              }),
-              (envelope: EventEnvelope) => handleParentEvent(envelope.event),
-            ).pipe(Effect.catchEager(() => Effect.void)),
-          )
-        }),
+        FiberSet.run(fiberSet)(
+          Stream.runForEach(
+            eventStore.subscribe({
+              sessionId,
+              branchId,
+            }),
+            (envelope: EventEnvelope) => handleParentEvent(envelope.event),
+          ).pipe(Effect.catchEager(() => Effect.void)),
+        ),
 
       stop: () =>
         Effect.gen(function* () {

@@ -17,6 +17,8 @@ const decodeTodoItem = Schema.decodeUnknownEffect(TodoItem)
 const EventJson = Schema.fromJsonString(AgentEvent)
 const decodeEvent = Schema.decodeUnknownEffect(EventJson)
 const encodeEvent = Schema.encodeEffect(EventJson)
+const MetadataJson = Schema.fromJsonString(Schema.Unknown)
+const encodeMetadataJson = Schema.encodeSync(MetadataJson)
 // Storage Error
 
 export class StorageError extends Schema.TaggedErrorClass<StorageError>()("StorageError", {
@@ -453,53 +455,49 @@ const makeStorage = Effect.gen(function* () {
 
   return {
     // Sessions
-    createSession: (session) =>
-      Effect.gen(function* () {
+    createSession: Effect.fn("Storage.createSession")(
+      function* (session) {
         let bypass: 0 | 1 | null = null
         if (session.bypass !== undefined) bypass = session.bypass ? 1 : 0
         yield* sql`INSERT INTO sessions (id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${session.name ?? null}, ${session.cwd ?? null}, ${bypass}, ${session.reasoningLevel ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
         return session
-      }).pipe(
-        Effect.mapError(mapError("Failed to create session")),
-        Effect.withSpan("Storage.createSession"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to create session")),
+    ),
 
-    getSession: (id) =>
-      Effect.gen(function* () {
+    getSession: Effect.fn("Storage.getSession")(
+      function* (id) {
         const rows =
           yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id}`
         const row = rows[0]
         if (row === undefined) return undefined
         return sessionFromRow(row)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get session")),
-        Effect.withSpan("Storage.getSession"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get session")),
+    ),
 
-    getLastSessionByCwd: (cwd) =>
-      Effect.gen(function* () {
+    getLastSessionByCwd: Effect.fn("Storage.getLastSessionByCwd")(
+      function* (cwd) {
         const rows =
           yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} ORDER BY updated_at DESC LIMIT 1`
         const row = rows[0]
         if (row === undefined) return undefined
         return sessionFromRow(row)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get last session by cwd")),
-        Effect.withSpan("Storage.getLastSessionByCwd"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get last session by cwd")),
+    ),
 
-    listSessions: () =>
-      Effect.gen(function* () {
+    listSessions: Effect.fn("Storage.listSessions")(
+      function* () {
         const rows =
           yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
         return rows.map(sessionFromRow)
-      }).pipe(
-        Effect.mapError(mapError("Failed to list sessions")),
-        Effect.withSpan("Storage.listSessions"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to list sessions")),
+    ),
 
-    listFirstBranches: () =>
-      Effect.gen(function* () {
+    listFirstBranches: Effect.fn("Storage.listFirstBranches")(
+      function* () {
         const rows = yield* sql<{
           session_id: SessionId
           branch_id: BranchId | null
@@ -515,21 +513,19 @@ const makeStorage = Effect.gen(function* () {
           sessionId: row.session_id,
           branchId: row.branch_id ?? undefined,
         }))
-      }).pipe(
-        Effect.mapError(mapError("Failed to list first branches")),
-        Effect.withSpan("Storage.listFirstBranches"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to list first branches")),
+    ),
 
-    updateSession: (session) =>
-      Effect.gen(function* () {
+    updateSession: Effect.fn("Storage.updateSession")(
+      function* (session) {
         let bypass: 0 | 1 | null = null
         if (session.bypass !== undefined) bypass = session.bypass ? 1 : 0
         yield* sql`UPDATE sessions SET name = ${session.name ?? null}, bypass = ${bypass}, reasoning_level = ${session.reasoningLevel ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id}`
         return session
-      }).pipe(
-        Effect.mapError(mapError("Failed to update session")),
-        Effect.withSpan("Storage.updateSession"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to update session")),
+    ),
 
     deleteSession: (id) =>
       sql`DELETE FROM sessions WHERE id = ${id}`.pipe(
@@ -539,36 +535,33 @@ const makeStorage = Effect.gen(function* () {
       ),
 
     // Branches
-    createBranch: (branch) =>
-      Effect.gen(function* () {
+    createBranch: Effect.fn("Storage.createBranch")(
+      function* (branch) {
         yield* sql`INSERT INTO branches (id, session_id, parent_branch_id, parent_message_id, name, summary, created_at) VALUES (${branch.id}, ${branch.sessionId}, ${branch.parentBranchId ?? null}, ${branch.parentMessageId ?? null}, ${branch.name ?? null}, ${branch.summary ?? null}, ${branch.createdAt.getTime()})`
         return branch
-      }).pipe(
-        Effect.mapError(mapError("Failed to create branch")),
-        Effect.withSpan("Storage.createBranch"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to create branch")),
+    ),
 
-    getBranch: (id) =>
-      Effect.gen(function* () {
+    getBranch: Effect.fn("Storage.getBranch")(
+      function* (id) {
         const rows =
           yield* sql<BranchRow>`SELECT id, session_id, parent_branch_id, parent_message_id, name, summary, created_at FROM branches WHERE id = ${id}`
         const row = rows[0]
         if (row === undefined) return undefined
         return branchFromRow(row)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get branch")),
-        Effect.withSpan("Storage.getBranch"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get branch")),
+    ),
 
-    listBranches: (sessionId) =>
-      Effect.gen(function* () {
+    listBranches: Effect.fn("Storage.listBranches")(
+      function* (sessionId) {
         const rows =
           yield* sql<BranchRow>`SELECT id, session_id, parent_branch_id, parent_message_id, name, summary, created_at FROM branches WHERE session_id = ${sessionId} ORDER BY created_at ASC`
         return rows.map(branchFromRow)
-      }).pipe(
-        Effect.mapError(mapError("Failed to list branches")),
-        Effect.withSpan("Storage.listBranches"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to list branches")),
+    ),
 
     updateBranchSummary: (branchId, summary) =>
       sql`UPDATE branches SET summary = ${summary} WHERE id = ${branchId}`.pipe(
@@ -577,19 +570,18 @@ const makeStorage = Effect.gen(function* () {
         Effect.withSpan("Storage.updateBranchSummary"),
       ),
 
-    countMessages: (branchId) =>
-      Effect.gen(function* () {
+    countMessages: Effect.fn("Storage.countMessages")(
+      function* (branchId) {
         const rows = yield* sql<{
           count: number
         }>`SELECT COUNT(*) as count FROM messages WHERE branch_id = ${branchId}`
         return rows[0]?.count ?? 0
-      }).pipe(
-        Effect.mapError(mapError("Failed to count messages")),
-        Effect.withSpan("Storage.countMessages"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to count messages")),
+    ),
 
-    countMessagesByBranches: (branchIds) =>
-      Effect.gen(function* () {
+    countMessagesByBranches: Effect.fn("Storage.countMessagesByBranches")(
+      function* (branchIds) {
         if (branchIds.length === 0) return new Map<BranchId, number>()
         const rows = yield* sql<{
           branch_id: BranchId
@@ -600,50 +592,46 @@ const makeStorage = Effect.gen(function* () {
           result.set(row.branch_id, row.count)
         }
         return result
-      }).pipe(
-        Effect.mapError(mapError("Failed to count messages by branches")),
-        Effect.withSpan("Storage.countMessagesByBranches"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to count messages by branches")),
+    ),
 
     // Messages
-    createMessage: (message) =>
-      Effect.gen(function* () {
+    createMessage: Effect.fn("Storage.createMessage")(
+      function* (message) {
         const partsJson = yield* encodeMessageParts([...message.parts])
         yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null})`
         yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
         return message
-      }).pipe(
-        Effect.mapError(mapError("Failed to create message")),
-        Effect.withSpan("Storage.createMessage"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to create message")),
+    ),
 
-    getMessage: (id) =>
-      Effect.gen(function* () {
+    getMessage: Effect.fn("Storage.getMessage")(
+      function* (id) {
         const rows =
           yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE id = ${id}`
         const row = rows[0]
         if (row === undefined) return undefined
         const parts = yield* decodeMessageParts(row.parts)
         return messageFromRow(row, parts)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get message")),
-        Effect.withSpan("Storage.getMessage"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get message")),
+    ),
 
-    listMessages: (branchId) =>
-      Effect.gen(function* () {
+    listMessages: Effect.fn("Storage.listMessages")(
+      function* (branchId) {
         const rows =
           yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ${branchId} ORDER BY created_at ASC, id ASC`
         return yield* Effect.forEach(rows, (row) =>
           Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
         )
-      }).pipe(
-        Effect.mapError(mapError("Failed to list messages")),
-        Effect.withSpan("Storage.listMessages"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to list messages")),
+    ),
 
-    deleteMessages: (branchId, afterMessageId) =>
-      Effect.gen(function* () {
+    deleteMessages: Effect.fn("Storage.deleteMessages")(
+      function* (branchId, afterMessageId) {
         if (afterMessageId !== undefined) {
           const msgs = yield* sql<{
             id: string
@@ -656,10 +644,9 @@ const makeStorage = Effect.gen(function* () {
         } else {
           yield* sql`DELETE FROM messages WHERE branch_id = ${branchId}`
         }
-      }).pipe(
-        Effect.mapError(mapError("Failed to delete messages")),
-        Effect.withSpan("Storage.deleteMessages"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to delete messages")),
+    ),
 
     updateMessageTurnDuration: (messageId, durationMs) =>
       sql`UPDATE messages SET turn_duration_ms = ${durationMs} WHERE id = ${messageId}`.pipe(
@@ -669,8 +656,8 @@ const makeStorage = Effect.gen(function* () {
       ),
 
     // Events
-    appendEvent: (event, options) =>
-      Effect.gen(function* () {
+    appendEvent: Effect.fn("Storage.appendEvent")(
+      function* (event, options) {
         const sessionId = getEventSessionId(event)
         if (sessionId === undefined) {
           return yield* new StorageError({ message: "Event missing sessionId" })
@@ -688,13 +675,12 @@ const makeStorage = Effect.gen(function* () {
           createdAt,
           ...(traceId !== undefined ? { traceId } : {}),
         })
-      }).pipe(
-        Effect.mapError(mapError("Failed to append event")),
-        Effect.withSpan("Storage.appendEvent"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to append event")),
+    ),
 
-    listEvents: ({ sessionId, branchId, afterId }) =>
-      Effect.gen(function* () {
+    listEvents: Effect.fn("Storage.listEvents")(
+      function* ({ sessionId, branchId, afterId }) {
         const sinceId = afterId ?? 0
         const rows =
           branchId !== undefined
@@ -712,13 +698,12 @@ const makeStorage = Effect.gen(function* () {
               }),
           ),
         )
-      }).pipe(
-        Effect.mapError(mapError("Failed to list events")),
-        Effect.withSpan("Storage.listEvents"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to list events")),
+    ),
 
-    getLatestEventId: ({ sessionId, branchId }) =>
-      Effect.gen(function* () {
+    getLatestEventId: Effect.fn("Storage.getLatestEventId")(
+      function* ({ sessionId, branchId }) {
         const rows =
           branchId !== undefined
             ? yield* sql<{
@@ -728,25 +713,23 @@ const makeStorage = Effect.gen(function* () {
                 id: number
               }>`SELECT id FROM events WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`
         return rows[0]?.id
-      }).pipe(
-        Effect.mapError(mapError("Failed to get latest event id")),
-        Effect.withSpan("Storage.getLatestEventId"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get latest event id")),
+    ),
 
-    getLatestEventTag: ({ sessionId, branchId, tags }) =>
-      Effect.gen(function* () {
+    getLatestEventTag: Effect.fn("Storage.getLatestEventTag")(
+      function* ({ sessionId, branchId, tags }) {
         if (tags.length === 0) return undefined
         const rows = yield* sql<{
           event_tag: string
         }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
         return rows[0]?.event_tag
-      }).pipe(
-        Effect.mapError(mapError("Failed to get latest event tag")),
-        Effect.withSpan("Storage.getLatestEventTag"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get latest event tag")),
+    ),
 
-    getLatestEvent: ({ sessionId, branchId, tags }) =>
-      Effect.gen(function* () {
+    getLatestEvent: Effect.fn("Storage.getLatestEvent")(
+      function* ({ sessionId, branchId, tags }) {
         if (tags.length === 0) return undefined
         const rows = yield* sql<{
           event_json: string
@@ -754,14 +737,13 @@ const makeStorage = Effect.gen(function* () {
         const row = rows[0]
         if (row === undefined) return undefined
         return yield* decodeEvent(row.event_json)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get latest event")),
-        Effect.withSpan("Storage.getLatestEvent"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get latest event")),
+    ),
 
     // Todos
-    listTodos: (branchId) =>
-      Effect.gen(function* () {
+    listTodos: Effect.fn("Storage.listTodos")(
+      function* (branchId) {
         const rows = yield* sql<{
           id: string
           content: string
@@ -780,10 +762,9 @@ const makeStorage = Effect.gen(function* () {
             updatedAt: row.updated_at,
           }),
         )
-      }).pipe(
-        Effect.mapError(mapError("Failed to list todos")),
-        Effect.withSpan("Storage.listTodos"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to list todos")),
+    ),
 
     replaceTodos: (branchId, todos) =>
       sql
@@ -800,46 +781,46 @@ const makeStorage = Effect.gen(function* () {
           Effect.withSpan("Storage.replaceTodos"),
         ),
     // Tasks
-    createTask: (task) =>
-      Effect.gen(function* () {
-        let meta: string | null = null
-        if (task.metadata !== undefined) {
-          try {
-            meta = JSON.stringify(task.metadata)
-          } catch {
-            return yield* new StorageError({ message: "Task metadata is not JSON-serializable" })
-          }
-        }
+    createTask: Effect.fn("Storage.createTask")(
+      function* (task) {
+        const meta =
+          task.metadata === undefined
+            ? null
+            : yield* Effect.try({
+                try: () => encodeMetadataJson(task.metadata),
+                catch: () =>
+                  new StorageError({ message: "Task metadata is not JSON-serializable" }),
+              })
         yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
         return task
-      }).pipe(
-        Effect.mapError(mapError("Failed to create task")),
-        Effect.withSpan("Storage.createTask"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to create task")),
+    ),
 
-    getTask: (id) =>
-      Effect.gen(function* () {
+    getTask: Effect.fn("Storage.getTask")(
+      function* (id) {
         const rows =
           yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
         const row = rows[0]
         if (row === undefined) return undefined
         return taskFromRow(row)
-      }).pipe(Effect.mapError(mapError("Failed to get task")), Effect.withSpan("Storage.getTask")),
+      },
+      Effect.mapError(mapError("Failed to get task")),
+    ),
 
-    listTasks: (sessionId, branchId) =>
-      Effect.gen(function* () {
+    listTasks: Effect.fn("Storage.listTasks")(
+      function* (sessionId, branchId) {
         const rows =
           branchId !== undefined
             ? yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} AND branch_id = ${branchId} ORDER BY created_at ASC`
             : yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} ORDER BY created_at ASC`
         return rows.map(taskFromRow)
-      }).pipe(
-        Effect.mapError(mapError("Failed to list tasks")),
-        Effect.withSpan("Storage.listTasks"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to list tasks")),
+    ),
 
-    updateTask: (id, fields) =>
-      Effect.gen(function* () {
+    updateTask: Effect.fn("Storage.updateTask")(
+      function* (id, fields) {
         const now = Date.now()
         // Validate status if provided
         const VALID_STATUSES = new Set(["pending", "in_progress", "completed", "failed"])
@@ -870,11 +851,12 @@ const makeStorage = Effect.gen(function* () {
           if (fields.metadata === null || fields.metadata === undefined) {
             params.push(null)
           } else {
-            try {
-              params.push(JSON.stringify(fields.metadata))
-            } catch {
-              return yield* new StorageError({ message: "Metadata is not JSON-serializable" })
-            }
+            params.push(
+              yield* Effect.try({
+                try: () => encodeMetadataJson(fields.metadata),
+                catch: () => new StorageError({ message: "Metadata is not JSON-serializable" }),
+              }),
+            )
           }
         }
 
@@ -886,19 +868,17 @@ const makeStorage = Effect.gen(function* () {
         const row = rows[0]
         if (row === undefined) return undefined
         return taskFromRow(row)
-      }).pipe(
-        Effect.mapError(mapError("Failed to update task")),
-        Effect.withSpan("Storage.updateTask"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to update task")),
+    ),
 
-    deleteTask: (id) =>
-      Effect.gen(function* () {
+    deleteTask: Effect.fn("Storage.deleteTask")(
+      function* (id) {
         yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
         yield* sql`DELETE FROM tasks WHERE id = ${id}`
-      }).pipe(
-        Effect.mapError(mapError("Failed to delete task")),
-        Effect.withSpan("Storage.deleteTask"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to delete task")),
+    ),
 
     addTaskDep: (taskId, blockedById) =>
       sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`.pipe(
@@ -914,42 +894,39 @@ const makeStorage = Effect.gen(function* () {
         Effect.withSpan("Storage.removeTaskDep"),
       ),
 
-    getTaskDeps: (taskId) =>
-      Effect.gen(function* () {
+    getTaskDeps: Effect.fn("Storage.getTaskDeps")(
+      function* (taskId) {
         const rows = yield* sql<{
           blocked_by_id: TaskId
         }>`SELECT blocked_by_id FROM task_deps WHERE task_id = ${taskId}`
         return rows.map((r) => r.blocked_by_id)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get task deps")),
-        Effect.withSpan("Storage.getTaskDeps"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get task deps")),
+    ),
 
-    getTaskDependents: (taskId) =>
-      Effect.gen(function* () {
+    getTaskDependents: Effect.fn("Storage.getTaskDependents")(
+      function* (taskId) {
         const rows = yield* sql<{
           task_id: TaskId
         }>`SELECT task_id FROM task_deps WHERE blocked_by_id = ${taskId}`
         return rows.map((r) => r.task_id)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get task dependents")),
-        Effect.withSpan("Storage.getTaskDependents"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get task dependents")),
+    ),
 
     // Session tree
 
-    getChildSessions: (parentSessionId) =>
-      Effect.gen(function* () {
+    getChildSessions: Effect.fn("Storage.getChildSessions")(
+      function* (parentSessionId) {
         const rows =
           yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE parent_session_id = ${parentSessionId} ORDER BY created_at ASC`
         return rows.map(sessionFromRow)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get child sessions")),
-        Effect.withSpan("Storage.getChildSessions"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get child sessions")),
+    ),
 
-    getSessionAncestors: (sessionId) =>
-      Effect.gen(function* () {
+    getSessionAncestors: Effect.fn("Storage.getSessionAncestors")(
+      function* (sessionId) {
         const rows = yield* sql.unsafe<SessionRow>(
           `WITH RECURSIVE ancestors(id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
             SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, 0
@@ -965,13 +942,12 @@ const makeStorage = Effect.gen(function* () {
           ORDER BY depth ASC`,
         )
         return rows.map(sessionFromRow)
-      }).pipe(
-        Effect.mapError(mapError("Failed to get session ancestors")),
-        Effect.withSpan("Storage.getSessionAncestors"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get session ancestors")),
+    ),
 
-    getSessionDetail: (sessionId) =>
-      Effect.gen(function* () {
+    getSessionDetail: Effect.fn("Storage.getSessionDetail")(
+      function* (sessionId) {
         // Get session
         const sessionRows =
           yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${sessionId}`
@@ -999,14 +975,13 @@ const makeStorage = Effect.gen(function* () {
         )
 
         return { session, branches: result }
-      }).pipe(
-        Effect.mapError(mapError("Failed to get session detail")),
-        Effect.withSpan("Storage.getSessionDetail"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to get session detail")),
+    ),
 
     // Search
-    searchMessages: (query, options) =>
-      Effect.gen(function* () {
+    searchMessages: Effect.fn("Storage.searchMessages")(
+      function* (query, options) {
         const limit = options?.limit ?? 20
         const sessionFilter = options?.sessionId
         const dateAfter = options?.dateAfter
@@ -1044,15 +1019,14 @@ const makeStorage = Effect.gen(function* () {
           snippet: row.snippet_text,
           createdAt: row.created_at,
         }))
-      }).pipe(
-        Effect.mapError(mapError("Failed to search messages")),
-        Effect.withSpan("Storage.searchMessages"),
-      ),
+      },
+      Effect.mapError(mapError("Failed to search messages")),
+    ),
   } satisfies StorageService
 })
 
 export class Storage extends ServiceMap.Service<Storage, StorageService>()(
-  "@gent/storage/src/sqlite-storage/Storage",
+  "@gent/core/src/storage/sqlite-storage/Storage",
 ) {
   static Live = (
     dbPath: string,

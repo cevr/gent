@@ -4,7 +4,7 @@
  */
 
 import { FileSystem, Effect } from "effect"
-import { resolve, relative } from "path"
+import { relativePath, resolvePath } from "../platform/path-runtime"
 
 export interface FileRef {
   path: string
@@ -62,8 +62,8 @@ const readFileContent = (absolutePath: string, startLine?: number, endLine?: num
   })
 
 const expandSingleRef = (ref: FileRef, cwd: string) => {
-  const absolutePath = resolve(cwd, ref.path)
-  const relativePath = relative(cwd, absolutePath)
+  const absolutePath = resolvePath(cwd, ref.path)
+  const relativePathValue = relativePath(cwd, absolutePath)
 
   return Effect.gen(function* () {
     const content = yield* readFileContent(absolutePath, ref.startLine, ref.endLine)
@@ -78,7 +78,7 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     }
 
     // Build range label
-    let rangeLabel = relativePath
+    let rangeLabel = relativePathValue
     if (ref.startLine !== undefined) {
       rangeLabel += `:${ref.startLine}`
       if (ref.endLine !== undefined) {

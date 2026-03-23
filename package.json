@@ -7,7 +7,7 @@
   ],
   "type": "module",
   "scripts": {
-    "typecheck": "turbo run typecheck",
+    "typecheck": "effect-language-service patch && turbo run typecheck --force",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
@@ -17,7 +17,7 @@
     "gate": "concurrently -n type,lint,fmt,build,test -c blue,yellow,magenta,cyan,green \"bun run typecheck\" \"bun run lint\" \"bun run fmt\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
-    "prepare": "lefthook install"
+    "prepare": "effect-language-service patch && lefthook install"
   },
   "dependencies": {
     "effect-machine": "catalog:",

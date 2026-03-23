@@ -56,7 +56,7 @@ export interface TaskServiceApi {
 }
 
 export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>()(
-  "@gent/runtime/src/task-service/TaskService",
+  "@gent/core/src/runtime/task-service/TaskService",
 ) {
   static Live: Layer.Layer<
     TaskService,

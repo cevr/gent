@@ -33,7 +33,7 @@ export interface LoopResult {
  * the verdict. Text parsing is avoided to prevent false positives from
  * LLM negations (e.g., "I should NOT stop").
  */
-export const runLoop = Effect.fn("runLoop")(function* (params: {
+export const runLoop: (params: {
   body: (
     iteration: number,
     previousOutput: string,
@@ -45,13 +45,7 @@ export const runLoop = Effect.fn("runLoop")(function* (params: {
     iteration: number,
     phase: "body" | "evaluate",
   ) => Effect.Effect<void, SubagentError>
-}): Generator<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  any,
-  LoopResult,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  any
-> {
+}) => Effect.Effect<LoopResult, SubagentError> = Effect.fn("runLoop")(function* (params) {
   let output = ""
   let feedback: string | undefined
 

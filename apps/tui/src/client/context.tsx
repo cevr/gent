@@ -550,7 +550,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     updateSessionBypass: (bypass) => {
       const s = session()
-      if (s === null) return Effect.succeed(undefined)
+      if (s === null) return Effect.sync(() => undefined)
       return client.updateSessionBypass(s.sessionId, bypass).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
@@ -563,7 +563,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     updateSessionReasoningLevel: (reasoningLevel) => {
       const s = session()
-      if (s === null) return Effect.succeed(undefined)
+      if (s === null) return Effect.sync(() => undefined)
       return client.updateSessionReasoningLevel(s.sessionId, reasoningLevel).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {

@@ -8,7 +8,7 @@ export interface FileLockShape {
 }
 
 export class FileLockService extends ServiceMap.Service<FileLockService, FileLockShape>()(
-  "@gent/core/src/file-lock/FileLockService",
+  "@gent/core/src/domain/file-lock/FileLockService",
 ) {
   static layer = Layer.effect(
     FileLockService,

@@ -4,9 +4,9 @@
  */
 
 import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { unlink } from "node:fs/promises"
+import { removeFile } from "../platform/fs-runtime"
+import { joinPath } from "../platform/path-runtime"
 
 export function resolveEditor(visual: string | undefined, editor: string | undefined): string {
   return visual || editor || "vi"
@@ -21,7 +21,7 @@ export function parseEditorCommand(editor: string): [string, ...string[]] {
 }
 
 export function makeTmpPath(): string {
-  return join(tmpdir(), `gent-edit-${randomUUID()}.md`)
+  return joinPath(tmpdir(), `gent-edit-${randomUUID()}.md`)
 }
 
 export type EditorResult =
@@ -67,10 +67,6 @@ export async function openExternalEditor(
     return { _tag: "error", message: `Editor failed: ${err}` }
   } finally {
     resume()
-    try {
-      await unlink(tmpPath)
-    } catch {
-      // Ignore cleanup failures
-    }
+    await removeFile(tmpPath)
   }
 }

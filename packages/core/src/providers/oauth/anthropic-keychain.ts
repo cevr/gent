@@ -51,13 +51,14 @@ const readCredentialsFile = (): Effect.Effect<ClaudeCredentials, ProviderAuthErr
       }),
   }).pipe(Effect.flatMap(decodeCredentials))
 
-class KeychainNotFoundError extends ProviderAuthError {
-  constructor() {
-    super({ message: "keychain-not-found" })
-  }
-}
+class ClaudeKeychainNotFoundError extends Schema.TaggedErrorClass<ClaudeKeychainNotFoundError>()(
+  "ClaudeKeychainNotFoundError",
+  {},
+) {}
 
-const spawnSecurity = (args: readonly string[]): Effect.Effect<string, ProviderAuthError> =>
+const spawnSecurity = (
+  args: readonly string[],
+): Effect.Effect<string, ProviderAuthError | ClaudeKeychainNotFoundError> =>
   Effect.tryPromise({
     try: async () => {
       const proc = Bun.spawn(["security", ...args], {
@@ -81,7 +82,7 @@ const spawnSecurity = (args: readonly string[]): Effect.Effect<string, ProviderA
         })
       }
       if (error.exitCode === 44) {
-        return new KeychainNotFoundError()
+        return new ClaudeKeychainNotFoundError()
       }
       if (error.exitCode === 36) {
         return new ProviderAuthError({
@@ -101,7 +102,10 @@ const spawnSecurity = (args: readonly string[]): Effect.Effect<string, ProviderA
     },
   })
 
-const readFromKeychain = (): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
+const readFromKeychain = (): Effect.Effect<
+  ClaudeCredentials,
+  ProviderAuthError | ClaudeKeychainNotFoundError
+> =>
   spawnSecurity(["find-generic-password", "-s", CLAUDE_CODE_SERVICE, "-w"]).pipe(
     Effect.flatMap(decodeCredentials),
   )
@@ -114,10 +118,7 @@ export const readClaudeCodeCredentials = (): Effect.Effect<
     return readCredentialsFile()
   }
   return readFromKeychain().pipe(
-    Effect.catchIf(
-      (e): e is KeychainNotFoundError => e instanceof KeychainNotFoundError,
-      () => readCredentialsFile(),
-    ),
+    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => readCredentialsFile()),
   )
 }
 

@@ -169,9 +169,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       listModels: () =>
         Effect.gen(function* () {
           const models = yield* modelRegistry.list()
-          const authInfo = yield* authStore
-            .get("openai")
-            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+          const authInfo = yield* authStore.get("openai").pipe(Effect.catchEager(() => Effect.void))
           if (authInfo?.type !== "oauth") return models
 
           return models

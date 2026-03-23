@@ -33,7 +33,6 @@ import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
 import { DebugProvider } from "../debug/provider.js"
-import * as nodePath from "node:path"
 import * as os from "node:os"
 import {
   GentCore,
@@ -190,10 +189,11 @@ export const createDependencies = (
       ext.setup({ cwd: config.cwd, config: undefined as never, source: "builtin" }),
     ),
   }))
-  const userExtDir = nodePath.join(os.homedir(), ".gent", "extensions")
-  const projectExtDir = nodePath.join(config.cwd, ".gent", "extensions")
   const ExtensionRegistryLive = Layer.unwrap(
     Effect.gen(function* () {
+      const path = yield* Path.Path
+      const userExtDir = path.join(os.homedir(), ".gent", "extensions")
+      const projectExtDir = path.join(config.cwd, ".gent", "extensions")
       const discovered = yield* discoverExtensions({
         userDir: userExtDir,
         projectDir: projectExtDir,
@@ -228,8 +228,9 @@ export const createDependencies = (
       return Option.getOrElse(maybeHome, () => os.homedir())
     }).pipe(Effect.catchEager(() => Effect.succeed(os.homedir()))),
   )
-  const globalSkillsDir = nodePath.join(home, ".gent", "skills")
-  const claudeSkillsDir = nodePath.join(home, ".claude", "skills")
+  const homePrefix = home.endsWith("/") || home.endsWith("\\") ? home.slice(0, -1) : home
+  const globalSkillsDir = `${homePrefix}/.gent/skills`
+  const claudeSkillsDir = `${homePrefix}/.claude/skills`
 
   const SkillsLive = Skills.Live({
     cwd: config.cwd,

@@ -10,7 +10,7 @@ export interface TodoHandlerService {
 }
 
 export class TodoHandler extends ServiceMap.Service<TodoHandler, TodoHandlerService>()(
-  "@gent/tools/src/todo/TodoHandler",
+  "@gent/core/src/tools/todo/TodoHandler",
 ) {
   static Test = (initialTodos: ReadonlyArray<TodoItem> = []): Layer.Layer<TodoHandler> => {
     let todos = [...initialTodos]

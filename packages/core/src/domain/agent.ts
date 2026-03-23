@@ -270,4 +270,4 @@ export interface SubagentRunner {
 export class SubagentRunnerService extends ServiceMap.Service<
   SubagentRunnerService,
   SubagentRunner
->()("@gent/core/src/agent/SubagentRunnerService") {}
+>()("@gent/core/src/domain/agent/SubagentRunnerService") {}

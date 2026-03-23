@@ -38,7 +38,7 @@ export interface ProviderFactoryService {
 
 // Test auth storage (no-op)
 const testAuthStorage: AuthStoreService = {
-  get: () => Effect.succeed(undefined),
+  get: () => Effect.sync(() => undefined as AuthInfo | undefined),
   set: () => Effect.void,
   remove: () => Effect.void,
   list: () => Effect.succeed([]),
@@ -49,11 +49,11 @@ const readEnv = (name: string) =>
   Effect.gen(function* () {
     const opt = yield* Config.option(Config.string(name))
     return Option.getOrUndefined(opt)
-  }).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+  }).pipe(Effect.catchEager(() => Effect.sync(() => undefined as string | undefined)))
 
 // Service tag
 export class ProviderFactory extends ServiceMap.Service<ProviderFactory, ProviderFactoryService>()(
-  "@gent/providers/src/provider-factory/ProviderFactory",
+  "@gent/core/src/providers/provider-factory/ProviderFactory",
 ) {
   static Live: Layer.Layer<ProviderFactory, never, AuthStore> = Layer.effect(
     ProviderFactory,
@@ -80,7 +80,9 @@ const resolveAuth = (
   providerName: string,
   auth: AuthStoreService,
 ): Effect.Effect<AuthInfo | undefined> =>
-  auth.get(providerName).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+  auth
+    .get(providerName)
+    .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
 
 type ProviderClient = (modelName: string) => LanguageModel
 

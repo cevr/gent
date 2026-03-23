@@ -3,9 +3,8 @@
  * This file is kept for backwards compatibility. All exports are deprecated.
  */
 
-import { Effect, Exit, Layer, Option, ServiceMap, Tracer, Cause } from "effect"
-
-import { appendFileSync, writeFileSync } from "node:fs"
+import type { PlatformError, Scope, ServiceMap } from "effect"
+import { Effect, Exit, FileSystem, Layer, Option, Tracer, Cause } from "effect"
 
 // DevSpan - logs span lifecycle to file
 class DevSpan implements Tracer.Span {
@@ -26,8 +25,6 @@ class DevSpan implements Tracer.Span {
   events: Array<[name: string, startTime: bigint, attributes: Record<string, unknown>]> = []
 
   private depth: number
-  private logFile: string
-
   constructor(
     options: {
       readonly name: string
@@ -38,7 +35,7 @@ class DevSpan implements Tracer.Span {
       readonly kind: Tracer.SpanKind
       readonly sampled: boolean
     },
-    logFile: string,
+    private readonly writeLine: (line: string) => void,
   ) {
     this.name = options.name
     this.parent = options.parent
@@ -47,7 +44,6 @@ class DevSpan implements Tracer.Span {
     this.startTime = options.startTime
     this.kind = options.kind
     this.sampled = options.sampled
-    this.logFile = logFile
     this.status = { _tag: "Started", startTime: options.startTime }
     this.attributes = new Map()
     this.traceId = Option.getOrUndefined(options.parent)?.traceId ?? randomHex(32)
@@ -81,11 +77,7 @@ class DevSpan implements Tracer.Span {
     const line = `[${timestamp}] ${indent}${icon} ${message}${
       extra !== undefined && extra !== "" ? ` ${extra}` : ""
     }\n`
-    try {
-      appendFileSync(this.logFile, line)
-    } catch {
-      // ignore write errors
-    }
+    this.writeLine(line)
   }
 
   end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {
@@ -135,14 +127,32 @@ function randomHex(length: number): string {
 
 /** @deprecated Use `GentLogger` from `./logger` instead. */
 export function makeDevTracer(logFile: string): Tracer.Tracer {
+  const writeLine = (line: string) => {
+    void Bun.write(logFile, line)
+  }
   return Tracer.make({
-    span: (options) => new DevSpan(options, logFile),
+    span: (options) => new DevSpan(options, writeLine),
   })
 }
 
 /** @deprecated Use `GentLogger` from `./logger` instead. */
-export const DevTracerLive = (logFile: string): Layer.Layer<never> =>
-  Layer.effectServices(Effect.succeed(ServiceMap.make(Tracer.Tracer, makeDevTracer(logFile))))
+export const DevTracerLive = (
+  logFile: string,
+): Layer.Layer<never, PlatformError.PlatformError, FileSystem.FileSystem | Scope.Scope> =>
+  Layer.effect(
+    Tracer.Tracer,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const file = yield* fs.open(logFile, { flag: "a+" })
+      const encoder = new TextEncoder()
+      const writeLine = (line: string) => {
+        void Effect.runFork(Effect.ignore(file.write(encoder.encode(line))))
+      }
+      return Tracer.make({
+        span: (options) => new DevSpan(options, writeLine),
+      })
+    }),
+  )
 
 /** @deprecated Use `GentLogger` from `./logger` instead. */
 export const DEFAULT_LOG_FILE = "/tmp/gent-trace.log"
@@ -152,9 +162,5 @@ export const DevTracer = DevTracerLive(DEFAULT_LOG_FILE)
 
 /** @deprecated Use `GentLogger` from `./logger` instead. */
 export function clearLog(logFile: string = DEFAULT_LOG_FILE): void {
-  try {
-    writeFileSync(logFile, "")
-  } catch {
-    // ignore
-  }
+  void Bun.write(logFile, "")
 }

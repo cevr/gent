@@ -41,7 +41,7 @@ export interface SequenceRecorderService {
 export class SequenceRecorder extends ServiceMap.Service<
   SequenceRecorder,
   SequenceRecorderService
->()("@gent/test-utils/src/index/SequenceRecorder") {
+>()("@gent/core/src/test-utils/index/SequenceRecorder") {
   static Live: Layer.Layer<SequenceRecorder> = Layer.effect(
     SequenceRecorder,
     Effect.gen(function* () {

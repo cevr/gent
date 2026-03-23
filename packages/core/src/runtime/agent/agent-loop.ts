@@ -266,7 +266,7 @@ const resolveStoredAgent = (params: {
         branchId: params.branchId,
         tags: ["AgentSwitched"],
       })
-      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+      .pipe(Effect.catchEager(() => Effect.void))
 
     const raw =
       latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
@@ -585,7 +585,7 @@ const publishPhaseFailure = (params: {
     )
 
 const makePublishingInspector = (params: {
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, unknown>
+  publishEvent: (event: AgentEvent) => Effect.Effect<void, never>
   sessionId: SessionId
   branchId: BranchId
 }) =>
@@ -641,7 +641,7 @@ export interface AgentLoopService {
 }
 
 export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()(
-  "@gent/runtime/src/agent/agent-loop/AgentLoop",
+  "@gent/core/src/runtime/agent/agent-loop/AgentLoop",
 ) {
   static Live = (config: {
     systemPrompt: string
@@ -672,6 +672,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 }),
             ),
           )
+        const publishEventOrDie = (event: AgentEvent) => publishEvent(event).pipe(Effect.orDie)
 
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
@@ -679,7 +680,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
             const inspector = makePublishingInspector({
-              publishEvent,
+              publishEvent: publishEventOrDie,
               sessionId,
               branchId,
             })
@@ -743,7 +744,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 branchId,
                 extensionRegistry,
                 sessionId,
-                publishEvent,
+                publishEvent: publishEventOrDie,
                 systemPrompt: config.systemPrompt,
               })
               if (resolved === undefined) {
@@ -774,7 +775,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 },
                 provider,
                 extensionRegistry,
-                publishEvent,
+                publishEvent: publishEventOrDie,
                 storage,
                 sessionId,
                 branchId,
@@ -804,7 +805,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             ) {
               yield* executeToolsPhase({
                 draft: state.draft,
-                publishEvent,
+                publishEvent: publishEventOrDie,
                 sessionId,
                 branchId,
                 currentTurnAgent: state.currentTurnAgent,
@@ -822,7 +823,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             ) {
               const nextHandoffSuppress = yield* finalizeTurnPhase({
                 storage,
-                publishEvent,
+                publishEvent: publishEventOrDie,
                 sessionId,
                 branchId,
                 startedAtMs: state.startedAtMs,
@@ -1159,7 +1160,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 case "Interject": {
                   const session = yield* storage
                     .getSession(command.sessionId)
-                    .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                    .pipe(Effect.catchEager(() => Effect.void))
                   const bypass = session?.bypass ?? true
                   const interjectMessage = new Message({
                     id: Bun.randomUUIDv7() as MessageId,
@@ -1198,7 +1199,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               }
               const session = yield* storage
                 .getSession(message.sessionId)
-                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                .pipe(Effect.catchEager(() => Effect.void))
               const bypass = session?.bypass ?? true
               const content = messageText(message)
               yield* loop.actor.sendAndWait(
@@ -1320,7 +1321,7 @@ export interface AgentActorService {
 }
 
 export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService>()(
-  "@gent/runtime/src/agent/agent-loop/AgentActor",
+  "@gent/core/src/runtime/agent/agent-loop/AgentActor",
 ) {
   static Live: Layer.Layer<
     AgentActor,
@@ -1633,7 +1634,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
       const run: AgentActorService["run"] = Effect.fn("AgentActor.run")((input) =>
         Effect.gen(function* () {
           const inspector = makePublishingInspector({
-            publishEvent: eventStore.publish,
+            publishEvent: (event) => eventStore.publish(event).pipe(Effect.orDie),
             sessionId: input.sessionId,
             branchId: input.branchId,
           })

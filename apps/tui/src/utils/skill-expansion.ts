@@ -5,7 +5,7 @@
  * wraps in XML context blocks, and prepends to the user message.
  */
 
-import { dirname } from "path"
+import { dirnamePath } from "../platform/path-runtime"
 
 /** Escape a string for use in an XML attribute value. */
 function escapeAttr(s: string): string {
@@ -70,7 +70,7 @@ export function expandSkillMentions(
     if (totalBytes + content.length > MAX_EXPANDED_BYTES) continue
 
     const filePath = getFilePath?.(token.name)
-    const baseDir = filePath !== null && filePath !== undefined ? dirname(filePath) : undefined
+    const baseDir = filePath !== null && filePath !== undefined ? dirnamePath(filePath) : undefined
     const baseDirAttr = baseDir !== undefined ? ` base_dir="${escapeAttr(baseDir)}"` : ""
 
     // CDATA wrapping prevents skill content (arbitrary markdown) from breaking the XML envelope

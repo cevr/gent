@@ -309,7 +309,7 @@ const generateSessionName = Effect.fn("generateSessionName")(function* (
 })
 
 export class GentCore extends ServiceMap.Service<GentCore, GentCoreService>()(
-  "@gent/server/src/core/GentCore",
+  "@gent/core/src/server/core/GentCore",
 ) {
   static Live: Layer.Layer<
     GentCore,
@@ -389,357 +389,347 @@ ${conversation}`
       })
 
       const service: GentCoreService = {
-        createSession: (input) =>
-          Effect.gen(function* () {
-            const sessionId = Bun.randomUUIDv7() as SessionId
+        createSession: Effect.fn("GentCore.createSession")(function* (input) {
+          const sessionId = Bun.randomUUIDv7() as SessionId
 
-            // Validate parent session exists if specified
-            if (input.parentSessionId !== undefined) {
-              const parent = yield* storage.getSession(input.parentSessionId)
-              if (parent === undefined) {
-                return yield* new NotFoundError({
-                  message: `Parent session not found: ${input.parentSessionId}`,
-                  entity: "session",
-                })
-              }
-            }
-
-            const branchId = Bun.randomUUIDv7() as BranchId
-            const now = new Date()
-
-            // Start with placeholder name
-            const placeholderName = input.name ?? "New Chat"
-            const bypass = input.bypass ?? true
-
-            const session = new Session({
-              id: sessionId,
-              name: placeholderName,
-              cwd: input.cwd,
-              bypass,
-              parentSessionId: input.parentSessionId,
-              parentBranchId: input.parentBranchId,
-              createdAt: now,
-              updatedAt: now,
-            })
-
-            const branch = new Branch({
-              id: branchId,
-              sessionId,
-              createdAt: now,
-            })
-
-            yield* storage.createSession(session)
-            yield* storage.createBranch(branch)
-
-            const firstMessage = input.firstMessage
-            if (firstMessage !== undefined) {
-              // Capture caller's span so daemons inherit the traceId
-              const parentSpan = yield* Effect.currentParentSpan.pipe(
-                Effect.orElseSucceed(() => undefined),
-              )
-
-              // Fork name generation (non-blocking)
-              yield* Effect.forkDetach(
-                Effect.gen(function* () {
-                  const generatedName = yield* generateSessionName(provider, firstMessage)
-                  const updatedSession = new Session({
-                    ...session,
-                    name: generatedName,
-                    updatedAt: new Date(),
-                  })
-                  yield* storage.updateSession(updatedSession)
-                  yield* eventStore.publish(
-                    new SessionNameUpdated({ sessionId, name: generatedName }),
-                  )
-                }).pipe(
-                  Effect.catchEager((e) => Effect.logWarning("session name generation failed", e)),
-                  parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-                ),
-              )
-
-              // Route through ActorProcess — handles Message construction, forkDetach, error handling
-              yield* actorProcess.sendUserMessage({
-                sessionId,
-                branchId,
-                content: firstMessage,
-                bypass,
-              })
-            }
-
-            return { sessionId, branchId, name: placeholderName, bypass }
-          }).pipe(Effect.withSpan("GentCore.createSession")),
-
-        listSessions: () =>
-          Effect.gen(function* () {
-            const sessions = yield* storage.listSessions()
-            const firstBranches = yield* storage.listFirstBranches()
-            const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
-            return sessions.map((s) => ({
-              id: s.id,
-              name: s.name,
-              cwd: s.cwd,
-              bypass: s.bypass,
-              reasoningLevel: s.reasoningLevel,
-              branchId: branchMap.get(s.id),
-              parentSessionId: s.parentSessionId,
-              parentBranchId: s.parentBranchId,
-              createdAt: s.createdAt.getTime(),
-              updatedAt: s.updatedAt.getTime(),
-            }))
-          }).pipe(Effect.withSpan("GentCore.listSessions")),
-
-        getSession: (sessionId) =>
-          Effect.gen(function* () {
-            const session = yield* storage.getSession(sessionId)
-            if (session === undefined) return null
-            const branches = yield* storage.listBranches(sessionId)
-            return {
-              id: session.id,
-              name: session.name,
-              cwd: session.cwd,
-              bypass: session.bypass,
-              reasoningLevel: session.reasoningLevel,
-              branchId: branches[0]?.id,
-              parentSessionId: session.parentSessionId,
-              parentBranchId: session.parentBranchId,
-              createdAt: session.createdAt.getTime(),
-              updatedAt: session.updatedAt.getTime(),
-            }
-          }).pipe(Effect.withSpan("GentCore.getSession")),
-
-        getLastSessionByCwd: (cwd) =>
-          Effect.gen(function* () {
-            const session = yield* storage.getLastSessionByCwd(cwd)
-            if (session === undefined) return null
-            const branches = yield* storage.listBranches(session.id)
-            return {
-              id: session.id,
-              name: session.name,
-              cwd: session.cwd,
-              bypass: session.bypass,
-              reasoningLevel: session.reasoningLevel,
-              branchId: branches[0]?.id,
-              parentSessionId: session.parentSessionId,
-              parentBranchId: session.parentBranchId,
-              createdAt: session.createdAt.getTime(),
-              updatedAt: session.updatedAt.getTime(),
-            }
-          }).pipe(Effect.withSpan("GentCore.getLastSessionByCwd")),
-
-        deleteSession: (sessionId) => storage.deleteSession(sessionId),
-
-        getChildSessions: (parentSessionId) =>
-          Effect.gen(function* () {
-            const children = yield* storage.getChildSessions(parentSessionId)
-            const firstBranches = yield* storage.listFirstBranches()
-            const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
-            return children.map((s) => ({
-              id: s.id,
-              name: s.name,
-              cwd: s.cwd,
-              bypass: s.bypass,
-              reasoningLevel: s.reasoningLevel,
-              branchId: branchMap.get(s.id),
-              parentSessionId: s.parentSessionId,
-              parentBranchId: s.parentBranchId,
-              createdAt: s.createdAt.getTime(),
-              updatedAt: s.updatedAt.getTime(),
-            }))
-          }).pipe(Effect.withSpan("GentCore.getChildSessions")),
-
-        getSessionTree: (rootSessionId) =>
-          Effect.gen(function* () {
-            // BFS build of session tree
-            const rootSession = yield* storage.getSession(rootSessionId)
-            if (rootSession === undefined) {
+          // Validate parent session exists if specified
+          if (input.parentSessionId !== undefined) {
+            const parent = yield* storage.getSession(input.parentSessionId)
+            if (parent === undefined) {
               return yield* new NotFoundError({
-                message: `Session not found: ${rootSessionId}`,
+                message: `Parent session not found: ${input.parentSessionId}`,
                 entity: "session",
               })
             }
+          }
 
-            const buildNode = (session: Session): Effect.Effect<SessionTreeNode, GentCoreError> =>
+          const branchId = Bun.randomUUIDv7() as BranchId
+          const now = new Date()
+
+          // Start with placeholder name
+          const placeholderName = input.name ?? "New Chat"
+          const bypass = input.bypass ?? true
+
+          const session = new Session({
+            id: sessionId,
+            name: placeholderName,
+            cwd: input.cwd,
+            bypass,
+            parentSessionId: input.parentSessionId,
+            parentBranchId: input.parentBranchId,
+            createdAt: now,
+            updatedAt: now,
+          })
+
+          const branch = new Branch({
+            id: branchId,
+            sessionId,
+            createdAt: now,
+          })
+
+          yield* storage.createSession(session)
+          yield* storage.createBranch(branch)
+
+          const firstMessage = input.firstMessage
+          if (firstMessage !== undefined) {
+            // Capture caller's span so daemons inherit the traceId
+            const parentSpan = yield* Effect.currentParentSpan.pipe(
+              Effect.orElseSucceed(() => undefined),
+            )
+
+            // Fork name generation (non-blocking)
+            yield* Effect.forkDetach(
               Effect.gen(function* () {
-                const children = yield* storage.getChildSessions(session.id)
-                const childNodes = yield* Effect.forEach(children, buildNode, { concurrency: 5 })
-                return { session, children: childNodes }
-              })
-
-            return yield* buildNode(rootSession)
-          }).pipe(Effect.withSpan("GentCore.getSessionTree")),
-
-        createBranch: (input) =>
-          Effect.gen(function* () {
-            const branchId = Bun.randomUUIDv7() as BranchId
-            const branch = new Branch({
-              id: branchId,
-              sessionId: input.sessionId,
-              name: input.name,
-              createdAt: new Date(),
-            })
-            yield* storage.createBranch(branch)
-            yield* eventStore.publish(
-              new BranchCreated({
-                sessionId: input.sessionId,
-                branchId,
-                ...(branch.parentBranchId !== undefined
-                  ? { parentBranchId: branch.parentBranchId }
-                  : {}),
-                ...(branch.parentMessageId !== undefined
-                  ? { parentMessageId: branch.parentMessageId }
-                  : {}),
-              }),
-            )
-            return { branchId }
-          }).pipe(Effect.withSpan("GentCore.createBranch")),
-
-        getBranchTree: (sessionId) =>
-          Effect.gen(function* () {
-            const branches = yield* storage.listBranches(sessionId)
-            const branchIds = branches.map((b) => b.id)
-            const messageCounts = yield* storage.countMessagesByBranches(branchIds)
-            const nodes = new Map<BranchId, MutableBranchTreeNode>()
-
-            for (const branch of branches) {
-              const messageCount = messageCounts.get(branch.id) ?? 0
-              nodes.set(branch.id, {
-                id: branch.id,
-                name: branch.name,
-                summary: branch.summary,
-                parentMessageId: branch.parentMessageId,
-                messageCount,
-                createdAt: branch.createdAt.getTime(),
-                children: [],
-              })
-            }
-
-            const roots: MutableBranchTreeNode[] = []
-            for (const branch of branches) {
-              const node = nodes.get(branch.id)
-              if (node === undefined) continue
-              if (
-                branch.parentBranchId !== undefined &&
-                branch.parentBranchId !== "" &&
-                nodes.has(branch.parentBranchId)
-              ) {
-                const parent = nodes.get(branch.parentBranchId)
-                if (parent !== undefined) parent.children.push(node)
-              } else {
-                roots.push(node)
-              }
-            }
-
-            const sortNodes = (list: MutableBranchTreeNode[]) => {
-              list.sort((a, b) => a.createdAt - b.createdAt)
-              for (const node of list) {
-                if (node.children.length > 0) sortNodes(node.children)
-              }
-            }
-            sortNodes(roots)
-
-            return roots
-          }).pipe(Effect.withSpan("GentCore.getBranchTree")),
-
-        switchBranch: (input) =>
-          Effect.gen(function* () {
-            const fromBranch = yield* storage.getBranch(input.fromBranchId)
-            if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-              return yield* new NotFoundError({
-                message: "From branch not found",
-                entity: "branch",
-              })
-            }
-            const toBranch = yield* storage.getBranch(input.toBranchId)
-            if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
-              return yield* new NotFoundError({ message: "To branch not found", entity: "branch" })
-            }
-
-            const shouldSummarize = input.summarize !== false
-            if (shouldSummarize && input.fromBranchId !== input.toBranchId) {
-              const summary = yield* summarizeBranch(input.fromBranchId).pipe(
-                Effect.catchEager(() => Effect.succeed("")),
-              )
-              if (summary !== "") {
-                yield* storage.updateBranchSummary(input.fromBranchId, summary)
+                const generatedName = yield* generateSessionName(provider, firstMessage)
+                const updatedSession = new Session({
+                  ...session,
+                  name: generatedName,
+                  updatedAt: new Date(),
+                })
+                yield* storage.updateSession(updatedSession)
                 yield* eventStore.publish(
-                  new BranchSummarized({
-                    sessionId: input.sessionId,
-                    branchId: input.fromBranchId,
-                    summary,
-                  }),
+                  new SessionNameUpdated({ sessionId, name: generatedName }),
                 )
-              }
-            }
-
-            yield* eventStore.publish(
-              new BranchSwitched({
-                sessionId: input.sessionId,
-                fromBranchId: input.fromBranchId,
-                toBranchId: input.toBranchId,
-              }),
+              }).pipe(
+                Effect.catchEager((e) => Effect.logWarning("session name generation failed", e)),
+                parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
+              ),
             )
-          }).pipe(Effect.withSpan("GentCore.switchBranch")),
 
-        forkBranch: (input) =>
-          Effect.gen(function* () {
-            const fromBranch = yield* storage.getBranch(input.fromBranchId)
-            if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-              return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
-            }
-
-            const messages = yield* storage.listMessages(input.fromBranchId)
-            const targetIndex = messages.findIndex((m) => m.id === input.atMessageId)
-            if (targetIndex === -1) {
-              return yield* new NotFoundError({
-                message: "Message not found in branch",
-                entity: "message",
-              })
-            }
-
-            const branchId = Bun.randomUUIDv7() as BranchId
-            const now = new Date()
-            const branch = new Branch({
-              id: branchId,
-              sessionId: input.sessionId,
-              parentBranchId: input.fromBranchId,
-              parentMessageId: input.atMessageId,
-              name: input.name,
-              createdAt: now,
+            // Route through ActorProcess — handles Message construction, forkDetach, error handling
+            yield* actorProcess.sendUserMessage({
+              sessionId,
+              branchId,
+              content: firstMessage,
+              bypass,
             })
-            yield* storage.createBranch(branch)
+          }
 
-            const messagesToCopy = messages.slice(0, targetIndex + 1)
-            for (const message of messagesToCopy) {
-              yield* storage.createMessage(
-                new Message({
-                  id: Bun.randomUUIDv7() as MessageId,
-                  sessionId: message.sessionId,
-                  branchId,
-                  role: message.role,
-                  parts: message.parts,
-                  createdAt: message.createdAt,
-                  ...(message.turnDurationMs !== undefined
-                    ? { turnDurationMs: message.turnDurationMs }
-                    : {}),
+          return { sessionId, branchId, name: placeholderName, bypass }
+        }),
+
+        listSessions: Effect.fn("GentCore.listSessions")(function* () {
+          const sessions = yield* storage.listSessions()
+          const firstBranches = yield* storage.listFirstBranches()
+          const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
+          return sessions.map((s) => ({
+            id: s.id,
+            name: s.name,
+            cwd: s.cwd,
+            bypass: s.bypass,
+            reasoningLevel: s.reasoningLevel,
+            branchId: branchMap.get(s.id),
+            parentSessionId: s.parentSessionId,
+            parentBranchId: s.parentBranchId,
+            createdAt: s.createdAt.getTime(),
+            updatedAt: s.updatedAt.getTime(),
+          }))
+        }),
+
+        getSession: Effect.fn("GentCore.getSession")(function* (sessionId) {
+          const session = yield* storage.getSession(sessionId)
+          if (session === undefined) return null
+          const branches = yield* storage.listBranches(sessionId)
+          return {
+            id: session.id,
+            name: session.name,
+            cwd: session.cwd,
+            bypass: session.bypass,
+            reasoningLevel: session.reasoningLevel,
+            branchId: branches[0]?.id,
+            parentSessionId: session.parentSessionId,
+            parentBranchId: session.parentBranchId,
+            createdAt: session.createdAt.getTime(),
+            updatedAt: session.updatedAt.getTime(),
+          }
+        }),
+
+        getLastSessionByCwd: Effect.fn("GentCore.getLastSessionByCwd")(function* (cwd) {
+          const session = yield* storage.getLastSessionByCwd(cwd)
+          if (session === undefined) return null
+          const branches = yield* storage.listBranches(session.id)
+          return {
+            id: session.id,
+            name: session.name,
+            cwd: session.cwd,
+            bypass: session.bypass,
+            reasoningLevel: session.reasoningLevel,
+            branchId: branches[0]?.id,
+            parentSessionId: session.parentSessionId,
+            parentBranchId: session.parentBranchId,
+            createdAt: session.createdAt.getTime(),
+            updatedAt: session.updatedAt.getTime(),
+          }
+        }),
+
+        deleteSession: (sessionId) => storage.deleteSession(sessionId),
+
+        getChildSessions: Effect.fn("GentCore.getChildSessions")(function* (parentSessionId) {
+          const children = yield* storage.getChildSessions(parentSessionId)
+          const firstBranches = yield* storage.listFirstBranches()
+          const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
+          return children.map((s) => ({
+            id: s.id,
+            name: s.name,
+            cwd: s.cwd,
+            bypass: s.bypass,
+            reasoningLevel: s.reasoningLevel,
+            branchId: branchMap.get(s.id),
+            parentSessionId: s.parentSessionId,
+            parentBranchId: s.parentBranchId,
+            createdAt: s.createdAt.getTime(),
+            updatedAt: s.updatedAt.getTime(),
+          }))
+        }),
+
+        getSessionTree: Effect.fn("GentCore.getSessionTree")(function* (rootSessionId) {
+          // BFS build of session tree
+          const rootSession = yield* storage.getSession(rootSessionId)
+          if (rootSession === undefined) {
+            return yield* new NotFoundError({
+              message: `Session not found: ${rootSessionId}`,
+              entity: "session",
+            })
+          }
+
+          const buildNode = (session: Session): Effect.Effect<SessionTreeNode, GentCoreError> =>
+            Effect.gen(function* () {
+              const children = yield* storage.getChildSessions(session.id)
+              const childNodes = yield* Effect.forEach(children, buildNode, { concurrency: 5 })
+              return { session, children: childNodes }
+            })
+
+          return yield* buildNode(rootSession)
+        }),
+
+        createBranch: Effect.fn("GentCore.createBranch")(function* (input) {
+          const branchId = Bun.randomUUIDv7() as BranchId
+          const branch = new Branch({
+            id: branchId,
+            sessionId: input.sessionId,
+            name: input.name,
+            createdAt: new Date(),
+          })
+          yield* storage.createBranch(branch)
+          yield* eventStore.publish(
+            new BranchCreated({
+              sessionId: input.sessionId,
+              branchId,
+              ...(branch.parentBranchId !== undefined
+                ? { parentBranchId: branch.parentBranchId }
+                : {}),
+              ...(branch.parentMessageId !== undefined
+                ? { parentMessageId: branch.parentMessageId }
+                : {}),
+            }),
+          )
+          return { branchId }
+        }),
+
+        getBranchTree: Effect.fn("GentCore.getBranchTree")(function* (sessionId) {
+          const branches = yield* storage.listBranches(sessionId)
+          const branchIds = branches.map((b) => b.id)
+          const messageCounts = yield* storage.countMessagesByBranches(branchIds)
+          const nodes = new Map<BranchId, MutableBranchTreeNode>()
+
+          for (const branch of branches) {
+            const messageCount = messageCounts.get(branch.id) ?? 0
+            nodes.set(branch.id, {
+              id: branch.id,
+              name: branch.name,
+              summary: branch.summary,
+              parentMessageId: branch.parentMessageId,
+              messageCount,
+              createdAt: branch.createdAt.getTime(),
+              children: [],
+            })
+          }
+
+          const roots: MutableBranchTreeNode[] = []
+          for (const branch of branches) {
+            const node = nodes.get(branch.id)
+            if (node === undefined) continue
+            if (
+              branch.parentBranchId !== undefined &&
+              branch.parentBranchId !== "" &&
+              nodes.has(branch.parentBranchId)
+            ) {
+              const parent = nodes.get(branch.parentBranchId)
+              if (parent !== undefined) parent.children.push(node)
+            } else {
+              roots.push(node)
+            }
+          }
+
+          const sortNodes = (list: MutableBranchTreeNode[]) => {
+            list.sort((a, b) => a.createdAt - b.createdAt)
+            for (const node of list) {
+              if (node.children.length > 0) sortNodes(node.children)
+            }
+          }
+          sortNodes(roots)
+
+          return roots
+        }),
+
+        switchBranch: Effect.fn("GentCore.switchBranch")(function* (input) {
+          const fromBranch = yield* storage.getBranch(input.fromBranchId)
+          if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
+            return yield* new NotFoundError({
+              message: "From branch not found",
+              entity: "branch",
+            })
+          }
+          const toBranch = yield* storage.getBranch(input.toBranchId)
+          if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
+            return yield* new NotFoundError({ message: "To branch not found", entity: "branch" })
+          }
+
+          const shouldSummarize = input.summarize !== false
+          if (shouldSummarize && input.fromBranchId !== input.toBranchId) {
+            const summary = yield* summarizeBranch(input.fromBranchId).pipe(
+              Effect.catchEager(() => Effect.succeed("")),
+            )
+            if (summary !== "") {
+              yield* storage.updateBranchSummary(input.fromBranchId, summary)
+              yield* eventStore.publish(
+                new BranchSummarized({
+                  sessionId: input.sessionId,
+                  branchId: input.fromBranchId,
+                  summary,
                 }),
               )
             }
+          }
 
-            yield* eventStore.publish(
-              new BranchCreated({
-                sessionId: input.sessionId,
+          yield* eventStore.publish(
+            new BranchSwitched({
+              sessionId: input.sessionId,
+              fromBranchId: input.fromBranchId,
+              toBranchId: input.toBranchId,
+            }),
+          )
+        }),
+
+        forkBranch: Effect.fn("GentCore.forkBranch")(function* (input) {
+          const fromBranch = yield* storage.getBranch(input.fromBranchId)
+          if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
+            return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
+          }
+
+          const messages = yield* storage.listMessages(input.fromBranchId)
+          const targetIndex = messages.findIndex((m) => m.id === input.atMessageId)
+          if (targetIndex === -1) {
+            return yield* new NotFoundError({
+              message: "Message not found in branch",
+              entity: "message",
+            })
+          }
+
+          const branchId = Bun.randomUUIDv7() as BranchId
+          const now = new Date()
+          const branch = new Branch({
+            id: branchId,
+            sessionId: input.sessionId,
+            parentBranchId: input.fromBranchId,
+            parentMessageId: input.atMessageId,
+            name: input.name,
+            createdAt: now,
+          })
+          yield* storage.createBranch(branch)
+
+          const messagesToCopy = messages.slice(0, targetIndex + 1)
+          for (const message of messagesToCopy) {
+            yield* storage.createMessage(
+              new Message({
+                id: Bun.randomUUIDv7() as MessageId,
+                sessionId: message.sessionId,
                 branchId,
-                ...(branch.parentBranchId !== undefined
-                  ? { parentBranchId: branch.parentBranchId }
-                  : {}),
-                ...(branch.parentMessageId !== undefined
-                  ? { parentMessageId: branch.parentMessageId }
+                role: message.role,
+                parts: message.parts,
+                createdAt: message.createdAt,
+                ...(message.turnDurationMs !== undefined
+                  ? { turnDurationMs: message.turnDurationMs }
                   : {}),
               }),
             )
+          }
 
-            return { branchId }
-          }).pipe(Effect.withSpan("GentCore.forkBranch")),
+          yield* eventStore.publish(
+            new BranchCreated({
+              sessionId: input.sessionId,
+              branchId,
+              ...(branch.parentBranchId !== undefined
+                ? { parentBranchId: branch.parentBranchId }
+                : {}),
+              ...(branch.parentMessageId !== undefined
+                ? { parentMessageId: branch.parentMessageId }
+                : {}),
+            }),
+          )
+
+          return { branchId }
+        }),
 
         sendMessage: Effect.fn("GentCore.sendMessage")(function* (input) {
           const session = yield* storage.getSession(input.sessionId)
@@ -777,8 +767,8 @@ ${conversation}`
           })
         }),
 
-        listMessages: (branchId) =>
-          Effect.gen(function* () {
+        listMessages: Effect.fn("GentCore.listMessages")(function* (branchId) {
+          return yield* Effect.gen(function* () {
             const messages = yield* storage.listMessages(branchId)
             return messages.map((m) => ({
               id: m.id,
@@ -790,10 +780,11 @@ ${conversation}`
               createdAt: m.createdAt.getTime(),
               turnDurationMs: m.turnDurationMs,
             }))
-          }).pipe(Effect.withSpan("GentCore.listMessages")),
+          })
+        }),
 
-        listBranches: (sessionId) =>
-          Effect.gen(function* () {
+        listBranches: Effect.fn("GentCore.listBranches")(function* (sessionId) {
+          return yield* Effect.gen(function* () {
             const branches = yield* storage.listBranches(sessionId)
             return branches.map((b) => ({
               id: b.id,
@@ -804,7 +795,8 @@ ${conversation}`
               summary: b.summary,
               createdAt: b.createdAt.getTime(),
             }))
-          }).pipe(Effect.withSpan("GentCore.listBranches")),
+          })
+        }),
 
         listTasks: (sessionId, branchId) =>
           storage.listTasks(sessionId, branchId).pipe(Effect.withSpan("GentCore.listTasks")),
@@ -821,8 +813,8 @@ ${conversation}`
 
         steer: (command) => actorProcess.steerAgent(command),
 
-        getSessionState: (input) =>
-          Effect.gen(function* () {
+        getSessionState: Effect.fn("GentCore.getSessionState")(function* (input) {
+          return yield* Effect.gen(function* () {
             const session = yield* storage.getSession(input.sessionId)
             if (session === undefined) {
               return yield* new NotFoundError({ message: "Session not found", entity: "session" })
@@ -876,10 +868,11 @@ ${conversation}`
               bypass: session.bypass,
               reasoningLevel: session.reasoningLevel,
             }
-          }).pipe(Effect.withSpan("GentCore.getSessionState")),
+          })
+        }),
 
-        updateSessionBypass: (input) =>
-          Effect.gen(function* () {
+        updateSessionBypass: Effect.fn("GentCore.updateSessionBypass")(function* (input) {
+          return yield* Effect.gen(function* () {
             const session = yield* storage.getSession(input.sessionId)
             if (session === undefined) {
               return yield* new NotFoundError({ message: "Session not found", entity: "session" })
@@ -891,22 +884,26 @@ ${conversation}`
             })
             yield* storage.updateSession(updated)
             return { bypass: input.bypass }
-          }).pipe(Effect.withSpan("GentCore.updateSessionBypass")),
+          })
+        }),
 
-        updateSessionReasoningLevel: (input) =>
-          Effect.gen(function* () {
-            const session = yield* storage.getSession(input.sessionId)
-            if (session === undefined) {
-              return yield* new NotFoundError({ message: "Session not found", entity: "session" })
-            }
-            const updated = new Session({
-              ...session,
-              reasoningLevel: input.reasoningLevel,
-              updatedAt: new Date(),
+        updateSessionReasoningLevel: Effect.fn("GentCore.updateSessionReasoningLevel")(
+          function* (input) {
+            return yield* Effect.gen(function* () {
+              const session = yield* storage.getSession(input.sessionId)
+              if (session === undefined) {
+                return yield* new NotFoundError({ message: "Session not found", entity: "session" })
+              }
+              const updated = new Session({
+                ...session,
+                reasoningLevel: input.reasoningLevel,
+                updatedAt: new Date(),
+              })
+              yield* storage.updateSession(updated)
+              return { reasoningLevel: input.reasoningLevel }
             })
-            yield* storage.updateSession(updated)
-            return { reasoningLevel: input.reasoningLevel }
-          }).pipe(Effect.withSpan("GentCore.updateSessionReasoningLevel")),
+          },
+        ),
 
         subscribeEvents: (input) =>
           eventStore.subscribe({
@@ -915,8 +912,8 @@ ${conversation}`
             ...(input.after !== undefined ? { after: input.after as EventId } : {}),
           }),
 
-        respondPermission: (input) =>
-          Effect.gen(function* () {
+        respondPermission: Effect.fn("GentCore.respondPermission")(function* (input) {
+          return yield* Effect.gen(function* () {
             const request = yield* permissionHandler.respond(input.requestId, input.decision)
             if (input.persist === true && request !== undefined) {
               const rule = new PermissionRule({
@@ -926,15 +923,16 @@ ${conversation}`
               yield* configService.addPermissionRule(rule)
               yield* permission.addRule(rule)
             }
-          }).pipe(Effect.withSpan("GentCore.respondPermission")),
+          })
+        }),
 
         respondPrompt: (input) =>
           promptHandler
             .respond(input.requestId, input.decision, input.content)
             .pipe(Effect.asVoid, Effect.withSpan("GentCore.respondPrompt")),
 
-        respondHandoff: (input) =>
-          Effect.gen(function* () {
+        respondHandoff: Effect.fn("GentCore.respondHandoff")(function* (input) {
+          return yield* Effect.gen(function* () {
             if (input.decision !== "confirm") {
               yield* handoffHandler.respond(input.requestId, "reject", undefined, input.reason)
               return { childSessionId: undefined, childBranchId: undefined }
@@ -957,7 +955,8 @@ ${conversation}`
 
             yield* handoffHandler.respond(input.requestId, "confirm", result.sessionId)
             return { childSessionId: result.sessionId, childBranchId: result.branchId }
-          }).pipe(Effect.withSpan("GentCore.respondHandoff")),
+          })
+        }),
       }
 
       return service

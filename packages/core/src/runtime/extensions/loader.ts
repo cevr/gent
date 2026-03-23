@@ -26,7 +26,7 @@ const discoverDir = (
   PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > =>
-  Effect.fn("ExtensionLoader.discoverDir")(function* () {
+  Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
 
@@ -59,13 +59,13 @@ const discoverDir = (
     }
 
     return paths.sort()
-  })()
+  }).pipe(Effect.withSpan("ExtensionLoader.discoverDir"))
 
 // Loading — import extension files via Bun native import()
 
 /** Load a single extension from a file path. */
 const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, ExtensionLoadError> =>
-  Effect.fn("ExtensionLoader.loadExtensionFile")(function* () {
+  Effect.gen(function* () {
     const mod = yield* Effect.tryPromise({
       try: () => import(filePath),
       catch: (err) =>
@@ -112,7 +112,7 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
       return yield* Effect.fail(new ExtensionLoadError("unknown", `No extension in ${filePath}`))
     }
     return result
-  })()
+  }).pipe(Effect.withSpan("ExtensionLoader.loadExtensionFile"))
 
 /** Type guard for GentExtension shape */
 const isGentExtension = (value: unknown): value is GentExtension => {
@@ -143,7 +143,7 @@ export const discoverExtensions = (opts: {
   ExtensionLoadError | PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > =>
-  Effect.fn("ExtensionLoader.discoverExtensions")(function* () {
+  Effect.gen(function* () {
     const userPaths = yield* discoverDir(opts.userDir)
     const projectPaths = yield* discoverDir(opts.projectDir)
 
@@ -160,14 +160,14 @@ export const discoverExtensions = (opts: {
     }
 
     return results
-  })()
+  }).pipe(Effect.withSpan("ExtensionLoader.discoverExtensions"))
 
 /** Run extension setup and produce LoadedExtension. Catches defects from malformed setup functions. */
 export const setupExtension = (
   discovered: DiscoveredExtension,
   cwd: string,
 ): Effect.Effect<LoadedExtension, ExtensionLoadError> =>
-  Effect.fn("ExtensionLoader.setupExtension")(function* () {
+  Effect.gen(function* () {
     const { extension, kind, sourcePath } = discovered
     const setup: ExtensionSetup = yield* extension
       .setup({
@@ -193,13 +193,13 @@ export const setupExtension = (
       sourcePath,
       setup,
     }
-  })()
+  }).pipe(Effect.withSpan("ExtensionLoader.setupExtension"))
 
 /** Validate a set of loaded extensions for conflicts. */
 export const validateExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): Effect.Effect<void, ExtensionLoadError> =>
-  Effect.fn("ExtensionLoader.validateExtensions")(function* () {
+  Effect.gen(function* () {
     // Check duplicate manifest ids within same scope
     const idsByScope = new Map<string, Set<string>>()
     for (const ext of extensions) {
@@ -258,4 +258,4 @@ export const validateExtensions = (
       }
       agentsByScope.set(key, scopeAgents)
     }
-  })()
+  }).pipe(Effect.withSpan("ExtensionLoader.validateExtensions"))

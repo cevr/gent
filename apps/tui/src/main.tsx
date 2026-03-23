@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
-import { BunServices, BunRuntime } from "@effect/platform-bun"
+import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
 import { Config, Console, Effect, Layer, Option, Ref, Stream, Tracer } from "effect"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
@@ -22,7 +22,6 @@ import { OsService } from "@gent/core/domain/os-service.js"
 import type { HandoffPresented } from "@gent/core/domain/event.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
 import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
-import * as path from "node:path"
 import * as os from "node:os"
 
 import { render } from "@opentui/solid"
@@ -34,6 +33,7 @@ import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
 import { seedDebugSession } from "./debug/bootstrap"
 import { startDebugScenario } from "@gent/core/debug/scenario.js"
+import { joinPath } from "./platform/path-runtime"
 
 // Clear client log on startup
 clearClientLog()
@@ -187,7 +187,7 @@ const formatMissingProviders = (providers: readonly ProviderId[]): string =>
 const ATOM_CACHE_MAX = 256
 
 // Platform layer
-const PlatformLayer = BunServices.layer
+const PlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
 
 // Logger layer — pretty (stderr) + JSON (/tmp/gent.log)
 const LoggerLayer = GentLogger
@@ -204,13 +204,13 @@ const makeCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
       const homeOpt = yield* Config.option(Config.string("HOME"))
       const home = Option.getOrElse(homeOpt, () => os.homedir())
       const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
-      const dataDir = Option.getOrElse(dataDirOpt, () => path.join(home, ".gent"))
+      const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
       const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
-      const dbPath = Option.getOrElse(dbPathOpt, () => path.join(dataDir, "data.db"))
+      const dbPath = Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db"))
       const authFilePath = Option.isSome(dataDirOpt)
-        ? path.join(dataDir, "auth.json.enc")
+        ? joinPath(dataDir, "auth.json.enc")
         : undefined
-      const authKeyPath = Option.isSome(dataDirOpt) ? path.join(dataDir, "auth.key") : undefined
+      const authKeyPath = Option.isSome(dataDirOpt) ? joinPath(dataDir, "auth.key") : undefined
 
       const serverDeps = createDependencies({
         cwd,
@@ -221,7 +221,7 @@ const makeCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
         ...(authKeyPath !== undefined ? { authKeyPath } : {}),
       }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))
       const coreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
-      return Layer.mergeAll(coreLive, serverDeps, PlatformLayer, OsService.Live, LinkLayer)
+      return Layer.mergeAll(coreLive, serverDeps, LinkLayer)
     }),
   )
 
@@ -353,170 +353,172 @@ const main = Command.make(
       // Get core service for direct access (headless, session management)
       const cwd = process.cwd()
       const runtimeLayer = makeCoreLayer({ cwd, debug })
+      const scope = yield* Effect.scope
+      const services = yield* Layer.buildWithScope(runtimeLayer, scope)
 
-      const program = Effect.gen(function* () {
-        const core = yield* GentCore
-        const authGuard = yield* AuthGuard
+      return yield* Effect.promise(() =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const core = yield* GentCore
+            const authGuard = yield* AuthGuard
 
-        const authProviders = yield* authGuard.listProviders()
-        const missingProviders = authProviders
-          .filter((p) => p.required && !p.hasKey)
-          .map((p) => p.provider)
+            const authProviders = yield* authGuard.listProviders()
+            const missingProviders = authProviders
+              .filter((p) => p.required && !p.hasKey)
+              .map((p) => p.provider)
 
-        if (missingProviders.length > 0 && headless && !debug) {
-          const hint = formatMissingProviders(missingProviders)
-          yield* Console.error(`Error: missing required API keys: ${hint}`)
-          return process.exit(1)
-        }
+            if (missingProviders.length > 0 && headless && !debug) {
+              const hint = formatMissingProviders(missingProviders)
+              yield* Console.error(`Error: missing required API keys: ${hint}`)
+              return process.exit(1)
+            }
 
-        // Resolve initial state (discriminated union)
-        const state = yield* resolveInitialState({
-          core,
-          cwd,
-          session,
-          continue_,
-          headless,
-          debug,
-          prompt,
-          promptArg,
-          bypass,
-        })
+            // Resolve initial state (discriminated union)
+            const state = yield* resolveInitialState({
+              core,
+              cwd,
+              session,
+              continue_,
+              headless,
+              debug,
+              prompt,
+              promptArg,
+              bypass,
+            })
 
-        // Create client (used by both headless and TUI)
-        const gentClient: GentClient = yield* makeDirectGentClient
+            // Create client (used by both headless and TUI)
+            const gentClient: GentClient = yield* makeDirectGentClient
 
-        // Handle headless mode
-        if (state._tag === "headless") {
-          const branchId = state.session.branchId
-          if (branchId === undefined) {
-            yield* Console.error("Error: session has no branch")
-            return process.exit(1)
-          }
-          // If spawned as subprocess, inherit parent trace context
-          const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
-          const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
-          const parentSpan =
-            Option.isSome(traceIdOpt) && Option.isSome(parentSpanIdOpt)
-              ? Tracer.externalSpan({
-                  traceId: traceIdOpt.value,
-                  spanId: parentSpanIdOpt.value,
-                  sampled: true,
-                })
-              : undefined
-          const headlessEffect = runHeadless(
-            core,
-            gentClient,
-            state.session.id,
-            branchId,
-            state.prompt,
-          ).pipe(
-            Effect.withSpan("Headless.run"),
-            parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-          )
-          yield* headlessEffect
-          return process.exit(0)
-        }
+            // Handle headless mode
+            if (state._tag === "headless") {
+              const branchId = state.session.branchId
+              if (branchId === undefined) {
+                yield* Console.error("Error: session has no branch")
+                return process.exit(1)
+              }
+              const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
+              const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
+              const parentSpan =
+                Option.isSome(traceIdOpt) && Option.isSome(parentSpanIdOpt)
+                  ? Tracer.externalSpan({
+                      traceId: traceIdOpt.value,
+                      spanId: parentSpanIdOpt.value,
+                      sampled: true,
+                    })
+                  : undefined
+              const headlessEffect = runHeadless(
+                core,
+                gentClient,
+                state.session.id,
+                branchId,
+                state.prompt,
+              ).pipe(
+                Effect.withSpan("Headless.run"),
+                parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
+              )
+              yield* headlessEffect
+              return process.exit(0)
+            }
 
-        // Get runtime for client
-        const uiServices = (yield* Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
+            const uiServices = (yield* Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
 
-        // Derive initial session and route from state
-        let initialSession: Session | undefined
-        let initialRoute = Route.home()
-        let initialPrompt: string | undefined
-        let debugMode = false
-        const missingAuthProviders =
-          !debug && missingProviders.length > 0
-            ? (missingProviders as readonly ProviderId[])
-            : undefined
+            let initialSession: Session | undefined
+            let initialRoute = Route.home()
+            let initialPrompt: string | undefined
+            let debugMode = false
+            const missingAuthProviders =
+              !debug && missingProviders.length > 0
+                ? (missingProviders as readonly ProviderId[])
+                : undefined
 
-        if (state._tag === "debug") {
-          const debugSession = yield* seedDebugSession(cwd)
-          yield* startDebugScenario({
-            sessionId: debugSession.sessionId,
-            branchId: debugSession.branchId,
-            cwd,
-          })
-          initialSession = debugSession
-          initialRoute = Route.session(debugSession.sessionId, debugSession.branchId)
-          debugMode = true
-        }
+            if (state._tag === "debug") {
+              const debugSession = yield* seedDebugSession(cwd)
+              yield* startDebugScenario({
+                sessionId: debugSession.sessionId,
+                branchId: debugSession.branchId,
+                cwd,
+              })
+              initialSession = debugSession
+              initialRoute = Route.session(debugSession.sessionId, debugSession.branchId)
+              debugMode = true
+            }
 
-        if (state._tag === "session" && state.session.branchId !== undefined) {
-          initialSession = {
-            sessionId: state.session.id,
-            branchId: state.session.branchId,
-            name: state.session.name ?? "Unnamed",
-            bypass: state.session.bypass ?? true,
-            reasoningLevel: state.session.reasoningLevel,
-          }
-          initialRoute = Route.session(state.session.id, state.session.branchId)
-          initialPrompt = state.prompt
-        }
+            if (state._tag === "session" && state.session.branchId !== undefined) {
+              initialSession = {
+                sessionId: state.session.id,
+                branchId: state.session.branchId,
+                name: state.session.name ?? "Unnamed",
+                bypass: state.session.bypass ?? true,
+                reasoningLevel: state.session.reasoningLevel,
+              }
+              initialRoute = Route.session(state.session.id, state.session.branchId)
+              initialPrompt = state.prompt
+            }
 
-        if (state._tag === "branchPicker") {
-          initialRoute = Route.branchPicker(
-            state.session.id,
-            state.session.name ?? "Unnamed",
-            state.branches,
-            state.prompt,
-          )
-        }
+            if (state._tag === "branchPicker") {
+              initialRoute = Route.branchPicker(
+                state.session.id,
+                state.session.name ?? "Unnamed",
+                state.branches,
+                state.prompt,
+              )
+            }
 
-        // Read env vars via Config at startup
-        const visualOpt = yield* Config.option(Config.string("VISUAL"))
-        const editorOpt = yield* Config.option(Config.string("EDITOR"))
-        const env = {
-          visual: Option.getOrUndefined(visualOpt),
-          editor: Option.getOrUndefined(editorOpt),
-        }
+            const visualOpt = yield* Config.option(Config.string("VISUAL"))
+            const editorOpt = yield* Config.option(Config.string("EDITOR"))
+            const env = {
+              visual: Option.getOrUndefined(visualOpt),
+              editor: Option.getOrUndefined(editorOpt),
+            }
 
-        // Launch TUI with providers
-        yield* Effect.promise(() =>
-          render(() => (
-            <EnvProvider env={env}>
-              <WorkspaceProvider cwd={cwd} services={uiServices}>
-                <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                  <ClientProvider client={gentClient} initialSession={initialSession}>
-                    <RouterProvider initialRoute={initialRoute}>
-                      <App
-                        initialPrompt={initialPrompt}
-                        missingAuthProviders={missingAuthProviders}
-                        debugMode={debugMode}
-                      />
-                    </RouterProvider>
-                  </ClientProvider>
-                </RegistryProvider>
-              </WorkspaceProvider>
-            </EnvProvider>
-          )),
-        )
+            yield* Effect.promise(() =>
+              render(() => (
+                <EnvProvider env={env}>
+                  <WorkspaceProvider cwd={cwd} services={uiServices}>
+                    <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
+                      <ClientProvider client={gentClient} initialSession={initialSession}>
+                        <RouterProvider initialRoute={initialRoute}>
+                          <App
+                            initialPrompt={initialPrompt}
+                            missingAuthProviders={missingAuthProviders}
+                            debugMode={debugMode}
+                          />
+                        </RouterProvider>
+                      </ClientProvider>
+                    </RegistryProvider>
+                  </WorkspaceProvider>
+                </EnvProvider>
+              )),
+            )
 
-        // Keep process alive until TUI exits
-        return yield* Effect.never
-      }).pipe(Effect.scoped, Effect.provide(runtimeLayer))
-
-      return yield* program
+            return yield* Effect.never
+          }).pipe(Effect.provideServices(services)),
+        ),
+      )
     }),
 )
 
 // Sessions subcommand
 const sessions = Command.make("sessions", {}, () =>
   Effect.gen(function* () {
-    const core = yield* GentCore
-    const allSessions = yield* core.listSessions()
+    const scope = yield* Effect.scope
+    const services = yield* Layer.buildWithScope(makeCoreLayer({ cwd: process.cwd() }), scope)
+    return yield* Effect.gen(function* () {
+      const core = yield* GentCore
+      const allSessions = yield* core.listSessions()
 
-    if (allSessions.length === 0) {
-      yield* Console.log("No sessions found.")
-      return
-    }
+      if (allSessions.length === 0) {
+        yield* Console.log("No sessions found.")
+        return
+      }
 
-    yield* Console.log("Sessions:")
-    for (const s of allSessions) {
-      const date = new Date(s.updatedAt).toISOString()
-      yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
-    }
-  }).pipe(Effect.provide(makeCoreLayer({ cwd: process.cwd() }))),
+      yield* Console.log("Sessions:")
+      for (const s of allSessions) {
+        const date = new Date(s.updatedAt).toISOString()
+        yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
+      }
+    }).pipe(Effect.provideServices(services))
+  }),
 )
 
 // Root command with subcommands
@@ -531,10 +533,12 @@ const cli = Command.run(command, {
 })
 
 // Run with base platform layers; command handlers provide core layers as needed
-const MainLayer = Layer.effectDiscard(cli).pipe(
-  Layer.provide(PlatformLayer),
+const CliLayer = Layer.effectDiscard(cli)
+
+const MainLayer = CliLayer.pipe(
   Layer.provide(LoggerLayer),
   Layer.provide(TracerLayer),
+  Layer.provide(PlatformLayer),
 )
 
-BunRuntime.runMain(Layer.launch(MainLayer).pipe(Effect.provide(LoggerLayer)))
+BunRuntime.runMain(Effect.scoped(Layer.launch(MainLayer)))

@@ -6,13 +6,13 @@
  */
 
 import { createSignal } from "solid-js"
-import { readFile, writeFile, mkdir } from "fs/promises"
-import { join } from "path"
 import { homedir } from "os"
+import { makeDirectory, writeFileString } from "../platform/fs-runtime"
+import { joinPath } from "../platform/path-runtime"
 
 const MAX_ENTRIES = 100
-const CACHE_DIR = join(homedir(), ".cache", "gent")
-const HISTORY_PATH = join(CACHE_DIR, "prompt-history.json")
+const CACHE_DIR = joinPath(homedir(), ".cache", "gent")
+const HISTORY_PATH = joinPath(CACHE_DIR, "prompt-history.json")
 
 interface HistoryStore {
   entries: string[]
@@ -85,7 +85,9 @@ export function usePromptHistory(): PromptHistory {
     if (store.loaded) return
     store.loaded = true
     try {
-      const raw = await readFile(HISTORY_PATH, "utf-8")
+      const file = Bun.file(HISTORY_PATH)
+      if (!(await file.exists())) return
+      const raw = await file.text()
       if (raw.length === 0) return
       const data = JSON.parse(raw) as HistoryStore
       if (Array.isArray(data.entries)) {
@@ -98,8 +100,8 @@ export function usePromptHistory(): PromptHistory {
 
   const persist = (items: string[]) => {
     const data: HistoryStore = { entries: items }
-    void mkdir(CACHE_DIR, { recursive: true })
-      .then(() => writeFile(HISTORY_PATH, JSON.stringify(data), "utf-8"))
+    void makeDirectory(CACHE_DIR, { recursive: true })
+      .then(() => writeFileString(HISTORY_PATH, JSON.stringify(data)))
       .catch(() => {})
   }
 
