@@ -14,9 +14,11 @@ import { Input } from "../components/input"
 import { useRuntime } from "../hooks/use-runtime"
 import { useExit } from "../hooks/use-exit"
 import { executeSlashCommand } from "../commands/slash-commands"
-import { ClientError, type UiError } from "../utils/format-error"
+import { ClientError, formatError, type UiError } from "../utils/format-error"
 import { useWorkspace } from "../workspace/index"
 import { BorderedInput, formatCwdGit, type BorderLabelItem } from "../components/bordered-input"
+import { useKeyChain } from "../hooks/use-key-chain"
+import { PromptSearchPalette } from "../components/prompt-search-palette"
 
 const LOGOS = getLogos()
 
@@ -26,8 +28,8 @@ export interface HomeProps {
 }
 
 type HomeState =
-  | { _tag: "idle"; showWelcome: boolean }
-  | { _tag: "pending"; prompt: string; showWelcome: boolean }
+  | { _tag: "idle"; showWelcome: boolean; overlay: "prompt-search" | null }
+  | { _tag: "pending"; prompt: string; showWelcome: boolean; overlay: "prompt-search" | null }
 
 export function Home(props: HomeProps) {
   const { theme } = useTheme()
@@ -36,6 +38,7 @@ export function Home(props: HomeProps) {
   const router = useRouter()
   const { cast } = useRuntime(client.client.services)
   const { exit, handleEsc } = useExit()
+  const quitChain = useKeyChain()
   const workspace = useWorkspace()
 
   const cwdGitLabel = () =>
@@ -47,10 +50,16 @@ export function Home(props: HomeProps) {
   const [state, setState] = createSignal<HomeState>({
     _tag: "idle",
     showWelcome: false,
+    overlay: null,
   })
   const [authProviders, setAuthProviders] = createSignal<
     { hasKey: boolean; provider: string; required: boolean }[]
   >([])
+  const [composerText, setComposerText] = createSignal("")
+  const [restoreTextRequest, setRestoreTextRequest] = createSignal<
+    { token: number; text: string } | undefined
+  >(undefined)
+  const promptSearchOpen = () => state().overlay === "prompt-search"
 
   const needsAuth = createMemo(() => {
     const providers = authProviders()
@@ -62,9 +71,9 @@ export function Home(props: HomeProps) {
     setState((prev) => {
       switch (prev._tag) {
         case "idle":
-          return { _tag: "idle", showWelcome }
+          return { _tag: "idle", showWelcome, overlay: prev.overlay }
         case "pending":
-          return { _tag: "pending", prompt: prev.prompt, showWelcome }
+          return { _tag: "pending", prompt: prev.prompt, showWelcome, overlay: prev.overlay }
       }
     })
   }
@@ -76,7 +85,9 @@ export function Home(props: HomeProps) {
     const session = client.session()
     if (session === null) return
     setState((prev) =>
-      prev._tag === "pending" ? { _tag: "idle", showWelcome: prev.showWelcome } : prev,
+      prev._tag === "pending"
+        ? { _tag: "idle", showWelcome: prev.showWelcome, overlay: prev.overlay }
+        : prev,
     )
     router.navigateToSession(session.sessionId, session.branchId, current.prompt)
   })
@@ -85,23 +96,73 @@ export function Home(props: HomeProps) {
     // Let command system handle keybinds first
     if (command.handleKeybind(e)) return
 
-    // ESC: double-tap to quit
-    if (e.name === "escape") {
-      if (command.paletteOpen()) {
-        command.closePalette()
+    const clearComposer = () => {
+      setRestoreTextRequest({ token: Date.now(), text: "" })
+    }
+
+    const handleQuitKey = (chainId: string) => {
+      if (composerText().length > 0) {
+        quitChain.trigger(chainId, {
+          first: clearComposer,
+          second: exit,
+        })
         return
       }
 
-      handleEsc()
+      quitChain.trigger(chainId, {
+        first: () => {
+          handleEsc()
+        },
+        second: exit,
+      })
+    }
+
+    // ESC: double-tap to quit
+    if (e.name === "escape") {
+      if (promptSearchOpen()) {
+        setState((prev) => ({ ...prev, overlay: null }))
+        quitChain.reset()
+        return
+      }
+
+      if (command.paletteOpen()) {
+        command.closePalette()
+        quitChain.reset()
+        return
+      }
+
+      handleQuitKey("escape")
       return
     }
 
-    // Ctrl+C: always quit immediately
+    // Ctrl+C: clear composer first, then quit
     if (e.ctrl === true && e.name === "c") {
-      exit()
+      handleQuitKey("ctrl+c")
+      return
+    }
+
+    if (e.ctrl === true && e.name === "r") {
+      setState((prev) => ({ ...prev, overlay: "prompt-search" }))
+      quitChain.reset()
       return
     }
   })
+
+  const createNewSession = (): Effect.Effect<void, UiError> =>
+    client.client
+      .createSession({
+        cwd: workspace.cwd,
+      })
+      .pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            client.switchSession(result.sessionId, result.branchId, result.name, result.bypass)
+            router.navigateToSession(result.sessionId, result.branchId)
+          }),
+        ),
+        Effect.asVoid,
+        Effect.catchEager((error) => Effect.fail(ClientError(formatError(error)))),
+      )
 
   const handleSlashCommand = (cmd: string, args: string): Effect.Effect<void, UiError> =>
     executeSlashCommand(cmd, args, {
@@ -116,6 +177,7 @@ export function Home(props: HomeProps) {
       openPermissions: () => {},
       openAuth: () => router.navigateToAuth(),
       sendMessage: (content: string) => client.sendMessage(content),
+      newSession: () => createNewSession(),
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
@@ -129,7 +191,12 @@ export function Home(props: HomeProps) {
 
   const handleSubmit = (content: string, _mode?: "queue" | "interject") => {
     // Create session, navigate with pending prompt for session route to send
-    setState((prev) => ({ _tag: "pending", prompt: content, showWelcome: prev.showWelcome }))
+    setState((prev) => ({
+      _tag: "pending",
+      prompt: content,
+      showWelcome: prev.showWelcome,
+      overlay: prev.overlay,
+    }))
     client.createSession()
   }
 
@@ -137,7 +204,12 @@ export function Home(props: HomeProps) {
   onMount(() => {
     if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
       const prompt = props.initialPrompt
-      setState((prev) => ({ _tag: "pending", prompt, showWelcome: prev.showWelcome }))
+      setState((prev) => ({
+        _tag: "pending",
+        prompt,
+        showWelcome: prev.showWelcome,
+        overlay: prev.overlay,
+      }))
       client.createSession()
     }
   })
@@ -204,10 +276,21 @@ export function Home(props: HomeProps) {
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
           debugMode={props.debugMode}
+          onTextChange={setComposerText}
+          restoreTextRequest={restoreTextRequest()}
         >
           <Input.Autocomplete />
         </Input>
       </BorderedInput>
+
+      <PromptSearchPalette
+        open={promptSearchOpen()}
+        onClose={() => setState((prev) => ({ ...prev, overlay: null }))}
+        onSelect={(prompt) => {
+          setRestoreTextRequest({ token: Date.now(), text: prompt })
+          setState((prev) => ({ ...prev, overlay: null }))
+        }}
+      />
     </box>
   )
 }

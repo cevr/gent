@@ -34,6 +34,7 @@ import {
   type SessionInfo,
   type BranchInfo,
   type BranchTreeNode,
+  type SessionTreeNode,
   type SteerCommand,
 } from "@gent/sdk"
 
@@ -138,7 +139,12 @@ export interface ClientContextValue {
   listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
   getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
+  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentRpcError>
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentRpcError>
+  drainQueuedMessages: () => Effect.Effect<
+    { steering: readonly string[]; followUp: readonly string[] },
+    GentRpcError
+  >
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId, summarize?: boolean) => void
 
@@ -585,6 +591,8 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.getBranchTree(s.sessionId)
     },
 
+    getSessionTree: (sessionId) => client.getSessionTree(sessionId),
+
     forkBranch: (messageId, name) => {
       const s = session()
       if (s === null) return Effect.succeed("" as BranchId)
@@ -596,6 +604,14 @@ export function ClientProvider(props: ClientProviderProps) {
           ...(name !== undefined ? { name } : {}),
         })
         .pipe(Effect.map((result) => result.branchId as BranchId))
+    },
+
+    drainQueuedMessages: () => {
+      const s = session()
+      if (s === null) {
+        return Effect.succeed({ steering: [] as const, followUp: [] as const })
+      }
+      return client.drainQueuedMessages({ sessionId: s.sessionId, branchId: s.branchId })
     },
 
     // Event subscription for message updates (shared with internal agent state subscription)

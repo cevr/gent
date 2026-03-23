@@ -3,6 +3,7 @@
  */
 
 import {
+  createEffect,
   createSignal,
   createContext,
   useContext,
@@ -92,6 +93,8 @@ export interface InputProps {
   onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
   clearMessages?: () => void
   debugMode?: boolean
+  onTextChange?: (text: string) => void
+  restoreTextRequest?: { token: number; text: string }
   children?: JSX.Element
   /** Input state from parent (optional - for state machine mode) */
   inputState?: InputState
@@ -195,6 +198,7 @@ export function Input(props: InputProps) {
       }
     }
     previousValue = value
+    props.onTextChange?.(value)
 
     // No autocomplete in shell mode
     if (effectiveMode() === "shell") {
@@ -409,6 +413,7 @@ export function Input(props: InputProps) {
               openPermissions: () => {},
               openAuth: () => {},
               sendMessage: (content: string) => client.sendMessage(content),
+              newSession: () => Effect.fail(ClientError("New session not available here")),
             }).pipe(
               Effect.tap((result) =>
                 Effect.sync(() => {
@@ -465,7 +470,19 @@ export function Input(props: InputProps) {
   const clearInput = () => {
     if (inputRef !== null) inputRef.setText("")
     previousValue = ""
+    props.onTextChange?.("")
   }
+
+  createEffect(() => {
+    const request = props.restoreTextRequest
+    if (request === undefined || inputRef === null) return
+    inputRef.replaceText(request.text)
+    inputRef.cursorOffset = request.text.length
+    previousValue = request.text
+    props.onTextChange?.(request.text)
+    setAutocomplete(null)
+    inputRef.focus()
+  })
 
   // Focus input on mount
   onMount(() => {

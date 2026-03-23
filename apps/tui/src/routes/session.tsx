@@ -5,7 +5,7 @@
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
 import { Effect } from "effect"
-import { type BranchTreeNode, useClient } from "../client/index"
+import { type SessionInfo, type SessionTreeNode, useClient } from "../client/index"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList, type SessionItem } from "../components/message-list"
 import { Input } from "../components/input"
@@ -20,9 +20,9 @@ import {
   type InputEvent,
   type InputEffect,
 } from "../components/input-state"
-import { formatError, type UiError } from "../utils/format-error"
+import { ClientError, formatError, type UiError } from "../utils/format-error"
 import { useExit } from "../hooks/use-exit"
-import { BranchTree } from "../components/branch-tree"
+import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
 import { MermaidViewer, collectDiagrams } from "../components/mermaid-viewer"
 import { TaskWidget } from "../components/task-widget"
@@ -37,6 +37,8 @@ import {
 } from "../components/bordered-input"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { useSessionFeed } from "../hooks/use-session-feed"
+import { useKeyChain } from "../hooks/use-key-chain"
+import { PromptSearchPalette } from "../components/prompt-search-palette"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -47,9 +49,10 @@ export interface SessionProps {
 
 type OverlayState =
   | null
-  | { _tag: "tree"; nodes: BranchTreeNode[] }
+  | { _tag: "tree"; tree: SessionTreeNode; sessions: readonly SessionInfo[] }
   | { _tag: "fork" }
   | { _tag: "mermaid" }
+  | { _tag: "prompt-search" }
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
@@ -58,6 +61,7 @@ export function Session(props: SessionProps) {
   const router = useRouter()
   const { cast } = useRuntime(client.client.services)
   const { exit, handleEsc } = useExit()
+  const quitChain = useKeyChain()
   const workspace = useWorkspace()
   const tick = useSpinnerClock()
   const { getChildren } = useChildSessions(client)
@@ -77,6 +81,11 @@ export function Session(props: SessionProps) {
       createdAt: number
     }>
   >([])
+  const [composerText, setComposerText] = createSignal("")
+  const [restoreTextRequest, setRestoreTextRequest] = createSignal<
+    { token: number; text: string } | undefined
+  >(undefined)
+  const promptSearchOpen = () => overlay()?._tag === "prompt-search"
 
   // Handle input state transitions
   const handleInputEvent = (event: InputEvent) => {
@@ -192,14 +201,25 @@ export function Session(props: SessionProps) {
     onCleanup(() => clearInterval(interval))
   })
 
-  const openBranchTree = () => {
+  const openSessionTree = () => {
     cast(
-      client.getBranchTree().pipe(
-        Effect.tap((tree) =>
-          Effect.sync(() => {
-            setOverlay({ _tag: "tree", nodes: [...tree] })
-          }),
-        ),
+      Effect.gen(function* () {
+        const sessions = yield* client.listSessions()
+        const byId = new Map(sessions.map((session) => [session.id, session]))
+        let rootId = props.sessionId
+        let current = byId.get(props.sessionId)
+        while (current?.parentSessionId !== undefined) {
+          const parent = byId.get(current.parentSessionId)
+          if (parent === undefined) break
+          rootId = parent.id
+          current = parent
+        }
+
+        const tree = yield* client.getSessionTree(rootId)
+        yield* Effect.sync(() => {
+          setOverlay({ _tag: "tree", tree, sessions })
+        })
+      }).pipe(
         Effect.catchEager((err) =>
           Effect.sync(() => {
             client.setError(formatError(err))
@@ -223,25 +243,85 @@ export function Session(props: SessionProps) {
 
     if (overlay() !== null) return
 
+    const clearComposer = () => {
+      setRestoreTextRequest({ token: Date.now(), text: "" })
+    }
+
+    const handleQuitKey = (chainId: string) => {
+      if (composerText().length > 0) {
+        quitChain.trigger(chainId, {
+          first: clearComposer,
+          second: exit,
+        })
+        return
+      }
+
+      quitChain.trigger(chainId, {
+        first: () => {
+          handleEsc()
+        },
+        second: exit,
+      })
+    }
+
     // ESC: cancel if streaming, double-tap to quit when idle
     if (e.name === "escape") {
+      if (promptSearchOpen()) {
+        setOverlay(null)
+        quitChain.reset()
+        return
+      }
+
       if (command.paletteOpen()) {
         command.closePalette()
+        quitChain.reset()
         return
       }
 
       if (client.isStreaming()) {
         client.steer({ _tag: "Cancel" })
+        quitChain.reset()
         return
       }
 
-      handleEsc()
+      handleQuitKey("escape")
       return
     }
 
-    // Ctrl+C: always quit immediately
+    // Ctrl+C: clear composer first, then quit
     if (e.ctrl === true && e.name === "c") {
-      exit()
+      handleQuitKey("ctrl+c")
+      return
+    }
+
+    if (e.meta === true && e.name === "up") {
+      cast(
+        client.drainQueuedMessages().pipe(
+          Effect.tap(({ steering, followUp }) =>
+            Effect.sync(() => {
+              const all = [...steering, ...followUp]
+              if (all.length === 0) return
+              setRestoreTextRequest({
+                token: Date.now(),
+                text: all.join("\n"),
+              })
+              setPendingQueuedMessage(null)
+              setPendingSteerMessages([])
+            }),
+          ),
+          Effect.catchEager((err) =>
+            Effect.sync(() => {
+              client.setError(formatError(err))
+            }),
+          ),
+        ),
+      )
+      return
+    }
+
+    if (e.ctrl === true && e.name === "r") {
+      setOverlay({ _tag: "prompt-search" })
+      quitChain.reset()
       return
     }
 
@@ -349,7 +429,7 @@ export function Session(props: SessionProps) {
       clearMessages: feed.clear,
       navigateToSessions: () => command.openPalette(),
       createBranch: client.createBranch().pipe(Effect.asVoid),
-      openTree: openBranchTree,
+      openTree: openSessionTree,
       openFork: openForkPicker,
       toggleBypass: Effect.gen(function* () {
         const current = client.session()?.bypass ?? true
@@ -359,6 +439,22 @@ export function Session(props: SessionProps) {
       openPermissions: () => router.navigateToPermissions(),
       openAuth: () => router.navigateToAuth(),
       sendMessage: (content: string) => client.sendMessage(content),
+      newSession: () =>
+        client.client
+          .createSession({
+            cwd: workspace.cwd,
+            bypass: client.session()?.bypass ?? true,
+          })
+          .pipe(
+            Effect.tap((result) =>
+              Effect.sync(() => {
+                client.switchSession(result.sessionId, result.branchId, result.name, result.bypass)
+                router.navigateToSession(result.sessionId, result.branchId)
+              }),
+            ),
+            Effect.asVoid,
+            Effect.catchEager((error) => Effect.fail(ClientError(formatError(error)))),
+          ),
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
@@ -370,9 +466,18 @@ export function Session(props: SessionProps) {
       Effect.asVoid,
     )
 
-  const handleBranchSelect = (branchId: BranchId) => {
+  const handleSessionTreeSelect = (sessionId: SessionId) => {
+    const current = overlay()
     setOverlay(null)
-    client.switchBranch(branchId)
+    if (current?._tag !== "tree") return
+    const next = current.sessions.find((session) => session.id === sessionId)
+    const branchId = next?.branchId
+    if (next === undefined || branchId === undefined) {
+      client.setError("Session tree entry missing active branch")
+      return
+    }
+    client.switchSession(next.id, branchId, next.name ?? "Unnamed", next.bypass)
+    router.navigateToSession(next.id, branchId)
   }
 
   const handleForkSelect = (messageId: MessageId) => {
@@ -395,7 +500,7 @@ export function Session(props: SessionProps) {
 
   const overlayTree = () => {
     const current = overlay()
-    return current?._tag === "tree" ? current.nodes : []
+    return current?._tag === "tree" ? current.tree : null
   }
 
   const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
@@ -486,6 +591,8 @@ export function Session(props: SessionProps) {
           onSlashCommand={handleSlashCommand}
           debugMode={props.debugMode}
           clearMessages={feed.clear}
+          onTextChange={setComposerText}
+          restoreTextRequest={restoreTextRequest()}
           inputState={inputState()}
           onInputEvent={handleInputEvent}
           onInputEffect={handleInputEffect}
@@ -494,11 +601,11 @@ export function Session(props: SessionProps) {
         </Input>
       </BorderedInput>
 
-      <BranchTree
+      <SessionTree
         open={overlay()?._tag === "tree"}
         tree={overlayTree()}
-        activeBranchId={client.session()?.branchId}
-        onSelect={handleBranchSelect}
+        currentSessionId={props.sessionId}
+        onSelect={handleSessionTreeSelect}
         onClose={() => setOverlay(null)}
       />
 
@@ -513,6 +620,15 @@ export function Session(props: SessionProps) {
         open={overlay()?._tag === "mermaid"}
         diagrams={overlay()?._tag === "mermaid" ? collectDiagrams(feed.messages()) : []}
         onClose={() => setOverlay(null)}
+      />
+
+      <PromptSearchPalette
+        open={promptSearchOpen()}
+        onClose={() => setOverlay(null)}
+        onSelect={(prompt) => {
+          setRestoreTextRequest({ token: Date.now(), text: prompt })
+          setOverlay(null)
+        }}
       />
     </box>
   )

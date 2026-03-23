@@ -245,6 +245,16 @@ export const SteerPayload = Schema.Union([
 ])
 export type SteerPayload = typeof SteerPayload.Type
 
+export const DrainQueuedMessagesPayload = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+
+export const DrainQueuedMessagesSuccess = Schema.Struct({
+  steering: Schema.Array(Schema.String),
+  followUp: Schema.Array(Schema.String),
+})
+
 // ============================================================================
 // Event Operations
 // ============================================================================
@@ -450,6 +460,11 @@ export class GentRpcs extends RpcGroup.make(
   // Steer RPC
   Rpc.make("steer", {
     payload: { command: SteerPayload },
+    error: GentRpcError,
+  }),
+  Rpc.make("drainQueuedMessages", {
+    payload: DrainQueuedMessagesPayload.fields,
+    success: DrainQueuedMessagesSuccess,
     error: GentRpcError,
   }),
 

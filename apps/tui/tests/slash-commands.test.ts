@@ -44,6 +44,7 @@ describe("executeSlashCommand", () => {
   interface MockCalls {
     openPalette: number
     clearMessages: number
+    newSession: number
     navigateToSessions: number
     createBranch: number
     openTree: number
@@ -57,6 +58,7 @@ describe("executeSlashCommand", () => {
     const calls: MockCalls = {
       openPalette: 0,
       clearMessages: 0,
+      newSession: 0,
       navigateToSessions: 0,
       createBranch: 0,
       openTree: 0,
@@ -95,6 +97,10 @@ describe("executeSlashCommand", () => {
         calls.openAuth++
       },
       sendMessage: () => {},
+      newSession: () =>
+        Effect.sync(() => {
+          calls.newSession++
+        }),
     }
 
     return { ctx, calls }
@@ -109,13 +115,22 @@ describe("executeSlashCommand", () => {
     expect(calls.openPalette).toBe(1)
   })
 
-  test("/clear clears messages", async () => {
+  test("/clear starts a new session", async () => {
     const { ctx, calls } = createMockContext()
     const result = await Effect.runPromise(executeSlashCommand("clear", "", ctx))
 
     expect(result.handled).toBe(true)
     expect(result.error).toBeUndefined()
-    expect(calls.clearMessages).toBe(1)
+    expect(calls.newSession).toBe(1)
+  })
+
+  test("/new starts a new session", async () => {
+    const { ctx, calls } = createMockContext()
+    const result = await Effect.runPromise(executeSlashCommand("new", "", ctx))
+
+    expect(result.handled).toBe(true)
+    expect(result.error).toBeUndefined()
+    expect(calls.newSession).toBe(1)
   })
 
   test("/sessions navigates to sessions", async () => {
@@ -174,7 +189,7 @@ describe("executeSlashCommand", () => {
 
     const { ctx: ctx2, calls: calls2 } = createMockContext()
     await Effect.runPromise(executeSlashCommand("Clear", "", ctx2))
-    expect(calls2.clearMessages).toBe(1)
+    expect(calls2.newSession).toBe(1)
   })
 
   test("/counsel sends counsel message", async () => {
@@ -213,6 +228,7 @@ describe("executeSlashCommand", () => {
       openPermissions: () => {},
       openAuth: () => {},
       sendMessage: () => {},
+      newSession: () => Effect.void,
     }
 
     const result = await Effect.runPromise(executeSlashCommand("branch", "", ctx))

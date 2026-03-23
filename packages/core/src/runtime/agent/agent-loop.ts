@@ -169,6 +169,12 @@ const restampQueuedMessage = (message: Message): Message =>
     createdAt: new Date(),
   })
 
+const messageText = (message: Message): string =>
+  message.parts
+    .filter((part): part is TextPart => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+
 type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
 
 type SemaphoreType = Semaphore.Semaphore
@@ -206,6 +212,10 @@ export interface AgentLoopService {
   ) => Effect.Effect<void, AgentLoopError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void>
   readonly followUp: (message: Message) => Effect.Effect<void, AgentLoopError>
+  readonly drainQueue: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<{ steering: string[]; followUp: string[] }>
   readonly isRunning: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -1025,6 +1035,24 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               )
             }),
 
+          drainQueue: (input) =>
+            Effect.gen(function* () {
+              const loop = yield* findLoop(input.sessionId, input.branchId)
+              if (loop === undefined) {
+                return { steering: [], followUp: [] }
+              }
+
+              const steeringItems = yield* Ref.get(loop.steeringMessageQueue)
+              const followUpItems = yield* Ref.get(loop.followUpQueue)
+              yield* Ref.set(loop.steeringMessageQueue, [])
+              yield* Ref.set(loop.followUpQueue, [])
+
+              return {
+                steering: steeringItems.map((item) => messageText(item.message)).filter(Boolean),
+                followUp: followUpItems.map((item) => messageText(item.message)).filter(Boolean),
+              }
+            }),
+
           isRunning: (input) =>
             Effect.gen(function* () {
               const loop = yield* findLoop(input.sessionId, input.branchId)
@@ -1042,6 +1070,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
       run: () => Effect.void,
       steer: () => Effect.void,
       followUp: () => Effect.void,
+      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       isRunning: (_input) => Effect.succeed(false),
     })
 }

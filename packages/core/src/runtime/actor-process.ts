@@ -99,6 +99,9 @@ export interface ActorProcessService {
   readonly invokeTool: (input: InvokeToolPayload) => Effect.Effect<void, ActorProcessError>
   readonly interrupt: (input: InterruptPayload) => Effect.Effect<void, ActorProcessError>
   readonly steerAgent: (command: SteerCommand) => Effect.Effect<void, ActorProcessError>
+  readonly drainQueuedMessages: (
+    input: ActorTarget,
+  ) => Effect.Effect<{ steering: string[]; followUp: string[] }, ActorProcessError>
   readonly getState: (input: ActorTarget) => Effect.Effect<ActorProcessState, ActorProcessError>
   readonly getMetrics: (input: ActorTarget) => Effect.Effect<ActorProcessMetrics, ActorProcessError>
 }
@@ -113,6 +116,7 @@ export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessS
       invokeTool: () => Effect.void,
       interrupt: () => Effect.void,
       steerAgent: () => Effect.void,
+      drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getState: () => Effect.succeed({ status: "idle" as const, queueDepth: 0 }),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
@@ -357,6 +361,15 @@ export const LocalActorProcessLive: Layer.Layer<
           )
         }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause)))),
 
+      drainQueuedMessages: (input) =>
+        agentLoop
+          .drainQueue(input)
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.fail(wrapError("drainQueuedMessages failed", cause)),
+            ),
+          ),
+
       interrupt: (input) =>
         Effect.gen(function* () {
           if (input.kind === "interject") {
@@ -433,6 +446,14 @@ const InterruptRpc = Rpc.make("Interrupt", {
   success: Schema.Void,
   error: ActorProcessError,
 })
+const DrainQueuedMessagesRpc = Rpc.make("DrainQueuedMessages", {
+  payload: ActorTarget.fields,
+  success: Schema.Struct({
+    steering: Schema.Array(Schema.String),
+    followUp: Schema.Array(Schema.String),
+  }),
+  error: ActorProcessError,
+})
 const GetStateRpc = Rpc.make("GetState", {
   payload: ActorTarget.fields,
   success: ActorProcessState,
@@ -453,6 +474,7 @@ const actorProcessRpcGroup = RpcGroup.make(
   SendUserMessageRpc,
   SendToolResultRpc,
   InterruptRpc,
+  DrainQueuedMessagesRpc,
   SteerAgentRpc,
   GetStateRpc,
   GetMetricsRpc,
@@ -469,6 +491,7 @@ export const SessionActorEntityLive = SessionActorEntity.toLayer(
       SendUserMessage: (envelope) => actorProcess.sendUserMessage(envelope.payload),
       SendToolResult: (envelope) => actorProcess.sendToolResult(envelope.payload),
       Interrupt: (envelope) => actorProcess.interrupt(envelope.payload),
+      DrainQueuedMessages: (envelope) => actorProcess.drainQueuedMessages(envelope.payload),
       SteerAgent: (envelope) => actorProcess.steerAgent(envelope.payload.command),
       GetState: (envelope) => actorProcess.getState(envelope.payload),
       GetMetrics: (envelope) => actorProcess.getMetrics(envelope.payload),
@@ -504,6 +527,17 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
         interrupt: (input) =>
           (client(input)["Interrupt"](input) as Effect.Effect<void, ActorProcessError>).pipe(
             Effect.catchCause((cause) => Effect.fail(wrapError("Interrupt failed", cause))),
+          ),
+        drainQueuedMessages: (input) =>
+          (
+            client(input)["DrainQueuedMessages"](input) as Effect.Effect<
+              { steering: string[]; followUp: string[] },
+              ActorProcessError
+            >
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.fail(wrapError("DrainQueuedMessages failed", cause)),
+            ),
           ),
         steerAgent: (command) =>
           (

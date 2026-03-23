@@ -6,6 +6,7 @@ export {
   type SessionInfo,
   type BranchInfo,
   type BranchTreeNode,
+  type SessionTreeNode,
   type SteerCommand,
   type AuthProviderInfo,
   type AuthMethod,

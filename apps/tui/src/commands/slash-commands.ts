@@ -1,7 +1,7 @@
 /**
  * Slash command handlers
  *
- * Commands: /agent, /clear, /sessions, /branch, /tree, /fork, /bypass, /handoff
+ * Commands: /agent, /clear, /new, /sessions, /branch, /tree, /fork, /bypass, /handoff
  */
 
 import { Effect } from "effect"
@@ -11,6 +11,7 @@ import { formatError, type UiError } from "../utils/format-error"
 export type SlashCommandId =
   | "agent"
   | "clear"
+  | "new"
   | "sessions"
   | "branch"
   | "tree"
@@ -37,6 +38,7 @@ export interface SlashCommandContext {
   openPermissions: () => void
   openAuth: () => void
   sendMessage: (content: string) => void
+  newSession: () => Effect.Effect<void, UiError>
 }
 
 export interface SlashCommandResult {
@@ -73,10 +75,10 @@ export const executeSlashCommand = (
       })
 
     case "clear":
-      return Effect.sync(() => {
-        ctx.clearMessages()
-        return { handled: true }
-      })
+      return runCommandEffect(ctx.newSession())
+
+    case "new":
+      return runCommandEffect(ctx.newSession())
 
     case "sessions":
       return Effect.sync(() => {

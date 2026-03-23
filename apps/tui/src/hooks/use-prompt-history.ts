@@ -37,6 +37,7 @@ export interface NavigateResult {
 }
 
 export interface PromptHistory {
+  readonly entries: () => readonly string[]
   /** Add a submitted prompt to history. */
   readonly add: (text: string) => void
   /**
@@ -53,21 +54,42 @@ export interface PromptHistory {
   readonly reset: () => void
 }
 
-export function usePromptHistory(): PromptHistory {
+type PromptHistoryStore = {
+  entries: ReturnType<typeof createSignal<string[]>>[0]
+  setEntries: ReturnType<typeof createSignal<string[]>>[1]
+  historyIndex: number
+  savedEntry: string | null
+  loaded: boolean
+}
+
+let singleton: PromptHistoryStore | null = null
+
+const getStore = (): PromptHistoryStore => {
+  if (singleton !== null) return singleton
+
   const [entries, setEntries] = createSignal<string[]>([])
-  let historyIndex = -1
-  let savedEntry: string | null = null
-  let loaded = false
+  singleton = {
+    entries,
+    setEntries,
+    historyIndex: -1,
+    savedEntry: null,
+    loaded: false,
+  }
+  return singleton
+}
+
+export function usePromptHistory(): PromptHistory {
+  const store = getStore()
 
   const ensureLoaded = async () => {
-    if (loaded) return
-    loaded = true
+    if (store.loaded) return
+    store.loaded = true
     try {
       const raw = await readFile(HISTORY_PATH, "utf-8")
       if (raw.length === 0) return
       const data = JSON.parse(raw) as HistoryStore
       if (Array.isArray(data.entries)) {
-        setEntries(data.entries.slice(0, MAX_ENTRIES))
+        store.setEntries(data.entries.slice(0, MAX_ENTRIES))
       }
     } catch {
       // No file or bad JSON — start fresh
@@ -84,18 +106,20 @@ export function usePromptHistory(): PromptHistory {
   void ensureLoaded()
 
   return {
+    entries: () => store.entries(),
+
     add(text: string) {
       const trimmed = text.trim()
       if (trimmed.length === 0) return
 
-      setEntries((prev) => {
+      store.setEntries((prev) => {
         if (prev[0] === trimmed) return prev
         const next = [trimmed, ...prev].slice(0, MAX_ENTRIES)
         persist(next)
         return next
       })
-      historyIndex = -1
-      savedEntry = null
+      store.historyIndex = -1
+      store.savedEntry = null
     },
 
     navigate(
@@ -104,44 +128,44 @@ export function usePromptHistory(): PromptHistory {
       cursorPos: number,
       textLength: number,
     ): NavigateResult {
-      const inHistory = historyIndex >= 0
+      const inHistory = store.historyIndex >= 0
       if (!canNavigateAtCursor(direction, cursorPos, textLength, inHistory)) {
         return { handled: false }
       }
 
-      const list = entries()
+      const list = store.entries()
       if (list.length === 0 && direction === "up") return { handled: false }
 
       if (direction === "up") {
-        if (historyIndex === -1) {
-          savedEntry = currentText
-          historyIndex = 0
+        if (store.historyIndex === -1) {
+          store.savedEntry = currentText
+          store.historyIndex = 0
           return { handled: true, text: list[0], cursor: "start" }
         }
-        if (historyIndex < list.length - 1) {
-          historyIndex += 1
-          return { handled: true, text: list[historyIndex], cursor: "start" }
+        if (store.historyIndex < list.length - 1) {
+          store.historyIndex += 1
+          return { handled: true, text: list[store.historyIndex], cursor: "start" }
         }
         return { handled: false }
       }
 
       // down
-      if (historyIndex > 0) {
-        historyIndex -= 1
-        return { handled: true, text: list[historyIndex], cursor: "end" }
+      if (store.historyIndex > 0) {
+        store.historyIndex -= 1
+        return { handled: true, text: list[store.historyIndex], cursor: "end" }
       }
-      if (historyIndex === 0) {
-        historyIndex = -1
-        const restored = savedEntry ?? ""
-        savedEntry = null
+      if (store.historyIndex === 0) {
+        store.historyIndex = -1
+        const restored = store.savedEntry ?? ""
+        store.savedEntry = null
         return { handled: true, text: restored, cursor: "end" }
       }
       return { handled: false }
     },
 
     reset() {
-      historyIndex = -1
-      savedEntry = null
+      store.historyIndex = -1
+      store.savedEntry = null
     },
   }
 }

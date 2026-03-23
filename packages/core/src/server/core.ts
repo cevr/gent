@@ -209,6 +209,11 @@ export interface GentCoreService {
     branchId?: BranchId,
   ) => Effect.Effect<ReadonlyArray<Task>, GentCoreError>
 
+  readonly drainQueuedMessages: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<{ steering: string[]; followUp: string[] }, GentCoreError>
+
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
   readonly getSessionState: (
@@ -797,6 +802,11 @@ ${conversation}`
 
         listTasks: (sessionId, branchId) =>
           storage.listTasks(sessionId, branchId).pipe(Effect.withSpan("GentCore.listTasks")),
+
+        drainQueuedMessages: ({ sessionId, branchId }) =>
+          actorProcess
+            .drainQueuedMessages({ sessionId, branchId })
+            .pipe(Effect.withSpan("GentCore.drainQueuedMessages")),
 
         steer: (command) => actorProcess.steerAgent(command),
 

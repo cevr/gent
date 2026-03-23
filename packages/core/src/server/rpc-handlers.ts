@@ -119,6 +119,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       // SAFETY: SteerPayload and SteerCommand are structurally identical Schema.Union types
       steer: ({ command }) => core.steer(command as SteerCommand),
 
+      drainQueuedMessages: ({ sessionId, branchId }) =>
+        core.drainQueuedMessages({ sessionId, branchId }),
+
       subscribeEvents: ({ sessionId, branchId, after }) =>
         // Return the stream directly for streaming RPC
         core.subscribeEvents({
