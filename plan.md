@@ -1,6 +1,6 @@
 # TUI Worker Supervision And Durable Turns
 
-Status: implemented through Batch 7.
+Status: implemented.
 
 ## Summary
 
