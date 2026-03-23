@@ -69,6 +69,15 @@ RegistryProvider → WorkspaceProvider → RouterProvider → ClientProvider →
 | `RouterProvider`    | route, navigate - discriminated union routes    |
 | `ClientProvider`    | transport client, session state, event stream   |
 
+## Testing Seams
+
+- `tests/client-context.test.ts` is mock-only local projection coverage
+- `tests/session-feed-boundary.test.tsx` is the real session-feed seam:
+  real client, real worker transport, real backend events
+- `tests/worker-supervisor.test.ts` owns worker startup/restart/debug boundary behavior
+
+If a TUI bug depends on backend timing, live events, queue visibility, or reconnects, do not stop at a mocked provider test. Add or extend a real transport-backed seam test.
+
 Routes:
 
 - `src/routes/home.tsx`
