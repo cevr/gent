@@ -186,6 +186,7 @@ export const MachineInspectionType = Schema.Literals([
   "@machine.event",
   "@machine.transition",
   "@machine.effect",
+  "@machine.task",
   "@machine.error",
   "@machine.stop",
 ])

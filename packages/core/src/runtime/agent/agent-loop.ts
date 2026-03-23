@@ -2,11 +2,13 @@ import { Cause, ServiceMap, Deferred, Effect, Layer, Ref, Schema, Semaphore, Str
 import {
   type ActorRef,
   type AnyInspectionEvent,
+  combineInspectors,
   Event,
   InspectorService,
   Machine,
   State,
-  makeInspector,
+  makeInspectorEffect,
+  tracingInspector,
 } from "effect-machine"
 import {
   AgentDefinition,
@@ -582,90 +584,22 @@ const publishPhaseFailure = (params: {
       Effect.asVoid,
     )
 
-const annotateInspectionSpan = (event: AnyInspectionEvent) => {
-  const shared = [
-    Effect.annotateCurrentSpan("machine.actor.id", event.actorId),
-    Effect.annotateCurrentSpan("machine.inspection.type", event.type),
-  ]
-
-  switch (event.type) {
-    case "@machine.spawn":
-      return Effect.all([
-        ...shared,
-        Effect.annotateCurrentSpan("machine.state.initial", event.initialState._tag),
-      ]).pipe(Effect.asVoid)
-    case "@machine.event":
-      return Effect.all([
-        ...shared,
-        Effect.annotateCurrentSpan("machine.state.current", event.state._tag),
-        Effect.annotateCurrentSpan("machine.event.tag", event.event._tag),
-      ]).pipe(Effect.asVoid)
-    case "@machine.transition":
-      return Effect.all([
-        ...shared,
-        Effect.annotateCurrentSpan("machine.state.from", event.fromState._tag),
-        Effect.annotateCurrentSpan("machine.state.to", event.toState._tag),
-        Effect.annotateCurrentSpan("machine.event.tag", event.event._tag),
-      ]).pipe(Effect.asVoid)
-    case "@machine.effect":
-      return Effect.all([
-        ...shared,
-        Effect.annotateCurrentSpan("machine.state.current", event.state._tag),
-        Effect.annotateCurrentSpan("machine.effect.kind", event.effectType),
-      ]).pipe(Effect.asVoid)
-    case "@machine.error":
-      return Effect.all([
-        ...shared,
-        Effect.annotateCurrentSpan("machine.phase", event.phase),
-        Effect.annotateCurrentSpan("machine.state.current", event.state._tag),
-      ]).pipe(Effect.asVoid)
-    case "@machine.stop":
-      return Effect.all([
-        ...shared,
-        Effect.annotateCurrentSpan("machine.state.final", event.finalState._tag),
-      ]).pipe(Effect.asVoid)
-  }
-}
-
-const inspectionTraceEventName = (event: AnyInspectionEvent): string => {
-  switch (event.type) {
-    case "@machine.spawn":
-      return `machine.spawn ${event.initialState._tag}`
-    case "@machine.event":
-      return `machine.event ${event.event._tag}`
-    case "@machine.transition":
-      return `machine.transition ${event.fromState._tag}->${event.toState._tag}`
-    case "@machine.effect":
-      return `machine.effect ${event.effectType}`
-    case "@machine.error":
-      return `machine.error ${event.phase}`
-    case "@machine.stop":
-      return `machine.stop ${event.finalState._tag}`
-  }
-}
-
-const emitInspectionTraceEvent = (event: AnyInspectionEvent) =>
-  Effect.gen(function* () {
-    const span = yield* Effect.currentSpan
-    span.event(inspectionTraceEventName(event), BigInt(Date.now()) * 1_000_000n, {
-      actorId: event.actorId,
-      inspectionType: event.type,
-    })
-  }).pipe(Effect.catchEager(() => Effect.void))
-
 const makePublishingInspector = (params: {
-  runFork: (effect: Effect.Effect<void, never, never>) => unknown
   publishEvent: (event: AgentEvent) => Effect.Effect<void, unknown>
   sessionId: SessionId
   branchId: BranchId
 }) =>
-  makeInspector<{ readonly _tag: string }, { readonly _tag: string }>(
-    (event: AnyInspectionEvent) => {
-      params.runFork(
-        Effect.gen(function* () {
-          yield* annotateInspectionSpan(event)
-          yield* emitInspectionTraceEvent(event)
-          yield* params.publishEvent(
+  combineInspectors(
+    tracingInspector<{ readonly _tag: string }, { readonly _tag: string }>({
+      attributes: () => ({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+      }),
+    }),
+    makeInspectorEffect<{ readonly _tag: string }, { readonly _tag: string }>(
+      (event: AnyInspectionEvent) =>
+        params
+          .publishEvent(
             new MachineInspected({
               sessionId: params.sessionId,
               branchId: params.branchId,
@@ -674,14 +608,13 @@ const makePublishingInspector = (params: {
               payload: event,
             }),
           )
-        }).pipe(
-          Effect.withSpan("Machine.inspect"),
-          Effect.catchEager((error) =>
-            Effect.logWarning("failed to publish MachineInspected", error),
+          .pipe(
+            Effect.withSpan("Machine.inspect.publish"),
+            Effect.catchEager((error) =>
+              Effect.logWarning("failed to publish MachineInspected", error),
+            ),
           ),
-        ),
-      )
-    },
+    ),
   )
 
 // Agent Loop Service
@@ -745,10 +678,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
-            const services = yield* Effect.services<never>()
-            const runFork = Effect.runForkWith(services)
             const inspector = makePublishingInspector({
-              runFork,
               publishEvent,
               sessionId,
               branchId,
@@ -1097,6 +1027,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     ),
                   ),
                 {
+                  name: "resolve",
                   onSuccess: (event) => event,
                   onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
@@ -1112,6 +1043,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     ),
                   ),
                 {
+                  name: "stream",
                   onSuccess: (event) => event,
                   onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
@@ -1127,6 +1059,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     ),
                   ),
                 {
+                  name: "tools",
                   onSuccess: (event) => event,
                   onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
@@ -1142,6 +1075,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     ),
                   ),
                 {
+                  name: "finalize",
                   onSuccess: (event) => event,
                   onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
@@ -1373,6 +1307,7 @@ const makeAgentMachine = (run: (input: AgentRunInput) => Effect.Effect<void, Sub
       AgentActorState.Failed({ error: event.error }),
     )
     .task(AgentActorState.Running, ({ state }) => run(state.input), {
+      name: "run",
       onSuccess: () => AgentActorEvent.Succeeded,
       onFailure: (cause) => AgentActorEvent.Failed({ error: Cause.pretty(cause) }),
     })
@@ -1697,10 +1632,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
 
       const run: AgentActorService["run"] = Effect.fn("AgentActor.run")((input) =>
         Effect.gen(function* () {
-          const services = yield* Effect.services<never>()
-          const runFork = Effect.runForkWith(services)
           const inspector = makePublishingInspector({
-            runFork,
             publishEvent: eventStore.publish,
             sessionId: input.sessionId,
             branchId: input.branchId,
