@@ -112,7 +112,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
         yield* recorder.record({
           service: "EventStore",
           method: "publish",
-          args: { _tag: event._tag },
+          args: event,
         })
       }),
       subscribe: ({ sessionId, branchId, after }) =>

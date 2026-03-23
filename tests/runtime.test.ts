@@ -536,6 +536,22 @@ describe("AgentLoop actor model", () => {
     return Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
   }
 
+  const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
+    const recorderLayer = SequenceRecorder.Live
+    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      providerLayer,
+      makeTestExtRegistry(),
+      HandoffHandler.Test(),
+      ToolRunner.Test(),
+      BunServices.layer,
+      recorderLayer,
+      eventStoreLayer,
+    )
+    return Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
+  }
+
   test("runs sessions concurrently", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
     let calls = 0
@@ -680,6 +696,59 @@ describe("AgentLoop actor model", () => {
             )
 
           expect(userTexts).toEqual(["first", "second\nthird"])
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("publishes loop inspection transitions through Streaming", async () => {
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const layer = makeRecordingLayer(providerLayer)
+
+    const getStateTag = (payload: unknown, key: string) => {
+      if (typeof payload !== "object" || payload === null) return undefined
+      const state = (payload as Record<string, unknown>)[key]
+      if (typeof state !== "object" || state === null) return undefined
+      const tag = (state as Record<string, unknown>)["_tag"]
+      return typeof tag === "string" ? tag : undefined
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const recorder = yield* SequenceRecorder
+
+          yield* agentLoop.run(makeMessage("s1", "b1", "inspect me"))
+
+          const calls = yield* recorder.getCalls()
+          const transitions = calls
+            .filter((call) => call.service === "EventStore" && call.method === "publish")
+            .map(
+              (call) =>
+                call.args as
+                  | { _tag?: string; inspectionType?: string; payload?: unknown }
+                  | undefined,
+            )
+            .filter(
+              (
+                event,
+              ): event is { _tag: "MachineInspected"; inspectionType: string; payload: unknown } =>
+                event?._tag === "MachineInspected" &&
+                event.inspectionType === "@machine.transition" &&
+                "payload" in event,
+            )
+            .map((event) => ({
+              from: getStateTag(event.payload, "fromState"),
+              to: getStateTag(event.payload, "toState"),
+            }))
+
+          expect(transitions).toContainEqual({ from: "Resolving", to: "Streaming" })
         }).pipe(Effect.provide(layer)),
       ),
     )
