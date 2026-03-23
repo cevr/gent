@@ -134,21 +134,20 @@ const makeInProcessCase = (): TransportCase => ({
 })
 
 const makeWorkerCase = (): TransportCase => {
-  const root = makeTempDir("gent-transport-worker-")
-  const dataDir = path.join(root, "data")
-  fs.mkdirSync(dataDir, { recursive: true })
-
   return {
     name: "worker-http",
     run: (assertion) =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
+            const root = makeTempDir("gent-transport-worker-")
+            const dataDir = path.join(root, "data")
+            fs.mkdirSync(dataDir, { recursive: true })
             const worker = yield* startWorkerSupervisor({
               cwd: repoRoot,
+              startupTimeoutMs: 20_000,
               env: {
                 GENT_DATA_DIR: dataDir,
-                GENT_PERSISTENCE_MODE: "memory",
                 GENT_PROVIDER_MODE: "debug-scripted",
                 GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
                 GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),

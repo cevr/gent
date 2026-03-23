@@ -564,7 +564,6 @@ export class EventStore extends ServiceMap.Service<EventStore, EventStoreService
         subscribe: ({ sessionId, branchId, after }) =>
           Stream.unwrap(
             Effect.gen(function* () {
-              const queue = yield* PubSub.subscribe(pubsub)
               const afterId = after ?? (0 as EventId)
               const latestId = yield* Ref.get(idRef)
               const buffered = (yield* Ref.get(eventsRef)).filter(
@@ -573,7 +572,7 @@ export class EventStore extends ServiceMap.Service<EventStore, EventStoreService
                   env.id <= latestId &&
                   matchesEventFilter(env, sessionId, branchId),
               )
-              const live = Stream.fromSubscription(queue).pipe(
+              const live = Stream.fromPubSub(pubsub).pipe(
                 Stream.filter(
                   (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
                 ),

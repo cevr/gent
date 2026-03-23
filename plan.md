@@ -5,7 +5,7 @@ Status: in progress.
 ## Task List
 
 - [x] Batch 1 — Shared contract harness
-- [ ] Batch 2 — Event stream parity
+- [x] Batch 2 — Event stream parity
 - [ ] Batch 3 — Worker boundary tests
 - [ ] Batch 4 — Session feed projection tests
 - [ ] Batch 5 — Queue and resume semantics across boundaries
@@ -140,11 +140,11 @@ Gate:
 
 Checklist:
 
-- [ ] shared stream assertions for replay/live/after semantics
-- [ ] cover in-process RPC stream
-- [ ] cover HTTP worker stream
-- [ ] cover queue/interjection stream visibility
-- [ ] `bun run gate`
+- [x] shared stream assertions for replay/live/after semantics
+- [x] cover in-process RPC stream
+- [x] cover HTTP worker stream
+- [x] keep queue/steer visibility assertions out of stream tests
+- [x] `bun run gate`
 
 Goal:
 
@@ -156,7 +156,10 @@ Assertions:
 - live events continue after replay
 - `after` cursor works
 - stream survives normal turn completion
-- stream sees queued/interjection signals
+- stream parity covers only what the stream actually owns:
+  - buffered replay
+  - live continuation
+  - cursor semantics
 
 Tests:
 
@@ -169,6 +172,7 @@ Tests:
 Special focus:
 
 - this batch should permanently cover the regression we just fixed
+- queue and steer ordering remain Batch 5 concerns because they are primarily snapshot/command semantics, not first-class event-stream contracts
 
 Gate:
 
