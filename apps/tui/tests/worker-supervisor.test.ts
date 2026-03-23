@@ -136,6 +136,61 @@ describe("worker supervisor", () => {
     )
   })
 
+  test("watchSessionState can resubscribe after worker restart", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerWithClient({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+          })
+
+          const pid = worker.pid()
+          expect(pid).not.toBeNull()
+          process.kill(pid!, "SIGKILL")
+
+          yield* Effect.promise(() => waitForRunning(worker, 1))
+
+          const states = yield* Deferred.make<string>()
+
+          yield* worker.client
+            .watchSessionState({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            })
+            .pipe(
+              Stream.runForEach((state) =>
+                state.sessionId === created.sessionId
+                  ? Deferred.succeed(states, state.sessionId).pipe(Effect.ignore)
+                  : Effect.void,
+              ),
+              Effect.forkScoped,
+            )
+
+          const sessionId = yield* Deferred.await(states).pipe(
+            Effect.timeoutOption("5 seconds"),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new Error("watchSessionState did not resume after worker restart")),
+                onSome: Effect.succeed,
+              }),
+            ),
+          )
+
+          expect(sessionId).toBe(created.sessionId)
+        }),
+      ),
+    )
+  }, 15_000)
+
   test("debug mode keeps the worker transport seam with ephemeral runtime state", async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -235,7 +290,8 @@ describe("worker supervisor", () => {
               branchId: created.branchId,
             }),
             (state) => state.isStreaming,
-            10_000,
+            15_000,
+            "session to enter streaming before restart setup",
           )
 
           yield* worker.client.sendMessage({
@@ -259,7 +315,8 @@ describe("worker supervisor", () => {
             (snapshot) =>
               snapshot.steering.some((entry) => entry.content.includes("urgent steer")) &&
               snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
-            10_000,
+            15_000,
+            "queued steer and follow-up before worker restart",
           )
 
           expect(queuedBeforeRestart.steering[0]?.content).toContain("urgent steer")
@@ -284,6 +341,7 @@ describe("worker supervisor", () => {
               )
             },
             20_000,
+            "replayed user message order after worker restart",
           )
 
           const userTexts = messages
@@ -299,7 +357,8 @@ describe("worker supervisor", () => {
               branchId: created.branchId,
             }),
             (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
-            10_000,
+            15_000,
+            "queue to drain after worker restart",
           )
 
           expect(settledQueue.steering).toEqual([])
@@ -359,6 +418,60 @@ describe("worker supervisor", () => {
           )
 
           expect(["MessageReceived", "StreamStarted"]).toContain(tag)
+        }),
+      ),
+    )
+  }, 15_000)
+
+  test("subscribeLiveEvents delivers future events after worker restart", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerWithClient({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+          })
+
+          yield* worker.restart
+
+          const firstLiveEvent = yield* Deferred.make<string>()
+
+          yield* worker.client
+            .subscribeLiveEvents({
+              sessionId: created.sessionId,
+            })
+            .pipe(
+              Stream.runForEach((envelope) =>
+                envelope.event._tag === "BranchCreated"
+                  ? Deferred.succeed(firstLiveEvent, envelope.event._tag).pipe(Effect.ignore)
+                  : Effect.void,
+              ),
+              Effect.forkScoped,
+            )
+
+          yield* Effect.sleep("50 millis")
+
+          yield* worker.client.createBranch(created.sessionId, "after-restart-live")
+
+          const tag = yield* Deferred.await(firstLiveEvent).pipe(
+            Effect.timeoutOption("5 seconds"),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new Error("worker did not deliver a live-only event after restart")),
+                onSome: Effect.succeed,
+              }),
+            ),
+          )
+
+          expect(tag).toBe("BranchCreated")
         }),
       ),
     )

@@ -6,7 +6,6 @@ import { Agents } from "@gent/core/domain/agent.js"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"
 import { AuthStorage } from "@gent/core/domain/auth-storage.js"
 import { AuthStore } from "@gent/core/domain/auth-store.js"
-import { EventStore } from "@gent/core/domain/event.js"
 import { Permission } from "@gent/core/domain/permission.js"
 import { Skills } from "@gent/core/domain/skills.js"
 import { DebugProvider, DebugSlowProvider } from "@gent/core/debug/provider.js"
@@ -22,6 +21,7 @@ import { ConfigService } from "@gent/core/runtime/config-service.js"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
 import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
 import { LocalActorProcessLive } from "@gent/core/runtime/actor-process.js"
+import { EventStoreLive } from "@gent/core/server/event-store.js"
 import { AppServicesLive } from "@gent/core/server/index.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
@@ -60,7 +60,6 @@ const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
 
   const baseDeps = Layer.mergeAll(
     Storage.Memory(),
-    EventStore.Memory,
     providerLive,
     extensionRegistryLive,
     Permission.Test(),
@@ -77,18 +76,20 @@ const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
     providerAuthLive,
   )
 
+  const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)
+
   const agentLoopLive = Layer.provide(
     AgentLoop.Live({ systemPrompt: "test system prompt" }),
-    baseDeps,
+    Layer.merge(baseDeps, eventStoreLive),
   )
   const actorProcessLive = Layer.provide(
     LocalActorProcessLive,
-    Layer.merge(baseDeps, agentLoopLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, agentLoopLive),
   )
 
   return Layer.provideMerge(
     AppServicesLive,
-    Layer.mergeAll(baseDeps, agentLoopLive, actorProcessLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, agentLoopLive, actorProcessLive),
   )
 }
 
@@ -154,4 +155,5 @@ const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted"
 ]
 
 export const transportCases = makeTransportCases()
+export const slowTransportCases = makeTransportCases("debug-slow")
 export const queueTransportCases = [makeWorkerCase("debug-slow")]
