@@ -35,7 +35,7 @@
 
     // Readability
     "no-nested-ternary": "error",
-    "complexity": ["error", 35],
+    "complexity": ["warn", 20],
 
     // Disabled — false positives with TS enums, type imports, etc.
     "no-shadow": "off"
