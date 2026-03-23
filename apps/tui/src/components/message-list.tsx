@@ -7,12 +7,7 @@ import type { SessionEvent } from "./session-event-label"
 import type { ImageInfo } from "../client"
 import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { replaceMermaidBlocks } from "../utils/mermaid"
-
 export type { ToolCall }
-
-function escapeMarkdownInline(value: string): string {
-  return value.replaceAll(/([\\`*_{}[\]()#+.!>-])/g, "\\$1")
-}
 
 export interface Message {
   _tag: "message"
@@ -101,12 +96,6 @@ function AssistantMessage(props: {
       ? props.content
       : replaceMermaidBlocks(props.content, process.stdout.columns ?? 80),
   )
-  const thinkingContent = createMemo(() =>
-    [
-      `*${escapeMarkdownInline("[thinking]")}*`,
-      ...props.reasoning.split("\n").map((line) => `*${escapeMarkdownInline(line)}*`),
-    ].join("  \n"),
-  )
 
   return (
     <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
@@ -119,7 +108,11 @@ function AssistantMessage(props: {
               : 0
           }
         >
-          <markdown syntaxStyle={props.syntaxStyle()} content={thinkingContent()} conceal />
+          <text>
+            <span style={{ fg: theme.textMuted, dim: true }}>
+              <i>{props.reasoning}</i>
+            </span>
+          </text>
         </box>
       </Show>
       <Show when={props.images.length > 0}>
@@ -188,37 +181,43 @@ interface MessageListProps {
 export function MessageList(props: MessageListProps) {
   return (
     <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
-      <For each={props.items}>
-        {(item, index) =>
-          item._tag === "event" ? (
-            <SessionEventIndicator event={item} />
-          ) : (
-            <Show
-              when={item.role === "user"}
-              fallback={
-                <AssistantMessage
+      <box flexDirection="column">
+        <For each={props.items}>
+          {(item, index) =>
+            item._tag === "event" ? (
+              <SessionEventIndicator event={item} />
+            ) : (
+              <Show
+                when={item.role === "user"}
+                fallback={
+                  <AssistantMessage
+                    content={item.content}
+                    reasoning={item.reasoning}
+                    images={item.images}
+                    toolCalls={item.toolCalls}
+                    expanded={props.toolsExpanded}
+                    syntaxStyle={props.syntaxStyle}
+                    streaming={props.streaming && index() === props.items.length - 1}
+                    getChildSessions={props.getChildSessions}
+                  />
+                }
+              >
+                <UserMessage
                   content={item.content}
-                  reasoning={item.reasoning}
                   images={item.images}
-                  toolCalls={item.toolCalls}
-                  expanded={props.toolsExpanded}
-                  syntaxStyle={props.syntaxStyle}
-                  streaming={props.streaming && index() === props.items.length - 1}
-                  getChildSessions={props.getChildSessions}
+                  kind={item.kind}
+                  pendingMode={item.pendingMode}
                 />
-              }
-            >
-              <UserMessage
-                content={item.content}
-                images={item.images}
-                kind={item.kind}
-                pendingMode={item.pendingMode}
-              />
-            </Show>
-          )
-        }
-      </For>
-      <Show when={props.footer !== undefined}>{props.footer}</Show>
+              </Show>
+            )
+          }
+        </For>
+        <Show when={props.footer !== undefined}>
+          <box flexDirection="column" flexShrink={0}>
+            {props.footer}
+          </box>
+        </Show>
+      </box>
     </scrollbox>
   )
 }

@@ -19,6 +19,7 @@ import { useWorkspace } from "../workspace/index"
 import { BorderedInput, formatCwdGit, type BorderLabelItem } from "../components/bordered-input"
 import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
+import { buildTopRightLabels } from "../utils/session-labels"
 
 const LOGOS = getLogos()
 
@@ -269,13 +270,17 @@ export function Home(props: HomeProps) {
 
       {/* Bordered input */}
       <BorderedInput
-        topRight={[{ text: client.agent(), color: theme.textMuted }] satisfies BorderLabelItem[]}
+        topRight={
+          buildTopRightLabels(client.agent(), undefined, 0, undefined, theme, {
+            debugMode: props.debugMode,
+          }) satisfies BorderLabelItem[]
+        }
         bottomRight={[{ text: cwdGitLabel(), color: theme.textMuted }]}
+        borderColor={props.debugMode === true ? theme.warning : theme.border}
       >
         <Input
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
-          debugMode={props.debugMode}
           onTextChange={setComposerText}
           restoreTextRequest={restoreTextRequest()}
         >

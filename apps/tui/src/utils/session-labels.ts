@@ -15,13 +15,23 @@ export function buildTopRightLabels(
   tokens: number,
   contextLength: number | undefined,
   theme: ThemeColors,
+  options?: { debugMode?: boolean },
 ): BorderLabelItem[] {
   const items: BorderLabelItem[] = []
 
   if (tokens > 0 && contextLength !== undefined && contextLength > 0) {
     const pct = Math.min(100, Math.round((tokens / contextLength) * 100))
-    const color = pct >= 90 ? theme.error : pct >= 70 ? theme.warning : theme.textMuted
+    let color = theme.textMuted
+    if (pct >= 90) {
+      color = theme.error
+    } else if (pct >= 70) {
+      color = theme.warning
+    }
     items.push({ text: `${formatTokens(tokens)} (${pct}%)`, color })
+  }
+
+  if (options?.debugMode === true) {
+    items.push({ text: "debug", color: theme.warning })
   }
 
   items.push({ text: agentName, color: theme.textMuted })

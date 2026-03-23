@@ -530,8 +530,12 @@ export function Session(props: SessionProps) {
     }
   })
 
-  const borderColor = () =>
-    client.isError() ? theme.error : client.isStreaming() ? theme.borderActive : theme.border
+  const borderColor = () => {
+    if (client.isError()) return theme.error
+    if (props.debugMode === true) return theme.warning
+    if (client.isStreaming()) return theme.borderActive
+    return theme.border
+  }
 
   const topLeftLabels = (): BorderLabelItem[] => {
     const c = client.cost()
@@ -545,6 +549,7 @@ export function Session(props: SessionProps) {
       client.latestInputTokens(),
       client.modelInfo()?.contextLength,
       theme,
+      { debugMode: props.debugMode },
     )
 
   const bottomLeftLabels = (): BorderLabelItem[] => {
@@ -589,7 +594,6 @@ export function Session(props: SessionProps) {
         <Input
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
-          debugMode={props.debugMode}
           clearMessages={feed.clear}
           onTextChange={setComposerText}
           restoreTextRequest={restoreTextRequest()}
