@@ -15,7 +15,9 @@ import type { SessionId } from "@gent/core/domain/ids"
 import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
-import { GentCore } from "@gent/core/server/core"
+import { AppServicesLive } from "@gent/core/server"
+import { SessionQueries } from "@gent/core/server/session-queries"
+import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -183,13 +185,14 @@ describe("Session State", () => {
       Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),
     )
-    const testLayer = Layer.provideMerge(GentCore.Live, deps)
+    const testLayer = Layer.provideMerge(AppServicesLive, deps)
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
+        const commands = yield* SessionCommands
+        const queries = yield* SessionQueries
         const storage = yield* Storage
-        const session = yield* core.createSession({ name: "Test Session" })
+        const session = yield* commands.createSession({ name: "Test Session" })
 
         yield* storage.appendEvent(
           new AgentSwitched({
@@ -200,7 +203,7 @@ describe("Session State", () => {
           }),
         )
 
-        return yield* core.getSessionState({
+        return yield* queries.getSessionState({
           sessionId: session.sessionId,
           branchId: session.branchId,
         })
@@ -229,26 +232,27 @@ describe("Session Tree", () => {
       Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),
     )
-    return Layer.provideMerge(GentCore.Live, deps)
+    return Layer.provideMerge(AppServicesLive, deps)
   }
 
   test("getChildSessions returns direct children", async () => {
     const testLayer = makeTestLayer()
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
-        const parent = yield* core.createSession({ name: "Parent" })
-        yield* core.createSession({
+        const commands = yield* SessionCommands
+        const queries = yield* SessionQueries
+        const parent = yield* commands.createSession({ name: "Parent" })
+        yield* commands.createSession({
           name: "Child 1",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
-        yield* core.createSession({
+        yield* commands.createSession({
           name: "Child 2",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
-        return yield* core.getChildSessions(parent.sessionId)
+        return yield* queries.getChildSessions(parent.sessionId)
       }).pipe(Effect.provide(testLayer)),
     )
 
@@ -259,19 +263,20 @@ describe("Session Tree", () => {
     const testLayer = makeTestLayer()
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
-        const root = yield* core.createSession({ name: "Root" })
-        const child = yield* core.createSession({
+        const commands = yield* SessionCommands
+        const queries = yield* SessionQueries
+        const root = yield* commands.createSession({ name: "Root" })
+        const child = yield* commands.createSession({
           name: "Child",
           parentSessionId: root.sessionId,
           parentBranchId: root.branchId,
         })
-        yield* core.createSession({
+        yield* commands.createSession({
           name: "Grandchild",
           parentSessionId: child.sessionId,
           parentBranchId: child.branchId,
         })
-        return yield* core.getSessionTree(root.sessionId)
+        return yield* queries.getSessionTree(root.sessionId)
       }).pipe(Effect.provide(testLayer)),
     )
 
@@ -286,9 +291,9 @@ describe("Session Tree", () => {
     const testLayer = makeTestLayer()
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
+        const commands = yield* SessionCommands
         return yield* Effect.result(
-          core.createSession({
+          commands.createSession({
             name: "Orphan",
             parentSessionId: "nonexistent" as SessionId,
           }),
@@ -303,14 +308,15 @@ describe("Session Tree", () => {
     const testLayer = makeTestLayer()
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
-        const parent = yield* core.createSession({ name: "Parent" })
-        const child = yield* core.createSession({
+        const commands = yield* SessionCommands
+        const queries = yield* SessionQueries
+        const parent = yield* commands.createSession({ name: "Parent" })
+        const child = yield* commands.createSession({
           name: "Child",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
-        return yield* core.getSession(child.sessionId)
+        return yield* queries.getSession(child.sessionId)
       }).pipe(Effect.provide(testLayer)),
     )
 
@@ -319,7 +325,7 @@ describe("Session Tree", () => {
   })
 })
 
-describe("GentCore → ActorProcess integration", () => {
+describe("SessionCommands → ActorProcess integration", () => {
   const makeIntegrationLayer = (runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>) => {
     const agentLoopLayer = Layer.effect(
       AgentLoop,
@@ -366,7 +372,7 @@ describe("GentCore → ActorProcess integration", () => {
       Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
     )
-    return Layer.provideMerge(GentCore.Live, deps)
+    return Layer.provideMerge(AppServicesLive, deps)
   }
 
   test("createSession with firstMessage reaches AgentLoop.run", async () => {
@@ -375,8 +381,8 @@ describe("GentCore → ActorProcess integration", () => {
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
-        const session = yield* core.createSession({
+        const commands = yield* SessionCommands
+        const session = yield* commands.createSession({
           name: "Integration Test",
           firstMessage: "hello from createSession",
         })
@@ -398,10 +404,10 @@ describe("GentCore → ActorProcess integration", () => {
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
-        const session = yield* core.createSession({ name: "Send Test" })
+        const commands = yield* SessionCommands
+        const session = yield* commands.createSession({ name: "Send Test" })
 
-        yield* core.sendMessage({
+        yield* commands.sendMessage({
           sessionId: session.sessionId,
           branchId: session.branchId,
           content: "hello from sendMessage",
@@ -453,14 +459,14 @@ describe("GentCore → ActorProcess integration", () => {
       Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
     )
-    const layer = Layer.provideMerge(GentCore.Live, deps)
+    const layer = Layer.provideMerge(AppServicesLive, deps)
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const core = yield* GentCore
-        const session = yield* core.createSession({ name: "Steer Test" })
+        const commands = yield* SessionCommands
+        const session = yield* commands.createSession({ name: "Steer Test" })
 
-        yield* core.steer({
+        yield* commands.steer({
           _tag: "SwitchAgent",
           sessionId: session.sessionId,
           branchId: session.branchId,

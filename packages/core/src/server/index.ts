@@ -1,6 +1,6 @@
 import { AgentLoopError, SteerCommand } from "../runtime/agent/agent-loop.js"
 import { Layer } from "effect"
-import { GentCore, type GentCoreError, type GentCoreService, StorageError } from "./core.js"
+import { StorageError } from "../storage/sqlite-storage.js"
 import { createDependencies, type DependenciesConfig } from "./dependencies.js"
 import { SessionQueries, type SessionQueriesService } from "./session-queries.js"
 import { SessionCommands, type SessionCommandsService } from "./session-commands.js"
@@ -42,9 +42,6 @@ export {
   type SessionEventsService,
   InteractionCommands,
   type InteractionCommandsService,
-  GentCore,
-  type GentCoreService,
-  type GentCoreError,
   type CreateSessionInput,
   type CreateSessionOutput,
   type CreateBranchInput,

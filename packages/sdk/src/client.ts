@@ -367,7 +367,7 @@ export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
 
 /**
  * Creates an in-process RPC client for testing or embedded use.
- * Requires a layer that provides all handler dependencies (GentCore, etc).
+ * Requires a layer that provides the split app-service handlers and their dependencies.
  *
  * The layer must provide RpcHandlersContext, which includes:
  * - SessionQueries
@@ -452,7 +452,7 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
     const skillsService = yield* Skills
     const services = yield* Effect.services<never>()
 
-    // Error mapping: GentCoreError → GentRpcError (structurally compatible)
+    // Error mapping: app-service errors → GentRpcError (structurally compatible)
     const mapErr = <A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, GentRpcError> =>
       effect as Effect.Effect<A, GentRpcError>
 
