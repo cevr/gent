@@ -165,4 +165,27 @@ describe("worker supervisor", () => {
       ),
     )
   }, 15_000)
+
+  test("stop tears down the spawned worker process", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerSupervisor({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const pid = worker.pid()
+          expect(pid).not.toBeNull()
+
+          yield* worker.stop
+
+          expect(worker.getState()._tag).toBe("stopped")
+          expect(() => process.kill(pid!, 0)).toThrow()
+        }),
+      ),
+    )
+  })
 })

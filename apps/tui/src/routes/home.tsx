@@ -2,7 +2,7 @@
  * Home route - displays logo, handles first message
  */
 
-import { createEffect, createMemo, createSignal, onMount, Show } from "solid-js"
+import { createMemo, createSignal, onMount, Show } from "solid-js"
 import { Effect } from "effect"
 import { getLogos } from "../logo.macro.js" with { type: "macro" }
 import { useTheme } from "../theme/index"
@@ -69,10 +69,32 @@ export function Home(props: HomeProps) {
         setRestoreTextRequest({ token: Date.now(), text: effect.text })
         break
       case "CreateSession":
-        client.createSession()
-        break
-      case "NavigateToSession":
-        router.navigateToSession(effect.sessionId, effect.branchId, effect.prompt)
+        cast(
+          client.client
+            .createSession({
+              cwd: workspace.cwd,
+              firstMessage: effect.prompt,
+            })
+            .pipe(
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  client.switchSession(
+                    result.sessionId,
+                    result.branchId,
+                    result.name,
+                    result.bypass,
+                  )
+                  router.navigateToSession(result.sessionId, result.branchId)
+                }),
+              ),
+              Effect.catchEager((error) =>
+                Effect.sync(() => {
+                  client.setError(formatError(error))
+                  dispatchHome({ _tag: "SessionCreationFailed" })
+                }),
+              ),
+            ),
+        )
         break
     }
   }
@@ -94,19 +116,6 @@ export function Home(props: HomeProps) {
   const setShowWelcome = (showWelcome: boolean) => {
     dispatchHome({ _tag: "SetShowWelcome", showWelcome })
   }
-
-  // Navigate when session becomes active after pending prompt
-  createEffect(() => {
-    const current = state()
-    if (current._tag !== "pending") return
-    const session = client.session()
-    if (session === null) return
-    dispatchHome({
-      _tag: "SessionActivated",
-      sessionId: session.sessionId,
-      branchId: session.branchId,
-    })
-  })
 
   useScopedKeyboard((e) => {
     if (promptSearchOpen()) {

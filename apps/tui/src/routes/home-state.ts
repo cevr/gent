@@ -1,4 +1,3 @@
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { PromptSearchEvent, PromptSearchState } from "../components/prompt-search-state"
 import {
   PromptSearchState as PromptSearchStateFactory,
@@ -44,21 +43,11 @@ export type HomeEvent =
     }
   | { readonly _tag: "SubmitPrompt"; readonly prompt: string }
   | { readonly _tag: "InitialPrompt"; readonly prompt: string }
-  | {
-      readonly _tag: "SessionActivated"
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-    }
+  | { readonly _tag: "SessionCreationFailed" }
 
 export type HomeEffect =
   | { readonly _tag: "RestoreComposer"; readonly text: string }
-  | { readonly _tag: "CreateSession" }
-  | {
-      readonly _tag: "NavigateToSession"
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-      readonly prompt: string
-    }
+  | { readonly _tag: "CreateSession"; readonly prompt: string }
 
 export interface HomeTransitionResult {
   readonly state: HomeState
@@ -98,23 +87,16 @@ export function transitionHome(state: HomeState, event: HomeEvent): HomeTransiti
     case "InitialPrompt":
       return {
         state: HomeState.pending(event.prompt, state.showWelcome, state.promptSearch),
-        effects: [{ _tag: "CreateSession" }],
+        effects: [{ _tag: "CreateSession", prompt: event.prompt }],
       }
 
-    case "SessionActivated":
+    case "SessionCreationFailed":
       if (state._tag !== "pending") {
         return { state, effects: [] }
       }
       return {
         state: HomeState.idle(state.showWelcome, state.promptSearch),
-        effects: [
-          {
-            _tag: "NavigateToSession",
-            sessionId: event.sessionId,
-            branchId: event.branchId,
-            prompt: state.prompt,
-          },
-        ],
+        effects: [],
       }
   }
 }

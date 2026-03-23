@@ -26,25 +26,14 @@ describe("transitionHome", () => {
     })
 
     expect(result.state).toEqual(HomeState.pending("ship it", true, { _tag: "closed" }))
-    expect(result.effects).toEqual([{ _tag: "CreateSession" }])
+    expect(result.effects).toEqual([{ _tag: "CreateSession", prompt: "ship it" }])
   })
 
-  test("navigates when pending session activates", () => {
+  test("returns home to idle when session creation fails", () => {
     const state = HomeState.pending("ship it", false, { _tag: "closed" })
-    const result = transitionHome(state, {
-      _tag: "SessionActivated",
-      sessionId: "session_123" as never,
-      branchId: "branch_123" as never,
-    })
+    const result = transitionHome(state, { _tag: "SessionCreationFailed" })
 
     expect(result.state).toEqual(HomeState.idle(false, { _tag: "closed" }))
-    expect(result.effects).toEqual([
-      {
-        _tag: "NavigateToSession",
-        sessionId: "session_123",
-        branchId: "branch_123",
-        prompt: "ship it",
-      },
-    ])
+    expect(result.effects).toEqual([])
   })
 })

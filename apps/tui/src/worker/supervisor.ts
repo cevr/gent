@@ -151,6 +151,15 @@ const stopSubprocess = (proc: Bun.Subprocess): Effect.Effect<void> =>
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
+const killSubprocessSync = (proc: Bun.Subprocess | undefined) => {
+  if (proc === undefined || proc.exitCode !== null) return
+  try {
+    process.kill(proc.pid, "SIGTERM")
+  } catch {
+    // Parent is already exiting. Best effort only.
+  }
+}
+
 const spawnWorkerProcess = (
   options: WorkerSupervisorOptions,
   port: number,
@@ -208,6 +217,11 @@ export const startWorkerSupervisor = (
         port: assignedPort,
         restartCount,
       }
+      const handleProcessExit = () => {
+        killSubprocessSync(current)
+      }
+
+      process.on("exit", handleProcessExit)
 
       const emit = (next: WorkerLifecycleState) => {
         state = next
@@ -288,6 +302,7 @@ export const startWorkerSupervisor = (
       const stop = Effect.gen(function* () {
         if (stopped) return
         stopped = true
+        process.off("exit", handleProcessExit)
         const proc = current
         current = undefined
         if (proc !== undefined) yield* stopSubprocess(proc)

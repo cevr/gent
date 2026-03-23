@@ -94,7 +94,7 @@ const resolveInitialState = (input: {
 
     // 3. Continue from cwd
     if (continue_) {
-      const sess: SessionInfo = yield* Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const existing = yield* client
           .listSessions()
           .pipe(
@@ -105,23 +105,34 @@ const resolveInitialState = (input: {
                   .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
             ),
           )
-        if (existing !== null) return existing
+        if (existing !== null) {
+          return { session: existing, createdFromPrompt: false as const }
+        }
 
-        const result = yield* client.createSession({ cwd, bypass })
-        return {
-          id: result.sessionId,
-          name: result.name,
+        const firstMessage = Option.getOrUndefined(prompt)
+        const created = yield* client.createSession({
           cwd,
-          bypass: result.bypass,
-          reasoningLevel: undefined,
-          branchId: result.branchId,
-          parentSessionId: undefined,
-          parentBranchId: undefined,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          bypass,
+          ...(firstMessage !== undefined ? { firstMessage } : {}),
+        })
+        return {
+          session: {
+            id: created.sessionId,
+            name: created.name,
+            cwd,
+            bypass: created.bypass,
+            reasoningLevel: undefined,
+            branchId: created.branchId,
+            parentSessionId: undefined,
+            parentBranchId: undefined,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          } satisfies SessionInfo,
+          createdFromPrompt: firstMessage !== undefined,
         }
       })
-      const promptText = Option.isSome(prompt) ? prompt.value : undefined
+      const sess = result.session
+      const promptText = result.createdFromPrompt ? undefined : Option.getOrUndefined(prompt)
       const branches = yield* client.listBranches(sess.id)
       if (branches.length > 1) {
         return {
@@ -136,7 +147,11 @@ const resolveInitialState = (input: {
 
     // 4. Prompt without session - create new
     if (Option.isSome(prompt)) {
-      const result = yield* client.createSession({ cwd, bypass })
+      const result = yield* client.createSession({
+        cwd,
+        bypass,
+        firstMessage: prompt.value,
+      })
       const sess: SessionInfo = {
         id: result.sessionId,
         name: result.name,
@@ -149,7 +164,7 @@ const resolveInitialState = (input: {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }
-      return { _tag: "session" as const, session: sess, prompt: prompt.value }
+      return { _tag: "session" as const, session: sess }
     }
 
     // 5. Home view

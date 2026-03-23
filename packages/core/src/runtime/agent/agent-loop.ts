@@ -3,11 +3,13 @@ import {
   ServiceMap,
   Deferred,
   Effect,
+  Exit,
   Layer,
   Option,
   Ref,
   Schema,
   Semaphore,
+  Scope,
   Stream,
 } from "effect"
 import {
@@ -202,6 +204,7 @@ type LoopHandle = {
   actor: LoopActor
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   bashSemaphore: SemaphoreType
+  scope: Scope.Closeable
 }
 
 const interruptActiveStream = (activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>) =>
@@ -566,6 +569,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
+            const loopScope = yield* Scope.make()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
@@ -1024,12 +1028,16 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const loopActor = yield* Machine.spawn(
               loopMachine,
               `agent-loop:${sessionId}:${branchId}`,
-            ).pipe(Effect.provideService(InspectorService, inspector))
+            ).pipe(
+              Effect.provideService(InspectorService, inspector),
+              Effect.provideService(Scope.Scope, loopScope),
+            )
 
             return {
               actor: loopActor,
               activeStreamRef,
               bashSemaphore,
+              scope: loopScope,
             }
           })
 
@@ -1194,6 +1202,17 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               return (yield* loop.actor.snapshot)._tag !== "Idle"
             }),
         }
+
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            const loops = yield* Ref.get(loopsRef)
+            yield* Effect.forEach(
+              Array.from(loops.values()),
+              (loop) => Scope.close(loop.scope, Exit.void),
+              { concurrency: "unbounded" },
+            )
+          }),
+        )
 
         return service
       }),
