@@ -432,49 +432,78 @@ const buildResolvingState = (
     interruptAfterTools: false,
   })
 
-const updateQueueOnState = (state: LoopState, queue: LoopQueueState): LoopState => {
+function updateQueueOnState(state: IdleState, queue: LoopQueueState): IdleState
+function updateQueueOnState(state: ResolvingState, queue: LoopQueueState): ResolvingState
+function updateQueueOnState(state: StreamingState, queue: LoopQueueState): StreamingState
+function updateQueueOnState(state: ExecutingToolsState, queue: LoopQueueState): ExecutingToolsState
+function updateQueueOnState(state: FinalizingState, queue: LoopQueueState): FinalizingState
+function updateQueueOnState(state: LoopState, queue: LoopQueueState): LoopState
+function updateQueueOnState(state: LoopState, queue: LoopQueueState): LoopState {
   switch (state._tag) {
     case "Idle":
-      return AgentLoopState.Idle({ ...state, queue })
+      return AgentLoopState.Idle.derive(state, { queue })
     case "Resolving":
-      return AgentLoopState.Resolving({ ...state, queue })
+      return AgentLoopState.Resolving.derive(state, { queue })
     case "Streaming":
-      return AgentLoopState.Streaming({ ...state, queue })
+      return AgentLoopState.Streaming.derive(state, { queue })
     case "ExecutingTools":
-      return AgentLoopState.ExecutingTools({ ...state, queue })
+      return AgentLoopState.ExecutingTools.derive(state, { queue })
     case "Finalizing":
-      return AgentLoopState.Finalizing({ ...state, queue })
+      return AgentLoopState.Finalizing.derive(state, { queue })
   }
 }
 
-const updateCurrentAgentOnState = (state: LoopState, currentAgent: AgentNameType): LoopState => {
+function updateCurrentAgentOnState(state: IdleState, currentAgent: AgentNameType): IdleState
+function updateCurrentAgentOnState(
+  state: ResolvingState,
+  currentAgent: AgentNameType,
+): ResolvingState
+function updateCurrentAgentOnState(
+  state: StreamingState,
+  currentAgent: AgentNameType,
+): StreamingState
+function updateCurrentAgentOnState(
+  state: ExecutingToolsState,
+  currentAgent: AgentNameType,
+): ExecutingToolsState
+function updateCurrentAgentOnState(
+  state: FinalizingState,
+  currentAgent: AgentNameType,
+): FinalizingState
+function updateCurrentAgentOnState(state: LoopState, currentAgent: AgentNameType): LoopState
+function updateCurrentAgentOnState(state: LoopState, currentAgent: AgentNameType): LoopState {
   switch (state._tag) {
     case "Idle":
-      return AgentLoopState.Idle({ ...state, currentAgent })
+      return AgentLoopState.Idle.derive(state, { currentAgent })
     case "Resolving":
-      return AgentLoopState.Resolving({ ...state, currentAgent })
+      return AgentLoopState.Resolving.derive(state, { currentAgent })
     case "Streaming":
-      return AgentLoopState.Streaming({ ...state, currentAgent })
+      return AgentLoopState.Streaming.derive(state, { currentAgent })
     case "ExecutingTools":
-      return AgentLoopState.ExecutingTools({ ...state, currentAgent })
+      return AgentLoopState.ExecutingTools.derive(state, { currentAgent })
     case "Finalizing":
-      return AgentLoopState.Finalizing({ ...state, currentAgent })
+      return AgentLoopState.Finalizing.derive(state, { currentAgent })
   }
 }
 
 const markInterruptAfterTools = (state: ExecutingToolsState): ExecutingToolsState =>
-  AgentLoopState.ExecutingTools({ ...state, interruptAfterTools: true })
+  AgentLoopState.ExecutingTools.derive(state, { interruptAfterTools: true })
 
-const markTurnInterrupted = (state: ActiveLoopState): ActiveLoopState => {
+function markTurnInterrupted(state: ResolvingState): ResolvingState
+function markTurnInterrupted(state: StreamingState): StreamingState
+function markTurnInterrupted(state: ExecutingToolsState): ExecutingToolsState
+function markTurnInterrupted(state: FinalizingState): FinalizingState
+function markTurnInterrupted(state: ActiveLoopState): ActiveLoopState
+function markTurnInterrupted(state: ActiveLoopState): ActiveLoopState {
   switch (state._tag) {
     case "Resolving":
-      return AgentLoopState.Resolving({ ...state, turnInterrupted: true })
+      return AgentLoopState.Resolving.derive(state, { turnInterrupted: true })
     case "Streaming":
-      return AgentLoopState.Streaming({ ...state, turnInterrupted: true })
+      return AgentLoopState.Streaming.derive(state, { turnInterrupted: true })
     case "ExecutingTools":
-      return AgentLoopState.ExecutingTools({ ...state, turnInterrupted: true })
+      return AgentLoopState.ExecutingTools.derive(state, { turnInterrupted: true })
     case "Finalizing":
-      return AgentLoopState.Finalizing({ ...state, turnInterrupted: true })
+      return AgentLoopState.Finalizing.derive(state, { turnInterrupted: true })
   }
 }
 
@@ -482,22 +511,15 @@ const toStreamingState = (params: {
   state: ResolvingState
   resolved: ResolvedTurn
 }): StreamingState =>
-  AgentLoopState.Streaming({
-    queue: params.state.queue,
-    currentAgent: params.state.currentAgent,
-    handoffSuppress: params.state.handoffSuppress,
-    message: params.state.message,
-    bypass: params.state.bypass,
-    startedAtMs: params.state.startedAtMs,
-    agentOverride: params.state.agentOverride,
-    turnInterrupted: params.state.turnInterrupted,
-    interruptAfterTools: params.state.interruptAfterTools,
+  AgentLoopState.Streaming.derive(params.state, {
     currentTurnAgent: params.resolved.currentTurnAgent,
     messages: params.resolved.messages,
     systemPrompt: params.resolved.systemPrompt,
     modelId: params.resolved.modelId,
-    reasoning: params.resolved.reasoning,
-    temperature: params.resolved.temperature,
+    ...(params.resolved.reasoning !== undefined ? { reasoning: params.resolved.reasoning } : {}),
+    ...(params.resolved.temperature !== undefined
+      ? { temperature: params.resolved.temperature }
+      : {}),
   })
 
 const toExecutingToolsState = (params: {
@@ -505,16 +527,7 @@ const toExecutingToolsState = (params: {
   currentTurnAgent: AgentNameType
   draft: AssistantDraft
 }): ExecutingToolsState =>
-  AgentLoopState.ExecutingTools({
-    queue: params.state.queue,
-    currentAgent: params.state.currentAgent,
-    handoffSuppress: params.state.handoffSuppress,
-    message: params.state.message,
-    bypass: params.state.bypass,
-    startedAtMs: params.state.startedAtMs,
-    agentOverride: params.state.agentOverride,
-    turnInterrupted: params.state.turnInterrupted,
-    interruptAfterTools: params.state.interruptAfterTools,
+  AgentLoopState.ExecutingTools.derive(params.state, {
     currentTurnAgent: params.currentTurnAgent,
     draft: params.draft,
   })
@@ -526,14 +539,7 @@ const toFinalizingState = (params: {
   streamFailed: boolean
   turnInterrupted: boolean
 }): FinalizingState =>
-  AgentLoopState.Finalizing({
-    queue: params.state.queue,
-    currentAgent: params.state.currentAgent,
-    handoffSuppress: params.state.handoffSuppress,
-    message: params.state.message,
-    bypass: params.state.bypass,
-    startedAtMs: params.state.startedAtMs,
-    agentOverride: params.state.agentOverride,
+  AgentLoopState.Finalizing.derive(params.state, {
     interruptAfterTools: false,
     turnInterrupted: params.turnInterrupted,
     currentTurnAgent: params.currentTurnAgent,
@@ -637,8 +643,32 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
 
-            const switchAgentOnState = (state: LoopState, next: AgentNameType) =>
-              Effect.gen(function* () {
+            function switchAgentOnState(
+              state: IdleState,
+              next: AgentNameType,
+            ): Effect.Effect<IdleState>
+            function switchAgentOnState(
+              state: ResolvingState,
+              next: AgentNameType,
+            ): Effect.Effect<ResolvingState>
+            function switchAgentOnState(
+              state: StreamingState,
+              next: AgentNameType,
+            ): Effect.Effect<StreamingState>
+            function switchAgentOnState(
+              state: ExecutingToolsState,
+              next: AgentNameType,
+            ): Effect.Effect<ExecutingToolsState>
+            function switchAgentOnState(
+              state: FinalizingState,
+              next: AgentNameType,
+            ): Effect.Effect<FinalizingState>
+            function switchAgentOnState(
+              state: LoopState,
+              next: AgentNameType,
+            ): Effect.Effect<LoopState>
+            function switchAgentOnState(state: LoopState, next: AgentNameType) {
+              return Effect.gen(function* () {
                 const previous = state.currentAgent ?? "cowork"
                 if (previous === next) return state
                 const resolved = yield* extensionRegistry.getAgent(next)
@@ -659,6 +689,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
                 return updateCurrentAgentOnState(state, next)
               }).pipe(Effect.orDie)
+            }
 
             const runResolvingState = Effect.fn("AgentLoop.runResolvingState")(function* (
               state: ResolvingState,
@@ -778,33 +809,49 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
                 buildResolvingState(state, event.item),
               )
-              .on(AgentLoopState.Idle, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
-                updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
+              .on(
+                [
+                  AgentLoopState.Idle,
+                  AgentLoopState.Resolving,
+                  AgentLoopState.Streaming,
+                  AgentLoopState.ExecutingTools,
+                  AgentLoopState.Finalizing,
+                ],
+                AgentLoopEvent.QueueFollowUp,
+                ({ state, event }) =>
+                  updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
+              )
+              .on(
+                [
+                  AgentLoopState.Idle,
+                  AgentLoopState.Resolving,
+                  AgentLoopState.Streaming,
+                  AgentLoopState.ExecutingTools,
+                  AgentLoopState.Finalizing,
+                ],
+                AgentLoopEvent.ClearQueue,
+                ({ state }) => updateQueueOnState(state, clearQueueState(state.queue)),
+              )
+              .on(
+                [
+                  AgentLoopState.Idle,
+                  AgentLoopState.Resolving,
+                  AgentLoopState.Streaming,
+                  AgentLoopState.ExecutingTools,
+                  AgentLoopState.Finalizing,
+                ],
+                AgentLoopEvent.SwitchAgent,
+                ({ state, event }) => switchAgentOnState(state, event.agent),
               )
               .on(AgentLoopState.Idle, AgentLoopEvent.QueueSteering, ({ state, event }) =>
                 updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
               )
-              .on(AgentLoopState.Idle, AgentLoopEvent.ClearQueue, ({ state }) =>
-                updateQueueOnState(state, clearQueueState(state.queue)),
-              )
               .on(AgentLoopState.Idle, AgentLoopEvent.Interrupt, ({ state }) => state)
-              .on(AgentLoopState.Idle, AgentLoopEvent.SwitchAgent, ({ state, event }) =>
-                switchAgentOnState(state, event.agent),
-              )
-              .on(AgentLoopState.Resolving, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
-                updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
-              )
               .on(AgentLoopState.Resolving, AgentLoopEvent.QueueSteering, ({ state, event }) =>
                 updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
               )
-              .on(AgentLoopState.Resolving, AgentLoopEvent.ClearQueue, ({ state }) =>
-                updateQueueOnState(state, clearQueueState(state.queue)),
-              )
               .on(AgentLoopState.Resolving, AgentLoopEvent.Interrupt, ({ state }) =>
                 markTurnInterrupted(state),
-              )
-              .on(AgentLoopState.Resolving, AgentLoopEvent.SwitchAgent, ({ state, event }) =>
-                switchAgentOnState(state, event.agent),
               )
               .on(AgentLoopState.Resolving, AgentLoopEvent.Resolved, ({ state, event }) =>
                 toStreamingState({ state, resolved: event }),
@@ -817,9 +864,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   turnInterrupted: state.turnInterrupted,
                 }),
               )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
-                updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
-              )
               .on(AgentLoopState.Streaming, AgentLoopEvent.QueueSteering, ({ state, event }) =>
                 Effect.gen(function* () {
                   if (event.urgent) {
@@ -828,14 +872,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return updateQueueOnState(state, appendSteeringItem(state.queue, event.item))
                 }),
               )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.ClearQueue, ({ state }) =>
-                updateQueueOnState(state, clearQueueState(state.queue)),
-              )
               .on(AgentLoopState.Streaming, AgentLoopEvent.Interrupt, ({ state }) =>
                 interruptActiveStream(activeStreamRef).pipe(Effect.as(state)),
-              )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.SwitchAgent, ({ state, event }) =>
-                switchAgentOnState(state, event.agent),
               )
               .on(AgentLoopState.Streaming, AgentLoopEvent.StreamFinished, ({ state, event }) =>
                 event.draft.toolCalls.length === 0
@@ -876,9 +914,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   turnInterrupted: state.turnInterrupted,
                 }),
               )
-              .on(AgentLoopState.ExecutingTools, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
-                updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
-              )
               .on(
                 AgentLoopState.ExecutingTools,
                 AgentLoopEvent.QueueSteering,
@@ -890,14 +925,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return event.urgent ? markInterruptAfterTools(nextState) : nextState
                 },
               )
-              .on(AgentLoopState.ExecutingTools, AgentLoopEvent.ClearQueue, ({ state }) =>
-                updateQueueOnState(state, clearQueueState(state.queue)),
-              )
               .on(AgentLoopState.ExecutingTools, AgentLoopEvent.Interrupt, ({ state }) =>
                 markInterruptAfterTools(state),
-              )
-              .on(AgentLoopState.ExecutingTools, AgentLoopEvent.SwitchAgent, ({ state, event }) =>
-                switchAgentOnState(state, event.agent),
               )
               .on(AgentLoopState.ExecutingTools, AgentLoopEvent.ToolsFinished, ({ state }) =>
                 toFinalizingState({
@@ -917,20 +946,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
                 }),
               )
-              .on(AgentLoopState.Finalizing, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
-                updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
-              )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.QueueSteering, ({ state, event }) =>
                 updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
               )
-              .on(AgentLoopState.Finalizing, AgentLoopEvent.ClearQueue, ({ state }) =>
-                updateQueueOnState(state, clearQueueState(state.queue)),
-              )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.Interrupt, ({ state }) =>
                 markTurnInterrupted(state),
-              )
-              .on(AgentLoopState.Finalizing, AgentLoopEvent.SwitchAgent, ({ state, event }) =>
-                switchAgentOnState(state, event.agent),
               )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.FinalizeFinished, ({ state, event }) =>
                 event.nextItem !== undefined
@@ -1058,10 +1078,10 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           ) {
             const bypass = options?.bypass ?? true
             const loop = yield* getLoop(message.sessionId, message.branchId)
-            const loopState = yield* loop.actor.snapshot
+            const initialState = yield* loop.actor.snapshot
             const item: QueuedTurnItem = { message, bypass }
 
-            if (loopState._tag !== "Idle") {
+            if (initialState._tag !== "Idle") {
               const content = messageText(message)
               yield* loop.actor.sendAndWait(AgentLoopEvent.QueueFollowUp({ item }), (state) =>
                 queueContainsContent(state.queue.followUp, content),
@@ -1069,20 +1089,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               return
             }
 
-            const done = yield* Deferred.make<void>()
-            const services = yield* Effect.services<never>()
-            let sawActive = false
-            const unsubscribe = loop.actor.subscribe((state) => {
-              if (state._tag !== "Idle") {
-                sawActive = true
-              } else if (sawActive) {
-                Effect.runForkWith(services)(Deferred.succeed(done, void 0))
-              }
-            })
-
             yield* loop.actor.send(AgentLoopEvent.Start({ item }))
-            yield* Deferred.await(done)
-            unsubscribe()
+            yield* loop.actor.waitFor((state) => state._tag === "Idle" && state !== initialState)
           }),
 
           steer: (command) =>
