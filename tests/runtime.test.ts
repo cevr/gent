@@ -794,10 +794,18 @@ describe("AgentLoop actor model", () => {
           })
 
           const snapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
-          expect(snapshot).toEqual({
-            steering: ["steer now"],
-            followUp: ["queued a\nqueued b"],
-          })
+          expect(snapshot.steering).toEqual([
+            expect.objectContaining({
+              kind: "steering",
+              content: "steer now",
+            }),
+          ])
+          expect(snapshot.followUp).toEqual([
+            expect.objectContaining({
+              kind: "follow-up",
+              content: "queued a\nqueued b",
+            }),
+          ])
 
           const secondSnapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
           expect(secondSnapshot).toEqual(snapshot)
@@ -864,7 +872,12 @@ describe("AgentLoop actor model", () => {
             sessionId: "s1",
             branchId: "b1",
           })
-          expect(snapshotWhileRunning.followUp).toEqual(["queued after failure"])
+          expect(snapshotWhileRunning.followUp).toEqual([
+            expect.objectContaining({
+              kind: "follow-up",
+              content: "queued after failure",
+            }),
+          ])
 
           yield* Deferred.succeed(gate, undefined)
 

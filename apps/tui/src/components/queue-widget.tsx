@@ -1,15 +1,11 @@
 import { For, Show } from "solid-js"
+import type { QueueEntryInfo } from "@gent/sdk"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
 
-export interface PendingQueueMessage {
-  content: string
-  createdAt: number
-}
-
 export interface QueueWidgetProps {
-  queuedMessages: readonly PendingQueueMessage[]
-  steerMessages: readonly PendingQueueMessage[]
+  queuedMessages: readonly QueueEntryInfo[]
+  steerMessages: readonly QueueEntryInfo[]
 }
 
 function summaryText(text: string): string {

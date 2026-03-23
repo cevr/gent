@@ -7,6 +7,7 @@ import { AgentName, ReasoningEffort } from "../domain/agent.js"
 import { Model } from "../domain/model.js"
 import { PermissionDecision, PermissionRule } from "../domain/permission.js"
 import { Task } from "../domain/task.js"
+import { QueueSnapshot } from "../domain/queue.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import { AuthProviderInfo } from "../domain/auth-guard.js"
 import {
@@ -250,20 +251,14 @@ export const DrainQueuedMessagesPayload = Schema.Struct({
   branchId: BranchId,
 })
 
-export const DrainQueuedMessagesSuccess = Schema.Struct({
-  steering: Schema.Array(Schema.String),
-  followUp: Schema.Array(Schema.String),
-})
+export const DrainQueuedMessagesSuccess = QueueSnapshot
 
 export const GetQueuedMessagesPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
 })
 
-export const GetQueuedMessagesSuccess = Schema.Struct({
-  steering: Schema.Array(Schema.String),
-  followUp: Schema.Array(Schema.String),
-})
+export const GetQueuedMessagesSuccess = QueueSnapshot
 
 // ============================================================================
 // Event Operations

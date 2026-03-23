@@ -23,6 +23,8 @@ export type {
   SessionState,
   CreateSessionResult,
   SteerCommand,
+  QueueEntryInfo,
+  QueueSnapshot,
   AuthProviderInfo,
   AuthMethod,
   AuthAuthorization,

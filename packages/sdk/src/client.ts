@@ -30,6 +30,7 @@ import type {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import type { Task } from "@gent/core/domain/task.js"
+import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import { Skills, type SkillScope } from "@gent/core/domain/skills.js"
 import { ConfigService } from "@gent/core/runtime/config-service.js"
 import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
@@ -49,6 +50,8 @@ export type {
   SessionId,
   BranchId,
   MessageId,
+  QueueEntryInfo,
+  QueueSnapshot,
 }
 
 // Re-export RPC types
@@ -218,6 +221,9 @@ export interface BranchTreeNode {
   children: readonly BranchTreeNode[]
 }
 
+export type QueueEntryInfoReadonly = QueueEntryInfo
+export type QueueSnapshotReadonly = QueueSnapshot
+
 export interface SessionState {
   sessionId: SessionId
   branchId: BranchId
@@ -348,13 +354,13 @@ export interface GentClient {
   drainQueuedMessages: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<{ steering: readonly string[]; followUp: readonly string[] }, GentRpcError>
+  }) => Effect.Effect<QueueSnapshotReadonly, GentRpcError>
 
   /** Read queued steer/follow-up messages without mutating queue state */
   getQueuedMessages: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<{ steering: readonly string[]; followUp: readonly string[] }, GentRpcError>
+  }) => Effect.Effect<QueueSnapshotReadonly, GentRpcError>
 
   /** Respond to questions from agent */
   respondQuestions: (

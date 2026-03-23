@@ -31,6 +31,7 @@ import {
   type GentClient,
   type GentRpcError,
   type MessageInfoReadonly,
+  type QueueSnapshot,
   type SessionInfo,
   type BranchInfo,
   type BranchTreeNode,
@@ -141,14 +142,8 @@ export interface ClientContextValue {
   getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
   getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentRpcError>
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentRpcError>
-  drainQueuedMessages: () => Effect.Effect<
-    { steering: readonly string[]; followUp: readonly string[] },
-    GentRpcError
-  >
-  getQueuedMessages: () => Effect.Effect<
-    { steering: readonly string[]; followUp: readonly string[] },
-    GentRpcError
-  >
+  drainQueuedMessages: () => Effect.Effect<QueueSnapshot, GentRpcError>
+  getQueuedMessages: () => Effect.Effect<QueueSnapshot, GentRpcError>
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId, summarize?: boolean) => void
 

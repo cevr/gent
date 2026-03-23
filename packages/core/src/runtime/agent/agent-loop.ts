@@ -29,6 +29,7 @@ import {
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
+import { QueueEntryInfo, type QueueSnapshot } from "../../domain/queue.js"
 import {
   EventStore,
   AgentSwitched,
@@ -183,6 +184,36 @@ const formatStreamErrorMessage = (streamError: unknown) => {
   }
   return String(streamError)
 }
+
+const toQueueEntry = (
+  kind: "steering" | "follow-up",
+  item: FollowUpItem,
+): QueueEntryInfo | undefined => {
+  const content = messageText(item.message)
+  if (content === "") return undefined
+  return new QueueEntryInfo({
+    id: item.message.id,
+    kind,
+    content,
+    createdAt: item.message.createdAt.getTime(),
+    bypass: item.bypass,
+    ...(item.agentOverride !== undefined ? { agentOverride: item.agentOverride } : {}),
+  })
+}
+
+const toQueueSnapshot = (
+  steeringItems: ReadonlyArray<FollowUpItem>,
+  followUpItems: ReadonlyArray<FollowUpItem>,
+): QueueSnapshot => ({
+  steering: steeringItems.flatMap((item) => {
+    const entry = toQueueEntry("steering", item)
+    return entry === undefined ? [] : [entry]
+  }),
+  followUp: followUpItems.flatMap((item) => {
+    const entry = toQueueEntry("follow-up", item)
+    return entry === undefined ? [] : [entry]
+  }),
+})
 
 const enqueueInterjectionMessage = (params: {
   sessionId: SessionId
@@ -1082,11 +1113,11 @@ export interface AgentLoopService {
   readonly drainQueue: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<{ steering: string[]; followUp: string[] }>
+  }) => Effect.Effect<QueueSnapshot>
   readonly getQueue: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<{ steering: string[]; followUp: string[] }>
+  }) => Effect.Effect<QueueSnapshot>
   readonly isRunning: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -1576,10 +1607,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               yield* Ref.set(loop.steeringMessageQueue, [])
               yield* Ref.set(loop.followUpQueue, [])
 
-              return {
-                steering: steeringItems.map((item) => messageText(item.message)).filter(Boolean),
-                followUp: followUpItems.map((item) => messageText(item.message)).filter(Boolean),
-              }
+              return toQueueSnapshot(steeringItems, followUpItems)
             }),
 
           getQueue: (input) =>
@@ -1592,10 +1620,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               const steeringItems = yield* Ref.get(loop.steeringMessageQueue)
               const followUpItems = yield* Ref.get(loop.followUpQueue)
 
-              return {
-                steering: steeringItems.map((item) => messageText(item.message)).filter(Boolean),
-                followUp: followUpItems.map((item) => messageText(item.message)).filter(Boolean),
-              }
+              return toQueueSnapshot(steeringItems, followUpItems)
             }),
 
           isRunning: (input) =>

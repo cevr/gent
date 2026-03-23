@@ -41,6 +41,7 @@ import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { useScopedKeyboard } from "../keyboard/context"
 import { usePromptHistory } from "../hooks/use-prompt-history"
+import type { QueueEntryInfo } from "@gent/sdk"
 import {
   SessionUiState,
   getPromptSearchState,
@@ -58,15 +59,37 @@ export interface SessionProps {
 }
 
 type QueueState = {
-  steering: readonly string[]
-  followUp: readonly string[]
+  steering: readonly QueueEntryInfo[]
+  followUp: readonly QueueEntryInfo[]
 }
 
-const appendQueuedFollowUp = (queue: readonly string[], content: string): readonly string[] => {
+const appendQueuedFollowUp = (
+  queue: readonly QueueEntryInfo[],
+  content: string,
+): readonly QueueEntryInfo[] => {
   const last = queue[queue.length - 1]
-  if (last === undefined) return [content]
-  return [...queue.slice(0, -1), `${last}\n${content}`]
+  if (last === undefined) return [makeOptimisticQueueEntry("follow-up", content)]
+  return [
+    ...queue.slice(0, -1),
+    {
+      ...last,
+      content: `${last.content}\n${content}`,
+    },
+  ]
 }
+
+const makeOptimisticQueueEntry = (
+  kind: "steering" | "follow-up",
+  content: string,
+  agentOverride?: QueueEntryInfo["agentOverride"],
+): QueueEntryInfo => ({
+  id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}` as MessageId,
+  kind,
+  content,
+  createdAt: Date.now(),
+  bypass: true,
+  ...(agentOverride !== undefined ? { agentOverride } : {}),
+})
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
@@ -129,7 +152,10 @@ export function Session(props: SessionProps) {
       if (mode === "interject") {
         return {
           ...current,
-          steering: [...current.steering, content],
+          steering: [
+            ...current.steering,
+            makeOptimisticQueueEntry("steering", content, client.agent()),
+          ],
         }
       }
 
@@ -350,7 +376,7 @@ export function Session(props: SessionProps) {
             if (all.length === 0) return
             setRestoreTextRequest({
               token: Date.now(),
-              text: all.join("\n"),
+              text: all.map((entry) => entry.content).join("\n"),
             })
             setQueueState({ steering: [], followUp: [] })
           }),
@@ -593,8 +619,8 @@ export function Session(props: SessionProps) {
 
           <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
           <QueueWidget
-            queuedMessages={queueState().followUp.map((content) => ({ content, createdAt: 0 }))}
-            steerMessages={queueState().steering.map((content) => ({ content, createdAt: 0 }))}
+            queuedMessages={queueState().followUp}
+            steerMessages={queueState().steering}
           />
         </box>
       </scrollbox>

@@ -25,6 +25,7 @@ import { AgentName, type ReasoningEffort } from "../domain/agent.js"
 import { Permission, PermissionRule, type PermissionDecision } from "../domain/permission.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { Task } from "../domain/task.js"
+import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage, StorageError } from "../storage/sqlite-storage.js"
 import { Provider, type ProviderError, type ProviderService } from "../providers/provider.js"
 import type { ProviderAuthError } from "../providers/provider-auth.js"
@@ -212,12 +213,12 @@ export interface GentCoreService {
   readonly drainQueuedMessages: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<{ steering: string[]; followUp: string[] }, GentCoreError>
+  }) => Effect.Effect<QueueSnapshot, GentCoreError>
 
   readonly getQueuedMessages: (input: {
     sessionId: SessionId
     branchId: BranchId
-  }) => Effect.Effect<{ steering: string[]; followUp: string[] }, GentCoreError>
+  }) => Effect.Effect<QueueSnapshot, GentCoreError>
 
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 

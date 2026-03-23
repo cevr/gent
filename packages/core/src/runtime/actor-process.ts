@@ -3,6 +3,7 @@ import { Entity } from "effect/unstable/cluster"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Cause, ServiceMap, Effect, Layer, Schema } from "effect"
 import { AgentName } from "../domain/agent.js"
+import { QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
   ErrorOccurred,
@@ -101,10 +102,10 @@ export interface ActorProcessService {
   readonly steerAgent: (command: SteerCommand) => Effect.Effect<void, ActorProcessError>
   readonly drainQueuedMessages: (
     input: ActorTarget,
-  ) => Effect.Effect<{ steering: string[]; followUp: string[] }, ActorProcessError>
+  ) => Effect.Effect<QueueSnapshot, ActorProcessError>
   readonly getQueuedMessages: (
     input: ActorTarget,
-  ) => Effect.Effect<{ steering: string[]; followUp: string[] }, ActorProcessError>
+  ) => Effect.Effect<QueueSnapshot, ActorProcessError>
   readonly getState: (input: ActorTarget) => Effect.Effect<ActorProcessState, ActorProcessError>
   readonly getMetrics: (input: ActorTarget) => Effect.Effect<ActorProcessMetrics, ActorProcessError>
 }
@@ -459,18 +460,12 @@ const InterruptRpc = Rpc.make("Interrupt", {
 })
 const DrainQueuedMessagesRpc = Rpc.make("DrainQueuedMessages", {
   payload: ActorTarget.fields,
-  success: Schema.Struct({
-    steering: Schema.Array(Schema.String),
-    followUp: Schema.Array(Schema.String),
-  }),
+  success: QueueSnapshot,
   error: ActorProcessError,
 })
 const GetQueuedMessagesRpc = Rpc.make("GetQueuedMessages", {
   payload: ActorTarget.fields,
-  success: Schema.Struct({
-    steering: Schema.Array(Schema.String),
-    followUp: Schema.Array(Schema.String),
-  }),
+  success: QueueSnapshot,
   error: ActorProcessError,
 })
 const GetStateRpc = Rpc.make("GetState", {
@@ -552,7 +547,7 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
         drainQueuedMessages: (input) =>
           (
             client(input)["DrainQueuedMessages"](input) as Effect.Effect<
-              { steering: string[]; followUp: string[] },
+              QueueSnapshot,
               ActorProcessError
             >
           ).pipe(
@@ -563,7 +558,7 @@ export const ClusterActorProcessLive: Layer.Layer<ActorProcess, never, Sharding.
         getQueuedMessages: (input) =>
           (
             client(input)["GetQueuedMessages"](input) as Effect.Effect<
-              { steering: string[]; followUp: string[] },
+              QueueSnapshot,
               ActorProcessError
             >
           ).pipe(
