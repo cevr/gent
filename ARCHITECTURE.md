@@ -58,7 +58,9 @@ commands      queries/events
    runtime + boundaries
 ```
 
-Process topology is secondary. In-process direct transport is still server-first if it obeys the same contract.
+Process topology is secondary, but production topology is not.
+
+Production TUI is a shell over a supervised worker process. Debug-only local hosting lives under `apps/tui/src/debug/*`.
 
 ## Transport Boundary
 
@@ -120,6 +122,7 @@ Shape:
 
 - `ActorProcess` is the single command entry for session/branch actor work.
 - `AgentLoop` is a flat machine-owned control plane.
+- production actor routing is cluster-backed inside the worker process
 - queue ownership is structural
 - turn phases are explicit
 - machine inspection events are published as diagnostics
@@ -141,9 +144,21 @@ App entrypoints bind concrete Bun/OS behavior:
 - `apps/tui/src/main.tsx`
 - `apps/server/src/main.ts`
 
+Production rule:
+
+- `apps/tui/src/main.tsx` supervises the worker and talks through transport only
+- debug-only direct hosting is isolated under `apps/tui/src/debug/*`
+- production `main.tsx` must not import app dependency wiring directly
+
 ## TUI
 
 TUI is a client over the shared contract, not a parallel app.
+
+Production shape:
+
+- shell process owns renderer, input, reconnect UX
+- worker process owns storage, providers, actor runtime, durability
+- reconnect logic rehydrates from worker state, not UI guesses
 
 Main boundaries:
 

@@ -1,26 +1,16 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Layer, Option, Tracer } from "effect"
+import { Config, Console, Effect, Layer, Option, Schema, Tracer } from "effect"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
-import { createDependencies } from "@gent/core/server/dependencies.js"
-import { AppServicesLive } from "@gent/core/server/index.js"
-import { prepareDebugSession } from "@gent/core/debug/session.js"
-import {
-  makeDirectGentClient,
-  type GentClient,
-  type GentRpcError,
-  type SessionInfo,
-} from "@gent/sdk"
-import { GentLogger } from "@gent/core/runtime/logger.js"
-import { GentTracerLive, clearTraceLogIfRoot } from "@gent/core/runtime/tracer.js"
+import type { runDebugApp as runDebugAppFn } from "./debug/run-debug-app"
+import { type GentClient, type GentRpcError, type SessionInfo } from "@gent/sdk"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
 import { OsService } from "@gent/core/domain/os-service.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
 import type { SessionId } from "@gent/core/domain/ids.js"
-import * as os from "node:os"
 
 import { render } from "@opentui/solid"
 import { App } from "./app"
@@ -29,13 +19,16 @@ import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
-import { joinPath } from "./platform/path-runtime"
-import { resolveAppBootstrap, resolveDebugBootstrap, type InitialState } from "./app-bootstrap"
+import { resolveAppBootstrap, type InitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { startWorkerSupervisor } from "./worker/supervisor"
 
 // Clear client log on startup
 clearClientLog()
+
+class DebugImportError extends Schema.TaggedErrorClass<DebugImportError>()("DebugImportError", {
+  message: Schema.String,
+}) {}
 
 // Pure function for state resolution
 const resolveInitialState = (input: {
@@ -181,44 +174,7 @@ const ATOM_CACHE_MAX = 256
 // Platform layer
 const PlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
 
-// Logger layer — pretty (stderr) + JSON (/tmp/gent.log)
-const LoggerLayer = GentLogger
-
-// Tracer layer — span tracing to /tmp/gent-trace.log
-const TracerLayer = Layer.merge(GentTracerLive, clearTraceLogIfRoot)
-
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
-
-const makeDebugCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const cwd = options?.cwd ?? process.cwd()
-      const homeOpt = yield* Config.option(Config.string("HOME"))
-      const home = Option.getOrElse(homeOpt, () => os.homedir())
-      const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
-      const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
-      const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
-      const dbPath = Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db"))
-      const authFilePath = Option.isSome(dataDirOpt)
-        ? joinPath(dataDir, "auth.json.enc")
-        : undefined
-      const authKeyPath = Option.isSome(dataDirOpt) ? joinPath(dataDir, "auth.key") : undefined
-
-      const serverDeps = createDependencies({
-        cwd,
-        home,
-        platform: process.platform,
-        dbPath,
-        persistenceMode: options?.debug === true ? "memory" : "disk",
-        providerMode: options?.debug === true ? "debug-scripted" : "live",
-        actorRuntime: "local",
-        ...(authFilePath !== undefined ? { authFilePath } : {}),
-        ...(authKeyPath !== undefined ? { authKeyPath } : {}),
-      }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))
-      const coreLive = AppServicesLive.pipe(Layer.provide(serverDeps))
-      return Layer.mergeAll(coreLive, serverDeps, LinkLayer)
-    }),
-  )
 
 const makeUiLayer = () => Layer.mergeAll(PlatformLayer, LinkLayer)
 
@@ -267,46 +223,24 @@ const main = Command.make(
         makeUiLayer(),
         scope,
       )) as ServiceMap.ServiceMap<unknown>
+      const visualOpt = yield* Config.option(Config.string("VISUAL"))
+      const editorOpt = yield* Config.option(Config.string("EDITOR"))
+      const env = {
+        visual: Option.getOrUndefined(visualOpt),
+        editor: Option.getOrUndefined(editorOpt),
+      }
 
       if (debug) {
-        const debugServices = (yield* Layer.buildWithScope(
-          makeDebugCoreLayer({ cwd, debug }),
-          scope,
-        )) as ServiceMap.ServiceMap<unknown>
-        const gentClient = yield* makeDirectGentClient.pipe(Effect.provideServices(debugServices))
-        const debugSession = yield* prepareDebugSession(cwd).pipe(
-          Effect.provideServices(debugServices),
-        )
-        const bootstrap = resolveDebugBootstrap(debugSession)
-
-        const visualOpt = yield* Config.option(Config.string("VISUAL"))
-        const editorOpt = yield* Config.option(Config.string("EDITOR"))
-        const env = {
-          visual: Option.getOrUndefined(visualOpt),
-          editor: Option.getOrUndefined(editorOpt),
-        }
-
-        yield* Effect.sync(() =>
-          render(() => (
-            <EnvProvider env={env}>
-              <WorkspaceProvider cwd={cwd} services={uiServices}>
-                <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                  <ClientProvider client={gentClient} initialSession={bootstrap.initialSession}>
-                    <RouterProvider initialRoute={bootstrap.initialRoute}>
-                      <App
-                        initialPrompt={bootstrap.initialPrompt}
-                        missingAuthProviders={bootstrap.missingAuthProviders}
-                        debugMode={bootstrap.debugMode}
-                      />
-                    </RouterProvider>
-                  </ClientProvider>
-                </RegistryProvider>
-              </WorkspaceProvider>
-            </EnvProvider>
-          )),
-        )
-
-        return yield* Effect.never
+        const debugModule: { runDebugApp: typeof runDebugAppFn } = yield* Effect.tryPromise({
+          try: () => import("./debug/run-debug-app"),
+          catch: (cause) => new DebugImportError({ message: String(cause) }),
+        })
+        return yield* debugModule.runDebugApp({
+          cwd,
+          uiServices,
+          env,
+          atomCacheMax: ATOM_CACHE_MAX,
+        })
       }
 
       const supervisor = yield* startWorkerSupervisor({ cwd })
@@ -364,13 +298,6 @@ const main = Command.make(
       const bootstrap = resolveAppBootstrap(state, {
         missingProviders: missingProviders as readonly ProviderId[],
       })
-
-      const visualOpt = yield* Config.option(Config.string("VISUAL"))
-      const editorOpt = yield* Config.option(Config.string("EDITOR"))
-      const env = {
-        visual: Option.getOrUndefined(visualOpt),
-        editor: Option.getOrUndefined(editorOpt),
-      }
 
       yield* Effect.sync(() =>
         render(() => (
@@ -433,10 +360,6 @@ const cli = Command.run(command, {
 // Run with base platform layers; command handlers provide core layers as needed
 const CliLayer = Layer.effectDiscard(cli)
 
-const MainLayer = CliLayer.pipe(
-  Layer.provide(LoggerLayer),
-  Layer.provide(TracerLayer),
-  Layer.provide(PlatformLayer),
-)
+const MainLayer = CliLayer.pipe(Layer.provide(PlatformLayer))
 
 BunRuntime.runMain(Effect.scoped(Layer.launch(MainLayer)))

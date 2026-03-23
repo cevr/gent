@@ -1,5 +1,7 @@
 # TUI Worker Supervision And Durable Turns
 
+Status: implemented through Batch 7.
+
 ## Summary
 
 Move the TUI onto a supervised worker-hosted app runtime.
