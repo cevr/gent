@@ -1,31 +1,29 @@
-# Flattened Agent Loop Rewrite
+# Agent Loop Machine Shape Refinement
 
 ## Summary
 
-Rewrite `packages/core/src/runtime/agent/agent-loop.ts` as one flat machine per
-`sessionId + branchId`.
+Replace the completed rewrite plan with a follow-on pass focused on pushing
+`packages/core/src/runtime/agent/agent-loop.ts` from "flat but still branchy"
+to "phase-explicit and mostly pure."
 
-No outer machine plus inner handwritten loop.
-No nested `TurnMachine` unless the flat version gets worse in code.
-No string-array queue API.
-
-Keep streams and tool execution as state-scoped tasks.
-Keep chunk accumulation task-local.
-Keep `Stream.interruptWhen(...)`.
-Do not use `Effect.whileLoop` as the main orchestrator.
+Keep current queue semantics and public APIs. Internal architecture pass only.
 
 ## Locked Decisions
 
-- Flat machine, not nested machine
-- Structured queue entries now, not later
-- Queue lanes stay split: `steering` + `followUp`
-- Preserve current user-facing semantics:
-  - queued follow-ups batch with `\n`
-  - steering drains before follow-up
-  - interjection agent override is one-turn scoped
+- Flat machine stays flat. No nested `TurnMachine`.
+- No cluster/entity integration in this pass.
+- No queue API changes. Keep `{ steering, followUp }`.
+- No user-visible semantic changes:
+  - follow-ups still batch with `\n`
+  - steering still drains before follow-up
+  - interjection agent override stays one-turn scoped
   - provider failure still flushes queued work
-  - interruption persists partial assistant output
-- Cluster/entity integration is out of scope
+  - interruption still persists partial assistant output
+- Use `effect-machine` harder where it helps:
+  - `State.derive(...)`
+  - `.onAny(...)`
+  - state-scoped `.task(...)`
+- Do not use `Effect.whileLoop` as orchestration.
 
 ## Target Shape
 
@@ -37,84 +35,109 @@ Do not use `Effect.whileLoop` as the main orchestrator.
 - `ExecutingTools`
 - `Finalizing`
 
-### Machine-owned business state
+### State payloads
 
-- `queue: { steering: QueueEntry[]; followUp: QueueEntry[] }`
-- `currentAgent?: AgentName`
-- `handoffSuppress: number`
-- `turn: ...` payload for non-idle states
+- `TurnEnvelope`
+  - `message`
+  - `bypass`
+  - `startedAtMs`
+  - `agentOverride`
+  - `turnInterrupted`
+  - `interruptAfterTools`
+- `ResolvedTurn`
+  - `currentTurnAgent`
+  - `messages`
+  - `tools`
+  - `systemPrompt`
+  - `modelId`
+  - `reasoning`
+- `AssistantDraft`
+  - `text`
+  - `reasoning`
+  - `toolCalls`
+  - `usage?`
 
-### Runtime-only infra outside machine state
+### Phase ownership
 
-- provider abort / interrupt handle for the active stream
-- serial tool semaphore
-- storage/provider/event-store/tool-runner services
+- `Resolving`
+  - persist incoming user/interjection message
+  - resolve agent/tools/prompt/model/reasoning
+  - emit `Resolved`
+- `Streaming`
+  - run provider stream only
+  - publish stream events
+  - collect `AssistantDraft`
+  - persist assistant output on success
+  - persist partial assistant output on interrupt/failure
+- `ExecutingTools`
+  - execute tool calls from `AssistantDraft`
+  - persist tool result message
+- `Finalizing`
+  - update turn duration
+  - publish `TurnCompleted`
+  - run handoff suppression logic
+  - dequeue next turn or return idle
 
-## Public API Changes
+## Implementation Batches
 
-Introduce structured queue entries across:
+### Batch 0 — Plan checkpoint
 
-- `AgentLoopService`
-- `ActorProcess`
-- `GentCore`
-- RPC schemas
-- SDK client
-- TUI client/session route/widget
+- replace `PLAN.md` with this follow-on plan
 
-Queue entry shape:
+### Batch 1 — Introduce real resolve phase
 
-- `id: MessageId`
-- `kind: "steering" | "follow-up"`
-- `content: string`
-- `createdAt: Date`
-- `agentOverride?: AgentName`
-- `bypass: boolean`
+- add `Resolving` state
+- add `Resolved` event
+- add `TurnEnvelope`, `ResolvedTurn`, `AssistantDraft`
+- remove dead `PhaseFailed.error` payload
+- keep behavior unchanged
 
-Queue API shape:
+Commit after gate.
 
-- `{ steering: QueueEntry[]; followUp: QueueEntry[] }`
+### Batch 2 — Split phase tasks from machine shell
 
-## Execution Batches
+- extract phase tasks into `agent-loop-phases.ts`
+- keep `agent-loop.ts` as machine/service wiring shell
+- split into:
+  - resolving task
+  - streaming task
+  - tools task
+  - finalizing task
+- add one shared wrapper for logs/span/error publication
 
-### Batch 0 — Planning checkpoint
+Commit after gate.
 
-- update `PLAN.md`
-- lock execution checklist
+### Batch 3 — Collapse transition boilerplate
 
-### Batch 1 — Core queue types and public surfaces
+- move state-independent events to `.onAny(...)`:
+  - `QueueFollowUp`
+  - `ClearQueue`
+  - `SwitchAgent`
+- keep phase-specific handlers explicit:
+  - `QueueSteering`
+  - `Interrupt`
+  - phase completion/failure events
+- replace repeated object spreads with `State.derive(...)` or small pure helpers
 
-- add structured queue entry schema/type
-- update `AgentLoopService` / `ActorProcess` / `GentCore`
-- update RPC and SDK queue types
-- update tests that only depend on queue shape
+Commit after gate.
 
-### Batch 2 — Flat machine rewrite
+### Batch 4 — Cleanup and verification
 
-- replace current mixed machine + imperative loop with one flat machine
-- remove queue ownership refs / recursive drain helpers
-- preserve interruption, failure flush, tool execution, and handoff semantics
-- keep `run(...)` blocking semantics when starting from idle
+- remove dead helpers/types left behind by the split
+- confirm complexity remains under current lint threshold
+- run full gate
 
-### Batch 3 — TUI queue migration
-
-- move session/client queue state to structured entries
-- update queue widget rendering and restore-to-composer path
-- keep backend as source of truth
-
-### Batch 4 — Verification and cleanup
-
-- runtime regressions
-- full gate
-- final cleanup of dead helpers / types
+Commit after gate.
 
 ## Regression Checklist
 
-- queued regular messages batch into one persisted follow-up
-- steering executes before queued follow-up
-- queue reads do not drain
-- queue drain returns structured entries
-- queued work flushes after provider failure
-- interruption persists partial assistant output
-- serial tool calls do not overlap
-- auto-handoff suppression still works
-- TUI queue widget renders structured entries and restore still joins with `\n`
+- idle start enters resolve phase first
+- text-only turns skip tool execution
+- tool-call turns persist assistant message before tool result message
+- interrupt during streaming persists partial assistant output
+- steering during streaming interrupts immediately
+- steering during tool execution waits for tools, then finalizes as interrupted
+- provider failure still flushes queued work
+- queue read/drain semantics stay unchanged
+- follow-up batching stays unchanged
+- handoff suppression stays unchanged
