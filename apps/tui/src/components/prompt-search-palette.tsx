@@ -1,106 +1,60 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import { usePromptHistory } from "../hooks/use-prompt-history"
 import { truncate } from "../utils/truncate"
 import { useScopedKeyboard } from "../keyboard/context"
-
-const fuzzyMatch = (text: string, query: string): boolean => {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  let j = 0
-  for (let i = 0; i < lower.length && j < q.length; i++) {
-    if (lower[i] === q[j]) j++
-  }
-  return j === q.length
-}
+import {
+  getPromptSearchItems,
+  type PromptSearchEvent,
+  type PromptSearchState,
+} from "./prompt-search-state"
 
 export interface PromptSearchPaletteProps {
-  open: boolean
-  onPreview: (prompt: string | undefined) => void
-  onAccept: () => void
-  onClose: () => void
+  state: PromptSearchState
+  entries: readonly string[]
+  onEvent: (event: PromptSearchEvent) => void
 }
 
 export function PromptSearchPalette(props: PromptSearchPaletteProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const history = usePromptHistory()
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
-  const [query, setQuery] = createSignal("")
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
-  const items = createMemo(() => {
-    const currentQuery = query().trim()
-    const entries = history.entries()
-    if (currentQuery.length === 0) return entries
-    return entries.filter((entry) => fuzzyMatch(entry, currentQuery))
-  })
-
-  const selectedPrompt = createMemo(() => {
-    const visible = items()
-    if (visible.length === 0) return undefined
-    const index = Math.min(selectedIndex(), visible.length - 1)
-    return visible[index]
-  })
+  const items = createMemo(() => getPromptSearchItems(props.state, props.entries))
+  const selectedIndex = () => (props.state._tag === "open" ? props.state.selectedIndex : 0)
+  const query = () => (props.state._tag === "open" ? props.state.query : "")
 
   useScrollSync(() => `prompt-search-${selectedIndex()}`, { getRef: () => scrollRef })
-
-  createEffect(() => {
-    if (!props.open) return
-    setSelectedIndex(0)
-    setQuery("")
-  })
-
-  createEffect(() => {
-    const visible = items()
-    if (visible.length === 0) {
-      setSelectedIndex(0)
-      props.onPreview(undefined)
-      return
-    }
-
-    const nextIndex = Math.min(selectedIndex(), visible.length - 1)
-    if (nextIndex !== selectedIndex()) {
-      setSelectedIndex(nextIndex)
-      return
-    }
-
-    props.onPreview(visible[nextIndex])
-  })
 
   useScopedKeyboard(
     (e) => {
       if (e.name === "escape") {
-        props.onClose()
+        props.onEvent({ _tag: "Cancel" })
         return true
       }
 
       if (e.name === "backspace") {
-        setQuery((current) => current.slice(0, -1))
-        setSelectedIndex(0)
+        props.onEvent({ _tag: "Backspace" })
         return true
       }
 
-      if (e.name === "return") {
-        if (selectedPrompt() !== undefined) {
-          props.onAccept()
-        }
+      if (e.name === "return" || e.name === "linefeed") {
+        props.onEvent({ _tag: "Accept" })
         return true
       }
 
       const visible = items()
 
       if (visible.length > 0 && (e.name === "up" || (e.ctrl === true && e.name === "p"))) {
-        setSelectedIndex((index) => (index > 0 ? index - 1 : visible.length - 1))
+        props.onEvent({ _tag: "MoveUp" })
         return true
       }
 
       if (visible.length > 0 && (e.name === "down" || (e.ctrl === true && e.name === "n"))) {
-        setSelectedIndex((index) => (index < visible.length - 1 ? index + 1 : 0))
+        props.onEvent({ _tag: "MoveDown" })
         return true
       }
 
@@ -114,14 +68,13 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
       ) {
         const char = e.sequence
         if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-          setQuery((current) => current + char)
-          setSelectedIndex(0)
+          props.onEvent({ _tag: "TypeChar", char })
           return true
         }
       }
       return false
     },
-    { when: () => props.open },
+    { when: () => props.state._tag === "open", capture: true },
   )
 
   const panelWidth = () => Math.min(80, dimensions().width - 6)
@@ -130,7 +83,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
 
   return (
-    <Show when={props.open}>
+    <Show when={props.state._tag === "open"}>
       <ChromePanel.Root
         title="Prompt Search"
         width={panelWidth()}

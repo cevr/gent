@@ -20,6 +20,12 @@ import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { useScopedKeyboard } from "../keyboard/context"
+import {
+  PromptSearchState,
+  transitionPromptSearch,
+  type PromptSearchEvent,
+} from "../components/prompt-search-state"
+import { usePromptHistory } from "../hooks/use-prompt-history"
 
 const LOGOS = getLogos()
 
@@ -32,15 +38,13 @@ type HomeState =
   | {
       _tag: "idle"
       showWelcome: boolean
-      overlay: "prompt-search" | null
-      draftBeforeSearch: string
+      promptSearch: PromptSearchState
     }
   | {
       _tag: "pending"
       prompt: string
       showWelcome: boolean
-      overlay: "prompt-search" | null
-      draftBeforeSearch: string
+      promptSearch: PromptSearchState
     }
 
 export function Home(props: HomeProps) {
@@ -52,6 +56,7 @@ export function Home(props: HomeProps) {
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
   const workspace = useWorkspace()
+  const history = usePromptHistory()
 
   const cwdGitLabel = () =>
     formatCwdGit(workspace.cwd, workspace.gitRoot(), workspace.gitStatus()?.branch)
@@ -62,8 +67,7 @@ export function Home(props: HomeProps) {
   const [state, setState] = createSignal<HomeState>({
     _tag: "idle",
     showWelcome: false,
-    overlay: null,
-    draftBeforeSearch: "",
+    promptSearch: PromptSearchState.closed(),
   })
   const [authProviders, setAuthProviders] = createSignal<
     { hasKey: boolean; provider: string; required: boolean }[]
@@ -72,7 +76,8 @@ export function Home(props: HomeProps) {
   const [restoreTextRequest, setRestoreTextRequest] = createSignal<
     { token: number; text: string } | undefined
   >(undefined)
-  const promptSearchOpen = () => state().overlay === "prompt-search"
+  const promptSearchState = () => state().promptSearch
+  const promptSearchOpen = () => promptSearchState()._tag === "open"
 
   const needsAuth = createMemo(() => {
     const providers = authProviders()
@@ -87,19 +92,27 @@ export function Home(props: HomeProps) {
           return {
             _tag: "idle",
             showWelcome,
-            overlay: prev.overlay,
-            draftBeforeSearch: prev.draftBeforeSearch,
+            promptSearch: prev.promptSearch,
           }
         case "pending":
           return {
             _tag: "pending",
             prompt: prev.prompt,
             showWelcome,
-            overlay: prev.overlay,
-            draftBeforeSearch: prev.draftBeforeSearch,
+            promptSearch: prev.promptSearch,
           }
       }
     })
+  }
+
+  const dispatchPromptSearch = (event: PromptSearchEvent) => {
+    const result = transitionPromptSearch(promptSearchState(), event, history.entries())
+    setState((prev) => ({ ...prev, promptSearch: result.state }))
+    for (const effect of result.effects) {
+      if (effect._tag === "Preview") {
+        setRestoreTextRequest({ token: Date.now(), text: effect.text })
+      }
+    }
   }
 
   // Navigate when session becomes active after pending prompt
@@ -113,8 +126,7 @@ export function Home(props: HomeProps) {
         ? {
             _tag: "idle",
             showWelcome: prev.showWelcome,
-            overlay: prev.overlay,
-            draftBeforeSearch: prev.draftBeforeSearch,
+            promptSearch: prev.promptSearch,
           }
         : prev,
     )
@@ -149,9 +161,7 @@ export function Home(props: HomeProps) {
     // ESC: double-tap to quit
     if (e.name === "escape") {
       if (promptSearchOpen()) {
-        const draftBeforeSearch = state().draftBeforeSearch
-        setState((prev) => ({ ...prev, overlay: null }))
-        setRestoreTextRequest({ token: Date.now(), text: draftBeforeSearch })
+        dispatchPromptSearch({ _tag: "Cancel" })
         quitChain.reset()
         return true
       }
@@ -173,7 +183,7 @@ export function Home(props: HomeProps) {
     }
 
     if (e.ctrl === true && e.name === "r") {
-      setState((prev) => ({ ...prev, overlay: "prompt-search", draftBeforeSearch: composerText() }))
+      dispatchPromptSearch({ _tag: "Open", draftBeforeOpen: composerText() })
       quitChain.reset()
       return true
     }
@@ -227,8 +237,7 @@ export function Home(props: HomeProps) {
       _tag: "pending",
       prompt: content,
       showWelcome: prev.showWelcome,
-      overlay: prev.overlay,
-      draftBeforeSearch: prev.draftBeforeSearch,
+      promptSearch: prev.promptSearch,
     }))
     client.createSession()
   }
@@ -241,8 +250,7 @@ export function Home(props: HomeProps) {
         _tag: "pending",
         prompt,
         showWelcome: prev.showWelcome,
-        overlay: prev.overlay,
-        draftBeforeSearch: prev.draftBeforeSearch,
+        promptSearch: prev.promptSearch,
       }))
       client.createSession()
     }
@@ -323,19 +331,9 @@ export function Home(props: HomeProps) {
       </BorderedInput>
 
       <PromptSearchPalette
-        open={promptSearchOpen()}
-        onClose={() => {
-          const draftBeforeSearch = state().draftBeforeSearch
-          setState((prev) => ({ ...prev, overlay: null }))
-          setRestoreTextRequest({ token: Date.now(), text: draftBeforeSearch })
-        }}
-        onPreview={(prompt) => {
-          const fallback = state().draftBeforeSearch
-          setRestoreTextRequest({ token: Date.now(), text: prompt ?? fallback })
-        }}
-        onAccept={() => {
-          setState((prev) => ({ ...prev, overlay: null }))
-        }}
+        state={promptSearchState()}
+        entries={history.entries()}
+        onEvent={dispatchPromptSearch}
       />
     </box>
   )

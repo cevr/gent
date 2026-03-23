@@ -40,6 +40,12 @@ import { useSessionFeed } from "../hooks/use-session-feed"
 import { useKeyChain } from "../hooks/use-key-chain"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { useScopedKeyboard } from "../keyboard/context"
+import {
+  PromptSearchState,
+  transitionPromptSearch,
+  type PromptSearchEvent,
+} from "../components/prompt-search-state"
+import { usePromptHistory } from "../hooks/use-prompt-history"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -64,7 +70,7 @@ type OverlayState =
   | { _tag: "tree"; tree: SessionTreeNode; sessions: readonly SessionInfo[] }
   | { _tag: "fork" }
   | { _tag: "mermaid" }
-  | { _tag: "prompt-search"; draftBeforeOpen: string }
+  | { _tag: "prompt-search"; state: Extract<PromptSearchState, { _tag: "open" }> }
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
@@ -75,6 +81,7 @@ export function Session(props: SessionProps) {
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
   const workspace = useWorkspace()
+  const history = usePromptHistory()
   const tick = useSpinnerClock()
   const { getChildren } = useChildSessions(client)
 
@@ -90,14 +97,26 @@ export function Session(props: SessionProps) {
   >(undefined)
   const promptSearchState = () => {
     const current = overlay()
-    return current?._tag === "prompt-search" ? current : null
+    return current?._tag === "prompt-search" ? current.state : PromptSearchState.closed()
   }
-  const promptSearchOpen = () => promptSearchState() !== null
-  const closePromptSearch = () => {
-    const current = promptSearchState()
-    setOverlay(null)
-    if (current === null) return
-    setRestoreTextRequest({ token: Date.now(), text: current.draftBeforeOpen })
+  const promptSearchOpen = () => promptSearchState()._tag === "open"
+
+  const dispatchPromptSearch = (event: PromptSearchEvent) => {
+    const result = transitionPromptSearch(promptSearchState(), event, history.entries())
+
+    if (result.state._tag === "open") {
+      setOverlay({ _tag: "prompt-search", state: result.state })
+    } else if (overlay()?._tag === "prompt-search") {
+      setOverlay(null)
+    }
+
+    for (const effect of result.effects) {
+      if (effect._tag === "Preview") {
+        setRestoreTextRequest({ token: Date.now(), text: effect.text })
+        continue
+      }
+      setOverlay(null)
+    }
   }
 
   const syncQueueState = () =>
@@ -262,7 +281,7 @@ export function Session(props: SessionProps) {
     // ESC: cancel if streaming, double-tap to quit when idle
     if (e.name === "escape") {
       if (promptSearchOpen()) {
-        setOverlay(null)
+        dispatchPromptSearch({ _tag: "Cancel" })
         quitChain.reset()
         return true
       }
@@ -290,7 +309,7 @@ export function Session(props: SessionProps) {
     }
 
     if (e.ctrl === true && e.name === "r") {
-      setOverlay({ _tag: "prompt-search", draftBeforeOpen: composerText() })
+      dispatchPromptSearch({ _tag: "Open", draftBeforeOpen: composerText() })
       quitChain.reset()
       return true
     }
@@ -629,15 +648,9 @@ export function Session(props: SessionProps) {
       />
 
       <PromptSearchPalette
-        open={promptSearchOpen()}
-        onClose={closePromptSearch}
-        onPreview={(prompt) => {
-          const fallback = promptSearchState()?.draftBeforeOpen ?? ""
-          setRestoreTextRequest({ token: Date.now(), text: prompt ?? fallback })
-        }}
-        onAccept={() => {
-          setOverlay(null)
-        }}
+        state={promptSearchState()}
+        entries={history.entries()}
+        onEvent={dispatchPromptSearch}
       />
     </box>
   )

@@ -7,6 +7,7 @@ type ScopedKeyHandler = (event: KeyInput) => boolean | void
 interface KeyboardScopeEntry {
   order: number
   when?: () => boolean
+  capture?: boolean
   handler: ScopedKeyHandler
 }
 
@@ -18,6 +19,7 @@ const KeyboardScopeContext = createContext<KeyboardScopeContextValue>()
 
 export interface ScopedKeyboardOptions {
   when?: () => boolean
+  capture?: boolean
 }
 
 export function KeyboardScopeProvider(props: ParentProps) {
@@ -28,7 +30,8 @@ export function KeyboardScopeProvider(props: ParentProps) {
     const stack = [...entries].sort((left, right) => right.order - left.order)
     for (const entry of stack) {
       if (entry.when?.() === false) continue
-      if (entry.handler(event) === true) return
+      const handled = entry.handler(event) === true
+      if (handled || entry.capture === true) return
     }
   })
 
@@ -58,7 +61,11 @@ export function useScopedKeyboard(handler: ScopedKeyHandler, options?: ScopedKey
   }
 
   onMount(() => {
-    const unregister = context.register({ handler, when: options?.when })
+    const unregister = context.register({
+      handler,
+      when: options?.when,
+      capture: options?.capture,
+    })
     onCleanup(unregister)
   })
 }
