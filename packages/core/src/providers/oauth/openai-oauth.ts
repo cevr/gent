@@ -32,6 +32,11 @@ interface PendingOAuth {
 let oauthServer: ReturnType<typeof Bun.serve> | undefined
 const pendingOAuth = new Map<string, PendingOAuth>()
 
+interface ResolvedRequestTarget {
+  url: URL
+  shouldRewrite: boolean
+}
+
 const generateRandomString = (length: number): string => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
   const bytes = crypto.getRandomValues(new Uint8Array(length))
@@ -392,91 +397,117 @@ export const refreshOpenAIOauth = async (refreshToken: string) => {
   }
 }
 
+const loadOpenAIOAuth = async (authStore: AuthStoreService): Promise<AuthOauth> => {
+  const current = await Effect.runPromise(
+    authStore.get("openai").pipe(Effect.catchEager(() => Effect.succeed(undefined))),
+  )
+  if (current === undefined || current.type !== "oauth") {
+    throw new Error("OpenAI OAuth credentials missing")
+  }
+  const auth = current as AuthOauth
+  if (auth.access.length > 0 && auth.expires >= Date.now()) return auth
+
+  const refreshed = await refreshOpenAIOauth(auth.refresh)
+  const next = new AuthOauth({ type: "oauth", ...refreshed })
+  await Effect.runPromise(authStore.set("openai", next))
+  return next
+}
+
+const copyHeadersInto = (headers: Headers, source: HeadersInit) => {
+  if (source instanceof Headers) {
+    source.forEach((value, key) => headers.set(key, value))
+    return
+  }
+  if (Array.isArray(source)) {
+    for (const [key, value] of source) {
+      if (value !== undefined) headers.set(key, String(value))
+    }
+    return
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined) headers.set(key, String(value))
+  }
+}
+
+const createAuthHeaders = (initHeaders: HeadersInit | undefined, auth: AuthOauth) => {
+  const headers = new Headers()
+  if (initHeaders !== undefined) copyHeadersInto(headers, initHeaders)
+
+  headers.delete("authorization")
+  headers.delete("Authorization")
+  headers.set("authorization", `Bearer ${auth.access}`)
+  if (auth.accountId !== undefined && auth.accountId.length > 0) {
+    headers.set("ChatGPT-Account-Id", auth.accountId)
+  }
+  if (!headers.has("originator")) headers.set("originator", "gent")
+  if (!headers.has("User-Agent")) {
+    headers.set("User-Agent", `gent (${os.platform()} ${os.release()}; ${os.arch()})`)
+  }
+
+  return headers
+}
+
+const resolveRequestTarget = (input: RequestInfo | URL): ResolvedRequestTarget => {
+  const parsed =
+    input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url)
+  const shouldRewrite =
+    parsed.pathname.includes("/responses") || parsed.pathname.includes("/chat/completions")
+  return {
+    url: shouldRewrite ? new URL(CODEX_API_ENDPOINT) : parsed,
+    shouldRewrite,
+  }
+}
+
+const splitInstructions = (input: unknown) => {
+  if (!Array.isArray(input)) return undefined
+
+  const instructions: string[] = []
+  const filteredInput: unknown[] = []
+  for (const item of input) {
+    if (
+      item !== null &&
+      typeof item === "object" &&
+      (item.role === "developer" || item.role === "system")
+    ) {
+      if (typeof item.content === "string") instructions.push(item.content)
+      continue
+    }
+    filteredInput.push(item)
+  }
+
+  return { instructions, filteredInput }
+}
+
+const rewriteCodexBody = (body: BodyInit | null | undefined): BodyInit | null | undefined => {
+  if (typeof body !== "string") return body
+
+  try {
+    const parsedBody = JSON.parse(body)
+    const split = splitInstructions(parsedBody.input)
+    if (split !== undefined) {
+      if (split.instructions.length > 0) {
+        parsedBody.instructions = split.instructions.join("\n\n")
+      }
+      parsedBody.input = split.filteredInput
+      parsedBody.store = false
+    }
+    return JSON.stringify(parsedBody)
+  } catch (e) {
+    // Body rewrite failed — leave unchanged, log for debugging
+    console.debug("[openai-oauth] body rewrite failed:", e)
+    return body
+  }
+}
+
 export const createOpenAIOAuthFetch = (authStore: AuthStoreService): typeof fetch => {
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const current = await Effect.runPromise(
-      authStore.get("openai").pipe(Effect.catchEager(() => Effect.succeed(undefined))),
-    )
-    if (current === undefined || current.type !== "oauth") {
-      throw new Error("OpenAI OAuth credentials missing")
-    }
-    let auth = current as AuthOauth
-    if (auth.access.length === 0 || auth.expires < Date.now()) {
-      const refreshed = await refreshOpenAIOauth(auth.refresh)
-      auth = new AuthOauth({ type: "oauth", ...refreshed })
-      await Effect.runPromise(authStore.set("openai", auth))
-    }
-
-    const headers = new Headers()
-    if (init?.headers !== undefined) {
-      if (init.headers instanceof Headers) {
-        init.headers.forEach((value, key) => headers.set(key, value))
-      } else if (Array.isArray(init.headers)) {
-        for (const [key, value] of init.headers) {
-          if (value !== undefined) headers.set(key, String(value))
-        }
-      } else {
-        for (const [key, value] of Object.entries(init.headers)) {
-          if (value !== undefined) headers.set(key, String(value))
-        }
-      }
-    }
-
-    const parsed =
-      input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url)
-    const shouldRewrite =
-      parsed.pathname.includes("/responses") || parsed.pathname.includes("/chat/completions")
-    const url = shouldRewrite ? new URL(CODEX_API_ENDPOINT) : parsed
-
-    headers.delete("authorization")
-    headers.delete("Authorization")
-    headers.set("authorization", `Bearer ${auth.access}`)
-    if (auth.accountId !== undefined && auth.accountId.length > 0) {
-      headers.set("ChatGPT-Account-Id", auth.accountId)
-    }
-    if (!headers.has("originator")) {
-      headers.set("originator", "gent")
-    }
-    if (!headers.has("User-Agent")) {
-      headers.set("User-Agent", `gent (${os.platform()} ${os.release()}; ${os.arch()})`)
-    }
+    const auth = await loadOpenAIOAuth(authStore)
+    const { url, shouldRewrite } = resolveRequestTarget(input)
+    const headers = createAuthHeaders(init?.headers, auth)
     if (shouldRewrite && !headers.has("OpenAI-Beta")) {
       headers.set("OpenAI-Beta", "responses=experimental")
     }
-
-    // For codex endpoint: transform request body
-    // Move developer/system messages from input[] to top-level instructions
-    let body = init?.body
-    if (shouldRewrite && typeof body === "string") {
-      try {
-        const parsed_body = JSON.parse(body)
-        if (Array.isArray(parsed_body.input)) {
-          const instructions: string[] = []
-          const filteredInput: unknown[] = []
-          for (const item of parsed_body.input) {
-            if (
-              item !== null &&
-              typeof item === "object" &&
-              (item.role === "developer" || item.role === "system")
-            ) {
-              if (typeof item.content === "string") instructions.push(item.content)
-            } else {
-              filteredInput.push(item)
-            }
-          }
-          if (instructions.length > 0) {
-            parsed_body.instructions = instructions.join("\n\n")
-            parsed_body.input = filteredInput
-          }
-          // Codex requires store: false
-          parsed_body.store = false
-        }
-        body = JSON.stringify(parsed_body)
-      } catch (e) {
-        // Body rewrite failed — leave unchanged, log for debugging
-        console.debug("[openai-oauth] body rewrite failed:", e)
-      }
-    }
+    const body = shouldRewrite ? rewriteCodexBody(init?.body) : init?.body
 
     return fetch(url, {
       ...init,
