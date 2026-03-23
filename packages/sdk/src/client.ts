@@ -350,6 +350,12 @@ export interface GentClient {
     branchId: BranchId
   }) => Effect.Effect<{ steering: readonly string[]; followUp: readonly string[] }, GentRpcError>
 
+  /** Read queued steer/follow-up messages without mutating queue state */
+  getQueuedMessages: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<{ steering: readonly string[]; followUp: readonly string[] }, GentRpcError>
+
   /** Respond to questions from agent */
   respondQuestions: (
     requestId: string,
@@ -508,6 +514,7 @@ export function createClient(
 
     steer: (command) => rpcClient.steer({ command }),
     drainQueuedMessages: (input) => rpcClient.drainQueuedMessages(input),
+    getQueuedMessages: (input) => rpcClient.getQueuedMessages(input),
 
     invokeTool: (input) => rpcClient.actorInvokeTool(input),
 
@@ -802,6 +809,8 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
       steer: (command) => mapErr(core.steer(command)),
       drainQueuedMessages: ({ sessionId, branchId }) =>
         mapErr(core.drainQueuedMessages({ sessionId, branchId })),
+      getQueuedMessages: ({ sessionId, branchId }) =>
+        mapErr(core.getQueuedMessages({ sessionId, branchId })),
 
       invokeTool: (input) => mapErr(actorProcess.invokeTool(input)),
 

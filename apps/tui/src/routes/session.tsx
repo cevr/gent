@@ -48,6 +48,11 @@ export interface SessionProps {
   debugMode?: boolean
 }
 
+type QueueState = {
+  steering: readonly string[]
+  followUp: readonly string[]
+}
+
 type OverlayState =
   | null
   | { _tag: "tree"; tree: SessionTreeNode; sessions: readonly SessionInfo[] }
@@ -72,21 +77,28 @@ export function Session(props: SessionProps) {
   const [toolsExpanded, setToolsExpanded] = createSignal(false)
   const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
   const [overlay, setOverlay] = createSignal<OverlayState>(null)
-  const [pendingQueuedMessage, setPendingQueuedMessage] = createSignal<{
-    content: string
-    createdAt: number
-  } | null>(null)
-  const [pendingSteerMessages, setPendingSteerMessages] = createSignal<
-    ReadonlyArray<{
-      content: string
-      createdAt: number
-    }>
-  >([])
+  const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
   const [composerText, setComposerText] = createSignal("")
   const [restoreTextRequest, setRestoreTextRequest] = createSignal<
     { token: number; text: string } | undefined
   >(undefined)
   const promptSearchOpen = () => overlay()?._tag === "prompt-search"
+
+  const syncQueueState = () =>
+    cast(
+      client.getQueuedMessages().pipe(
+        Effect.tap((next) =>
+          Effect.sync(() => {
+            setQueueState(next)
+          }),
+        ),
+        Effect.catchEager((err) =>
+          Effect.sync(() => {
+            client.setError(formatError(err))
+          }),
+        ),
+      ),
+    )
 
   // Handle input state transitions
   const handleInputEvent = (event: InputEvent) => {
@@ -115,41 +127,24 @@ export function Session(props: SessionProps) {
   const items = createMemo<SessionItem[]>(() => feed.items())
 
   createEffect(() => {
-    const pending = pendingQueuedMessage()
-    if (pending === null) return
-
-    const matched = feed
-      .messages()
-      .some(
-        (message) =>
-          message.role === "user" &&
-          message.kind === "regular" &&
-          message.content === pending.content &&
-          message.createdAt >= pending.createdAt,
-      )
-
-    if (matched) {
-      setPendingQueuedMessage(null)
-    }
+    const sessionId = props.sessionId
+    const branchId = props.branchId
+    void sessionId
+    void branchId
+    syncQueueState()
   })
 
   createEffect(() => {
-    const pending = pendingSteerMessages()
-    if (pending.length === 0) return
+    const queue = queueState()
+    const shouldPoll =
+      client.isStreaming() || queue.steering.length > 0 || queue.followUp.length > 0
+    if (!shouldPoll) return
 
-    setPendingSteerMessages((current) =>
-      current.filter((message) => {
-        return !feed
-          .messages()
-          .some(
-            (item) =>
-              item.role === "user" &&
-              item.kind === "interjection" &&
-              item.content === message.content &&
-              item.createdAt >= message.createdAt,
-          )
-      }),
-    )
+    const interval = setInterval(() => {
+      syncQueueState()
+    }, 250)
+
+    onCleanup(() => clearInterval(interval))
   })
 
   // ── Elapsed timer ──
@@ -273,8 +268,7 @@ export function Session(props: SessionProps) {
                 token: Date.now(),
                 text: all.join("\n"),
               })
-              setPendingQueuedMessage(null)
-              setPendingSteerMessages([])
+              setQueueState({ steering: [], followUp: [] })
             }),
           ),
           Effect.catchEager((err) =>
@@ -308,17 +302,14 @@ export function Session(props: SessionProps) {
 
   const handleSubmit = (content: string, mode?: "queue" | "interject") => {
     if (mode === "interject" && client.isStreaming()) {
-      setPendingSteerMessages((current) => [...current, { content, createdAt: Date.now() }])
       client.steer({ _tag: "Interject", message: content, agent: client.agent() })
+      setTimeout(syncQueueState, 0)
       return
     }
 
     if (client.isStreaming()) {
-      setPendingQueuedMessage((current) => ({
-        content: current === null ? content : `${current.content}\n${content}`,
-        createdAt: current?.createdAt ?? Date.now(),
-      }))
       client.sendMessage(content)
+      setTimeout(syncQueueState, 0)
       return
     }
 
@@ -554,8 +545,8 @@ export function Session(props: SessionProps) {
 
           <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
           <QueueWidget
-            queuedMessage={pendingQueuedMessage()}
-            steerMessages={pendingSteerMessages()}
+            queuedMessages={queueState().followUp.map((content) => ({ content, createdAt: 0 }))}
+            steerMessages={queueState().steering.map((content) => ({ content, createdAt: 0 }))}
           />
         </box>
       </scrollbox>

@@ -145,6 +145,10 @@ export interface ClientContextValue {
     { steering: readonly string[]; followUp: readonly string[] },
     GentRpcError
   >
+  getQueuedMessages: () => Effect.Effect<
+    { steering: readonly string[]; followUp: readonly string[] },
+    GentRpcError
+  >
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId, summarize?: boolean) => void
 
@@ -612,6 +616,14 @@ export function ClientProvider(props: ClientProviderProps) {
         return Effect.succeed({ steering: [] as const, followUp: [] as const })
       }
       return client.drainQueuedMessages({ sessionId: s.sessionId, branchId: s.branchId })
+    },
+
+    getQueuedMessages: () => {
+      const s = session()
+      if (s === null) {
+        return Effect.succeed({ steering: [] as const, followUp: [] as const })
+      }
+      return client.getQueuedMessages({ sessionId: s.sessionId, branchId: s.branchId })
     },
 
     // Event subscription for message updates (shared with internal agent state subscription)

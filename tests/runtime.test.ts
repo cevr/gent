@@ -751,6 +751,63 @@ describe("AgentLoop actor model", () => {
       ),
     )
   })
+
+  test("reads queued messages without draining them", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    let calls = 0
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
+            ),
+          )
+        }
+        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+      },
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const layer = makeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const first = makeMessage("s1", "b1", "first")
+          const queuedA = makeMessage("s1", "b1", "queued a")
+          const queuedB = makeMessage("s1", "b1", "queued b")
+
+          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          yield* Effect.sleep("10 millis")
+          yield* agentLoop.run(queuedA)
+          yield* agentLoop.run(queuedB)
+          yield* agentLoop.steer({
+            _tag: "Interject",
+            sessionId: "s1",
+            branchId: "b1",
+            message: "steer now",
+          })
+
+          const snapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
+          expect(snapshot).toEqual({
+            steering: ["steer now"],
+            followUp: ["queued a\nqueued b"],
+          })
+
+          const secondSnapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
+          expect(secondSnapshot).toEqual(snapshot)
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiber)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
 })
 
 describe("AgentActor", () => {

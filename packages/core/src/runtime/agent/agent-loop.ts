@@ -216,6 +216,10 @@ export interface AgentLoopService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<{ steering: string[]; followUp: string[] }>
+  readonly getQueue: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<{ steering: string[]; followUp: string[] }>
   readonly isRunning: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -1013,9 +1017,48 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           }),
 
           steer: (command) =>
-            getLoop(command.sessionId, command.branchId).pipe(
-              Effect.flatMap((loop) => Queue.offer(loop.steerQueue, command)),
-            ),
+            Effect.gen(function* () {
+              const loop = yield* getLoop(command.sessionId, command.branchId)
+              if (command._tag !== "Interject") {
+                yield* Queue.offer(loop.steerQueue, command)
+                return
+              }
+
+              const isRunning = yield* loop.actor.matches("Running")
+              if (!isRunning) {
+                yield* Queue.offer(loop.steerQueue, command)
+                return
+              }
+
+              const session = yield* storage
+                .getSession(command.sessionId)
+                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+              const bypass = session?.bypass ?? true
+              const interjectMessage = new Message({
+                id: Bun.randomUUIDv7() as MessageId,
+                sessionId: command.sessionId,
+                branchId: command.branchId,
+                kind: "interjection",
+                role: "user",
+                parts: [new TextPart({ type: "text", text: command.message })],
+                createdAt: new Date(),
+              })
+
+              yield* Ref.update(loop.steeringMessageQueue, (items) => [
+                ...items,
+                {
+                  message: interjectMessage,
+                  bypass,
+                  ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
+                },
+              ])
+
+              yield* Queue.offer(loop.steerQueue, {
+                _tag: "Interrupt",
+                sessionId: command.sessionId,
+                branchId: command.branchId,
+              })
+            }),
 
           followUp: (message) =>
             Effect.gen(function* () {
@@ -1053,6 +1096,22 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               }
             }),
 
+          getQueue: (input) =>
+            Effect.gen(function* () {
+              const loop = yield* findLoop(input.sessionId, input.branchId)
+              if (loop === undefined) {
+                return { steering: [], followUp: [] }
+              }
+
+              const steeringItems = yield* Ref.get(loop.steeringMessageQueue)
+              const followUpItems = yield* Ref.get(loop.followUpQueue)
+
+              return {
+                steering: steeringItems.map((item) => messageText(item.message)).filter(Boolean),
+                followUp: followUpItems.map((item) => messageText(item.message)).filter(Boolean),
+              }
+            }),
+
           isRunning: (input) =>
             Effect.gen(function* () {
               const loop = yield* findLoop(input.sessionId, input.branchId)
@@ -1071,6 +1130,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
       steer: () => Effect.void,
       followUp: () => Effect.void,
       drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       isRunning: (_input) => Effect.succeed(false),
     })
 }

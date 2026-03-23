@@ -8,7 +8,7 @@ export interface PendingQueueMessage {
 }
 
 export interface QueueWidgetProps {
-  queuedMessage: PendingQueueMessage | null
+  queuedMessages: readonly PendingQueueMessage[]
   steerMessages: readonly PendingQueueMessage[]
 }
 
@@ -22,7 +22,7 @@ function summaryText(text: string): string {
 export function QueueWidget(props: QueueWidgetProps) {
   const { theme } = useTheme()
 
-  const hasItems = () => props.queuedMessage !== null || props.steerMessages.length > 0
+  const hasItems = () => props.queuedMessages.length > 0 || props.steerMessages.length > 0
 
   return (
     <Show when={hasItems()}>
@@ -44,15 +44,15 @@ export function QueueWidget(props: QueueWidgetProps) {
               </text>
             )}
           </For>
-          <Show when={props.queuedMessage} keyed>
-            {(message) => (
+          <For each={props.queuedMessages}>
+            {(message, index) => (
               <text>
                 <span style={{ fg: theme.warning }}>{"│ "}</span>
-                <span style={{ fg: theme.textMuted }}>[queued]</span>
+                <span style={{ fg: theme.textMuted }}>[queued {index() + 1}]</span>
                 <span style={{ fg: theme.text }}> {summaryText(message.content)}</span>
               </text>
             )}
-          </Show>
+          </For>
         </InlineChrome.Body>
         <InlineChrome.Footer
           accentColor={theme.warning}

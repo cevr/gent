@@ -255,6 +255,16 @@ export const DrainQueuedMessagesSuccess = Schema.Struct({
   followUp: Schema.Array(Schema.String),
 })
 
+export const GetQueuedMessagesPayload = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+
+export const GetQueuedMessagesSuccess = Schema.Struct({
+  steering: Schema.Array(Schema.String),
+  followUp: Schema.Array(Schema.String),
+})
+
 // ============================================================================
 // Event Operations
 // ============================================================================
@@ -465,6 +475,11 @@ export class GentRpcs extends RpcGroup.make(
   Rpc.make("drainQueuedMessages", {
     payload: DrainQueuedMessagesPayload.fields,
     success: DrainQueuedMessagesSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("getQueuedMessages", {
+    payload: GetQueuedMessagesPayload.fields,
+    success: GetQueuedMessagesSuccess,
     error: GentRpcError,
   }),
 

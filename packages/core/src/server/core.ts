@@ -214,6 +214,11 @@ export interface GentCoreService {
     branchId: BranchId
   }) => Effect.Effect<{ steering: string[]; followUp: string[] }, GentCoreError>
 
+  readonly getQueuedMessages: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<{ steering: string[]; followUp: string[] }, GentCoreError>
+
   readonly steer: (command: SteerCommand) => Effect.Effect<void, GentCoreError>
 
   readonly getSessionState: (
@@ -807,6 +812,11 @@ ${conversation}`
           actorProcess
             .drainQueuedMessages({ sessionId, branchId })
             .pipe(Effect.withSpan("GentCore.drainQueuedMessages")),
+
+        getQueuedMessages: ({ sessionId, branchId }) =>
+          actorProcess
+            .getQueuedMessages({ sessionId, branchId })
+            .pipe(Effect.withSpan("GentCore.getQueuedMessages")),
 
         steer: (command) => actorProcess.steerAgent(command),
 

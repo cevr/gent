@@ -122,6 +122,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       drainQueuedMessages: ({ sessionId, branchId }) =>
         core.drainQueuedMessages({ sessionId, branchId }),
 
+      getQueuedMessages: ({ sessionId, branchId }) =>
+        core.getQueuedMessages({ sessionId, branchId }),
+
       subscribeEvents: ({ sessionId, branchId, after }) =>
         // Return the stream directly for streaming RPC
         core.subscribeEvents({
