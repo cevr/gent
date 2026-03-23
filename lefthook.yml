@@ -1,5 +1,6 @@
 pre-commit:
-  parallel: true
+  # Mutating jobs must run serially so stage_fixed can re-stage deterministic output.
+  parallel: false
   jobs:
     - name: fmt
       run: bun run fmt
