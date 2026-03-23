@@ -132,4 +132,28 @@ describe("worker supervisor", () => {
       ),
     )
   })
+
+  test("debug mode keeps the worker transport seam with ephemeral runtime state", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerSupervisor({
+            cwd: repoRoot,
+            mode: "debug",
+          })
+
+          const initial = yield* worker.client.listSessions()
+          expect(initial).toEqual([])
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+          })
+
+          const sessions = yield* worker.client.listSessions()
+          expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)
+        }),
+      ),
+    )
+  })
 })

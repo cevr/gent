@@ -60,7 +60,7 @@ commands      queries/events
 
 Process topology is secondary, but production topology is not.
 
-Production TUI is a shell over a supervised worker process. Debug-only local hosting lives under `apps/tui/src/debug/*`.
+Production TUI is a shell over a supervised worker process. Debug mode uses the same worker transport seam with ephemeral storage and scripted providers.
 
 ## Transport Boundary
 
@@ -147,7 +147,7 @@ App entrypoints bind concrete Bun/OS behavior:
 Production rule:
 
 - `apps/tui/src/main.tsx` supervises the worker and talks through transport only
-- debug-only direct hosting is isolated under `apps/tui/src/debug/*`
+- debug mode stays on the worker path; only the worker dependencies change
 - production `main.tsx` must not import app dependency wiring directly
 
 ## TUI

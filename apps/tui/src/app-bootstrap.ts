@@ -5,7 +5,6 @@ import { Route } from "./router/index"
 
 export type InitialState =
   | { _tag: "home" }
-  | { _tag: "debug" }
   | { _tag: "session"; session: SessionInfo; prompt?: string }
   | {
       _tag: "branchPicker"
@@ -23,7 +22,7 @@ export interface AppBootstrap {
   readonly missingAuthProviders: readonly ProviderId[] | undefined
 }
 
-const toSession = (session: SessionInfo): Session | undefined => {
+export const toSession = (session: SessionInfo): Session | undefined => {
   if (session.branchId === undefined) return undefined
   return {
     sessionId: session.id,
@@ -33,14 +32,6 @@ const toSession = (session: SessionInfo): Session | undefined => {
     reasoningLevel: session.reasoningLevel,
   }
 }
-
-export const resolveDebugBootstrap = (session: Session): AppBootstrap => ({
-  initialSession: session,
-  initialRoute: Route.session(session.sessionId, session.branchId),
-  initialPrompt: undefined,
-  debugMode: true,
-  missingAuthProviders: undefined,
-})
 
 export const resolveAppBootstrap = (
   state: Exclude<InitialState, { _tag: "headless" | "debug" }>,

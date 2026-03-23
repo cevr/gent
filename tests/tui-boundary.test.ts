@@ -11,6 +11,7 @@ test("production TUI shell does not import app runtime wiring directly", () => {
   expect(mainSource).not.toContain("@gent/core/server/index.js")
   expect(mainSource).not.toContain("@gent/core/debug/session.js")
   expect(mainSource).not.toContain("makeDirectGentClient")
+  expect(mainSource).not.toContain("run-debug-app")
   expect(mainSource).toContain("startWorkerSupervisor")
-  expect(mainSource).toContain('import("./debug/run-debug-app")')
+  expect(mainSource).toContain('mode: debug ? "debug" : "default"')
 })

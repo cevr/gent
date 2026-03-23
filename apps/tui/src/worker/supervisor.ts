@@ -48,6 +48,7 @@ export interface WorkerSupervisorOptions {
   readonly cwd: string
   readonly env?: Record<string, string | undefined>
   readonly startupTimeoutMs?: number
+  readonly mode?: "default" | "debug"
 }
 
 const SERVER_ENTRY_PATH = new URL("../../../server/src/main.ts", import.meta.url).pathname
@@ -131,12 +132,20 @@ const spawnWorkerProcess = (
   port: number,
 ): Effect.Effect<{ readonly port: number; readonly url: string; readonly proc: Bun.Subprocess }> =>
   Effect.sync(() => {
+    const mode = options.mode ?? "default"
     const env = {
       ...Bun.env,
       ...options.env,
       GENT_PORT: String(port),
       GENT_SERVER_MODE: "worker",
       GENT_TRACE_ID: `worker-${Bun.randomUUIDv7()}`,
+      ...(mode === "debug"
+        ? {
+            GENT_PERSISTENCE_MODE: "memory",
+            GENT_PROVIDER_MODE: "debug-scripted",
+            GENT_DEBUG_MODE: "1",
+          }
+        : {}),
     }
     const proc = Bun.spawn([process.execPath, SERVER_ENTRY_PATH], {
       cwd: options.cwd,
