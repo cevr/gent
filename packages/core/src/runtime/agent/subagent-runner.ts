@@ -2,12 +2,19 @@ import { Cause, ServiceMap, Duration, Effect, Layer } from "effect"
 import {
   AgentSwitched,
   EventStore,
+  type EventEnvelope,
+  type EventStoreService,
   SubagentSucceeded,
   SubagentFailed,
   SubagentSpawned,
 } from "../../domain/event.js"
-import { SubagentError, SubagentRunnerService, type SubagentToolCall } from "../../domain/agent.js"
-import { Session, Branch } from "../../domain/message.js"
+import {
+  SubagentError,
+  SubagentRunnerService,
+  type SubagentToolCall,
+  type AgentExecutionOverrides,
+} from "../../domain/agent.js"
+import { Session, Branch, type Message } from "../../domain/message.js"
 import type { SessionId, BranchId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentActor } from "./agent-loop"
@@ -17,54 +24,73 @@ interface ChildMetadata {
   toolCalls?: ReadonlyArray<SubagentToolCall>
 }
 
+interface ChildMetadataAccumulator {
+  input: number
+  output: number
+  started: Map<string, { toolName: string; args: Record<string, unknown> }>
+  toolCalls: SubagentToolCall[]
+}
+
+const createChildMetadataAccumulator = (): ChildMetadataAccumulator => ({
+  input: 0,
+  output: 0,
+  started: new Map<string, { toolName: string; args: Record<string, unknown> }>(),
+  toolCalls: [],
+})
+
+const appendFinishedToolCall = (
+  state: ChildMetadataAccumulator,
+  toolCallId: string,
+  toolName: string,
+  isError: boolean,
+) => {
+  const info = state.started.get(toolCallId)
+  state.toolCalls.push({
+    toolName: info?.toolName ?? toolName,
+    args: info?.args ?? {},
+    isError,
+  })
+}
+
+const applyChildMetadataEnvelope = (state: ChildMetadataAccumulator, env: EventEnvelope) => {
+  switch (env.event._tag) {
+    case "StreamEnded":
+      if (env.event.usage !== undefined) {
+        state.input += env.event.usage.inputTokens
+        state.output += env.event.usage.outputTokens
+      }
+      return
+    case "ToolCallStarted":
+      state.started.set(env.event.toolCallId, {
+        toolName: env.event.toolName,
+        args: (env.event.input ?? {}) as Record<string, unknown>,
+      })
+      return
+    case "ToolCallSucceeded":
+      appendFinishedToolCall(state, env.event.toolCallId, env.event.toolName, false)
+      return
+    case "ToolCallCompleted":
+      appendFinishedToolCall(state, env.event.toolCallId, env.event.toolName, env.event.isError)
+      return
+    case "ToolCallFailed":
+      appendFinishedToolCall(state, env.event.toolCallId, env.event.toolName, true)
+      return
+  }
+}
+
+const finalizeChildMetadata = (state: ChildMetadataAccumulator): ChildMetadata => ({
+  ...(state.input > 0 || state.output > 0
+    ? { usage: { input: state.input, output: state.output } }
+    : {}),
+  ...(state.toolCalls.length > 0 ? { toolCalls: state.toolCalls } : {}),
+})
+
 const collectChildMetadata = (storage: StorageService, sessionId: SessionId) =>
   storage.listEvents({ sessionId }).pipe(
     Effect.map((envelopes) => {
-      let input = 0
-      let output = 0
-      const started = new Map<string, { toolName: string; args: Record<string, unknown> }>()
-      const toolCalls: SubagentToolCall[] = []
-
-      for (const env of envelopes) {
-        switch (env.event._tag) {
-          case "StreamEnded":
-            if (env.event.usage !== undefined) {
-              input += env.event.usage.inputTokens
-              output += env.event.usage.outputTokens
-            }
-            break
-          case "ToolCallStarted":
-            started.set(env.event.toolCallId, {
-              toolName: env.event.toolName,
-              args: (env.event.input ?? {}) as Record<string, unknown>,
-            })
-            break
-          case "ToolCallSucceeded":
-          case "ToolCallCompleted": {
-            const info = started.get(env.event.toolCallId)
-            toolCalls.push({
-              toolName: info?.toolName ?? env.event.toolName,
-              args: info?.args ?? {},
-              isError: env.event._tag === "ToolCallCompleted" ? env.event.isError : false,
-            })
-            break
-          }
-          case "ToolCallFailed": {
-            const info = started.get(env.event.toolCallId)
-            toolCalls.push({
-              toolName: info?.toolName ?? env.event.toolName,
-              args: info?.args ?? {},
-              isError: true,
-            })
-            break
-          }
-        }
-      }
-
-      const result: ChildMetadata = {}
-      if (input > 0 || output > 0) result.usage = { input, output }
-      if (toolCalls.length > 0) result.toolCalls = toolCalls
-      return result
+      const state = createChildMetadataAccumulator()
+      for (const env of envelopes) applyChildMetadataEnvelope(state, env)
+      return finalizeChildMetadata(state)
     }),
     Effect.catchEager((e) =>
       Effect.logWarning("failed to collect subagent metadata", e).pipe(
@@ -136,6 +162,195 @@ const createSubagentSession = (
     return { sessionId, branchId, bypass }
   })
 
+const publishSubagentSpawned = (
+  eventStore: EventStoreService,
+  params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    toolCallId?: string
+    sessionId: SessionId
+    agentName: string
+    prompt: string
+  },
+) =>
+  eventStore.publish(
+    new SubagentSpawned({
+      parentSessionId: params.parentSessionId,
+      childSessionId: params.sessionId,
+      agentName: params.agentName,
+      prompt: params.prompt,
+      toolCallId: params.toolCallId,
+      branchId: params.parentBranchId,
+    }),
+  )
+
+const publishAgentSwitch = (
+  eventStore: EventStoreService,
+  params: {
+    sessionId: SessionId
+    branchId: BranchId
+    agentName: string
+  },
+) =>
+  eventStore.publish(
+    new AgentSwitched({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      fromAgent: "cowork",
+      toAgent: params.agentName,
+    }),
+  )
+
+const publishSubagentSucceeded = (
+  eventStore: EventStoreService,
+  params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    toolCallId?: string
+    sessionId: SessionId
+    agentName: string
+  },
+) =>
+  eventStore.publish(
+    new SubagentSucceeded({
+      parentSessionId: params.parentSessionId,
+      childSessionId: params.sessionId,
+      agentName: params.agentName,
+      toolCallId: params.toolCallId,
+      branchId: params.parentBranchId,
+    }),
+  )
+
+const publishSubagentFailed = (
+  eventStore: EventStoreService,
+  params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    toolCallId?: string
+    sessionId: SessionId
+    agentName: string
+  },
+) =>
+  eventStore
+    .publish(
+      new SubagentFailed({
+        parentSessionId: params.parentSessionId,
+        childSessionId: params.sessionId,
+        agentName: params.agentName,
+        toolCallId: params.toolCallId,
+        branchId: params.parentBranchId,
+      }),
+    )
+    .pipe(Effect.catchEager((e) => Effect.logWarning("failed to publish subagent event", e)))
+
+const latestAssistantText = (messages: ReadonlyArray<Message>) => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg === undefined || msg.role !== "assistant") continue
+    const part = msg.parts.find((p) => p.type === "text")
+    return part?.text ?? ""
+  }
+  return ""
+}
+
+const buildSubagentSuccess = (params: {
+  text: string
+  sessionId: SessionId
+  agentName: string
+  meta: ChildMetadata
+}) => ({
+  _tag: "success" as const,
+  text: params.text,
+  sessionId: params.sessionId,
+  agentName: params.agentName,
+  usage: params.meta.usage,
+  toolCalls: params.meta.toolCalls,
+})
+
+const withSubagentFailureHandling = <E>(
+  effect: Effect.Effect<
+    | {
+        _tag: "success"
+        text: string
+        sessionId: SessionId
+        agentName: string
+        usage?: { input: number; output: number }
+        toolCalls?: ReadonlyArray<SubagentToolCall>
+      }
+    | {
+        _tag: "error"
+        error: string
+        sessionId: SessionId
+        agentName: string
+      },
+    E,
+    never
+  >,
+  eventStore: EventStoreService,
+  params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    toolCallId?: string
+    sessionId: SessionId
+    agentName: string
+    spanName: string
+  },
+) =>
+  effect.pipe(
+    Effect.withSpan(params.spanName, {
+      attributes: { agentName: params.agentName },
+    }),
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+      return Effect.gen(function* () {
+        const error = Cause.pretty(cause)
+        yield* publishSubagentFailed(eventStore, params)
+        return {
+          _tag: "error" as const,
+          error,
+          sessionId: params.sessionId,
+          agentName: params.agentName,
+        }
+      })
+    }),
+  )
+
+const overrideArray = <A>(values: ReadonlyArray<A> | undefined) =>
+  values === undefined ? undefined : [...values]
+
+const buildRunInputOverrides = (overrides: AgentExecutionOverrides | undefined) => ({
+  ...(overrides?.modelId !== undefined ? { modelId: overrides.modelId } : {}),
+  ...(overrides?.allowedActions !== undefined
+    ? { overrideAllowedActions: overrideArray(overrides.allowedActions) }
+    : {}),
+  ...(overrides?.allowedTools !== undefined
+    ? { overrideAllowedTools: overrideArray(overrides.allowedTools) }
+    : {}),
+  ...(overrides?.deniedTools !== undefined
+    ? { overrideDeniedTools: overrideArray(overrides.deniedTools) }
+    : {}),
+  ...(overrides?.reasoningEffort !== undefined
+    ? { overrideReasoningEffort: overrides.reasoningEffort }
+    : {}),
+  ...(overrides?.systemPromptAddendum !== undefined
+    ? { overrideSystemPromptAddendum: overrides.systemPromptAddendum }
+    : {}),
+  ...(overrides?.tags !== undefined ? { tags: overrideArray(overrides.tags) } : {}),
+})
+
+const loadSubagentSuccessData = (
+  storage: StorageService,
+  branchId: BranchId,
+  sessionId: SessionId,
+  agentName: string,
+) =>
+  Effect.gen(function* () {
+    const messages = yield* storage.listMessages(branchId)
+    const text = latestAssistantText(messages)
+    const meta = yield* collectChildMetadata(storage, sessionId)
+    return buildSubagentSuccess({ text, sessionId, agentName, meta })
+  })
+
 export const InProcessRunner: Layer.Layer<
   SubagentRunnerService,
   never,
@@ -153,24 +368,19 @@ export const InProcessRunner: Layer.Layer<
         createSubagentSession(storage, params).pipe(
           Effect.flatMap(({ sessionId, branchId, bypass }) => {
             const run = Effect.gen(function* () {
-              yield* eventStore.publish(
-                new SubagentSpawned({
-                  parentSessionId: params.parentSessionId,
-                  childSessionId: sessionId,
-                  agentName: params.agent.name,
-                  prompt: params.prompt,
-                  toolCallId: params.toolCallId,
-                  branchId: params.parentBranchId,
-                }),
-              )
-              yield* eventStore.publish(
-                new AgentSwitched({
-                  sessionId,
-                  branchId,
-                  fromAgent: "cowork",
-                  toAgent: params.agent.name,
-                }),
-              )
+              yield* publishSubagentSpawned(eventStore, {
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                toolCallId: params.toolCallId,
+                sessionId,
+                agentName: params.agent.name,
+                prompt: params.prompt,
+              })
+              yield* publishAgentSwitch(eventStore, {
+                sessionId,
+                branchId,
+                agentName: params.agent.name,
+              })
 
               const runSubagent = actor.run({
                 sessionId,
@@ -179,27 +389,7 @@ export const InProcessRunner: Layer.Layer<
                 prompt: params.prompt,
                 systemPrompt: runnerConfig.systemPrompt,
                 bypass,
-                ...(params.overrides?.modelId !== undefined
-                  ? { modelId: params.overrides.modelId }
-                  : {}),
-                ...(params.overrides?.allowedActions !== undefined
-                  ? { overrideAllowedActions: [...params.overrides.allowedActions] }
-                  : {}),
-                ...(params.overrides?.allowedTools !== undefined
-                  ? { overrideAllowedTools: [...params.overrides.allowedTools] }
-                  : {}),
-                ...(params.overrides?.deniedTools !== undefined
-                  ? { overrideDeniedTools: [...params.overrides.deniedTools] }
-                  : {}),
-                ...(params.overrides?.reasoningEffort !== undefined
-                  ? { overrideReasoningEffort: params.overrides.reasoningEffort }
-                  : {}),
-                ...(params.overrides?.systemPromptAddendum !== undefined
-                  ? { overrideSystemPromptAddendum: params.overrides.systemPromptAddendum }
-                  : {}),
-                ...(params.overrides?.tags !== undefined
-                  ? { tags: [...params.overrides.tags] }
-                  : {}),
+                ...buildRunInputOverrides(params.overrides),
               })
 
               // No actor-level retry — replays non-idempotent tool calls.
@@ -220,72 +410,30 @@ export const InProcessRunner: Layer.Layer<
                     )
 
               yield* runWithTimeout
-
-              const messages = yield* storage.listMessages(branchId)
-              let text = ""
-              for (let i = messages.length - 1; i >= 0; i--) {
-                const msg = messages[i]
-                if (msg === undefined || msg.role !== "assistant") continue
-                const part = msg.parts.find((p) => p.type === "text")
-                text = part?.text ?? ""
-                break
-              }
-
-              const meta = yield* collectChildMetadata(storage, sessionId)
-
-              yield* eventStore.publish(
-                new SubagentSucceeded({
-                  parentSessionId: params.parentSessionId,
-                  childSessionId: sessionId,
-                  agentName: params.agent.name,
-                  toolCallId: params.toolCallId,
-                  branchId: params.parentBranchId,
-                }),
+              const result = yield* loadSubagentSuccessData(
+                storage,
+                branchId,
+                sessionId,
+                params.agent.name,
               )
-
-              return {
-                _tag: "success" as const,
-                text,
+              yield* publishSubagentSucceeded(eventStore, {
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                toolCallId: params.toolCallId,
                 sessionId,
                 agentName: params.agent.name,
-                usage: meta.usage,
-                toolCalls: meta.toolCalls,
-              }
+              })
+              return result
             })
 
-            return run.pipe(
-              Effect.withSpan("SubagentRunner.inProcess", {
-                attributes: { agentName: params.agent.name },
-              }),
-              Effect.catchCause((cause) => {
-                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-                return Effect.gen(function* () {
-                  const error = Cause.pretty(cause)
-                  yield* eventStore
-                    .publish(
-                      new SubagentFailed({
-                        parentSessionId: params.parentSessionId,
-                        childSessionId: sessionId,
-                        agentName: params.agent.name,
-                        toolCallId: params.toolCallId,
-                        branchId: params.parentBranchId,
-                      }),
-                    )
-                    .pipe(
-                      Effect.catchEager((e) =>
-                        Effect.logWarning("failed to publish subagent event", e),
-                      ),
-                    )
-
-                  return {
-                    _tag: "error" as const,
-                    error,
-                    sessionId,
-                    agentName: params.agent.name,
-                  }
-                })
-              }),
-            )
+            return withSubagentFailureHandling(run, eventStore, {
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              toolCallId: params.toolCallId,
+              sessionId,
+              agentName: params.agent.name,
+              spanName: "SubagentRunner.inProcess",
+            })
           }),
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
@@ -316,16 +464,14 @@ export const SubprocessRunner: Layer.Layer<
         createSubagentSession(storage, params).pipe(
           Effect.flatMap(({ sessionId, branchId, bypass }) => {
             const run = Effect.gen(function* () {
-              yield* eventStore.publish(
-                new SubagentSpawned({
-                  parentSessionId: params.parentSessionId,
-                  childSessionId: sessionId,
-                  agentName: params.agent.name,
-                  prompt: params.prompt,
-                  toolCallId: params.toolCallId,
-                  branchId: params.parentBranchId,
-                }),
-              )
+              yield* publishSubagentSpawned(eventStore, {
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                toolCallId: params.toolCallId,
+                sessionId,
+                agentName: params.agent.name,
+                prompt: params.prompt,
+              })
 
               // Capture trace context for subprocess propagation
               const currentSpan = yield* Effect.currentParentSpan.pipe(
@@ -405,71 +551,30 @@ export const SubprocessRunner: Layer.Layer<
                 }
               }
 
-              const messages = yield* storage.listMessages(branchId)
-              let text = ""
-              for (let i = messages.length - 1; i >= 0; i--) {
-                const msg = messages[i]
-                if (msg === undefined || msg.role !== "assistant") continue
-                const part = msg.parts.find((p) => p.type === "text")
-                text = part?.text ?? ""
-                break
-              }
-
-              const meta = yield* collectChildMetadata(storage, sessionId)
-
-              yield* eventStore.publish(
-                new SubagentSucceeded({
-                  parentSessionId: params.parentSessionId,
-                  childSessionId: sessionId,
-                  agentName: params.agent.name,
-                  toolCallId: params.toolCallId,
-                  branchId: params.parentBranchId,
-                }),
+              const result = yield* loadSubagentSuccessData(
+                storage,
+                branchId,
+                sessionId,
+                params.agent.name,
               )
-
-              return {
-                _tag: "success" as const,
-                text,
+              yield* publishSubagentSucceeded(eventStore, {
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                toolCallId: params.toolCallId,
                 sessionId,
                 agentName: params.agent.name,
-                usage: meta.usage,
-                toolCalls: meta.toolCalls,
-              }
+              })
+              return result
             })
 
-            return run.pipe(
-              Effect.withSpan("SubagentRunner.subprocess", {
-                attributes: { agentName: params.agent.name },
-              }),
-              Effect.catchCause((cause) => {
-                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-                return Effect.gen(function* () {
-                  const error = Cause.pretty(cause)
-                  yield* eventStore
-                    .publish(
-                      new SubagentFailed({
-                        parentSessionId: params.parentSessionId,
-                        childSessionId: sessionId,
-                        agentName: params.agent.name,
-                        toolCallId: params.toolCallId,
-                        branchId: params.parentBranchId,
-                      }),
-                    )
-                    .pipe(
-                      Effect.catchEager((e) =>
-                        Effect.logWarning("failed to publish subagent event", e),
-                      ),
-                    )
-
-                  return {
-                    _tag: "error" as const,
-                    error,
-                    sessionId,
-                    agentName: params.agent.name,
-                  }
-                })
-              }),
-            )
+            return withSubagentFailureHandling(run, eventStore, {
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              toolCallId: params.toolCallId,
+              sessionId,
+              agentName: params.agent.name,
+              spanName: "SubagentRunner.subprocess",
+            })
           }),
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
