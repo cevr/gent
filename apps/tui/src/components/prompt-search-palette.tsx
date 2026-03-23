@@ -5,7 +5,7 @@ import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncate } from "../utils/truncate"
-import { useScopedKeyboard } from "../keyboard/context"
+import type { ScopedKeyboardEvent } from "../keyboard/context"
 import {
   getPromptSearchItems,
   type PromptSearchEvent,
@@ -24,22 +24,32 @@ const isPromptSearchChar = (sequence: string | undefined) => {
   return code >= 32 && code <= 126
 }
 
-const handlePromptSearchNav = (
-  name: string,
-  ctrl: boolean | undefined,
+export const promptSearchEventFromKey = (
+  event: ScopedKeyboardEvent,
   hasItems: boolean,
-  onEvent: (event: PromptSearchEvent) => void,
-) => {
-  if (!hasItems) return false
-  if (name === "up" || (ctrl === true && name === "p")) {
-    onEvent({ _tag: "MoveUp" })
-    return true
+): PromptSearchEvent | undefined => {
+  if (event.name === "escape") return { _tag: "Cancel" }
+  if (event.name === "backspace") return { _tag: "Backspace" }
+  if (event.name === "return" || event.name === "linefeed") return { _tag: "Accept" }
+
+  if (hasItems && (event.name === "up" || (event.ctrl === true && event.name === "p"))) {
+    return { _tag: "MoveUp" }
   }
-  if (name === "down" || (ctrl === true && name === "n")) {
-    onEvent({ _tag: "MoveDown" })
-    return true
+  if (hasItems && (event.name === "down" || (event.ctrl === true && event.name === "n"))) {
+    return { _tag: "MoveDown" }
   }
-  return false
+
+  if (
+    isPromptSearchChar(event.sequence) &&
+    event.ctrl !== true &&
+    event.meta !== true &&
+    event.super !== true &&
+    event.option !== true
+  ) {
+    return { _tag: "TypeChar", char: event.sequence }
+  }
+
+  return undefined
 }
 
 export function PromptSearchPalette(props: PromptSearchPaletteProps) {
@@ -52,42 +62,6 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
   const query = () => (props.state._tag === "open" ? props.state.query : "")
 
   useScrollSync(() => `prompt-search-${selectedIndex()}`, { getRef: () => scrollRef })
-
-  useScopedKeyboard(
-    (e) => {
-      if (e.name === "escape") {
-        props.onEvent({ _tag: "Cancel" })
-        return true
-      }
-
-      if (e.name === "backspace") {
-        props.onEvent({ _tag: "Backspace" })
-        return true
-      }
-
-      if (e.name === "return" || e.name === "linefeed") {
-        props.onEvent({ _tag: "Accept" })
-        return true
-      }
-
-      if (handlePromptSearchNav(e.name, e.ctrl, items().length > 0, props.onEvent)) {
-        return true
-      }
-
-      if (
-        isPromptSearchChar(e.sequence) &&
-        e.ctrl !== true &&
-        e.meta !== true &&
-        e.super !== true &&
-        e.option !== true
-      ) {
-        props.onEvent({ _tag: "TypeChar", char: e.sequence })
-        return true
-      }
-      return false
-    },
-    { when: () => props.state._tag === "open", capture: true },
-  )
 
   const panelWidth = () => Math.min(80, dimensions().width - 6)
   const panelHeight = () => Math.min(16, dimensions().height - 6)

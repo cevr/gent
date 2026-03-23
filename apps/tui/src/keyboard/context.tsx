@@ -3,6 +3,7 @@ import { useKeyboard } from "@opentui/solid"
 
 type KeyInput = Parameters<Parameters<typeof useKeyboard>[0]>[0]
 type ScopedKeyHandler = (event: KeyInput) => boolean | void
+export type ScopedKeyboardEvent = KeyInput
 
 interface KeyboardScopeEntry {
   order: number

@@ -17,10 +17,11 @@ import { ClientError, formatError, type UiError } from "../utils/format-error"
 import { useWorkspace } from "../workspace/index"
 import { BorderedInput, formatCwdGit, type BorderLabelItem } from "../components/bordered-input"
 import { useKeyChain } from "../hooks/use-key-chain"
-import { PromptSearchPalette } from "../components/prompt-search-palette"
+import { PromptSearchPalette, promptSearchEventFromKey } from "../components/prompt-search-palette"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { useScopedKeyboard } from "../keyboard/context"
 import { usePromptHistory } from "../hooks/use-prompt-history"
+import { getPromptSearchItems } from "../components/prompt-search-state"
 import { transitionHome, type HomeEffect, type HomeEvent, type HomeState } from "./home-state"
 
 const LOGOS = getLogos()
@@ -108,6 +109,21 @@ export function Home(props: HomeProps) {
   })
 
   useScopedKeyboard((e) => {
+    if (promptSearchOpen()) {
+      const promptEvent = promptSearchEventFromKey(
+        e,
+        getPromptSearchItems(promptSearchState(), history.entries()).length > 0,
+      )
+      if (promptEvent !== undefined) {
+        dispatchHome({
+          _tag: "PromptSearch",
+          event: promptEvent,
+          entries: history.entries(),
+        })
+      }
+      return true
+    }
+
     // Let command system handle keybinds first
     if (command.handleKeybind(e)) return true
 
@@ -134,16 +150,6 @@ export function Home(props: HomeProps) {
 
     // ESC: double-tap to quit
     if (e.name === "escape") {
-      if (promptSearchOpen()) {
-        dispatchHome({
-          _tag: "PromptSearch",
-          event: { _tag: "Cancel" },
-          entries: history.entries(),
-        })
-        quitChain.reset()
-        return true
-      }
-
       if (command.paletteOpen()) {
         command.closePalette()
         quitChain.reset()

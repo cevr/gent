@@ -4,6 +4,8 @@ import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import { collectDiagrams } from "../components/mermaid-viewer"
 import type { Message, SessionItem } from "../components/message-list"
+import { promptSearchEventFromKey } from "../components/prompt-search-palette"
+import { getPromptSearchItems } from "../components/prompt-search-state"
 import {
   transition,
   type InputEffect,
@@ -453,6 +455,21 @@ export function useSessionController(props: {
   }
 
   useScopedKeyboard((event) => {
+    if (promptSearchOpen(uiState())) {
+      const promptEvent = promptSearchEventFromKey(
+        event,
+        getPromptSearchItems(getPromptSearchState(uiState()), history.entries()).length > 0,
+      )
+      if (promptEvent !== undefined) {
+        dispatchSessionUi({
+          _tag: "PromptSearch",
+          event: promptEvent,
+          entries: history.entries(),
+        })
+      }
+      return true
+    }
+
     if (command.handleKeybind(event)) return true
     if (uiState().overlay._tag !== "none") return false
 
@@ -474,16 +491,6 @@ export function useSessionController(props: {
     }
 
     if (event.name === "escape") {
-      if (promptSearchOpen(uiState())) {
-        dispatchSessionUi({
-          _tag: "PromptSearch",
-          event: { _tag: "Cancel" },
-          entries: history.entries(),
-        })
-        quitChain.reset()
-        return true
-      }
-
       if (command.paletteOpen()) {
         command.closePalette()
         quitChain.reset()
