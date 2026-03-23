@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { startWorkerSupervisor } from "../src/worker/supervisor"
+import { startWorkerSupervisor, type WorkerLifecycleState } from "../src/worker/supervisor"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 
@@ -21,6 +21,26 @@ const makeTempDir = (): string => {
   tempDirs.push(dir)
   return dir
 }
+
+const waitForRunning = async (
+  worker: {
+    getState: () => WorkerLifecycleState
+    subscribe: (listener: (state: WorkerLifecycleState) => void) => () => void
+  },
+  expectedRestartCount: number,
+): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsubscribe()
+      reject(new Error(`worker did not reach running state ${expectedRestartCount}`))
+    }, 10_000)
+    const unsubscribe = worker.subscribe((state) => {
+      if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
+      clearTimeout(timeout)
+      unsubscribe()
+      resolve()
+    })
+  })
 
 describe("worker supervisor", () => {
   test("boots worker and serves the shared client contract", async () => {
@@ -74,6 +94,37 @@ describe("worker supervisor", () => {
           const state = worker.getState()
           expect(state._tag).toBe("running")
           if (state._tag === "running") expect(state.restartCount).toBe(1)
+
+          const sessions = yield* worker.client.listSessions()
+          expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)
+        }),
+      ),
+    )
+  })
+
+  test("auto-restarts after worker death and keeps serving the same session state", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerSupervisor({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+          })
+          const pid = worker.pid()
+
+          expect(pid).not.toBeNull()
+          process.kill(pid!, "SIGKILL")
+
+          yield* Effect.promise(() => waitForRunning(worker, 1))
+
+          expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
 
           const sessions = yield* worker.client.listSessions()
           expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)

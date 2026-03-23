@@ -53,8 +53,16 @@ export function Session(props: SessionProps) {
   }
 
   const topLeftLabels = (): BorderLabelItem[] => {
+    const items: BorderLabelItem[] = []
+    const worker = client.workerState()
+    if (client.isReconnecting()) {
+      items.push({ text: "reconnecting", color: theme.warning })
+    } else if (worker?._tag === "running" && worker.restartCount > 0) {
+      items.push({ text: `restart ${worker.restartCount}`, color: theme.textMuted })
+    }
     const c = client.cost()
-    return c > 0 ? [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }] : []
+    if (c > 0) items.push({ text: `$${c.toFixed(2)}`, color: theme.textMuted })
+    return items
   }
 
   const topRightLabels = (): BorderLabelItem[] =>

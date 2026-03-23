@@ -249,6 +249,13 @@ export function useSessionController(props: {
   })
 
   createEffect(() => {
+    const restartCount = client.workerRestartCount()
+    void restartCount
+    if (!client.isActive()) return
+    syncQueueState()
+  })
+
+  createEffect(() => {
     const queue = queueState()
     const shouldPoll =
       client.isStreaming() || queue.steering.length > 0 || queue.followUp.length > 0

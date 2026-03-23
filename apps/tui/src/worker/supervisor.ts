@@ -10,16 +10,36 @@ export class WorkerSupervisorError extends Schema.TaggedErrorClass<WorkerSupervi
 ) {}
 
 export type WorkerLifecycleState =
-  | { readonly _tag: "starting" }
-  | { readonly _tag: "running"; readonly port: number; readonly restartCount: number }
-  | { readonly _tag: "stopped" }
-  | { readonly _tag: "crashed"; readonly exitCode: number | null }
+  | { readonly _tag: "starting"; readonly port: number; readonly restartCount: number }
+  | {
+      readonly _tag: "running"
+      readonly port: number
+      readonly pid: number
+      readonly restartCount: number
+    }
+  | {
+      readonly _tag: "restarting"
+      readonly port: number
+      readonly restartCount: number
+      readonly previousPid: number | undefined
+      readonly exitCode: number | null
+    }
+  | { readonly _tag: "stopped"; readonly port: number; readonly restartCount: number }
+  | {
+      readonly _tag: "failed"
+      readonly port: number
+      readonly restartCount: number
+      readonly message: string
+      readonly exitCode: number | null
+    }
 
 export interface WorkerSupervisor {
   readonly client: GentClient
   readonly url: string
   readonly port: number
+  readonly pid: () => number | null
   readonly getState: () => WorkerLifecycleState
+  readonly subscribe: (listener: (state: WorkerLifecycleState) => void) => () => void
   readonly stop: Effect.Effect<void, never>
   readonly restart: Effect.Effect<void, WorkerSupervisorError>
 }
@@ -58,6 +78,7 @@ const waitForWorkerReady = (
   timeoutMs: number,
 ): Effect.Effect<void, WorkerSupervisorError> =>
   Effect.promise(async () => {
+    const deadline = Date.now() + timeoutMs
     const poll = async (): Promise<void> => {
       if (Date.now() >= deadline) {
         throw new WorkerSupervisorError({
@@ -68,12 +89,11 @@ const waitForWorkerReady = (
         const response = await fetch(url.replace(/\/rpc$/, "/docs/openapi.json"))
         if (response.ok) return
       } catch {
-        // worker not ready yet
+        // still booting
       }
       await Bun.sleep(100)
       return poll()
     }
-    const deadline = Date.now() + timeoutMs
     return poll()
   }).pipe(
     Effect.mapError((error) => {
@@ -134,8 +154,6 @@ export const startWorkerSupervisor = (
   Effect.acquireRelease(
     Effect.gen(function* () {
       const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
-      let state: WorkerLifecycleState = { _tag: "starting" }
-      let restartCount = 0
       const assignedPort = yield* Effect.promise(findOpenPort).pipe(
         Effect.mapError(
           (error) =>
@@ -144,46 +162,119 @@ export const startWorkerSupervisor = (
             }),
         ),
       )
-      let current = yield* spawnWorkerProcess(options, assignedPort)
-
-      const trackCrash = (proc: Bun.Subprocess) => {
-        void proc.exited.then(() => {
-          if (state._tag === "stopped") return
-          state = { _tag: "crashed", exitCode: proc.exitCode }
-        })
+      const url = `http://${WORKER_HOST}:${assignedPort}/rpc`
+      const client = yield* makeHttpGentClient({ url })
+      const listeners = new Set<(state: WorkerLifecycleState) => void>()
+      let restartCount = 0
+      let stopped = false
+      let current: Bun.Subprocess | undefined
+      let restartPromise: Promise<void> | undefined
+      let state: WorkerLifecycleState = {
+        _tag: "starting",
+        port: assignedPort,
+        restartCount,
       }
-      trackCrash(current.proc)
 
-      yield* waitForWorkerReady(current.url, startupTimeoutMs)
-      state = { _tag: "running", port: current.port, restartCount }
+      const emit = (next: WorkerLifecycleState) => {
+        state = next
+        for (const listener of listeners) listener(next)
+      }
 
-      const stop = stopSubprocess(current.proc).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            state = { _tag: "stopped" }
-          }),
-        ),
-      )
+      const launchCurrent = Effect.gen(function* () {
+        const launched = yield* spawnWorkerProcess(options, assignedPort)
+        current = launched.proc
+        yield* waitForWorkerReady(launched.url, startupTimeoutMs)
+        restartPromise = undefined
+        emit({
+          _tag: "running",
+          port: launched.port,
+          pid: launched.proc.pid,
+          restartCount,
+        })
 
-      const restart: Effect.Effect<void, WorkerSupervisorError> = Effect.gen(function* () {
-        yield* stopSubprocess(current.proc)
-        restartCount += 1
-        state = { _tag: "starting" }
-        current = yield* spawnWorkerProcess(options, assignedPort)
-        trackCrash(current.proc)
-        yield* waitForWorkerReady(current.url, startupTimeoutMs)
-        state = { _tag: "running", port: current.port, restartCount }
+        void launched.proc.exited.then(() => {
+          if (stopped) return
+          if (current?.pid !== launched.proc.pid) return
+          void Effect.runPromiseExit(
+            restartInternal({ exitCode: launched.proc.exitCode, previousPid: launched.proc.pid }),
+          )
+        })
       })
 
-      const client = yield* makeHttpGentClient({ url: current.url })
+      const restartInternal = Effect.fn("WorkerSupervisor.restartInternal")(function* (input?: {
+        exitCode: number | null
+        previousPid: number | undefined
+      }) {
+        if (stopped) return
+        if (restartPromise !== undefined) {
+          const inFlight = restartPromise
+          yield* Effect.promise(() => inFlight)
+          return
+        }
+
+        restartCount += 1
+        emit({
+          _tag: "restarting",
+          port: assignedPort,
+          restartCount,
+          previousPid: input?.previousPid,
+          exitCode: input?.exitCode ?? null,
+        })
+
+        restartPromise = Effect.runPromise(
+          Effect.gen(function* () {
+            const proc = current
+            if (proc !== undefined) {
+              yield* stopSubprocess(proc)
+            }
+            yield* launchCurrent
+          }).pipe(
+            Effect.catchEager((error) =>
+              Effect.sync(() => {
+                restartPromise = undefined
+                emit({
+                  _tag: "failed",
+                  port: assignedPort,
+                  restartCount,
+                  message: error.message,
+                  exitCode: input?.exitCode ?? current?.exitCode ?? null,
+                })
+                throw error
+              }),
+            ),
+          ),
+        )
+
+        const inFlight = restartPromise
+        yield* Effect.promise(() => inFlight)
+      })
+
+      yield* launchCurrent
+
+      const stop = Effect.gen(function* () {
+        if (stopped) return
+        stopped = true
+        const proc = current
+        current = undefined
+        if (proc !== undefined) yield* stopSubprocess(proc)
+        emit({ _tag: "stopped", port: assignedPort, restartCount })
+      }).pipe(Effect.catchEager(() => Effect.void))
 
       return {
         client,
-        url: current.url,
-        port: current.port,
+        url,
+        port: assignedPort,
+        pid: () => (state._tag === "running" ? state.pid : null),
         getState: () => state,
+        subscribe: (listener) => {
+          listeners.add(listener)
+          listener(state)
+          return () => {
+            listeners.delete(listener)
+          }
+        },
         stop,
-        restart,
+        restart: restartInternal(),
       } satisfies WorkerSupervisor
     }),
     (supervisor) => supervisor.stop,

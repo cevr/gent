@@ -309,7 +309,8 @@ const main = Command.make(
         return yield* Effect.never
       }
 
-      const gentClient = (yield* startWorkerSupervisor({ cwd })).client
+      const supervisor = yield* startWorkerSupervisor({ cwd })
+      const gentClient = supervisor.client
 
       const authProviders = yield* gentClient.listAuthProviders()
       const missingProviders = authProviders
@@ -376,7 +377,11 @@ const main = Command.make(
           <EnvProvider env={env}>
             <WorkspaceProvider cwd={cwd} services={uiServices}>
               <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                <ClientProvider client={gentClient} initialSession={bootstrap.initialSession}>
+                <ClientProvider
+                  client={gentClient}
+                  initialSession={bootstrap.initialSession}
+                  supervisor={supervisor}
+                >
                   <RouterProvider initialRoute={bootstrap.initialRoute}>
                     <App
                       initialPrompt={bootstrap.initialPrompt}

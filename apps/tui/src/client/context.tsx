@@ -26,6 +26,7 @@ import { tuiError } from "../utils/unified-tracer"
 import { clientLog } from "../utils/client-logger"
 import { formatError } from "../utils/format-error"
 import { useMachine } from "../hooks/use-machine"
+import type { WorkerLifecycleState, WorkerSupervisor } from "../worker/supervisor"
 
 import {
   type GentClient,
@@ -120,6 +121,9 @@ export interface ClientContextValue {
   error: () => string | null
   latestInputTokens: () => number
   modelInfo: () => Model | undefined
+  workerState: () => WorkerLifecycleState | undefined
+  isReconnecting: () => boolean
+  workerRestartCount: () => number
 
   // Agent state setters (for local errors only)
   setError: (error: string | null) => void
@@ -189,6 +193,7 @@ const toSessionState = (ms: typeof SessionMachineState.Type): SessionState => {
 interface ClientProviderProps extends ParentProps {
   client: GentClient
   initialSession: Session | undefined
+  supervisor?: WorkerSupervisor
 }
 
 export function ClientProvider(props: ClientProviderProps) {
@@ -246,6 +251,11 @@ export function ClientProvider(props: ClientProviderProps) {
   })
   const [preferredAgent, setPreferredAgent] = createSignal<AgentName>(defaultAgent)
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
+  const [workerState, setWorkerState] = createSignal<WorkerLifecycleState | undefined>(
+    props.supervisor?.getState(),
+  )
+  const [lastSeenEventId, setLastSeenEventId] = createSignal<number | null>(null)
+  const [lastSeenSessionKey, setLastSeenSessionKey] = createSignal<string | null>(null)
 
   const [modelStore, setModelStore] = createStore<{
     modelsById: Record<string, Model>
@@ -258,6 +268,15 @@ export function ClientProvider(props: ClientProviderProps) {
   const eventBuffer: EventEnvelope[] = []
   const EVENT_BUFFER_LIMIT = 1000
 
+  createEffect(() => {
+    const supervisor = props.supervisor
+    if (supervisor === undefined) return
+    const unsubscribe = supervisor.subscribe((nextState) => {
+      setWorkerState(nextState)
+    })
+    onCleanup(unsubscribe)
+  })
+
   // Stable session key — only changes when sessionId:branchId actually changes
   const sessionKey = createMemo<string | null>(() => {
     const ms = machineState()
@@ -265,13 +284,30 @@ export function ClientProvider(props: ClientProviderProps) {
     return `${ms.session.sessionId}:${ms.session.branchId}`
   })
 
+  const workerEpoch = createMemo<number | null>(() => {
+    const state = workerState()
+    if (state === undefined) return 0
+    return state._tag === "running" ? state.restartCount : null
+  })
+
+  const isReconnecting = () => {
+    const state = workerState()
+    return state?._tag === "starting" || state?._tag === "restarting"
+  }
+
   // Subscribe to events when session becomes active - SINGLE shared subscription
   // Uses on() to explicitly track only sessionKey, not other signals read inside
   createEffect(
-    on(sessionKey, (key) => {
+    on([sessionKey, workerEpoch], ([key]) => {
       if (key === null) {
         eventBuffer.length = 0
+        setLastSeenEventId(null)
+        setLastSeenSessionKey(null)
         return
+      }
+      if (key !== lastSeenSessionKey()) {
+        setLastSeenSessionKey(key)
+        setLastSeenEventId(null)
       }
 
       const sep = key.indexOf(":")
@@ -290,6 +326,7 @@ export function ClientProvider(props: ClientProviderProps) {
         })
 
         eventBuffer.push(envelope)
+        setLastSeenEventId(envelope.id)
         if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
           eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
         }
@@ -359,7 +396,9 @@ export function ClientProvider(props: ClientProviderProps) {
 
       cast(
         Effect.gen(function* () {
+          if (props.supervisor !== undefined && workerState()?._tag !== "running") return
           const snapshot = yield* client.getSessionState({ sessionId, branchId })
+          const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
 
           yield* Effect.sync(() => {
             setAgentStore(
@@ -383,7 +422,7 @@ export function ClientProvider(props: ClientProviderProps) {
           const events = client.subscribeEvents({
             sessionId,
             branchId,
-            ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+            ...(after !== undefined ? { after } : {}),
           })
 
           yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
@@ -402,6 +441,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.catchEager((err) =>
             Effect.sync(() => {
               if (!cancelled) {
+                if (props.supervisor !== undefined && workerState()?._tag !== "running") return
                 setAgentStore({ status: AgentStatus.error(formatError(err)) })
               }
             }),
@@ -438,6 +478,9 @@ export function ClientProvider(props: ClientProviderProps) {
     error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
     latestInputTokens,
     modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
+    workerState,
+    isReconnecting,
+    workerRestartCount: () => workerState()?.restartCount ?? 0,
 
     // Agent state setters (for local errors only)
     setError: (error) =>
