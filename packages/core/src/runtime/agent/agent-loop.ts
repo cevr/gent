@@ -1,6 +1,5 @@
 import { Cause, ServiceMap, Deferred, Effect, Layer, Ref, Schema, Semaphore, Stream } from "effect"
 import {
-  type ActorRef,
   type AnyInspectionEvent,
   combineInspectors,
   Event,
@@ -18,8 +17,8 @@ import {
   SubagentError,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
-import { ModelId } from "../../domain/model.js"
-import { QueueEntryInfo, type QueueSnapshot } from "../../domain/queue.js"
+import type { ModelId } from "../../domain/model.js"
+import { type QueueSnapshot } from "../../domain/queue.js"
 import {
   EventStore,
   AgentSwitched,
@@ -35,7 +34,6 @@ import {
   MachineInspected,
   MachineTaskFailed,
   MachineTaskSucceeded,
-  UsageSchema,
   type AgentEvent,
 } from "../../domain/event.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
@@ -51,37 +49,42 @@ import { ExtensionRegistry } from "../extensions/registry.js"
 import { ToolRunner } from "./tool-runner"
 import {
   type ActiveStreamHandle,
-  type AssistantDraft,
-  type ResolvedTurn,
   executeToolsPhase,
   finalizeTurnPhase,
   resolveTurnPhase,
   streamTurnPhase,
 } from "./agent-loop-phases.js"
+import {
+  AgentLoopEvent,
+  AgentLoopState,
+  appendFollowUpQueueState,
+  appendSteeringItem,
+  buildIdleState,
+  buildResolvingState,
+  clearQueueState,
+  countQueuedFollowUps,
+  markInterruptAfterTools,
+  markTurnInterrupted,
+  queueContainsContent,
+  queueSnapshotFromState,
+  takeNextQueuedTurn,
+  toExecutingToolsState,
+  toFinalizingState,
+  toStreamingState,
+  updateCurrentAgentOnState,
+  updateQueueOnState,
+  type ExecutingToolsState,
+  type FinalizingState,
+  type IdleState,
+  type LoopActor,
+  type LoopState,
+  type QueuedTurnItem,
+  type ResolvingState,
+  type StreamingState,
+} from "./agent-loop.state.js"
+import { buildSystemPrompt, messageText, resolveReasoning } from "./agent-loop.utils.js"
 
 // Agent Loop Error
-
-const buildSystemPrompt = (basePrompt: string, agent: AgentDefinition): string => {
-  const parts: string[] = [basePrompt]
-
-  if (agent.systemPromptAddendum !== undefined && agent.systemPromptAddendum !== "") {
-    parts.push(`\n\n## Agent: ${agent.name}\n${agent.systemPromptAddendum}`)
-  }
-
-  return parts.join("")
-}
-
-const VALID_REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
-
-const resolveReasoning = (
-  agent: AgentDefinition,
-  sessionOverride?: string,
-): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined => {
-  if (sessionOverride !== undefined && VALID_REASONING_LEVELS.has(sessionOverride)) {
-    return sessionOverride as "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
-  }
-  return agent.reasoningEffort
-}
 
 export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("AgentLoopError", {
   message: Schema.String,
@@ -108,151 +111,6 @@ export const SteerCommand = Schema.Union([
 export type SteerCommand = typeof SteerCommand.Type
 
 // Agent Loop Context
-
-const QueuedTurnItem = Schema.Struct({
-  message: Message,
-  bypass: Schema.Boolean,
-  agentOverride: Schema.optional(AgentName),
-})
-type QueuedTurnItem = typeof QueuedTurnItem.Type
-
-const LoopQueueState = Schema.Struct({
-  steering: Schema.Array(QueuedTurnItem),
-  followUp: Schema.Array(QueuedTurnItem),
-})
-type LoopQueueState = typeof LoopQueueState.Type
-
-const getSingleText = (message: Message): string | undefined => {
-  if (message.parts.length !== 1) return undefined
-  const [part] = message.parts
-  return part?.type === "text" ? part.text : undefined
-}
-
-const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {
-  if (existing.agentOverride !== undefined || incoming.agentOverride !== undefined) return false
-  if (existing.message.role !== "user" || incoming.message.role !== "user") return false
-  if (existing.message.kind === "interjection" || incoming.message.kind === "interjection")
-    return false
-  return (
-    getSingleText(existing.message) !== undefined && getSingleText(incoming.message) !== undefined
-  )
-}
-
-const mergeQueuedFollowUp = (
-  existing: QueuedTurnItem,
-  incoming: QueuedTurnItem,
-): QueuedTurnItem => {
-  const existingText = getSingleText(existing.message)
-  const incomingText = getSingleText(incoming.message)
-  if (existingText === undefined || incomingText === undefined) return incoming
-
-  return {
-    ...existing,
-    message: new Message({
-      ...existing.message,
-      parts: [new TextPart({ type: "text", text: `${existingText}\n${incomingText}` })],
-    }),
-  }
-}
-
-const appendFollowUpItem = (
-  queue: ReadonlyArray<QueuedTurnItem>,
-  item: QueuedTurnItem,
-): QueuedTurnItem[] => {
-  const last = queue[queue.length - 1]
-  if (last === undefined || !canBatchQueuedFollowUp(last, item)) {
-    return [...queue, item]
-  }
-  return [...queue.slice(0, -1), mergeQueuedFollowUp(last, item)]
-}
-
-const restampQueuedMessage = (message: Message): Message =>
-  new Message({
-    ...message,
-    createdAt: new Date(),
-  })
-
-const messageText = (message: Message): string =>
-  message.parts
-    .filter((part): part is TextPart => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-
-const toQueueEntry = (
-  kind: "steering" | "follow-up",
-  item: QueuedTurnItem,
-): QueueEntryInfo | undefined => {
-  const content = messageText(item.message)
-  if (content === "") return undefined
-  return new QueueEntryInfo({
-    id: item.message.id,
-    kind,
-    content,
-    createdAt: item.message.createdAt.getTime(),
-    bypass: item.bypass,
-    ...(item.agentOverride !== undefined ? { agentOverride: item.agentOverride } : {}),
-  })
-}
-
-const toQueueSnapshot = (
-  steeringItems: ReadonlyArray<QueuedTurnItem>,
-  followUpItems: ReadonlyArray<QueuedTurnItem>,
-): QueueSnapshot => ({
-  steering: steeringItems.flatMap((item) => {
-    const entry = toQueueEntry("steering", item)
-    return entry === undefined ? [] : [entry]
-  }),
-  followUp: followUpItems.flatMap((item) => {
-    const entry = toQueueEntry("follow-up", item)
-    return entry === undefined ? [] : [entry]
-  }),
-})
-
-const emptyLoopQueueState = (): LoopQueueState => ({
-  steering: [],
-  followUp: [],
-})
-
-const appendSteeringItem = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState => ({
-  ...queue,
-  steering: [...queue.steering, item],
-})
-
-const appendFollowUpQueueState = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState => ({
-  ...queue,
-  followUp: appendFollowUpItem(queue.followUp, item),
-})
-
-const clearQueueState = (_queue: LoopQueueState): LoopQueueState => emptyLoopQueueState()
-
-const restampQueuedTurnItem = (item: QueuedTurnItem): QueuedTurnItem => ({
-  ...item,
-  message: restampQueuedMessage(item.message),
-})
-
-const takeNextQueuedTurn = (
-  queue: LoopQueueState,
-): { queue: LoopQueueState; nextItem?: QueuedTurnItem } => {
-  const [nextSteer, ...restSteering] = queue.steering
-  if (nextSteer !== undefined) {
-    return {
-      queue: { ...queue, steering: restSteering },
-      nextItem: restampQueuedTurnItem(nextSteer),
-    }
-  }
-
-  const [nextFollowUp, ...restFollowUp] = queue.followUp
-  if (nextFollowUp === undefined) {
-    return { queue }
-  }
-
-  return {
-    queue: { ...queue, followUp: restFollowUp },
-    nextItem: restampQueuedTurnItem(nextFollowUp),
-  }
-}
-
-const countQueuedFollowUps = (queue: LoopQueueState) => queue.followUp.length
 
 const resolveStoredAgent = (params: {
   storage: StorageService
@@ -312,90 +170,6 @@ const applyAgentOverrides = (agent: AgentDefinition, input: AgentRunInput): Agen
   })
 }
 
-const LoopStateBaseFields = {
-  queue: LoopQueueState,
-  currentAgent: Schema.optional(AgentName),
-  handoffSuppress: Schema.Number,
-}
-
-const ActiveTurnFields = {
-  ...LoopStateBaseFields,
-  message: Message,
-  bypass: Schema.Boolean,
-  startedAtMs: Schema.Number,
-  agentOverride: Schema.optional(AgentName),
-  turnInterrupted: Schema.Boolean,
-  interruptAfterTools: Schema.Boolean,
-}
-
-const ResolvedTurnFields = {
-  currentTurnAgent: AgentName,
-  messages: Schema.Array(Message),
-  systemPrompt: Schema.String,
-  modelId: ModelId,
-  reasoning: Schema.optional(ReasoningEffort),
-  temperature: Schema.optional(Schema.Number),
-}
-
-const AssistantDraftSchema = Schema.Struct({
-  text: Schema.String,
-  reasoning: Schema.String,
-  toolCalls: Schema.Array(ToolCallPart),
-  usage: Schema.optional(UsageSchema),
-})
-
-// Agent Loop Machine
-
-const AgentLoopState = State({
-  Idle: LoopStateBaseFields,
-  Resolving: ActiveTurnFields,
-  Streaming: {
-    ...ActiveTurnFields,
-    ...ResolvedTurnFields,
-  },
-  ExecutingTools: {
-    ...ActiveTurnFields,
-    currentTurnAgent: AgentName,
-    draft: AssistantDraftSchema,
-  },
-  Finalizing: {
-    ...ActiveTurnFields,
-    currentTurnAgent: Schema.optional(AgentName),
-    usage: Schema.optional(UsageSchema),
-    streamFailed: Schema.Boolean,
-  },
-})
-
-const AgentLoopEvent = Event({
-  Start: { item: QueuedTurnItem },
-  QueueFollowUp: { item: QueuedTurnItem },
-  QueueSteering: { item: QueuedTurnItem, urgent: Schema.Boolean },
-  Interrupt: {},
-  SwitchAgent: { agent: AgentName },
-  ClearQueue: {},
-  Resolved: ResolvedTurnFields,
-  StreamFinished: { currentTurnAgent: AgentName, draft: AssistantDraftSchema },
-  StreamInterrupted: { currentTurnAgent: AgentName },
-  StreamFailed: { currentTurnAgent: AgentName },
-  ToolsFinished: {},
-  FinalizeFinished: {
-    queue: LoopQueueState,
-    nextItem: Schema.optional(QueuedTurnItem),
-    handoffSuppress: Schema.Number,
-  },
-  PhaseFailed: {},
-})
-
-type LoopState = typeof AgentLoopState.Type
-type IdleState = Extract<LoopState, { _tag: "Idle" }>
-type ResolvingState = Extract<LoopState, { _tag: "Resolving" }>
-type StreamingState = Extract<LoopState, { _tag: "Streaming" }>
-type ExecutingToolsState = Extract<LoopState, { _tag: "ExecutingTools" }>
-type FinalizingState = Extract<LoopState, { _tag: "Finalizing" }>
-type ActiveLoopState = Exclude<LoopState, IdleState>
-
-type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
-
 type SemaphoreType = Semaphore.Semaphore
 
 type LoopHandle = {
@@ -403,158 +177,6 @@ type LoopHandle = {
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   bashSemaphore: SemaphoreType
 }
-
-const buildIdleState = (params?: {
-  queue?: LoopQueueState
-  currentAgent?: AgentNameType
-  handoffSuppress?: number
-}): IdleState =>
-  AgentLoopState.Idle({
-    queue: params?.queue ?? emptyLoopQueueState(),
-    currentAgent: params?.currentAgent,
-    handoffSuppress: params?.handoffSuppress ?? 0,
-  })
-
-const buildResolvingState = (
-  base: {
-    queue: LoopQueueState
-    currentAgent?: AgentNameType
-    handoffSuppress: number
-  },
-  item: QueuedTurnItem,
-): ResolvingState =>
-  AgentLoopState.Resolving({
-    queue: base.queue,
-    currentAgent: base.currentAgent,
-    handoffSuppress: base.handoffSuppress,
-    message: item.message,
-    bypass: item.bypass,
-    startedAtMs: Date.now(),
-    agentOverride: item.agentOverride,
-    turnInterrupted: false,
-    interruptAfterTools: false,
-  })
-
-function updateQueueOnState(state: IdleState, queue: LoopQueueState): IdleState
-function updateQueueOnState(state: ResolvingState, queue: LoopQueueState): ResolvingState
-function updateQueueOnState(state: StreamingState, queue: LoopQueueState): StreamingState
-function updateQueueOnState(state: ExecutingToolsState, queue: LoopQueueState): ExecutingToolsState
-function updateQueueOnState(state: FinalizingState, queue: LoopQueueState): FinalizingState
-function updateQueueOnState(state: LoopState, queue: LoopQueueState): LoopState
-function updateQueueOnState(state: LoopState, queue: LoopQueueState): LoopState {
-  switch (state._tag) {
-    case "Idle":
-      return AgentLoopState.Idle.derive(state, { queue })
-    case "Resolving":
-      return AgentLoopState.Resolving.derive(state, { queue })
-    case "Streaming":
-      return AgentLoopState.Streaming.derive(state, { queue })
-    case "ExecutingTools":
-      return AgentLoopState.ExecutingTools.derive(state, { queue })
-    case "Finalizing":
-      return AgentLoopState.Finalizing.derive(state, { queue })
-  }
-}
-
-function updateCurrentAgentOnState(state: IdleState, currentAgent: AgentNameType): IdleState
-function updateCurrentAgentOnState(
-  state: ResolvingState,
-  currentAgent: AgentNameType,
-): ResolvingState
-function updateCurrentAgentOnState(
-  state: StreamingState,
-  currentAgent: AgentNameType,
-): StreamingState
-function updateCurrentAgentOnState(
-  state: ExecutingToolsState,
-  currentAgent: AgentNameType,
-): ExecutingToolsState
-function updateCurrentAgentOnState(
-  state: FinalizingState,
-  currentAgent: AgentNameType,
-): FinalizingState
-function updateCurrentAgentOnState(state: LoopState, currentAgent: AgentNameType): LoopState
-function updateCurrentAgentOnState(state: LoopState, currentAgent: AgentNameType): LoopState {
-  switch (state._tag) {
-    case "Idle":
-      return AgentLoopState.Idle.derive(state, { currentAgent })
-    case "Resolving":
-      return AgentLoopState.Resolving.derive(state, { currentAgent })
-    case "Streaming":
-      return AgentLoopState.Streaming.derive(state, { currentAgent })
-    case "ExecutingTools":
-      return AgentLoopState.ExecutingTools.derive(state, { currentAgent })
-    case "Finalizing":
-      return AgentLoopState.Finalizing.derive(state, { currentAgent })
-  }
-}
-
-const markInterruptAfterTools = (state: ExecutingToolsState): ExecutingToolsState =>
-  AgentLoopState.ExecutingTools.derive(state, { interruptAfterTools: true })
-
-function markTurnInterrupted(state: ResolvingState): ResolvingState
-function markTurnInterrupted(state: StreamingState): StreamingState
-function markTurnInterrupted(state: ExecutingToolsState): ExecutingToolsState
-function markTurnInterrupted(state: FinalizingState): FinalizingState
-function markTurnInterrupted(state: ActiveLoopState): ActiveLoopState
-function markTurnInterrupted(state: ActiveLoopState): ActiveLoopState {
-  switch (state._tag) {
-    case "Resolving":
-      return AgentLoopState.Resolving.derive(state, { turnInterrupted: true })
-    case "Streaming":
-      return AgentLoopState.Streaming.derive(state, { turnInterrupted: true })
-    case "ExecutingTools":
-      return AgentLoopState.ExecutingTools.derive(state, { turnInterrupted: true })
-    case "Finalizing":
-      return AgentLoopState.Finalizing.derive(state, { turnInterrupted: true })
-  }
-}
-
-const toStreamingState = (params: {
-  state: ResolvingState
-  resolved: ResolvedTurn
-}): StreamingState =>
-  AgentLoopState.Streaming.derive(params.state, {
-    currentTurnAgent: params.resolved.currentTurnAgent,
-    messages: params.resolved.messages,
-    systemPrompt: params.resolved.systemPrompt,
-    modelId: params.resolved.modelId,
-    ...(params.resolved.reasoning !== undefined ? { reasoning: params.resolved.reasoning } : {}),
-    ...(params.resolved.temperature !== undefined
-      ? { temperature: params.resolved.temperature }
-      : {}),
-  })
-
-const toExecutingToolsState = (params: {
-  state: StreamingState
-  currentTurnAgent: AgentNameType
-  draft: AssistantDraft
-}): ExecutingToolsState =>
-  AgentLoopState.ExecutingTools.derive(params.state, {
-    currentTurnAgent: params.currentTurnAgent,
-    draft: params.draft,
-  })
-
-const toFinalizingState = (params: {
-  state: ResolvingState | StreamingState | ExecutingToolsState
-  currentTurnAgent?: AgentNameType
-  usage?: { inputTokens: number; outputTokens: number }
-  streamFailed: boolean
-  turnInterrupted: boolean
-}): FinalizingState =>
-  AgentLoopState.Finalizing.derive(params.state, {
-    interruptAfterTools: false,
-    turnInterrupted: params.turnInterrupted,
-    currentTurnAgent: params.currentTurnAgent,
-    usage: params.usage,
-    streamFailed: params.streamFailed,
-  })
-
-const queueSnapshotFromState = (state: LoopState): QueueSnapshot =>
-  toQueueSnapshot(state.queue.steering, state.queue.followUp)
-
-const queueContainsContent = (queue: ReadonlyArray<QueuedTurnItem>, content: string): boolean =>
-  queue.some((item) => messageText(item.message).includes(content))
 
 const interruptActiveStream = (activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>) =>
   Effect.gen(function* () {

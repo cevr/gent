@@ -2,7 +2,6 @@ import { DateTime, Deferred, Effect, Ref, Stream, type Semaphore } from "effect"
 import {
   type AgentDefinition,
   Agents,
-  type ReasoningEffort,
   resolveAgentModel,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
@@ -23,11 +22,9 @@ import {
 import { type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import { type HandoffHandlerService } from "../../domain/interaction-handlers.js"
 import { Message, ReasoningPart, TextPart, ToolCallPart } from "../../domain/message.js"
-import type { ModelId } from "../../domain/model.js"
 import {
   type ProviderError,
   type ProviderService,
-  type ProviderRequest,
   type StreamChunk as ProviderStreamChunk,
 } from "../../providers/provider.js"
 import { type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
@@ -37,28 +34,8 @@ import { estimateContextPercent } from "../context-estimation"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { withRetry } from "../retry"
 import { type ToolRunnerService } from "./tool-runner"
-
-const buildSystemPrompt = (basePrompt: string, agent: AgentDefinition): string => {
-  const parts: string[] = [basePrompt]
-
-  if (agent.systemPromptAddendum !== undefined && agent.systemPromptAddendum !== "") {
-    parts.push(`\n\n## Agent: ${agent.name}\n${agent.systemPromptAddendum}`)
-  }
-
-  return parts.join("")
-}
-
-const VALID_REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
-
-const resolveReasoning = (
-  agent: AgentDefinition,
-  sessionOverride?: string,
-): ProviderRequest["reasoning"] | undefined => {
-  if (sessionOverride !== undefined && VALID_REASONING_LEVELS.has(sessionOverride)) {
-    return sessionOverride as ProviderRequest["reasoning"]
-  }
-  return agent.reasoningEffort
-}
+import { type AssistantDraft, type ResolvedTurn } from "./agent-loop.state.js"
+import { buildSystemPrompt, resolveReasoning } from "./agent-loop.utils.js"
 
 const formatStreamErrorMessage = (streamError: unknown) => {
   if (streamError instanceof Error) return streamError.message
@@ -89,22 +66,6 @@ export type ActiveStreamHandle = {
   abortController: AbortController
   interruptDeferred: Deferred.Deferred<void>
   interruptedRef: Ref.Ref<boolean>
-}
-
-export type AssistantDraft = {
-  text: string
-  reasoning: string
-  toolCalls: ReadonlyArray<ToolCallPart>
-  usage?: { inputTokens: number; outputTokens: number }
-}
-
-export type ResolvedTurn = {
-  currentTurnAgent: AgentNameType
-  messages: ReadonlyArray<Message>
-  systemPrompt: string
-  modelId: ModelId
-  reasoning?: ReasoningEffort
-  temperature?: number
 }
 
 interface ResolvedTurnContext extends ResolvedTurn {
