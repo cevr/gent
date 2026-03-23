@@ -4,7 +4,7 @@ Status: in progress.
 
 ## Task List
 
-- [ ] Batch 1 — Shared contract harness
+- [x] Batch 1 — Shared contract harness
 - [ ] Batch 2 — Event stream parity
 - [ ] Batch 3 — Worker boundary tests
 - [ ] Batch 4 — Session feed projection tests
@@ -105,12 +105,12 @@ Core rule:
 
 Checklist:
 
-- [ ] add reusable transport harness
-- [ ] add shared contract assertions
-- [ ] run first parity suite against direct client
-- [ ] run first parity suite against in-process RPC client
-- [ ] run first parity suite against HTTP worker client
-- [ ] `bun run gate`
+- [x] add reusable transport harness
+- [x] add shared contract assertions
+- [x] run first parity suite against direct client
+- [x] run first parity suite against in-process RPC client
+- [x] run first parity suite against HTTP worker client
+- [x] `bun run gate`
 
 Goal:
 
