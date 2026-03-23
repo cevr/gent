@@ -138,98 +138,113 @@ export interface TransitionResult {
   readonly effect?: InputEffect
 }
 
+const transitionToPrompt = (event: InputEvent): TransitionResult | undefined => {
+  switch (event._tag) {
+    case "QuestionsAsked":
+      return { state: InputState.fromQuestions(event.event) }
+    case "PermissionRequested":
+      return { state: InputState.fromPermission(event.event) }
+    case "PromptPresented":
+      return { state: InputState.fromPrompt(event.event) }
+    case "HandoffPresented":
+      return { state: InputState.fromHandoff(event.event) }
+    default:
+      return undefined
+  }
+}
+
+const transitionNormal = (
+  state: Extract<InputState, { _tag: "normal" }>,
+  event: InputEvent,
+): TransitionResult => {
+  const promptTransition = transitionToPrompt(event)
+  if (promptTransition !== undefined) return promptTransition
+
+  switch (event._tag) {
+    case "TypeExclaim":
+      return { state: InputState.shell(), effect: { _tag: "ClearInput" } }
+    case "Escape":
+      return state.autocomplete !== null ? { state: InputState.normal(null) } : { state }
+    case "TriggerAutocomplete":
+      return {
+        state: InputState.normal({
+          type: event.type,
+          filter: event.filter,
+          triggerPos: event.triggerPos,
+        }),
+      }
+    case "CloseAutocomplete":
+      return { state: InputState.normal(null) }
+    default:
+      return { state }
+  }
+}
+
+const transitionShell = (
+  state: Extract<InputState, { _tag: "shell" }>,
+  event: InputEvent,
+): TransitionResult => {
+  const promptTransition = transitionToPrompt(event)
+  if (promptTransition !== undefined) return promptTransition
+
+  switch (event._tag) {
+    case "Escape":
+      return { state: InputState.normal(), effect: { _tag: "ClearInput" } }
+    case "BackspaceAtStart":
+      return { state: InputState.normal() }
+    default:
+      return { state }
+  }
+}
+
+const transitionPrompt = (
+  state: Extract<InputState, { _tag: "prompt" }>,
+  event: InputEvent,
+): TransitionResult => {
+  const { prompt } = state
+  switch (event._tag) {
+    case "Escape":
+      return { state: InputState.normal(), effect: { _tag: "ClearInput" } }
+    case "SubmitAnswer": {
+      const newAnswers = [...prompt.answers, event.selections]
+      const nextIndex = prompt.currentIndex + 1
+
+      if (nextIndex >= prompt.questions.length) {
+        return {
+          state: InputState.normal(),
+          effect: {
+            _tag: "RespondPrompt",
+            kind: prompt.kind,
+            requestId: prompt.requestId,
+            answers: newAnswers,
+          },
+        }
+      }
+
+      return {
+        state: {
+          _tag: "prompt",
+          prompt: {
+            ...prompt,
+            currentIndex: nextIndex,
+            answers: newAnswers,
+          },
+        },
+      }
+    }
+    default:
+      return { state }
+  }
+}
+
 export function transition(state: InputState, event: InputEvent): TransitionResult {
   switch (state._tag) {
-    case "normal": {
-      switch (event._tag) {
-        case "TypeExclaim":
-          return { state: InputState.shell(), effect: { _tag: "ClearInput" } }
-        case "Escape":
-          if (state.autocomplete !== null) {
-            return { state: InputState.normal(null) }
-          }
-          return { state }
-        case "TriggerAutocomplete":
-          return {
-            state: InputState.normal({
-              type: event.type,
-              filter: event.filter,
-              triggerPos: event.triggerPos,
-            }),
-          }
-        case "CloseAutocomplete":
-          return { state: InputState.normal(null) }
-        case "QuestionsAsked":
-          return { state: InputState.fromQuestions(event.event) }
-        case "PermissionRequested":
-          return { state: InputState.fromPermission(event.event) }
-        case "PromptPresented":
-          return { state: InputState.fromPrompt(event.event) }
-        case "HandoffPresented":
-          return { state: InputState.fromHandoff(event.event) }
-        default:
-          return { state }
-      }
-    }
-
-    case "shell": {
-      switch (event._tag) {
-        case "Escape":
-          return { state: InputState.normal(), effect: { _tag: "ClearInput" } }
-        case "BackspaceAtStart":
-          return { state: InputState.normal() }
-        case "QuestionsAsked":
-          return { state: InputState.fromQuestions(event.event) }
-        case "PermissionRequested":
-          return { state: InputState.fromPermission(event.event) }
-        case "PromptPresented":
-          return { state: InputState.fromPrompt(event.event) }
-        case "HandoffPresented":
-          return { state: InputState.fromHandoff(event.event) }
-        default:
-          return { state }
-      }
-    }
-
-    case "prompt": {
-      const { prompt } = state
-      switch (event._tag) {
-        case "Escape":
-          // ESC cancels prompt, returns to normal
-          return { state: InputState.normal(), effect: { _tag: "ClearInput" } }
-        case "SubmitAnswer": {
-          const newAnswers = [...prompt.answers, event.selections]
-          const nextIndex = prompt.currentIndex + 1
-
-          if (nextIndex >= prompt.questions.length) {
-            // All questions answered
-            return {
-              state: InputState.normal(),
-              effect: {
-                _tag: "RespondPrompt",
-                kind: prompt.kind,
-                requestId: prompt.requestId,
-                answers: newAnswers,
-              },
-            }
-          }
-
-          // More questions
-          return {
-            state: {
-              _tag: "prompt",
-              prompt: {
-                ...prompt,
-                currentIndex: nextIndex,
-                answers: newAnswers,
-              },
-            },
-          }
-        }
-        default:
-          return { state }
-      }
-    }
+    case "normal":
+      return transitionNormal(state, event)
+    case "shell":
+      return transitionShell(state, event)
+    case "prompt":
+      return transitionPrompt(state, event)
   }
 }
 

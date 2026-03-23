@@ -7,7 +7,7 @@
  */
 
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
-import { createStore, produce } from "solid-js/store"
+import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Effect } from "effect"
 import type { AgentEvent } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
@@ -39,12 +39,22 @@ export type InputFeedEvent =
   | { _tag: "PromptPresented"; event: AgentEvent & { _tag: "PromptPresented" } }
   | { _tag: "HandoffPresented"; event: AgentEvent & { _tag: "HandoffPresented" } }
 
+type ToolResultEvent = Extract<
+  AgentEvent,
+  { _tag: "ToolCallCompleted" | "ToolCallSucceeded" | "ToolCallFailed" }
+>
+
 export interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
   turnCount: () => number
   activeTool: () => string | undefined
   clear: () => void
+}
+
+type SessionFeedStore = {
+  messages: Message[]
+  events: SessionEvent[]
 }
 
 // ── Build messages from raw ──
@@ -68,6 +78,131 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
     }
   })
 }
+
+const createAssistantMessage = (content: string): Message => ({
+  _tag: "message",
+  id: crypto.randomUUID(),
+  role: "assistant",
+  kind: "regular",
+  content,
+  reasoning: "",
+  images: [],
+  createdAt: Date.now(),
+  toolCalls: undefined,
+})
+
+const createInterruptionEvent = (seq: number): SessionEvent => ({
+  _tag: "event",
+  kind: "interruption",
+  createdAt: Date.now(),
+  seq,
+})
+
+const createTurnEndedEvent = (durationSeconds: number, seq: number): SessionEvent => ({
+  _tag: "event",
+  kind: "turn-ended",
+  durationSeconds,
+  createdAt: Date.now(),
+  seq,
+})
+
+const createRetryingEvent = (
+  attempt: number,
+  maxAttempts: number,
+  delayMs: number,
+  seq: number,
+): SessionEvent => ({
+  _tag: "event",
+  kind: "retrying",
+  attempt,
+  maxAttempts,
+  delayMs,
+  createdAt: Date.now(),
+  seq,
+})
+
+const createErrorEvent = (error: string, seq: number): SessionEvent => ({
+  _tag: "event",
+  kind: "error",
+  error,
+  createdAt: Date.now(),
+  seq,
+})
+
+const appendSessionEvent = (setStore: SetStoreFunction<SessionFeedStore>, event: SessionEvent) => {
+  setStore(
+    produce((draft) => {
+      draft.events.push(event)
+    }),
+  )
+}
+
+const ensureAssistantMessage = (setStore: SetStoreFunction<SessionFeedStore>, content: string) => {
+  setStore(
+    produce((draft) => {
+      const last = draft.messages[draft.messages.length - 1]
+      if (last !== undefined && last.role === "assistant") {
+        last.content += content
+        return
+      }
+
+      draft.messages.push(createAssistantMessage(content))
+    }),
+  )
+}
+
+const updateLatestToolCall = (
+  setStore: SetStoreFunction<SessionFeedStore>,
+  updater: (message: Message) => void,
+) => {
+  setStore(
+    produce((draft) => {
+      const last = draft.messages[draft.messages.length - 1]
+      if (last === undefined || last.role !== "assistant") return
+      updater(last)
+    }),
+  )
+}
+
+const handleToolCallResult = (
+  setStore: SetStoreFunction<SessionFeedStore>,
+  setActiveTool: (value: string | undefined) => string | undefined,
+  toolEvent: ToolResultEvent,
+) => {
+  const isError =
+    toolEvent._tag === "ToolCallFailed" ||
+    (toolEvent._tag === "ToolCallCompleted" && toolEvent.isError)
+
+  setActiveTool(undefined)
+  updateLatestToolCall(setStore, (message) => {
+    if (message.toolCalls === undefined) return
+    const tc = message.toolCalls.find((t) => t.id === toolEvent.toolCallId)
+    if (tc === undefined) return
+    tc.status = isError ? "error" : "completed"
+    tc.summary = toolEvent.summary
+    tc.output = toolEvent.output
+  })
+}
+
+const toInputFeedEvent = (event: AgentEvent): InputFeedEvent | undefined => {
+  switch (event._tag) {
+    case "QuestionsAsked":
+      return { _tag: "QuestionsAsked", event }
+    case "PermissionRequested":
+      return { _tag: "PermissionRequested", event }
+    case "PromptPresented":
+      return { _tag: "PromptPresented", event }
+    case "HandoffPresented":
+      return { _tag: "HandoffPresented", event }
+    default:
+      return undefined
+  }
+}
+
+const isToolResultEvent = (event: AgentEvent): event is ToolResultEvent =>
+  event._tag === "ToolCallCompleted" ||
+  event._tag === "ToolCallSucceeded" ||
+  event._tag === "ToolCallFailed"
 
 // ── Hook ──
 
@@ -194,6 +329,17 @@ export function useSessionFeed(
     // Drop events if identity changed
     if (currentKey !== key) return
 
+    const inputEvent = toInputFeedEvent(event)
+    if (inputEvent !== undefined) {
+      callbacks.onInputEvent(inputEvent)
+      return
+    }
+
+    if (isToolResultEvent(event)) {
+      handleToolCallResult(setStore, setActiveTool, event)
+      return
+    }
+
     switch (event._tag) {
       case "MessageReceived":
         loadMessages(branch, key)
@@ -209,71 +355,19 @@ export function useSessionFeed(
       case "StreamStarted":
         setTurnCount((n) => n + 1)
         setActiveTool(undefined)
-        setStore(
-          produce((draft) => {
-            draft.messages.push({
-              _tag: "message",
-              id: crypto.randomUUID(),
-              role: "assistant",
-              kind: "regular",
-              content: "",
-              reasoning: "",
-              images: [],
-              createdAt: Date.now(),
-              toolCalls: undefined,
-            })
-          }),
-        )
+        ensureAssistantMessage(setStore, "")
         break
 
       case "StreamChunk":
-        setStore(
-          produce((draft) => {
-            const last = draft.messages[draft.messages.length - 1]
-            if (last !== undefined && last.role === "assistant") {
-              last.content += event.chunk
-            } else {
-              draft.messages.push({
-                _tag: "message",
-                id: crypto.randomUUID(),
-                role: "assistant",
-                kind: "regular",
-                content: event.chunk,
-                reasoning: "",
-                images: [],
-                createdAt: Date.now(),
-                toolCalls: undefined,
-              })
-            }
-          }),
-        )
+        ensureAssistantMessage(setStore, event.chunk)
         break
 
       case "TurnCompleted": {
         const durationSeconds = Math.round(event.durationMs / 1000)
         if (event.interrupted === true) {
-          setStore(
-            produce((draft) => {
-              draft.events.push({
-                _tag: "event",
-                kind: "interruption",
-                createdAt: Date.now(),
-                seq: eventSeq++,
-              })
-            }),
-          )
+          appendSessionEvent(setStore, createInterruptionEvent(eventSeq++))
         } else if (durationSeconds > 0) {
-          setStore(
-            produce((draft) => {
-              draft.events.push({
-                _tag: "event",
-                kind: "turn-ended",
-                durationSeconds,
-                createdAt: Date.now(),
-                seq: eventSeq++,
-              })
-            }),
-          )
+          appendSessionEvent(setStore, createTurnEndedEvent(durationSeconds, eventSeq++))
         }
         break
       }
@@ -283,92 +377,30 @@ export function useSessionFeed(
         setActiveTool(
           inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
         )
-        setStore(
-          produce((draft) => {
-            const last = draft.messages[draft.messages.length - 1]
-            if (last !== undefined && last.role === "assistant") {
-              if (last.toolCalls === undefined) last.toolCalls = []
-              last.toolCalls.push({
-                id: event.toolCallId,
-                toolName: event.toolName,
-                status: "running" as const,
-                input: event.input,
-                summary: undefined,
-                output: undefined,
-              })
-            }
-          }),
-        )
+        updateLatestToolCall(setStore, (message) => {
+          if (message.toolCalls === undefined) message.toolCalls = []
+          message.toolCalls.push({
+            id: event.toolCallId,
+            toolName: event.toolName,
+            status: "running" as const,
+            input: event.input,
+            summary: undefined,
+            output: undefined,
+          })
+        })
         break
       }
-
-      case "ToolCallCompleted":
-      case "ToolCallSucceeded":
-      case "ToolCallFailed": {
-        const isError =
-          event._tag === "ToolCallFailed" || (event._tag === "ToolCallCompleted" && event.isError)
-        setActiveTool(undefined)
-        setStore(
-          produce((draft) => {
-            const last = draft.messages[draft.messages.length - 1]
-            if (last !== undefined && last.role === "assistant" && last.toolCalls !== undefined) {
-              const tc = last.toolCalls.find((t) => t.id === event.toolCallId)
-              if (tc !== undefined) {
-                tc.status = isError ? "error" : "completed"
-                tc.summary = event.summary
-                tc.output = event.output
-              }
-            }
-          }),
-        )
-        break
-      }
-
-      case "QuestionsAsked":
-        callbacks.onInputEvent({ _tag: "QuestionsAsked", event })
-        break
-
-      case "PermissionRequested":
-        callbacks.onInputEvent({ _tag: "PermissionRequested", event })
-        break
-
-      case "PromptPresented":
-        callbacks.onInputEvent({ _tag: "PromptPresented", event })
-        break
-
-      case "HandoffPresented":
-        callbacks.onInputEvent({ _tag: "HandoffPresented", event })
-        break
 
       case "ProviderRetrying":
-        setStore(
-          produce((draft) => {
-            draft.events.push({
-              _tag: "event",
-              kind: "retrying",
-              attempt: event.attempt,
-              maxAttempts: event.maxAttempts,
-              delayMs: event.delayMs,
-              createdAt: Date.now(),
-              seq: eventSeq++,
-            })
-          }),
+        appendSessionEvent(
+          setStore,
+          createRetryingEvent(event.attempt, event.maxAttempts, event.delayMs, eventSeq++),
         )
         break
 
       case "ErrorOccurred":
         clientLog.error("sessionFeed.error", { error: event.error, seq: eventSeq })
-        setStore(
-          produce((draft) => {
-            draft.events.push({
-              _tag: "event",
-              kind: "error",
-              error: event.error,
-              createdAt: Date.now(),
-              seq: eventSeq++,
-            })
-          }),
-        )
+        appendSessionEvent(setStore, createErrorEvent(event.error, eventSeq++))
         break
     }
   }
