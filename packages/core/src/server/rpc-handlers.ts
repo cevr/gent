@@ -1,6 +1,5 @@
 import { Effect } from "effect"
 import { GentRpcs } from "./rpcs"
-import { GentCore } from "./core"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AuthGuard } from "../domain/auth-guard.js"
@@ -13,6 +12,10 @@ import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { OPENAI_OAUTH_ALLOWED_MODELS } from "../providers/oauth/openai-oauth.js"
+import { SessionQueries } from "./session-queries.js"
+import { SessionCommands } from "./session-commands.js"
+import { SessionEvents } from "./session-events.js"
+import { InteractionCommands } from "./interaction-commands.js"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -20,7 +23,10 @@ import { OPENAI_OAUTH_ALLOWED_MODELS } from "../providers/oauth/openai-oauth.js"
 
 export const RpcHandlersLive = GentRpcs.toLayer(
   Effect.gen(function* () {
-    const core = yield* GentCore
+    const queries = yield* SessionQueries
+    const commands = yield* SessionCommands
+    const events = yield* SessionEvents
+    const interactions = yield* InteractionCommands
     const skills = yield* Skills
     const askUserHandler = yield* AskUserHandler
     const permission = yield* Permission
@@ -33,7 +39,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
     return {
       createSession: (input) =>
-        core.createSession({
+        commands.createSession({
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
           ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
@@ -44,16 +50,16 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(input.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
         }),
 
-      listSessions: () => core.listSessions(),
+      listSessions: () => queries.listSessions(),
 
-      getSession: ({ sessionId }) => core.getSession(sessionId),
+      getSession: ({ sessionId }) => queries.getSession(sessionId),
 
-      deleteSession: ({ sessionId }) => core.deleteSession(sessionId),
+      deleteSession: ({ sessionId }) => commands.deleteSession(sessionId),
 
-      getChildSessions: ({ parentSessionId }) => core.getChildSessions(parentSessionId),
+      getChildSessions: ({ parentSessionId }) => queries.getChildSessions(parentSessionId),
 
       getSessionTree: ({ sessionId }) =>
-        core.getSessionTree(sessionId).pipe(
+        queries.getSessionTree(sessionId).pipe(
           Effect.map(function toRpc(node): {
             id: typeof node.session.id
             name: typeof node.session.name
@@ -79,18 +85,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           }),
         ),
 
-      listBranches: ({ sessionId }) => core.listBranches(sessionId),
+      listBranches: ({ sessionId }) => queries.listBranches(sessionId),
 
       createBranch: ({ sessionId, name }) =>
-        core.createBranch({
+        commands.createBranch({
           sessionId,
           ...(name !== undefined ? { name } : {}),
         }),
 
-      getBranchTree: ({ sessionId }) => core.getBranchTree(sessionId),
+      getBranchTree: ({ sessionId }) => queries.getBranchTree(sessionId),
 
       switchBranch: ({ sessionId, fromBranchId, toBranchId, summarize }) =>
-        core.switchBranch({
+        commands.switchBranch({
           sessionId,
           fromBranchId,
           toBranchId,
@@ -98,7 +104,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       forkBranch: ({ sessionId, fromBranchId, atMessageId, name }) =>
-        core.forkBranch({
+        commands.forkBranch({
           sessionId,
           fromBranchId,
           atMessageId,
@@ -106,28 +112,29 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       sendMessage: ({ sessionId, branchId, content }) =>
-        core.sendMessage({
+        commands.sendMessage({
           sessionId,
           branchId,
           content,
         }),
 
-      listMessages: ({ branchId }) => core.listMessages(branchId),
+      listMessages: ({ branchId }) => queries.listMessages(branchId),
 
-      getSessionState: ({ sessionId, branchId }) => core.getSessionState({ sessionId, branchId }),
+      getSessionState: ({ sessionId, branchId }) =>
+        queries.getSessionState({ sessionId, branchId }),
 
       // SAFETY: SteerPayload and SteerCommand are structurally identical Schema.Union types
-      steer: ({ command }) => core.steer(command as SteerCommand),
+      steer: ({ command }) => commands.steer(command as SteerCommand),
 
       drainQueuedMessages: ({ sessionId, branchId }) =>
-        core.drainQueuedMessages({ sessionId, branchId }),
+        commands.drainQueuedMessages({ sessionId, branchId }),
 
       getQueuedMessages: ({ sessionId, branchId }) =>
-        core.getQueuedMessages({ sessionId, branchId }),
+        queries.getQueuedMessages({ sessionId, branchId }),
 
       subscribeEvents: ({ sessionId, branchId, after }) =>
         // Return the stream directly for streaming RPC
-        core.subscribeEvents({
+        events.subscribeEvents({
           sessionId,
           ...(branchId !== undefined ? { branchId } : {}),
           ...(after !== undefined ? { after } : {}),
@@ -136,27 +143,27 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       respondQuestions: ({ requestId, answers }) => askUserHandler.respond(requestId, answers),
 
       respondPermission: ({ requestId, decision, persist }) =>
-        core.respondPermission({ requestId, decision, persist }),
+        interactions.respondPermission({ requestId, decision, persist }),
 
       respondPrompt: ({ requestId, decision, content }) =>
-        core.respondPrompt({
+        interactions.respondPrompt({
           requestId,
           decision,
           ...(content !== undefined ? { content } : {}),
         }),
 
       respondHandoff: ({ requestId, decision, reason }) =>
-        core.respondHandoff({
+        interactions.respondHandoff({
           requestId,
           decision,
           ...(reason !== undefined ? { reason } : {}),
         }),
 
       updateSessionBypass: ({ sessionId, bypass }) =>
-        core.updateSessionBypass({ sessionId, bypass }),
+        commands.updateSessionBypass({ sessionId, bypass }),
 
       updateSessionReasoningLevel: ({ sessionId, reasoningLevel }) =>
-        core.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
+        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
 
       getPermissionRules: () => configService.getPermissionRules(),
 
@@ -216,7 +223,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       callbackAuth: ({ sessionId, provider, method, authorizationId, code }) =>
         providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
 
-      listTasks: ({ sessionId, branchId }) => core.listTasks(sessionId, branchId),
+      listTasks: ({ sessionId, branchId }) => queries.listTasks(sessionId, branchId),
 
       actorSendUserMessage: (input) => actorProcess.sendUserMessage(input),
 

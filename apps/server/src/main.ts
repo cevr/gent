@@ -8,6 +8,10 @@ import { Effect, Layer, Schema } from "effect"
 import * as os from "node:os"
 import { GentApi } from "@gent/core/server/http-api.js"
 import { GentCore, SteerCommand } from "@gent/core/server/core.js"
+import { SessionQueries } from "@gent/core/server/session-queries.js"
+import { SessionCommands } from "@gent/core/server/session-commands.js"
+import { SessionEvents } from "@gent/core/server/session-events.js"
+import { InteractionCommands } from "@gent/core/server/interaction-commands.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { createDependencies } from "@gent/core/server/index.js"
@@ -15,10 +19,11 @@ import { createDependencies } from "@gent/core/server/index.js"
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
   Effect.gen(function* () {
-    const core = yield* GentCore
+    const queries = yield* SessionQueries
+    const commands = yield* SessionCommands
     return handlers
       .handle("create", ({ payload }) =>
-        core
+        commands
           .createSession({
             name: payload.name ?? "New Session",
             ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
@@ -26,26 +31,27 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
           })
           .pipe(Effect.orDie),
       )
-      .handle("list", () => core.listSessions().pipe(Effect.orDie))
+      .handle("list", () => queries.listSessions().pipe(Effect.orDie))
       .handle("get", ({ params }) =>
-        core.getSession(params.sessionId).pipe(
+        queries.getSession(params.sessionId).pipe(
           Effect.flatMap((s) =>
             s !== null ? Effect.succeed(s) : Effect.die(new Error("Session not found")),
           ),
           Effect.orDie,
         ),
       )
-      .handle("delete", ({ params }) => core.deleteSession(params.sessionId).pipe(Effect.orDie))
+      .handle("delete", ({ params }) => commands.deleteSession(params.sessionId).pipe(Effect.orDie))
   }),
 )
 
 // Messages API Handlers
 const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
   Effect.gen(function* () {
-    const core = yield* GentCore
+    const queries = yield* SessionQueries
+    const commands = yield* SessionCommands
     return handlers
       .handle("send", ({ payload }) =>
-        core
+        commands
           .sendMessage({
             sessionId: payload.sessionId,
             branchId: payload.branchId,
@@ -53,11 +59,11 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
           })
           .pipe(Effect.orDie),
       )
-      .handle("list", ({ params }) => core.listMessages(params.branchId).pipe(Effect.orDie))
+      .handle("list", ({ params }) => queries.listMessages(params.branchId).pipe(Effect.orDie))
       .handle("steer", ({ payload }) =>
         Effect.gen(function* () {
           const command = yield* Schema.decodeEffect(SteerCommand)(payload)
-          yield* core.steer(command)
+          yield* commands.steer(command)
         }).pipe(Effect.orDie),
       )
   }),
@@ -79,11 +85,17 @@ const DepsLive = createDependencies({
   Layer.provide(GentTracerLive),
 )
 
-// GentCore layer
 const GentCoreLive = GentCore.Live.pipe(Layer.provide(DepsLive))
 
+const AppServicesLive = Layer.mergeAll(
+  SessionQueries.Live,
+  SessionCommands.Live,
+  SessionEvents.Live,
+  InteractionCommands.Live,
+).pipe(Layer.provideMerge(GentCoreLive), Layer.provide(DepsLive))
+
 // Combined layer for RPC handlers
-const CoreWithDeps = Layer.merge(GentCoreLive, DepsLive)
+const CoreWithDeps = Layer.merge(AppServicesLive, DepsLive)
 
 // RPC-over-HTTP routes with ndjson for streaming
 const RpcRoutes = RpcServer.layerHttp({
@@ -98,7 +110,7 @@ const RpcRoutes = RpcServer.layerHttp({
 
 // API Groups Layer (REST endpoints)
 const HttpGroupsLive = Layer.provideMerge(SessionsApiLive, MessagesApiLive).pipe(
-  Layer.provide(GentCoreLive),
+  Layer.provide(AppServicesLive),
 )
 
 // API Routes
@@ -124,7 +136,7 @@ const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJso
 // Server
 const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
-  Layer.provide(GentCoreLive),
+  Layer.provide(AppServicesLive),
   Layer.provide(BunFileSystem.layer),
 )
 

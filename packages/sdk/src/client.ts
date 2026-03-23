@@ -20,7 +20,10 @@ import type {
   SessionTreeNode,
   CreateSessionResult,
 } from "@gent/core/server/transport-contract.js"
-import { GentCore } from "@gent/core/server/core.js"
+import { SessionQueries } from "@gent/core/server/session-queries.js"
+import { SessionCommands } from "@gent/core/server/session-commands.js"
+import { InteractionCommands } from "@gent/core/server/interaction-commands.js"
+import { SessionEvents } from "@gent/core/server/session-events.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
 import { ActorProcess } from "@gent/core/runtime/actor-process.js"
 import type { GentRpcError } from "@gent/core/server/errors.js"
@@ -367,7 +370,10 @@ export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
  * Requires a layer that provides all handler dependencies (GentCore, etc).
  *
  * The layer must provide RpcHandlersContext, which includes:
- * - GentCore
+ * - SessionQueries
+ * - SessionCommands
+ * - InteractionCommands
+ * - SessionEvents
  * - AskUserHandler
  * - PermissionHandler
  * - PromptHandler
@@ -411,7 +417,10 @@ export const makeInProcessClient = <E, R>(
  * Context required to create an in-process transport adapter.
  */
 export type DirectGentClientContext =
-  | GentCore
+  | SessionQueries
+  | SessionCommands
+  | InteractionCommands
+  | SessionEvents
   | ActorProcess
   | AskUserHandler
   | Permission
@@ -428,7 +437,10 @@ export type DirectGentClientContext =
  */
 export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentClientContext> =
   Effect.gen(function* () {
-    const core = yield* GentCore
+    const queries = yield* SessionQueries
+    const commands = yield* SessionCommands
+    const interactions = yield* InteractionCommands
+    const events = yield* SessionEvents
     const actorProcess = yield* ActorProcess
     const askUserHandler = yield* AskUserHandler
     const permission = yield* Permission
@@ -445,11 +457,11 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
       effect as Effect.Effect<A, GentRpcError>
 
     const client: GentClient = {
-      sendMessage: (input) => mapErr(core.sendMessage(input)),
+      sendMessage: (input) => mapErr(commands.sendMessage(input)),
 
       createSession: (input) =>
         mapErr(
-          core.createSession({
+          commands.createSession({
             ...(input?.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
             ...(input?.cwd !== undefined ? { cwd: input.cwd } : {}),
             ...(input?.bypass !== undefined ? { bypass: input.bypass } : {}),
@@ -462,19 +474,19 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
           }),
         ),
 
-      listMessages: (branchId) => mapErr(core.listMessages(branchId)),
+      listMessages: (branchId) => mapErr(queries.listMessages(branchId)),
 
-      getSessionState: (input) => mapErr(core.getSessionState(input)),
+      getSessionState: (input) => mapErr(queries.getSessionState(input)),
 
-      getSession: (sessionId) => mapErr(core.getSession(sessionId)),
+      getSession: (sessionId) => mapErr(queries.getSession(sessionId)),
 
-      listSessions: () => mapErr(core.listSessions()),
+      listSessions: () => mapErr(queries.listSessions()),
 
-      getChildSessions: (parentSessionId) => mapErr(core.getChildSessions(parentSessionId)),
+      getChildSessions: (parentSessionId) => mapErr(queries.getChildSessions(parentSessionId)),
 
       getSessionTree: (sessionId) =>
         mapErr(
-          core.getSessionTree(sessionId).pipe(
+          queries.getSessionTree(sessionId).pipe(
             Effect.map(function toFlat(node): SessionTreeNode {
               return {
                 id: node.session.id,
@@ -521,42 +533,42 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
           }),
         ),
 
-      listBranches: (sessionId) => mapErr(core.listBranches(sessionId)),
+      listBranches: (sessionId) => mapErr(queries.listBranches(sessionId)),
 
-      listTasks: (sessionId, branchId) => mapErr(core.listTasks(sessionId, branchId)),
+      listTasks: (sessionId, branchId) => mapErr(queries.listTasks(sessionId, branchId)),
 
-      getBranchTree: (sessionId) => mapErr(core.getBranchTree(sessionId)),
+      getBranchTree: (sessionId) => mapErr(queries.getBranchTree(sessionId)),
 
       createBranch: (sessionId, name) =>
         mapErr(
-          core
+          commands
             .createBranch({ sessionId, ...(name !== undefined ? { name } : {}) })
             .pipe(Effect.map((r) => r.branchId)),
         ),
 
-      switchBranch: (input) => mapErr(core.switchBranch(input)),
+      switchBranch: (input) => mapErr(commands.switchBranch(input)),
 
-      forkBranch: (input) => mapErr(core.forkBranch(input)),
+      forkBranch: (input) => mapErr(commands.forkBranch(input)),
 
       subscribeEvents: (input) =>
-        core.subscribeEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
+        events.subscribeEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
 
-      steer: (command) => mapErr(core.steer(command)),
+      steer: (command) => mapErr(commands.steer(command)),
       drainQueuedMessages: ({ sessionId, branchId }) =>
-        mapErr(core.drainQueuedMessages({ sessionId, branchId })),
+        mapErr(commands.drainQueuedMessages({ sessionId, branchId })),
       getQueuedMessages: ({ sessionId, branchId }) =>
-        mapErr(core.getQueuedMessages({ sessionId, branchId })),
+        mapErr(queries.getQueuedMessages({ sessionId, branchId })),
 
       invokeTool: (input) => mapErr(actorProcess.invokeTool(input)),
 
       respondQuestions: (requestId, answers) => mapErr(askUserHandler.respond(requestId, answers)),
 
       respondPermission: (requestId, decision, persist) =>
-        mapErr(core.respondPermission({ requestId, decision, persist })),
+        mapErr(interactions.respondPermission({ requestId, decision, persist })),
 
       respondPrompt: (requestId, decision, content) =>
         mapErr(
-          core.respondPrompt({
+          interactions.respondPrompt({
             requestId,
             decision,
             ...(content !== undefined ? { content } : {}),
@@ -565,7 +577,7 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
 
       respondHandoff: (requestId, decision, reason) =>
         mapErr(
-          core.respondHandoff({
+          interactions.respondHandoff({
             requestId,
             decision,
             ...(reason !== undefined ? { reason } : {}),
@@ -573,10 +585,10 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
         ),
 
       updateSessionBypass: (sessionId, bypass) =>
-        mapErr(core.updateSessionBypass({ sessionId, bypass })),
+        mapErr(commands.updateSessionBypass({ sessionId, bypass })),
 
       updateSessionReasoningLevel: (sessionId, reasoningLevel) =>
-        mapErr(core.updateSessionReasoningLevel({ sessionId, reasoningLevel })),
+        mapErr(commands.updateSessionReasoningLevel({ sessionId, reasoningLevel })),
 
       getPermissionRules: () => mapErr(configService.getPermissionRules()),
 

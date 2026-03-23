@@ -6,7 +6,11 @@ import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
 import { createDependencies } from "@gent/core/server/index.js"
-import { GentCore, type GentCoreService, type GentCoreError } from "@gent/core/server/core.js"
+import { GentCore, type GentCoreError } from "@gent/core/server/core.js"
+import { SessionQueries, type SessionQueriesService } from "@gent/core/server/session-queries.js"
+import { SessionCommands, type SessionCommandsService } from "@gent/core/server/session-commands.js"
+import { SessionEvents, type SessionEventsService } from "@gent/core/server/session-events.js"
+import { InteractionCommands } from "@gent/core/server/interaction-commands.js"
 import { makeDirectGentClient, type GentClient, type SessionInfo, type BranchInfo } from "@gent/sdk"
 import { GentLogger } from "@gent/core/runtime/logger.js"
 import { GentTracerLive, clearTraceLogIfRoot } from "@gent/core/runtime/tracer.js"
@@ -49,7 +53,8 @@ type InitialState =
 
 // Pure function for state resolution
 const resolveInitialState = (input: {
-  core: GentCoreService
+  queries: SessionQueriesService
+  commands: Pick<SessionCommandsService, "createSession">
   cwd: string
   session: Option.Option<string>
   continue_: boolean
@@ -60,7 +65,18 @@ const resolveInitialState = (input: {
   bypass: boolean
 }): Effect.Effect<InitialState, GentCoreError> =>
   Effect.gen(function* () {
-    const { core, cwd, session, continue_, headless, debug, prompt, promptArg, bypass } = input
+    const {
+      queries,
+      commands,
+      cwd,
+      session,
+      continue_,
+      headless,
+      debug,
+      prompt,
+      promptArg,
+      bypass,
+    } = input
 
     if (debug) {
       return { _tag: "debug" as const }
@@ -75,7 +91,7 @@ const resolveInitialState = (input: {
       }
       // Get or create session
       if (Option.isSome(session)) {
-        const sess = yield* core.getSession(session.value as SessionId)
+        const sess = yield* queries.getSession(session.value as SessionId)
         if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
           return process.exit(1)
@@ -83,7 +99,7 @@ const resolveInitialState = (input: {
         return { _tag: "headless" as const, session: sess, prompt: promptText }
       }
 
-      const result = yield* core.createSession({ name: "headless session", cwd, bypass })
+      const result = yield* commands.createSession({ name: "headless session", cwd, bypass })
       const sess: SessionInfo = {
         id: result.sessionId,
         name: result.name,
@@ -101,13 +117,13 @@ const resolveInitialState = (input: {
 
     // 2. Explicit session ID
     if (Option.isSome(session)) {
-      const sess = yield* core.getSession(session.value as SessionId)
+      const sess = yield* queries.getSession(session.value as SessionId)
       if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
         return process.exit(1)
       }
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
-      const branches = yield* core.listBranches(sess.id)
+      const branches = yield* queries.listBranches(sess.id)
       if (branches.length > 1) {
         return {
           _tag: "branchPicker" as const,
@@ -122,10 +138,10 @@ const resolveInitialState = (input: {
     // 3. Continue from cwd
     if (continue_) {
       const sess: SessionInfo = yield* Effect.gen(function* () {
-        const existing = yield* core.getLastSessionByCwd(cwd)
+        const existing = yield* queries.getLastSessionByCwd(cwd)
         if (existing !== null) return existing
 
-        const result = yield* core.createSession({ cwd, bypass })
+        const result = yield* commands.createSession({ cwd, bypass })
         return {
           id: result.sessionId,
           name: result.name,
@@ -140,7 +156,7 @@ const resolveInitialState = (input: {
         }
       })
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
-      const branches = yield* core.listBranches(sess.id)
+      const branches = yield* queries.listBranches(sess.id)
       if (branches.length > 1) {
         return {
           _tag: "branchPicker" as const,
@@ -154,7 +170,7 @@ const resolveInitialState = (input: {
 
     // 4. Prompt without session - create new
     if (Option.isSome(prompt)) {
-      const result = yield* core.createSession({ cwd, bypass })
+      const result = yield* commands.createSession({ cwd, bypass })
       const sess: SessionInfo = {
         id: result.sessionId,
         name: result.name,
@@ -215,14 +231,21 @@ const makeCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
         ...(authFilePath !== undefined ? { authFilePath } : {}),
         ...(authKeyPath !== undefined ? { authKeyPath } : {}),
       }).pipe(Layer.provide(PlatformLayer), Layer.provide(LoggerLayer), Layer.provide(TracerLayer))
-      const coreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
+      const gentCoreLive = GentCore.Live.pipe(Layer.provide(serverDeps))
+      const coreLive = Layer.mergeAll(
+        SessionQueries.Live,
+        SessionCommands.Live,
+        SessionEvents.Live,
+        InteractionCommands.Live,
+      ).pipe(Layer.provideMerge(gentCoreLive), Layer.provide(serverDeps))
       return Layer.mergeAll(coreLive, serverDeps, LinkLayer)
     }),
   )
 
 // Headless runner - streams events to stdout
 const runHeadless = (
-  core: GentCoreService,
+  commands: SessionCommandsService,
+  events: SessionEventsService,
   client: GentClient,
   sessionId: SessionId,
   branchId: BranchId,
@@ -230,10 +253,10 @@ const runHeadless = (
 ): Effect.Effect<void, GentCoreError, never> =>
   Effect.gen(function* () {
     // Subscribe to events before sending message
-    const events = core.subscribeEvents({ sessionId, branchId })
+    const eventStream = events.subscribeEvents({ sessionId, branchId })
 
     // Send the message
-    yield* core
+    yield* commands
       .sendMessage({ sessionId, branchId, content: promptText })
       .pipe(Effect.withSpan("Headless.sendMessage"))
 
@@ -243,7 +266,7 @@ const runHeadless = (
     const doneRef = yield* Ref.make(false)
     const handoffPendingRef = yield* Ref.make(false)
 
-    yield* events.pipe(
+    yield* eventStream.pipe(
       Stream.tap((envelope) =>
         Effect.gen(function* () {
           const event = envelope.event
@@ -354,7 +377,9 @@ const main = Command.make(
       return yield* Effect.promise(() =>
         Effect.runPromise(
           Effect.gen(function* () {
-            const core = yield* GentCore
+            const queries = yield* SessionQueries
+            const commands = yield* SessionCommands
+            const events = yield* SessionEvents
             const authGuard = yield* AuthGuard
 
             const authProviders = yield* authGuard.listProviders()
@@ -370,7 +395,8 @@ const main = Command.make(
 
             // Resolve initial state (discriminated union)
             const state = yield* resolveInitialState({
-              core,
+              queries,
+              commands: { createSession: commands.createSession },
               cwd,
               session,
               continue_,
@@ -402,7 +428,8 @@ const main = Command.make(
                     })
                   : undefined
               const headlessEffect = runHeadless(
-                core,
+                commands,
+                events,
                 gentClient,
                 state.session.id,
                 branchId,
@@ -494,8 +521,8 @@ const sessions = Command.make("sessions", {}, () =>
     const scope = yield* Effect.scope
     const services = yield* Layer.buildWithScope(makeCoreLayer({ cwd: process.cwd() }), scope)
     return yield* Effect.gen(function* () {
-      const core = yield* GentCore
-      const allSessions = yield* core.listSessions()
+      const queries = yield* SessionQueries
+      const allSessions = yield* queries.listSessions()
 
       if (allSessions.length === 0) {
         yield* Console.log("No sessions found.")

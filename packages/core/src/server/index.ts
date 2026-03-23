@@ -1,6 +1,10 @@
 import { AgentLoopError, SteerCommand } from "../runtime/agent/agent-loop.js"
 import { GentCore, type GentCoreError, type GentCoreService, StorageError } from "./core.js"
 import { createDependencies, type DependenciesConfig } from "./dependencies.js"
+import { SessionQueries, type SessionQueriesService } from "./session-queries.js"
+import { SessionCommands, type SessionCommandsService } from "./session-commands.js"
+import { SessionEvents, type SessionEventsService } from "./session-events.js"
+import { InteractionCommands, type InteractionCommandsService } from "./interaction-commands.js"
 import type {
   BranchInfo,
   CreateBranchInput,
@@ -19,6 +23,14 @@ export { DEFAULT_SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt"
 
 export { SteerCommand, AgentLoopError, StorageError, createDependencies, type DependenciesConfig }
 export {
+  SessionQueries,
+  type SessionQueriesService,
+  SessionCommands,
+  type SessionCommandsService,
+  SessionEvents,
+  type SessionEventsService,
+  InteractionCommands,
+  type InteractionCommandsService,
   GentCore,
   type GentCoreService,
   type GentCoreError,
