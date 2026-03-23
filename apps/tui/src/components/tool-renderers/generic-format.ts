@@ -18,21 +18,14 @@ function uniqueNonEmpty(parts: Array<string | undefined>): string[] {
 }
 
 function extractPrimaryMessage(value: Record<string, unknown>): string | undefined {
-  const primary =
-    typeof value["error"] === "string"
-      ? value["error"]
-      : typeof value["message"] === "string"
-        ? value["message"]
-        : typeof value["summary"] === "string"
-          ? value["summary"]
-          : undefined
+  let primary: string | undefined
+  if (typeof value["error"] === "string") primary = value["error"]
+  else if (typeof value["message"] === "string") primary = value["message"]
+  else if (typeof value["summary"] === "string") primary = value["summary"]
 
-  const secondary =
-    typeof value["details"] === "string"
-      ? value["details"]
-      : typeof value["reason"] === "string"
-        ? value["reason"]
-        : undefined
+  let secondary: string | undefined
+  if (typeof value["details"] === "string") secondary = value["details"]
+  else if (typeof value["reason"] === "string") secondary = value["reason"]
 
   const issues = Array.isArray(value["errors"])
     ? value["errors"].filter((item): item is string => typeof item === "string")

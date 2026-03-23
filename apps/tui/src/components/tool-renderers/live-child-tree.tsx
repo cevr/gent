@@ -6,6 +6,18 @@ import type { ChildSessionEntry } from "../../hooks/use-child-sessions"
 export function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
   const { theme } = useTheme()
 
+  const statusColor = (status: ChildSessionEntry["status"]) => {
+    if (status === "running") return theme.warning
+    if (status === "error") return theme.error
+    return theme.success
+  }
+
+  const statusIcon = (status: ChildSessionEntry["status"]) => {
+    if (status === "running") return "⋯"
+    if (status === "error") return "✕"
+    return "✓"
+  }
+
   return (
     <For each={props.childSessions}>
       {(entry) => {
@@ -25,15 +37,10 @@ export function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
             <text style={{ fg: theme.textMuted }}>
               <span
                 style={{
-                  fg:
-                    entry.status === "running"
-                      ? theme.warning
-                      : entry.status === "error"
-                        ? theme.error
-                        : theme.success,
+                  fg: statusColor(entry.status),
                 }}
               >
-                {entry.status === "running" ? "⋯" : entry.status === "error" ? "✕" : "✓"}
+                {statusIcon(entry.status)}
               </span>{" "}
               {entry.agentName}
             </text>

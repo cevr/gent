@@ -48,14 +48,17 @@ function formatDuration(ms: number): string {
 export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
 
-  const statusIcon = () => (props.status === "running" ? "⋯" : props.status === "error" ? "✕" : "✓")
+  const statusIcon = () => {
+    if (props.status === "running") return "⋯"
+    if (props.status === "error") return "✕"
+    return "✓"
+  }
 
-  const statusColor = () =>
-    props.status === "running"
-      ? theme.warning
-      : props.status === "error"
-        ? theme.error
-        : theme.success
+  const statusColor = () => {
+    if (props.status === "running") return theme.warning
+    if (props.status === "error") return theme.error
+    return theme.success
+  }
 
   const footer = () => {
     if (props.durationMs === undefined) return undefined

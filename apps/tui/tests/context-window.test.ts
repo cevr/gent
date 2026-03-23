@@ -9,7 +9,9 @@ function computeContextPct(
 ): { pct: number; label: string; severity: "muted" | "warning" | "error" } | null {
   if (inputTokens <= 0 || contextLength === undefined) return null
   const pct = Math.min(100, Math.round((inputTokens / contextLength) * 100))
-  const severity = pct >= 90 ? "error" : pct >= 70 ? "warning" : "muted"
+  let severity: "muted" | "warning" | "error" = "muted"
+  if (pct >= 90) severity = "error"
+  else if (pct >= 70) severity = "warning"
   return { pct, label: `${formatTokens(inputTokens)} (${pct}%)`, severity }
 }
 

@@ -175,7 +175,9 @@ export function Permissions(props: PermissionsProps) {
   }
 
   const formatRule = (rule: PermissionRule): string => {
-    const action = rule.action === "allow" ? "Allow" : rule.action === "deny" ? "Deny" : "Ask"
+    let action = "Ask"
+    if (rule.action === "allow") action = "Allow"
+    else if (rule.action === "deny") action = "Deny"
     const pattern =
       rule.pattern !== undefined && rule.pattern.length > 0 ? ` (${rule.pattern})` : ""
     return `${action}: ${rule.tool}${pattern}`

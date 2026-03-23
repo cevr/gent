@@ -27,6 +27,20 @@ type DiffLine =
   | { _tag: "line"; text: string; kind: "add" | "remove" | "context" }
   | { _tag: "elision"; count: number }
 
+type DiffLineKind = Extract<DiffLine, { _tag: "line" }>["kind"]
+
+function diffLineKind(text: string): DiffLineKind {
+  if (text.startsWith("+")) return "add"
+  if (text.startsWith("-")) return "remove"
+  return "context"
+}
+
+function diffLineColor(kind: DiffLineKind, theme: ReturnType<typeof useTheme>["theme"]) {
+  if (kind === "add") return theme.success
+  if (kind === "remove") return theme.error
+  return theme.textMuted
+}
+
 export function EditToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
@@ -37,12 +51,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
     const data = editData()
     if (data === null) return []
     const lines: DiffLine[] = data.diff.split("\n").map((text) => {
-      const kind = text.startsWith("+")
-        ? ("add" as const)
-        : text.startsWith("-")
-          ? ("remove" as const)
-          : ("context" as const)
-      return { _tag: "line", text, kind }
+      return { _tag: "line", text, kind: diffLineKind(text) }
     })
     if (lines.length <= 6) return lines
     const { items } = windowItems<DiffLine>(lines, headTailExcerpts(3, 3), (count) => ({
@@ -91,12 +100,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
                       <text>
                         <span
                           style={{
-                            fg:
-                              item.kind === "add"
-                                ? theme.success
-                                : item.kind === "remove"
-                                  ? theme.error
-                                  : theme.textMuted,
+                            fg: diffLineColor(item.kind, theme),
                           }}
                         >
                           {item.text}
