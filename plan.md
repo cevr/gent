@@ -23,7 +23,8 @@ So the target architecture is:
 - app worker process
   - hosts app services
   - exposes the shared transport contract
-  - runs `ActorProcess` through Effect cluster / entity semantics
+  - boots `ClusterSingleLive`
+  - runs `ActorProcess` through `SessionActorEntity` / `ClusterActorProcessLive`
 - durable actor state
   - queued turns and in-flight turn recovery survive worker restarts
 
@@ -130,7 +131,10 @@ worker transport adapter
 shared transport contract
     │
     ▼
-ActorProcess / SessionActorEntity
+ClusterSingleLive
+    │
+    ▼
+ClusterActorProcessLive / SessionActorEntity
     │
     ▼
 durable inbox + checkpoints + projections
@@ -187,13 +191,16 @@ No worker-specific DTO layer.
 
 Use that.
 
-But use it for actor routing and supervision semantics inside the worker, not as an excuse to distribute the whole app immediately.
+This is not a later optimization. It is the worker runtime default.
+
+Use cluster for actor routing and durable mailbox semantics inside the worker, not as an excuse to distribute the whole app immediately.
 
 Practical target:
 
 - worker boots `ClusterSingleLive`
 - worker uses `ClusterActorProcessLive`
 - session/branch actors live behind the entity boundary
+- `LocalActorProcessLive` survives only in tests/debug scaffolding
 
 ### 4. Turn durability is required for the real win
 
@@ -295,11 +302,13 @@ Justification:
 
 - First-principles cut.
 - The TUI shell should stop booting app services directly.
+- The worker should not start life on a dead-end local runtime path.
 
 Target:
 
 - add an app worker entrypoint
 - add TUI supervisor process management
+- make the worker host the shared contract immediately
 - keep behavior unchanged from the user’s perspective
 
 Task list:
@@ -307,11 +316,13 @@ Task list:
 - create worker bootstrap entrypoint that hosts app services
 - define shell ↔ worker lifecycle states
 - start/stop/restart worker from the TUI shell
+- point production TUI client creation at the worker-hosted shared contract
 - fence direct hosting behind test/debug-only scaffolding immediately
 - update docs to reflect the new topology
 - add one end-to-end proof:
   - TUI starts
   - worker boots
+  - shared client calls succeed through the worker
   - session home/session render still works
 
 Relevant skills:
@@ -326,51 +337,16 @@ Primary files:
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/app.tsx`
 - `/Users/cvr/Developer/personal/gent/apps/server/src/main.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/worker/supervisor.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
-
-### Batch 2 — Add Worker Transport
-
-Justification:
-
-- Worker supervision is worthless if the transport seam forks into a second contract.
-
-Target:
-
-- one worker transport adapter over the shared contract
-
-Task list:
-
-- define worker transport protocol
-  - likely NDJSON RPC over stdio
-- implement transport adapter in SDK or adjacent transport module
-- make TUI client creation pick worker transport
-- keep the same `GentClient` surface
-- ensure event subscription works over the worker channel
-- migrate production TUI callers to the worker transport immediately
-- prove the full chain:
-  - request
-  - worker transport
-  - app service
-  - response/event stream
-
-Relevant skills:
-
-- `architecture`
-- `effect-v4`
-
-Primary files:
-
 - `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
 
-### Batch 3 — Host ActorProcess Through Effect Cluster
+### Batch 2 — Make Cluster The Worker Runtime Default
 
 Justification:
 
 - We already have `SessionActorEntity`.
-- Re-inventing another supervision boundary would be self-harm.
+- Booting the worker on `LocalActorProcessLive` first would be throwaway architecture.
 
 Target:
 
@@ -379,7 +355,7 @@ Target:
 Task list:
 
 - wire worker runtime through `ClusterSingleLive`
-- provide `ClusterActorProcessLive` instead of local actor process where appropriate
+- provide `ClusterActorProcessLive` instead of `LocalActorProcessLive` in production worker wiring
 - ensure session actors are addressed by `sessionId:branchId`
 - keep non-cluster local/test layers for tests only
 - document the new runtime path
@@ -387,17 +363,17 @@ Task list:
 
 Relevant skills:
 
-- `effect-v4`
 - `architecture`
+- `effect-v4`
 
 Primary files:
 
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/cluster-layer.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/server/src/main.ts`
 
-### Batch 4 — Add Durable Actor Inbox
+### Batch 3 — Add Durable Actor Inbox
 
 Justification:
 
@@ -434,12 +410,12 @@ Primary files:
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/queue.ts`
 
-### Batch 5 — Add Turn Checkpoints
+### Batch 4 — Add Turn Checkpoints
 
 Justification:
 
-- Queue durability alone is insufficient.
-- In-flight turn state currently dies in memory.
+- Cluster mailbox durability is not enough.
+- In-flight turn state still dies unless we checkpoint the turn machine explicitly.
 
 Target:
 
@@ -471,7 +447,7 @@ Primary files:
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts`
 
-### Batch 6 — Define Crash Recovery Semantics
+### Batch 5 — Define Crash Recovery Semantics
 
 Justification:
 
@@ -497,17 +473,17 @@ Task list:
 
 Relevant skills:
 
-- `architecture`
 - `effect-v4`
+- `architecture`
 
 Primary files:
 
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts`
 
-### Batch 7 — Reconnect And Heal In The TUI
+### Batch 6 — Reconnect And Heal In The TUI
 
 Justification:
 
@@ -535,6 +511,7 @@ Relevant skills:
 - `opentui`
 - `react`
 - `architecture`
+- `effect-v4`
 
 Primary files:
 
@@ -543,7 +520,7 @@ Primary files:
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session.tsx`
 
-### Batch 8 — Delete Transitional In-Process Hosting
+### Batch 7 — Delete Transitional In-Process Hosting
 
 Justification:
 

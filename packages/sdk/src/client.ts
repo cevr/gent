@@ -353,6 +353,18 @@ export const makeClient: Effect.Effect<GentClient, never, RpcClient.Protocol | S
     )
   })
 
+/**
+ * Creates a Gent client over the shared RPC-over-HTTP transport.
+ */
+export const makeHttpGentClient = (
+  config: HttpTransportConfig,
+): Effect.Effect<GentClient, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const scope = yield* Effect.scope
+    const transport = yield* Layer.buildWithScope(HttpTransport(config), scope)
+    return yield* makeClient.pipe(Effect.provide(transport))
+  })
+
 // =============================================================================
 // In-process transport helpers
 // =============================================================================

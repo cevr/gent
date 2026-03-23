@@ -22,6 +22,7 @@ export {
   type GentRpcsClient,
   createClient,
   makeClient,
+  makeHttpGentClient,
   makeInProcessClient,
   makeInProcessRpcClient,
   type RpcHandlersContext,

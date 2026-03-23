@@ -1,23 +1,18 @@
 import { Effect, Ref, Stream } from "effect"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { HandoffPresented } from "@gent/core/domain/event.js"
-import type { AppServiceError } from "@gent/core/server/errors.js"
-import type { GentClient } from "@gent/sdk"
-import type { SessionCommandsService } from "@gent/core/server/session-commands.js"
-import type { SessionEventsService } from "@gent/core/server/session-events.js"
+import type { GentClient, GentRpcError } from "@gent/sdk"
 
 export const runHeadless = (
-  commands: SessionCommandsService,
-  events: SessionEventsService,
   client: GentClient,
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
-): Effect.Effect<void, AppServiceError, never> =>
+): Effect.Effect<void, GentRpcError, never> =>
   Effect.gen(function* () {
-    const eventStream = events.subscribeEvents({ sessionId, branchId })
+    const eventStream = client.subscribeEvents({ sessionId, branchId })
 
-    yield* commands
+    yield* client
       .sendMessage({ sessionId, branchId, content: promptText })
       .pipe(Effect.withSpan("Headless.sendMessage"))
 

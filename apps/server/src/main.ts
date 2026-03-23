@@ -5,7 +5,7 @@ import { SteerCommand } from "@gent/core/runtime/agent/agent-loop.js"
 import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
-import { Effect, Layer, Schema } from "effect"
+import { Config, Effect, Layer, Option, Schema } from "effect"
 import * as os from "node:os"
 import { GentApi } from "@gent/core/server/http-api.js"
 import { SessionQueries } from "@gent/core/server/session-queries.js"
@@ -14,6 +14,39 @@ import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { createDependencies } from "@gent/core/server/dependencies.js"
 import { AppServicesLive } from "@gent/core/server/index.js"
+
+const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
+
+const resolveRuntimeConfig = Effect.gen(function* () {
+  const portRaw = yield* Config.option(Config.string("GENT_PORT"))
+  const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
+  const homeOpt = yield* Config.option(Config.string("HOME"))
+  const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
+  const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
+  const persistenceOpt = yield* Config.option(Config.string("GENT_PERSISTENCE_MODE"))
+  const providerOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
+  const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
+
+  const home = Option.getOrElse(homeOpt, () => os.homedir())
+  const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
+  const parsedPort = Number(Option.getOrElse(portRaw, () => "3000"))
+
+  return {
+    port: Number.isFinite(parsedPort) ? parsedPort : 3000,
+    cwd: Option.getOrElse(cwdOpt, () => process.cwd()),
+    home,
+    dbPath: Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db")),
+    authFilePath: joinPath(dataDir, "auth.json.enc"),
+    authKeyPath: joinPath(dataDir, "auth.key"),
+    persistenceMode:
+      Option.getOrUndefined(persistenceOpt) === "memory" ? ("memory" as const) : ("disk" as const),
+    providerMode:
+      Option.getOrUndefined(providerOpt) === "debug-scripted"
+        ? ("debug-scripted" as const)
+        : ("live" as const),
+    isWorker: Option.getOrUndefined(serverModeOpt) === "worker",
+  }
+})
 
 // Sessions API Handlers
 const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
@@ -71,67 +104,82 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
 // Platform layer for Storage
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
 
-// Dependencies layer
-const DepsLive = createDependencies({
-  cwd: process.cwd(),
-  home: os.homedir(),
-  platform: process.platform,
-  dbPath: ".gent/data.db",
-}).pipe(
-  Layer.provide(PlatformLayer),
-  Layer.provide(GentLogger),
-  Layer.provide(GentLogLevel),
-  Layer.provide(GentTracerLive),
-)
+const program = Effect.gen(function* () {
+  const config = yield* resolveRuntimeConfig
 
-// Combined layer for RPC handlers
-const CoreWithDeps = Layer.merge(AppServicesLive, DepsLive)
+  // Dependencies layer
+  const depsLive = createDependencies({
+    cwd: config.cwd,
+    home: config.home,
+    platform: process.platform,
+    dbPath: config.dbPath,
+    authFilePath: config.authFilePath,
+    authKeyPath: config.authKeyPath,
+    persistenceMode: config.persistenceMode,
+    providerMode: config.providerMode,
+  }).pipe(
+    Layer.provide(PlatformLayer),
+    Layer.provide(GentLogger),
+    Layer.provide(GentLogLevel),
+    Layer.provide(GentTracerLive),
+  )
 
-// RPC-over-HTTP routes with ndjson for streaming
-const RpcRoutes = RpcServer.layerHttp({
-  group: GentRpcs,
-  path: "/rpc",
-  protocol: "http",
-}).pipe(
-  Layer.provide(RpcSerialization.layerNdjson),
-  Layer.provide(RpcHandlersLive),
-  Layer.provide(CoreWithDeps),
-)
+  // Combined layer for RPC handlers
+  const CoreWithDeps = Layer.merge(AppServicesLive, depsLive)
 
-// API Groups Layer (REST endpoints)
-const HttpGroupsLive = Layer.provideMerge(SessionsApiLive, MessagesApiLive).pipe(
-  Layer.provide(AppServicesLive),
-)
+  // RPC-over-HTTP routes with ndjson for streaming
+  const RpcRoutes = RpcServer.layerHttp({
+    group: GentRpcs,
+    path: "/rpc",
+    protocol: "http",
+  }).pipe(
+    Layer.provide(RpcSerialization.layerNdjson),
+    Layer.provide(RpcHandlersLive),
+    Layer.provide(CoreWithDeps),
+  )
 
-// API Routes
-const HttpApiRoutes = HttpApiBuilder.layer(GentApi).pipe(Layer.provide(HttpGroupsLive))
+  // API Groups Layer (REST endpoints)
+  const HttpGroupsLive = Layer.provideMerge(SessionsApiLive, MessagesApiLive).pipe(
+    Layer.provide(AppServicesLive),
+  )
 
-// Swagger docs at /docs
-const DocsRoute = HttpApiScalar.layer(GentApi, {
-  path: "/docs",
+  // API Routes
+  const HttpApiRoutes = HttpApiBuilder.layer(GentApi).pipe(Layer.provide(HttpGroupsLive))
+
+  // Swagger docs at /docs
+  const DocsRoute = HttpApiScalar.layer(GentApi, {
+    path: "/docs",
+  })
+
+  // OpenAPI JSON
+  const OpenApiJsonRoute = HttpRouter.add(
+    "GET",
+    "/docs/openapi.json",
+    HttpServerResponse.json(OpenApi.fromApi(GentApi)),
+  )
+
+  // Merge all routes (REST API + RPC + docs)
+  const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
+    Layer.provide(HttpRouter.cors()),
+  )
+
+  // Server
+  const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
+    Layer.provide(BunHttpServer.layer({ port: config.port })),
+    Layer.provide(AppServicesLive),
+    Layer.provide(depsLive),
+    Layer.provide(BunFileSystem.layer),
+  )
+
+  const baseUrl = `http://localhost:${config.port}`
+  if (config.isWorker) {
+    console.error(`Gent worker starting on ${baseUrl}`)
+  } else {
+    console.log(`Gent server starting on ${baseUrl}`)
+    console.log(`Swagger UI: ${baseUrl}/docs`)
+  }
+
+  return yield* Effect.scoped(Layer.launch(HttpServerLive))
 })
 
-// OpenAPI JSON
-const OpenApiJsonRoute = HttpRouter.add(
-  "GET",
-  "/docs/openapi.json",
-  HttpServerResponse.json(OpenApi.fromApi(GentApi)),
-)
-
-// Merge all routes (REST API + RPC + docs)
-const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
-  Layer.provide(HttpRouter.cors()),
-)
-
-// Server
-const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
-  Layer.provide(BunHttpServer.layer({ port: 3000 })),
-  Layer.provide(AppServicesLive),
-  Layer.provide(DepsLive),
-  Layer.provide(BunFileSystem.layer),
-)
-
-// Main
-console.log("Gent server starting on http://localhost:3000")
-console.log("Swagger UI: http://localhost:3000/docs")
-BunRuntime.runMain(Effect.scoped(Layer.launch(HttpServerLive)))
+BunRuntime.runMain(program)

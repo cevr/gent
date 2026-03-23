@@ -1,5 +1,3 @@
-import { Effect } from "effect"
-import { prepareDebugSession } from "@gent/core/debug/session.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
 import type { BranchInfo, SessionInfo } from "@gent/sdk"
 import type { Session } from "./client/index"
@@ -36,60 +34,55 @@ const toSession = (session: SessionInfo): Session | undefined => {
   }
 }
 
+export const resolveDebugBootstrap = (session: Session): AppBootstrap => ({
+  initialSession: session,
+  initialRoute: Route.session(session.sessionId, session.branchId),
+  initialPrompt: undefined,
+  debugMode: true,
+  missingAuthProviders: undefined,
+})
+
 export const resolveAppBootstrap = (
-  state: Exclude<InitialState, { _tag: "headless" }>,
+  state: Exclude<InitialState, { _tag: "headless" | "debug" }>,
   options: {
-    cwd: string
-    debug: boolean
     missingProviders: readonly ProviderId[]
   },
-) =>
-  Effect.gen(function* () {
-    const missingAuthProviders =
-      !options.debug && options.missingProviders.length > 0 ? options.missingProviders : undefined
+): AppBootstrap => {
+  const missingAuthProviders =
+    options.missingProviders.length > 0 ? options.missingProviders : undefined
 
-    switch (state._tag) {
-      case "home":
-        return {
-          initialSession: undefined,
-          initialRoute: Route.home(),
-          initialPrompt: undefined,
-          debugMode: false,
-          missingAuthProviders,
-        } satisfies AppBootstrap
-      case "debug": {
-        const debugSession = yield* prepareDebugSession(options.cwd)
-        return {
-          initialSession: debugSession,
-          initialRoute: Route.session(debugSession.sessionId, debugSession.branchId),
-          initialPrompt: undefined,
-          debugMode: true,
-          missingAuthProviders,
-        } satisfies AppBootstrap
+  switch (state._tag) {
+    case "home":
+      return {
+        initialSession: undefined,
+        initialRoute: Route.home(),
+        initialPrompt: undefined,
+        debugMode: false,
+        missingAuthProviders,
       }
-      case "session":
-        return {
-          initialSession: toSession(state.session),
-          initialRoute:
-            state.session.branchId !== undefined
-              ? Route.session(state.session.id, state.session.branchId)
-              : Route.home(),
-          initialPrompt: state.prompt,
-          debugMode: false,
-          missingAuthProviders,
-        } satisfies AppBootstrap
-      case "branchPicker":
-        return {
-          initialSession: undefined,
-          initialRoute: Route.branchPicker(
-            state.session.id,
-            state.session.name ?? "Unnamed",
-            state.branches,
-            state.prompt,
-          ),
-          initialPrompt: undefined,
-          debugMode: false,
-          missingAuthProviders,
-        } satisfies AppBootstrap
-    }
-  })
+    case "session":
+      return {
+        initialSession: toSession(state.session),
+        initialRoute:
+          state.session.branchId !== undefined
+            ? Route.session(state.session.id, state.session.branchId)
+            : Route.home(),
+        initialPrompt: state.prompt,
+        debugMode: false,
+        missingAuthProviders,
+      }
+    case "branchPicker":
+      return {
+        initialSession: undefined,
+        initialRoute: Route.branchPicker(
+          state.session.id,
+          state.session.name ?? "Unnamed",
+          state.branches,
+          state.prompt,
+        ),
+        initialPrompt: undefined,
+        debugMode: false,
+        missingAuthProviders,
+      }
+  }
+}
