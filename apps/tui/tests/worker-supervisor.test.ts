@@ -1,32 +1,17 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"
-import * as fs from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 import { extractText } from "@gent/sdk"
+import { type WorkerLifecycleState, WorkerSupervisorInternal } from "../src/worker/supervisor"
 import {
-  makeWorkerHttpClient,
-  startWorkerSupervisor,
-  type WorkerLifecycleState,
-  WorkerSupervisorInternal,
-} from "../src/worker/supervisor"
+  createTempDirFixture,
+  createWorkerEnv,
+  startWorkerWithClient,
+  waitFor,
+} from "../../../tests/seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
-
-const tempDirs: string[] = []
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop()
-    if (dir !== undefined) fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-const makeTempDir = (): string => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-worker-"))
-  tempDirs.push(dir)
-  return dir
-}
+const makeTempDir = createTempDirFixture("gent-worker-")
 
 const waitForRunning = async (
   worker: {
@@ -46,31 +31,6 @@ const waitForRunning = async (
       unsubscribe()
       resolve()
     })
-  })
-
-const waitFor = <A>(
-  effect: Effect.Effect<A, unknown>,
-  predicate: (value: A) => boolean,
-  timeoutMs = 5_000,
-): Effect.Effect<A, Error> => {
-  const deadline = Date.now() + timeoutMs
-
-  const loop: Effect.Effect<A, Error> = Effect.gen(function* () {
-    const value = yield* effect.pipe(Effect.mapError((error) => new Error(String(error))))
-    if (predicate(value)) return value
-    if (Date.now() >= deadline) return yield* Effect.fail(new Error("timed out waiting"))
-    yield* Effect.sleep("100 millis")
-    return yield* loop
-  })
-
-  return loop
-}
-
-const startWorkerWithClient = (options: Parameters<typeof startWorkerSupervisor>[0]) =>
-  Effect.gen(function* () {
-    const worker = yield* startWorkerSupervisor(options)
-    const client = yield* makeWorkerHttpClient(worker)
-    return { ...worker, client }
   })
 
 describe("worker supervisor", () => {
@@ -211,19 +171,13 @@ describe("worker supervisor", () => {
 
   test("persists file-backed auth visibility through worker restart", async () => {
     const root = makeTempDir()
-    const dataDir = path.join(root, "data")
-    fs.mkdirSync(dataDir, { recursive: true })
 
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
-            env: {
-              GENT_DATA_DIR: dataDir,
-              GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
-              GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
-            },
+            env: createWorkerEnv(root),
           })
 
           yield* worker.client.setAuthKey("anthropic", "test-anthropic-key")
@@ -254,8 +208,6 @@ describe("worker supervisor", () => {
 
   test("restart with steer and follow-up queued converges to steer before follow-up", async () => {
     const root = makeTempDir()
-    const dataDir = path.join(root, "data")
-    fs.mkdirSync(dataDir, { recursive: true })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -263,12 +215,7 @@ describe("worker supervisor", () => {
           const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
-            env: {
-              GENT_DATA_DIR: dataDir,
-              GENT_PROVIDER_MODE: "debug-slow",
-              GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
-              GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
-            },
+            env: createWorkerEnv(root, { providerMode: "debug-slow" }),
           })
 
           const created = yield* worker.client.createSession({

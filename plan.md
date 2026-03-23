@@ -1,11 +1,11 @@
 # Seam Test Improvement Plan
 
-Status: not started.
+Status: in progress.
 
 ## Task List
 
-- [ ] Batch 1 — Decouple supervision from transport
-- [ ] Batch 2 — Shared worker fixture and boilerplate collapse
+- [x] Batch 1 — Decouple supervision from transport
+- [x] Batch 2 — Shared worker fixture and boilerplate collapse
 - [ ] Batch 3 — Polling reduction and event-driven waits
 - [ ] Batch 4 — Fast parity vs slow lifecycle split
 - [ ] Batch 5 — Missing boundary coverage

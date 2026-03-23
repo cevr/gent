@@ -1,31 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 
-import { afterEach, describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as fs from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
-import { makeWorkerHttpClient, startWorkerSupervisor } from "../src/worker/supervisor"
 import { renderFrame, renderWithProviders } from "./render-harness"
+import {
+  createTempDirFixture,
+  createWorkerEnv,
+  startWorkerWithClient,
+} from "../../../tests/seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
-
-const tempDirs: string[] = []
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop()
-    if (dir !== undefined) fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-const makeTempDir = (): string => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-session-feed-"))
-  tempDirs.push(dir)
-  return dir
-}
+const makeTempDir = createTempDirFixture("gent-session-feed-")
 
 const waitForFrame = async (
   setup: Awaited<ReturnType<typeof renderWithProviders>>,
@@ -64,18 +52,9 @@ const makeSessionState = (created: {
   reasoningLevel: undefined,
 })
 
-const startWorkerWithClient = (options: Parameters<typeof startWorkerSupervisor>[0]) =>
-  Effect.gen(function* () {
-    const worker = yield* startWorkerSupervisor(options)
-    const client = yield* makeWorkerHttpClient(worker)
-    return { ...worker, client }
-  })
-
 describe("session feed boundary", () => {
   test("projects thinking state and assistant output from worker transport", async () => {
     const root = makeTempDir()
-    const dataDir = path.join(root, "data")
-    fs.mkdirSync(dataDir, { recursive: true })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -83,12 +62,7 @@ describe("session feed boundary", () => {
           const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
-            env: {
-              GENT_DATA_DIR: dataDir,
-              GENT_PROVIDER_MODE: "debug-slow",
-              GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
-              GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
-            },
+            env: createWorkerEnv(root, { providerMode: "debug-slow" }),
           })
 
           const created = yield* worker.client.createSession({
@@ -138,8 +112,6 @@ describe("session feed boundary", () => {
 
   test("projects queue widget updates while the active turn is running", async () => {
     const root = makeTempDir()
-    const dataDir = path.join(root, "data")
-    fs.mkdirSync(dataDir, { recursive: true })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -147,12 +119,7 @@ describe("session feed boundary", () => {
           const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
-            env: {
-              GENT_DATA_DIR: dataDir,
-              GENT_PROVIDER_MODE: "debug-scripted",
-              GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
-              GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
-            },
+            env: createWorkerEnv(root, { providerMode: "debug-scripted" }),
           })
 
           const created = yield* worker.client.createSession({
@@ -207,8 +174,6 @@ describe("session feed boundary", () => {
 
   test("projects provider failures into session events instead of composer text", async () => {
     const root = makeTempDir()
-    const dataDir = path.join(root, "data")
-    fs.mkdirSync(dataDir, { recursive: true })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -216,12 +181,7 @@ describe("session feed boundary", () => {
           const worker = yield* startWorkerWithClient({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
-            env: {
-              GENT_DATA_DIR: dataDir,
-              GENT_PROVIDER_MODE: "debug-failing",
-              GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
-              GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
-            },
+            env: createWorkerEnv(root, { providerMode: "debug-failing" }),
           })
 
           const created = yield* worker.client.createSession({

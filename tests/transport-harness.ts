@@ -1,9 +1,6 @@
-import { afterEach } from "bun:test"
 import { Effect, Layer } from "effect"
 import type { ServiceMap } from "effect"
 import { RpcTest } from "effect/unstable/rpc"
-import * as fs from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 import { Agents } from "@gent/core/domain/agent.js"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"
@@ -31,24 +28,11 @@ import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
 import { createClient, makeDirectGentClient, type GentClient, type GentRpcClient } from "@gent/sdk"
-import { makeWorkerHttpClient, startWorkerSupervisor } from "../apps/tui/src/worker/supervisor"
+import { createTempDirFixture, createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
+export { waitFor } from "./seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "..")
-
-const tempDirs: string[] = []
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop()
-    if (dir !== undefined) fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-const makeTempDir = (prefix: string): string => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
-  tempDirs.push(dir)
-  return dir
-}
+const makeTempDir = createTempDirFixture("gent-transport-worker-")
 
 export interface TransportCase {
   readonly name: string
@@ -150,21 +134,13 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const root = makeTempDir("gent-transport-worker-")
-            const dataDir = path.join(root, "data")
-            fs.mkdirSync(dataDir, { recursive: true })
-            const worker = yield* startWorkerSupervisor({
+            const root = makeTempDir()
+            const worker = yield* startWorkerWithClient({
               cwd: repoRoot,
               startupTimeoutMs: 20_000,
-              env: {
-                GENT_DATA_DIR: dataDir,
-                GENT_PROVIDER_MODE: providerMode,
-                GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
-                GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
-              },
+              env: createWorkerEnv(root, { providerMode }),
             })
-            const client = yield* makeWorkerHttpClient(worker)
-            return yield* assertion(client)
+            return yield* assertion(worker.client)
           }),
         ),
       ),
@@ -179,21 +155,3 @@ const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted"
 
 export const transportCases = makeTransportCases()
 export const queueTransportCases = [makeWorkerCase("debug-slow")]
-
-export const waitFor = <A>(
-  effect: Effect.Effect<A, unknown>,
-  predicate: (value: A) => boolean,
-  timeoutMs = 5_000,
-): Effect.Effect<A, Error> => {
-  const deadline = Date.now() + timeoutMs
-
-  const loop: Effect.Effect<A, Error> = Effect.gen(function* () {
-    const value = yield* effect.pipe(Effect.mapError((error) => new Error(String(error))))
-    if (predicate(value)) return value
-    if (Date.now() >= deadline) return yield* Effect.fail(new Error("timed out waiting"))
-    yield* Effect.sleep("100 millis")
-    return yield* loop
-  })
-
-  return loop
-}
