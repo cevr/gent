@@ -26,6 +26,7 @@ import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
 import { MermaidViewer, collectDiagrams } from "../components/mermaid-viewer"
 import { TaskWidget } from "../components/task-widget"
+import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/index"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
@@ -111,40 +112,7 @@ export function Session(props: SessionProps) {
     props.initialPrompt,
   )
 
-  const items = createMemo<SessionItem[]>(() => {
-    const pending = pendingQueuedMessage()
-    const pendingSteers = pendingSteerMessages().map((message) => ({
-      _tag: "message" as const,
-      id: `pending-steer-${message.createdAt}`,
-      role: "user" as const,
-      kind: "interjection" as const,
-      pendingMode: "steer" as const,
-      content: message.content,
-      reasoning: "",
-      images: [],
-      createdAt: message.createdAt,
-      toolCalls: undefined,
-    }))
-    const pendingQueue =
-      pending === null
-        ? []
-        : [
-            {
-              _tag: "message" as const,
-              id: `pending-queue-${pending.createdAt}`,
-              role: "user" as const,
-              kind: "regular" as const,
-              pendingMode: "queued" as const,
-              content: pending.content,
-              reasoning: "",
-              images: [],
-              createdAt: pending.createdAt,
-              toolCalls: undefined,
-            },
-          ]
-
-    return [...feed.items(), ...pendingSteers, ...pendingQueue]
-  })
+  const items = createMemo<SessionItem[]>(() => feed.items())
 
   createEffect(() => {
     const pending = pendingQueuedMessage()
@@ -580,7 +548,15 @@ export function Session(props: SessionProps) {
         syntaxStyle={syntaxStyle}
         streaming={client.isStreaming()}
         getChildSessions={getChildren}
-        footer={<TaskWidget sessionId={props.sessionId} branchId={props.branchId} />}
+        footer={
+          <box flexDirection="column">
+            <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
+            <QueueWidget
+              queuedMessage={pendingQueuedMessage()}
+              steerMessages={pendingSteerMessages()}
+            />
+          </box>
+        }
       />
 
       {/* Bordered input */}
