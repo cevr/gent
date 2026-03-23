@@ -29,8 +29,19 @@ export interface HomeProps {
 }
 
 type HomeState =
-  | { _tag: "idle"; showWelcome: boolean; overlay: "prompt-search" | null }
-  | { _tag: "pending"; prompt: string; showWelcome: boolean; overlay: "prompt-search" | null }
+  | {
+      _tag: "idle"
+      showWelcome: boolean
+      overlay: "prompt-search" | null
+      draftBeforeSearch: string
+    }
+  | {
+      _tag: "pending"
+      prompt: string
+      showWelcome: boolean
+      overlay: "prompt-search" | null
+      draftBeforeSearch: string
+    }
 
 export function Home(props: HomeProps) {
   const { theme } = useTheme()
@@ -52,6 +63,7 @@ export function Home(props: HomeProps) {
     _tag: "idle",
     showWelcome: false,
     overlay: null,
+    draftBeforeSearch: "",
   })
   const [authProviders, setAuthProviders] = createSignal<
     { hasKey: boolean; provider: string; required: boolean }[]
@@ -72,9 +84,20 @@ export function Home(props: HomeProps) {
     setState((prev) => {
       switch (prev._tag) {
         case "idle":
-          return { _tag: "idle", showWelcome, overlay: prev.overlay }
+          return {
+            _tag: "idle",
+            showWelcome,
+            overlay: prev.overlay,
+            draftBeforeSearch: prev.draftBeforeSearch,
+          }
         case "pending":
-          return { _tag: "pending", prompt: prev.prompt, showWelcome, overlay: prev.overlay }
+          return {
+            _tag: "pending",
+            prompt: prev.prompt,
+            showWelcome,
+            overlay: prev.overlay,
+            draftBeforeSearch: prev.draftBeforeSearch,
+          }
       }
     })
   }
@@ -87,7 +110,12 @@ export function Home(props: HomeProps) {
     if (session === null) return
     setState((prev) =>
       prev._tag === "pending"
-        ? { _tag: "idle", showWelcome: prev.showWelcome, overlay: prev.overlay }
+        ? {
+            _tag: "idle",
+            showWelcome: prev.showWelcome,
+            overlay: prev.overlay,
+            draftBeforeSearch: prev.draftBeforeSearch,
+          }
         : prev,
     )
     router.navigateToSession(session.sessionId, session.branchId, current.prompt)
@@ -121,7 +149,9 @@ export function Home(props: HomeProps) {
     // ESC: double-tap to quit
     if (e.name === "escape") {
       if (promptSearchOpen()) {
+        const draftBeforeSearch = state().draftBeforeSearch
         setState((prev) => ({ ...prev, overlay: null }))
+        setRestoreTextRequest({ token: Date.now(), text: draftBeforeSearch })
         quitChain.reset()
         return
       }
@@ -143,7 +173,7 @@ export function Home(props: HomeProps) {
     }
 
     if (e.ctrl === true && e.name === "r") {
-      setState((prev) => ({ ...prev, overlay: "prompt-search" }))
+      setState((prev) => ({ ...prev, overlay: "prompt-search", draftBeforeSearch: composerText() }))
       quitChain.reset()
       return
     }
@@ -197,6 +227,7 @@ export function Home(props: HomeProps) {
       prompt: content,
       showWelcome: prev.showWelcome,
       overlay: prev.overlay,
+      draftBeforeSearch: prev.draftBeforeSearch,
     }))
     client.createSession()
   }
@@ -210,6 +241,7 @@ export function Home(props: HomeProps) {
         prompt,
         showWelcome: prev.showWelcome,
         overlay: prev.overlay,
+        draftBeforeSearch: prev.draftBeforeSearch,
       }))
       client.createSession()
     }
@@ -281,6 +313,7 @@ export function Home(props: HomeProps) {
         <Input
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
+          suspended={promptSearchOpen()}
           onTextChange={setComposerText}
           restoreTextRequest={restoreTextRequest()}
         >
@@ -290,9 +323,16 @@ export function Home(props: HomeProps) {
 
       <PromptSearchPalette
         open={promptSearchOpen()}
-        onClose={() => setState((prev) => ({ ...prev, overlay: null }))}
-        onSelect={(prompt) => {
-          setRestoreTextRequest({ token: Date.now(), text: prompt })
+        onClose={() => {
+          const draftBeforeSearch = state().draftBeforeSearch
+          setState((prev) => ({ ...prev, overlay: null }))
+          setRestoreTextRequest({ token: Date.now(), text: draftBeforeSearch })
+        }}
+        onPreview={(prompt) => {
+          const fallback = state().draftBeforeSearch
+          setRestoreTextRequest({ token: Date.now(), text: prompt ?? fallback })
+        }}
+        onAccept={() => {
           setState((prev) => ({ ...prev, overlay: null }))
         }}
       />

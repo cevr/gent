@@ -58,7 +58,7 @@ type OverlayState =
   | { _tag: "tree"; tree: SessionTreeNode; sessions: readonly SessionInfo[] }
   | { _tag: "fork" }
   | { _tag: "mermaid" }
-  | { _tag: "prompt-search" }
+  | { _tag: "prompt-search"; draftBeforeOpen: string }
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
@@ -82,10 +82,16 @@ export function Session(props: SessionProps) {
   const [restoreTextRequest, setRestoreTextRequest] = createSignal<
     { token: number; text: string } | undefined
   >(undefined)
-  const promptSearchOpen = () => overlay()?._tag === "prompt-search"
+  const promptSearchState = () => {
+    const current = overlay()
+    return current?._tag === "prompt-search" ? current : null
+  }
+  const promptSearchOpen = () => promptSearchState() !== null
   const closePromptSearch = () => {
+    const current = promptSearchState()
     setOverlay(null)
-    setRestoreTextRequest({ token: Date.now(), text: "" })
+    if (current === null) return
+    setRestoreTextRequest({ token: Date.now(), text: current.draftBeforeOpen })
   }
 
   const syncQueueState = () =>
@@ -262,7 +268,7 @@ export function Session(props: SessionProps) {
     }
 
     if (e.ctrl === true && e.name === "r") {
-      setOverlay({ _tag: "prompt-search" })
+      setOverlay({ _tag: "prompt-search", draftBeforeOpen: composerText() })
       quitChain.reset()
       return
     }
@@ -602,8 +608,11 @@ export function Session(props: SessionProps) {
       <PromptSearchPalette
         open={promptSearchOpen()}
         onClose={closePromptSearch}
-        onSelect={(prompt) => {
-          setRestoreTextRequest({ token: Date.now(), text: prompt })
+        onPreview={(prompt) => {
+          const fallback = promptSearchState()?.draftBeforeOpen ?? ""
+          setRestoreTextRequest({ token: Date.now(), text: prompt ?? fallback })
+        }}
+        onAccept={() => {
           setOverlay(null)
         }}
       />

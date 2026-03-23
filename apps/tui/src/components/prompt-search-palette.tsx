@@ -19,7 +19,8 @@ const fuzzyMatch = (text: string, query: string): boolean => {
 
 export interface PromptSearchPaletteProps {
   open: boolean
-  onSelect: (prompt: string) => void
+  onPreview: (prompt: string | undefined) => void
+  onAccept: () => void
   onClose: () => void
 }
 
@@ -57,13 +58,17 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
     const visible = items()
     if (visible.length === 0) {
       setSelectedIndex(0)
+      props.onPreview(undefined)
       return
     }
 
     const nextIndex = Math.min(selectedIndex(), visible.length - 1)
     if (nextIndex !== selectedIndex()) {
       setSelectedIndex(nextIndex)
+      return
     }
+
+    props.onPreview(visible[nextIndex])
   })
 
   useKeyboard((e) => {
@@ -81,8 +86,9 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
     }
 
     if (e.name === "return") {
-      const next = selectedPrompt()
-      if (next !== undefined) props.onSelect(next)
+      if (selectedPrompt() !== undefined) {
+        props.onAccept()
+      }
       return
     }
 
