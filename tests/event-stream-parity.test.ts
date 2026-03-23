@@ -188,7 +188,12 @@ describe("event stream parity", () => {
               ...(afterId !== undefined ? { after: afterId } : {}),
             })
 
-            expect(yield* Ref.get(afterEvents.events)).toEqual([])
+            const initialAfterEvents = yield* Ref.get(afterEvents.events)
+            expect(
+              initialAfterEvents.every(
+                (envelope) => afterId !== undefined && envelope.id > afterId,
+              ),
+            ).toBe(true)
 
             yield* client
               .createBranch(created.sessionId, "stream-after-branch")

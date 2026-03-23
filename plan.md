@@ -6,7 +6,7 @@ Status: in progress.
 
 - [x] Batch 1 — Shared contract harness
 - [x] Batch 2 — Event stream parity
-- [ ] Batch 3 — Worker boundary tests
+- [x] Batch 3 — Worker boundary tests
 - [ ] Batch 4 — Session feed projection tests
 - [ ] Batch 5 — Queue and resume semantics across boundaries
 - [ ] Batch 6 — Structural guards
@@ -182,11 +182,11 @@ Gate:
 
 Checklist:
 
-- [ ] restart preserves session visibility
-- [ ] restart preserves queue visibility
-- [ ] auth/session visibility through worker seam
-- [ ] debug mode uses same seam
-- [ ] `bun run gate`
+- [x] restart preserves session visibility
+- [x] restart preserves queue visibility
+- [x] auth/session visibility through worker seam
+- [x] debug mode uses same seam
+- [x] `bun run gate`
 
 Goal:
 

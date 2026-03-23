@@ -46,6 +46,24 @@ const waitForRunning = async (
     })
   })
 
+const waitFor = <A>(
+  effect: Effect.Effect<A, unknown>,
+  predicate: (value: A) => boolean,
+  timeoutMs = 5_000,
+): Effect.Effect<A, Error> => {
+  const deadline = Date.now() + timeoutMs
+
+  const loop: Effect.Effect<A, Error> = Effect.gen(function* () {
+    const value = yield* effect.pipe(Effect.mapError((error) => new Error(String(error))))
+    if (predicate(value)) return value
+    if (Date.now() >= deadline) return yield* Effect.fail(new Error("timed out waiting"))
+    yield* Effect.sleep("100 millis")
+    return yield* loop
+  })
+
+  return loop
+}
+
 describe("worker supervisor", () => {
   test("compiled binary launch resolves bun runtime and on-disk server entry", async () => {
     const launch = await WorkerSupervisorInternal.resolveWorkerLaunch({
@@ -159,12 +177,140 @@ describe("worker supervisor", () => {
           })
 
           const sessions = yield* worker.client.listSessions()
+          const debugSession = sessions.find((session) => session.name === "debug scenario")
+
           expect(sessions.length).toBeGreaterThanOrEqual(1)
-          expect(sessions.some((session) => session.name === "debug scenario")).toBe(true)
+          expect(debugSession).toBeDefined()
+          expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
+
+          const state = yield* waitFor(
+            worker.client.getSessionState({
+              sessionId: debugSession!.id,
+              branchId: debugSession!.branchId!,
+            }),
+            (sessionState) => sessionState.messages.length > 0,
+            15_000,
+          )
+
+          expect(state.sessionId).toBe(debugSession!.id)
+          expect(state.branchId).toBe(debugSession!.branchId)
+          expect(state.messages.length).toBeGreaterThan(0)
         }),
       ),
     )
   }, 15_000)
+
+  test("persists file-backed auth visibility through worker restart", async () => {
+    const root = makeTempDir()
+    const dataDir = path.join(root, "data")
+    fs.mkdirSync(dataDir, { recursive: true })
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerSupervisor({
+            cwd: repoRoot,
+            env: {
+              GENT_DATA_DIR: dataDir,
+              GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
+              GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
+            },
+          })
+
+          yield* worker.client.setAuthKey("anthropic", "test-anthropic-key")
+
+          const beforeRestart = yield* waitFor(worker.client.listAuthProviders(), (providers) =>
+            providers.some((provider) => provider.provider === "anthropic" && provider.hasKey),
+          )
+          expect(beforeRestart.find((provider) => provider.provider === "anthropic")).toMatchObject(
+            { hasKey: true, source: "stored" },
+          )
+
+          yield* worker.restart
+
+          const afterRestart = yield* waitFor(
+            worker.client.listAuthProviders(),
+            (providers) =>
+              providers.some((provider) => provider.provider === "anthropic" && provider.hasKey),
+            10_000,
+          )
+          expect(afterRestart.find((provider) => provider.provider === "anthropic")).toMatchObject({
+            hasKey: true,
+            source: "stored",
+          })
+        }),
+      ),
+    )
+  })
+
+  test("restart preserves queued follow-up visibility while the active turn is retrying", async () => {
+    const root = makeTempDir()
+    const dataDir = path.join(root, "data")
+    fs.mkdirSync(dataDir, { recursive: true })
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerSupervisor({
+            cwd: repoRoot,
+            startupTimeoutMs: 20_000,
+            env: {
+              GENT_DATA_DIR: dataDir,
+              GENT_PROVIDER_MODE: "debug-scripted",
+              GENT_AUTH_FILE_PATH: path.join(root, "auth.enc"),
+              GENT_AUTH_KEY_PATH: path.join(root, "auth.key"),
+            },
+          })
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+          })
+
+          yield* worker.client.sendMessage({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "first",
+          })
+
+          yield* worker.client.sendMessage({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "queued follow-up",
+          })
+
+          const queuedBeforeRestart = yield* waitFor(
+            worker.client.getQueuedMessages({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            (snapshot) =>
+              snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
+            10_000,
+          )
+          expect(queuedBeforeRestart.followUp).toHaveLength(1)
+
+          const pid = worker.pid()
+          expect(pid).not.toBeNull()
+          process.kill(pid!, "SIGKILL")
+
+          yield* Effect.promise(() => waitForRunning(worker, 1))
+
+          const queuedAfterRestart = yield* waitFor(
+            worker.client.getQueuedMessages({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            (snapshot) =>
+              snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
+            10_000,
+          )
+          expect(queuedAfterRestart.followUp).toHaveLength(1)
+          expect(queuedAfterRestart.followUp[0]?.content).toContain("queued follow-up")
+        }),
+      ),
+    )
+  }, 25_000)
 
   test("delivers live events after subscribeEvents is established", async () => {
     const dataDir = makeTempDir()
