@@ -259,6 +259,127 @@ export function Input(props: InputProps) {
     handleSubmit()
   }
 
+  const handleExternalEditorKey = (e: {
+    readonly ctrl?: boolean
+    readonly name?: string
+  }): boolean => {
+    if (!(e.ctrl === true && e.name === "g")) return false
+
+    const currentContent = inputRef?.plainText ?? ""
+    const editor = resolveEditor(env.visual, env.editor)
+    openExternalEditor(
+      currentContent,
+      () => renderer.suspend(),
+      () => renderer.resume(),
+      editor,
+    )
+      .then((result) => {
+        if (result._tag === "applied" && inputRef !== null) {
+          inputRef.replaceText(result.content)
+          inputRef.cursorOffset = result.content.length
+          previousValue = result.content
+          return
+        }
+        if (result._tag === "error") {
+          client.setError(result.message)
+        }
+      })
+      .catch((err: unknown) => {
+        client.setError(`Editor error: ${err}`)
+      })
+    return true
+  }
+
+  const handleAutocompleteKey = (e: {
+    readonly ctrl?: boolean
+    readonly name?: string
+  }): boolean | undefined => {
+    if (autocomplete() === null) return undefined
+    if (e.name === "escape") {
+      setAutocomplete(null)
+      return true
+    }
+    if (["up", "down", "return", "tab"].includes(e.name ?? "")) {
+      return false
+    }
+    if (e.ctrl === true && (e.name === "p" || e.name === "n")) {
+      return false
+    }
+    return undefined
+  }
+
+  const handleShellModeKey = (e: { readonly name?: string }): boolean => {
+    if (
+      e.name === "!" &&
+      inputRef?.cursorOffset === 0 &&
+      effectiveMode() === "normal" &&
+      autocomplete() === null
+    ) {
+      setInternalState({ _tag: "shell" })
+      return true
+    }
+
+    if (effectiveMode() !== "shell") return false
+
+    if (e.name === "escape") {
+      setInternalState({ _tag: "normal", autocomplete: null })
+      if (inputRef !== null) inputRef.setText("")
+      return true
+    }
+
+    if (e.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
+      setInternalState({ _tag: "normal", autocomplete: null })
+      return true
+    }
+
+    return false
+  }
+
+  const handleSlashAutocompleteKey = (e: { readonly name?: string }): boolean => {
+    if (
+      e.name !== "/" ||
+      inputRef?.cursorOffset !== 0 ||
+      effectiveMode() !== "normal" ||
+      autocomplete() !== null
+    ) {
+      return false
+    }
+
+    setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
+    return true
+  }
+
+  const handlePromptHistoryKey = (e: {
+    readonly ctrl?: boolean
+    readonly meta?: boolean
+    readonly option?: boolean
+    readonly shift?: boolean
+    readonly name?: string
+  }): boolean => {
+    if (
+      (e.name !== "up" && e.name !== "down") ||
+      effectiveMode() !== "normal" ||
+      autocomplete() !== null ||
+      inputRef === null ||
+      e.ctrl === true ||
+      e.meta === true ||
+      e.option === true ||
+      e.shift === true
+    ) {
+      return false
+    }
+
+    const cursorPos = inputRef.cursorOffset
+    const textLength = inputRef.plainText.length
+    const result = history.navigate(e.name, inputRef.plainText, cursorPos, textLength)
+    if (!result.handled || result.text === undefined) return false
+
+    inputRef.replaceText(result.text)
+    inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
+    previousValue = result.text
+    return true
+  }
+
   useScopedKeyboard((e) => {
     if (props.suspended === true) return false
 
@@ -273,108 +394,18 @@ export function Input(props: InputProps) {
       return true
     }
 
-    // Ctrl+G: open external editor
-    if (e.ctrl === true && e.name === "g") {
-      const currentContent = inputRef?.plainText ?? ""
-      const editor = resolveEditor(env.visual, env.editor)
-      openExternalEditor(
-        currentContent,
-        () => renderer.suspend(),
-        () => renderer.resume(),
-        editor,
-      )
-        .then((result) => {
-          if (result._tag === "applied" && inputRef !== null) {
-            inputRef.replaceText(result.content)
-            inputRef.cursorOffset = result.content.length
-            previousValue = result.content
-          } else if (result._tag === "error") {
-            client.setError(result.message)
-          }
-        })
-        .catch((err: unknown) => {
-          client.setError(`Editor error: ${err}`)
-        })
-      return true
-    }
+    if (handleExternalEditorKey(e)) return true
 
     if ((e.meta === true || e.super === true) && e.name === "up") {
       props.onRestoreQueue?.()
       return true
     }
 
-    // Handle autocomplete keyboard first
-    if (autocomplete() !== null) {
-      if (e.name === "escape") {
-        setAutocomplete(null)
-        return true
-      }
-      // Let autocomplete popup handle up/down/enter/tab
-      if (["up", "down", "return", "tab"].includes(e.name)) {
-        return false
-      }
-      if (e.ctrl === true && (e.name === "p" || e.name === "n")) {
-        return false
-      }
-    }
-
-    // Shell mode: ! at position 0 enters shell mode
-    if (
-      e.name === "!" &&
-      inputRef?.cursorOffset === 0 &&
-      effectiveMode() === "normal" &&
-      autocomplete() === null
-    ) {
-      setInternalState({ _tag: "shell" })
-      return true
-    }
-
-    // Exit shell mode on ESC or backspace at position 0
-    if (effectiveMode() === "shell") {
-      if (e.name === "escape") {
-        setInternalState({ _tag: "normal", autocomplete: null })
-        if (inputRef !== null) inputRef.setText("")
-        return true
-      }
-      // Backspace at position 0 or 1 exits shell mode (like deleting the implicit !)
-      if (e.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
-        setInternalState({ _tag: "normal", autocomplete: null })
-        return true
-      }
-    }
-
-    // / at position 0 opens command autocomplete
-    if (
-      e.name === "/" &&
-      inputRef?.cursorOffset === 0 &&
-      effectiveMode() === "normal" &&
-      autocomplete() === null
-    ) {
-      setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
-      return true
-    }
-
-    // Prompt history: up/down at cursor boundaries (normal mode only)
-    if (
-      (e.name === "up" || e.name === "down") &&
-      effectiveMode() === "normal" &&
-      autocomplete() === null &&
-      inputRef !== null &&
-      !e.ctrl &&
-      !e.meta &&
-      !e.option &&
-      !e.shift
-    ) {
-      const cursorPos = inputRef.cursorOffset
-      const textLength = inputRef.plainText.length
-      const result = history.navigate(e.name, inputRef.plainText, cursorPos, textLength)
-      if (result.handled && result.text !== undefined) {
-        inputRef.replaceText(result.text)
-        inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
-        previousValue = result.text
-        return true
-      }
-    }
+    const autocompleteResult = handleAutocompleteKey(e)
+    if (autocompleteResult !== undefined) return autocompleteResult
+    if (handleShellModeKey(e)) return true
+    if (handleSlashAutocompleteKey(e)) return true
+    if (handlePromptHistoryKey(e)) return true
     return false
   })
 
@@ -702,6 +733,12 @@ function PromptUI(props: PromptUIProps) {
   const isSelected = (label: string) => selected().has(label)
   const isFocused = (index: number) => focusIndex() === index
   const isFreeformFocused = () => focusIndex() === options().length
+  const optionMarker = (label: string): string => {
+    if (isMultiple()) {
+      return isSelected(label) ? "[x] " : "[ ] "
+    }
+    return isSelected(label) ? "(•) " : "( ) "
+  }
 
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
@@ -732,13 +769,7 @@ function PromptUI(props: PromptUIProps) {
               <box flexDirection="row">
                 <text style={{ fg: isFocused(idx()) ? theme.primary : theme.text }}>
                   {isFocused(idx()) ? "❯ " : "  "}
-                  {isMultiple()
-                    ? isSelected(opt.label)
-                      ? "[x] "
-                      : "[ ] "
-                    : isSelected(opt.label)
-                      ? "(•) "
-                      : "( ) "}
+                  {optionMarker(opt.label)}
                   {opt.label}
                 </text>
                 <Show when={opt.description !== undefined && opt.description.length > 0}>

@@ -29,6 +29,10 @@ export interface AuthProps {
   onResolved?: () => void
 }
 
+function isPrintableAuthSequence(sequence: string | undefined): sequence is string {
+  return sequence !== undefined && sequence.length === 1
+}
+
 export function Auth(props: AuthProps) {
   const { theme } = useTheme()
   const router = useRouter()
@@ -297,118 +301,149 @@ export function Auth(props: AuthProps) {
     )
   }
 
-  // ── Keyboard ──
+  const isPrintableAuthChar = (e: {
+    readonly sequence?: string
+    readonly ctrl?: boolean
+    readonly meta?: boolean
+  }): e is { readonly sequence: string } =>
+    isPrintableAuthSequence(e.sequence) && e.ctrl !== true && e.meta !== true
 
-  useScopedKeyboard((e) => {
-    const current = state()
-
-    if (current._tag === "Key") {
-      if (e.name === "escape") {
-        send(AuthEvent.Cancel)
-        return true
-      }
-      if (e.name === "return") {
-        submitKey()
-        return true
-      }
-      if (e.name === "backspace") {
-        send(AuthEvent.BackspaceKey)
-        return true
-      }
-      if (
-        e.sequence !== undefined &&
-        e.sequence.length === 1 &&
-        e.ctrl !== true &&
-        e.meta !== true
-      ) {
-        send(AuthEvent.TypeKey({ char: e.sequence }))
-        return true
-      }
-      return false
+  const handleKeyStateKeyboard = (
+    current: ReturnType<typeof keyState>,
+    e: {
+      readonly name?: string
+      readonly sequence?: string
+      readonly ctrl?: boolean
+      readonly meta?: boolean
+    },
+  ): boolean | undefined => {
+    if (current === undefined) return undefined
+    if (e.name === "escape") {
+      send(AuthEvent.Cancel)
+      return true
     }
-
-    if (current._tag === "OAuth") {
-      if (e.name === "escape") {
-        send(AuthEvent.Cancel)
-        return true
-      }
-      if (e.name === "return") {
-        submitOauth()
-        return true
-      }
-      if (e.name === "backspace") {
-        send(AuthEvent.BackspaceCode)
-        return true
-      }
-      if (
-        e.sequence !== undefined &&
-        e.sequence.length === 1 &&
-        e.ctrl !== true &&
-        e.meta !== true
-      ) {
-        send(AuthEvent.TypeCode({ char: e.sequence }))
-        return true
-      }
-      return false
+    if (e.name === "return") {
+      submitKey()
+      return true
     }
-
-    if (current._tag === "Method") {
-      if (e.name === "escape") {
-        send(AuthEvent.Cancel)
-        return true
-      }
-      const provider = current.providers[current.providerIndex]
-      const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
-      if (methods.length === 0) return false
-      if (e.name === "up") {
-        const next = current.methodIndex > 0 ? current.methodIndex - 1 : methods.length - 1
-        send(AuthEvent.SelectMethod({ index: next }))
-        return true
-      }
-      if (e.name === "down") {
-        const next = current.methodIndex < methods.length - 1 ? current.methodIndex + 1 : 0
-        send(AuthEvent.SelectMethod({ index: next }))
-        return true
-      }
-      if (e.name === "return") {
-        startMethod()
-        return true
-      }
-      return false
+    if (e.name === "backspace") {
+      send(AuthEvent.BackspaceKey)
+      return true
     }
+    if (isPrintableAuthChar(e)) {
+      send(AuthEvent.TypeKey({ char: e.sequence }))
+      return true
+    }
+    return false
+  }
 
-    // List state
+  const handleOauthStateKeyboard = (
+    current: ReturnType<typeof oauthState>,
+    e: {
+      readonly name?: string
+      readonly sequence?: string
+      readonly ctrl?: boolean
+      readonly meta?: boolean
+    },
+  ): boolean | undefined => {
+    if (current === undefined) return undefined
+    if (e.name === "escape") {
+      send(AuthEvent.Cancel)
+      return true
+    }
+    if (e.name === "return") {
+      submitOauth()
+      return true
+    }
+    if (e.name === "backspace") {
+      send(AuthEvent.BackspaceCode)
+      return true
+    }
+    if (isPrintableAuthChar(e)) {
+      send(AuthEvent.TypeCode({ char: e.sequence }))
+      return true
+    }
+    return false
+  }
+
+  const handleMethodStateKeyboard = (
+    current: ReturnType<typeof methodState>,
+    e: {
+      readonly name?: string
+      readonly ctrl?: boolean
+    },
+  ): boolean | undefined => {
+    if (current === undefined) return undefined
+    if (e.name === "escape") {
+      send(AuthEvent.Cancel)
+      return true
+    }
+    const provider = current.providers[current.providerIndex]
+    const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
+    if (methods.length === 0) return false
+    if (e.name === "up") {
+      const next = current.methodIndex > 0 ? current.methodIndex - 1 : methods.length - 1
+      send(AuthEvent.SelectMethod({ index: next }))
+      return true
+    }
+    if (e.name === "down") {
+      const next = current.methodIndex < methods.length - 1 ? current.methodIndex + 1 : 0
+      send(AuthEvent.SelectMethod({ index: next }))
+      return true
+    }
+    if (e.name === "return") {
+      startMethod()
+      return true
+    }
+    return false
+  }
+
+  const handleListStateKeyboard = (
+    current: Extract<ReturnType<typeof state>, { readonly _tag: "List" }>,
+    e: {
+      readonly name?: string
+    },
+  ): boolean => {
     if (e.name === "escape") {
       router.back()
       return true
     }
-
-    if (current._tag !== "List" || current.providers.length === 0) return false
-
+    if (current.providers.length === 0) return false
     if (e.name === "up") {
       const next =
         current.providerIndex > 0 ? current.providerIndex - 1 : current.providers.length - 1
       send(AuthEvent.SelectProvider({ index: next }))
       return true
     }
-
     if (e.name === "down") {
       const next =
         current.providerIndex < current.providers.length - 1 ? current.providerIndex + 1 : 0
       send(AuthEvent.SelectProvider({ index: next }))
       return true
     }
-
     if (e.name === "return" || e.name === "a") {
       send(AuthEvent.OpenMethod)
       return true
     }
-
     if (e.name === "d") {
       deleteSelected()
       return true
     }
     return false
+  }
+
+  // ── Keyboard ──
+
+  useScopedKeyboard((e) => {
+    const current = state()
+    const keyResult = handleKeyStateKeyboard(keyState(), e)
+    if (keyResult !== undefined) return keyResult
+    const oauthResult = handleOauthStateKeyboard(oauthState(), e)
+    if (oauthResult !== undefined) return oauthResult
+    const methodResult = handleMethodStateKeyboard(methodState(), e)
+    if (methodResult !== undefined) return methodResult
+    if (current._tag !== "List") return false
+    return handleListStateKeyboard(current, e)
   })
 
   usePaste((event) => {
@@ -468,6 +503,14 @@ export function Auth(props: AuthProps) {
     return current._tag === "Method" ? current : undefined
   }
 
+  const oauthPromptLabel = () => {
+    const current = oauthState()
+    if (current === undefined) return "(type code)"
+    if (current.code.length > 0) return current.code
+    if (current.phase === "waiting") return "(waiting for browser...)"
+    return "(type code)"
+  }
+
   // ── Render ──
 
   return (
@@ -513,13 +556,7 @@ export function Auth(props: AuthProps) {
                     ? "Paste code:"
                     : "Paste code (optional):"}
                 </text>
-                <text style={{ fg: theme.text }}>
-                  {current().code.length > 0
-                    ? current().code
-                    : current().phase === "waiting"
-                      ? "(waiting for browser...)"
-                      : "(type code)"}
-                </text>
+                <text style={{ fg: theme.text }}>{oauthPromptLabel()}</text>
               </box>
               <Show when={current().authorization.method === "auto"}>
                 <text style={{ fg: theme.textMuted }}>
