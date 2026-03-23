@@ -380,43 +380,195 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 if (cachedMessages !== undefined) cachedMessages.push(message)
               }
 
+              const persistAssistantText = Effect.fn("AgentLoop.persistAssistantText")(function* (
+                text: string,
+                reasoning: string,
+                createdAt = new Date(),
+              ) {
+                if (text === "" && reasoning === "") return undefined
+
+                const parts: Array<TextPart | ReasoningPart> = []
+                if (reasoning !== "") {
+                  parts.push(new ReasoningPart({ type: "reasoning", text: reasoning }))
+                }
+                if (text !== "") {
+                  parts.push(new TextPart({ type: "text", text }))
+                }
+
+                const message = new Message({
+                  id: Bun.randomUUIDv7() as MessageId,
+                  sessionId,
+                  branchId,
+                  role: "assistant",
+                  parts,
+                  createdAt,
+                })
+                yield* storage.createMessage(message)
+                appendCachedMessage(message)
+                yield* publishEvent(
+                  new MessageReceived({
+                    sessionId,
+                    branchId,
+                    messageId: message.id,
+                    role: "assistant",
+                  }),
+                )
+                return message
+              })
+
+              const formatStreamErrorMessage = (streamError: unknown) => {
+                if (streamError instanceof Error) return streamError.message
+                if ("message" in (streamError as Record<string, unknown>)) {
+                  return String((streamError as Record<string, unknown>)["message"])
+                }
+                return String(streamError)
+              }
+
+              const drainNextQueuedTurn = Effect.fn("AgentLoop.drainNextQueuedTurn")(function* () {
+                const steeringItems = yield* Ref.get(steeringMessageQueue)
+                const nextSteer = steeringItems[0]
+                if (nextSteer !== undefined) {
+                  yield* Ref.update(steeringMessageQueue, (items) => items.slice(1))
+                  return yield* runLoopRecovering(
+                    nextSteer.message,
+                    nextSteer.bypass,
+                    nextSteer.agentOverride,
+                  )
+                }
+
+                const queue = yield* Ref.get(followUpQueue)
+                const nextItem = queue[0]
+                if (nextItem === undefined) return false
+                yield* Ref.update(followUpQueue, (items) => items.slice(1))
+                return yield* runLoopRecovering(
+                  restampQueuedMessage(nextItem.message),
+                  nextItem.bypass,
+                )
+              })
+
+              const runAutoHandoffIfNeeded = Effect.fn("AgentLoop.runAutoHandoffIfNeeded")(
+                function* () {
+                  if (turnInterrupted) return
+
+                  const suppressLeft = yield* Ref.get(handoffSuppressRef)
+                  if (suppressLeft > 0) {
+                    yield* Ref.update(handoffSuppressRef, (n) => n - 1)
+                    return
+                  }
+
+                  const allMessages = yield* storage.listMessages(branchId)
+                  const currentAgent = yield* resolveCurrentAgent()
+                  const currentAgentDef = yield* extensionRegistry.getAgent(currentAgent)
+                  const modelId = resolveAgentModel(currentAgentDef ?? Agents.cowork)
+                  const contextPercent = estimateContextPercent(allMessages, modelId)
+                  if (contextPercent < DEFAULTS.handoffThresholdPercent) return
+
+                  yield* Effect.logInfo("auto-handoff.threshold").pipe(
+                    Effect.annotateLogs({
+                      contextPercent,
+                      threshold: DEFAULTS.handoffThresholdPercent,
+                    }),
+                  )
+                  const recentText = allMessages
+                    .slice(-20)
+                    .map((m) => {
+                      const text = m.parts
+                        .filter((p): p is typeof TextPart.Type => p.type === "text")
+                        .map((p) => p.text)
+                        .join("\n")
+                      return text !== "" ? `${m.role}: ${text}` : ""
+                    })
+                    .filter((line) => line.length > 0)
+                    .join("\n\n")
+                  const summary =
+                    recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
+
+                  const decision = yield* handoffHandler
+                    .present({
+                      sessionId,
+                      branchId,
+                      summary,
+                      reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
+                    })
+                    .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
+
+                  if (decision === "reject") {
+                    yield* Ref.set(handoffSuppressRef, 5)
+                  }
+                },
+              )
+
+              const handlePolledSteerCommand = Effect.fn("AgentLoop.handlePolledSteerCommand")(
+                function* (cmd: SteerCommand) {
+                  if (cmd._tag === "SwitchAgent") {
+                    yield* applySteerCommand(cmd)
+                    return false
+                  }
+
+                  if (cmd._tag === "Interject") {
+                    yield* enqueueInterject(cmd.message, cmd.agent)
+                  } else {
+                    turnInterrupted = true
+                    yield* publishEvent(
+                      new StreamEnded({
+                        sessionId,
+                        branchId,
+                        interrupted: true,
+                      }),
+                    )
+                  }
+
+                  continueLoop = false
+                  return true
+                },
+              )
+
+              const handleInterruptCommand = Effect.fn("AgentLoop.handleInterruptCommand")(
+                function* (
+                  interruptCmd: SteerCommand,
+                  partialText: string,
+                  partialReasoning: string,
+                ) {
+                  turnInterrupted = true
+                  yield* publishEvent(
+                    new StreamEnded({
+                      sessionId,
+                      branchId,
+                      interrupted: true,
+                    }),
+                  )
+
+                  const createdAt = new Date()
+                  const partialMessage = yield* persistAssistantText(
+                    partialText,
+                    partialReasoning,
+                    createdAt,
+                  )
+
+                  if (interruptCmd._tag === "Interject") {
+                    const interjectCreatedAt =
+                      partialMessage !== undefined
+                        ? new Date(partialMessage.createdAt.getTime() + 1)
+                        : new Date()
+                    yield* enqueueInterject(
+                      interruptCmd.message,
+                      interruptCmd.agent,
+                      interjectCreatedAt,
+                    )
+                  }
+
+                  continueLoop = false
+                },
+              )
+
               while (continueLoop) {
                 yield* applyPendingSteerCommands()
 
                 // Check for steer commands
                 const steerCmd = yield* Queue.poll(steerQueue)
                 if (steerCmd._tag === "Some") {
-                  const cmd = steerCmd.value
-                  if (cmd._tag === "Cancel") {
-                    continueLoop = false
-                    turnInterrupted = true
-                    yield* publishEvent(
-                      new StreamEnded({
-                        sessionId,
-                        branchId,
-                        interrupted: true,
-                      }),
-                    )
-                    break
-                  } else if (cmd._tag === "Interrupt") {
-                    // Hard stop - emit StreamEnded with interrupted flag
-                    continueLoop = false
-                    turnInterrupted = true
-                    yield* publishEvent(
-                      new StreamEnded({
-                        sessionId,
-                        branchId,
-                        interrupted: true,
-                      }),
-                    )
-                    break
-                  } else if (cmd._tag === "Interject") {
-                    yield* enqueueInterject(cmd.message, cmd.agent)
-                    continueLoop = false
-                    break
-                  } else if (cmd._tag === "SwitchAgent") {
-                    yield* applySteerCommand(cmd)
-                  }
+                  const shouldBreak = yield* handlePolledSteerCommand(steerCmd.value)
+                  if (shouldBreak) break
                 }
 
                 const currentAgent = agentOverride ?? (yield* resolveCurrentAgent())
@@ -552,51 +704,14 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                         "stream error, persisting partial output",
                         streamError,
                       )
-                      const partialText = textParts.join("")
-                      const partialReasoning = reasoningParts.join("")
-                      if (partialText !== "" || partialReasoning !== "") {
-                        const parts: Array<TextPart | ReasoningPart> = []
-                        if (partialReasoning !== "") {
-                          parts.push(
-                            new ReasoningPart({ type: "reasoning", text: partialReasoning }),
-                          )
-                        }
-                        if (partialText !== "") {
-                          parts.push(new TextPart({ type: "text", text: partialText }))
-                        }
-                        const partialMessage = new Message({
-                          id: Bun.randomUUIDv7() as MessageId,
-                          sessionId,
-                          branchId,
-                          role: "assistant",
-                          parts,
-                          createdAt: new Date(),
-                        })
-                        yield* storage.createMessage(partialMessage)
-                        appendCachedMessage(partialMessage)
-                        yield* publishEvent(
-                          new MessageReceived({
-                            sessionId,
-                            branchId,
-                            messageId: partialMessage.id,
-                            role: "assistant",
-                          }),
-                        )
-                      }
+                      yield* persistAssistantText(textParts.join(""), reasoningParts.join(""))
                       // Stream error is not an interruption — emit error event, not interrupted
                       yield* publishEvent(new StreamEnded({ sessionId, branchId }))
-                      let errorMessage: string
-                      if (streamError instanceof Error) errorMessage = streamError.message
-                      else if ("message" in (streamError as Record<string, unknown>)) {
-                        errorMessage = String((streamError as Record<string, unknown>)["message"])
-                      } else {
-                        errorMessage = String(streamError)
-                      }
                       yield* publishEvent(
                         new ErrorOccurred({
                           sessionId,
                           branchId,
-                          error: errorMessage,
+                          error: formatStreamErrorMessage(streamError),
                         }),
                       )
                       return true
@@ -613,58 +728,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 yield* applyPendingSteerCommands()
                 const interruptCmd = yield* Ref.get(interruptRef)
                 if (interruptCmd !== null) {
-                  turnInterrupted = true
-                  yield* publishEvent(
-                    new StreamEnded({
-                      sessionId,
-                      branchId,
-                      interrupted: true,
-                    }),
+                  yield* handleInterruptCommand(
+                    interruptCmd,
+                    textParts.join(""),
+                    reasoningParts.join(""),
                   )
-
-                  const partialText = textParts.join("")
-                  const partialReasoning = reasoningParts.join("")
-                  let assistantCreatedAtMs: number | null = null
-                  if (partialText !== "" || partialReasoning !== "") {
-                    const createdAt = new Date()
-                    assistantCreatedAtMs = createdAt.getTime()
-                    const parts: Array<TextPart | ReasoningPart> = []
-                    if (partialReasoning !== "") {
-                      parts.push(new ReasoningPart({ type: "reasoning", text: partialReasoning }))
-                    }
-                    if (partialText !== "") {
-                      parts.push(new TextPart({ type: "text", text: partialText }))
-                    }
-                    const assistantMessage = new Message({
-                      id: Bun.randomUUIDv7() as MessageId,
-                      sessionId,
-                      branchId,
-                      role: "assistant",
-                      parts,
-                      createdAt,
-                    })
-
-                    yield* storage.createMessage(assistantMessage)
-                    appendCachedMessage(assistantMessage)
-                    yield* publishEvent(
-                      new MessageReceived({
-                        sessionId,
-                        branchId,
-                        messageId: assistantMessage.id,
-                        role: "assistant",
-                      }),
-                    )
-                  }
-
-                  if (interruptCmd._tag === "Interject") {
-                    const createdAt =
-                      assistantCreatedAtMs !== null
-                        ? new Date(assistantCreatedAtMs + 1)
-                        : new Date()
-                    yield* enqueueInterject(interruptCmd.message, interruptCmd.agent, createdAt)
-                  }
-
-                  continueLoop = false
                   break
                 }
 
@@ -814,81 +882,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 }),
               )
 
-              // Auto-handoff on context pressure (after turn completes, before next turn)
-              if (!turnInterrupted) {
-                const suppressLeft = yield* Ref.get(handoffSuppressRef)
-                if (suppressLeft > 0) {
-                  yield* Ref.update(handoffSuppressRef, (n) => n - 1)
-                } else {
-                  const allMessages = yield* storage.listMessages(branchId)
-                  const currentAgent = yield* resolveCurrentAgent()
-                  const currentAgentDef = yield* extensionRegistry.getAgent(currentAgent)
-                  const modelId = resolveAgentModel(currentAgentDef ?? Agents.cowork)
-                  const contextPercent = estimateContextPercent(allMessages, modelId)
-                  if (contextPercent >= DEFAULTS.handoffThresholdPercent) {
-                    yield* Effect.logInfo("auto-handoff.threshold").pipe(
-                      Effect.annotateLogs({
-                        contextPercent,
-                        threshold: DEFAULTS.handoffThresholdPercent,
-                      }),
-                    )
-                    // Build summary from recent messages
-                    const recentText = allMessages
-                      .slice(-20)
-                      .map((m) => {
-                        const text = m.parts
-                          .filter((p): p is typeof TextPart.Type => p.type === "text")
-                          .map((p) => p.text)
-                          .join("\n")
-                        return text !== "" ? `${m.role}: ${text}` : ""
-                      })
-                      .filter((line) => line.length > 0)
-                      .join("\n\n")
-                    const summary =
-                      recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
-
-                    const decision = yield* handoffHandler
-                      .present({
-                        sessionId,
-                        branchId,
-                        summary,
-                        reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
-                      })
-                      .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
-
-                    if (decision === "reject") {
-                      // Suppress for 5 more turns
-                      yield* Ref.set(handoffSuppressRef, 5)
-                    }
-                  }
-                }
-              }
-
-              // Process steering queue first
-              const steeringItems = yield* Ref.get(steeringMessageQueue)
-              const nextSteer = steeringItems[0]
-              if (nextSteer !== undefined) {
-                yield* Ref.update(steeringMessageQueue, (items) => items.slice(1))
-                const nextInterrupted = yield* runLoopRecovering(
-                  nextSteer.message,
-                  nextSteer.bypass,
-                  nextSteer.agentOverride,
-                )
-                interrupted = interrupted || nextInterrupted
-                return interrupted
-              }
-
-              // Process follow-up queue
-              const queue = yield* Ref.get(followUpQueue)
-              const nextItem = queue[0]
-              if (nextItem !== undefined) {
-                yield* Ref.update(followUpQueue, (items) => items.slice(1))
-                const nextInterrupted = yield* runLoopRecovering(
-                  restampQueuedMessage(nextItem.message),
-                  nextItem.bypass,
-                )
-                interrupted = interrupted || nextInterrupted
-              }
+              yield* runAutoHandoffIfNeeded()
+              const nextInterrupted = yield* drainNextQueuedTurn()
+              interrupted = interrupted || nextInterrupted
 
               return interrupted
             })
@@ -920,10 +916,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               const queue = yield* Ref.get(followUpQueue)
               const nextItem = queue[0]
-              if (nextItem !== undefined) {
-                yield* Ref.update(followUpQueue, (items) => items.slice(1))
-                yield* runLoopRecovering(restampQueuedMessage(nextItem.message), nextItem.bypass)
-              }
+              if (nextItem === undefined) return
+              yield* Ref.update(followUpQueue, (items) => items.slice(1))
+              yield* runLoopRecovering(restampQueuedMessage(nextItem.message), nextItem.bypass)
             })
 
             runLoopRecovering = (

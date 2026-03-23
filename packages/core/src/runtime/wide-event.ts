@@ -7,7 +7,7 @@
  */
 
 import { ServiceMap, Effect, Filter, Layer, Option, Schema, Stream } from "effect"
-import { EventStore, type EventStoreError } from "../domain/event.js"
+import { EventStore, type EventEnvelope, type EventStoreError } from "../domain/event.js"
 import type { SessionId } from "../domain/ids.js"
 
 // =============================================================================
@@ -110,6 +110,43 @@ const finalizeAccumulator = (acc: TurnAccumulator, durationMs: number): TurnWide
   })
 }
 
+const ignoredWideEventTags = new Set([
+  "SessionStarted",
+  "SessionEnded",
+  "StreamChunk",
+  "PermissionRequested",
+  "PromptPresented",
+  "PromptConfirmed",
+  "PromptRejected",
+  "PromptEdited",
+  "HandoffPresented",
+  "HandoffConfirmed",
+  "HandoffRejected",
+  "ProviderRetrying",
+  "MachineInspected",
+  "MachineTaskSucceeded",
+  "MachineTaskFailed",
+  "TodoUpdated",
+  "QuestionsAsked",
+  "QuestionsAnswered",
+  "SessionNameUpdated",
+  "BranchCreated",
+  "BranchSwitched",
+  "BranchSummarized",
+  "SubagentSpawned",
+  "SubagentCompleted",
+  "SubagentSucceeded",
+  "SubagentFailed",
+  "TaskCreated",
+  "TaskUpdated",
+  "TaskCompleted",
+  "TaskFailed",
+  "TaskDeleted",
+  "AgentRestarted",
+  "WorkflowPhaseStarted",
+  "WorkflowCompleted",
+])
+
 // =============================================================================
 // Service
 // =============================================================================
@@ -141,138 +178,95 @@ export class WideEvent extends ServiceMap.Service<WideEvent, WideEventService>()
             return acc
           }
 
-          return eventStore.subscribe({ sessionId }).pipe(
-            Stream.filterMap(
-              Filter.fromPredicateOption((envelope) => {
-                const event = envelope.event
-                const branchId =
-                  "branchId" in event ? (event.branchId as string | undefined) : undefined
+          const updateToolCall = (
+            branchId: string,
+            toolCallId: string,
+            createdAt: number,
+            isError: boolean,
+          ) => {
+            const acc = getOrCreate(branchId)
+            const tc = acc.toolCalls.find((t) => t.toolCallId === toolCallId)
+            if (tc === undefined) return
+            tc.isError = isError
+            tc.durationMs = createdAt - tc.startedAt
+          }
 
-                if (branchId === undefined) return Option.none()
+          const handleEnvelope = (envelope: EventEnvelope) => {
+            const event = envelope.event
+            const branchId =
+              "branchId" in event ? (event.branchId as string | undefined) : undefined
+            if (branchId === undefined) return Option.none<TurnWideEvent>()
+            if (ignoredWideEventTags.has(event._tag)) return Option.none<TurnWideEvent>()
 
-                switch (event._tag) {
-                  case "MessageReceived": {
-                    if (event.role === "user") {
-                      const acc = makeAccumulator(sessionId, branchId)
-                      acc.traceId = envelope.traceId
-                      acc.startedAt = envelope.createdAt
-                      accumulators.set(accKey(branchId), acc)
-                    }
-                    return Option.none()
-                  }
-
-                  case "StreamStarted": {
-                    const acc = getOrCreate(branchId)
-                    acc.streamCount++
-                    return Option.none()
-                  }
-
-                  case "StreamEnded": {
-                    const acc = getOrCreate(branchId)
-                    if (event.usage !== undefined) {
-                      acc.inputTokens += event.usage.inputTokens
-                      acc.outputTokens += event.usage.outputTokens
-                    }
-                    if (event.interrupted === true) {
-                      acc.interrupted = true
-                    }
-                    return Option.none()
-                  }
-
-                  case "AgentSwitched": {
-                    const acc = getOrCreate(branchId)
-                    acc.agent = event.toAgent
-                    return Option.none()
-                  }
-
-                  case "ToolCallStarted": {
-                    const acc = getOrCreate(branchId)
-                    acc.toolCalls.push({
-                      toolName: event.toolName,
-                      toolCallId: event.toolCallId,
-                      isError: false,
-                      startedAt: envelope.createdAt,
-                    })
-                    return Option.none()
-                  }
-
-                  case "ToolCallCompleted": {
-                    const acc = getOrCreate(branchId)
-                    const tc = acc.toolCalls.find((t) => t.toolCallId === event.toolCallId)
-                    if (tc !== undefined) {
-                      tc.isError = event.isError
-                      tc.durationMs = envelope.createdAt - tc.startedAt
-                    }
-                    return Option.none()
-                  }
-
-                  case "ToolCallSucceeded":
-                  case "ToolCallFailed": {
-                    const acc = getOrCreate(branchId)
-                    const tc = acc.toolCalls.find((t) => t.toolCallId === event.toolCallId)
-                    if (tc !== undefined) {
-                      tc.isError = event._tag === "ToolCallFailed"
-                      tc.durationMs = envelope.createdAt - tc.startedAt
-                    }
-                    return Option.none()
-                  }
-
-                  case "ErrorOccurred": {
-                    const acc = getOrCreate(branchId)
-                    acc.error = event.error
-                    return Option.none()
-                  }
-
-                  case "TurnCompleted": {
-                    const acc = getOrCreate(branchId)
-                    if (event.interrupted === true) {
-                      acc.interrupted = true
-                    }
-                    const wide = finalizeAccumulator(acc, event.durationMs)
-                    accumulators.delete(accKey(branchId))
-                    return Option.some(wide)
-                  }
-
-                  // Explicitly ignored events — no accumulator impact
-                  case "SessionStarted":
-                  case "SessionEnded":
-                  case "StreamChunk":
-                  case "PermissionRequested":
-                  case "PromptPresented":
-                  case "PromptConfirmed":
-                  case "PromptRejected":
-                  case "PromptEdited":
-                  case "HandoffPresented":
-                  case "HandoffConfirmed":
-                  case "HandoffRejected":
-                  case "ProviderRetrying":
-                  case "MachineInspected":
-                  case "MachineTaskSucceeded":
-                  case "MachineTaskFailed":
-                  case "TodoUpdated":
-                  case "QuestionsAsked":
-                  case "QuestionsAnswered":
-                  case "SessionNameUpdated":
-                  case "BranchCreated":
-                  case "BranchSwitched":
-                  case "BranchSummarized":
-                  case "SubagentSpawned":
-                  case "SubagentCompleted":
-                  case "SubagentSucceeded":
-                  case "SubagentFailed":
-                  case "TaskCreated":
-                  case "TaskUpdated":
-                  case "TaskCompleted":
-                  case "TaskFailed":
-                  case "TaskDeleted":
-                  case "AgentRestarted":
-                  case "WorkflowPhaseStarted":
-                  case "WorkflowCompleted":
-                    return Option.none()
+            switch (event._tag) {
+              case "MessageReceived": {
+                if (event.role === "user") {
+                  const acc = makeAccumulator(sessionId, branchId)
+                  acc.traceId = envelope.traceId
+                  acc.startedAt = envelope.createdAt
+                  accumulators.set(accKey(branchId), acc)
                 }
-              }),
-            ),
-          )
+                return Option.none()
+              }
+
+              case "StreamStarted":
+                getOrCreate(branchId).streamCount++
+                return Option.none()
+
+              case "StreamEnded": {
+                const acc = getOrCreate(branchId)
+                if (event.usage !== undefined) {
+                  acc.inputTokens += event.usage.inputTokens
+                  acc.outputTokens += event.usage.outputTokens
+                }
+                if (event.interrupted === true) acc.interrupted = true
+                return Option.none()
+              }
+
+              case "AgentSwitched":
+                getOrCreate(branchId).agent = event.toAgent
+                return Option.none()
+
+              case "ToolCallStarted":
+                getOrCreate(branchId).toolCalls.push({
+                  toolName: event.toolName,
+                  toolCallId: event.toolCallId,
+                  isError: false,
+                  startedAt: envelope.createdAt,
+                })
+                return Option.none()
+
+              case "ToolCallCompleted":
+                updateToolCall(branchId, event.toolCallId, envelope.createdAt, event.isError)
+                return Option.none()
+
+              case "ToolCallSucceeded":
+                updateToolCall(branchId, event.toolCallId, envelope.createdAt, false)
+                return Option.none()
+
+              case "ToolCallFailed":
+                updateToolCall(branchId, event.toolCallId, envelope.createdAt, true)
+                return Option.none()
+
+              case "ErrorOccurred":
+                getOrCreate(branchId).error = event.error
+                return Option.none()
+
+              case "TurnCompleted": {
+                const acc = getOrCreate(branchId)
+                if (event.interrupted === true) acc.interrupted = true
+                const wide = finalizeAccumulator(acc, event.durationMs)
+                accumulators.delete(accKey(branchId))
+                return Option.some(wide)
+              }
+            }
+
+            return Option.none()
+          }
+
+          return eventStore
+            .subscribe({ sessionId })
+            .pipe(Stream.filterMap(Filter.fromPredicateOption(handleEnvelope)))
         },
       }
 

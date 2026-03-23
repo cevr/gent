@@ -75,54 +75,59 @@ export const DelegateTool = defineTool({
         }),
       )
 
-    // Background mode: create durable task and fire-and-forget
-    if (params.background === true) {
+    const appendSessionRef = (error: string, sessionId?: string) => {
+      if (sessionId === undefined) return error
+      return `${error}\n\nFull session: session://${sessionId}`
+    }
+
+    const summarizeTaskSubject = (task: string) => {
+      if (task.length <= 60) return task
+      return `${task.slice(0, 60)}…`
+    }
+
+    const backgroundSingle = Effect.fn("DelegateTool.backgroundSingle")(function* () {
       const taskService = yield* TaskService
+      const resolved = yield* resolveAgent(params.agent ?? "")
+      if (!resolved.ok) return { error: resolved.error }
 
-      if (hasSingle) {
-        const resolved = yield* resolveAgent(params.agent ?? "")
+      const task = yield* taskService.create({
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        subject: params.description ?? params.task ?? "background task",
+        agentType: resolved.agent.name,
+        prompt: params.task,
+        cwd: process.cwd(),
+      })
+      const result = yield* taskService.run(task.id)
+      return { taskId: result.taskId, status: result.status }
+    })
+
+    const backgroundParallel = Effect.fn("DelegateTool.backgroundParallel")(function* () {
+      const taskService = yield* TaskService
+      const tasks = params.tasks ?? []
+      if (tasks.length > MAX_PARALLEL_TASKS) {
+        return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
+      }
+
+      const taskIds: string[] = []
+      for (const item of tasks) {
+        const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
-
         const task = yield* taskService.create({
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
-          subject: params.description ?? params.task ?? "background task",
+          subject: summarizeTaskSubject(item.task),
           agentType: resolved.agent.name,
-          prompt: params.task,
+          prompt: item.task,
           cwd: process.cwd(),
         })
-        const result = yield* taskService.run(task.id)
-        return { taskId: result.taskId, status: result.status }
+        yield* taskService.run(task.id)
+        taskIds.push(task.id)
       }
+      return { taskIds, status: "running" as const, count: taskIds.length }
+    })
 
-      if (hasTasks) {
-        const tasks = params.tasks ?? []
-        if (tasks.length > MAX_PARALLEL_TASKS) {
-          return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
-        }
-        const taskIds: string[] = []
-        for (const item of tasks) {
-          const resolved = yield* resolveAgent(item.agent)
-          if (!resolved.ok) return { error: resolved.error }
-          const task = yield* taskService.create({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            subject: item.task.length > 60 ? item.task.slice(0, 60) + "…" : item.task,
-            agentType: resolved.agent.name,
-            prompt: item.task,
-            cwd: process.cwd(),
-          })
-          yield* taskService.run(task.id)
-          taskIds.push(task.id)
-        }
-        return { taskIds, status: "running", count: taskIds.length }
-      }
-
-      return { error: "Background mode only supports single and parallel modes, not chain" }
-    }
-
-    // Foreground mode: blocking subagent dispatch
-    if (hasChain) {
+    const foregroundChain = Effect.fn("DelegateTool.foregroundChain")(function* () {
       const results: SubagentResult[] = []
       let previousOutput = ""
 
@@ -142,9 +147,10 @@ export const DelegateTool = defineTool({
 
         results.push(result)
         if (result._tag === "error") {
-          const ref =
-            result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
-          return { error: `${result.error}${ref}`, metadata: { mode: "chain", results } }
+          return {
+            error: appendSessionRef(result.error, result.sessionId),
+            metadata: { mode: "chain" as const, results },
+          }
         }
         previousOutput = result.text
       }
@@ -153,13 +159,17 @@ export const DelegateTool = defineTool({
         .filter((r): r is Extract<SubagentResult, { _tag: "success" }> => r._tag === "success")
         .map((r) => `session://${r.sessionId}`)
         .join(", ")
+      const output =
+        chainSessionRefs.length > 0
+          ? `${previousOutput}\n\nFull sessions: ${chainSessionRefs}`
+          : previousOutput
       return {
-        output: `${previousOutput}${chainSessionRefs.length > 0 ? `\n\nFull sessions: ${chainSessionRefs}` : ""}`,
-        metadata: { mode: "chain", results },
+        output,
+        metadata: { mode: "chain" as const, results },
       }
-    }
+    })
 
-    if (hasTasks) {
+    const foregroundParallel = Effect.fn("DelegateTool.foregroundParallel")(function* () {
       const tasks = params.tasks ?? []
       if (tasks.length > MAX_PARALLEL_TASKS) {
         return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
@@ -188,44 +198,59 @@ export const DelegateTool = defineTool({
         )
 
       const results = yield* Effect.forEach(tasks, runTask, { concurrency: MAX_CONCURRENCY })
-
       const successes = results.filter(
         (r): r is Extract<SubagentResult, { _tag: "success" }> => r._tag === "success",
       )
       const parallelSessionRefs = successes.map((r) => `session://${r.sessionId}`).join(", ")
+      const output =
+        parallelSessionRefs.length > 0
+          ? `Parallel: ${successes.length}/${results.length} succeeded\n\nFull sessions: ${parallelSessionRefs}`
+          : `Parallel: ${successes.length}/${results.length} succeeded`
       return {
-        output: `Parallel: ${successes.length}/${results.length} succeeded${parallelSessionRefs.length > 0 ? `\n\nFull sessions: ${parallelSessionRefs}` : ""}`,
-        metadata: { mode: "parallel", results },
+        output,
+        metadata: { mode: "parallel" as const, results },
       }
-    }
-
-    const resolved = yield* resolveAgent(params.agent ?? "")
-    if (!resolved.ok) return { error: resolved.error }
-
-    const result = yield* runner.run({
-      agent: resolved.agent,
-      prompt: params.task ?? "",
-      parentSessionId: ctx.sessionId,
-      parentBranchId: ctx.branchId,
-      toolCallId: ctx.toolCallId,
-      cwd: process.cwd(),
     })
 
-    if (result._tag === "error") {
-      const ref =
-        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
-      return { error: `${result.error}${ref}` }
+    const foregroundSingle = Effect.fn("DelegateTool.foregroundSingle")(function* () {
+      const resolved = yield* resolveAgent(params.agent ?? "")
+      if (!resolved.ok) return { error: resolved.error }
+
+      const result = yield* runner.run({
+        agent: resolved.agent,
+        prompt: params.task ?? "",
+        parentSessionId: ctx.sessionId,
+        parentBranchId: ctx.branchId,
+        toolCallId: ctx.toolCallId,
+        cwd: process.cwd(),
+      })
+
+      if (result._tag === "error") {
+        return { error: appendSessionRef(result.error, result.sessionId) }
+      }
+
+      return {
+        output: `${result.text}\n\nFull session: session://${result.sessionId}`,
+        metadata: {
+          mode: "single" as const,
+          sessionId: result.sessionId,
+          agentName: result.agentName,
+          usage: result.usage,
+          toolCalls: result.toolCalls,
+        },
+      }
+    })
+
+    // Background mode: create durable task and fire-and-forget
+    if (params.background === true) {
+      if (hasSingle) return yield* backgroundSingle()
+      if (hasTasks) return yield* backgroundParallel()
+      return { error: "Background mode only supports single and parallel modes, not chain" }
     }
 
-    return {
-      output: `${result.text}\n\nFull session: session://${result.sessionId}`,
-      metadata: {
-        mode: "single",
-        sessionId: result.sessionId,
-        agentName: result.agentName,
-        usage: result.usage,
-        toolCalls: result.toolCalls,
-      },
-    }
+    // Foreground mode: blocking subagent dispatch
+    if (hasChain) return yield* foregroundChain()
+    if (hasTasks) return yield* foregroundParallel()
+    return yield* foregroundSingle()
   }),
 })
