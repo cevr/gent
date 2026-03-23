@@ -9,7 +9,7 @@ import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
-import { Input } from "../components/input"
+import { Composer } from "../components/composer"
 import { useRuntime } from "../hooks/use-runtime"
 import { useExit } from "../hooks/use-exit"
 import { executeSlashCommand } from "../commands/slash-commands"
@@ -293,15 +293,15 @@ export function Home(props: HomeProps) {
         bottomRight={[{ text: cwdGitLabel(), color: theme.textMuted }]}
         borderColor={props.debugMode === true ? theme.warning : theme.border}
       >
-        <Input
+        <Composer
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
           suspended={promptSearchOpen()}
           onTextChange={setComposerText}
           restoreTextRequest={restoreTextRequest()}
         >
-          <Input.Autocomplete />
-        </Input>
+          <Composer.Autocomplete />
+        </Composer>
       </BorderedInput>
 
       <PromptSearchPalette

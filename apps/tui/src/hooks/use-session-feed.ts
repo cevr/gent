@@ -29,11 +29,11 @@ import type { ClientContextValue } from "../client/context"
 // ── Types ──
 
 export interface SessionFeedCallbacks {
-  onInputEvent: (event: InputFeedEvent) => void
+  onComposerEvent: (event: ComposerFeedEvent) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
 }
 
-export type InputFeedEvent =
+export type ComposerFeedEvent =
   | { _tag: "QuestionsAsked"; event: AgentEvent & { _tag: "QuestionsAsked" } }
   | { _tag: "PermissionRequested"; event: AgentEvent & { _tag: "PermissionRequested" } }
   | { _tag: "PromptPresented"; event: AgentEvent & { _tag: "PromptPresented" } }
@@ -184,7 +184,7 @@ const handleToolCallResult = (
   })
 }
 
-const toInputFeedEvent = (event: AgentEvent): InputFeedEvent | undefined => {
+const toComposerFeedEvent = (event: AgentEvent): ComposerFeedEvent | undefined => {
   switch (event._tag) {
     case "QuestionsAsked":
       return { _tag: "QuestionsAsked", event }
@@ -329,9 +329,9 @@ export function useSessionFeed(
     // Drop events if identity changed
     if (currentKey !== key) return
 
-    const inputEvent = toInputFeedEvent(event)
-    if (inputEvent !== undefined) {
-      callbacks.onInputEvent(inputEvent)
+    const composerEvent = toComposerFeedEvent(event)
+    if (composerEvent !== undefined) {
+      callbacks.onComposerEvent(composerEvent)
       return
     }
 

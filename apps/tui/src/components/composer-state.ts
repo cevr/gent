@@ -1,5 +1,5 @@
 /**
- * Input state machine for unified input handling
+ * Composer state machine for unified composer handling.
  */
 
 import type {
@@ -35,10 +35,10 @@ export interface PromptState {
 export type PromptKind = "questions" | "permission" | "prompt" | "handoff"
 
 // ============================================================================
-// Input State Union
+// Composer State Union
 // ============================================================================
 
-export type InputState =
+export type ComposerState =
   | { readonly _tag: "normal"; readonly autocomplete: AutocompleteOverlay | null }
   | { readonly _tag: "shell" }
   | { readonly _tag: "prompt"; readonly prompt: PromptState }
@@ -47,13 +47,13 @@ export type InputState =
 // Constructors
 // ============================================================================
 
-export const InputState = {
-  normal: (autocomplete: AutocompleteOverlay | null = null): InputState => ({
+export const ComposerState = {
+  normal: (autocomplete: AutocompleteOverlay | null = null): ComposerState => ({
     _tag: "normal",
     autocomplete,
   }),
-  shell: (): InputState => ({ _tag: "shell" }),
-  fromQuestions: (event: typeof QuestionsAsked.Type): InputState => ({
+  shell: (): ComposerState => ({ _tag: "shell" }),
+  fromQuestions: (event: typeof QuestionsAsked.Type): ComposerState => ({
     _tag: "prompt",
     prompt: {
       requestId: event.requestId,
@@ -63,7 +63,7 @@ export const InputState = {
       answers: [],
     },
   }),
-  fromPermission: (event: typeof PermissionRequested.Type): InputState => ({
+  fromPermission: (event: typeof PermissionRequested.Type): ComposerState => ({
     _tag: "prompt",
     prompt: {
       requestId: event.requestId,
@@ -73,7 +73,7 @@ export const InputState = {
       answers: [],
     },
   }),
-  fromPrompt: (event: typeof PromptPresented.Type): InputState => ({
+  fromPrompt: (event: typeof PromptPresented.Type): ComposerState => ({
     _tag: "prompt",
     prompt: {
       requestId: event.requestId,
@@ -83,7 +83,7 @@ export const InputState = {
       answers: [],
     },
   }),
-  fromHandoff: (event: typeof HandoffPresented.Type): InputState => ({
+  fromHandoff: (event: typeof HandoffPresented.Type): ComposerState => ({
     _tag: "prompt",
     prompt: {
       requestId: event.requestId,
@@ -96,10 +96,10 @@ export const InputState = {
 } as const
 
 // ============================================================================
-// Input Events
+// Composer Events
 // ============================================================================
 
-export type InputEvent =
+export type ComposerEvent =
   | { readonly _tag: "TypeExclaim" }
   | { readonly _tag: "Escape" }
   | { readonly _tag: "BackspaceAtStart" }
@@ -117,10 +117,10 @@ export type InputEvent =
   | { readonly _tag: "SubmitAnswer"; readonly selections: readonly string[] }
 
 // ============================================================================
-// Input Effects (side effects to execute)
+// Composer Effects (side effects to execute)
 // ============================================================================
 
-export type InputEffect =
+export type ComposerEffect =
   | { readonly _tag: "ClearInput" }
   | {
       readonly _tag: "RespondPrompt"
@@ -134,84 +134,84 @@ export type InputEffect =
 // ============================================================================
 
 export interface TransitionResult {
-  readonly state: InputState
-  readonly effect?: InputEffect
+  readonly state: ComposerState
+  readonly effect?: ComposerEffect
 }
 
-const transitionToPrompt = (event: InputEvent): TransitionResult | undefined => {
+const transitionToPrompt = (event: ComposerEvent): TransitionResult | undefined => {
   switch (event._tag) {
     case "QuestionsAsked":
-      return { state: InputState.fromQuestions(event.event) }
+      return { state: ComposerState.fromQuestions(event.event) }
     case "PermissionRequested":
-      return { state: InputState.fromPermission(event.event) }
+      return { state: ComposerState.fromPermission(event.event) }
     case "PromptPresented":
-      return { state: InputState.fromPrompt(event.event) }
+      return { state: ComposerState.fromPrompt(event.event) }
     case "HandoffPresented":
-      return { state: InputState.fromHandoff(event.event) }
+      return { state: ComposerState.fromHandoff(event.event) }
     default:
       return undefined
   }
 }
 
 const transitionNormal = (
-  state: Extract<InputState, { _tag: "normal" }>,
-  event: InputEvent,
+  state: Extract<ComposerState, { _tag: "normal" }>,
+  event: ComposerEvent,
 ): TransitionResult => {
   const promptTransition = transitionToPrompt(event)
   if (promptTransition !== undefined) return promptTransition
 
   switch (event._tag) {
     case "TypeExclaim":
-      return { state: InputState.shell(), effect: { _tag: "ClearInput" } }
+      return { state: ComposerState.shell(), effect: { _tag: "ClearInput" } }
     case "Escape":
-      return state.autocomplete !== null ? { state: InputState.normal(null) } : { state }
+      return state.autocomplete !== null ? { state: ComposerState.normal(null) } : { state }
     case "TriggerAutocomplete":
       return {
-        state: InputState.normal({
+        state: ComposerState.normal({
           type: event.type,
           filter: event.filter,
           triggerPos: event.triggerPos,
         }),
       }
     case "CloseAutocomplete":
-      return { state: InputState.normal(null) }
+      return { state: ComposerState.normal(null) }
     default:
       return { state }
   }
 }
 
 const transitionShell = (
-  state: Extract<InputState, { _tag: "shell" }>,
-  event: InputEvent,
+  state: Extract<ComposerState, { _tag: "shell" }>,
+  event: ComposerEvent,
 ): TransitionResult => {
   const promptTransition = transitionToPrompt(event)
   if (promptTransition !== undefined) return promptTransition
 
   switch (event._tag) {
     case "Escape":
-      return { state: InputState.normal(), effect: { _tag: "ClearInput" } }
+      return { state: ComposerState.normal(), effect: { _tag: "ClearInput" } }
     case "BackspaceAtStart":
-      return { state: InputState.normal() }
+      return { state: ComposerState.normal() }
     default:
       return { state }
   }
 }
 
 const transitionPrompt = (
-  state: Extract<InputState, { _tag: "prompt" }>,
-  event: InputEvent,
+  state: Extract<ComposerState, { _tag: "prompt" }>,
+  event: ComposerEvent,
 ): TransitionResult => {
   const { prompt } = state
   switch (event._tag) {
     case "Escape":
-      return { state: InputState.normal(), effect: { _tag: "ClearInput" } }
+      return { state: ComposerState.normal(), effect: { _tag: "ClearInput" } }
     case "SubmitAnswer": {
       const newAnswers = [...prompt.answers, event.selections]
       const nextIndex = prompt.currentIndex + 1
 
       if (nextIndex >= prompt.questions.length) {
         return {
-          state: InputState.normal(),
+          state: ComposerState.normal(),
           effect: {
             _tag: "RespondPrompt",
             kind: prompt.kind,
@@ -237,7 +237,7 @@ const transitionPrompt = (
   }
 }
 
-export function transition(state: InputState, event: InputEvent): TransitionResult {
+export function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
   switch (state._tag) {
     case "normal":
       return transitionNormal(state, event)

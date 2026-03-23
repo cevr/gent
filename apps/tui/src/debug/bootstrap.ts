@@ -126,7 +126,7 @@ export const seedDebugSession = (cwd: string): Effect.Effect<ClientSession, neve
           lineCount: 18,
           truncated: false,
           content:
-            "const [toolsExpanded, setToolsExpanded] = createSignal(false)\nconst [inputState, setInputState] = createSignal(...)",
+            "const [toolsExpanded, setToolsExpanded] = createSignal(false)\nconst [composerState, setComposerState] = createSignal(...)",
         }),
         makeJsonResult(asToolCallId("dbg-grep"), "grep", {
           matches: [

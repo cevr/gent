@@ -1,11 +1,11 @@
 /**
- * Session route - message list, input, streaming
+ * Session route - message list, composer, streaming
  */
 
 import { createMemo } from "solid-js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList } from "../components/message-list"
-import { Input } from "../components/input"
+import { Composer } from "../components/composer"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
@@ -108,7 +108,7 @@ export function Session(props: SessionProps) {
         bottomRight={bottomRightLabels()}
         borderColor={borderColor()}
       >
-        <Input
+        <Composer
           onSubmit={controller.onSubmit}
           onSlashCommand={controller.onSlashCommand}
           clearMessages={controller.clearMessages}
@@ -116,12 +116,11 @@ export function Session(props: SessionProps) {
           suspended={controller.promptSearchOpen()}
           onTextChange={controller.setComposerText}
           restoreTextRequest={controller.restoreTextRequest()}
-          inputState={controller.inputState()}
-          onInputEvent={controller.onInputEvent}
-          onInputEffect={controller.onInputEffect}
+          composerState={controller.composerState()}
+          onComposerEvent={controller.onComposerEvent}
         >
-          <Input.Autocomplete />
-        </Input>
+          <Composer.Autocomplete />
+        </Composer>
       </BorderedInput>
 
       <SessionTree

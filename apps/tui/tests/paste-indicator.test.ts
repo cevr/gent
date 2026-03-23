@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 
-// Paste indicator constants and functions (matching input.tsx)
+// Paste indicator constants and functions (matching composer controller)
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
 

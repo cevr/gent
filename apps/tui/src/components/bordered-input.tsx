@@ -1,5 +1,5 @@
 /**
- * BorderedInput — wraps Input in flat horizontal rules with embedded labels.
+ * BorderedInput — wraps Composer in flat horizontal rules with embedded labels.
  *
  * Layout:
  *   ── $0.14 ──────────── claude-opus-4-5 ──

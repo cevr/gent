@@ -13,7 +13,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "build": "turbo run build",
-    "test": "turbo run test && bun test tests",
+    "test": "turbo run test && bun test ./tests/*.test.ts",
     "gate": "concurrently -n type,lint,fmt,build,test -c blue,yellow,magenta,cyan,green \"bun run typecheck\" \"bun run lint\" \"bun run fmt\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",

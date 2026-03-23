@@ -9,8 +9,8 @@
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test tests",
-    "test:e2e": "bun test e2e"
+    "test": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests",
+    "test:e2e": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts e2e"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",

@@ -6,12 +6,7 @@ import { collectDiagrams } from "../components/mermaid-viewer"
 import type { Message, SessionItem } from "../components/message-list"
 import { promptSearchEventFromKey } from "../components/prompt-search-palette"
 import { getPromptSearchItems } from "../components/prompt-search-state"
-import {
-  transition,
-  type InputEffect,
-  type InputEvent,
-  InputState,
-} from "../components/input-state"
+import { transition, type ComposerEvent, ComposerState } from "../components/composer-state"
 import { useClient } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/index"
@@ -47,7 +42,7 @@ export interface SessionController {
   items: () => SessionItem[]
   messages: () => Message[]
   queueState: () => QueueState
-  inputState: () => InputState
+  composerState: () => ComposerState
   uiState: () => ReturnType<typeof SessionUiState.initial>
   promptEntries: () => readonly string[]
   promptSearchState: () => ReturnType<typeof getPromptSearchState>
@@ -69,8 +64,7 @@ export interface SessionController {
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void, UiError>
   onRestoreQueue: () => void
-  onInputEvent: (event: InputEvent) => void
-  onInputEffect: (effect: InputEffect) => void
+  onComposerEvent: (event: ComposerEvent) => void
   closeOverlay: () => void
   onSessionTreeSelect: (sessionId: SessionId) => void
   onForkSelect: (messageId: MessageId) => void
@@ -125,7 +119,7 @@ export function useSessionController(props: {
   const { getChildren } = useChildSessions(client)
 
   const [uiState, setUiState] = createSignal(SessionUiState.initial())
-  const [inputState, setInputState] = createSignal<InputState>(InputState.normal())
+  const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.normal())
   const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
   const [composerText, setComposerText] = createSignal("")
   const [restoreTextRequest, setRestoreTextRequest] = createSignal<RestoreTextRequest>(undefined)
@@ -160,7 +154,8 @@ export function useSessionController(props: {
       ),
     )
 
-  const handleInputEffect = (effect: InputEffect) => {
+  const handleComposerEffect = (effect: ReturnType<typeof transition>["effect"]) => {
+    if (effect === undefined) return
     switch (effect._tag) {
       case "ClearInput":
         break
@@ -229,10 +224,10 @@ export function useSessionController(props: {
     }
   }
 
-  const onInputEvent = (event: InputEvent) => {
-    const result = transition(inputState(), event)
-    setInputState(result.state)
-    if (result.effect !== undefined) handleInputEffect(result.effect)
+  const onComposerEvent = (event: ComposerEvent) => {
+    const result = transition(composerState(), event)
+    setComposerState(result.state)
+    handleComposerEffect(result.effect)
   }
 
   const feed = useSessionFeed(
@@ -241,7 +236,7 @@ export function useSessionController(props: {
     client,
     cast,
     {
-      onInputEvent,
+      onComposerEvent,
       onBranchSwitch: (sessionId, branchId) => {
         router.navigateToSession(sessionId, branchId)
       },
@@ -540,7 +535,7 @@ export function useSessionController(props: {
     items,
     messages: feed.messages,
     queueState,
-    inputState,
+    composerState,
     uiState,
     promptEntries: history.entries,
     promptSearchState: () => getPromptSearchState(uiState()),
@@ -560,8 +555,7 @@ export function useSessionController(props: {
     onSubmit,
     onSlashCommand,
     onRestoreQueue,
-    onInputEvent,
-    onInputEffect: handleInputEffect,
+    onComposerEvent,
     closeOverlay: () => dispatchSessionUi({ _tag: "CloseOverlay" }),
     onSessionTreeSelect,
     onForkSelect,
