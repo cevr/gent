@@ -60,12 +60,9 @@ export class Permission extends ServiceMap.Service<Permission, PermissionService
           regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
         })
         const rulesRef = yield* Ref.make<StoredRule[]>([...initialRules.map(toStored)])
-        const defaultResult =
-          defaultAction === "allow"
-            ? ("allowed" as const)
-            : defaultAction === "deny"
-              ? ("denied" as const)
-              : ("ask" as const)
+        let defaultResult: PermissionResult = "ask"
+        if (defaultAction === "allow") defaultResult = "allowed"
+        else if (defaultAction === "deny") defaultResult = "denied"
         return Permission.of({
           check: (tool, args) =>
             Ref.get(rulesRef).pipe(

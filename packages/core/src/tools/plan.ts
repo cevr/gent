@@ -16,6 +16,7 @@ import {
   extractLoopEvaluation,
   requireText,
   runAdversarialPair,
+  workflowResultFromLoopReason,
   type WorkflowRunContext,
 } from "./workflow-helpers.js"
 
@@ -376,13 +377,7 @@ export const PlanTool = defineWorkflow({
         }),
     })
 
-    yield* completeWorkflow(
-      loopResult.reason === "done"
-        ? "success"
-        : loopResult.reason === "error"
-          ? "error"
-          : "max_iterations",
-    )
+    yield* completeWorkflow(workflowResultFromLoopReason(loopResult.reason))
 
     return {
       iterations: loopResult.iterations,

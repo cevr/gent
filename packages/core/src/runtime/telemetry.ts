@@ -74,7 +74,10 @@ class DevSpan implements Tracer.Span {
   private log(event: string, message: string, extra?: string) {
     const indent = "  ".repeat(this.depth)
     const timestamp = new Date().toISOString().slice(11, 23) // HH:mm:ss.SSS
-    const icon = event === "START" ? ">" : event === "END" ? "<" : event === "ERROR" ? "!" : "."
+    let icon = "."
+    if (event === "START") icon = ">"
+    else if (event === "END") icon = "<"
+    else if (event === "ERROR") icon = "!"
     const line = `[${timestamp}] ${indent}${icon} ${message}${
       extra !== undefined && extra !== "" ? ` ${extra}` : ""
     }\n`

@@ -12,7 +12,12 @@ import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { runLoop } from "../runtime/loop.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { extractLoopEvaluation, requireText, type WorkflowRunContext } from "./workflow-helpers.js"
+import {
+  extractLoopEvaluation,
+  requireText,
+  workflowResultFromLoopReason,
+  type WorkflowRunContext,
+} from "./workflow-helpers.js"
 
 interface AuditConcern {
   name: string
@@ -460,13 +465,7 @@ export const AuditTool = defineWorkflow({
         }),
     })
 
-    yield* completeWorkflow(
-      loopResult.reason === "done"
-        ? "success"
-        : loopResult.reason === "error"
-          ? "error"
-          : "max_iterations",
-    )
+    yield* completeWorkflow(workflowResultFromLoopReason(loopResult.reason))
 
     return {
       findings: latestFindings,

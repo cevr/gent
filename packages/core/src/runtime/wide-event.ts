@@ -82,8 +82,9 @@ const makeAccumulator = (sessionId: string, branchId: string): TurnAccumulator =
 })
 
 const finalizeAccumulator = (acc: TurnAccumulator, durationMs: number): TurnWideEvent => {
-  const status: "ok" | "error" | "interrupted" =
-    acc.error !== undefined ? "error" : acc.interrupted ? "interrupted" : "ok"
+  let status: "ok" | "error" | "interrupted" = "ok"
+  if (acc.error !== undefined) status = "error"
+  else if (acc.interrupted) status = "interrupted"
 
   return new TurnWideEvent({
     sessionId: acc.sessionId,

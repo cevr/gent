@@ -11,7 +11,12 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
 import { runLoop } from "../runtime/loop.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { extractLoopEvaluation, requireText, type WorkflowRunContext } from "./workflow-helpers.js"
+import {
+  extractLoopEvaluation,
+  requireText,
+  workflowResultFromLoopReason,
+  type WorkflowRunContext,
+} from "./workflow-helpers.js"
 
 export class CodeReviewError extends Schema.TaggedErrorClass<CodeReviewError>()("CodeReviewError", {
   message: Schema.String,
@@ -448,13 +453,7 @@ export const CodeReviewTool = defineWorkflow({
         }),
     })
 
-    yield* completeWorkflow(
-      loopResult.reason === "done"
-        ? "success"
-        : loopResult.reason === "error"
-          ? "error"
-          : "max_iterations",
-    )
+    yield* completeWorkflow(workflowResultFromLoopReason(loopResult.reason))
 
     const summary = summarizeComments(latestComments)
     return {

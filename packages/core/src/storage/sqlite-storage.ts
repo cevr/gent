@@ -455,7 +455,9 @@ const makeStorage = Effect.gen(function* () {
     // Sessions
     createSession: (session) =>
       Effect.gen(function* () {
-        yield* sql`INSERT INTO sessions (id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${session.name ?? null}, ${session.cwd ?? null}, ${session.bypass === undefined ? null : session.bypass ? 1 : 0}, ${session.reasoningLevel ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
+        let bypass: 0 | 1 | null = null
+        if (session.bypass !== undefined) bypass = session.bypass ? 1 : 0
+        yield* sql`INSERT INTO sessions (id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${session.name ?? null}, ${session.cwd ?? null}, ${bypass}, ${session.reasoningLevel ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
         return session
       }).pipe(
         Effect.mapError(mapError("Failed to create session")),
@@ -520,7 +522,9 @@ const makeStorage = Effect.gen(function* () {
 
     updateSession: (session) =>
       Effect.gen(function* () {
-        yield* sql`UPDATE sessions SET name = ${session.name ?? null}, bypass = ${session.bypass === undefined ? null : session.bypass ? 1 : 0}, reasoning_level = ${session.reasoningLevel ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id}`
+        let bypass: 0 | 1 | null = null
+        if (session.bypass !== undefined) bypass = session.bypass ? 1 : 0
+        yield* sql`UPDATE sessions SET name = ${session.name ?? null}, bypass = ${bypass}, reasoning_level = ${session.reasoningLevel ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id}`
         return session
       }).pipe(
         Effect.mapError(mapError("Failed to update session")),

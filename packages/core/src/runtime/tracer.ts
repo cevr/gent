@@ -94,7 +94,10 @@ class GentSpan implements Tracer.Span {
   private log(event: string, message: string, extra?: string) {
     const indent = "  ".repeat(this.depth)
     const traceShort = this.traceId.slice(0, 8)
-    const icon = event === "START" ? ">" : event === "END" ? "<" : event === "ERROR" ? "!" : "."
+    let icon = "."
+    if (event === "START") icon = ">"
+    else if (event === "END") icon = "<"
+    else if (event === "ERROR") icon = "!"
     writeLine(
       `${timestamp()} [${traceShort}] ${indent}${icon} ${message}${
         extra !== undefined && extra.length > 0 ? ` ${extra}` : ""

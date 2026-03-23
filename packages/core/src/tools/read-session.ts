@@ -56,12 +56,11 @@ export function renderMessageParts(parts: ReadonlyArray<MessagePart>): string {
         )
         break
       case "tool-result": {
-        const output =
-          part.output !== undefined
-            ? typeof part.output.value === "string"
-              ? part.output.value
-              : JSON.stringify(part.output.value)
-            : ""
+        let output = ""
+        if (part.output !== undefined) {
+          if (typeof part.output.value === "string") output = part.output.value
+          else output = JSON.stringify(part.output.value)
+        }
         chunks.push(`result: ${truncate(output, MAX_TOOL_ARG_CHARS)}`)
         break
       }

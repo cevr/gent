@@ -193,12 +193,10 @@ export const BashTool = defineTool({
       )
     }
 
-    const stdout =
-      formatted.truncatedLines > 0
-        ? fullOutputPath !== undefined
-          ? `${formatted.text}\n\nFull output saved to: ${fullOutputPath}`
-          : formatted.text
-        : formatted.text
+    let stdout = formatted.text
+    if (formatted.truncatedLines > 0 && fullOutputPath !== undefined) {
+      stdout = `${formatted.text}\n\nFull output saved to: ${fullOutputPath}`
+    }
 
     return {
       stdout,

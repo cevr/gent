@@ -10,7 +10,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { defineTool } from "../domain/tool.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
 import { runLoop } from "../runtime/loop.js"
-import { extractLoopEvaluation } from "./workflow-helpers.js"
+import { extractLoopEvaluation, workflowResultFromLoopReason } from "./workflow-helpers.js"
 
 const LoopBody = Schema.Struct({
   agent: AgentName,
@@ -145,12 +145,7 @@ export const LoopTool = defineWorkflow({
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
           workflowName: "loop",
-          result:
-            result.reason === "done"
-              ? "success"
-              : result.reason === "error"
-                ? "error"
-                : "max_iterations",
+          result: workflowResultFromLoopReason(result.reason),
         }),
       )
       .pipe(Effect.catchEager(() => Effect.void))

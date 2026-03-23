@@ -10,6 +10,9 @@ import { EventStore, WorkflowPhaseStarted, type EventEnvelope } from "../domain/
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { LoopVerdict } from "../runtime/loop.js"
 
+type LoopExitReason = "done" | "error" | "max_reached"
+type WorkflowResult = "success" | "rejected" | "error" | "max_iterations"
+
 // ── Adversarial Pair Runner ──
 
 export interface WorkflowRunContext {
@@ -87,6 +90,12 @@ export const extractLoopVerdict = (
   envelopes: ReadonlyArray<EventEnvelope>,
   resultText: string,
 ): LoopVerdict => extractLoopEvaluation(envelopes, resultText).verdict
+
+export const workflowResultFromLoopReason = (reason: LoopExitReason): WorkflowResult => {
+  if (reason === "done") return "success"
+  if (reason === "error") return "error"
+  return "max_iterations"
+}
 
 // ── Phase Emitter ──
 
