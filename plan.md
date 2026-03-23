@@ -1,6 +1,6 @@
 # Seam Test Plan
 
-Status: complete.
+Status: in progress.
 
 ## Task List
 
@@ -8,8 +8,8 @@ Status: complete.
 - [x] Batch 2 — Event stream parity
 - [x] Batch 3 — Worker boundary tests
 - [x] Batch 4 — Session feed projection tests
-- [x] Batch 5 — Queue and resume semantics across boundaries
-- [x] Batch 6 — Structural guards
+- [ ] Batch 5 — Queue and resume semantics across boundaries
+- [ ] Batch 6 — Structural guards
 
 ## Summary
 
@@ -279,10 +279,10 @@ Gate:
 
 Checklist:
 
-- [x] document seam test guidance
-- [x] add lightweight guards where useful
-- [x] point future client behavior tests at shared contract suite
-- [x] `bun run gate`
+- [ ] document seam test guidance
+- [ ] add lightweight guards where useful
+- [ ] point future client behavior tests at shared contract suite
+- [ ] `bun run gate`
 
 Goal:
 

@@ -1,15 +1,5 @@
 /**
  * Tests for ClientProvider event handling and state management
- *
- * This file is intentionally mock-only. It covers local projection/listener logic,
- * not transport/runtime seams.
- *
- * Transport seam coverage lives in:
- * - tests/transport-contract.test.ts
- * - tests/event-stream-parity.test.ts
- * - tests/queue-contract.test.ts
- * - apps/tui/tests/session-feed-boundary.test.tsx
- * - apps/tui/tests/worker-supervisor.test.ts
  */
 
 import { describe, test, expect, mock } from "bun:test"

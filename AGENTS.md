@@ -95,17 +95,6 @@ const layer = createRecordingTestLayer({ ... })
 assertSequence(calls, [{ service: "Provider", method: "stream" }])
 ```
 
-Seam defaults:
-
-- `tests/transport-contract.test.ts` owns shared client contract behavior across transports
-- `tests/event-stream-parity.test.ts` owns replay/live/`after` event-stream semantics
-- `tests/queue-contract.test.ts` owns queue visibility, steer ordering, and drain/restore semantics
-- `apps/tui/tests/session-feed-boundary.test.tsx` owns TUI feed projection from a real backend transport
-- `apps/tui/tests/worker-supervisor.test.ts` owns worker startup/restart/debug transport seams
-- `apps/tui/tests/client-context.test.ts` is mock-only reducer/listener coverage, not transport proof
-
-If the bug crosses a transport or worker boundary, add a seam test there first.
-
 ## Key Files
 
 | File                                             | Purpose                                        |
