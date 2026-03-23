@@ -27,7 +27,7 @@ import {
   SubagentError,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
-import type { ModelId } from "../../domain/model.js"
+import { ModelId } from "../../domain/model.js"
 import { QueueEntryInfo, type QueueSnapshot } from "../../domain/queue.js"
 import {
   EventStore,
@@ -743,16 +743,44 @@ const ActiveTurnFields = {
   interruptAfterTools: Schema.Boolean,
 }
 
+const ResolvedTurnFields = {
+  currentTurnAgent: AgentName,
+  messages: Schema.Array(Message),
+  systemPrompt: Schema.String,
+  modelId: ModelId,
+  reasoning: Schema.optional(ReasoningEffort),
+  temperature: Schema.optional(Schema.Number),
+}
+
+const AssistantDraftSchema = Schema.Struct({
+  text: Schema.String,
+  reasoning: Schema.String,
+  toolCalls: Schema.Array(ToolCallPart),
+  usage: Schema.optional(UsageSchema),
+})
+type AssistantDraft = typeof AssistantDraftSchema.Type
+type ResolvedTurn = {
+  currentTurnAgent: AgentNameType
+  messages: ReadonlyArray<Message>
+  systemPrompt: string
+  modelId: ModelId
+  reasoning?: ReasoningEffort
+  temperature?: number
+}
+
 // Agent Loop Machine
 
 const AgentLoopState = State({
   Idle: LoopStateBaseFields,
-  Streaming: ActiveTurnFields,
+  Resolving: ActiveTurnFields,
+  Streaming: {
+    ...ActiveTurnFields,
+    ...ResolvedTurnFields,
+  },
   ExecutingTools: {
     ...ActiveTurnFields,
     currentTurnAgent: AgentName,
-    toolCalls: Schema.Array(ToolCallPart),
-    usage: Schema.optional(UsageSchema),
+    draft: AssistantDraftSchema,
   },
   Finalizing: {
     ...ActiveTurnFields,
@@ -769,11 +797,8 @@ const AgentLoopEvent = Event({
   Interrupt: {},
   SwitchAgent: { agent: AgentName },
   ClearQueue: {},
-  StreamFinished: {
-    currentTurnAgent: AgentName,
-    toolCalls: Schema.Array(ToolCallPart),
-    usage: Schema.optional(UsageSchema),
-  },
+  Resolved: ResolvedTurnFields,
+  StreamFinished: { currentTurnAgent: AgentName, draft: AssistantDraftSchema },
   StreamInterrupted: { currentTurnAgent: AgentName },
   StreamFailed: { currentTurnAgent: AgentName },
   ToolsFinished: {},
@@ -782,11 +807,12 @@ const AgentLoopEvent = Event({
     nextItem: Schema.optional(QueuedTurnItem),
     handoffSuppress: Schema.Number,
   },
-  PhaseFailed: { error: Schema.String },
+  PhaseFailed: {},
 })
 
 type LoopState = typeof AgentLoopState.Type
 type IdleState = Extract<LoopState, { _tag: "Idle" }>
+type ResolvingState = Extract<LoopState, { _tag: "Resolving" }>
 type StreamingState = Extract<LoopState, { _tag: "Streaming" }>
 type ExecutingToolsState = Extract<LoopState, { _tag: "ExecutingTools" }>
 type FinalizingState = Extract<LoopState, { _tag: "Finalizing" }>
@@ -813,15 +839,15 @@ const buildIdleState = (params?: {
     handoffSuppress: params?.handoffSuppress ?? 0,
   })
 
-const buildStreamingState = (
+const buildResolvingState = (
   base: {
     queue: LoopQueueState
     currentAgent?: AgentNameType
     handoffSuppress: number
   },
   item: QueuedTurnItem,
-): StreamingState =>
-  AgentLoopState.Streaming({
+): ResolvingState =>
+  AgentLoopState.Resolving({
     queue: base.queue,
     currentAgent: base.currentAgent,
     handoffSuppress: base.handoffSuppress,
@@ -837,6 +863,8 @@ const updateQueueOnState = (state: LoopState, queue: LoopQueueState): LoopState 
   switch (state._tag) {
     case "Idle":
       return AgentLoopState.Idle({ ...state, queue })
+    case "Resolving":
+      return AgentLoopState.Resolving({ ...state, queue })
     case "Streaming":
       return AgentLoopState.Streaming({ ...state, queue })
     case "ExecutingTools":
@@ -850,6 +878,8 @@ const updateCurrentAgentOnState = (state: LoopState, currentAgent: AgentNameType
   switch (state._tag) {
     case "Idle":
       return AgentLoopState.Idle({ ...state, currentAgent })
+    case "Resolving":
+      return AgentLoopState.Resolving({ ...state, currentAgent })
     case "Streaming":
       return AgentLoopState.Streaming({ ...state, currentAgent })
     case "ExecutingTools":
@@ -864,6 +894,8 @@ const markInterruptAfterTools = (state: ExecutingToolsState): ExecutingToolsStat
 
 const markTurnInterrupted = (state: ActiveLoopState): ActiveLoopState => {
   switch (state._tag) {
+    case "Resolving":
+      return AgentLoopState.Resolving({ ...state, turnInterrupted: true })
     case "Streaming":
       return AgentLoopState.Streaming({ ...state, turnInterrupted: true })
     case "ExecutingTools":
@@ -873,8 +905,49 @@ const markTurnInterrupted = (state: ActiveLoopState): ActiveLoopState => {
   }
 }
 
+const toStreamingState = (params: {
+  state: ResolvingState
+  resolved: ResolvedTurn
+}): StreamingState =>
+  AgentLoopState.Streaming({
+    queue: params.state.queue,
+    currentAgent: params.state.currentAgent,
+    handoffSuppress: params.state.handoffSuppress,
+    message: params.state.message,
+    bypass: params.state.bypass,
+    startedAtMs: params.state.startedAtMs,
+    agentOverride: params.state.agentOverride,
+    turnInterrupted: params.state.turnInterrupted,
+    interruptAfterTools: params.state.interruptAfterTools,
+    currentTurnAgent: params.resolved.currentTurnAgent,
+    messages: params.resolved.messages,
+    systemPrompt: params.resolved.systemPrompt,
+    modelId: params.resolved.modelId,
+    reasoning: params.resolved.reasoning,
+    temperature: params.resolved.temperature,
+  })
+
+const toExecutingToolsState = (params: {
+  state: StreamingState
+  currentTurnAgent: AgentNameType
+  draft: AssistantDraft
+}): ExecutingToolsState =>
+  AgentLoopState.ExecutingTools({
+    queue: params.state.queue,
+    currentAgent: params.state.currentAgent,
+    handoffSuppress: params.state.handoffSuppress,
+    message: params.state.message,
+    bypass: params.state.bypass,
+    startedAtMs: params.state.startedAtMs,
+    agentOverride: params.state.agentOverride,
+    turnInterrupted: params.state.turnInterrupted,
+    interruptAfterTools: params.state.interruptAfterTools,
+    currentTurnAgent: params.currentTurnAgent,
+    draft: params.draft,
+  })
+
 const toFinalizingState = (params: {
-  state: StreamingState | ExecutingToolsState
+  state: ResolvingState | StreamingState | ExecutingToolsState
   currentTurnAgent?: AgentNameType
   usage?: { inputTokens: number; outputTokens: number }
   streamFailed: boolean
@@ -1014,8 +1087,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 return updateCurrentAgentOnState(state, next)
               }).pipe(Effect.orDie)
 
-            const runStreamingState = Effect.fn("AgentLoop.runStreamingState")(function* (
-              state: StreamingState,
+            const runResolvingState = Effect.fn("AgentLoop.runResolvingState")(function* (
+              state: ResolvingState,
             ) {
               yield* storage.createMessage(state.message)
               yield* publishEvent(
@@ -1027,6 +1100,33 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 }),
               )
 
+              const resolved = yield* resolveTurnContext({
+                agentOverride: state.agentOverride,
+                currentAgent: state.currentAgent,
+                storage,
+                branchId,
+                extensionRegistry,
+                sessionId,
+                publishEvent,
+                systemPrompt: config.systemPrompt,
+              })
+              if (resolved === undefined) {
+                return AgentLoopEvent.PhaseFailed
+              }
+
+              return AgentLoopEvent.Resolved({
+                currentTurnAgent: resolved.currentAgent,
+                messages: resolved.messages,
+                systemPrompt: resolved.systemPrompt,
+                modelId: resolved.modelId,
+                reasoning: resolved.reasoning,
+                temperature: resolved.agent.temperature,
+              })
+            })
+
+            const runStreamingState = Effect.fn("AgentLoop.runStreamingState")(function* (
+              state: StreamingState,
+            ) {
               const persistAssistantTextLocal = (
                 text: string,
                 reasoning: string,
@@ -1042,27 +1142,24 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   createdAt,
                 })
 
-              const resolved = yield* resolveTurnContext({
-                agentOverride: state.agentOverride,
-                currentAgent: state.currentAgent,
-                storage,
-                branchId,
-                extensionRegistry,
-                sessionId,
-                publishEvent,
-                systemPrompt: config.systemPrompt,
-              })
-              if (resolved === undefined) {
+              const agent = yield* extensionRegistry.getAgent(state.currentTurnAgent)
+              if (agent === undefined) {
                 return AgentLoopEvent.StreamFailed({
-                  currentTurnAgent: state.agentOverride ?? state.currentAgent ?? "cowork",
+                  currentTurnAgent: state.currentTurnAgent,
                 })
               }
+
+              const tools = yield* extensionRegistry.listToolsForAgent(agent, {
+                sessionId,
+                branchId,
+                agentName: state.currentTurnAgent,
+              })
 
               yield* publishEvent(new StreamStarted({ sessionId, branchId }))
               yield* Effect.logInfo("stream.start").pipe(
                 Effect.annotateLogs({
-                  agent: resolved.currentAgent,
-                  model: resolved.modelId,
+                  agent: state.currentTurnAgent,
+                  model: state.modelId,
                 }),
               )
 
@@ -1074,15 +1171,13 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               const streamEffect = yield* withRetry(
                 provider.stream({
-                  model: resolved.modelId,
-                  messages: [...resolved.messages],
-                  tools: [...resolved.tools],
-                  systemPrompt: resolved.systemPrompt,
+                  model: state.modelId,
+                  messages: [...state.messages],
+                  tools: [...tools],
+                  systemPrompt: state.systemPrompt,
                   abortSignal: activeStream.abortController.signal,
-                  ...(resolved.agent.temperature !== undefined
-                    ? { temperature: resolved.agent.temperature }
-                    : {}),
-                  ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+                  ...(state.temperature !== undefined ? { temperature: state.temperature } : {}),
+                  ...(state.reasoning !== undefined ? { reasoning: state.reasoning } : {}),
                 }),
                 undefined,
                 {
@@ -1123,13 +1218,13 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   collected.reasoningParts.join(""),
                 )
                 return AgentLoopEvent.StreamInterrupted({
-                  currentTurnAgent: resolved.currentAgent,
+                  currentTurnAgent: state.currentTurnAgent,
                 })
               }
 
               if (collected.streamFailed) {
                 return AgentLoopEvent.StreamFailed({
-                  currentTurnAgent: resolved.currentAgent,
+                  currentTurnAgent: state.currentTurnAgent,
                 })
               }
 
@@ -1159,9 +1254,13 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               })
 
               return AgentLoopEvent.StreamFinished({
-                currentTurnAgent: resolved.currentAgent,
-                toolCalls: collected.toolCalls,
-                usage: collected.lastFinishChunk?.usage,
+                currentTurnAgent: state.currentTurnAgent,
+                draft: {
+                  text: collected.textParts.join(""),
+                  reasoning: collected.reasoningParts.join(""),
+                  toolCalls: [...collected.toolCalls],
+                  usage: collected.lastFinishChunk?.usage,
+                },
               })
             })
 
@@ -1170,14 +1269,14 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             ) {
               yield* storeToolResultsIfAny({
                 collected: {
-                  textParts: [],
-                  reasoningParts: [],
-                  toolCalls: state.toolCalls,
+                  textParts: state.draft.text === "" ? [] : [state.draft.text],
+                  reasoningParts: state.draft.reasoning === "" ? [] : [state.draft.reasoning],
+                  toolCalls: state.draft.toolCalls,
                   lastFinishChunk:
-                    state.usage !== undefined
+                    state.draft.usage !== undefined
                       ? new FinishChunk({
                           finishReason: "tool-calls",
-                          usage: state.usage,
+                          usage: state.draft.usage,
                         })
                       : undefined,
                   streamFailed: false,
@@ -1243,7 +1342,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               initial: buildIdleState({ currentAgent }),
             })
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
-                buildStreamingState(state, event.item),
+                buildResolvingState(state, event.item),
               )
               .on(AgentLoopState.Idle, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
                 updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
@@ -1257,6 +1356,32 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               .on(AgentLoopState.Idle, AgentLoopEvent.Interrupt, ({ state }) => state)
               .on(AgentLoopState.Idle, AgentLoopEvent.SwitchAgent, ({ state, event }) =>
                 switchAgentOnState(state, event.agent),
+              )
+              .on(AgentLoopState.Resolving, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
+                updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
+              )
+              .on(AgentLoopState.Resolving, AgentLoopEvent.QueueSteering, ({ state, event }) =>
+                updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
+              )
+              .on(AgentLoopState.Resolving, AgentLoopEvent.ClearQueue, ({ state }) =>
+                updateQueueOnState(state, clearQueueState(state.queue)),
+              )
+              .on(AgentLoopState.Resolving, AgentLoopEvent.Interrupt, ({ state }) =>
+                markTurnInterrupted(state),
+              )
+              .on(AgentLoopState.Resolving, AgentLoopEvent.SwitchAgent, ({ state, event }) =>
+                switchAgentOnState(state, event.agent),
+              )
+              .on(AgentLoopState.Resolving, AgentLoopEvent.Resolved, ({ state, event }) =>
+                toStreamingState({ state, resolved: event }),
+              )
+              .on(AgentLoopState.Resolving, AgentLoopEvent.PhaseFailed, ({ state }) =>
+                toFinalizingState({
+                  state,
+                  currentTurnAgent: state.agentOverride ?? state.currentAgent ?? "cowork",
+                  streamFailed: true,
+                  turnInterrupted: state.turnInterrupted,
+                }),
               )
               .on(AgentLoopState.Streaming, AgentLoopEvent.QueueFollowUp, ({ state, event }) =>
                 updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
@@ -1279,19 +1404,18 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 switchAgentOnState(state, event.agent),
               )
               .on(AgentLoopState.Streaming, AgentLoopEvent.StreamFinished, ({ state, event }) =>
-                event.toolCalls.length === 0
+                event.draft.toolCalls.length === 0
                   ? toFinalizingState({
                       state,
                       currentTurnAgent: event.currentTurnAgent,
-                      usage: event.usage,
+                      usage: event.draft.usage,
                       streamFailed: false,
                       turnInterrupted: state.turnInterrupted,
                     })
-                  : AgentLoopState.ExecutingTools({
-                      ...state,
+                  : toExecutingToolsState({
+                      state,
                       currentTurnAgent: event.currentTurnAgent,
-                      toolCalls: event.toolCalls,
-                      usage: event.usage,
+                      draft: event.draft,
                     }),
               )
               .on(AgentLoopState.Streaming, AgentLoopEvent.StreamInterrupted, ({ state, event }) =>
@@ -1313,7 +1437,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               .on(AgentLoopState.Streaming, AgentLoopEvent.PhaseFailed, ({ state }) =>
                 toFinalizingState({
                   state,
-                  currentTurnAgent: state.agentOverride ?? state.currentAgent ?? "cowork",
+                  currentTurnAgent: state.currentTurnAgent,
                   streamFailed: true,
                   turnInterrupted: state.turnInterrupted,
                 }),
@@ -1345,7 +1469,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 toFinalizingState({
                   state,
                   currentTurnAgent: state.currentTurnAgent,
-                  usage: state.usage,
+                  usage: state.draft.usage,
                   streamFailed: false,
                   turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
                 }),
@@ -1354,7 +1478,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 toFinalizingState({
                   state,
                   currentTurnAgent: state.currentTurnAgent,
-                  usage: state.usage,
+                  usage: state.draft.usage,
                   streamFailed: true,
                   turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
                 }),
@@ -1376,7 +1500,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.FinalizeFinished, ({ state, event }) =>
                 event.nextItem !== undefined
-                  ? buildStreamingState(
+                  ? buildResolvingState(
                       {
                         queue: event.queue,
                         currentAgent: state.currentAgent,
@@ -1398,6 +1522,21 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 }),
               )
               .task(
+                AgentLoopState.Resolving,
+                ({ state }) =>
+                  runResolvingState(state).pipe(
+                    Effect.annotateLogs({ sessionId, branchId }),
+                    Effect.withSpan("AgentLoop.resolve"),
+                    Effect.tapCause((cause) =>
+                      publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
+                    ),
+                  ),
+                {
+                  onSuccess: (event) => event,
+                  onFailure: () => AgentLoopEvent.PhaseFailed,
+                },
+              )
+              .task(
                 AgentLoopState.Streaming,
                 ({ state }) =>
                   runStreamingState(state).pipe(
@@ -1409,7 +1548,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   ),
                 {
                   onSuccess: (event) => event,
-                  onFailure: (cause) => AgentLoopEvent.PhaseFailed({ error: Cause.pretty(cause) }),
+                  onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
               )
               .task(
@@ -1424,7 +1563,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   ),
                 {
                   onSuccess: (event) => event,
-                  onFailure: (cause) => AgentLoopEvent.PhaseFailed({ error: Cause.pretty(cause) }),
+                  onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
               )
               .task(
@@ -1439,7 +1578,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   ),
                 {
                   onSuccess: (event) => event,
-                  onFailure: (cause) => AgentLoopEvent.PhaseFailed({ error: Cause.pretty(cause) }),
+                  onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
               )
               .build()
