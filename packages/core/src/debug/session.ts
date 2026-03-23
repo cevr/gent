@@ -34,7 +34,7 @@ const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown
 
 const nowPlus = (offsetMs: number) => new Date(Date.now() + offsetMs)
 
-const createDebugSessionSeed = Effect.fn("DebugSession.createSeed")(function* (cwd: string) {
+export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
   const storage = yield* Storage
   const sessionId = Bun.randomUUIDv7() as SessionId
   const branchId = Bun.randomUUIDv7() as BranchId
@@ -345,7 +345,7 @@ const createDebugSessionSeed = Effect.fn("DebugSession.createSeed")(function* (c
 })
 
 export const prepareDebugSession = Effect.fn("DebugSession.prepare")(function* (cwd: string) {
-  const session = yield* createDebugSessionSeed(cwd)
+  const session = yield* seedDebugSession(cwd)
   yield* startDebugScenario({
     sessionId: session.sessionId,
     branchId: session.branchId,

@@ -142,18 +142,11 @@ describe("worker supervisor", () => {
             mode: "debug",
           })
 
-          const initial = yield* worker.client.listSessions()
-          expect(initial).toEqual([])
-
-          const created = yield* worker.client.createSession({
-            cwd: repoRoot,
-            bypass: true,
-          })
-
           const sessions = yield* worker.client.listSessions()
-          expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)
+          expect(sessions.length).toBeGreaterThanOrEqual(1)
+          expect(sessions.some((session) => session.name === "debug scenario")).toBe(true)
         }),
       ),
     )
-  })
+  }, 15_000)
 })

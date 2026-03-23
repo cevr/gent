@@ -9,16 +9,16 @@ import { type GentClient, type GentRpcError, type SessionInfo } from "@gent/sdk"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
 import { OsService } from "@gent/core/domain/os-service.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import type { SessionId } from "@gent/core/domain/ids.js"
 
 import { render } from "@opentui/solid"
 import { App } from "./app"
 import { ClientProvider } from "./client/index"
-import { Route, RouterProvider } from "./router/index"
+import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
-import { resolveAppBootstrap, toSession, type InitialState } from "./app-bootstrap"
+import { resolveAppBootstrap, type InitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { startWorkerSupervisor } from "./worker/supervisor"
 
@@ -156,54 +156,6 @@ const resolveInitialState = (input: {
     return { _tag: "home" as const }
   })
 
-const resolveDebugInitialSession = (
-  client: GentClient,
-  cwd: string,
-): Effect.Effect<SessionInfo & { readonly branchId: BranchId }, GentRpcError> =>
-  Effect.gen(function* () {
-    const sessions = yield* client
-      .listSessions()
-      .pipe(
-        Effect.map((items) => [...items].sort((left, right) => right.updatedAt - left.updatedAt)),
-      )
-    const session = sessions[0]
-    if (session === undefined) {
-      const created = yield* client.createSession({
-        cwd,
-        bypass: true,
-      })
-      yield* client.sendMessage({
-        sessionId: created.sessionId,
-        branchId: created.branchId,
-        content: "Inspect the TUI renderer surfaces and queued turn behavior.",
-      })
-      return {
-        id: created.sessionId,
-        name: created.name,
-        cwd,
-        bypass: created.bypass,
-        reasoningLevel: undefined,
-        branchId: created.branchId,
-        parentSessionId: undefined,
-        parentBranchId: undefined,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }
-    }
-
-    const branches = yield* client.listBranches(session.id)
-    const branch = branches[0]
-    if (branch === undefined) {
-      yield* Console.error("Error: debug session has no branch")
-      return process.exit(1)
-    }
-
-    return {
-      ...session,
-      branchId: branch.id,
-    }
-  })
-
 const formatMissingProviders = (providers: readonly ProviderId[]): string =>
   providers.map((provider) => provider).join(", ")
 
@@ -282,48 +234,11 @@ const main = Command.make(
         return process.exit(1)
       }
 
-      if (debug) {
-        const debugSession = yield* resolveDebugInitialSession(gentClient, cwd)
-        const bootstrap = {
-          initialSession: toSession(debugSession),
-          initialRoute: Route.session(debugSession.id, debugSession.branchId),
-          initialPrompt: undefined,
-          debugMode: true,
-          missingAuthProviders: undefined,
-        }
-
-        yield* Effect.sync(() =>
-          render(() => (
-            <EnvProvider env={env}>
-              <WorkspaceProvider cwd={cwd} services={uiServices}>
-                <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                  <ClientProvider
-                    client={gentClient}
-                    initialSession={bootstrap.initialSession}
-                    supervisor={supervisor}
-                  >
-                    <RouterProvider initialRoute={bootstrap.initialRoute}>
-                      <App
-                        initialPrompt={bootstrap.initialPrompt}
-                        missingAuthProviders={bootstrap.missingAuthProviders}
-                        debugMode={bootstrap.debugMode}
-                      />
-                    </RouterProvider>
-                  </ClientProvider>
-                </RegistryProvider>
-              </WorkspaceProvider>
-            </EnvProvider>
-          )),
-        )
-
-        return yield* Effect.never
-      }
-
       const state = yield* resolveInitialState({
         client: gentClient,
         cwd,
         session,
-        continue_,
+        continue_: continue_ || debug,
         headless,
         prompt,
         promptArg,
@@ -354,6 +269,7 @@ const main = Command.make(
       }
       const bootstrap = resolveAppBootstrap(state, {
         missingProviders: missingProviders as readonly ProviderId[],
+        debugMode: debug,
       })
 
       yield* Effect.sync(() =>

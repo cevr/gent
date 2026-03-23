@@ -37,6 +37,7 @@ export const resolveAppBootstrap = (
   state: Exclude<InitialState, { _tag: "headless" | "debug" }>,
   options: {
     missingProviders: readonly ProviderId[]
+    debugMode: boolean
   },
 ): AppBootstrap => {
   const missingAuthProviders =
@@ -48,7 +49,7 @@ export const resolveAppBootstrap = (
         initialSession: undefined,
         initialRoute: Route.home(),
         initialPrompt: undefined,
-        debugMode: false,
+        debugMode: options.debugMode,
         missingAuthProviders,
       }
     case "session":
@@ -59,7 +60,7 @@ export const resolveAppBootstrap = (
             ? Route.session(state.session.id, state.session.branchId)
             : Route.home(),
         initialPrompt: state.prompt,
-        debugMode: false,
+        debugMode: options.debugMode,
         missingAuthProviders,
       }
     case "branchPicker":
@@ -72,7 +73,7 @@ export const resolveAppBootstrap = (
           state.prompt,
         ),
         initialPrompt: undefined,
-        debugMode: false,
+        debugMode: options.debugMode,
         missingAuthProviders,
       }
   }
