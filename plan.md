@@ -1,43 +1,120 @@
-# OAuth + Auth Discipline Plan
+# Flattened Agent Loop Rewrite
 
-## Phase 0 — Audit Findings (sources)
+## Summary
 
-- [ ] Duplicate AgentSwitched event in subagent run (double publish). Refs: `packages/runtime/src/agent/subagent-runner.ts:114`, `packages/runtime/src/agent/subagent-runner.ts:122`
-- [ ] ProviderAuth pending OAuth map not session-scoped (overwrites across sessions). Refs: `packages/providers/src/provider-auth.ts:170`, `packages/providers/src/provider-auth.ts:185`
-- [ ] OpenAI OAuth server/pending global; timeout does not stop server → leak. Refs: `packages/providers/src/oauth/openai-oauth.ts:182`, `packages/providers/src/oauth/openai-oauth.ts:249`
-- [ ] Anthropic OAuth tool-name rewrite is chunk regex → corrupt JSON on chunk splits. Refs: `packages/providers/src/oauth/anthropic-oauth.ts:243`, `packages/providers/src/oauth/anthropic-oauth.ts:254`
-- [ ] Env-based auth override still exists; violates curated, minimal config. Refs: `packages/core/src/auth-guard.ts:33`, `packages/providers/src/provider-factory.ts:76`, `packages/core/src/model.ts:58`, `apps/tui/src/main.tsx:121`, `ARCHITECTURE.md:162`
-- [ ] Effect Config usage pattern check. Refs: `/Users/cvr/.cache/repo/Effect-TS/effect/packages/effect/src/Config.ts`
+Rewrite `packages/core/src/runtime/agent/agent-loop.ts` as one flat machine per
+`sessionId + branchId`.
 
-## Phase 1 — Decisions (locked)
+No outer machine plus inner handwritten loop.
+No nested `TurnMachine` unless the flat version gets worse in code.
+No string-array queue API.
 
-- [x] OAuth default + API key fallback for Anthropic/OpenAI
-- [x] OAuth UX: auto + code (auto default)
-- [x] AuthStore layered over AuthStorage
-- [x] Model gating for OpenAI OAuth (Codex only)
-- [x] Pending OAuth scoped by sessionId + authorizationId
-- [x] Stream-safe tool-name rewrite (no chunk regex)
-- [x] Remove env-auth override entirely
+Keep streams and tool execution as state-scoped tasks.
+Keep chunk accumulation task-local.
+Keep `Stream.interruptWhen(...)`.
+Do not use `Effect.whileLoop` as the main orchestrator.
 
-## Phase 2 — Implementation
+## Locked Decisions
 
-- [x] Auth schemas: add `authorizationId` to AuthAuthorization; remove env-only shapes; update exports. Refs: `packages/core/src/auth-method.ts`, `packages/core/src/auth-guard.ts`, `packages/core/src/model.ts`, `packages/core/src/index.ts`
-- [x] ProviderAuth: session-scoped pending map keyed by sessionId+provider+method+authorizationId; require authId on callback. Refs: `packages/providers/src/provider-auth.ts`
-- [x] OpenAI OAuth: support concurrent pending states, stop server on timeout/empty; no globals leak. Refs: `packages/providers/src/oauth/openai-oauth.ts`
-- [x] Anthropic OAuth: stream-safe SSE JSON rewrite for tool names; avoid chunk regex. Refs: `packages/providers/src/oauth/anthropic-oauth.ts`
-- [x] ProviderFactory/AuthGuard: remove env fallback; rely on AuthStore only. Refs: `packages/providers/src/provider-factory.ts`, `packages/core/src/auth-guard.ts`
-- [x] RPC/SDK/Direct client: add listAuthMethods/authorizeAuth/callbackAuth, add authId threading. Refs: `packages/server/src/rpcs.ts`, `packages/server/src/rpc-handlers.ts`, `packages/sdk/src/client.ts`, `packages/sdk/src/direct-client.ts`, `packages/server/src/index.ts`
-- [x] TUI auth flow: method selection, auto/code UX, authId threading, no env hints. Refs: `apps/tui/src/routes/auth.tsx`, `apps/tui/src/main.tsx`
+- Flat machine, not nested machine
+- Structured queue entries now, not later
+- Queue lanes stay split: `steering` + `followUp`
+- Preserve current user-facing semantics:
+  - queued follow-ups batch with `\n`
+  - steering drains before follow-up
+  - interjection agent override is one-turn scoped
+  - provider failure still flushes queued work
+  - interruption persists partial assistant output
+- Cluster/entity integration is out of scope
 
-## Phase 3 — Tests (regression + goals)
+## Target Shape
 
-- [x] AuthStore: api+oauth roundtrip + listInfo; AuthGuard uses stored only. Refs: `tests/auth.test.ts`, `tests/core.test.ts`
-- [x] ProviderAuth: pending map scoped by sessionId+authId; callback fails without matching authId. Refs: `tests/provider-auth.test.ts`
-- [ ] OpenAI OAuth: timeout stops server + pending cleanup (unit). Refs: `packages/providers/src/oauth/openai-oauth.ts`
-- [x] Anthropic OAuth: stream-safe rewrite (SSE lines split across chunks). Refs: `tests/provider-auth.test.ts`
+### Machine states
 
-## Phase 4 — Verify
+- `Idle`
+- `Resolving`
+- `Streaming`
+- `ExecutingTools`
+- `Finalizing`
 
-- [ ] `bun run typecheck`
-- [ ] `bun run lint`
-- [ ] `bun run test`
+### Machine-owned business state
+
+- `queue: { steering: QueueEntry[]; followUp: QueueEntry[] }`
+- `currentAgent?: AgentName`
+- `handoffSuppress: number`
+- `turn: ...` payload for non-idle states
+
+### Runtime-only infra outside machine state
+
+- provider abort / interrupt handle for the active stream
+- serial tool semaphore
+- storage/provider/event-store/tool-runner services
+
+## Public API Changes
+
+Introduce structured queue entries across:
+
+- `AgentLoopService`
+- `ActorProcess`
+- `GentCore`
+- RPC schemas
+- SDK client
+- TUI client/session route/widget
+
+Queue entry shape:
+
+- `id: MessageId`
+- `kind: "steering" | "follow-up"`
+- `content: string`
+- `createdAt: Date`
+- `agentOverride?: AgentName`
+- `bypass: boolean`
+
+Queue API shape:
+
+- `{ steering: QueueEntry[]; followUp: QueueEntry[] }`
+
+## Execution Batches
+
+### Batch 0 — Planning checkpoint
+
+- update `PLAN.md`
+- lock execution checklist
+
+### Batch 1 — Core queue types and public surfaces
+
+- add structured queue entry schema/type
+- update `AgentLoopService` / `ActorProcess` / `GentCore`
+- update RPC and SDK queue types
+- update tests that only depend on queue shape
+
+### Batch 2 — Flat machine rewrite
+
+- replace current mixed machine + imperative loop with one flat machine
+- remove queue ownership refs / recursive drain helpers
+- preserve interruption, failure flush, tool execution, and handoff semantics
+- keep `run(...)` blocking semantics when starting from idle
+
+### Batch 3 — TUI queue migration
+
+- move session/client queue state to structured entries
+- update queue widget rendering and restore-to-composer path
+- keep backend as source of truth
+
+### Batch 4 — Verification and cleanup
+
+- runtime regressions
+- full gate
+- final cleanup of dead helpers / types
+
+## Regression Checklist
+
+- queued regular messages batch into one persisted follow-up
+- steering executes before queued follow-up
+- queue reads do not drain
+- queue drain returns structured entries
+- queued work flushes after provider failure
+- interruption persists partial assistant output
+- serial tool calls do not overlap
+- auto-handoff suppression still works
+- TUI queue widget renders structured entries and restore still joins with `\n`
