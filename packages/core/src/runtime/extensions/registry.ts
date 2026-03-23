@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { ServiceMap, Effect, Layer } from "effect"
 import type { AgentDefinition } from "../../domain/agent.js"
 import type {
@@ -120,11 +119,11 @@ export class ExtensionRegistry extends ServiceMap.Service<
           .runInterceptor(
             "tools.visible",
             { agent, tools: filterToolsForAgent([...resolved.tools.values()], agent), runContext },
-            (input: any) => Effect.succeed(input.tools),
+            (input) => Effect.succeed(input.tools),
           )
           .pipe(
             // Re-apply deny filter after interceptor — hooks can inject but not override deny policy
-            Effect.map((tools: any) => applyDenyFilter(tools as AnyToolDefinition[], agent)),
+            Effect.map((tools) => applyDenyFilter(tools, agent)),
           ),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
@@ -179,10 +178,10 @@ export const filterToolsForAgent = (
 
 /** Re-apply deny filter — used after interceptor to prevent hook-based escalation. */
 const applyDenyFilter = (
-  tools: AnyToolDefinition[],
+  tools: ReadonlyArray<AnyToolDefinition>,
   agent: AgentDefinition,
 ): AnyToolDefinition[] => {
-  if (agent.deniedTools === undefined) return tools
+  if (agent.deniedTools === undefined) return [...tools]
   const denied = new Set(agent.deniedTools)
   return tools.filter((t) => !denied.has(t.name))
 }

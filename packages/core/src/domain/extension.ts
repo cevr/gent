@@ -62,7 +62,7 @@ export interface RunContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName?: AgentName
-  readonly parentToolCallId?: string
+  readonly parentToolCallId?: ToolCallId
   readonly tags?: ReadonlyArray<string>
 }
 
@@ -138,9 +138,24 @@ export interface ExtensionObserverMap {
   readonly "message.received": Observer<MessageReceived>
 }
 
+export type ExtensionInterceptorKey = keyof ExtensionInterceptorMap
+export type ExtensionObserverKey = keyof ExtensionObserverMap
+
+export type ExtensionInterceptorDescriptor<
+  K extends ExtensionInterceptorKey = ExtensionInterceptorKey,
+> = {
+  readonly key: K
+  readonly run: ExtensionInterceptorMap[K]
+}
+
+export type ExtensionObserverDescriptor<K extends ExtensionObserverKey = ExtensionObserverKey> = {
+  readonly key: K
+  readonly run: ExtensionObserverMap[K]
+}
+
 export interface ExtensionHooks {
-  readonly interceptors?: Partial<ExtensionInterceptorMap>
-  readonly observers?: Partial<ExtensionObserverMap>
+  readonly interceptors?: ReadonlyArray<ExtensionInterceptorDescriptor>
+  readonly observers?: ReadonlyArray<ExtensionObserverDescriptor>
 }
 
 // Extension Setup — what an extension provides
@@ -150,8 +165,7 @@ export interface ExtensionSetup {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly promptFragments?: ReadonlyArray<SystemPromptFragment>
   readonly hooks?: ExtensionHooks
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly layer?: Layer.Layer<any, any, any>
+  readonly layer?: Layer.Layer<unknown, unknown, unknown>
 }
 
 // Extension — the core primitive
@@ -170,3 +184,13 @@ export interface GentExtension<Config = void> {
 
 export const defineExtension = <Config = void>(ext: GentExtension<Config>): GentExtension<Config> =>
   ext
+
+export const defineInterceptor = <K extends ExtensionInterceptorKey>(
+  key: K,
+  run: ExtensionInterceptorMap[K],
+): ExtensionInterceptorDescriptor<K> => ({ key, run })
+
+export const defineObserver = <K extends ExtensionObserverKey>(
+  key: K,
+  run: ExtensionObserverMap[K],
+): ExtensionObserverDescriptor<K> => ({ key, run })
