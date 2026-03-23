@@ -3,7 +3,11 @@ import { Effect } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { startWorkerSupervisor, type WorkerLifecycleState } from "../src/worker/supervisor"
+import {
+  startWorkerSupervisor,
+  type WorkerLifecycleState,
+  WorkerSupervisorInternal,
+} from "../src/worker/supervisor"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 
@@ -43,6 +47,18 @@ const waitForRunning = async (
   })
 
 describe("worker supervisor", () => {
+  test("compiled binary launch resolves bun runtime and on-disk server entry", async () => {
+    const launch = await WorkerSupervisorInternal.resolveWorkerLaunch({
+      sourceEntryPath: "/$bunfs/root/apps/server/src/main.ts",
+      execPath: "/repo/apps/tui/bin/gent",
+      sourceExists: async (candidate) => candidate === "/repo/apps/server/src/main.ts",
+      which: () => "/usr/local/bin/bun",
+    })
+
+    expect(launch.runtimePath).toBe("/usr/local/bin/bun")
+    expect(launch.serverEntryPath).toBe("/repo/apps/server/src/main.ts")
+  })
+
   test("boots worker and serves the shared client contract", async () => {
     const dataDir = makeTempDir()
 

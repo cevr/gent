@@ -1,6 +1,7 @@
 import { Effect, Schema, type Scope } from "effect"
 import { makeHttpGentClient, type GentClient } from "@gent/sdk"
 import * as net from "node:net"
+import { pathToFileURL } from "node:url"
 
 export class WorkerSupervisorError extends Schema.TaggedErrorClass<WorkerSupervisorError>()(
   "WorkerSupervisorError",
@@ -55,6 +56,29 @@ const SERVER_ENTRY_PATH = new URL("../../../server/src/main.ts", import.meta.url
 const WORKER_HOST = "127.0.0.1"
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
+
+const resolveWorkerLaunch = async (options?: {
+  readonly sourceEntryPath?: string
+  readonly execPath?: string
+  readonly sourceExists?: (path: string) => Promise<boolean>
+  readonly which?: (cmd: string) => string | null
+}) => {
+  const sourceEntryPath = options?.sourceEntryPath ?? SERVER_ENTRY_PATH
+  const execPath = options?.execPath ?? process.execPath
+  const sourceExists = options?.sourceExists ?? ((path: string) => Bun.file(path).exists())
+  const which = options?.which ?? Bun.which
+
+  const fallbackEntryPath = new URL("../../server/src/main.ts", pathToFileURL(execPath)).pathname
+  const serverEntryPath =
+    !sourceEntryPath.startsWith("/$bunfs/") && (await sourceExists(sourceEntryPath))
+      ? sourceEntryPath
+      : fallbackEntryPath
+
+  return {
+    runtimePath: execPath.endsWith("/bun") ? execPath : (which("bun") ?? execPath),
+    serverEntryPath,
+  }
+}
 
 const findOpenPort = (): Promise<number> =>
   new Promise((resolve, reject) => {
@@ -131,8 +155,9 @@ const spawnWorkerProcess = (
   options: WorkerSupervisorOptions,
   port: number,
 ): Effect.Effect<{ readonly port: number; readonly url: string; readonly proc: Bun.Subprocess }> =>
-  Effect.sync(() => {
+  Effect.promise(async () => {
     const mode = options.mode ?? "default"
+    const launch = await resolveWorkerLaunch()
     const env = {
       ...Bun.env,
       ...options.env,
@@ -147,7 +172,7 @@ const spawnWorkerProcess = (
           }
         : {}),
     }
-    const proc = Bun.spawn([process.execPath, SERVER_ENTRY_PATH], {
+    const proc = Bun.spawn([launch.runtimePath, launch.serverEntryPath], {
       cwd: options.cwd,
       env,
       stdin: "ignore",
@@ -288,3 +313,7 @@ export const startWorkerSupervisor = (
     }),
     (supervisor) => supervisor.stop,
   )
+
+export const WorkerSupervisorInternal = {
+  resolveWorkerLaunch,
+} as const

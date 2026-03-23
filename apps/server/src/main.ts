@@ -26,6 +26,8 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const homeOpt = yield* Config.option(Config.string("HOME"))
   const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
   const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
+  const authFilePathOpt = yield* Config.option(Config.string("GENT_AUTH_FILE_PATH"))
+  const authKeyPathOpt = yield* Config.option(Config.string("GENT_AUTH_KEY_PATH"))
   const persistenceOpt = yield* Config.option(Config.string("GENT_PERSISTENCE_MODE"))
   const providerOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
   const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
@@ -41,8 +43,8 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     home,
     dataDir,
     dbPath: Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db")),
-    authFilePath: joinPath(dataDir, "auth.json.enc"),
-    authKeyPath: joinPath(dataDir, "auth.key"),
+    authFilePath: Option.getOrUndefined(authFilePathOpt),
+    authKeyPath: Option.getOrUndefined(authKeyPathOpt),
     persistenceMode:
       Option.getOrUndefined(persistenceOpt) === "memory" ? ("memory" as const) : ("disk" as const),
     providerMode:
