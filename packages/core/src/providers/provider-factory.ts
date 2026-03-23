@@ -84,6 +84,62 @@ const resolveAuth = (
 
 type ProviderClient = (modelName: string) => LanguageModel
 
+const createOpenAICompatibleClient = (
+  baseUrl: string | undefined,
+  apiKey: { apiKey: string } | undefined,
+) => {
+  if (baseUrl === undefined || baseUrl === "") return undefined
+  return createOpenAI({
+    baseURL: baseUrl,
+    ...(apiKey ?? {}),
+  })
+}
+
+const createBedrockClient = (region: string | undefined) =>
+  createAmazonBedrock({
+    region: region ?? "us-east-1",
+    credentialProvider: async () => {
+      const creds = await fromIni()()
+      return {
+        accessKeyId: creds.accessKeyId,
+        secretAccessKey: creds.secretAccessKey,
+        ...(creds.sessionToken !== undefined ? { sessionToken: creds.sessionToken } : {}),
+      }
+    },
+  })
+
+const createAnthropicClient = (
+  authStore: AuthStoreService,
+  auth: AuthInfo | undefined,
+  apiKey: { apiKey: string } | undefined,
+) => {
+  if (auth?.type === "oauth") {
+    return createAnthropic({
+      apiKey: "oauth-placeholder",
+      fetch: createAnthropicKeychainFetch(authStore),
+    })
+  }
+  return createAnthropic(apiKey)
+}
+
+const createOpenAIClient = (
+  authStore: AuthStoreService,
+  auth: AuthInfo | undefined,
+  apiKey: { apiKey: string } | undefined,
+) => {
+  if (auth?.type === "oauth") {
+    const oauthClient = createOpenAI({
+      apiKey: "oauth",
+      fetch: createOpenAIOAuthFetch(authStore),
+      headers: {
+        originator: "gent",
+      },
+    })
+    return (modelName: string) => oauthClient.responses(modelName)
+  }
+  return createOpenAI(apiKey)
+}
+
 // Create AI SDK provider client
 const createProviderClient = (
   api: ProviderApi,
@@ -96,50 +152,15 @@ const createProviderClient = (
   const resolvedApiKey = apiKey !== undefined && apiKey !== "" ? { apiKey } : undefined
   switch (api) {
     case "anthropic":
-      if (auth?.type === "oauth") {
-        return createAnthropic({
-          apiKey: "oauth-placeholder",
-          fetch: createAnthropicKeychainFetch(authStore),
-        })
-      }
-      return createAnthropic(resolvedApiKey)
+      return createAnthropicClient(authStore, auth, resolvedApiKey)
     case "openai":
-      if (auth?.type === "oauth") {
-        const oauthClient = createOpenAI({
-          apiKey: "oauth",
-          fetch: createOpenAIOAuthFetch(authStore),
-          headers: {
-            originator: "gent",
-          },
-        })
-        // Codex models use the Responses API, not chat completions
-        return (modelName: string) => oauthClient.responses(modelName)
-      }
-      return createOpenAI(resolvedApiKey)
+      return createOpenAIClient(authStore, auth, resolvedApiKey)
     case "openai-compatible":
-      if (baseUrl === undefined || baseUrl === "") return undefined
-      return createOpenAI({
-        baseURL: baseUrl,
-        ...(resolvedApiKey ?? {}),
-      })
+      return createOpenAICompatibleClient(baseUrl, resolvedApiKey)
     case "azure-openai":
-      if (baseUrl === undefined || baseUrl === "") return undefined
-      return createOpenAI({
-        baseURL: baseUrl,
-        ...(resolvedApiKey ?? {}),
-      })
+      return createOpenAICompatibleClient(baseUrl, resolvedApiKey)
     case "bedrock":
-      return createAmazonBedrock({
-        region: region ?? "us-east-1",
-        credentialProvider: async () => {
-          const creds = await fromIni()()
-          return {
-            accessKeyId: creds.accessKeyId,
-            secretAccessKey: creds.secretAccessKey,
-            ...(creds.sessionToken !== undefined ? { sessionToken: creds.sessionToken } : {}),
-          }
-        },
-      })
+      return createBedrockClient(region)
     case "google":
       return createGoogleGenerativeAI(resolvedApiKey)
     case "mistral":

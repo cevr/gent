@@ -28,43 +28,36 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
   maxAttempts: 3,
 }
 
+const retryableMessageSnippets = [
+  "rate limit",
+  "429",
+  "too many requests",
+  "overloaded",
+  "529",
+  "500",
+  "502",
+  "503",
+  "504",
+  "internal server error",
+  "bad gateway",
+  "service unavailable",
+  "gateway timeout",
+]
+
+const hasRetryableStatus = (cause: unknown) => {
+  if (cause === null || typeof cause !== "object" || !("status" in cause)) return false
+  const status = (cause as { status: number }).status
+  return status === 429 || status === 529 || (status >= 500 && status < 600)
+}
+
 // Check if error is retryable
 
 export const isRetryable = (error: unknown): boolean => {
   if (!Schema.is(ProviderError)(error)) return false
 
   const message = error.message.toLowerCase()
-  const cause = error.cause
-
-  // Rate limits
-  if (message.includes("rate limit") || message.includes("429")) return true
-  if (message.includes("too many requests")) return true
-
-  // Overloaded
-  if (message.includes("overloaded") || message.includes("529")) return true
-
-  // Server errors (5xx)
-  if (
-    message.includes("500") ||
-    message.includes("502") ||
-    message.includes("503") ||
-    message.includes("504")
-  )
-    return true
-  if (message.includes("internal server error")) return true
-  if (message.includes("bad gateway")) return true
-  if (message.includes("service unavailable")) return true
-  if (message.includes("gateway timeout")) return true
-
-  // Check cause for status codes
-  if (cause !== null && typeof cause === "object" && "status" in cause) {
-    const status = (cause as { status: number }).status
-    if (status === 429 || status === 529 || (status >= 500 && status < 600)) {
-      return true
-    }
-  }
-
-  return false
+  if (retryableMessageSnippets.some((snippet) => message.includes(snippet))) return true
+  return hasRetryableStatus(error.cause)
 }
 
 // Extract retry-after from error/headers
