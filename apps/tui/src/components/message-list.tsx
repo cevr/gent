@@ -179,7 +179,7 @@ interface MessageListProps {
 
 export function MessageList(props: MessageListProps) {
   return (
-    <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+    <box flexDirection="column">
       <For each={props.items}>
         {(item, index) =>
           item._tag === "event" ? (
@@ -210,6 +210,6 @@ export function MessageList(props: MessageListProps) {
           )
         }
       </For>
-    </scrollbox>
+    </box>
   )
 }

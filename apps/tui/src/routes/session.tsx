@@ -542,21 +542,23 @@ export function Session(props: SessionProps) {
   return (
     <box flexDirection="column" flexGrow={1}>
       {/* Messages */}
-      <MessageList
-        items={items()}
-        toolsExpanded={toolsExpanded()}
-        syntaxStyle={syntaxStyle}
-        streaming={client.isStreaming()}
-        getChildSessions={getChildren}
-      />
+      <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+        <box flexDirection="column">
+          <MessageList
+            items={items()}
+            toolsExpanded={toolsExpanded()}
+            syntaxStyle={syntaxStyle}
+            streaming={client.isStreaming()}
+            getChildSessions={getChildren}
+          />
 
-      <box flexDirection="column" flexShrink={0}>
-        <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
-        <QueueWidget
-          queuedMessage={pendingQueuedMessage()}
-          steerMessages={pendingSteerMessages()}
-        />
-      </box>
+          <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
+          <QueueWidget
+            queuedMessage={pendingQueuedMessage()}
+            steerMessages={pendingSteerMessages()}
+          />
+        </box>
+      </scrollbox>
 
       {/* Bordered input */}
       <BorderedInput
