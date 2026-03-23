@@ -1,7 +1,7 @@
 import { Config, ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { Model } from "../domain/model.js"
 import type { ModelId, ModelPricing } from "../domain/model.js"
-import * as os from "node:os"
+import { RuntimePlatform } from "./runtime-platform.js"
 
 const MODELS_URL = "https://models.dev"
 const CACHE_RELATIVE = ".gent/models.json"
@@ -67,15 +67,20 @@ export interface ModelRegistryService {
 export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/model-registry/ModelRegistry",
 ) {
-  static Live: Layer.Layer<ModelRegistry, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
+  static Live: Layer.Layer<
+    ModelRegistry,
+    never,
+    FileSystem.FileSystem | Path.Path | RuntimePlatform
+  > = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
+      const runtimePlatform = yield* RuntimePlatform
       const homeOption = yield* Effect.gen(function* () {
         return yield* Config.option(Config.string("HOME"))
       }).pipe(Effect.catchEager(() => Effect.succeed(Option.none())))
-      const home = Option.getOrElse(homeOption, () => os.homedir())
+      const home = Option.getOrElse(homeOption, () => runtimePlatform.home)
       const cachePath = path.join(home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 

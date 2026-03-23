@@ -1,6 +1,6 @@
 import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 import { PermissionRule } from "../domain/permission.js"
-import * as os from "node:os"
+import { RuntimePlatform } from "./runtime-platform.js"
 
 // User config schema - stored at ~/.gent/config.json
 
@@ -27,15 +27,22 @@ export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServi
   /** Relative path from project root for project config */
   static PROJECT_CONFIG_RELATIVE = ".gent/config.json"
 
-  static Live: Layer.Layer<ConfigService, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
+  static Live: Layer.Layer<
+    ConfigService,
+    never,
+    FileSystem.FileSystem | Path.Path | RuntimePlatform
+  > = Layer.effect(
     ConfigService,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-
-      const home = os.homedir()
+      const runtimePlatform = yield* RuntimePlatform
+      const home = runtimePlatform.home
       const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
-      const projectConfigPath = path.join(process.cwd(), ConfigService.PROJECT_CONFIG_RELATIVE)
+      const projectConfigPath = path.join(
+        runtimePlatform.cwd,
+        ConfigService.PROJECT_CONFIG_RELATIVE,
+      )
 
       const UserConfigJson = Schema.fromJsonString(UserConfig)
       const defaultUserConfig = new UserConfig({ permissions: [] })

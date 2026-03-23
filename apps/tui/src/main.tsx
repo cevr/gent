@@ -208,6 +208,8 @@ const makeCoreLayer = (options?: { cwd?: string; debug?: boolean }) =>
 
       const serverDeps = createDependencies({
         cwd,
+        home,
+        platform: process.platform,
         dbPath,
         persistenceMode: options?.debug === true ? "memory" : "disk",
         providerMode: options?.debug === true ? "debug-scripted" : "live",

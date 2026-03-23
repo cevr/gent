@@ -5,6 +5,7 @@ import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
 import { Effect, Layer, Schema } from "effect"
+import * as os from "node:os"
 import { GentApi } from "@gent/core/server/http-api.js"
 import { GentCore, SteerCommand } from "@gent/core/server/core.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
@@ -68,6 +69,8 @@ const PlatformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
 // Dependencies layer
 const DepsLive = createDependencies({
   cwd: process.cwd(),
+  home: os.homedir(),
+  platform: process.platform,
   dbPath: ".gent/data.db",
 }).pipe(
   Layer.provide(PlatformLayer),

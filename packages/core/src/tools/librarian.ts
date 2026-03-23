@@ -2,7 +2,7 @@ import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { Agents, SubagentRunnerService } from "../domain/agent.js"
 import { $ } from "bun"
-import * as os from "node:os"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Librarian Tool Error
 
@@ -91,8 +91,8 @@ export const LibrarianTool = defineTool({
     const runner = yield* SubagentRunnerService
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-
-    const home = os.homedir()
+    const runtimePlatform = yield* RuntimePlatform
+    const home = runtimePlatform.home
     const cacheDir = path.join(home, ".cache", "repo")
     const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
