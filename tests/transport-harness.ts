@@ -27,7 +27,7 @@ import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
-import { createClient, makeInProcessClient, type GentClient, type GentRpcClient } from "@gent/sdk"
+import { createClient, type GentClient, type GentRpcClient } from "@gent/sdk"
 import { createTempDirFixture, createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
 
@@ -99,9 +99,16 @@ const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const appLayer = Layer.provide(AppServicesLive, baseLocalLayer(providerMode))
-          const handlersLayer = Layer.mergeAll(baseLocalLayer(providerMode), appLayer)
-          const client = yield* makeInProcessClient(handlersLayer)
+          const base = baseLocalLayer(providerMode)
+          const appLayer = Layer.provide(AppServicesLive, base)
+          const handlersLayer = Layer.mergeAll(base, appLayer)
+          const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
+          const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
+          const services = yield* Effect.services<never>()
+          const client = createClient(
+            rpcClient as unknown as GentRpcClient,
+            services as ServiceMap.ServiceMap<unknown>,
+          )
           return yield* assertion(client)
         }),
       ),

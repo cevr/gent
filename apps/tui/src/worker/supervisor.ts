@@ -346,28 +346,33 @@ export const startWorkerSupervisor = (
         }
 
         restartCount += 1
+        const isCrash = input !== undefined
         const now = Date.now()
-        restartTimestamps.push(now)
 
-        // Prune timestamps outside the window
-        while (
-          restartTimestamps.length > 0 &&
-          (restartTimestamps[0] ?? 0) < now - RESTART_WINDOW_MS
-        ) {
-          restartTimestamps.shift()
-        }
+        // Only track crash-triggered restarts for loop detection (not manual)
+        if (isCrash) {
+          restartTimestamps.push(now)
 
-        // Crash-loop detection: too many restarts in window → permanent failure
-        if (restartTimestamps.length > MAX_RESTARTS_IN_WINDOW) {
-          restartPromise = undefined
-          emit({
-            _tag: "failed",
-            port: assignedPort,
-            restartCount,
-            message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
-            exitCode: input?.exitCode ?? null,
-          })
-          return
+          // Prune timestamps outside the window
+          while (
+            restartTimestamps.length > 0 &&
+            (restartTimestamps[0] ?? 0) < now - RESTART_WINDOW_MS
+          ) {
+            restartTimestamps.shift()
+          }
+
+          // Crash-loop detection: too many crash restarts in window → permanent failure
+          if (restartTimestamps.length > MAX_RESTARTS_IN_WINDOW) {
+            restartPromise = undefined
+            emit({
+              _tag: "failed",
+              port: assignedPort,
+              restartCount,
+              message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
+              exitCode: input.exitCode,
+            })
+            return
+          }
         }
 
         emit({
@@ -378,11 +383,10 @@ export const startWorkerSupervisor = (
           exitCode: input?.exitCode ?? null,
         })
 
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s cap
-        const backoffMs = Math.min(
-          BACKOFF_BASE_MS * 2 ** (restartTimestamps.length - 1),
-          BACKOFF_MAX_MS,
-        )
+        // Exponential backoff only for crash restarts
+        const backoffMs = isCrash
+          ? Math.min(BACKOFF_BASE_MS * 2 ** (restartTimestamps.length - 1), BACKOFF_MAX_MS)
+          : 0
 
         restartPromise = Effect.runPromise(
           Effect.gen(function* () {
