@@ -24,6 +24,8 @@ export interface ExtensionUIContextValue {
   readonly commands: Accessor<ReadonlyArray<Command>>
   readonly overlays: Accessor<Map<string, SolidComponent>>
   readonly loading: Accessor<boolean>
+  /** Wire overlay dispatch from the session controller */
+  readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
 }
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
@@ -40,6 +42,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loading, setLoading] = createSignal(true)
 
+  // Mutable overlay dispatch — wired by session controller after mount
+  let overlayOpen: (id: string) => void = () => {}
+  let overlayClose: () => void = () => {}
+
+  const setOverlayDispatch = (open: (id: string) => void, close: () => void) => {
+    overlayOpen = open
+    overlayClose = close
+  }
+
   onMount(async () => {
     try {
       const home = homedir()
@@ -49,9 +60,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           projectDir: `${workspace.cwd}/.gent/extensions`,
         },
         {
-          // Overlay dispatch stubs — wired to session UI state in batch 5
-          openOverlay: () => {},
-          closeOverlay: () => {},
+          openOverlay: (id) => overlayOpen(id),
+          closeOverlay: () => overlayClose(),
         },
       )
       setResolved(result)
@@ -70,6 +80,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         commands: () => resolved().commands,
         overlays: () => resolved().overlays,
         loading,
+        setOverlayDispatch,
       }}
     >
       {props.children}

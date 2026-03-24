@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
@@ -132,14 +132,16 @@ export function useSessionController(props: {
   const [elapsed, setElapsed] = createSignal(0)
   let activityStartTime = Date.now()
 
-  // Register extension commands via the command system
-  onMount(() => {
+  // Register extension commands reactively — re-registers when extensions finish loading
+  let unsubExtCommands: (() => void) | undefined
+  createEffect(() => {
+    unsubExtCommands?.()
     const cmds = ext.commands()
     if (cmds.length > 0) {
-      const unsub = command.register([...cmds])
-      onCleanup(unsub)
+      unsubExtCommands = command.register([...cmds])
     }
   })
+  onCleanup(() => unsubExtCommands?.())
 
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
     if (effect._tag === "RestoreComposer") {
@@ -154,6 +156,12 @@ export function useSessionController(props: {
     setUiState(result.state)
     for (const effect of result.effects) handleSessionUiEffect(effect)
   }
+
+  // Wire extension overlay dispatch to session UI state
+  ext.setOverlayDispatch(
+    (id) => dispatchSessionUi({ _tag: "OpenExtensionOverlay", overlayId: id }),
+    () => dispatchSessionUi({ _tag: "CloseOverlay" }),
+  )
 
   const handleComposerEffect = (effect: ReturnType<typeof transition>["effect"]) => {
     if (effect === undefined) return

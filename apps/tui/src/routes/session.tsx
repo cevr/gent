@@ -186,7 +186,7 @@ export function Session(props: SessionProps) {
           if (overlay._tag !== "extension") return null
           const Overlay = ext.overlays().get(overlay.overlayId)
           if (Overlay === undefined) return null
-          return <Overlay />
+          return <Overlay open={true} onClose={controller.closeOverlay} />
         })()}
       </Show>
 
