@@ -159,7 +159,7 @@ const resolveTurnContext = (params: {
 
     // Derive extension projections from state machines
     const allTools = yield* params.extensionRegistry.listTools()
-    const extensionResults = yield* params.extensionStateRuntime.deriveAll({
+    const extensionResults = yield* params.extensionStateRuntime.deriveAll(params.sessionId, {
       agent,
       allTools,
     })

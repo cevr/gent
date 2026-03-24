@@ -21,7 +21,7 @@ export class StaleIntentError extends Schema.TaggedErrorClass<StaleIntentError>(
   },
 ) {}
 
-// Internal state per extension
+// Internal state per extension per session
 
 interface ExtensionEntry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -30,19 +30,27 @@ interface ExtensionEntry {
   epoch: number
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MachineList = ReadonlyArray<ExtensionStateMachine<any, any>>
+
+const initEntries = (machines: MachineList): ExtensionEntry[] =>
+  machines.map((machine) => ({ machine, state: machine.initial, epoch: 0 }))
+
 // Service
 
 export interface ExtensionStateRuntimeService {
-  /** Feed an event to all registered state machines */
+  /** Feed an event to all registered state machines for a session */
   readonly reduce: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<void>
 
   /** Get current projections for all extensions with state machines */
   readonly deriveAll: (
+    sessionId: SessionId,
     ctx: ExtensionDeriveContext,
   ) => Effect.Effect<ReadonlyArray<{ extensionId: string; projection: ExtensionProjection }>>
 
-  /** Handle a typed intent from the client (epoch-validated) */
+  /** Handle a typed intent from the client (epoch-validated, schema-validated) */
   readonly handleIntent: (
+    sessionId: SessionId,
     extensionId: string,
     intent: unknown,
     epoch: number,
@@ -65,47 +73,64 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
     Layer.effect(
       ExtensionStateRuntime,
       Effect.gen(function* () {
-        // Collect all extensions that have state machines
-        const entries: ExtensionEntry[] = []
+        // Collect machines from extensions
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const machines: ExtensionStateMachine<any, any>[] = []
         for (const ext of extensions) {
-          const machine = ext.setup.stateMachine
-          if (machine !== undefined) {
-            entries.push({
-              machine,
-              state: machine.initial,
-              epoch: 0,
-            })
+          if (ext.setup.stateMachine !== undefined) {
+            machines.push(ext.setup.stateMachine)
           }
         }
 
-        const entriesRef = yield* Ref.make(entries)
+        // Session-scoped state: Map<SessionId, ExtensionEntry[]>
+        const sessionsRef = yield* Ref.make<Map<SessionId, ExtensionEntry[]>>(new Map())
+
+        const getOrInitSession = (sessionId: SessionId) =>
+          Ref.modify(sessionsRef, (sessions) => {
+            const existing = sessions.get(sessionId)
+            if (existing !== undefined) return [existing, sessions]
+            const entries = initEntries(machines)
+            const next = new Map(sessions)
+            next.set(sessionId, entries)
+            return [entries, next]
+          })
 
         return {
           reduce: (event, ctx) =>
-            Ref.update(entriesRef, (current) =>
-              current.map((entry) => {
+            Effect.gen(function* () {
+              const entries = yield* getOrInitSession(ctx.sessionId)
+              let changed = false
+              const updated = entries.map((entry) => {
                 const nextState = entry.machine.reduce(entry.state, event, ctx)
                 if (nextState === entry.state) return entry
+                changed = true
                 return { ...entry, state: nextState, epoch: entry.epoch + 1 }
-              }),
-            ),
+              })
+              if (changed) {
+                yield* Ref.update(sessionsRef, (sessions) => {
+                  const next = new Map(sessions)
+                  next.set(ctx.sessionId, updated)
+                  return next
+                })
+              }
+            }),
 
-          deriveAll: (ctx) =>
+          deriveAll: (sessionId, ctx) =>
             Effect.gen(function* () {
-              const current = yield* Ref.get(entriesRef)
-              return current.map((entry) => ({
+              const entries = yield* getOrInitSession(sessionId)
+              return entries.map((entry) => ({
                 extensionId: entry.machine.id,
                 projection: entry.machine.derive(entry.state, ctx),
               }))
             }),
 
-          handleIntent: (extensionId, intent, epoch) =>
+          handleIntent: (sessionId, extensionId, intent, epoch) =>
             Effect.gen(function* () {
-              const current = yield* Ref.get(entriesRef)
-              const idx = current.findIndex((e) => e.machine.id === extensionId)
+              const entries = yield* getOrInitSession(sessionId)
+              const idx = entries.findIndex((e) => e.machine.id === extensionId)
               if (idx === -1) return
 
-              const entry = current[idx]
+              const entry = entries[idx]
               if (entry === undefined) return
               if (epoch < entry.epoch) {
                 return yield* new StaleIntentError({
@@ -119,11 +144,18 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               if (handler === undefined) return
 
               const result = handler(entry.state, intent)
-              yield* Ref.update(entriesRef, (entries) =>
-                entries.map((e, i) =>
-                  i === idx ? { ...e, state: result.state, epoch: e.epoch + 1 } : e,
-                ),
-              )
+              yield* Ref.update(sessionsRef, (sessions) => {
+                const current = sessions.get(sessionId)
+                if (current === undefined) return sessions
+                const next = new Map(sessions)
+                next.set(
+                  sessionId,
+                  current.map((e, i) =>
+                    i === idx ? { ...e, state: result.state, epoch: e.epoch + 1 } : e,
+                  ),
+                )
+                return next
+              })
 
               // Run side effects if any
               if (result.effects !== undefined) {
@@ -135,24 +167,23 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
 
           getUiSnapshots: (sessionId, branchId) =>
             Effect.gen(function* () {
-              const current = yield* Ref.get(entriesRef)
+              const entries = yield* getOrInitSession(sessionId)
               const snapshots: ExtensionUiSnapshot[] = []
-              for (const entry of current) {
-                // Only include entries whose derive produces a uiModel
-                // We derive with a minimal context — the agent/tools don't matter for UI snapshots
-                // This is a lightweight read, not a full derivation
-                const uiModel = entry.machine.derive(entry.state, {
+              for (const entry of entries) {
+                if (entry.machine.uiModelSchema === undefined) continue
+                const projection = entry.machine.derive(entry.state, {
+                  // UI snapshots don't depend on agent/tools context
                   agent: undefined as never,
                   allTools: [],
-                }).uiModel
-                if (uiModel !== undefined) {
+                })
+                if (projection.uiModel !== undefined) {
                   snapshots.push(
                     new ExtensionUiSnapshotClass({
                       sessionId,
                       branchId,
                       extensionId: entry.machine.id,
                       epoch: entry.epoch,
-                      model: uiModel,
+                      model: projection.uiModel,
                     }),
                   )
                 }

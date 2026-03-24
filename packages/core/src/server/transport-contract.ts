@@ -424,6 +424,7 @@ export { AuthProviderInfo }
 export { EventEnvelope }
 
 export const SendExtensionIntentInput = Schema.Struct({
+  sessionId: SessionId,
   extensionId: Schema.String,
   intent: Schema.Unknown,
   epoch: Schema.Number,
@@ -571,6 +572,7 @@ export interface GentClient {
   getSkillContent: (name: string) => Effect.Effect<SkillContent | null, GentRpcError>
 
   sendExtensionIntent: (
+    sessionId: SessionId,
     extensionId: string,
     intent: unknown,
     epoch: number,

@@ -582,20 +582,28 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const loopsSemaphore = yield* Semaphore.make(1)
 
         const stateKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
-        const publishEvent = (event: AgentEvent) =>
-          eventStore.publish(event).pipe(
-            Effect.mapError(
-              (error) =>
-                new AgentLoopError({
-                  message: `Failed to publish ${event._tag}`,
-                  cause: error,
-                }),
-            ),
-          )
-        const publishEventOrDie = (event: AgentEvent) => publishEvent(event).pipe(Effect.orDie)
 
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
+            // Session-scoped publish: event store + extension state machine reduction
+            // Shadows the outer publishEvent/publishEventOrDie inside makeLoop
+            const publishEvent = (event: AgentEvent) =>
+              eventStore.publish(event).pipe(
+                Effect.tap(() =>
+                  extensionStateRuntime
+                    .reduce(event, { sessionId, branchId })
+                    .pipe(Effect.catchDefect(() => Effect.void)),
+                ),
+                Effect.mapError(
+                  (error) =>
+                    new AgentLoopError({
+                      message: `Failed to publish ${event._tag}`,
+                      cause: error,
+                    }),
+                ),
+              )
+            const publishEventOrDie = (event: AgentEvent) => publishEvent(event).pipe(Effect.orDie)
+
             const loopScope = yield* Scope.make()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
