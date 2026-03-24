@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { type ActorRef, Event, State } from "effect-machine"
+import type { AnyToolDefinition } from "../../domain/tool.js"
 import {
   AgentName,
   ReasoningEffort,
@@ -194,6 +195,9 @@ export type ResolvedTurn = {
   modelId: ModelIdType
   reasoning?: ReasoningEffortType
   temperature?: number
+  /** Active tools for this turn — resolved per-agent, not serialized into machine state.
+   *  Absent in state machine transitions (tools live in a side-channel Ref). */
+  tools?: ReadonlyArray<AnyToolDefinition>
 }
 
 export const AgentLoopState = State({

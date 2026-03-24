@@ -72,6 +72,8 @@ export const GrepTool = defineTool({
   concurrency: "parallel",
   idempotent: true,
   description: "Search file contents with regex. Returns matching lines.",
+  promptSnippet: "Search file contents with regex",
+  promptGuidelines: ["Use instead of bash grep/rg"],
   params: GrepParams,
   execute: Effect.fn("GrepTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem

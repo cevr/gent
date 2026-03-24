@@ -44,6 +44,8 @@ export const ReadTool = defineTool({
   concurrency: "parallel",
   idempotent: true,
   description: "Read file contents. Returns numbered lines. Use offset/limit for large files.",
+  promptSnippet: "Read file contents with line numbers",
+  promptGuidelines: ["Use read instead of bash cat/head/tail"],
   params: ReadParams,
   execute: Effect.fn("ReadTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem

@@ -43,6 +43,8 @@ export const GlobTool = defineTool({
   concurrency: "parallel",
   idempotent: true,
   description: "Find files matching glob pattern. Returns paths sorted by mtime.",
+  promptSnippet: "Find files by glob pattern",
+  promptGuidelines: ["Use instead of bash find/ls"],
   params: GlobParams,
   execute: Effect.fn("GlobTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem

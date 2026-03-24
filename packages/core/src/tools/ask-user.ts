@@ -151,6 +151,7 @@ export const AskUserTool = defineTool({
   concurrency: "serial",
   description:
     "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",
+  promptSnippet: "Ask the user questions with optional predefined options",
   params: AskUserParams,
   execute: Effect.fn("AskUserTool.execute")(function* (params, ctx) {
     const handler = yield* AskUserHandler

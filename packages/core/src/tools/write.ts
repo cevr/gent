@@ -35,6 +35,8 @@ export const WriteTool = defineTool({
   action: "edit",
   concurrency: "serial",
   description: "Write content to file. Creates directories if needed.",
+  promptSnippet: "Create or overwrite files",
+  promptGuidelines: ["Read before writing", "Prefer edit for partial changes"],
   params: WriteParams,
   execute: Effect.fn("WriteTool.execute")(function* (params, _ctx) {
     const fs = yield* FileSystem.FileSystem

@@ -52,7 +52,8 @@ import {
 } from "../../domain/event.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId } from "../../domain/ids.js"
-import { type ToolAction, type ToolContext } from "../../domain/tool.js"
+import { type AnyToolDefinition, type ToolAction, type ToolContext } from "../../domain/tool.js"
+import type { PromptSection } from "../../server/system-prompt.js"
 import { HandoffHandler } from "../../domain/interaction-handlers.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
@@ -108,7 +109,7 @@ import {
 import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,
-  buildSystemPrompt,
+  buildTurnPrompt,
   messageText,
   resolveReasoning,
   toolResultMessageIdForTurn,
@@ -554,7 +555,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
   "@gent/core/src/runtime/agent/agent-loop/AgentLoop",
 ) {
   static Live = (config: {
-    systemPrompt: string
+    baseSections: ReadonlyArray<PromptSection>
   }): Layer.Layer<
     AgentLoop,
     never,
@@ -590,6 +591,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const loopScope = yield* Scope.make()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
+            const turnToolsRef = yield* Ref.make<ReadonlyArray<AnyToolDefinition>>([])
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
             const checkpoint = Option.getOrUndefined(
               yield* Effect.option(storage.getAgentLoopCheckpoint({ sessionId, branchId })),
@@ -703,11 +705,14 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 extensionRegistry,
                 sessionId,
                 publishEvent: publishEventOrDie,
-                systemPrompt: config.systemPrompt,
+                baseSections: config.baseSections,
               })
               if (resolved === undefined) {
                 return AgentLoopEvent.PhaseFailed
               }
+
+              // Store tools in side-channel ref (not serializable into state machine)
+              yield* Ref.set(turnToolsRef, resolved.tools)
 
               return AgentLoopEvent.Resolved(resolved)
             })
@@ -722,6 +727,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               }
 
               yield* Ref.set(activeStreamRef, activeStream)
+              const turnTools = yield* Ref.get(turnToolsRef)
               const collected = yield* streamTurnPhase({
                 messageId: state.message.id,
                 resolved: {
@@ -729,6 +735,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   messages: state.messages,
                   systemPrompt: state.systemPrompt,
                   modelId: state.modelId,
+                  tools: turnTools,
                   ...(state.reasoning !== undefined ? { reasoning: state.reasoning } : {}),
                   ...(state.temperature !== undefined ? { temperature: state.temperature } : {}),
                 },
@@ -1449,12 +1456,21 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
 
           const effectiveAgent = applyAgentOverrides(agent, input)
 
+          const tools = yield* extensionRegistry.listToolsForAgent(effectiveAgent, {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            agentName: input.agentName,
+            tags: input.tags,
+          })
+
+          // Build tool-aware prompt from the base system prompt string
+          const baseSections: Array<PromptSection> = [
+            { id: "base", content: input.systemPrompt, priority: 0 },
+          ]
+          const turnPrompt = buildTurnPrompt(baseSections, effectiveAgent, tools)
           const basePrompt = yield* extensionRegistry.hooks.runInterceptor(
             "prompt.system",
-            {
-              basePrompt: buildSystemPrompt(input.systemPrompt, effectiveAgent),
-              agent: effectiveAgent,
-            },
+            { basePrompt: turnPrompt, agent: effectiveAgent },
             (i) => Effect.succeed(i.basePrompt),
           )
 
@@ -1476,13 +1492,6 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
               role: "user",
             }),
           )
-
-          const tools = yield* extensionRegistry.listToolsForAgent(effectiveAgent, {
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            agentName: input.agentName,
-            tags: input.tags,
-          })
 
           const messages: Message[] = [userMessage]
           let continueLoop = true

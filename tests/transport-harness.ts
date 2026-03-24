@@ -75,7 +75,7 @@ export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-script
   const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)
 
   const agentLoopLive = Layer.provide(
-    AgentLoop.Live({ systemPrompt: "test system prompt" }),
+    AgentLoop.Live({ baseSections: [{ id: "base", content: "test system prompt", priority: 0 }] }),
     Layer.merge(baseDeps, eventStoreLive),
   )
   const actorProcessLive = Layer.provide(

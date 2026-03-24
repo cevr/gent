@@ -169,7 +169,13 @@ const makeRecoveryLayer = (params: {
     handoffLayer,
   )
 
-  return Layer.mergeAll(base, Layer.provide(AgentLoop.Live({ systemPrompt }), base))
+  return Layer.mergeAll(
+    base,
+    Layer.provide(
+      AgentLoop.Live({ baseSections: [{ id: "base", content: systemPrompt, priority: 0 }] }),
+      base,
+    ),
+  )
 }
 
 const waitFor = <A>(

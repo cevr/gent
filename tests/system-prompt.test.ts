@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test"
-import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT } from "@gent/core/server/system-prompt"
+import {
+  buildSystemPrompt,
+  buildBasePromptSections,
+  compileSystemPrompt,
+} from "@gent/core/server/system-prompt"
 
 describe("buildSystemPrompt", () => {
   const base = {
@@ -8,9 +12,15 @@ describe("buildSystemPrompt", () => {
     isGitRepo: true,
   }
 
-  test("includes default system prompt", () => {
+  test("includes character section", () => {
     const result = buildSystemPrompt(base)
-    expect(result).toContain(DEFAULT_SYSTEM_PROMPT)
+    expect(result).toContain("# Character")
+    expect(result).toContain("Finish what you start")
+  })
+
+  test("includes identity", () => {
+    const result = buildSystemPrompt(base)
+    expect(result).toContain("You are Gent, a coding assistant.")
   })
 
   test("includes environment section", () => {
@@ -54,14 +64,38 @@ describe("buildSystemPrompt", () => {
 
   test("omits skills section when empty array", () => {
     const result = buildSystemPrompt({ ...base, skills: [] })
-    // formatSkillsForPrompt returns "" for empty array
     const withoutSkills = buildSystemPrompt(base)
     expect(result).toBe(withoutSkills)
   })
 
   test("includes date in ISO format", () => {
     const result = buildSystemPrompt(base)
-    // Date format: YYYY-MM-DD
     expect(result).toMatch(/Date: \d{4}-\d{2}-\d{2}/)
+  })
+})
+
+describe("buildBasePromptSections", () => {
+  const base = {
+    cwd: "/test",
+    platform: "darwin",
+    isGitRepo: false,
+  }
+
+  test("returns ordered sections", () => {
+    const sections = buildBasePromptSections(base)
+    expect(sections.length).toBeGreaterThanOrEqual(6)
+    const ids = sections.map((s) => s.id)
+    expect(ids).toContain("identity")
+    expect(ids).toContain("character")
+    expect(ids).toContain("tools")
+    expect(ids).toContain("environment")
+  })
+
+  test("compileSystemPrompt sorts by priority", () => {
+    const result = compileSystemPrompt([
+      { id: "b", content: "second", priority: 20 },
+      { id: "a", content: "first", priority: 10 },
+    ])
+    expect(result).toBe("first\n\nsecond")
   })
 })

@@ -88,6 +88,7 @@ export const WebSearchTool = defineTool({
     const year = new Date().getFullYear()
     return `Search the web using Exa AI. Returns content from the most relevant websites. The current year is ${year} — use this year when searching for recent information.`
   },
+  promptSnippet: "Search the web for information",
   params: WebSearchParams,
   execute: Effect.fn("WebSearchTool.execute")(function* (params) {
     const searchRequest: McpRequest = {

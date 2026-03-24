@@ -23,6 +23,10 @@ export interface ToolDefinition<
   readonly concurrency?: "serial" | "parallel"
   /** Whether this tool is safe to replay after restart (read-only tools = true) */
   readonly idempotent?: boolean
+  /** One-liner for system prompt tool list (distinct from description which goes to LLM tool schema) */
+  readonly promptSnippet?: string
+  /** Behavioral guidelines injected into system prompt when this tool is active */
+  readonly promptGuidelines?: ReadonlyArray<string>
   readonly params: Params
   readonly execute: (
     params: Schema.Schema.Type<Params>,

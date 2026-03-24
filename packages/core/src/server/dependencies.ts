@@ -38,7 +38,7 @@ import { TaskService } from "../runtime/task-service.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
-import { buildSystemPrompt } from "./system-prompt.js"
+import { buildBasePromptSections, compileSystemPrompt } from "./system-prompt.js"
 import type { InteractionRequestType } from "../domain/interaction-request.js"
 
 /** Marker service — construction triggers recovery of pending interaction requests */
@@ -247,13 +247,14 @@ export const createDependencies = (config: DependenciesConfig) => {
         const customInstructions = yield* configService.loadInstructions(config.cwd)
         const availableSkills = yield* skills.list()
         const isGitRepo = yield* fs.exists(path.join(config.cwd, ".git"))
-        const systemPrompt = buildSystemPrompt({
+        const baseSections = buildBasePromptSections({
           cwd: config.cwd,
           platform: config.platform,
           isGitRepo,
           customInstructions,
           skills: availableSkills,
         })
+        const systemPrompt = compileSystemPrompt(baseSections)
 
         const agentActorLive = AgentActor.Live
         const subagentRunnerConfigLive = SubagentRunnerConfig.Live({
@@ -272,7 +273,7 @@ export const createDependencies = (config: DependenciesConfig) => {
               )
 
         return Layer.mergeAll(
-          AgentLoop.Live({ systemPrompt }),
+          AgentLoop.Live({ baseSections }),
           agentActorLive,
           subagentRunnerConfigLive,
           subagentRunnerLive,

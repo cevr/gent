@@ -142,6 +142,8 @@ export const EditTool = defineTool({
   concurrency: "serial",
   description:
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
+  promptSnippet: "Apply targeted edits to existing files",
+  promptGuidelines: ["Use for partial changes, not full rewrites", "old_string must match exactly"],
   params: EditParams,
   execute: Effect.fn("EditTool.execute")(function* (params, _ctx) {
     const fs = yield* FileSystem.FileSystem

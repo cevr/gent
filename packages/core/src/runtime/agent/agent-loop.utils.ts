@@ -8,18 +8,67 @@ import {
 } from "../../domain/message.js"
 import type { MessageId } from "../../domain/ids.js"
 import type { ProviderRequest } from "../../providers/provider.js"
+import type { AnyToolDefinition } from "../../domain/tool.js"
+import { compileSystemPrompt, type PromptSection } from "../../server/system-prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
 const VALID_REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
 
-export const buildSystemPrompt = (basePrompt: string, agent: AgentDefinition): string => {
-  const parts: string[] = [basePrompt]
+/**
+ * Build a per-turn system prompt from base sections, agent addendum, and active tools.
+ *
+ * Tools with `promptSnippet` appear in a tool list; tools with `promptGuidelines`
+ * contribute behavioral bullets. This replaces the old static `# Tools` section
+ * with dynamic, tool-aware content.
+ */
+export const buildTurnPrompt = (
+  baseSections: ReadonlyArray<PromptSection>,
+  agent: AgentDefinition,
+  tools: ReadonlyArray<AnyToolDefinition>,
+  extraSections?: ReadonlyArray<PromptSection>,
+): string => {
+  const sections: PromptSection[] = [...baseSections]
 
+  // Agent addendum
   if (agent.systemPromptAddendum !== undefined && agent.systemPromptAddendum !== "") {
-    parts.push(`\n\n## Agent: ${agent.name}\n${agent.systemPromptAddendum}`)
+    sections.push({
+      id: "agent-addendum",
+      content: `## Agent: ${agent.name}\n${agent.systemPromptAddendum}`,
+      priority: 90,
+    })
   }
 
-  return parts.join("")
+  // Tool list — tools with promptSnippet get listed explicitly
+  const snippets = tools
+    .filter((t) => t.promptSnippet !== undefined)
+    .map((t) => `- **${t.name}**: ${t.promptSnippet}`)
+  if (snippets.length > 0) {
+    sections.push({
+      id: "tool-list",
+      content: `## Available Tools\n\n${snippets.join("\n")}`,
+      priority: 42,
+    })
+  }
+
+  // Tool guidelines — collected from active tools
+  const guidelines = tools.flatMap((t) => t.promptGuidelines ?? [])
+  if (guidelines.length > 0) {
+    const deduped = [...new Set(guidelines)]
+    sections.push({
+      id: "tool-guidelines",
+      content: `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
+      priority: 44,
+    })
+  }
+
+  // Extension-contributed sections
+  if (extraSections !== undefined) {
+    for (const s of extraSections) {
+      sections.push(s)
+    }
+  }
+
+  return compileSystemPrompt(sections)
 }
 
 export const resolveReasoning = (

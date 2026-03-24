@@ -32,6 +32,7 @@ export const HandoffTool = defineTool({
   concurrency: "serial",
   description:
     "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",
+  promptSnippet: "Transfer context to a new session",
   params: HandoffParams,
   execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService

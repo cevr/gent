@@ -533,7 +533,7 @@ describe("AgentLoop actor model", () => {
       ToolRunner.Test(),
       BunServices.layer,
     )
-    return Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
+    return Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
   }
 
   const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
@@ -549,7 +549,7 @@ describe("AgentLoop actor model", () => {
       recorderLayer,
       eventStoreLayer,
     )
-    return Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
+    return Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
   }
 
   test("runs sessions concurrently", async () => {
@@ -652,7 +652,7 @@ describe("AgentLoop actor model", () => {
       ToolRunner.Test(),
       BunServices.layer,
     )
-    const layer = Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
+    const layer = Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
 
     await Effect.runPromise(
       Effect.scoped(

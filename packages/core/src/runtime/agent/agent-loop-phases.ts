@@ -29,7 +29,8 @@ import {
 } from "../../providers/provider.js"
 import { type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
-import { type ToolContext } from "../../domain/tool.js"
+import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
+import type { PromptSection } from "../../server/system-prompt.js"
 import { estimateContextPercent } from "../context-estimation"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { withRetry } from "../retry"
@@ -37,7 +38,7 @@ import { type ToolRunnerService } from "./tool-runner"
 import { type AssistantDraft, type ResolvedTurn } from "./agent-loop.state.js"
 import {
   assistantMessageIdForTurn,
-  buildSystemPrompt,
+  buildTurnPrompt,
   resolveReasoning,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
@@ -75,6 +76,7 @@ export type ActiveStreamHandle = {
 
 interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
+  tools: ReadonlyArray<AnyToolDefinition>
 }
 
 const persistAssistantText = (params: {
@@ -132,7 +134,7 @@ const resolveTurnContext = (params: {
   extensionRegistry: ExtensionRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
-  systemPrompt: string
+  baseSections: ReadonlyArray<PromptSection>
 }): Effect.Effect<ResolvedTurnContext | undefined, StorageError> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? "cowork"
@@ -153,9 +155,18 @@ const resolveTurnContext = (params: {
       return undefined
     }
 
+    // Resolve tools first — prompt is built from the active tool set
+    const tools = yield* params.extensionRegistry.listToolsForAgent(agent, {
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      agentName: currentAgent,
+    })
+
+    // Build tool-aware prompt, then run through prompt.system interceptor
+    const turnPrompt = buildTurnPrompt(params.baseSections, agent, tools)
     const systemPrompt = yield* params.extensionRegistry.hooks.runInterceptor(
       "prompt.system",
-      { basePrompt: buildSystemPrompt(params.systemPrompt, agent), agent },
+      { basePrompt: turnPrompt, agent },
       (input) => Effect.succeed(input.basePrompt),
     )
     const session = yield* params.storage
@@ -166,18 +177,13 @@ const resolveTurnContext = (params: {
       currentTurnAgent: currentAgent,
       messages,
       agent,
+      tools,
       systemPrompt,
       modelId: resolveAgentModel(agent),
       reasoning: resolveReasoning(agent, session?.reasoningLevel),
       temperature: agent.temperature,
     }
   })
-
-interface CollectedStreamResponse {
-  draft: AssistantDraft
-  streamFailed: boolean
-  interrupted: boolean
-}
 
 const collectStreamResponse = (params: {
   streamEffect: Stream.Stream<ProviderStreamChunk, ProviderError>
@@ -428,7 +434,7 @@ export const resolveTurnPhase = (params: {
   extensionRegistry: ExtensionRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
-  systemPrompt: string
+  baseSections: ReadonlyArray<PromptSection>
 }) =>
   Effect.gen(function* () {
     const existing = yield* params.storage.getMessage(params.message.id)
@@ -454,6 +460,7 @@ export const resolveTurnPhase = (params: {
       messages: resolved.messages,
       systemPrompt: resolved.systemPrompt,
       modelId: resolved.modelId,
+      tools: resolved.tools,
       ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
       ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
     } satisfies ResolvedTurn
@@ -483,20 +490,7 @@ export const streamTurnPhase = (params: {
         createdAt,
       })
 
-    const agent = yield* params.extensionRegistry.getAgent(params.resolved.currentTurnAgent)
-    if (agent === undefined) {
-      return {
-        draft: { text: "", reasoning: "", toolCalls: [] },
-        interrupted: false,
-        streamFailed: true,
-      } satisfies CollectedStreamResponse
-    }
-
-    const tools = yield* params.extensionRegistry.listToolsForAgent(agent, {
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      agentName: params.resolved.currentTurnAgent,
-    })
+    const tools = params.resolved.tools ?? []
 
     yield* params
       .publishEvent(new StreamStarted({ sessionId: params.sessionId, branchId: params.branchId }))

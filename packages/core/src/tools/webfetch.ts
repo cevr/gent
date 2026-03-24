@@ -39,6 +39,7 @@ export const WebFetchTool = defineTool({
   idempotent: true,
   description:
     "Fetch a URL and convert HTML to markdown. Use for researching documentation, reading web content, or gathering information from websites.",
+  promptSnippet: "Fetch a URL and convert HTML to markdown",
   params: WebFetchParams,
   execute: Effect.fn("WebFetchTool.execute")(function* (params) {
     const response = yield* Effect.tryPromise({

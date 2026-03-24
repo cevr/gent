@@ -38,6 +38,7 @@ export const DelegateTool = defineTool({
   concurrency: "serial",
   description:
     "Delegate work to specialized subagents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
+  promptSnippet: "Delegate work to specialized subagents",
   params: DelegateParams,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
