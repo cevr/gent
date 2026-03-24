@@ -63,6 +63,7 @@ import {
   EventEnvelope,
   SkillInfo,
   SkillContent,
+  SendExtensionIntentPayload,
 } from "./transport-contract.js"
 export {
   CreateSessionPayload,
@@ -348,6 +349,12 @@ export class GentRpcs extends RpcGroup.make(
   Rpc.make("getSkillContent", {
     payload: { name: Schema.String },
     success: Schema.NullOr(SkillContent),
+    error: GentRpcError,
+  }),
+
+  // Extension state
+  Rpc.make("sendExtensionIntent", {
+    payload: SendExtensionIntentPayload.fields,
     error: GentRpcError,
   }),
 ) {}

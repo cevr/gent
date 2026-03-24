@@ -17,6 +17,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.js"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner.js"
 import { ConfigService } from "@gent/core/runtime/config-service.js"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime.js"
 import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
 import { LocalActorProcessLive } from "@gent/core/runtime/actor-process.js"
 import { EventStoreLive } from "@gent/core/server/event-store.js"
@@ -58,6 +59,7 @@ export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-script
     Storage.Memory(),
     providerLive,
     extensionRegistryLive,
+    ExtensionStateRuntime.Test(),
     Permission.Test(),
     PermissionHandler.Test(["allow"]),
     PromptHandler.Test(["yes"]),

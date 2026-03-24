@@ -29,6 +29,7 @@ import {
 } from "@gent/core/runtime/agent/agent-loop.utils"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { EventStoreLive } from "@gent/core/server/event-store"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
@@ -164,6 +165,7 @@ const makeRecoveryLayer = (params: {
     storageLayer,
     eventStoreLayer,
     extensionLayer,
+    ExtensionStateRuntime.Test(),
     providerLayer,
     toolRunnerLayer,
     handoffLayer,

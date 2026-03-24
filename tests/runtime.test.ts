@@ -13,6 +13,7 @@ import {
   ExtensionRegistry,
   resolveExtensions,
 } from "@gent/core/runtime/extensions/registry"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { InProcessRunner, SubagentRunnerConfig } from "@gent/core/runtime/agent/subagent-runner"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
@@ -595,7 +596,7 @@ describe("AgentLoop actor model", () => {
       Storage.Test(),
       providerLayer,
       makeTestExtRegistry(),
-
+      ExtensionStateRuntime.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
@@ -611,6 +612,7 @@ describe("AgentLoop actor model", () => {
       Storage.Test(),
       providerLayer,
       makeTestExtRegistry(),
+      ExtensionStateRuntime.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,
@@ -715,6 +717,7 @@ describe("AgentLoop actor model", () => {
       slowStorage,
       providerLayer,
       makeTestExtRegistry(),
+      ExtensionStateRuntime.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),

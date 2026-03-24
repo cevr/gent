@@ -423,6 +423,14 @@ export const CallbackAuthPayload = CallbackAuthInput
 export { AuthProviderInfo }
 export { EventEnvelope }
 
+export const SendExtensionIntentInput = Schema.Struct({
+  extensionId: Schema.String,
+  intent: Schema.Unknown,
+  epoch: Schema.Number,
+})
+export type SendExtensionIntentInput = typeof SendExtensionIntentInput.Type
+export const SendExtensionIntentPayload = SendExtensionIntentInput
+
 export const SkillInfo = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
@@ -561,6 +569,12 @@ export interface GentClient {
   listSkills: () => Effect.Effect<readonly SkillContent[], GentRpcError>
 
   getSkillContent: (name: string) => Effect.Effect<SkillContent | null, GentRpcError>
+
+  sendExtensionIntent: (
+    extensionId: string,
+    intent: unknown,
+    epoch: number,
+  ) => Effect.Effect<void, GentRpcError>
 
   /** Fire-and-forget — run an effect on the client's captured runtime */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

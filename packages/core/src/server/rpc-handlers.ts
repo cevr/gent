@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { GentRpcs } from "./rpcs"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
@@ -38,6 +39,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
+    const extensionStateRuntime = yield* ExtensionStateRuntime
 
     return {
       createSession: (input) =>
@@ -269,6 +271,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
               : null,
           ),
         ),
+
+      sendExtensionIntent: ({ extensionId, intent, epoch }) =>
+        extensionStateRuntime.handleIntent(extensionId, intent, epoch).pipe(Effect.orDie),
     }
   }),
 )

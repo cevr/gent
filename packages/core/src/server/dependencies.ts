@@ -31,6 +31,7 @@ import {
 import { ConfigService } from "../runtime/config-service.js"
 import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { SqliteClientLive } from "../runtime/sql-client.js"
@@ -71,7 +72,7 @@ const loadBuiltinExtensions = (cwd: string): LoadedExtension[] =>
     setup: Effect.runSync(extension.setup({ cwd, config: undefined as never, source: "builtin" })),
   }))
 
-const makeExtensionRegistryLive = (config: DependenciesConfig) =>
+const makeExtensionLayers = (config: DependenciesConfig) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const path = yield* Path.Path
@@ -94,7 +95,11 @@ const makeExtensionRegistryLive = (config: DependenciesConfig) =>
         if (loaded !== undefined) external.push(loaded)
       }
 
-      return ExtensionRegistry.Live([...loadBuiltinExtensions(config.cwd), ...external])
+      const allExtensions = [...loadBuiltinExtensions(config.cwd), ...external]
+      return Layer.merge(
+        ExtensionRegistry.Live(allExtensions),
+        ExtensionStateRuntime.Live(allExtensions),
+      )
     }),
   )
 
@@ -131,7 +136,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     claudeSkillsDir: `${config.home}/.claude/skills`,
     extraDirs: config.skillsDirs,
   })
-  const extensionRegistryLive = makeExtensionRegistryLive(config)
+  const extensionRegistryLive = makeExtensionLayers(config)
   const fileLockServiceLive = FileLockService.layer
 
   const providerFactoryLive = Layer.provide(ProviderFactory.Live, authStoreLive)

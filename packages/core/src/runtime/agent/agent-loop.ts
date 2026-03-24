@@ -61,6 +61,7 @@ import { Provider, type FinishChunk } from "../../providers/provider.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withRetry } from "../retry"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
 import { ToolRunner } from "./tool-runner"
 import {
   type ActiveStreamHandle,
@@ -559,7 +560,13 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
   }): Layer.Layer<
     AgentLoop,
     never,
-    Storage | Provider | ExtensionRegistry | EventStore | HandoffHandler | ToolRunner
+    | Storage
+    | Provider
+    | ExtensionRegistry
+    | ExtensionStateRuntime
+    | EventStore
+    | HandoffHandler
+    | ToolRunner
   > =>
     Layer.effect(
       AgentLoop,
@@ -567,6 +574,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const storage = yield* Storage
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
+        const extensionStateRuntime = yield* ExtensionStateRuntime
         const eventStore = yield* EventStore
         const handoffHandler = yield* HandoffHandler
         const toolRunner = yield* ToolRunner
@@ -703,6 +711,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 storage,
                 branchId,
                 extensionRegistry,
+                extensionStateRuntime,
                 sessionId,
                 publishEvent: publishEventOrDie,
                 baseSections: config.baseSections,

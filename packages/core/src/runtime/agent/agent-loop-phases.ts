@@ -33,6 +33,7 @@ import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 import { estimateContextPercent } from "../context-estimation"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
+import { type ExtensionStateRuntimeService } from "../extensions/state-runtime.js"
 import { withRetry } from "../retry"
 import { type ToolRunnerService } from "./tool-runner"
 import { type AssistantDraft, type ResolvedTurn } from "./agent-loop.state.js"
@@ -132,6 +133,7 @@ const resolveTurnContext = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
+  extensionStateRuntime: ExtensionStateRuntimeService
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
@@ -155,12 +157,20 @@ const resolveTurnContext = (params: {
       return undefined
     }
 
+    // Derive extension projections from state machines
+    const allTools = yield* params.extensionRegistry.listTools()
+    const extensionResults = yield* params.extensionStateRuntime.deriveAll({
+      agent,
+      allTools,
+    })
+    const extensionProjections = extensionResults.map((r) => r.projection)
+
     // Resolve tools + extension prompt sections via ToolPolicy compiler
     const { tools, promptSections: extensionSections } =
       yield* params.extensionRegistry.resolveToolPolicy(
         agent,
         { sessionId: params.sessionId, branchId: params.branchId, agentName: currentAgent },
-        [], // No extension projections yet — wired in Batch 4
+        extensionProjections,
       )
 
     // Build tool-aware prompt, then run through prompt.system interceptor
@@ -433,6 +443,7 @@ export const resolveTurnPhase = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
+  extensionStateRuntime: ExtensionStateRuntimeService
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
