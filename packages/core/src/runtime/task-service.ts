@@ -164,15 +164,16 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 ),
             )
             if (allDone.every(Boolean)) {
-              // Atomically claim before forking
-              yield* storage
-                .updateTask(depTaskId, { status: "in_progress" })
-                .pipe(Effect.catchEager(() => Effect.void))
+              // Atomically claim: compare-and-set pending→in_progress
+              const claimed = yield* storage
+                .claimTask(depTaskId)
+                .pipe(Effect.catchEager(() => Effect.sync(() => undefined as Task | undefined)))
+              if (claimed === undefined) continue
               yield* eventStore
                 .publish(
                   new TaskUpdated({
-                    sessionId: depTask.sessionId,
-                    branchId: depTask.branchId,
+                    sessionId: claimed.sessionId,
+                    branchId: claimed.branchId,
                     taskId: depTaskId,
                     status: "in_progress",
                   }),
@@ -305,20 +306,23 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
               return { taskId: id, status: task.status }
             }
 
-            // Atomically claim before forking — prevents double-run race
-            yield* storage.updateTask(id, { status: "in_progress" }).pipe(Effect.orDie)
+            // Atomically claim before forking — compare-and-set prevents double-run
+            const claimed = yield* storage.claimTask(id).pipe(Effect.orDie)
+            if (claimed === undefined) {
+              return { taskId: id, status: task.status }
+            }
             yield* eventStore
               .publish(
                 new TaskUpdated({
-                  sessionId: task.sessionId,
-                  branchId: task.branchId,
+                  sessionId: claimed.sessionId,
+                  branchId: claimed.branchId,
                   taskId: id,
                   status: "in_progress",
                 }),
               )
               .pipe(Effect.catchEager(() => Effect.void))
 
-            yield* Effect.forkDetach(runTaskInternal(id, task))
+            yield* Effect.forkDetach(runTaskInternal(id, claimed))
             return { taskId: id, status: "running" }
           }),
 

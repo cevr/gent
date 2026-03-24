@@ -125,6 +125,8 @@ export interface StorageService {
     }>,
   ) => Effect.Effect<Task | undefined, StorageError>
   readonly deleteTask: (id: TaskId) => Effect.Effect<void, StorageError>
+  /** Atomically claim a pending task → in_progress. Returns the task if claimed, undefined if already non-pending. */
+  readonly claimTask: (id: TaskId) => Effect.Effect<Task | undefined, StorageError>
   readonly addTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
   readonly removeTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
   readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
@@ -1077,6 +1079,21 @@ const makeStorage = Effect.gen(function* () {
         yield* sql`DELETE FROM tasks WHERE id = ${id}`
       },
       Effect.mapError(mapError("Failed to delete task")),
+    ),
+
+    claimTask: Effect.fn("Storage.claimTask")(
+      function* (id) {
+        const now = Date.now()
+        // Compare-and-set: only update if currently pending
+        yield* sql`UPDATE tasks SET status = 'in_progress', updated_at = ${now} WHERE id = ${id} AND status = 'pending'`
+        // Re-read to see if we got it
+        const rows =
+          yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
+        const row = rows[0]
+        if (row === undefined || row.status !== "in_progress") return undefined
+        return taskFromRow(row)
+      },
+      Effect.mapError(mapError("Failed to claim task")),
     ),
 
     addTaskDep: (taskId, blockedById) =>
