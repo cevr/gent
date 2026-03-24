@@ -179,6 +179,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           name,
           cwd: input.cwd,
           bypass,
+          activeBranchId: branchId,
           parentSessionId: input.parentSessionId,
           parentBranchId: input.parentBranchId,
           createdAt: now,
@@ -279,6 +280,18 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
               }),
             )
           }
+        }
+
+        // Persist active branch pointer before publishing event
+        const session = yield* storage.getSession(input.sessionId)
+        if (session !== undefined) {
+          yield* storage.updateSession(
+            new Session({
+              ...session,
+              activeBranchId: input.toBranchId,
+              updatedAt: new Date(),
+            }),
+          )
         }
 
         yield* eventStore.publish(

@@ -81,6 +81,7 @@ export class Session extends Schema.Class<Session>("Session")({
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
   reasoningLevel: Schema.optional(ReasoningEffort),
+  activeBranchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
   createdAt: DateFromNumber,

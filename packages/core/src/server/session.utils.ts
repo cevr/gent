@@ -11,13 +11,13 @@ type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
 }
 
-export const sessionToInfo = (session: Session, branchId?: BranchId): SessionInfo => ({
+export const sessionToInfo = (session: Session, branchIdFallback?: BranchId): SessionInfo => ({
   id: session.id,
   name: session.name,
   cwd: session.cwd,
   bypass: session.bypass,
   reasoningLevel: session.reasoningLevel,
-  branchId,
+  branchId: session.activeBranchId ?? branchIdFallback,
   parentSessionId: session.parentSessionId,
   parentBranchId: session.parentBranchId,
   createdAt: session.createdAt.getTime(),
