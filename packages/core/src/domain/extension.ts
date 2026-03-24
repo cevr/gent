@@ -1,24 +1,9 @@
 import type { Effect, Layer, Schema } from "effect"
 import type { AgentDefinition, AgentName } from "./agent"
-import type {
-  AgentEvent,
-  SessionStarted,
-  SessionEnded,
-  StreamStarted,
-  StreamEnded,
-  TurnCompleted,
-  ToolCallStarted,
-  ToolCallSucceeded,
-  ToolCallFailed,
-  MessageReceived,
-  AgentSwitched,
-  HandoffPresented,
-  HandoffConfirmed,
-} from "./event"
+import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition } from "./tool"
-import type { ProviderRequest } from "../providers/provider"
 import type { PromptSection } from "./prompt.js"
 
 // Extension Manifest — authored by extension author
@@ -50,15 +35,7 @@ export class ExtensionLoadError {
   ) {}
 }
 
-// System Prompt Fragment — contributed by extensions
-
-export interface SystemPromptFragment {
-  readonly section: "guidelines" | "tools" | "context" | "custom"
-  readonly content: string
-  readonly priority?: number
-}
-
-// Run Context — per-run metadata for tools.visible decisions
+// Run Context — per-run metadata for tag injection and tool policy decisions
 
 export interface RunContext {
   readonly sessionId: SessionId
@@ -68,32 +45,18 @@ export interface RunContext {
   readonly tags?: ReadonlyArray<string>
 }
 
-// Interceptor + Observer types
+// Interceptor type
 
 export type Interceptor<I, O, E = never, R = never> = (
   input: I,
   next: (input: I) => Effect.Effect<O, E, R>,
 ) => Effect.Effect<O, E, R>
 
-export type Observer<I, E = never, R = never> = (input: I) => Effect.Effect<void, E, R>
-
 // Hook input types
 
 export interface SystemPromptInput {
   readonly basePrompt: string
   readonly agent: AgentDefinition
-}
-
-export interface AgentResolveInput {
-  readonly name: string
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
-export interface ToolsVisibleInput {
-  readonly agent: AgentDefinition
-  readonly tools: ReadonlyArray<AnyToolDefinition>
-  readonly runContext: RunContext
 }
 
 export interface ToolExecuteInput {
@@ -104,44 +67,20 @@ export interface ToolExecuteInput {
   readonly branchId: BranchId
 }
 
-export interface ProviderRequestInput {
-  readonly request: ProviderRequest
-  readonly agent: AgentDefinition
-}
-
 export interface PermissionCheckInput {
   readonly toolName: string
   readonly input: unknown
 }
 
-// Hook maps
+// Interceptor map — only hooks that have production callers
 
 export interface ExtensionInterceptorMap {
   readonly "prompt.system": Interceptor<SystemPromptInput, string>
-  readonly "agent.resolve": Interceptor<AgentResolveInput, AgentDefinition>
-  readonly "tools.visible": Interceptor<ToolsVisibleInput, ReadonlyArray<AnyToolDefinition>>
   readonly "tool.execute": Interceptor<ToolExecuteInput, unknown>
-  readonly "provider.request": Interceptor<ProviderRequestInput, ProviderRequest>
   readonly "permission.check": Interceptor<PermissionCheckInput, PermissionResult>
 }
 
-export interface ExtensionObserverMap {
-  readonly "session.start": Observer<SessionStarted>
-  readonly "session.end": Observer<SessionEnded>
-  readonly "handoff.before": Observer<HandoffPresented>
-  readonly "handoff.after": Observer<HandoffConfirmed>
-  readonly "agent.switch": Observer<AgentSwitched>
-  readonly "stream.start": Observer<StreamStarted>
-  readonly "stream.end": Observer<StreamEnded>
-  readonly "turn.end": Observer<TurnCompleted>
-  readonly "tool.call": Observer<ToolCallStarted>
-  readonly "tool.succeeded": Observer<ToolCallSucceeded>
-  readonly "tool.failed": Observer<ToolCallFailed>
-  readonly "message.received": Observer<MessageReceived>
-}
-
 export type ExtensionInterceptorKey = keyof ExtensionInterceptorMap
-export type ExtensionObserverKey = keyof ExtensionObserverMap
 
 export type ExtensionInterceptorDescriptor<
   K extends ExtensionInterceptorKey = ExtensionInterceptorKey,
@@ -150,14 +89,8 @@ export type ExtensionInterceptorDescriptor<
   readonly run: ExtensionInterceptorMap[K]
 }
 
-export type ExtensionObserverDescriptor<K extends ExtensionObserverKey = ExtensionObserverKey> = {
-  readonly key: K
-  readonly run: ExtensionObserverMap[K]
-}
-
 export interface ExtensionHooks {
   readonly interceptors?: ReadonlyArray<ExtensionInterceptorDescriptor>
-  readonly observers?: ReadonlyArray<ExtensionObserverDescriptor>
 }
 
 // Extension State Machine — server-owned state that drives tool policy, prompt, and UI
@@ -214,7 +147,7 @@ export interface ExtensionStateMachine<State, Intent = void> {
   readonly handleIntent?: (state: State, intent: Intent) => ExtensionIntentResult<State>
 }
 
-/** Tag-conditional tool injection — declarative replacement for tools.visible interceptor */
+/** Tag-conditional tool injection — declarative replacement for old tools.visible interceptor */
 export interface TagInjection {
   readonly tag: string
   readonly tools: ReadonlyArray<AnyToolDefinition>
@@ -225,13 +158,12 @@ export interface TagInjection {
 export interface ExtensionSetup {
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   readonly agents?: ReadonlyArray<AgentDefinition>
-  readonly promptFragments?: ReadonlyArray<SystemPromptFragment>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Layer<unknown, unknown, unknown>
   /** Server-owned state machine for this extension */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly stateMachine?: ExtensionStateMachine<any, any>
-  /** Declarative tag-conditional tool injections (replaces tools.visible for tag-based injection) */
+  /** Declarative tag-conditional tool injections */
   readonly tagInjections?: ReadonlyArray<TagInjection>
 }
 
@@ -256,8 +188,3 @@ export const defineInterceptor = <K extends ExtensionInterceptorKey>(
   key: K,
   run: ExtensionInterceptorMap[K],
 ): ExtensionInterceptorDescriptor<K> => ({ key, run })
-
-export const defineObserver = <K extends ExtensionObserverKey>(
-  key: K,
-  run: ExtensionObserverMap[K],
-): ExtensionObserverDescriptor<K> => ({ key, run })

@@ -5,7 +5,6 @@ import type {
   ExtensionProjection,
   LoadedExtension,
   RunContext,
-  SystemPromptFragment,
   TagInjection,
 } from "../../domain/extension.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -22,7 +21,6 @@ const SCOPE_PRECEDENCE: Record<ExtensionKind, number> = { builtin: 0, user: 1, p
 export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
-  readonly promptFragments: ReadonlyArray<SystemPromptFragment>
   readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -71,15 +69,6 @@ export const resolveExtensions = (
     }
   }
 
-  // Prompt fragments: collect all, sorted by priority (lower first)
-  const promptFragments: SystemPromptFragment[] = []
-  for (const ext of sorted) {
-    for (const frag of ext.setup.promptFragments ?? []) {
-      promptFragments.push(frag)
-    }
-  }
-  promptFragments.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))
-
   // Tag injections: collect from all extensions
   const tagInjections: TagInjection[] = []
   for (const ext of sorted) {
@@ -90,7 +79,7 @@ export const resolveExtensions = (
 
   const hooks = compileHooks(sorted)
 
-  return { tools, agents, promptFragments, tagInjections, hooks, extensions: sorted }
+  return { tools, agents, tagInjections, hooks, extensions: sorted }
 }
 
 // ToolPolicy compiler — unified tool filtering + prompt section collection
@@ -105,7 +94,7 @@ export interface CompiledToolPolicy {
  *
  * Pipeline:
  * 1. Agent allow/deny filtering
- * 2. Tag-conditional injection (declarative replacement for tools.visible interceptor)
+ * 2. Tag-conditional injection
  * 3. Extension projection fragments (include/exclude/overrideSet)
  * 4. Re-apply agent deny list (extensions can't escape denials)
  * 5. Collect extension-contributed prompt sections
@@ -208,9 +197,6 @@ export interface ExtensionRegistryService {
   readonly listPrimaryAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
   readonly listSubagents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
-  // Prompt fragments
-  readonly getPromptFragments: () => Effect.Effect<ReadonlyArray<SystemPromptFragment>>
-
   // Hooks
   readonly hooks: CompiledHookMap
 }
@@ -241,7 +227,6 @@ export class ExtensionRegistry extends ServiceMap.Service<
         ),
       listSubagents: () =>
         Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "subagent")),
-      getPromptFragments: () => Effect.succeed(resolved.promptFragments),
       hooks: resolved.hooks,
     })
 

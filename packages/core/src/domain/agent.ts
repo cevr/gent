@@ -235,9 +235,9 @@ export interface AgentExecutionOverrides {
   readonly deniedTools?: ReadonlyArray<string>
   readonly reasoningEffort?: ReasoningEffort
   readonly systemPromptAddendum?: string
-  /** Tags passed to RunContext for tools.visible hook decisions */
+  /** Tags passed to RunContext for tag injection decisions */
   readonly tags?: ReadonlyArray<string>
-  /** @deprecated Use tags + tools.visible hook instead */
+  /** @deprecated Use tags + tagInjections instead */
   readonly additionalTools?: ReadonlyArray<AnyToolDefinition>
 }
 

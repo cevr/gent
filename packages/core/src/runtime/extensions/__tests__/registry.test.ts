@@ -46,7 +46,6 @@ describe("resolveExtensions", () => {
     const resolved = resolveExtensions([])
     expect(resolved.tools.size).toBe(0)
     expect(resolved.agents.size).toBe(0)
-    expect(resolved.promptFragments.length).toBe(0)
   })
 
   test("collects tools from multiple extensions", () => {
@@ -86,27 +85,6 @@ describe("resolveExtensions", () => {
     ])
 
     expect(resolved.agents.get("explore")?.description).toBe("project explore")
-  })
-
-  test("collects prompt fragments sorted by priority", () => {
-    const resolved = resolveExtensions(
-      [makeExt("a", "builtin"), makeExt("b", "project")].map((ext) => ({
-        ...ext,
-        setup: {
-          ...ext.setup,
-          promptFragments: [
-            {
-              section: "custom" as const,
-              content: ext.manifest.id,
-              priority: ext.kind === "builtin" ? 50 : 10,
-            },
-          ],
-        },
-      })),
-    )
-
-    expect(resolved.promptFragments[0]?.content).toBe("b")
-    expect(resolved.promptFragments[1]?.content).toBe("a")
   })
 
   test("throws on same-scope tool collision from different extensions", () => {
