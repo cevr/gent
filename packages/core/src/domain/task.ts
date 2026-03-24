@@ -8,6 +8,27 @@ import { DateFromNumber } from "./message"
 export const TaskStatus = Schema.Literals(["pending", "in_progress", "completed", "failed"])
 export type TaskStatus = typeof TaskStatus.Type
 
+/** Legal task status transitions */
+const VALID_TRANSITIONS: ReadonlyMap<TaskStatus, ReadonlySet<TaskStatus>> = new Map([
+  ["pending", new Set<TaskStatus>(["in_progress", "failed"])],
+  ["in_progress", new Set<TaskStatus>(["completed", "failed"])],
+  ["completed", new Set<TaskStatus>()],
+  ["failed", new Set<TaskStatus>()],
+])
+
+/** Returns true if the transition from → to is legal */
+export const isValidTaskTransition = (from: TaskStatus, to: TaskStatus): boolean =>
+  VALID_TRANSITIONS.get(from)?.has(to) === true
+
+export class TaskTransitionError extends Schema.TaggedErrorClass<TaskTransitionError>()(
+  "TaskTransitionError",
+  {
+    message: Schema.String,
+    from: TaskStatus,
+    to: TaskStatus,
+  },
+) {}
+
 // Task
 
 export class Task extends Schema.Class<Task>("Task")({

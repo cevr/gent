@@ -170,13 +170,9 @@ describe("TaskUpdateTool", () => {
       Effect.gen(function* () {
         yield* setup
         const created = yield* TaskCreateTool.execute({ subject: "Fix it" }, ctx)
-        return yield* TaskUpdateTool.execute(
-          {
-            taskId: created.taskId,
-            status: "completed",
-          },
-          ctx,
-        )
+        // Must follow valid transition: pending → in_progress → completed
+        yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
+        return yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "completed" }, ctx)
       }).pipe(Effect.provide(layer)),
     )
     expect(result.status).toBe("completed")
@@ -188,16 +184,12 @@ describe("TaskUpdateTool", () => {
         yield* setup
         const eventStore = yield* EventStore
         const created = yield* TaskCreateTool.execute({ subject: "Ship it" }, ctx)
-        yield* TaskUpdateTool.execute(
-          {
-            taskId: created.taskId,
-            status: "completed",
-          },
-          ctx,
-        )
+        // Valid transition: pending → in_progress → completed
+        yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
+        yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "completed" }, ctx)
         const envelopes = yield* eventStore
           .subscribe({ sessionId: "s1" as SessionId })
-          .pipe(Stream.take(2), Stream.runCollect)
+          .pipe(Stream.take(3), Stream.runCollect)
         return Array.from(envelopes, (envelope) => envelope.event._tag)
       }).pipe(Effect.provide(layer)),
     )

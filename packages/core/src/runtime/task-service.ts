@@ -1,5 +1,10 @@
 import { ServiceMap, Effect, Layer } from "effect"
-import { Task, type TaskStatus } from "../domain/task.js"
+import {
+  Task,
+  TaskTransitionError,
+  isValidTaskTransition,
+  type TaskStatus,
+} from "../domain/task.js"
 import {
   EventStore,
   TaskCreated,
@@ -215,6 +220,20 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
 
         update: (id, fields) =>
           Effect.gen(function* () {
+            // Validate status transition if status is being changed
+            if (fields.status !== undefined) {
+              const existing = yield* storage.getTask(id)
+              if (
+                existing !== undefined &&
+                !isValidTaskTransition(existing.status, fields.status)
+              ) {
+                return yield* new TaskTransitionError({
+                  message: `Invalid task transition: ${existing.status} → ${fields.status}`,
+                  from: existing.status,
+                  to: fields.status,
+                })
+              }
+            }
             const updated = yield* storage.updateTask(id, fields)
             if (updated !== undefined && fields.status !== undefined) {
               if (fields.status === "completed") {
