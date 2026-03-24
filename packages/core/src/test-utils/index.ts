@@ -153,6 +153,7 @@ export const RecordingAskUserHandler = (
             args: { requestId, answers },
           })
         }),
+        rehydrate: () => Effect.void,
       }
     }),
   )

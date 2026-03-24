@@ -16,6 +16,7 @@ import {
   ImagePart,
 } from "@gent/core/domain/message"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   estimateTokens,
   estimateContextPercent,
@@ -89,7 +90,10 @@ describe("HandoffHandler", () => {
   })
 
   describe("Live layer", () => {
-    const LiveLayer = Layer.provideMerge(HandoffHandler.Live, EventStore.Live)
+    const LiveLayer = Layer.provideMerge(
+      HandoffHandler.Live,
+      Layer.mergeAll(EventStore.Live, Storage.Memory()),
+    )
 
     test("present blocks until respond, then returns decision", async () => {
       await Effect.runPromise(

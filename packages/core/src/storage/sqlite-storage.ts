@@ -10,6 +10,10 @@ import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import type { ActorCommandStatus, ActorInboxRecord } from "../runtime/actor-inbox.schema.js"
 import type { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
+import type {
+  InteractionRequestRecord,
+  InteractionRequestStatus,
+} from "../domain/interaction-request.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
@@ -205,6 +209,20 @@ export interface StorageService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<void, StorageError>
+
+  // Durable interaction requests
+  readonly persistInteractionRequest: (
+    record: InteractionRequestRecord,
+  ) => Effect.Effect<InteractionRequestRecord, StorageError>
+  readonly resolveInteractionRequest: (requestId: string) => Effect.Effect<void, StorageError>
+  readonly listPendingInteractionRequests: () => Effect.Effect<
+    ReadonlyArray<InteractionRequestRecord>,
+    StorageError
+  >
+  readonly deletePendingInteractionRequests: (
+    sessionId: SessionId,
+    branchId: BranchId,
+  ) => Effect.Effect<void, StorageError>
 }
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
@@ -273,6 +291,26 @@ interface AgentLoopCheckpointRow {
   state_json: string
   updated_at: number
 }
+
+interface InteractionRequestRow {
+  request_id: string
+  type: string
+  session_id: SessionId
+  branch_id: BranchId
+  params_json: string
+  status: string
+  created_at: number
+}
+
+const interactionRequestFromRow = (row: InteractionRequestRow): InteractionRequestRecord => ({
+  requestId: row.request_id,
+  type: row.type as InteractionRequestRecord["type"],
+  sessionId: row.session_id,
+  branchId: row.branch_id,
+  paramsJson: row.params_json,
+  status: row.status as InteractionRequestStatus,
+  createdAt: row.created_at,
+})
 
 const VALID_REASONING = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
 
@@ -526,6 +564,19 @@ const initSchema = Effect.gen(function* () {
     )
   `)
 
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS interaction_requests (
+      request_id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      params_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `)
+
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_messages_branch_created ON messages(branch_id, created_at, id)`,
@@ -553,6 +604,9 @@ const initSchema = Effect.gen(function* () {
     `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
   )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)`)
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_interaction_requests_status ON interaction_requests(status)`,
+  )
 
   // FTS5 for message search (standalone — no content-sync)
   // Migration: drop old content-sync FTS table if it exists (had column mismatch bug)
@@ -1262,6 +1316,39 @@ const makeStorage = Effect.gen(function* () {
         yield* sql`DELETE FROM agent_loop_checkpoints WHERE session_id = ${input.sessionId} AND branch_id = ${input.branchId}`
       },
       Effect.mapError(mapError("Failed to delete agent loop checkpoint")),
+    ),
+
+    // Durable interaction requests
+
+    persistInteractionRequest: Effect.fn("Storage.persistInteractionRequest")(
+      function* (record) {
+        yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${record.requestId}, ${record.type}, ${record.sessionId}, ${record.branchId}, ${record.paramsJson}, ${record.status}, ${record.createdAt})`
+        return record
+      },
+      Effect.mapError(mapError("Failed to persist interaction request")),
+    ),
+
+    resolveInteractionRequest: Effect.fn("Storage.resolveInteractionRequest")(
+      function* (requestId) {
+        yield* sql`UPDATE interaction_requests SET status = 'resolved' WHERE request_id = ${requestId}`
+      },
+      Effect.mapError(mapError("Failed to resolve interaction request")),
+    ),
+
+    listPendingInteractionRequests: Effect.fn("Storage.listPendingInteractionRequests")(
+      function* () {
+        const rows =
+          yield* sql<InteractionRequestRow>`SELECT request_id, type, session_id, branch_id, params_json, status, created_at FROM interaction_requests WHERE status = 'pending' ORDER BY created_at ASC`
+        return rows.map(interactionRequestFromRow)
+      },
+      Effect.mapError(mapError("Failed to list pending interaction requests")),
+    ),
+
+    deletePendingInteractionRequests: Effect.fn("Storage.deletePendingInteractionRequests")(
+      function* (sessionId, branchId) {
+        yield* sql`DELETE FROM interaction_requests WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND status = 'pending'`
+      },
+      Effect.mapError(mapError("Failed to delete pending interaction requests")),
     ),
   } satisfies StorageService
 })

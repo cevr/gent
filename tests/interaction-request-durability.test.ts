@@ -1,0 +1,192 @@
+import { describe, test, expect } from "bun:test"
+import { Deferred, Effect } from "effect"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import {
+  makeInteractionService,
+  type InteractionRequestRecord,
+  type InteractionStorageConfig,
+} from "@gent/core/domain/interaction-request"
+import type { SessionId, BranchId } from "@gent/core/domain/ids"
+
+// ============================================================================
+// Interaction Request Durability
+// ============================================================================
+
+describe("Interaction Request Durability", () => {
+  const storageLive = Storage.Memory()
+
+  test("present persists request to storage", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+
+        const storageCallbacks: InteractionStorageConfig = {
+          persist: (record) =>
+            storage.persistInteractionRequest(record).pipe(
+              Effect.asVoid,
+              Effect.catchEager(() => Effect.void),
+            ),
+          resolve: (requestId) =>
+            storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+        }
+
+        interface TestParams {
+          sessionId: SessionId
+          branchId: BranchId
+          value: string
+        }
+
+        const interaction = makeInteractionService<TestParams, string>({
+          type: "permission",
+          onPresent: () => Effect.void,
+          onRespond: () => Effect.void,
+          getContext: (p) => ({ sessionId: p.sessionId, branchId: p.branchId }),
+          storage: storageCallbacks,
+        })
+
+        // Fork present — it will block on the deferred
+        const resultDeferred = yield* Deferred.make<string>()
+        yield* Effect.forkDetach(
+          interaction
+            .present({
+              sessionId: "s1" as SessionId,
+              branchId: "b1" as BranchId,
+              value: "test",
+            })
+            .pipe(Effect.flatMap((d) => Deferred.succeed(resultDeferred, d))),
+        )
+
+        // Give the fork time to persist
+        yield* Effect.sleep("10 millis")
+
+        // Verify persisted
+        const pending = yield* storage.listPendingInteractionRequests()
+        expect(pending.length).toBe(1)
+        expect(pending[0]!.type).toBe("permission")
+        expect(pending[0]!.sessionId).toBe("s1")
+        expect(pending[0]!.branchId).toBe("b1")
+        expect(pending[0]!.status).toBe("pending")
+
+        // Respond — should resolve the deferred
+        const requestId = pending[0]!.requestId
+        yield* interaction.respond(requestId, "allow")
+
+        const result = yield* Deferred.await(resultDeferred)
+        expect(result).toBe("allow")
+
+        // Verify resolved in storage
+        const afterResolve = yield* storage.listPendingInteractionRequests()
+        expect(afterResolve.length).toBe(0)
+      }).pipe(Effect.provide(storageLive)),
+    )
+  })
+
+  test("respond marks request as resolved in storage", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+
+        // Manually insert a pending record
+        const record: InteractionRequestRecord = {
+          requestId: "req-manual-1",
+          type: "prompt",
+          sessionId: "s2" as SessionId,
+          branchId: "b2" as BranchId,
+          paramsJson: "{}",
+          status: "pending",
+          createdAt: Date.now(),
+        }
+        yield* storage.persistInteractionRequest(record)
+
+        // Verify it's pending
+        const before = yield* storage.listPendingInteractionRequests()
+        expect(before.some((r) => r.requestId === "req-manual-1")).toBe(true)
+
+        // Resolve it
+        yield* storage.resolveInteractionRequest("req-manual-1")
+
+        // Verify it's no longer pending
+        const after = yield* storage.listPendingInteractionRequests()
+        expect(after.some((r) => r.requestId === "req-manual-1")).toBe(false)
+      }).pipe(Effect.provide(storageLive)),
+    )
+  })
+
+  test("deletePendingInteractionRequests clears by session+branch", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+
+        // Insert requests for two different branches
+        yield* storage.persistInteractionRequest({
+          requestId: "req-del-1",
+          type: "permission",
+          sessionId: "s3" as SessionId,
+          branchId: "b3" as BranchId,
+          paramsJson: "{}",
+          status: "pending",
+          createdAt: Date.now(),
+        })
+        yield* storage.persistInteractionRequest({
+          requestId: "req-del-2",
+          type: "handoff",
+          sessionId: "s3" as SessionId,
+          branchId: "b4" as BranchId,
+          paramsJson: "{}",
+          status: "pending",
+          createdAt: Date.now(),
+        })
+
+        // Delete only b3
+        yield* storage.deletePendingInteractionRequests("s3" as SessionId, "b3" as BranchId)
+
+        // Only b4 should remain
+        const remaining = yield* storage.listPendingInteractionRequests()
+        expect(remaining.filter((r) => r.sessionId === "s3").length).toBe(1)
+        expect(remaining[0]!.branchId).toBe("b4")
+      }).pipe(Effect.provide(storageLive)),
+    )
+  })
+
+  test("autoResolve skips storage persistence", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+
+        const storageCallbacks: InteractionStorageConfig = {
+          persist: (record) =>
+            storage.persistInteractionRequest(record).pipe(
+              Effect.asVoid,
+              Effect.catchEager(() => Effect.void),
+            ),
+          resolve: (requestId) =>
+            storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+        }
+
+        interface TestParams {
+          sessionId: SessionId
+          branchId: BranchId
+        }
+
+        const interaction = makeInteractionService<TestParams, string>({
+          type: "prompt",
+          onPresent: () => Effect.void,
+          onRespond: () => Effect.void,
+          autoResolve: () => "auto-yes",
+          getContext: (p) => ({ sessionId: p.sessionId, branchId: p.branchId }),
+          storage: storageCallbacks,
+        })
+
+        // Auto-resolved — should not persist
+        const result = yield* interaction.present({
+          sessionId: "s4" as SessionId,
+          branchId: "b5" as BranchId,
+        })
+        expect(result).toBe("auto-yes")
+
+        const pending = yield* storage.listPendingInteractionRequests()
+        expect(pending.filter((r) => r.sessionId === "s4").length).toBe(0)
+      }).pipe(Effect.provide(storageLive)),
+    )
+  })
+})

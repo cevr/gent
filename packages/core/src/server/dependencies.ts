@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -39,6 +39,13 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildSystemPrompt } from "./system-prompt.js"
+import type { InteractionRequestType } from "../domain/interaction-request.js"
+
+/** Marker service — construction triggers recovery of pending interaction requests */
+class InteractionRecoveryTag extends ServiceMap.Service<
+  InteractionRecoveryTag,
+  { readonly recovered: number }
+>()("@gent/core/src/server/dependencies/InteractionRecoveryTag") {}
 
 export interface DependenciesConfig {
   cwd: string
@@ -185,6 +192,50 @@ export const createDependencies = (config: DependenciesConfig) => {
     handoffHandlerLive,
   )
 
+  // Recover pending interaction requests from storage.
+  // Dispatches each record to the appropriate handler's rehydrate method,
+  // which re-creates the deferred and re-publishes the event so clients
+  // re-present dialogs.
+  const interactionRecoveryLive = Layer.effect(
+    InteractionRecoveryTag,
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const permissionHandler = yield* PermissionHandler
+      const promptHandler = yield* PromptHandler
+      const handoffHandler = yield* HandoffHandler
+      const askUserHandler = yield* AskUserHandler
+
+      const pending = yield* storage.listPendingInteractionRequests()
+      if (pending.length === 0) return { recovered: 0 }
+
+      const handlers: Record<
+        InteractionRequestType,
+        (record: (typeof pending)[number]) => Effect.Effect<void>
+      > = {
+        permission: (r) =>
+          permissionHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
+        prompt: (r) => promptHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
+        handoff: (r) => handoffHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
+        "ask-user": (r) => askUserHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
+      }
+
+      let recovered = 0
+      for (const record of pending) {
+        const handler = handlers[record.type]
+        if (handler !== undefined) {
+          yield* handler(record)
+          recovered++
+        }
+      }
+
+      if (recovered > 0) {
+        yield* Effect.log(`Recovered ${recovered} pending interaction request(s)`)
+      }
+
+      return { recovered }
+    }),
+  ).pipe(Layer.provide(allDeps))
+
   const agentRuntimeLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
@@ -252,9 +303,14 @@ export const createDependencies = (config: DependenciesConfig) => {
       DurableActorProcessLive,
       Layer.merge(allWithRuntime, actorTransportLive),
     )
-    return Layer.mergeAll(allWithRuntime, clusterSupportLive, actorProcessLive)
+    return Layer.mergeAll(
+      allWithRuntime,
+      clusterSupportLive,
+      actorProcessLive,
+      interactionRecoveryLive,
+    )
   }
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
-  return Layer.mergeAll(allWithRuntime, actorProcessLive)
+  return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)
 }

@@ -16,7 +16,12 @@ import {
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { ToolContext } from "./tool"
 import type { PermissionDecision } from "./permission"
-import { makeInteractionService } from "./interaction-request"
+import {
+  makeInteractionService,
+  type InteractionStorageConfig,
+  type InteractionRequestRecord,
+} from "./interaction-request"
+import { Storage } from "../storage/sqlite-storage.js"
 
 // ============================================================================
 // Permission Handler
@@ -39,18 +44,21 @@ export interface PermissionHandlerService {
     requestId: string,
     decision: PermissionDecision,
   ) => Effect.Effect<PermissionParams | undefined, EventStoreError>
+  readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
 
 export class PermissionHandler extends ServiceMap.Service<
   PermissionHandler,
   PermissionHandlerService
 >()("@gent/core/src/domain/interaction-handlers/PermissionHandler") {
-  static Live: Layer.Layer<PermissionHandler, never, EventStore> = Layer.effect(
+  static Live: Layer.Layer<PermissionHandler, never, EventStore | Storage> = Layer.effect(
     PermissionHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
+      const storageCallbacks = yield* makeStorageCallbacks
 
       const interaction = makeInteractionService<PermissionParams, PermissionDecision>({
+        type: "permission",
         onPresent: (requestId, params) =>
           eventStore.publish(
             new PermissionRequested({
@@ -63,6 +71,8 @@ export class PermissionHandler extends ServiceMap.Service<
             }),
           ),
         onRespond: () => Effect.void,
+        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+        storage: storageCallbacks,
       })
 
       return {
@@ -76,6 +86,11 @@ export class PermissionHandler extends ServiceMap.Service<
           })
         }),
         respond: (requestId, decision) => interaction.respond(requestId, decision),
+        rehydrate: (record) =>
+          interaction.rehydrate(
+            record.requestId,
+            JSON.parse(record.paramsJson) as PermissionParams,
+          ),
       }
     }),
   )
@@ -87,6 +102,7 @@ export class PermissionHandler extends ServiceMap.Service<
     return Layer.succeed(PermissionHandler, {
       request: () => Effect.succeed(decisions[index++] ?? "allow"),
       respond: () => Effect.sync(() => undefined as PermissionParams | undefined),
+      rehydrate: () => Effect.void,
     })
   }
 }
@@ -111,17 +127,20 @@ export interface PromptHandlerService {
     decision: PromptDecision,
     content?: string,
   ) => Effect.Effect<PromptParams | undefined, EventStoreError>
+  readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
 
 export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandlerService>()(
   "@gent/core/src/domain/interaction-handlers/PromptHandler",
 ) {
-  static Live: Layer.Layer<PromptHandler, never, EventStore> = Layer.effect(
+  static Live: Layer.Layer<PromptHandler, never, EventStore | Storage> = Layer.effect(
     PromptHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
+      const storageCallbacks = yield* makeStorageCallbacks
 
       const interaction = makeInteractionService<PromptParams, PromptDecision>({
+        type: "prompt",
         autoResolve: (params) =>
           params.mode === "present" ? ("yes" as PromptDecision) : undefined,
         onPresent: (requestId, params) =>
@@ -167,12 +186,16 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
             }),
           )
         },
+        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+        storage: storageCallbacks,
       })
 
       return {
         present: (params) => interaction.present(params),
         respond: (requestId, decision, content) =>
           interaction.respond(requestId, decision, content),
+        rehydrate: (record) =>
+          interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as PromptParams),
       }
     }),
   )
@@ -184,6 +207,7 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
     return Layer.succeed(PromptHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "yes"),
       respond: () => Effect.sync(() => undefined as PromptParams | undefined),
+      rehydrate: () => Effect.void,
     })
   }
 }
@@ -209,18 +233,21 @@ export interface HandoffHandlerService {
     childSessionId?: SessionId,
     reason?: string,
   ) => Effect.Effect<HandoffParams | undefined, EventStoreError>
+  readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
 
 export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHandlerService>()(
   "@gent/core/src/domain/interaction-handlers/HandoffHandler",
 ) {
-  static Live: Layer.Layer<HandoffHandler, never, EventStore> = Layer.effect(
+  static Live: Layer.Layer<HandoffHandler, never, EventStore | Storage> = Layer.effect(
     HandoffHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
       const claimed = new Set<string>()
+      const storageCallbacks = yield* makeStorageCallbacks
 
       const interaction = makeInteractionService<HandoffParams, HandoffDecision>({
+        type: "handoff",
         onPresent: (requestId, params) =>
           eventStore.publish(
             new HandoffPresented({
@@ -251,6 +278,8 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
             }),
           )
         },
+        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+        storage: storageCallbacks,
       })
 
       return {
@@ -274,6 +303,9 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
             return yield* interaction.respond(requestId, decision, extra)
           },
         ),
+
+        rehydrate: (record) =>
+          interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as HandoffParams),
       }
     }),
   )
@@ -287,6 +319,26 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
       peek: () => Effect.sync(() => undefined as HandoffParams | undefined),
       claim: () => Effect.sync(() => undefined as HandoffParams | undefined),
       respond: () => Effect.sync(() => undefined as HandoffParams | undefined),
+      rehydrate: () => Effect.void,
     })
   }
 }
+
+// ============================================================================
+// Shared storage callback factory
+// ============================================================================
+
+const makeStorageCallbacks: Effect.Effect<InteractionStorageConfig, never, Storage> = Effect.gen(
+  function* () {
+    const storage = yield* Storage
+    return {
+      persist: (record) =>
+        storage.persistInteractionRequest(record).pipe(
+          Effect.asVoid,
+          Effect.catchEager(() => Effect.void),
+        ),
+      resolve: (requestId) =>
+        storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    }
+  },
+)

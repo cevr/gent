@@ -2,7 +2,12 @@ import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { EventStore, type EventStoreError, QuestionsAsked, type Question } from "../domain/event.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
-import { makeInteractionService } from "../domain/interaction-request.js"
+import {
+  makeInteractionService,
+  type InteractionRequestRecord,
+  type InteractionStorageConfig,
+} from "../domain/interaction-request.js"
+import { Storage } from "../storage/sqlite-storage.js"
 
 // Question option schema
 
@@ -65,20 +70,33 @@ export interface AskUserHandlerService {
     requestId: string,
     answers: ReadonlyArray<ReadonlyArray<string>>,
   ) => Effect.Effect<void, EventStoreError>
+  readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
 
 export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
   "@gent/core/src/tools/ask-user/AskUserHandler",
 ) {
-  static Live: Layer.Layer<AskUserHandler, never, EventStore> = Layer.effect(
+  static Live: Layer.Layer<AskUserHandler, never, EventStore | Storage> = Layer.effect(
     AskUserHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
+      const storage = yield* Storage
+
+      const storageCallbacks: InteractionStorageConfig = {
+        persist: (record) =>
+          storage.persistInteractionRequest(record).pipe(
+            Effect.asVoid,
+            Effect.catchEager(() => Effect.void),
+          ),
+        resolve: (requestId) =>
+          storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+      }
 
       const interaction = makeInteractionService<
         AskUserParams_,
         ReadonlyArray<ReadonlyArray<string>>
       >({
+        type: "ask-user",
         onPresent: (requestId, params) =>
           eventStore.publish(
             new QuestionsAsked({
@@ -89,6 +107,8 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
             }),
           ),
         onRespond: () => Effect.void,
+        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+        storage: storageCallbacks,
       })
 
       return {
@@ -104,6 +124,8 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
         }),
         respond: (requestId, answers) =>
           interaction.respond(requestId, answers).pipe(Effect.asVoid),
+        rehydrate: (record) =>
+          interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as AskUserParams_),
       }
     }),
   )
@@ -116,6 +138,7 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
           questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
         ).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
       respond: (_requestId, _answers) => Effect.void,
+      rehydrate: () => Effect.void,
     })
   }
 }
