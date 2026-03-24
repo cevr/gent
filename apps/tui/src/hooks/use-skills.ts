@@ -4,14 +4,14 @@
  * Fetches skills (with content) from the core Skills service via RPC.
  * Skills are preloaded — content available immediately for $-token expansion.
  *
- * The atom is hoisted to module scope so all consumers share one instance
- * (popup and submit path see the same snapshot).
+ * The atom is scoped to the current registry so all consumers in the same app
+ * share one snapshot without leaking across test/app boundaries.
  */
 
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import { Effect, Fiber } from "effect"
 import type { SkillContent, GentClient } from "@gent/sdk"
-import { type Atom, atom, useAtomValue, useRegistry } from "../atom-solid"
+import { type Atom, type Registry, atom, useAtomValue, useRegistry } from "../atom-solid"
 import { useClient } from "../client/index"
 
 export type { SkillContent as SkillInfo }
@@ -22,14 +22,10 @@ type SkillsState =
   | { _tag: "idle"; skills: SkillContent[] }
   | { _tag: "refreshing"; skills: SkillContent[] }
 
-// Module-level atom — lazily created on first useSkills() call,
-// shared across all consumers so popup and submit see the same data.
-let sharedAtom: Atom<SkillsState> | null = null
+const sharedAtoms = new WeakMap<Registry, Atom<SkillsState>>()
 
-function getOrCreateAtom(client: GentClient) {
-  if (sharedAtom !== null) return sharedAtom
-
-  sharedAtom = atom((registry) => {
+function createSkillsAtom(client: GentClient): Atom<SkillsState> {
+  return atom((registry) => {
     const [state, setState] = createSignal<SkillsState>({ _tag: "idle", skills: [] })
     const [version, setVersion] = createSignal(0)
     let cancelRefresh: (() => void) | undefined
@@ -42,7 +38,7 @@ function getOrCreateAtom(client: GentClient) {
 
         const fresh = yield* client.listSkills()
         yield* Effect.sync(() => {
-          setState({ _tag: "idle", skills: fresh as SkillContent[] })
+          setState({ _tag: "idle", skills: [...fresh] })
         })
       }).pipe(Effect.catchEager(() => Effect.void))
 
@@ -79,8 +75,14 @@ function getOrCreateAtom(client: GentClient) {
       dispose,
     }
   })
+}
 
-  return sharedAtom
+function getOrCreateAtom(registry: Registry, client: GentClient) {
+  const existing = sharedAtoms.get(registry)
+  if (existing !== undefined) return existing
+  const created = createSkillsAtom(client)
+  sharedAtoms.set(registry, created)
+  return created
 }
 
 export interface UseSkillsReturn {
@@ -94,7 +96,7 @@ export function useSkills(): UseSkillsReturn {
   const registry = useRegistry()
   const client = useClient()
 
-  const skillsAtom = getOrCreateAtom(client.client)
+  const skillsAtom = getOrCreateAtom(registry, client.client)
   const state = useAtomValue(skillsAtom)
 
   const skills = () => state().skills

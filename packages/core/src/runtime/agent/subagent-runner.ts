@@ -2,6 +2,7 @@ import { Cause, ServiceMap, Duration, Effect, Layer } from "effect"
 import {
   AgentSwitched,
   EventStore,
+  type EventStoreService,
   type EventEnvelope,
   SubagentSucceeded,
   SubagentFailed,
@@ -15,7 +16,7 @@ import {
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
 import type { SessionId, BranchId, ToolCallId } from "../../domain/ids.js"
-import { Storage } from "../../storage/sqlite-storage.js"
+import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentActor } from "./agent-loop"
 
 interface ChildMetadata {
@@ -208,6 +209,129 @@ const buildRunInputOverrides = (overrides: AgentExecutionOverrides | undefined) 
   ...(overrides?.tags !== undefined ? { tags: overrideArray(overrides.tags) } : {}),
 })
 
+const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStoreService) => {
+  const collectChildMetadata = (sessionId: SessionId): Effect.Effect<ChildMetadata> =>
+    storage.listEvents({ sessionId }).pipe(
+      Effect.map((envelopes) => {
+        const state = createChildMetadataAccumulator()
+        for (const env of envelopes) applyChildMetadataEnvelope(state, env)
+        return finalizeChildMetadata(state)
+      }),
+      Effect.catchEager((e) =>
+        Effect.logWarning("failed to collect subagent metadata", e).pipe(Effect.as({})),
+      ),
+    )
+
+  const createSubagentSession = (params: {
+    agent: { name: string }
+    prompt: string
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    cwd: string
+  }) =>
+    Effect.gen(function* () {
+      const sessionId = Bun.randomUUIDv7() as SessionId
+      const branchId = Bun.randomUUIDv7() as BranchId
+      const now = new Date()
+      const parentSession = yield* storage.getSession(params.parentSessionId)
+      const bypass = parentSession?.bypass ?? true
+
+      yield* storage.createSession(
+        new Session({
+          id: sessionId,
+          name: `${params.agent.name}: ${params.prompt.slice(0, 60)}`,
+          cwd: params.cwd,
+          bypass,
+          parentSessionId: params.parentSessionId,
+          parentBranchId: params.parentBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* storage.createBranch(
+        new Branch({
+          id: branchId,
+          sessionId,
+          createdAt: now,
+        }),
+      )
+
+      return { sessionId, branchId, bypass }
+    })
+
+  const publishSubagentSpawned = (params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    toolCallId?: ToolCallId
+    sessionId: SessionId
+    agentName: string
+    prompt: string
+  }) =>
+    eventStore.publish(
+      new SubagentSpawned({
+        parentSessionId: params.parentSessionId,
+        childSessionId: params.sessionId,
+        agentName: params.agentName,
+        prompt: params.prompt,
+        toolCallId: params.toolCallId,
+        branchId: params.parentBranchId,
+      }),
+    )
+
+  const publishSubagentSucceeded = (params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    toolCallId?: ToolCallId
+    sessionId: SessionId
+    agentName: string
+  }) =>
+    eventStore.publish(
+      new SubagentSucceeded({
+        parentSessionId: params.parentSessionId,
+        childSessionId: params.sessionId,
+        agentName: params.agentName,
+        toolCallId: params.toolCallId,
+        branchId: params.parentBranchId,
+      }),
+    )
+
+  const publishSubagentFailed = (params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    toolCallId?: ToolCallId
+    sessionId: SessionId
+    agentName: string
+  }) =>
+    eventStore
+      .publish(
+        new SubagentFailed({
+          parentSessionId: params.parentSessionId,
+          childSessionId: params.sessionId,
+          agentName: params.agentName,
+          toolCallId: params.toolCallId,
+          branchId: params.parentBranchId,
+        }),
+      )
+      .pipe(Effect.catchEager((e) => Effect.logWarning("failed to publish subagent event", e)))
+
+  const loadSubagentSuccessData = (branchId: BranchId, sessionId: SessionId, agentName: string) =>
+    Effect.gen(function* () {
+      const messages = yield* storage.listMessages(branchId)
+      const text = latestAssistantText(messages)
+      const meta = yield* collectChildMetadata(sessionId)
+      return buildSubagentSuccess({ text, sessionId, agentName, meta })
+    })
+
+  return {
+    collectChildMetadata,
+    createSubagentSession,
+    publishSubagentSpawned,
+    publishSubagentSucceeded,
+    publishSubagentFailed,
+    loadSubagentSuccessData,
+  }
+}
+
 export const InProcessRunner: Layer.Layer<
   SubagentRunnerService,
   never,
@@ -219,77 +343,7 @@ export const InProcessRunner: Layer.Layer<
     const eventStore = yield* EventStore
     const actor = yield* AgentActor
     const runnerConfig = yield* SubagentRunnerConfig
-
-    const collectChildMetadata = (sessionId: SessionId): Effect.Effect<ChildMetadata> =>
-      storage.listEvents({ sessionId }).pipe(
-        Effect.map((envelopes) => {
-          const state = createChildMetadataAccumulator()
-          for (const env of envelopes) applyChildMetadataEnvelope(state, env)
-          return finalizeChildMetadata(state)
-        }),
-        Effect.catchEager((e) =>
-          Effect.logWarning("failed to collect subagent metadata", e).pipe(
-            Effect.as({} as ChildMetadata),
-          ),
-        ),
-      )
-
-    const createSubagentSession = (params: {
-      agent: { name: string }
-      prompt: string
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      cwd: string
-    }) =>
-      Effect.gen(function* () {
-        const sessionId = Bun.randomUUIDv7() as SessionId
-        const branchId = Bun.randomUUIDv7() as BranchId
-        const now = new Date()
-        const parentSession = yield* storage.getSession(params.parentSessionId)
-        const bypass = parentSession?.bypass ?? true
-
-        yield* storage.createSession(
-          new Session({
-            id: sessionId,
-            name: `${params.agent.name}: ${params.prompt.slice(0, 60)}`,
-            cwd: params.cwd,
-            bypass,
-            parentSessionId: params.parentSessionId,
-            parentBranchId: params.parentBranchId,
-            createdAt: now,
-            updatedAt: now,
-          }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: branchId,
-            sessionId,
-            createdAt: now,
-          }),
-        )
-
-        return { sessionId, branchId, bypass }
-      })
-
-    const publishSubagentSpawned = (params: {
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      toolCallId?: ToolCallId
-      sessionId: SessionId
-      agentName: string
-      prompt: string
-    }) =>
-      eventStore.publish(
-        new SubagentSpawned({
-          parentSessionId: params.parentSessionId,
-          childSessionId: params.sessionId,
-          agentName: params.agentName,
-          prompt: params.prompt,
-          toolCallId: params.toolCallId,
-          branchId: params.parentBranchId,
-        }),
-      )
-
+    const shared = makeSharedRunnerHelpers(storage, eventStore)
     const publishAgentSwitch = (params: {
       sessionId: SessionId
       branchId: BranchId
@@ -304,56 +358,12 @@ export const InProcessRunner: Layer.Layer<
         }),
       )
 
-    const publishSubagentSucceeded = (params: {
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      toolCallId?: ToolCallId
-      sessionId: SessionId
-      agentName: string
-    }) =>
-      eventStore.publish(
-        new SubagentSucceeded({
-          parentSessionId: params.parentSessionId,
-          childSessionId: params.sessionId,
-          agentName: params.agentName,
-          toolCallId: params.toolCallId,
-          branchId: params.parentBranchId,
-        }),
-      )
-
-    const publishSubagentFailed = (params: {
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      toolCallId?: ToolCallId
-      sessionId: SessionId
-      agentName: string
-    }) =>
-      eventStore
-        .publish(
-          new SubagentFailed({
-            parentSessionId: params.parentSessionId,
-            childSessionId: params.sessionId,
-            agentName: params.agentName,
-            toolCallId: params.toolCallId,
-            branchId: params.parentBranchId,
-          }),
-        )
-        .pipe(Effect.catchEager((e) => Effect.logWarning("failed to publish subagent event", e)))
-
-    const loadSubagentSuccessData = (branchId: BranchId, sessionId: SessionId, agentName: string) =>
-      Effect.gen(function* () {
-        const messages = yield* storage.listMessages(branchId)
-        const text = latestAssistantText(messages)
-        const meta = yield* collectChildMetadata(sessionId)
-        return buildSubagentSuccess({ text, sessionId, agentName, meta })
-      })
-
     return {
       run: (params) =>
-        createSubagentSession(params).pipe(
+        shared.createSubagentSession(params).pipe(
           Effect.flatMap(({ sessionId, branchId, bypass }) => {
             const run = Effect.gen(function* () {
-              yield* publishSubagentSpawned({
+              yield* shared.publishSubagentSpawned({
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
                 toolCallId: params.toolCallId,
@@ -395,8 +405,12 @@ export const InProcessRunner: Layer.Layer<
                     )
 
               yield* runWithTimeout
-              const result = yield* loadSubagentSuccessData(branchId, sessionId, params.agent.name)
-              yield* publishSubagentSucceeded({
+              const result = yield* shared.loadSubagentSuccessData(
+                branchId,
+                sessionId,
+                params.agent.name,
+              )
+              yield* shared.publishSubagentSucceeded({
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
                 toolCallId: params.toolCallId,
@@ -416,7 +430,7 @@ export const InProcessRunner: Layer.Layer<
                 agentName: params.agent.name,
                 spanName: "SubagentRunner.inProcess",
               },
-              publishSubagentFailed,
+              shared.publishSubagentFailed,
             )
           }),
           Effect.catchCause((cause) => {
@@ -442,127 +456,14 @@ export const SubprocessRunner: Layer.Layer<
     const storage = yield* Storage
     const eventStore = yield* EventStore
     const config = yield* SubagentRunnerConfig
-
-    const collectChildMetadata = (sessionId: SessionId): Effect.Effect<ChildMetadata> =>
-      storage.listEvents({ sessionId }).pipe(
-        Effect.map((envelopes) => {
-          const state = createChildMetadataAccumulator()
-          for (const env of envelopes) applyChildMetadataEnvelope(state, env)
-          return finalizeChildMetadata(state)
-        }),
-        Effect.catchEager((e) =>
-          Effect.logWarning("failed to collect subagent metadata", e).pipe(
-            Effect.as({} as ChildMetadata),
-          ),
-        ),
-      )
-
-    const createSubagentSession = (params: {
-      agent: { name: string }
-      prompt: string
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      cwd: string
-    }) =>
-      Effect.gen(function* () {
-        const sessionId = Bun.randomUUIDv7() as SessionId
-        const branchId = Bun.randomUUIDv7() as BranchId
-        const now = new Date()
-        const parentSession = yield* storage.getSession(params.parentSessionId)
-        const bypass = parentSession?.bypass ?? true
-
-        yield* storage.createSession(
-          new Session({
-            id: sessionId,
-            name: `${params.agent.name}: ${params.prompt.slice(0, 60)}`,
-            cwd: params.cwd,
-            bypass,
-            parentSessionId: params.parentSessionId,
-            parentBranchId: params.parentBranchId,
-            createdAt: now,
-            updatedAt: now,
-          }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: branchId,
-            sessionId,
-            createdAt: now,
-          }),
-        )
-
-        return { sessionId, branchId, bypass }
-      })
-
-    const publishSubagentSpawned = (params: {
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      toolCallId?: ToolCallId
-      sessionId: SessionId
-      agentName: string
-      prompt: string
-    }) =>
-      eventStore.publish(
-        new SubagentSpawned({
-          parentSessionId: params.parentSessionId,
-          childSessionId: params.sessionId,
-          agentName: params.agentName,
-          prompt: params.prompt,
-          toolCallId: params.toolCallId,
-          branchId: params.parentBranchId,
-        }),
-      )
-
-    const publishSubagentSucceeded = (params: {
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      toolCallId?: ToolCallId
-      sessionId: SessionId
-      agentName: string
-    }) =>
-      eventStore.publish(
-        new SubagentSucceeded({
-          parentSessionId: params.parentSessionId,
-          childSessionId: params.sessionId,
-          agentName: params.agentName,
-          toolCallId: params.toolCallId,
-          branchId: params.parentBranchId,
-        }),
-      )
-
-    const publishSubagentFailed = (params: {
-      parentSessionId: SessionId
-      parentBranchId: BranchId
-      toolCallId?: ToolCallId
-      sessionId: SessionId
-      agentName: string
-    }) =>
-      eventStore
-        .publish(
-          new SubagentFailed({
-            parentSessionId: params.parentSessionId,
-            childSessionId: params.sessionId,
-            agentName: params.agentName,
-            toolCallId: params.toolCallId,
-            branchId: params.parentBranchId,
-          }),
-        )
-        .pipe(Effect.catchEager((e) => Effect.logWarning("failed to publish subagent event", e)))
-
-    const loadSubagentSuccessData = (branchId: BranchId, sessionId: SessionId, agentName: string) =>
-      Effect.gen(function* () {
-        const messages = yield* storage.listMessages(branchId)
-        const text = latestAssistantText(messages)
-        const meta = yield* collectChildMetadata(sessionId)
-        return buildSubagentSuccess({ text, sessionId, agentName, meta })
-      })
+    const shared = makeSharedRunnerHelpers(storage, eventStore)
 
     return {
       run: (params) =>
-        createSubagentSession(params).pipe(
+        shared.createSubagentSession(params).pipe(
           Effect.flatMap(({ sessionId, branchId, bypass }) => {
             const run = Effect.gen(function* () {
-              yield* publishSubagentSpawned({
+              yield* shared.publishSubagentSpawned({
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
                 toolCallId: params.toolCallId,
@@ -622,7 +523,7 @@ export const SubprocessRunner: Layer.Layer<
               })
 
               if (exitCode !== 0) {
-                yield* publishSubagentFailed({
+                yield* shared.publishSubagentFailed({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
@@ -641,8 +542,12 @@ export const SubprocessRunner: Layer.Layer<
                 }
               }
 
-              const result = yield* loadSubagentSuccessData(branchId, sessionId, params.agent.name)
-              yield* publishSubagentSucceeded({
+              const result = yield* shared.loadSubagentSuccessData(
+                branchId,
+                sessionId,
+                params.agent.name,
+              )
+              yield* shared.publishSubagentSucceeded({
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
                 toolCallId: params.toolCallId,
@@ -662,7 +567,7 @@ export const SubprocessRunner: Layer.Layer<
                 agentName: params.agent.name,
                 spanName: "SubagentRunner.subprocess",
               },
-              publishSubagentFailed,
+              shared.publishSubagentFailed,
             )
           }),
           Effect.catchCause((cause) => {

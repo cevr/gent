@@ -554,6 +554,7 @@ describe("AgentLoop actor model", () => {
 
   test("runs sessions concurrently", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
     let calls = 0
 
     const providerLayer = Layer.succeed(Provider, {
@@ -561,9 +562,13 @@ describe("AgentLoop actor model", () => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
-            Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
-            ),
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return new FinishChunk({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
           )
         }
         return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
@@ -582,7 +587,7 @@ describe("AgentLoop actor model", () => {
           const messageB = makeMessage("s2", "b2", "world")
 
           const fiberA = yield* Effect.forkChild(agentLoop.run(messageA))
-          yield* Effect.sleep("10 millis")
+          yield* Deferred.await(firstStarted)
           const fiberB = yield* Effect.forkChild(agentLoop.run(messageB))
 
           const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
@@ -600,6 +605,7 @@ describe("AgentLoop actor model", () => {
 
   test("serializes loop creation for the same session and branch", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
     let calls = 0
 
     const providerLayer = Layer.succeed(Provider, {
@@ -607,9 +613,13 @@ describe("AgentLoop actor model", () => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
-            Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
-            ),
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return new FinishChunk({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
           )
         }
 
@@ -650,14 +660,15 @@ describe("AgentLoop actor model", () => {
           const agentLoop = yield* AgentLoop
 
           const fiberA = yield* Effect.forkChild(agentLoop.run(makeMessage("s1", "b1", "first")))
+          yield* Deferred.await(firstStarted)
           const fiberB = yield* Effect.forkChild(agentLoop.run(makeMessage("s1", "b1", "second")))
+          const queuedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
 
-          yield* Effect.sleep("80 millis")
+          expect(queuedB._tag).toBe("Some")
           expect(calls).toBe(1)
 
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiberA)
-          yield* Fiber.join(fiberB)
 
           expect(calls).toBe(2)
         }).pipe(Effect.provide(layer)),
@@ -668,16 +679,23 @@ describe("AgentLoop actor model", () => {
   test("interrupt scoped to session/branch", async () => {
     const gateA = await Effect.runPromise(Deferred.make<void>())
     const gateB = await Effect.runPromise(Deferred.make<void>())
+    const startedA = await Effect.runPromise(Deferred.make<void>())
+    const startedB = await Effect.runPromise(Deferred.make<void>())
     let calls = 0
 
     const providerLayer = Layer.succeed(Provider, {
       stream: () => {
         calls += 1
         const gate = calls === 1 ? gateA : gateB
+        const started = calls === 1 ? startedA : startedB
         return Effect.succeed(
-          Stream.fromEffect(Deferred.await(gate)).pipe(
-            Stream.map(() => new FinishChunk({ finishReason: "stop" })),
-          ),
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined)
+              yield* Deferred.await(gate)
+              return new FinishChunk({ finishReason: "stop" })
+            }),
+          ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
         )
       },
       generate: () => Effect.succeed("test response"),
@@ -696,7 +714,8 @@ describe("AgentLoop actor model", () => {
           const fiberA = yield* Effect.forkChild(agentLoop.run(messageA))
           const fiberB = yield* Effect.forkChild(agentLoop.run(messageB))
 
-          yield* Effect.sleep("10 millis")
+          yield* Deferred.await(startedA)
+          yield* Deferred.await(startedB)
           yield* agentLoop.steer({ _tag: "Interrupt", sessionId: "s1", branchId: "b1" })
 
           const finishedA = yield* Fiber.join(fiberA).pipe(Effect.timeoutOption("200 millis"))
@@ -715,6 +734,7 @@ describe("AgentLoop actor model", () => {
 
   test("batches queued regular messages into one follow-up message", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
     let calls = 0
 
     const providerLayer = Layer.succeed(Provider, {
@@ -722,9 +742,13 @@ describe("AgentLoop actor model", () => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
-            Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
-            ),
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return new FinishChunk({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
           )
         }
         return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
@@ -745,7 +769,7 @@ describe("AgentLoop actor model", () => {
           const third = makeMessage("s1", "b1", "third")
 
           const fiber = yield* Effect.forkChild(agentLoop.run(first))
-          yield* Effect.sleep("10 millis")
+          yield* Deferred.await(firstStarted)
           yield* agentLoop.run(second)
           yield* agentLoop.run(third)
 
@@ -823,6 +847,7 @@ describe("AgentLoop actor model", () => {
 
   test("runs interjection before queued follow-up and scopes agent override to that turn", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
     const calls: Array<{ model: string; latestUserText: string }> = []
     let streamCount = 0
 
@@ -843,9 +868,13 @@ describe("AgentLoop actor model", () => {
         streamCount += 1
         if (streamCount === 1) {
           return Effect.succeed(
-            Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
-            ),
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return new FinishChunk({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
           )
         }
 
@@ -865,7 +894,7 @@ describe("AgentLoop actor model", () => {
           const queued = makeMessage("s1", "b1", "queued")
 
           const fiber = yield* Effect.forkChild(agentLoop.run(first))
-          yield* Effect.sleep("10 millis")
+          yield* Deferred.await(firstStarted)
           yield* agentLoop.run(queued)
           yield* agentLoop.steer({
             _tag: "Interject",
@@ -890,6 +919,7 @@ describe("AgentLoop actor model", () => {
 
   test("reads queued messages without draining them", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
     let calls = 0
 
     const providerLayer = Layer.succeed(Provider, {
@@ -897,9 +927,13 @@ describe("AgentLoop actor model", () => {
         calls += 1
         if (calls === 1) {
           return Effect.succeed(
-            Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
-            ),
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return new FinishChunk({ finishReason: "stop" })
+              }),
+            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
           )
         }
         return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
@@ -919,7 +953,7 @@ describe("AgentLoop actor model", () => {
           const queuedB = makeMessage("s1", "b1", "queued b")
 
           const fiber = yield* Effect.forkChild(agentLoop.run(first))
-          yield* Effect.sleep("10 millis")
+          yield* Deferred.await(firstStarted)
           yield* agentLoop.run(queuedA)
           yield* agentLoop.run(queuedB)
           yield* agentLoop.steer({
@@ -955,6 +989,7 @@ describe("AgentLoop actor model", () => {
 
   test("flushes queued follow-ups after provider failure", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
     const calls: string[] = []
     let streamCalls = 0
 
@@ -972,7 +1007,13 @@ describe("AgentLoop actor model", () => {
 
         if (streamCalls === 1) {
           return Effect.succeed(
-            Stream.fromEffect(Deferred.await(gate)).pipe(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.await(gate)
+                return undefined
+              }),
+            ).pipe(
               Stream.flatMap(() =>
                 Stream.fail(
                   new ProviderError({
@@ -1001,7 +1042,7 @@ describe("AgentLoop actor model", () => {
           const queued = makeMessage("s1", "b1", "queued after failure")
 
           const fiber = yield* Effect.forkChild(agentLoop.run(first))
-          yield* Effect.sleep("10 millis")
+          yield* Deferred.await(firstStarted)
           yield* agentLoop.run(queued)
 
           const snapshotWhileRunning = yield* agentLoop.getQueue({

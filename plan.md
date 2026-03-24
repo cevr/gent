@@ -1,6 +1,6 @@
 # State Machine Audit Plan
 
-Status: in progress.
+Status: implemented.
 
 ## Audit Summary
 
@@ -80,7 +80,7 @@ Those are either projections, tiny reducers, or pure compilation logic.
 - [x] Batch 5 — Promote command palette to an explicit reducer
 - [x] Batch 6 — Simplify or demote `session-machine`
 - [x] Batch 7 — Finish or demote `auth-machine`
-- [ ] Batch 8 — Clean up low-priority state ownership drift and test seams
+- [x] Batch 8 — Clean up low-priority state ownership drift and test seams
 
 ## Batch 1 — Serialize Loop Ownership And Canonical Runtime State
 

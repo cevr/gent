@@ -69,6 +69,12 @@ RegistryProvider → WorkspaceProvider → RouterProvider → ClientProvider →
 | `RouterProvider`    | route, navigate - discriminated union routes    |
 | `ClientProvider`    | transport client, session state, event stream   |
 
+State ownership rules:
+
+- One workflow, one owner. If a flow has modes/transitions, give it one reducer or machine.
+- Shared caches live under a provider/registry scope, not module globals.
+- Projections stay local and dumb. Do not promote derived display state into a second writer.
+
 Routes:
 
 - `src/routes/home.tsx`
