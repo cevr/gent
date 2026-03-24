@@ -1,6 +1,7 @@
 // Shared transport contract
 export type {
   GentClient,
+  GentClientInternal,
   MessageInfoReadonly,
   SessionInfo,
   BranchInfo,

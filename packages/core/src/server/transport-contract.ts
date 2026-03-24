@@ -562,6 +562,9 @@ export interface GentClient {
   listSkills: () => Effect.Effect<readonly SkillContent[], GentRpcError>
 
   getSkillContent: (name: string) => Effect.Effect<SkillContent | null, GentRpcError>
+}
 
+/** Internal client with access to ServiceMap for running fire-and-forget effects */
+export interface GentClientInternal extends GentClient {
   services: ServiceMap.ServiceMap<unknown>
 }

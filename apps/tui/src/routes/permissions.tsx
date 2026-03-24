@@ -10,13 +10,13 @@ import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { PermissionRule, GentClient } from "../client"
+import type { PermissionRule, GentClientInternal } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { formatError } from "../utils/format-error"
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface PermissionsProps {
-  client: GentClient
+  client: GentClientInternal
 }
 
 type PermissionsState =

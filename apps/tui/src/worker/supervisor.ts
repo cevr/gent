@@ -1,5 +1,5 @@
 import { Effect, Schema, type Scope } from "effect"
-import { makeHttpGentClient, type GentClient } from "@gent/sdk"
+import { makeHttpGentClient, type GentClientInternal } from "@gent/sdk"
 import * as net from "node:net"
 import { pathToFileURL } from "node:url"
 
@@ -446,7 +446,7 @@ export const startWorkerSupervisor = (
 
 export const makeWorkerHttpClient = (
   target: WorkerTransportTarget,
-): Effect.Effect<GentClient, never, Scope.Scope> => makeHttpGentClient({ url: target.url })
+): Effect.Effect<GentClientInternal, never, Scope.Scope> => makeHttpGentClient({ url: target.url })
 
 export const WorkerSupervisorInternal = {
   resolveWorkerLaunch,

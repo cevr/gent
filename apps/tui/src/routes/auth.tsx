@@ -7,7 +7,7 @@ import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { GentClient } from "../client"
+import type { GentClientInternal } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
 import { tuiEvent, tuiError } from "../utils/unified-tracer"
@@ -15,7 +15,7 @@ import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./a
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
-  client: GentClient
+  client: GentClientInternal
   enforceAuth?: boolean
   onResolved?: () => void
 }

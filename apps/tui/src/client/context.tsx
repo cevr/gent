@@ -33,7 +33,7 @@ import {
 import { reduceAgentLifecycle } from "./agent-lifecycle"
 
 import {
-  type GentClient,
+  type GentClientInternal,
   type GentRpcError,
   type MessageInfoReadonly,
   type QueueSnapshot,
@@ -85,7 +85,7 @@ export interface AgentState {
 
 export interface ClientContextValue {
   /** Underlying GentClient - returns Effects */
-  client: GentClient
+  client: GentClientInternal
 
   // Session state (union)
   sessionState: () => SessionState
@@ -150,7 +150,7 @@ export function useClient(): ClientContextValue {
 }
 
 interface ClientProviderProps extends ParentProps {
-  client: GentClient
+  client: GentClientInternal
   initialSession: Session | undefined
   supervisor?: WorkerSupervisor
 }

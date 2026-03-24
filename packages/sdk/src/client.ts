@@ -7,6 +7,7 @@ import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import type {
   GentClient,
+  GentClientInternal,
   SkillInfo,
   SkillContent,
   MessageInfoReadonly,
@@ -173,7 +174,7 @@ export function extractToolCallsWithResults(
 export function createClient(
   rpcClient: GentRpcClient,
   services: ServiceMap.ServiceMap<unknown>,
-): GentClient {
+): GentClientInternal {
   return {
     sendMessage: (input) => rpcClient.sendMessage(input),
 
@@ -331,24 +332,27 @@ export function createClient(
  * )
  * ```
  */
-export const makeClient: Effect.Effect<GentClient, never, RpcClient.Protocol | Scope.Scope> =
-  Effect.gen(function* () {
-    const rpcClient = yield* RpcClient.make(GentRpcs)
-    const services = yield* Effect.services<never>()
-    // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
-    // defines GentRpcError as the error schema. The cast narrows to our specific error type.
-    return createClient(
-      rpcClient as unknown as GentRpcClient,
-      services as ServiceMap.ServiceMap<unknown>,
-    )
-  })
+export const makeClient: Effect.Effect<
+  GentClientInternal,
+  never,
+  RpcClient.Protocol | Scope.Scope
+> = Effect.gen(function* () {
+  const rpcClient = yield* RpcClient.make(GentRpcs)
+  const services = yield* Effect.services<never>()
+  // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
+  // defines GentRpcError as the error schema. The cast narrows to our specific error type.
+  return createClient(
+    rpcClient as unknown as GentRpcClient,
+    services as ServiceMap.ServiceMap<unknown>,
+  )
+})
 
 /**
  * Creates a Gent client over the shared RPC-over-HTTP transport.
  */
 export const makeHttpGentClient = (
   config: HttpTransportConfig,
-): Effect.Effect<GentClient, never, Scope.Scope> =>
+): Effect.Effect<GentClientInternal, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     const transport = yield* Layer.buildWithScope(HttpTransport(config), scope)
@@ -404,7 +408,7 @@ export const makeInProcessRpcClient = <E, R>(
  */
 export const makeInProcessClient = <E, R>(
   handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
-): Effect.Effect<GentClient, E, R> =>
+): Effect.Effect<GentClientInternal, E, R> =>
   Effect.gen(function* () {
     const rpcClient = yield* makeInProcessRpcClient(handlersLayer)
     const services = yield* Effect.services<never>()
