@@ -84,7 +84,7 @@ function createMockClient() {
 }
 
 describe("ClientProvider event handling", () => {
-  test("StreamStarted sets status to streaming", () => {
+  test("records StreamStarted events", () => {
     const client = createMockClient()
     const event = new StreamStarted({ sessionId: "s1", branchId: "b1" })
 
@@ -94,7 +94,7 @@ describe("ClientProvider event handling", () => {
     expect(client.events).toContainEqual(event)
   })
 
-  test("StreamEnded sets status to idle", () => {
+  test("records StreamEnded events", () => {
     const client = createMockClient()
     const event = new StreamEnded({ sessionId: "s1", branchId: "b1" })
 

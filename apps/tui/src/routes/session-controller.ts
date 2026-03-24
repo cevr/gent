@@ -297,7 +297,7 @@ export function useSessionController(props: {
     const nextActivity = activity()
     switch (nextActivity.phase) {
       case "idle":
-        return ""
+        return nextActivity.turn > 0 ? "idle" : "ready"
       case "thinking":
         return "thinking"
       case "tool":

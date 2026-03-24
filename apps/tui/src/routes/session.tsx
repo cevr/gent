@@ -78,13 +78,18 @@ export function Session(props: SessionProps) {
 
   const bottomLeftLabels = (): BorderLabelItem[] => {
     const a = controller.activity()
-    if (a.phase === "idle") return []
-    const items: BorderLabelItem[] = [
-      { text: controller.spinner(), color: theme.textMuted },
-      { text: `turn ${a.turn}`, color: theme.textMuted },
-      { text: controller.phaseLabel(), color: theme.info },
-    ]
-    if (controller.elapsed() >= 1000) {
+    const items: BorderLabelItem[] = []
+    if (a.phase !== "idle") {
+      items.push({ text: controller.spinner(), color: theme.textMuted })
+    }
+    if (a.turn > 0) {
+      items.push({ text: `turn ${a.turn}`, color: theme.textMuted })
+    }
+    items.push({
+      text: controller.phaseLabel(),
+      color: a.phase === "idle" ? theme.textMuted : theme.info,
+    })
+    if (a.phase !== "idle" && controller.elapsed() >= 1000) {
       items.push({ text: formatElapsed(controller.elapsed()), color: theme.textMuted })
     }
     return items

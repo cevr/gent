@@ -111,6 +111,9 @@ describe("session feed boundary", () => {
             ),
           )
 
+          const initialFrame = renderFrame(setup)
+          expect(initialFrame).toContain("ready")
+
           yield* worker.client.sendMessage({
             sessionId: created.sessionId,
             branchId: created.branchId,
@@ -131,11 +134,12 @@ describe("session feed boundary", () => {
             setup,
             worker,
             created,
-            (frame) => frame.includes("debug response"),
+            (frame) => frame.includes("debug response") && frame.includes("idle"),
             "assistant debug response",
             10_000,
           )
           expect(responseFrame).toContain("debug response")
+          expect(responseFrame).toContain("idle")
         }),
       ),
     )

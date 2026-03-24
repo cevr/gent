@@ -28,6 +28,7 @@ import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
 import { useMachine } from "../hooks/use-machine"
 import type { WorkerLifecycleState, WorkerSupervisor } from "../worker/supervisor"
+import { reduceAgentLifecycle } from "./agent-lifecycle"
 
 import {
   type GentClient,
@@ -341,47 +342,45 @@ export function ClientProvider(props: ClientProviderProps) {
         const event = envelope.event
 
         // Update agent state based on events
-        switch (event._tag) {
-          case "StreamStarted":
-            setAgentStore({ status: AgentStatus.streaming() })
-            break
+        if (event._tag === "StreamEnded" && event.usage !== undefined) {
+          const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
+          const turnCost = calculateCost(event.usage, modelInfo?.pricing)
+          setAgentStore(
+            produce((draft) => {
+              draft.cost += turnCost
+            }),
+          )
+          setLatestInputTokens(event.usage.inputTokens)
+        }
 
-          case "StreamEnded":
-            setAgentStore({ status: AgentStatus.idle() })
-            if (event.usage !== undefined) {
-              const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
-              const turnCost = calculateCost(event.usage, modelInfo?.pricing)
-              setAgentStore(
-                produce((draft) => {
-                  draft.cost += turnCost
-                }),
-              )
-              setLatestInputTokens(event.usage.inputTokens)
-            }
-            break
+        if (event._tag === "ErrorOccurred") {
+          clientLog.error("agent.error", { error: event.error, eventId: envelope.id })
+        }
 
-          case "ErrorOccurred":
-            clientLog.error("agent.error", { error: event.error, eventId: envelope.id })
-            setAgentStore({ status: AgentStatus.error(event.error) })
-            break
-
-          case "AgentSwitched":
-            if (Schema.is(AgentNameSchema)(event.toAgent)) {
-              setPreferredAgent(event.toAgent)
-              setAgentStore({ agent: event.toAgent })
-            } else {
-              setAgentStore({ agent: defaultAgent })
-            }
-            break
-
-          case "MessageReceived":
-            if (event.role === "user") {
-              setAgentStore({ status: AgentStatus.streaming() })
-            } else if (event.role === "assistant") {
+        const lifecycle = reduceAgentLifecycle(event)
+        if (lifecycle.preferredAgent !== undefined) {
+          if (Schema.is(AgentNameSchema)(lifecycle.preferredAgent)) {
+            setPreferredAgent(lifecycle.preferredAgent)
+            setAgentStore({ agent: lifecycle.preferredAgent })
+          } else {
+            setAgentStore({ agent: defaultAgent })
+          }
+        }
+        if (lifecycle.status !== undefined) {
+          switch (lifecycle.status._tag) {
+            case "idle":
               setAgentStore({ status: AgentStatus.idle() })
-            }
-            break
+              break
+            case "streaming":
+              setAgentStore({ status: AgentStatus.streaming() })
+              break
+            case "error":
+              setAgentStore({ status: AgentStatus.error(lifecycle.status.error) })
+              break
+          }
+        }
 
+        switch (event._tag) {
           case "SessionNameUpdated":
             if (event.sessionId === sessionId) {
               sendMachine(SessionMachineEvent.UpdateName({ name: event.name }))
