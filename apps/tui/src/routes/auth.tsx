@@ -1,26 +1,17 @@
-/**
- * Auth route - manage API keys
- *
- * Uses effect-machine for state management via useMachine hook.
- * Side effects (RPC calls) handled in component; machine handles pure transitions.
- */
-
 import { createSignal, createEffect, onMount, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
-import { Machine } from "effect-machine"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
 import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
-import { useMachine } from "../hooks/use-machine"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { GentClient } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
 import { tuiEvent, tuiError } from "../utils/unified-tracer"
-import { AuthState, AuthEvent, authMachine } from "./auth-machine"
+import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./auth-state"
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
@@ -39,11 +30,10 @@ export function Auth(props: AuthProps) {
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime(props.client.services)
 
-  const { state, send } = useMachine(
-    Machine.spawn(authMachine),
-    AuthState.List({ providers: [], methods: {}, providerIndex: 0 }),
-    "auth",
-  )
+  const [state, setState] = createSignal<AuthRouteState>(AuthState.initial())
+  const send = (event: Parameters<typeof transitionAuth>[1]) => {
+    setState((current) => transitionAuth(current, event))
+  }
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
   const authSessionId = Bun.randomUUIDv7()
@@ -65,23 +55,19 @@ export function Auth(props: AuthProps) {
 
   const loadAuth = () => {
     tuiEvent("auth:load-start")
+    send({ _tag: "LoadStarted" })
     cast(
       Effect.all([props.client.listAuthProviders(), props.client.listAuthMethods()]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
             tuiEvent("auth:load-complete", { providers: loadedProviders.length })
-            send(
-              AuthEvent.Loaded({
-                providers: [...loadedProviders],
-                methods: loadedMethods,
-              }),
-            )
+            send({ _tag: "Loaded", providers: [...loadedProviders], methods: loadedMethods })
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
             tuiError("auth:load", err)
-            send(AuthEvent.LoadFailed({ error: formatError(err) }))
+            send({ _tag: "LoadFailed", error: formatError(err) })
           }),
         ),
       ),
@@ -96,7 +82,7 @@ export function Auth(props: AuthProps) {
     }).pipe(
       Effect.catchEager((err) =>
         Effect.sync(() => {
-          send(AuthEvent.ActionFailed({ error: formatError(ClientError(err.message)) }))
+          send({ _tag: "ActionFailed", error: formatError(ClientError(err.message)) })
         }),
       ),
     )
@@ -122,8 +108,8 @@ export function Auth(props: AuthProps) {
 
     const index = current.providers.findIndex((p) => missing.includes(p.provider))
     if (index >= 0) {
-      send(AuthEvent.SelectProvider({ index }))
-      send(AuthEvent.OpenMethod)
+      send({ _tag: "SelectProvider", index })
+      send({ _tag: "OpenMethod" })
       setAutoPrompted(true)
     }
   })
@@ -133,17 +119,18 @@ export function Auth(props: AuthProps) {
     if (current._tag !== "List") return
     const provider = current.providers[current.providerIndex]
     if (provider === undefined || provider.source !== "stored") return
+    send({ _tag: "DeleteStarted" })
 
     cast(
       props.client.deleteAuthKey(provider.provider).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
-            send(AuthEvent.ActionSucceeded)
+            send({ _tag: "ActionSucceeded" })
             loadAuth()
           }),
         ),
         Effect.catchEager((err) =>
-          Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
+          Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
         ),
       ),
     )
@@ -156,18 +143,19 @@ export function Auth(props: AuthProps) {
     const key = current.value.trim()
     if (provider === undefined || key.length === 0) return
     tuiEvent("auth:submit-key", { provider: provider.provider })
+    send({ _tag: "SubmitKeyStarted" })
 
     cast(
       props.client.setAuthKey(provider.provider, key).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             flashSuccess(`API key saved for ${provider.provider}`)
-            send(AuthEvent.ActionSucceeded)
+            send({ _tag: "ActionSucceeded" })
             loadAuth()
           }),
         ),
         Effect.catchEager((err) =>
-          Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
+          Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
         ),
       ),
     )
@@ -183,36 +171,32 @@ export function Auth(props: AuthProps) {
     tuiEvent("auth:start-method", { provider: provider.provider, method: method.type })
 
     if (method.type === "api") {
-      send(AuthEvent.StartKey)
+      send({ _tag: "StartKey" })
       return
     }
 
+    send({ _tag: "StartOAuthAuthorization" })
     cast(
       props.client.authorizeAuth(authSessionId, provider.provider, current.methodIndex).pipe(
         Effect.tap((authorization) =>
           Effect.sync(() => {
             if (authorization === null) {
-              send(
-                AuthEvent.ActionFailed({
-                  error: "No authorization available for this method",
-                }),
-              )
+              send({ _tag: "ActionFailed", error: "No authorization available for this method" })
               return
             }
             if (authorization.method === "done") {
               flashSuccess(`Authenticated ${provider.provider} via keychain`)
-              send(AuthEvent.ActionSucceeded)
+              send({ _tag: "ActionSucceeded" })
               loadAuth()
               return
             }
-            send(
-              AuthEvent.StartOAuth({
-                authorization,
-                method,
-                providerIndex: current.providerIndex,
-                methodIndex: current.methodIndex,
-              }),
-            )
+            send({
+              _tag: "StartOAuth",
+              authorization,
+              method,
+              providerIndex: current.providerIndex,
+              methodIndex: current.methodIndex,
+            })
           }),
         ),
         Effect.tap((authorization) => {
@@ -234,7 +218,7 @@ export function Auth(props: AuthProps) {
           return Effect.void
         }),
         Effect.catchEager((err) =>
-          Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
+          Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
         ),
       ),
     )
@@ -251,12 +235,12 @@ export function Auth(props: AuthProps) {
         Effect.tap(() =>
           Effect.sync(() => {
             flashSuccess(`Authenticated ${providerName} via OAuth`)
-            send(AuthEvent.ActionSucceeded)
+            send({ _tag: "ActionSucceeded" })
             loadAuth()
           }),
         ),
         Effect.catchEager((err) =>
-          Effect.sync(() => send(AuthEvent.OAuthAutoFailed({ error: formatError(err) }))),
+          Effect.sync(() => send({ _tag: "OAuthAutoFailed", error: formatError(err) })),
         ),
       ),
     )
@@ -276,6 +260,7 @@ export function Auth(props: AuthProps) {
     const trimmed = current.code.trim()
     const code = trimmed.length > 0 ? trimmed : undefined
     if (needsCode && code === undefined) return
+    send({ _tag: "SubmitOAuthStarted" })
 
     cast(
       props.client
@@ -290,12 +275,12 @@ export function Auth(props: AuthProps) {
           Effect.tap(() =>
             Effect.sync(() => {
               flashSuccess(`Authenticated ${provider.provider} via OAuth`)
-              send(AuthEvent.ActionSucceeded)
+              send({ _tag: "ActionSucceeded" })
               loadAuth()
             }),
           ),
           Effect.catchEager((err) =>
-            Effect.sync(() => send(AuthEvent.ActionFailed({ error: formatError(err) }))),
+            Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
           ),
         ),
     )
@@ -319,7 +304,7 @@ export function Auth(props: AuthProps) {
   ): boolean | undefined => {
     if (current === undefined) return undefined
     if (e.name === "escape") {
-      send(AuthEvent.Cancel)
+      send({ _tag: "Cancel" })
       return true
     }
     if (e.name === "return") {
@@ -327,11 +312,11 @@ export function Auth(props: AuthProps) {
       return true
     }
     if (e.name === "backspace") {
-      send(AuthEvent.BackspaceKey)
+      send({ _tag: "BackspaceKey" })
       return true
     }
     if (isPrintableAuthChar(e)) {
-      send(AuthEvent.TypeKey({ char: e.sequence }))
+      send({ _tag: "TypeKey", char: e.sequence })
       return true
     }
     return false
@@ -348,7 +333,7 @@ export function Auth(props: AuthProps) {
   ): boolean | undefined => {
     if (current === undefined) return undefined
     if (e.name === "escape") {
-      send(AuthEvent.Cancel)
+      send({ _tag: "Cancel" })
       return true
     }
     if (e.name === "return") {
@@ -356,11 +341,11 @@ export function Auth(props: AuthProps) {
       return true
     }
     if (e.name === "backspace") {
-      send(AuthEvent.BackspaceCode)
+      send({ _tag: "BackspaceCode" })
       return true
     }
     if (isPrintableAuthChar(e)) {
-      send(AuthEvent.TypeCode({ char: e.sequence }))
+      send({ _tag: "TypeCode", char: e.sequence })
       return true
     }
     return false
@@ -375,7 +360,7 @@ export function Auth(props: AuthProps) {
   ): boolean | undefined => {
     if (current === undefined) return undefined
     if (e.name === "escape") {
-      send(AuthEvent.Cancel)
+      send({ _tag: "Cancel" })
       return true
     }
     const provider = current.providers[current.providerIndex]
@@ -383,12 +368,12 @@ export function Auth(props: AuthProps) {
     if (methods.length === 0) return false
     if (e.name === "up") {
       const next = current.methodIndex > 0 ? current.methodIndex - 1 : methods.length - 1
-      send(AuthEvent.SelectMethod({ index: next }))
+      send({ _tag: "SelectMethod", index: next })
       return true
     }
     if (e.name === "down") {
       const next = current.methodIndex < methods.length - 1 ? current.methodIndex + 1 : 0
-      send(AuthEvent.SelectMethod({ index: next }))
+      send({ _tag: "SelectMethod", index: next })
       return true
     }
     if (e.name === "return") {
@@ -412,17 +397,17 @@ export function Auth(props: AuthProps) {
     if (e.name === "up") {
       const next =
         current.providerIndex > 0 ? current.providerIndex - 1 : current.providers.length - 1
-      send(AuthEvent.SelectProvider({ index: next }))
+      send({ _tag: "SelectProvider", index: next })
       return true
     }
     if (e.name === "down") {
       const next =
         current.providerIndex < current.providers.length - 1 ? current.providerIndex + 1 : 0
-      send(AuthEvent.SelectProvider({ index: next }))
+      send({ _tag: "SelectProvider", index: next })
       return true
     }
     if (e.name === "return" || e.name === "a") {
-      send(AuthEvent.OpenMethod)
+      send({ _tag: "OpenMethod" })
       return true
     }
     if (e.name === "d") {
@@ -452,12 +437,12 @@ export function Auth(props: AuthProps) {
     if (cleaned.length === 0) return
 
     if (current._tag === "Key") {
-      send(AuthEvent.PasteKey({ text: cleaned }))
+      send({ _tag: "PasteKey", text: cleaned })
       return
     }
 
     if (current._tag === "OAuth") {
-      send(AuthEvent.PasteCode({ text: cleaned }))
+      send({ _tag: "PasteCode", text: cleaned })
     }
   })
 

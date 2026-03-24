@@ -79,7 +79,7 @@ Those are either projections, tiny reducers, or pure compilation logic.
 - [x] Batch 4 — De-duplicate and flatten prompt search
 - [x] Batch 5 — Promote command palette to an explicit reducer
 - [x] Batch 6 — Simplify or demote `session-machine`
-- [ ] Batch 7 — Finish or demote `auth-machine`
+- [x] Batch 7 — Finish or demote `auth-machine`
 - [ ] Batch 8 — Clean up low-priority state ownership drift and test seams
 
 ## Batch 1 — Serialize Loop Ownership And Canonical Runtime State
