@@ -66,6 +66,4 @@ export {
   type ExtractedToolCall,
 } from "./client.js"
 
-// Direct in-process transport adapter
-export { makeDirectGentClient, type DirectGentClientContext } from "./client.js"
 export type { SkillScope } from "./client.js"

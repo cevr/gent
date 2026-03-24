@@ -1,5 +1,5 @@
 import { Effect, Layer } from "effect"
-import type { Stream, ServiceMap, Scope } from "effect"
+import type { ServiceMap, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
@@ -21,22 +21,12 @@ import type {
   SessionTreeNode,
   CreateSessionResult,
 } from "@gent/core/server/transport-contract.js"
-import { SessionQueries } from "@gent/core/server/session-queries.js"
-import { SessionCommands } from "@gent/core/server/session-commands.js"
-import { InteractionCommands } from "@gent/core/server/interaction-commands.js"
-import { SessionEvents } from "@gent/core/server/session-events.js"
-import { SessionSubscriptions } from "@gent/core/server/session-subscriptions.js"
-import { AskUserHandler } from "@gent/core/tools/ask-user.js"
-import { ActorProcess } from "@gent/core/runtime/actor-process.js"
 import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
-import { AuthApi, AuthStore, type AuthInfo } from "@gent/core/domain/auth-store.js"
-import { AuthGuard, type AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
-import { Permission, type PermissionRule } from "@gent/core/domain/permission.js"
-import { Model, type ProviderId } from "@gent/core/domain/model.js"
+import type { AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
+import type { PermissionRule } from "@gent/core/domain/permission.js"
 import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method.js"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
-import type { EventEnvelope } from "@gent/core/domain/event.js"
 import type {
   MessagePart,
   TextPart,
@@ -45,11 +35,7 @@ import type {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
-import { Skills, type SkillScope } from "@gent/core/domain/skills.js"
-import { ConfigService } from "@gent/core/runtime/config-service.js"
-import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
-import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
-import { OPENAI_OAUTH_ALLOWED_MODELS } from "@gent/core/providers/oauth/openai-oauth.js"
+import type { SkillScope } from "@gent/core/domain/skills.js"
 
 export type {
   MessagePart,
@@ -423,269 +409,6 @@ export const makeInProcessClient = <E, R>(
     const rpcClient = yield* makeInProcessRpcClient(handlersLayer)
     const services = yield* Effect.services<never>()
     return createClient(rpcClient, services as ServiceMap.ServiceMap<unknown>)
-  })
-
-// =============================================================================
-// Direct in-process transport adapter
-// =============================================================================
-
-/**
- * Context required to create an in-process transport adapter.
- */
-export type DirectGentClientContext =
-  | SessionQueries
-  | SessionCommands
-  | InteractionCommands
-  | SessionEvents
-  | SessionSubscriptions
-  | ActorProcess
-  | AskUserHandler
-  | Permission
-  | ConfigService
-  | ModelRegistry
-  | AuthStore
-  | AuthGuard
-  | ProviderAuth
-  | Skills
-
-/**
- * Creates the shared Gent transport contract using direct in-process calls.
- * Same contract as RPC/HTTP clients. Only the transport adapter differs.
- */
-export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentClientContext> =
-  Effect.gen(function* () {
-    const queries = yield* SessionQueries
-    const commands = yield* SessionCommands
-    const interactions = yield* InteractionCommands
-    const events = yield* SessionEvents
-    const subscriptions = yield* SessionSubscriptions
-    const actorProcess = yield* ActorProcess
-    const askUserHandler = yield* AskUserHandler
-    const permission = yield* Permission
-    const configService = yield* ConfigService
-    const modelRegistry = yield* ModelRegistry
-    const authStore = yield* AuthStore
-    const authGuard = yield* AuthGuard
-    const providerAuth = yield* ProviderAuth
-    const skillsService = yield* Skills
-    const services = yield* Effect.services<never>()
-
-    // Error mapping: app-service errors → GentRpcError (structurally compatible)
-    const mapErr = <A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, GentRpcError> =>
-      effect as Effect.Effect<A, GentRpcError>
-
-    const client: GentClient = {
-      sendMessage: (input) => mapErr(commands.sendMessage(input)),
-
-      createSession: (input) =>
-        mapErr(
-          commands.createSession({
-            ...(input?.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
-            ...(input?.cwd !== undefined ? { cwd: input.cwd } : {}),
-            ...(input?.bypass !== undefined ? { bypass: input.bypass } : {}),
-            ...(input?.parentSessionId !== undefined
-              ? { parentSessionId: input.parentSessionId }
-              : {}),
-            ...(input?.parentBranchId !== undefined
-              ? { parentBranchId: input.parentBranchId }
-              : {}),
-          }),
-        ),
-
-      listMessages: (branchId) => mapErr(queries.listMessages(branchId)),
-
-      getSessionSnapshot: (input) => mapErr(queries.getSessionSnapshot(input)),
-
-      getSession: (sessionId) => mapErr(queries.getSession(sessionId)),
-
-      listSessions: () => mapErr(queries.listSessions()),
-
-      getChildSessions: (parentSessionId) => mapErr(queries.getChildSessions(parentSessionId)),
-
-      getSessionTree: (sessionId) =>
-        mapErr(
-          queries.getSessionTree(sessionId).pipe(
-            Effect.map(function toFlat(node): SessionTreeNode {
-              return {
-                id: node.session.id,
-                name: node.session.name,
-                cwd: node.session.cwd,
-                bypass: node.session.bypass,
-                parentSessionId: node.session.parentSessionId,
-                parentBranchId: node.session.parentBranchId,
-                createdAt: node.session.createdAt.getTime(),
-                updatedAt: node.session.updatedAt.getTime(),
-                children: node.children.map(toFlat),
-              }
-            }),
-          ),
-        ),
-
-      listModels: () =>
-        mapErr(
-          Effect.gen(function* () {
-            const models = yield* modelRegistry.list()
-            const authInfo = yield* authStore
-              .get("openai")
-              .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
-            if (authInfo?.type !== "oauth") return models
-
-            return models
-              .filter((model) => {
-                if (model.provider !== "openai") return true
-                const [, modelName] = String(model.id).split("/", 2)
-                return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
-              })
-              .map((model) => {
-                if (model.provider !== "openai") return model
-                return new Model({
-                  id: model.id,
-                  name: model.name,
-                  provider: model.provider,
-                  ...(model.contextLength !== undefined
-                    ? { contextLength: model.contextLength }
-                    : {}),
-                  pricing: { input: 0, output: 0 },
-                })
-              })
-          }),
-        ),
-
-      listBranches: (sessionId) => mapErr(queries.listBranches(sessionId)),
-
-      listTasks: (sessionId, branchId) => mapErr(queries.listTasks(sessionId, branchId)),
-
-      getBranchTree: (sessionId) => mapErr(queries.getBranchTree(sessionId)),
-
-      createBranch: (sessionId, name) =>
-        mapErr(
-          commands
-            .createBranch({ sessionId, ...(name !== undefined ? { name } : {}) })
-            .pipe(Effect.map((r) => r.branchId)),
-        ),
-
-      switchBranch: (input) => mapErr(commands.switchBranch(input)),
-
-      forkBranch: (input) => mapErr(commands.forkBranch(input)),
-
-      streamEvents: (input) =>
-        events.streamEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
-      watchRuntime: (input) =>
-        subscriptions.watchRuntime(input) as Stream.Stream<SessionRuntime, GentRpcError>,
-
-      steer: (command) => mapErr(commands.steer(command)),
-      drainQueuedMessages: ({ sessionId, branchId }) =>
-        mapErr(commands.drainQueuedMessages({ sessionId, branchId })),
-      getQueuedMessages: ({ sessionId, branchId }) =>
-        mapErr(queries.getQueuedMessages({ sessionId, branchId })),
-
-      invokeTool: (input) => mapErr(actorProcess.invokeTool(input)),
-
-      respondQuestions: (requestId, answers) => mapErr(askUserHandler.respond(requestId, answers)),
-
-      respondPermission: (requestId, decision, persist) =>
-        mapErr(interactions.respondPermission({ requestId, decision, persist })),
-
-      respondPrompt: (requestId, decision, content) =>
-        mapErr(
-          interactions.respondPrompt({
-            requestId,
-            decision,
-            ...(content !== undefined ? { content } : {}),
-          }),
-        ),
-
-      respondHandoff: (requestId, decision, reason) =>
-        mapErr(
-          interactions.respondHandoff({
-            requestId,
-            decision,
-            ...(reason !== undefined ? { reason } : {}),
-          }),
-        ),
-
-      updateSessionBypass: (sessionId, bypass) =>
-        mapErr(commands.updateSessionBypass({ sessionId, bypass })),
-
-      updateSessionReasoningLevel: (sessionId, reasoningLevel) =>
-        mapErr(commands.updateSessionReasoningLevel({ sessionId, reasoningLevel })),
-
-      getPermissionRules: () => mapErr(configService.getPermissionRules()),
-
-      deletePermissionRule: (tool, pattern) =>
-        mapErr(
-          Effect.gen(function* () {
-            yield* configService.removePermissionRule(tool, pattern)
-            yield* permission.removeRule(tool, pattern)
-          }),
-        ),
-
-      listAuthProviders: () => mapErr(authGuard.listProviders()),
-
-      setAuthKey: (provider, key) =>
-        mapErr(
-          authStore
-            .set(provider, new AuthApi({ type: "api", key }))
-            .pipe(Effect.catchEager((e) => Effect.logWarning("setAuthKey failed", e))),
-        ),
-
-      deleteAuthKey: (provider) =>
-        mapErr(
-          authStore
-            .remove(provider)
-            .pipe(Effect.catchEager((e) => Effect.logWarning("deleteAuthKey failed", e))),
-        ),
-
-      listAuthMethods: () => mapErr(providerAuth.listMethods()),
-
-      authorizeAuth: (sessionId, provider, method) =>
-        mapErr(
-          providerAuth
-            .authorize(sessionId, provider as ProviderId, method)
-            .pipe(Effect.map((result) => result ?? null)),
-        ),
-
-      callbackAuth: (sessionId, provider, method, authorizationId, code) =>
-        mapErr(
-          providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
-        ),
-
-      listSkills: () =>
-        mapErr(
-          skillsService.list().pipe(
-            Effect.map((list) =>
-              list.map((s) => ({
-                name: s.name,
-                description: s.description,
-                scope: s.scope,
-                filePath: s.filePath,
-                content: s.content,
-              })),
-            ),
-          ),
-        ),
-
-      getSkillContent: (name) =>
-        mapErr(
-          skillsService.get(name).pipe(
-            Effect.map((s) =>
-              s !== undefined
-                ? {
-                    name: s.name,
-                    description: s.description,
-                    scope: s.scope,
-                    filePath: s.filePath,
-                    content: s.content,
-                  }
-                : null,
-            ),
-          ),
-        ),
-
-      services: services as ServiceMap.ServiceMap<unknown>,
-    }
-
-    return client
   })
 
 // =============================================================================
