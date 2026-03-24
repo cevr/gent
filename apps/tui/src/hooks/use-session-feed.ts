@@ -353,6 +353,20 @@ export function useSessionFeed(
 
     switch (event._tag) {
       case "MessageReceived":
+        // User messages from other sources (interjections, multi-client) need fetching
+        if (event.role === "user") {
+          void Effect.runPromise(
+            client.client.listMessages(event.branchId).pipe(
+              Effect.tap((msgs) =>
+                Effect.sync(() => {
+                  if (currentKey !== key) return
+                  setStore("messages", buildMessages(msgs))
+                }),
+              ),
+              Effect.catchEager(() => Effect.void),
+            ),
+          )
+        }
         break
 
       case "BranchSwitched":
