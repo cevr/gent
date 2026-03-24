@@ -99,6 +99,7 @@ import {
   type FinalizingState,
   type IdleState,
   type LoopActor,
+  type LoopRuntimeState,
   type LoopState,
   type QueuedTurnItem,
   type ResolvingState,
@@ -536,11 +537,17 @@ export interface AgentLoopService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<boolean>
+  readonly getActor: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<LoopActor>
   readonly getState: (input: { sessionId: SessionId; branchId: BranchId }) => Effect.Effect<{
+    phase: "idle" | "resolving" | "streaming" | "executing-tools" | "finalizing"
     status: "idle" | "running" | "interrupted"
     agent: AgentNameType
-    queueDepth: number
+    queue: QueueSnapshot
   }>
+  readonly toRuntimeState: (state: LoopState) => LoopRuntimeState
 }
 
 export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()(
@@ -1240,6 +1247,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               return runtimeStateFromLoopState(yield* loop.actor.snapshot).status !== "idle"
             }),
 
+          getActor: (input) =>
+            Effect.gen(function* () {
+              const loop = yield* getLoop(input.sessionId, input.branchId)
+              return loop.actor
+            }),
+
           getState: (input) =>
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
@@ -1248,15 +1261,17 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               }
 
               return {
+                phase: "idle" as const,
                 status: "idle" as const,
                 agent: yield* resolveStoredAgent({
                   storage,
                   sessionId: input.sessionId,
                   branchId: input.branchId,
                 }),
-                queueDepth: 0,
+                queue: { steering: [], followUp: [] },
               }
             }),
+          toRuntimeState: runtimeStateFromLoopState,
         }
 
         yield* Effect.addFinalizer(() =>
@@ -1283,7 +1298,15 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
       drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       isRunning: (_input) => Effect.succeed(false),
-      getState: () => Effect.succeed({ status: "idle", agent: "cowork", queueDepth: 0 }),
+      getActor: () => Effect.die("AgentLoop.Test.getActor not implemented"),
+      getState: () =>
+        Effect.succeed({
+          phase: "idle",
+          status: "idle",
+          agent: "cowork",
+          queue: { steering: [], followUp: [] },
+        }),
+      toRuntimeState: runtimeStateFromLoopState,
     })
 }
 

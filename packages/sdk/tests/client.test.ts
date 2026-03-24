@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import type { ServiceMap } from "effect"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import {
   createClient,
   HttpTransport,
@@ -29,20 +29,24 @@ describe("createClient", () => {
       forkBranch: () => Effect.succeed({ branchId: "b3" }),
       sendMessage: () => Effect.void,
       listMessages: () => Effect.succeed([]),
-      getSessionState: () =>
+      getSessionSnapshot: () =>
         Effect.succeed({
           sessionId: "s1",
           branchId: "b1",
           messages: [],
           lastEventId: null,
-          isStreaming: false,
-          agent: "cowork" as const,
+          bypass: false,
+          reasoningLevel: undefined,
         }),
       steer: () => Effect.void,
-      subscribeEvents: () => Effect.succeed([]),
-      subscribeLiveEvents: () => Effect.succeed([]),
-      watchSessionState: () => Effect.succeed([]),
-      watchQueue: () => Effect.succeed([]),
+      streamEvents: () => Stream.empty,
+      watchRuntime: () =>
+        Stream.make({
+          phase: "idle" as const,
+          status: "idle" as const,
+          agent: "cowork" as const,
+          queue: { steering: [], followUp: [] },
+        }),
       drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       respondQuestions: () => Effect.void,
@@ -65,13 +69,13 @@ describe("createClient", () => {
     expect(typeof client.listSessions).toBe("function")
     expect(typeof client.listModels).toBe("function")
     expect(typeof client.sendMessage).toBe("function")
-    expect(typeof client.subscribeEvents).toBe("function")
+    expect(typeof client.streamEvents).toBe("function")
     expect(typeof client.steer).toBe("function")
     expect(typeof client.respondQuestions).toBe("function")
     expect(typeof client.respondPermission).toBe("function")
     expect(typeof client.respondPrompt).toBe("function")
     expect(typeof client.listMessages).toBe("function")
-    expect(typeof client.getSessionState).toBe("function")
+    expect(typeof client.getSessionSnapshot).toBe("function")
     expect(typeof client.listBranches).toBe("function")
     expect(typeof client.createBranch).toBe("function")
     expect(typeof client.getBranchTree).toBe("function")

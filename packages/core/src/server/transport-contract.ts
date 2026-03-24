@@ -232,24 +232,42 @@ export const ListMessagesInput = Schema.Struct({
 export type ListMessagesInput = typeof ListMessagesInput.Type
 export const ListMessagesPayload = ListMessagesInput
 
-export const GetSessionStateInput = Schema.Struct({
+export const GetSessionSnapshotInput = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
 })
-export type GetSessionStateInput = typeof GetSessionStateInput.Type
-export const GetSessionStatePayload = GetSessionStateInput
+export type GetSessionSnapshotInput = typeof GetSessionSnapshotInput.Type
+export const GetSessionSnapshotPayload = GetSessionSnapshotInput
 
-export const SessionState = Schema.Struct({
+export const SessionSnapshot = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   messages: Schema.Array(MessageInfo),
   lastEventId: Schema.NullOr(Schema.Number),
-  isStreaming: Schema.Boolean,
-  agent: AgentName,
   bypass: Schema.optional(Schema.Boolean),
   reasoningLevel: Schema.optional(ReasoningEffort),
 })
-export type SessionState = typeof SessionState.Type
+export type SessionSnapshot = typeof SessionSnapshot.Type
+
+export const RuntimePhase = Schema.Literals([
+  "idle",
+  "resolving",
+  "streaming",
+  "executing-tools",
+  "finalizing",
+])
+export type RuntimePhase = typeof RuntimePhase.Type
+
+export const RuntimeStatus = Schema.Literals(["idle", "running", "interrupted"])
+export type RuntimeStatus = typeof RuntimeStatus.Type
+
+export const SessionRuntime = Schema.Struct({
+  phase: RuntimePhase,
+  status: RuntimeStatus,
+  agent: AgentName,
+  queue: QueueSnapshot,
+})
+export type SessionRuntime = typeof SessionRuntime.Type
 
 const SteerTargetFields = {
   sessionId: SessionId,
@@ -289,20 +307,9 @@ export const SubscribeEventsInput = Schema.Struct({
 export type SubscribeEventsInput = typeof SubscribeEventsInput.Type
 export const SubscribeEventsPayload = SubscribeEventsInput
 
-export const SubscribeLiveEventsInput = Schema.Struct({
-  sessionId: SessionId,
-  branchId: Schema.optional(BranchId),
-})
-export type SubscribeLiveEventsInput = typeof SubscribeLiveEventsInput.Type
-export const SubscribeLiveEventsPayload = SubscribeLiveEventsInput
-
-export const WatchSessionStateInput = GetSessionStateInput
-export type WatchSessionStateInput = typeof WatchSessionStateInput.Type
-export const WatchSessionStatePayload = WatchSessionStateInput
-
-export const WatchQueueInput = QueueTarget
-export type WatchQueueInput = typeof WatchQueueInput.Type
-export const WatchQueuePayload = WatchQueueInput
+export const WatchRuntimeInput = QueueTarget
+export type WatchRuntimeInput = typeof WatchRuntimeInput.Type
+export const WatchRuntimePayload = WatchRuntimeInput
 
 export const RespondQuestionsInput = Schema.Struct({
   requestId: Schema.String,
@@ -439,7 +446,9 @@ export interface GentClient {
 
   listMessages: (branchId: BranchId) => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
 
-  getSessionState: (input: GetSessionStateInput) => Effect.Effect<SessionState, GentRpcError>
+  getSessionSnapshot: (
+    input: GetSessionSnapshotInput,
+  ) => Effect.Effect<SessionSnapshot, GentRpcError>
 
   getSession: (sessionId: SessionId) => Effect.Effect<SessionInfo | null, GentRpcError>
 
@@ -471,12 +480,8 @@ export interface GentClient {
 
   forkBranch: (input: ForkBranchInput) => Effect.Effect<ForkBranchResult, GentRpcError>
 
-  subscribeEvents: (input: SubscribeEventsInput) => Stream.Stream<EventEnvelope, GentRpcError>
-  subscribeLiveEvents: (
-    input: SubscribeLiveEventsInput,
-  ) => Stream.Stream<EventEnvelope, GentRpcError>
-  watchSessionState: (input: WatchSessionStateInput) => Stream.Stream<SessionState, GentRpcError>
-  watchQueue: (input: WatchQueueInput) => Stream.Stream<QueueSnapshotReadonly, GentRpcError>
+  streamEvents: (input: SubscribeEventsInput) => Stream.Stream<EventEnvelope, GentRpcError>
+  watchRuntime: (input: WatchRuntimeInput) => Stream.Stream<SessionRuntime, GentRpcError>
 
   invokeTool: (input: {
     sessionId: SessionId

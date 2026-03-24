@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { queueTransportCases, waitFor } from "./transport-harness"
 
@@ -7,6 +7,17 @@ const flattenRestoreText = (snapshot: {
   steering: ReadonlyArray<{ content: string }>
   followUp: ReadonlyArray<{ content: string }>
 }) => [...snapshot.steering, ...snapshot.followUp].map((entry) => entry.content).join("\n")
+
+const collectRuntime = <A, E>(stream: Stream.Stream<A, E>): Effect.Effect<Ref.Ref<A[]>, E, never> =>
+  Effect.gen(function* () {
+    const values = yield* Ref.make<A[]>([])
+    yield* stream.pipe(
+      Stream.runForEach((value) => Ref.update(values, (current) => [...current, value])),
+      Effect.forkScoped,
+    )
+    yield* Effect.sleep("50 millis")
+    return values
+  })
 
 describe("queue seam contract", () => {
   for (const transport of queueTransportCases) {
@@ -20,6 +31,13 @@ describe("queue seam contract", () => {
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
+          const runtime = yield* collectRuntime(
+            client.watchRuntime({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+          ).pipe(Effect.mapError((error) => new Error(String(error))))
+
           yield* client
             .sendMessage({
               sessionId: created.sessionId,
@@ -29,13 +47,8 @@ describe("queue seam contract", () => {
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
           yield* waitFor(
-            client
-              .getSessionState({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (state) => state.isStreaming,
+            Ref.get(runtime),
+            (states) => states.some((state) => state.status !== "idle"),
             10_000,
           )
 
@@ -105,6 +118,13 @@ describe("queue seam contract", () => {
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
+          const runtime = yield* collectRuntime(
+            client.watchRuntime({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+          ).pipe(Effect.mapError((error) => new Error(String(error))))
+
           yield* client
             .sendMessage({
               sessionId: created.sessionId,
@@ -114,13 +134,8 @@ describe("queue seam contract", () => {
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
           yield* waitFor(
-            client
-              .getSessionState({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (state) => state.isStreaming,
+            Ref.get(runtime),
+            (states) => states.some((state) => state.status !== "idle"),
             10_000,
           )
 

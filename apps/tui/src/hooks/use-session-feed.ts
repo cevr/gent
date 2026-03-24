@@ -269,69 +269,69 @@ export function useSessionFeed(
       const session = sessionId()
       clientLog.info("sessionFeed.activate", { key })
 
-      const watchFiber = Effect.runForkWith(client.client.services)(
+      const streamFiber = Effect.runForkWith(client.client.services)(
         runWithReconnect(
           () =>
-            client.client
-              .watchSessionState({
+            Effect.gen(function* () {
+              const snapshot = yield* client.client.getSessionSnapshot({
                 sessionId: session,
                 branchId: branch,
               })
-              .pipe(
-                Stream.runForEach((state) =>
+
+              yield* Effect.sync(() => {
+                if (currentKey !== key) return
+                client.setConnectionIssue(null)
+                setStore("messages", buildMessages(snapshot.messages))
+              })
+
+              const eventStream = client.client.streamEvents({
+                sessionId: session,
+                branchId: branch,
+                ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+              })
+
+              const eventsFiber = yield* eventStream.pipe(
+                Stream.runForEach((envelope) =>
                   Effect.sync(() => {
                     if (currentKey !== key) return
                     client.setConnectionIssue(null)
-                    setStore("messages", buildMessages(state.messages))
+                    processEvent(envelope.event, branch, key)
                   }),
                 ),
-              ),
+                Effect.forkScoped,
+              )
+
+              // Send the prompt only after the event stream is established.
+              if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
+                sentPrompts.add(key)
+                clientLog.info("sessionFeed.sendInitialPrompt", {
+                  sessionId: session,
+                  branchId: branch,
+                })
+                yield* client.client.sendMessage({
+                  sessionId: session,
+                  branchId: branch,
+                  content: initialPrompt,
+                })
+              }
+
+              return yield* Fiber.join(eventsFiber)
+            }),
           {
             onError: (err) => {
               if (currentKey !== key) return
-              clientLog.error("sessionFeed.watchState.failed", {
+              clientLog.error("sessionFeed.snapshot.failed", {
                 error: formatConnectionIssue(err),
               })
               client.setConnectionIssue(formatConnectionIssue(err))
             },
+            waitForRetry: () => client.waitForWorkerRunning(),
           },
         ),
       )
 
-      const unsubscribe = client.subscribeEvents((event) => {
-        // Guard: only process events for our session/branch
-        if ("sessionId" in event && event.sessionId !== session) return
-        if ("branchId" in event && event.branchId !== branch) return
-        processEvent(event, branch, key)
-      })
-
-      // Send initial prompt after subscription is established (once per identity)
-      if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
-        sentPrompts.add(key)
-        clientLog.info("sessionFeed.sendInitialPrompt", {
-          sessionId: session,
-          branchId: branch,
-        })
-        cast(
-          client.client
-            .sendMessage({
-              sessionId: session,
-              branchId: branch,
-              content: initialPrompt,
-            })
-            .pipe(
-              Effect.tapError((err) =>
-                Effect.sync(() => {
-                  client.setConnectionIssue(formatConnectionIssue(err))
-                }),
-              ),
-            ),
-        )
-      }
-
       onCleanup(() => {
-        unsubscribe()
-        Effect.runFork(Fiber.interrupt(watchFiber))
+        Effect.runFork(Fiber.interrupt(streamFiber))
       })
     }),
   )

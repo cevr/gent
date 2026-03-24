@@ -16,12 +16,10 @@ import type {
   BranchTreeNode,
   QueueEntryInfoReadonly,
   QueueSnapshotReadonly,
-  SessionState,
+  SessionSnapshot,
+  SessionRuntime,
   SessionTreeNode,
   CreateSessionResult,
-  SubscribeLiveEventsInput,
-  WatchQueueInput,
-  WatchSessionStateInput,
 } from "@gent/core/server/transport-contract.js"
 import { SessionQueries } from "@gent/core/server/session-queries.js"
 import { SessionCommands } from "@gent/core/server/session-commands.js"
@@ -80,7 +78,8 @@ export type {
   BranchTreeNode,
   QueueEntryInfoReadonly,
   QueueSnapshotReadonly,
-  SessionState,
+  SessionSnapshot,
+  SessionRuntime,
   SessionTreeNode,
   CreateSessionResult,
 }
@@ -204,8 +203,8 @@ export function createClient(
 
     listMessages: (branchId) => rpcClient.listMessages({ branchId }),
 
-    getSessionState: (input) =>
-      rpcClient.getSessionState({ sessionId: input.sessionId, branchId: input.branchId }),
+    getSessionSnapshot: (input) =>
+      rpcClient.getSessionSnapshot({ sessionId: input.sessionId, branchId: input.branchId }),
 
     getSession: (sessionId) => rpcClient.getSession({ sessionId }),
 
@@ -248,21 +247,13 @@ export function createClient(
         ...(input.name !== undefined ? { name: input.name } : {}),
       }),
 
-    subscribeEvents: ({ sessionId, branchId, after }) =>
-      rpcClient.subscribeEvents({
+    streamEvents: ({ sessionId, branchId, after }) =>
+      rpcClient.streamEvents({
         sessionId,
         ...(branchId !== undefined ? { branchId } : {}),
         ...(after !== undefined ? { after } : {}),
       }),
-    subscribeLiveEvents: ({ sessionId, branchId }: SubscribeLiveEventsInput) =>
-      rpcClient.subscribeLiveEvents({
-        sessionId,
-        ...(branchId !== undefined ? { branchId } : {}),
-      }),
-    watchSessionState: ({ sessionId, branchId }: WatchSessionStateInput) =>
-      rpcClient.watchSessionState({ sessionId, branchId }),
-    watchQueue: ({ sessionId, branchId }: WatchQueueInput) =>
-      rpcClient.watchQueue({ sessionId, branchId }),
+    watchRuntime: ({ sessionId, branchId }) => rpcClient.watchRuntime({ sessionId, branchId }),
 
     steer: (command) => rpcClient.steer({ command }),
     drainQueuedMessages: (input) => rpcClient.drainQueuedMessages(input),
@@ -503,7 +494,7 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
 
       listMessages: (branchId) => mapErr(queries.listMessages(branchId)),
 
-      getSessionState: (input) => mapErr(queries.getSessionState(input)),
+      getSessionSnapshot: (input) => mapErr(queries.getSessionSnapshot(input)),
 
       getSession: (sessionId) => mapErr(queries.getSession(sessionId)),
 
@@ -577,14 +568,10 @@ export const makeDirectGentClient: Effect.Effect<GentClient, never, DirectGentCl
 
       forkBranch: (input) => mapErr(commands.forkBranch(input)),
 
-      subscribeEvents: (input) =>
-        events.subscribeEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
-      subscribeLiveEvents: (input) =>
-        events.subscribeLiveEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
-      watchSessionState: (input) =>
-        subscriptions.watchSessionState(input) as Stream.Stream<SessionState, GentRpcError>,
-      watchQueue: (input) =>
-        subscriptions.watchQueue(input) as Stream.Stream<QueueSnapshotReadonly, GentRpcError>,
+      streamEvents: (input) =>
+        events.streamEvents(input) as Stream.Stream<EventEnvelope, GentRpcError>,
+      watchRuntime: (input) =>
+        subscriptions.watchRuntime(input) as Stream.Stream<SessionRuntime, GentRpcError>,
 
       steer: (command) => mapErr(commands.steer(command)),
       drainQueuedMessages: ({ sessionId, branchId }) =>

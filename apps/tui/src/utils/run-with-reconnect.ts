@@ -3,6 +3,7 @@ import { Effect } from "effect"
 export interface ReconnectOptions<E> {
   readonly retryDelay?: number
   readonly onError?: (error: E) => void
+  readonly waitForRetry?: () => Effect.Effect<void>
 }
 
 export const runWithReconnect = <E, R>(
@@ -14,6 +15,6 @@ export const runWithReconnect = <E, R>(
       yield* effectFactory().pipe(
         Effect.catchEager((error) => Effect.sync(() => options.onError?.(error))),
       )
-      yield* Effect.sleep(options.retryDelay ?? 500)
+      yield* options.waitForRetry?.() ?? Effect.sleep(options.retryDelay ?? 500)
     }),
   )

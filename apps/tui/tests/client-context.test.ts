@@ -34,7 +34,7 @@ function createMockClient() {
         )
       }
     },
-    subscribeEvents: (_input: { sessionId: string }) => {
+    streamEvents: (_input: { sessionId: string }) => {
       return Stream.async<EventEnvelope>((emit) => {
         eventCallback = (envelope) => {
           emit.single(envelope)
@@ -42,33 +42,23 @@ function createMockClient() {
         return Effect.void
       })
     },
-    subscribeLiveEvents: (_input: { sessionId: string }) =>
-      Stream.async<EventEnvelope>((emit) => {
-        eventCallback = (envelope) => {
-          emit.single(envelope)
-        }
-        return Effect.void
-      }),
-    watchSessionState: () =>
+    watchRuntime: () =>
       Stream.make({
-        sessionId: "s1",
-        branchId: "b1",
-        messages: [],
-        lastEventId: null,
-        isStreaming: false,
+        phase: "idle" as const,
+        status: "idle" as const,
         agent: "cowork" as const,
+        queue: { steering: [], followUp: [] },
       }),
-    watchQueue: () => Stream.make({ steering: [], followUp: [] }),
     sendMessage: mock(() => Effect.void),
     listMessages: mock(() => Effect.succeed([])),
-    getSessionState: mock(() =>
+    getSessionSnapshot: mock(() =>
       Effect.succeed({
         sessionId: "s1",
         branchId: "b1",
         messages: [],
         lastEventId: null,
-        isStreaming: false,
-        agent: "cowork" as const,
+        bypass: true,
+        reasoningLevel: undefined,
       }),
     ),
     listSessions: mock(() => Effect.succeed([])),

@@ -10,7 +10,7 @@ export const runHeadless = (
   promptText: string,
 ): Effect.Effect<void, GentRpcError, never> =>
   Effect.gen(function* () {
-    const eventStream = client.subscribeEvents({ sessionId, branchId })
+    const eventStream = client.streamEvents({ sessionId, branchId })
 
     yield* client
       .sendMessage({ sessionId, branchId, content: promptText })

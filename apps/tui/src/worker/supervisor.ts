@@ -59,6 +59,7 @@ const SERVER_ENTRY_PATH = new URL("../../../server/src/main.ts", import.meta.url
 const WORKER_HOST = "127.0.0.1"
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
+const WORKER_READY_PREFIX = "GENT_WORKER_READY "
 
 const resolveWorkerLaunch = async (options?: {
   readonly sourceEntryPath?: string
@@ -102,28 +103,85 @@ const findOpenPort = (): Promise<number> =>
   })
 
 const waitForWorkerReady = (
-  url: string,
+  proc: Bun.Subprocess,
   timeoutMs: number,
 ): Effect.Effect<void, WorkerSupervisorError> =>
-  Effect.promise(async () => {
-    const deadline = Date.now() + timeoutMs
-    const poll = async (): Promise<void> => {
-      if (Date.now() >= deadline) {
-        throw new WorkerSupervisorError({
-          message: `worker did not become ready within ${timeoutMs}ms`,
+  Effect.promise(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const stdout = proc.stdout
+        if (stdout === undefined || stdout === null || typeof stdout === "number") {
+          reject(new WorkerSupervisorError({ message: "worker stdout unavailable during startup" }))
+          return
+        }
+
+        const reader = (stdout as ReadableStream<Uint8Array>).getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+        let settled = false
+
+        const finish = (error?: WorkerSupervisorError) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeout)
+          void reader.cancel().catch(() => undefined)
+          if (error !== undefined) reject(error)
+          else resolve()
+        }
+
+        const timeout = setTimeout(() => {
+          finish(
+            new WorkerSupervisorError({
+              message: `worker did not become ready within ${timeoutMs}ms`,
+            }),
+          )
+        }, timeoutMs)
+
+        void proc.exited.then(() => {
+          finish(
+            new WorkerSupervisorError({
+              message: `worker exited before ready${proc.exitCode !== null ? ` (${proc.exitCode})` : ""}`,
+            }),
+          )
         })
-      }
-      try {
-        const response = await fetch(url.replace(/\/rpc$/, "/docs/openapi.json"))
-        if (response.ok) return
-      } catch {
-        // still booting
-      }
-      await Bun.sleep(100)
-      return poll()
-    }
-    return poll()
-  }).pipe(
+
+        const handleText = (text: string) => {
+          buffer += text
+          while (true) {
+            const newline = buffer.indexOf("\n")
+            if (newline === -1) return
+            const line = buffer.slice(0, newline).trim()
+            buffer = buffer.slice(newline + 1)
+            if (line.startsWith(WORKER_READY_PREFIX)) {
+              finish()
+              return
+            }
+          }
+        }
+
+        const readLoop = (): void => {
+          void reader
+            .read()
+            .then(({ done, value }) => {
+              if (done) {
+                finish(new WorkerSupervisorError({ message: "worker stdout closed before ready" }))
+                return
+              }
+              handleText(decoder.decode(value, { stream: true }))
+              if (!settled) readLoop()
+            })
+            .catch((error: unknown) => {
+              finish(
+                new WorkerSupervisorError({
+                  message: `failed to read worker readiness: ${String(error)}`,
+                }),
+              )
+            })
+        }
+
+        readLoop()
+      }),
+  ).pipe(
     Effect.mapError((error) => {
       const message =
         typeof error === "object" && error !== null && "message" in error
@@ -188,11 +246,30 @@ const spawnWorkerProcess = (
       cwd: options.cwd,
       env,
       stdin: "ignore",
-      stdout: "ignore",
+      stdout: "pipe",
       stderr: "inherit",
     })
     return { port, url: `http://${WORKER_HOST}:${port}/rpc`, proc }
   })
+
+export const waitForWorkerRunning = (
+  worker: Pick<WorkerSupervisor, "getState" | "subscribe">,
+): Effect.Effect<void> =>
+  Effect.promise(
+    () =>
+      new Promise<void>((resolve) => {
+        if (worker.getState()._tag === "running") {
+          resolve()
+          return
+        }
+
+        const unsubscribe = worker.subscribe((state) => {
+          if (state._tag !== "running") return
+          unsubscribe()
+          resolve()
+        })
+      }),
+  )
 
 export const startWorkerSupervisor = (
   options: WorkerSupervisorOptions,
@@ -232,7 +309,7 @@ export const startWorkerSupervisor = (
       const launchCurrent = Effect.gen(function* () {
         const launched = yield* spawnWorkerProcess(options, assignedPort)
         current = launched.proc
-        yield* waitForWorkerReady(launched.url, startupTimeoutMs)
+        yield* waitForWorkerReady(launched.proc, startupTimeoutMs)
         restartPromise = undefined
         emit({
           _tag: "running",

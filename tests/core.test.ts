@@ -18,6 +18,7 @@ import { AppServicesLive } from "@gent/core/server/index"
 import { SessionQueries } from "@gent/core/server/session-queries"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess } from "@gent/core/runtime/actor-process"
+import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
 
 describe("Skills System", () => {
@@ -164,8 +165,8 @@ describe("Cost Calculation", () => {
   })
 })
 
-describe("Session State", () => {
-  test("getSessionState uses actor process snapshot for runtime state", async () => {
+describe("Session Snapshot", () => {
+  test("getSessionSnapshot only returns persisted state", async () => {
     const eventStoreLayer = EventStore.Test()
     const actorProcessLayer = Layer.succeed(ActorProcess, {
       sendUserMessage: () => Effect.void,
@@ -177,9 +178,10 @@ describe("Session State", () => {
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getState: () =>
         Effect.succeed({
+          phase: "streaming" as const,
           status: "running" as const,
           agent: "deepwork" as const,
-          queueDepth: 2,
+          queue: { steering: [], followUp: [] },
           lastError: undefined,
         }),
       getMetrics: () =>
@@ -196,6 +198,7 @@ describe("Session State", () => {
     )
     const deps = Layer.mergeAll(
       baseWithEventStore,
+      AgentLoop.Test(),
       Layer.provide(PermissionHandler.Live, baseWithEventStore),
       Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),
@@ -217,15 +220,16 @@ describe("Session State", () => {
           }),
         )
 
-        return yield* queries.getSessionState({
+        return yield* queries.getSessionSnapshot({
           sessionId: session.sessionId,
           branchId: session.branchId,
         })
       }).pipe(Effect.provide(testLayer)),
     )
 
-    expect(result.isStreaming).toBe(true)
-    expect(result.agent).toBe("deepwork")
+    expect(result.sessionId).toBeDefined()
+    expect(result.messages).toEqual([])
+    expect(result.bypass).toBe(true)
   })
 })
 
@@ -243,6 +247,7 @@ describe("Session Tree", () => {
     )
     const deps = Layer.mergeAll(
       baseWithEventStore,
+      AgentLoop.Test(),
       Layer.provide(PermissionHandler.Live, baseWithEventStore),
       Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),

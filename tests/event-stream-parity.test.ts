@@ -5,7 +5,7 @@ import { transportCases, waitFor } from "./transport-harness"
 
 const startCollecting = (
   client: {
-    subscribeEvents: (input: {
+    streamEvents: (input: {
       sessionId: string
       branchId?: string
       after?: number
@@ -15,7 +15,7 @@ const startCollecting = (
 ) =>
   Effect.gen(function* () {
     const events = yield* Ref.make<EventEnvelope[]>([])
-    const fiber = yield* client.subscribeEvents(input).pipe(
+    const fiber = yield* client.streamEvents(input).pipe(
       Stream.runForEach((envelope) => Ref.update(events, (current) => [...current, envelope])),
       Effect.forkScoped,
     )

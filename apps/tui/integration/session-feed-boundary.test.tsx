@@ -5,7 +5,7 @@ import { Deferred, Effect, Option, Stream } from "effect"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
-import { renderFrame, renderWithProviders } from "../tests/render-harness"
+import { destroyRenderSetup, renderFrame, renderWithProviders } from "../tests/render-harness"
 import {
   createTempDirFixture,
   createWorkerEnv,
@@ -29,7 +29,8 @@ const waitForFrame = (
       let lastFrame = ""
 
       const renderAndMatch = Effect.gen(function* () {
-        yield* Effect.sleep("10 millis")
+        yield* Effect.promise(() => setup.renderOnce())
+        yield* Effect.promise(() => Promise.resolve())
         yield* Effect.promise(() => setup.renderOnce())
         const frame = renderFrame(setup)
         lastFrame = frame
@@ -41,13 +42,10 @@ const waitForFrame = (
       yield* renderAndMatch
 
       yield* Effect.forkScoped(
-        worker.client.watchSessionState(session).pipe(Stream.runForEach(() => renderAndMatch)),
+        worker.client.watchRuntime(session).pipe(Stream.runForEach(() => renderAndMatch)),
       )
       yield* Effect.forkScoped(
-        worker.client.watchQueue(session).pipe(Stream.runForEach(() => renderAndMatch)),
-      )
-      yield* Effect.forkScoped(
-        worker.client.subscribeEvents(session).pipe(Stream.runForEach(() => renderAndMatch)),
+        worker.client.streamEvents(session).pipe(Stream.runForEach(() => renderAndMatch)),
       )
 
       return yield* Deferred.await(match).pipe(
@@ -110,6 +108,7 @@ describe("session feed boundary", () => {
               },
             ),
           )
+          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
           const initialFrame = renderFrame(setup)
           expect(initialFrame).toContain("ready")
@@ -130,6 +129,21 @@ describe("session feed boundary", () => {
           )
           expect(thinkingFrame).toContain("thinking")
 
+          const streamingFrame = yield* waitForFrame(
+            setup,
+            worker,
+            created,
+            (frame) =>
+              frame.includes("debug response.") &&
+              frame.includes("thinking") &&
+              !frame.includes("Latest user message:"),
+            "partial assistant chunk",
+            10_000,
+          )
+          expect(streamingFrame).toContain("debug response.")
+          expect(streamingFrame).toContain("thinking")
+          expect(streamingFrame).not.toContain("Latest user message:")
+
           const responseFrame = yield* waitForFrame(
             setup,
             worker,
@@ -140,6 +154,9 @@ describe("session feed boundary", () => {
           )
           expect(responseFrame).toContain("debug response")
           expect(responseFrame).toContain("idle")
+
+          yield* Effect.sync(() => destroyRenderSetup(setup))
+          yield* worker.stop
         }),
       ),
     )
@@ -176,6 +193,7 @@ describe("session feed boundary", () => {
               },
             ),
           )
+          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
           yield* worker.client.sendMessage({
             sessionId: created.sessionId,
@@ -202,6 +220,9 @@ describe("session feed boundary", () => {
 
           expect(frame).toContain("queue")
           expect(frame).toContain("[queued 1] queued follow-up")
+
+          yield* Effect.sync(() => destroyRenderSetup(setup))
+          yield* worker.stop
         }),
       ),
     )
@@ -238,6 +259,7 @@ describe("session feed boundary", () => {
               },
             ),
           )
+          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
           yield* worker.client.sendMessage({
             sessionId: created.sessionId,
@@ -256,6 +278,9 @@ describe("session feed boundary", () => {
 
           expect(frame).toContain("provider exploded")
           expect(frame).not.toContain("❯ provider exploded")
+
+          yield* Effect.sync(() => destroyRenderSetup(setup))
+          yield* worker.stop
         }),
       ),
     )

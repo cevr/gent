@@ -18,7 +18,8 @@ import type {
   MessageInfoReadonly,
   QueueSnapshotReadonly,
   SessionInfo,
-  SessionState,
+  SessionSnapshot,
+  SessionRuntime,
 } from "@gent/sdk"
 import type { GentRpcError } from "@gent/core/server/errors"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -71,14 +72,15 @@ export const createMockClient = (overrides: Partial<GentClient> = {}): GentClien
         bypass: false,
       } satisfies CreateSessionResult),
     listMessages: () => noRpcError([] satisfies readonly MessageInfoReadonly[]),
-    getSessionState: () =>
+    getSessionSnapshot: () =>
       noRpcError({
-        agent: "cowork",
-        isStreaming: false,
+        sessionId: "session-test" as SessionId,
+        branchId: "branch-test" as BranchId,
+        messages: [],
+        lastEventId: null,
         bypass: false,
         reasoningLevel: undefined,
-        lastEventId: null,
-      } satisfies SessionState),
+      } satisfies SessionSnapshot),
     getSession: () => noRpcError(null),
     listSessions: () => noRpcError([] satisfies readonly SessionInfo[]),
     getChildSessions: () => noRpcError([] satisfies readonly SessionInfo[]),
@@ -95,10 +97,12 @@ export const createMockClient = (overrides: Partial<GentClient> = {}): GentClien
     createBranch: () => noRpcError("branch-test" as BranchId),
     switchBranch: () => noRpcError(undefined),
     forkBranch: () => noRpcError({ branchId: "branch-test" as BranchId }),
-    subscribeEvents: () => Stream.empty as Stream.Stream<EventEnvelope, GentRpcError>,
-    subscribeLiveEvents: () => Stream.empty as Stream.Stream<EventEnvelope, GentRpcError>,
-    watchSessionState: () => Stream.empty as Stream.Stream<SessionState, GentRpcError>,
-    watchQueue: () => Stream.empty as Stream.Stream<QueueSnapshotReadonly, GentRpcError>,
+    streamEvents: () => Stream.empty as Stream.Stream<EventEnvelope, GentRpcError>,
+    watchRuntime: () =>
+      Stream.empty as Stream.Stream<
+        SessionRuntime & { queue: QueueSnapshotReadonly },
+        GentRpcError
+      >,
     invokeTool: () => noRpcError(undefined),
     steer: (_command: SteerCommand) => noRpcError(undefined),
     drainQueuedMessages: (_input: QueueTarget) => noRpcError(emptyQueueSnapshot()),
@@ -199,17 +203,24 @@ export const renderWithProviders = async (
   )
 
   await currentSetup.renderOnce()
+  await Promise.resolve()
+  await currentSetup.renderOnce()
   return currentSetup
 }
 
 export const renderFrame = (setup: TestRenderSetup) =>
   setup.captureCharFrame().replaceAll("\u00a0", " ")
 
+export const destroyRenderSetup = (setup: TestRenderSetup) => {
+  if (currentSetup === setup) currentSetup = undefined
+  setup.renderer.destroy()
+}
+
 beforeEach(() => {
   currentSetup = undefined
 })
 
 afterEach(() => {
-  currentSetup?.renderer.destroy()
+  if (currentSetup !== undefined) destroyRenderSetup(currentSetup)
   currentSetup = undefined
 })

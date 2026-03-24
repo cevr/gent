@@ -25,7 +25,11 @@ import { tuiError } from "../utils/unified-tracer"
 import { clientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
-import type { WorkerLifecycleState, WorkerSupervisor } from "../worker/supervisor"
+import {
+  type WorkerLifecycleState,
+  type WorkerSupervisor,
+  waitForWorkerRunning,
+} from "../worker/supervisor"
 import { reduceAgentLifecycle } from "./agent-lifecycle"
 
 import {
@@ -104,6 +108,7 @@ export interface ClientContextValue {
   latestInputTokens: () => number
   modelInfo: () => Model | undefined
   workerState: () => WorkerLifecycleState | undefined
+  waitForWorkerRunning: () => Effect.Effect<void>
   isReconnecting: () => boolean
   workerRestartCount: () => number
   connectionIssue: () => string | null
@@ -353,23 +358,14 @@ export function ClientProvider(props: ClientProviderProps) {
           () =>
             Effect.gen(function* () {
               if (props.supervisor !== undefined && workerState()?._tag !== "running") {
-                yield* Effect.sleep("250 millis")
-                return
+                yield* waitForWorkerRunning(props.supervisor)
               }
 
-              const snapshot = yield* client.getSessionState({ sessionId, branchId })
+              const snapshot = yield* client.getSessionSnapshot({ sessionId, branchId })
               const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
 
               yield* Effect.sync(() => {
                 setConnectionIssue(null)
-                setAgentStore(
-                  produce((draft) => {
-                    draft.agent = snapshot.agent ?? defaultAgent
-                    draft.status = snapshot.isStreaming
-                      ? AgentStatus.streaming()
-                      : AgentStatus.idle()
-                  }),
-                )
                 if (snapshot.bypass !== undefined) {
                   dispatchSession({ _tag: "UpdateBypass", bypass: snapshot.bypass ?? true })
                 }
@@ -381,7 +377,7 @@ export function ClientProvider(props: ClientProviderProps) {
                 }
               })
 
-              const events = client.subscribeEvents({
+              const events = client.streamEvents({
                 sessionId,
                 branchId,
                 ...(after !== undefined ? { after } : {}),
@@ -407,6 +403,10 @@ export function ClientProvider(props: ClientProviderProps) {
               clientLog.error("event.subscription.failed", { error: formatError(err) })
               setConnectionIssue(formatConnectionIssue(err))
             },
+            waitForRetry: () =>
+              props.supervisor === undefined
+                ? Effect.sleep(500)
+                : waitForWorkerRunning(props.supervisor),
           },
         ),
       )
@@ -442,6 +442,8 @@ export function ClientProvider(props: ClientProviderProps) {
     latestInputTokens,
     modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
     workerState,
+    waitForWorkerRunning: () =>
+      props.supervisor === undefined ? Effect.sleep(500) : waitForWorkerRunning(props.supervisor),
     isReconnecting,
     workerRestartCount: () => workerState()?.restartCount ?? 0,
     connectionIssue,

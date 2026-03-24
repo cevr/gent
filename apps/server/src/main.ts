@@ -203,14 +203,16 @@ const program = Effect.scoped(
         }).pipe(Effect.provide(coreServices)),
       )
     }
+    yield* Layer.buildWithScope(HttpServerLive, scope)
+
     if (config.isWorker) {
-      console.error(`Gent worker starting on ${baseUrl}`)
+      console.log(`GENT_WORKER_READY ${baseUrl}`)
     } else {
-      console.log(`Gent server starting on ${baseUrl}`)
+      console.log(`Gent server ready on ${baseUrl}`)
       console.log(`Swagger UI: ${baseUrl}/docs`)
     }
 
-    return yield* Layer.launch(HttpServerLive)
+    return yield* Effect.never
   }),
 )
 

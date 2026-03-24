@@ -259,7 +259,7 @@ export function useSessionController(props: {
       runWithReconnect(
         () =>
           client.client
-            .watchQueue({
+            .watchRuntime({
               sessionId: props.sessionId,
               branchId: props.branchId,
             })
@@ -267,7 +267,7 @@ export function useSessionController(props: {
               Stream.runForEach((next) =>
                 Effect.sync(() => {
                   client.setConnectionIssue(null)
-                  setQueueState(next)
+                  setQueueState(next.queue)
                 }),
               ),
             ),
@@ -275,6 +275,7 @@ export function useSessionController(props: {
           onError: (error) => {
             client.setConnectionIssue(formatConnectionIssue(error))
           },
+          waitForRetry: () => client.waitForWorkerRunning(),
         },
       ),
     )

@@ -244,11 +244,13 @@ export type ExecutingToolsState = Extract<LoopState, { _tag: "ExecutingTools" }>
 export type FinalizingState = Extract<LoopState, { _tag: "Finalizing" }>
 export type ActiveLoopState = Exclude<LoopState, IdleState>
 export type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
+export type LoopRuntimePhase = "idle" | "resolving" | "streaming" | "executing-tools" | "finalizing"
 export type LoopRuntimeStatus = "idle" | "running" | "interrupted"
 export type LoopRuntimeState = {
+  phase: LoopRuntimePhase
   status: LoopRuntimeStatus
   agent: AgentNameType
-  queueDepth: number
+  queue: QueueSnapshot
 }
 
 export const buildIdleState = (params?: {
@@ -412,22 +414,39 @@ export const queueContainsContent = (
 ): boolean => queue.some((item) => messageText(item.message).includes(content))
 
 export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState => {
-  const queueDepth = state.queue.steering.length + state.queue.followUp.length
   const agent = state.currentAgent ?? "cowork"
+  const queue = queueSnapshotFromState(state)
 
   switch (state._tag) {
     case "Idle":
-      return { status: "idle", agent, queueDepth }
+      return { phase: "idle", status: "idle", agent, queue }
     case "Resolving":
+      return {
+        phase: "resolving",
+        status: state.turnInterrupted ? "interrupted" : "running",
+        agent,
+        queue,
+      }
     case "Streaming":
-      return { status: state.turnInterrupted ? "interrupted" : "running", agent, queueDepth }
+      return {
+        phase: "streaming",
+        status: state.turnInterrupted ? "interrupted" : "running",
+        agent,
+        queue,
+      }
     case "ExecutingTools":
       return {
+        phase: "executing-tools",
         status: state.turnInterrupted || state.interruptAfterTools ? "interrupted" : "running",
         agent,
-        queueDepth,
+        queue,
       }
     case "Finalizing":
-      return { status: state.turnInterrupted ? "interrupted" : "running", agent, queueDepth }
+      return {
+        phase: "finalizing",
+        status: state.turnInterrupted ? "interrupted" : "running",
+        agent,
+        queue,
+      }
   }
 }

@@ -16,12 +16,12 @@ const collectSnapshots = <A, E>(
     return values
   })
 
-describe("watched state parity", () => {
+describe("runtime watch parity", () => {
   for (const transport of transportCases) {
     const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(
-      `${transport.name} watchSessionState emits current snapshot and later updates`,
+      `${transport.name} watchRuntime emits current runtime and later updates`,
       async () => {
         await transport.run((client) =>
           Effect.gen(function* () {
@@ -29,48 +29,59 @@ describe("watched state parity", () => {
               .createSession({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const states = yield* collectSnapshots(
-              client.watchSessionState({
+            const runtime = yield* collectSnapshots(
+              client.watchRuntime({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               }),
             ).pipe(Effect.mapError((error) => new Error(String(error))))
 
             const initial = yield* waitFor(
-              Ref.get(states),
+              Ref.get(runtime),
               (current) => current.length > 0,
               timeoutMs,
             )
-            expect(initial[0]?.messages).toEqual([])
+            expect(initial[0]?.status).toBe("idle")
+            expect(initial[0]?.queue.followUp).toEqual([])
+            expect(initial[0]?.queue.steering).toEqual([])
 
             yield* client
               .sendMessage({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
-                content: `watch-state ${transport.name}`,
+                content: `watch-runtime ${transport.name}`,
               })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const updated = yield* waitFor(
-              Ref.get(states),
-              (current) =>
-                current.some((state) =>
-                  state.messages.some(
-                    (message) =>
-                      message.role === "user" &&
-                      extractText(message.parts) === `watch-state ${transport.name}`,
-                  ),
+              Ref.get(runtime),
+              (current) => current.some((state) => state.status !== "idle"),
+              timeoutMs,
+            )
+
+            expect(updated.some((state) => state.status !== "idle")).toBe(true)
+
+            const persisted = yield* waitFor(
+              client
+                .getSessionSnapshot({
+                  sessionId: created.sessionId,
+                  branchId: created.branchId,
+                })
+                .pipe(Effect.mapError((error) => new Error(String(error)))),
+              (snapshot) =>
+                snapshot.messages.some(
+                  (message) =>
+                    message.role === "user" &&
+                    extractText(message.parts) === `watch-runtime ${transport.name}`,
                 ),
               timeoutMs,
             )
 
             expect(
-              updated.some((state) =>
-                state.messages.some(
-                  (message) =>
-                    message.role === "user" &&
-                    extractText(message.parts) === `watch-state ${transport.name}`,
-                ),
+              persisted.messages.some(
+                (message) =>
+                  message.role === "user" &&
+                  extractText(message.parts) === `watch-runtime ${transport.name}`,
               ),
             ).toBe(true)
           }),
@@ -84,7 +95,7 @@ describe("watched state parity", () => {
     const timeoutMs = transport.name === "worker-http" ? 30_000 : 20_000
 
     test(
-      `${transport.name} watchQueue emits current queue snapshots`,
+      `${transport.name} watchRuntime emits queued follow-up snapshots`,
       async () => {
         await transport.run((client) =>
           Effect.gen(function* () {
@@ -92,8 +103,8 @@ describe("watched state parity", () => {
               .createSession({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const queues = yield* collectSnapshots(
-              client.watchQueue({
+            const runtime = yield* collectSnapshots(
+              client.watchRuntime({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               }),
@@ -108,13 +119,8 @@ describe("watched state parity", () => {
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             yield* waitFor(
-              client
-                .getSessionState({
-                  sessionId: created.sessionId,
-                  branchId: created.branchId,
-                })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
-              (state) => state.isStreaming,
+              Ref.get(runtime),
+              (current) => current.some((state) => state.status !== "idle"),
               timeoutMs,
             )
 
@@ -127,17 +133,17 @@ describe("watched state parity", () => {
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const updated = yield* waitFor(
-              Ref.get(queues),
+              Ref.get(runtime),
               (current) =>
-                current.some((snapshot) =>
-                  snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
+                current.some((state) =>
+                  state.queue.followUp.some((entry) => entry.content.includes("queued follow-up")),
                 ),
               timeoutMs,
             )
 
             expect(
-              updated.some((snapshot) =>
-                snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
+              updated.some((state) =>
+                state.queue.followUp.some((entry) => entry.content.includes("queued follow-up")),
               ),
             ).toBe(true)
           }),

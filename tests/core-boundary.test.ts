@@ -90,7 +90,12 @@ describe("SessionCommands → ActorProcess integration", () => {
           followUp: () => Effect.void,
           isRunning: () => Effect.succeed(false),
           getState: () =>
-            Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+            Effect.succeed({
+              phase: "idle" as const,
+              status: "idle" as const,
+              agent: "cowork" as const,
+              queue: { steering: [], followUp: [] },
+            }),
         }
       }),
     )
@@ -198,7 +203,13 @@ describe("SessionCommands → ActorProcess integration", () => {
         }),
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
-      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+      getState: () =>
+        Effect.succeed({
+          phase: "idle" as const,
+          status: "idle" as const,
+          agent: "cowork" as const,
+          queue: { steering: [], followUp: [] },
+        }),
     })
 
     const eventStoreLayer = EventStore.Test()
@@ -253,9 +264,13 @@ describe("SessionCommands → ActorProcess integration", () => {
       isRunning: () => Effect.succeed(true),
       getState: () =>
         Effect.succeed({
+          phase: "streaming" as const,
           status: "interrupted" as const,
           agent: "deepwork" as const,
-          queueDepth: 2,
+          queue: {
+            steering: [{ content: "steer" }],
+            followUp: [{ content: "follow-up" }],
+          },
         }),
     })
 
@@ -279,9 +294,13 @@ describe("SessionCommands → ActorProcess integration", () => {
     )
 
     expect(result).toEqual({
+      phase: "streaming",
       status: "interrupted",
       agent: "deepwork",
-      queueDepth: 2,
+      queue: {
+        steering: [{ content: "steer" }],
+        followUp: [{ content: "follow-up" }],
+      },
       lastError: undefined,
     })
   })
@@ -297,7 +316,13 @@ describe("SessionCommands → ActorProcess integration", () => {
       steer: () => Effect.void,
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
-      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+      getState: () =>
+        Effect.succeed({
+          phase: "idle" as const,
+          status: "idle" as const,
+          agent: "cowork" as const,
+          queue: { steering: [], followUp: [] },
+        }),
     })
     const toolRunnerLayer = Layer.succeed(ToolRunner, {
       run: (toolCall) =>
@@ -389,7 +414,12 @@ describe("Durable actor inbox", () => {
           followUp: () => Effect.void,
           isRunning: () => Effect.succeed(false),
           getState: () =>
-            Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+            Effect.succeed({
+              phase: "idle" as const,
+              status: "idle" as const,
+              agent: "cowork" as const,
+              queue: { steering: [], followUp: [] },
+            }),
         }
       }),
     )
@@ -485,7 +515,12 @@ describe("Durable actor inbox", () => {
             followUp: () => Effect.void,
             isRunning: () => Effect.succeed(false),
             getState: () =>
-              Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+              Effect.succeed({
+                phase: "idle" as const,
+                status: "idle" as const,
+                agent: "cowork" as const,
+                queue: { steering: [], followUp: [] },
+              }),
           }
         }),
       )

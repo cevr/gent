@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Stream } from "effect"
+import { Effect, Layer, PubSub, Stream } from "effect"
 import { EventStore, EventStoreError, matchesEventFilter } from "../domain/event.js"
 import type { EventEnvelope } from "../domain/event.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
@@ -12,6 +12,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.eff
   EventStore,
   Effect.gen(function* () {
     const storage = yield* Storage
+    const pubsub = yield* PubSub.unbounded<EventEnvelope>()
 
     return {
       publish: Effect.fn("EventStore.publish")(function* (event) {
@@ -19,39 +20,31 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.eff
           Effect.orElseSucceed(() => undefined),
         )
         const traceId = currentSpan !== undefined ? currentSpan.traceId : undefined
-        yield* storage
+        const envelope = yield* storage
           .appendEvent(event, traceId !== undefined ? { traceId } : undefined)
           .pipe(Effect.mapError(toEventStoreError("Failed to append event")))
+        yield* PubSub.publish(pubsub, envelope)
       }),
 
       subscribe: ({ sessionId, branchId, after }) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const afterId = after ?? 0
-            const pollSince = (lastSeenId: number): Stream.Stream<EventEnvelope, EventStoreError> =>
-              Stream.paginate(lastSeenId, (cursor) =>
-                storage.listEvents({ sessionId, branchId, afterId: cursor }).pipe(
-                  Effect.mapError(toEventStoreError("Failed to load live events")),
-                  Effect.flatMap((events) =>
-                    Effect.sleep("100 millis").pipe(
-                      Effect.as([
-                        events.filter((env: EventEnvelope) =>
-                          matchesEventFilter(env, sessionId, branchId),
-                        ),
-                        Option.some(events[events.length - 1]?.id ?? cursor),
-                      ] as const),
-                    ),
-                  ),
+        Stream.scoped(
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const afterId = after ?? 0
+              const subscription = yield* PubSub.subscribe(pubsub)
+              const initial = yield* storage
+                .listEvents({ sessionId, branchId, afterId })
+                .pipe(Effect.mapError(toEventStoreError("Failed to load buffered events")))
+              const maxId = initial[initial.length - 1]?.id ?? afterId
+              const live = Stream.fromSubscription(subscription).pipe(
+                Stream.filter(
+                  (env) => env.id > maxId && matchesEventFilter(env, sessionId, branchId),
                 ),
               )
 
-            const initial = yield* storage
-              .listEvents({ sessionId, branchId, afterId })
-              .pipe(Effect.mapError(toEventStoreError("Failed to load buffered events")))
-            const maxId = initial[initial.length - 1]?.id ?? afterId
-
-            return Stream.concat(Stream.fromIterable(initial), pollSince(maxId))
-          }),
+              return Stream.concat(Stream.fromIterable(initial), live)
+            }),
+          ),
         ),
     }
   }),

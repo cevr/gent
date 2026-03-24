@@ -562,23 +562,26 @@ export class EventStore extends ServiceMap.Service<EventStore, EventStoreService
         }),
 
         subscribe: ({ sessionId, branchId, after }) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const afterId = after ?? (0 as EventId)
-              const latestId = yield* Ref.get(idRef)
-              const buffered = (yield* Ref.get(eventsRef)).filter(
-                (env) =>
-                  env.id > afterId &&
-                  env.id <= latestId &&
-                  matchesEventFilter(env, sessionId, branchId),
-              )
-              const live = Stream.fromPubSub(pubsub).pipe(
-                Stream.filter(
-                  (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
-                ),
-              )
-              return Stream.concat(Stream.fromIterable(buffered), live)
-            }),
+          Stream.scoped(
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const afterId = after ?? (0 as EventId)
+                const subscription = yield* PubSub.subscribe(pubsub)
+                const latestId = yield* Ref.get(idRef)
+                const buffered = (yield* Ref.get(eventsRef)).filter(
+                  (env) =>
+                    env.id > afterId &&
+                    env.id <= latestId &&
+                    matchesEventFilter(env, sessionId, branchId),
+                )
+                const live = Stream.fromSubscription(subscription).pipe(
+                  Stream.filter(
+                    (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
+                  ),
+                )
+                return Stream.concat(Stream.fromIterable(buffered), live)
+              }),
+            ),
           ),
       }
     }),

@@ -5,7 +5,7 @@ import { transportCases, waitFor } from "./transport-harness"
 
 describe("GentClient transport contract", () => {
   for (const transport of transportCases) {
-    test(`${transport.name} creates, lists, sends, and snapshots session state`, async () => {
+    test(`${transport.name} creates, lists, sends, and snapshots persisted session state`, async () => {
       await transport.run((client) =>
         Effect.gen(function* () {
           const initialSessions = yield* client
@@ -35,16 +35,16 @@ describe("GentClient transport contract", () => {
           expect(loaded?.id).toBe(created.sessionId)
           expect(loaded?.branchId).toBe(created.branchId)
 
-          const initialState = yield* client
-            .getSessionState({
+          const initialSnapshot = yield* client
+            .getSessionSnapshot({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          expect(initialState.messages).toEqual([])
-          expect(initialState.branchId).toBe(created.branchId)
-          expect(initialState.sessionId).toBe(created.sessionId)
+          expect(initialSnapshot.messages).toEqual([])
+          expect(initialSnapshot.branchId).toBe(created.branchId)
+          expect(initialSnapshot.sessionId).toBe(created.sessionId)
 
           const initialQueue = yield* client
             .getQueuedMessages({
@@ -83,7 +83,7 @@ describe("GentClient transport contract", () => {
 
           yield* waitFor(
             client
-              .getSessionState({
+              .getSessionSnapshot({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })

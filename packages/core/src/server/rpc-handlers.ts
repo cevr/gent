@@ -122,8 +122,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       listMessages: ({ branchId }) => queries.listMessages(branchId),
 
-      getSessionState: ({ sessionId, branchId }) =>
-        queries.getSessionState({ sessionId, branchId }),
+      getSessionSnapshot: ({ sessionId, branchId }) =>
+        queries.getSessionSnapshot({ sessionId, branchId }),
 
       // SAFETY: SteerPayload and SteerCommand are structurally identical Schema.Union types
       steer: ({ command }) => commands.steer(command as SteerCommand),
@@ -134,24 +134,16 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       getQueuedMessages: ({ sessionId, branchId }) =>
         queries.getQueuedMessages({ sessionId, branchId }),
 
-      subscribeEvents: ({ sessionId, branchId, after }) =>
+      streamEvents: ({ sessionId, branchId, after }) =>
         // Return the stream directly for streaming RPC
-        events.subscribeEvents({
+        events.streamEvents({
           sessionId,
           ...(branchId !== undefined ? { branchId } : {}),
           ...(after !== undefined ? { after } : {}),
         }),
 
-      subscribeLiveEvents: ({ sessionId, branchId }) =>
-        events.subscribeLiveEvents({
-          sessionId,
-          ...(branchId !== undefined ? { branchId } : {}),
-        }),
-
-      watchSessionState: ({ sessionId, branchId }) =>
-        subscriptions.watchSessionState({ sessionId, branchId }),
-
-      watchQueue: ({ sessionId, branchId }) => subscriptions.watchQueue({ sessionId, branchId }),
+      watchRuntime: ({ sessionId, branchId }) =>
+        subscriptions.watchRuntime({ sessionId, branchId }),
 
       respondQuestions: ({ requestId, answers }) => askUserHandler.respond(requestId, answers),
 

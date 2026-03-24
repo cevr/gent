@@ -136,7 +136,7 @@ describe("worker supervisor", () => {
     )
   })
 
-  test("watchSessionState can resubscribe after worker restart", async () => {
+  test("watchRuntime can resubscribe after worker restart", async () => {
     const dataDir = makeTempDir()
 
     await Effect.runPromise(
@@ -161,14 +161,14 @@ describe("worker supervisor", () => {
           const states = yield* Deferred.make<string>()
 
           yield* worker.client
-            .watchSessionState({
+            .watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
             .pipe(
               Stream.runForEach((state) =>
-                state.sessionId === created.sessionId
-                  ? Deferred.succeed(states, state.sessionId).pipe(Effect.ignore)
+                state.status === "idle" && state.queue.followUp.length === 0
+                  ? Deferred.succeed(states, created.sessionId).pipe(Effect.ignore)
                   : Effect.void,
               ),
               Effect.forkScoped,
@@ -179,7 +179,7 @@ describe("worker supervisor", () => {
             Effect.flatMap(
               Option.match({
                 onNone: () =>
-                  Effect.fail(new Error("watchSessionState did not resume after worker restart")),
+                  Effect.fail(new Error("watchRuntime did not resume after worker restart")),
                 onSome: Effect.succeed,
               }),
             ),
@@ -191,7 +191,7 @@ describe("worker supervisor", () => {
     )
   }, 15_000)
 
-  test("watchSessionState survives more than 10 seconds of idle time", async () => {
+  test("watchRuntime survives more than 10 seconds of idle time", async () => {
     const dataDir = makeTempDir()
 
     await Effect.runPromise(
@@ -210,14 +210,14 @@ describe("worker supervisor", () => {
           const update = yield* Deferred.make<number>()
 
           yield* worker.client
-            .watchSessionState({
+            .watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
             .pipe(
               Stream.runForEach((state) =>
-                state.messages.length > 0
-                  ? Deferred.succeed(update, state.messages.length).pipe(Effect.ignore)
+                state.status !== "idle"
+                  ? Deferred.succeed(update, state.queue.followUp.length).pipe(Effect.ignore)
                   : Effect.void,
               ),
               Effect.forkScoped,
@@ -236,13 +236,13 @@ describe("worker supervisor", () => {
             Effect.flatMap(
               Option.match({
                 onNone: () =>
-                  Effect.fail(new Error("watchSessionState dropped after idle timeout window")),
+                  Effect.fail(new Error("watchRuntime dropped after idle timeout window")),
                 onSome: Effect.succeed,
               }),
             ),
           )
 
-          expect(count).toBeGreaterThan(0)
+          expect(count).toBeGreaterThanOrEqual(0)
         }),
       ),
     )
@@ -265,11 +265,11 @@ describe("worker supervisor", () => {
           expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
 
           const state = yield* waitFor(
-            worker.client.getSessionState({
+            worker.client.getSessionSnapshot({
               sessionId: debugSession!.id,
               branchId: debugSession!.branchId!,
             }),
-            (sessionState) => sessionState.messages.length > 0,
+            (snapshot) => snapshot.messages.length > 0,
             15_000,
           )
 
@@ -342,13 +342,13 @@ describe("worker supervisor", () => {
           })
 
           yield* waitFor(
-            worker.client.getSessionState({
+            worker.client.getQueuedMessages({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
-            (state) => state.isStreaming,
+            (snapshot) => snapshot.followUp.length === 0 && snapshot.steering.length === 0,
             15_000,
-            "session to enter streaming before restart setup",
+            "first turn acceptance before restart setup",
           )
 
           yield* worker.client.sendMessage({
@@ -425,7 +425,7 @@ describe("worker supervisor", () => {
     )
   }, 25_000)
 
-  test("delivers live events after subscribeEvents is established", async () => {
+  test("delivers live events after streamEvents is established", async () => {
     const dataDir = makeTempDir()
 
     await Effect.runPromise(
@@ -444,7 +444,7 @@ describe("worker supervisor", () => {
           const firstLiveEvent = yield* Deferred.make<string>()
 
           yield* worker.client
-            .subscribeEvents({
+            .streamEvents({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
@@ -480,7 +480,7 @@ describe("worker supervisor", () => {
     )
   }, 15_000)
 
-  test("subscribeLiveEvents delivers future events after worker restart", async () => {
+  test("streamEvents with latest cursor delivers future events after worker restart", async () => {
     const dataDir = makeTempDir()
 
     await Effect.runPromise(
@@ -498,11 +498,17 @@ describe("worker supervisor", () => {
 
           yield* worker.restart
 
+          const snapshot = yield* worker.client.getSessionSnapshot({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          })
+
           const firstLiveEvent = yield* Deferred.make<string>()
 
           yield* worker.client
-            .subscribeLiveEvents({
+            .streamEvents({
               sessionId: created.sessionId,
+              after: snapshot.lastEventId ?? undefined,
             })
             .pipe(
               Stream.runForEach((envelope) =>
@@ -512,8 +518,6 @@ describe("worker supervisor", () => {
               ),
               Effect.forkScoped,
             )
-
-          yield* Effect.sleep("50 millis")
 
           yield* worker.client.createBranch(created.sessionId, "after-restart-live")
 

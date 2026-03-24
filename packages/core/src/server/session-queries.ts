@@ -10,10 +10,10 @@ import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./s
 import type {
   BranchInfo,
   BranchTreeNode,
-  GetSessionStateInput,
+  GetSessionSnapshotInput,
   MessageInfoReadonly,
   SessionInfo,
-  SessionState,
+  SessionSnapshot,
 } from "./transport-contract.js"
 
 export interface SessionQueriesService {
@@ -39,9 +39,9 @@ export interface SessionQueriesService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<QueueSnapshot, AppServiceError>
-  readonly getSessionState: (
-    input: GetSessionStateInput,
-  ) => Effect.Effect<SessionState, AppServiceError>
+  readonly getSessionSnapshot: (
+    input: GetSessionSnapshotInput,
+  ) => Effect.Effect<SessionSnapshot, AppServiceError>
 }
 
 export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQueriesService>()(
@@ -119,8 +119,8 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
         return buildBranchTree(branches, messageCounts)
       })
 
-      const getSessionState = Effect.fn("SessionQueries.getSessionState")(function* (
-        input: GetSessionStateInput,
+      const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")(function* (
+        input: GetSessionSnapshotInput,
       ) {
         const session = yield* storage.getSession(input.sessionId)
         if (session === undefined) {
@@ -136,18 +136,12 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           sessionId: input.sessionId,
           branchId: input.branchId,
         })
-        const runtimeState = yield* actorProcess.getState({
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-        })
 
         return {
           sessionId: input.sessionId,
           branchId: input.branchId,
           messages: messages.map(messageToInfo),
           lastEventId: lastEventId ?? null,
-          isStreaming: runtimeState.status !== "idle",
-          agent: runtimeState.agent ?? "cowork",
           bypass: session.bypass,
           reasoningLevel: session.reasoningLevel,
         }
@@ -170,7 +164,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           actorProcess
             .getQueuedMessages({ sessionId, branchId })
             .pipe(Effect.withSpan("SessionQueries.getQueuedMessages")),
-        getSessionState,
+        getSessionSnapshot,
       } satisfies SessionQueriesService
     }),
   )

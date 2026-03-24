@@ -79,11 +79,20 @@ export type InvokeToolPayload = typeof InvokeToolPayload.Type
 
 export const ActorProcessStatus = Schema.Literals(["idle", "running", "interrupted"])
 export type ActorProcessStatus = typeof ActorProcessStatus.Type
+export const ActorProcessPhase = Schema.Literals([
+  "idle",
+  "resolving",
+  "streaming",
+  "executing-tools",
+  "finalizing",
+])
+export type ActorProcessPhase = typeof ActorProcessPhase.Type
 
 export const ActorProcessState = Schema.Struct({
+  phase: ActorProcessPhase,
   status: ActorProcessStatus,
   agent: Schema.optional(AgentName),
-  queueDepth: Schema.Number,
+  queue: QueueSnapshot,
   lastError: Schema.optional(Schema.String),
 })
 export type ActorProcessState = typeof ActorProcessState.Type
@@ -127,7 +136,12 @@ export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessS
       steerAgent: () => Effect.void,
       drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-      getState: () => Effect.succeed({ status: "idle" as const, queueDepth: 0 }),
+      getState: () =>
+        Effect.succeed({
+          phase: "idle" as const,
+          status: "idle" as const,
+          queue: { steering: [], followUp: [] },
+        }),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
     })
@@ -373,9 +387,10 @@ export const LocalActorTransportLive: Layer.Layer<
         Effect.gen(function* () {
           const loopState = yield* agentLoop.getState(_input)
           return {
+            phase: loopState.phase,
             status: loopState.status,
             agent: loopState.agent,
-            queueDepth: loopState.queueDepth,
+            queue: loopState.queue,
             lastError: undefined,
           } satisfies ActorProcessState
         }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
