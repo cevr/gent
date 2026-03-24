@@ -82,9 +82,6 @@ export function Session(props: SessionProps) {
     if (a.phase !== "idle") {
       items.push({ text: controller.spinner(), color: theme.textMuted })
     }
-    if (a.turn > 0) {
-      items.push({ text: `turn ${a.turn}`, color: theme.textMuted })
-    }
     items.push({
       text: controller.phaseLabel(),
       color: a.phase === "idle" ? theme.textMuted : theme.info,
