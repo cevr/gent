@@ -32,6 +32,7 @@ export const RenameSessionTool = defineTool({
 
     const session = yield* storage.getSession(ctx.sessionId)
     if (session === undefined) return { renamed: false, reason: "session not found" }
+    if (session.name === trimmed) return { renamed: false, reason: "name unchanged" }
 
     const updated = new Session({ ...session, name: trimmed, updatedAt: new Date() })
     yield* storage.updateSession(updated)

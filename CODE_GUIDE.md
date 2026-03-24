@@ -214,7 +214,7 @@ The main service. Methods:
 
 **Hint:** `sendMessage` forks the agent loop (`Effect.forkDaemon`). It returns immediately; events tell TUI what's happening.
 
-**Hint:** Name generation happens in background (`generateSessionName` with haiku model).
+**Hint:** Session naming is handled by the `rename_session` tool — the agent calls it when it understands the task.
 
 ### 6.2 RPC Definitions
 

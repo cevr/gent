@@ -18,7 +18,9 @@ export const SessionToolsExtension = defineExtension({
           defineInterceptor(
             "prompt.system",
             (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
-              next({ ...input, basePrompt: input.basePrompt + NAMING_INSTRUCTION }),
+              input.agent.kind === "system"
+                ? next(input)
+                : next({ ...input, basePrompt: input.basePrompt + NAMING_INSTRUCTION }),
           ),
         ],
       },
