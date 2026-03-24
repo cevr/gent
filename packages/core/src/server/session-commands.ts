@@ -344,8 +344,11 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           Effect.gen(function* () {
             if (session === undefined || session.name !== "New Chat") return
             const generatedName = yield* generateSessionName(input.content)
+            // Compare-and-set: only update if name is still "New Chat" (avoids race with concurrent sends)
+            const current = yield* storage.getSession(input.sessionId)
+            if (current === undefined || current.name !== "New Chat") return
             const updatedSession = new Session({
-              ...session,
+              ...current,
               name: generatedName,
               updatedAt: new Date(),
             })
