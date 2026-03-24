@@ -1,29 +1,34 @@
 /**
- * Effect services hook for Solid
+ * Effect execution hook for Solid
  * Provides call (tracked) and cast (fire-and-forget) for Effect execution
  */
-import { Effect, Exit, Fiber, Cause, type ServiceMap } from "effect"
+import { Effect, Exit, Fiber, Cause } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "../atom-solid/result"
 import { tuiError } from "../utils/unified-tracer"
+import type { GentClient } from "@gent/sdk"
 
-export interface UseRuntimeReturn<R> {
+export interface UseRuntimeReturn {
   /** Run Effect, track result in signal. Returns [result accessor, cancel fn] */
-  call: <A, E>(effect: Effect.Effect<A, E, R>) => [Accessor<Result<A, E>>, () => void]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  call: <A, E>(effect: Effect.Effect<A, E, any>) => [Accessor<Result<A, E>>, () => void]
   /** Fire and forget - runs Effect without tracking result */
-  cast: <A, E>(effect: Effect.Effect<A, E, R>) => void
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cast: <A, E>(effect: Effect.Effect<A, E, any>) => void
 }
 
 /**
- * Hook to run Effects with a service map
- * @param services - ServiceMap with required services
+ * Hook to run Effects via a GentClient
+ * @param client - GentClient with runFork/runPromise
  */
-export function useRuntime<R>(services: ServiceMap.ServiceMap<R>): UseRuntimeReturn<R> {
-  const call = <A, E>(effect: Effect.Effect<A, E, R>): [Accessor<Result<A, E>>, () => void] => {
+export function useRuntime(client: GentClient): UseRuntimeReturn {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const call = <A, E>(effect: Effect.Effect<A, E, any>): [Accessor<Result<A, E>>, () => void] => {
     const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))
 
     let cancelled = false
-    const fiber = Effect.runForkWith(services)(effect)
+    // @effect-diagnostics-next-line *:off
+    const fiber = client.runFork(effect)
 
     fiber.addObserver((exit) => {
       if (cancelled) return
@@ -44,8 +49,10 @@ export function useRuntime<R>(services: ServiceMap.ServiceMap<R>): UseRuntimeRet
     return [result, cancel]
   }
 
-  const cast = <A, E>(effect: Effect.Effect<A, E, R>): void => {
-    const fiber = Effect.runForkWith(services)(effect)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cast = <A, E>(effect: Effect.Effect<A, E, any>): void => {
+    // @effect-diagnostics-next-line *:off
+    const fiber = client.runFork(effect)
     fiber.addObserver((exit) => {
       if (Exit.isFailure(exit)) {
         tuiError("cast", Cause.pretty(exit.cause))

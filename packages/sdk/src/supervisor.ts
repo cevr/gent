@@ -1,10 +1,9 @@
 import { Effect, Schema, type Scope } from "effect"
-import { makeHttpGentClient, type GentClientInternal } from "@gent/sdk"
 import * as net from "node:net"
 import { pathToFileURL } from "node:url"
 
 export class WorkerSupervisorError extends Schema.TaggedErrorClass<WorkerSupervisorError>()(
-  "WorkerSupervisorError",
+  "@gent/sdk/WorkerSupervisorError",
   {
     message: Schema.String,
   },
@@ -57,11 +56,7 @@ export interface WorkerSupervisorOptions {
   readonly mode?: "default" | "debug"
 }
 
-export interface WorkerTransportTarget {
-  readonly url: string
-}
-
-const SERVER_ENTRY_PATH = new URL("../../../server/src/main.ts", import.meta.url).pathname
+const SERVER_ENTRY_PATH = new URL("../../../apps/server/src/main.ts", import.meta.url).pathname
 const WORKER_HOST = "127.0.0.1"
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
@@ -447,10 +442,6 @@ export const startWorkerSupervisor = (
     }),
     (supervisor) => supervisor.stop,
   )
-
-export const makeWorkerHttpClient = (
-  target: WorkerTransportTarget,
-): Effect.Effect<GentClientInternal, never, Scope.Scope> => makeHttpGentClient({ url: target.url })
 
 export const WorkerSupervisorInternal = {
   resolveWorkerLaunch,

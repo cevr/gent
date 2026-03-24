@@ -7,7 +7,7 @@ import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { GentClientInternal } from "../client"
+import type { GentClient } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
 import { tuiEvent, tuiError } from "../utils/unified-tracer"
@@ -15,7 +15,7 @@ import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./a
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
-  client: GentClientInternal
+  client: GentClient
   enforceAuth?: boolean
   onResolved?: () => void
 }
@@ -28,7 +28,7 @@ export function Auth(props: AuthProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.client.services)
+  const { cast } = useRuntime(props.client)
 
   const [state, setState] = createSignal<AuthRouteState>(AuthState.initial())
   const send = (event: Parameters<typeof transitionAuth>[1]) => {

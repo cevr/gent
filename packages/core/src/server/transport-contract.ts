@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import type { Effect, Stream, ServiceMap } from "effect"
+import type { Effect, Fiber, Stream } from "effect"
 import { AgentName, ReasoningEffort } from "../domain/agent.js"
 import type { ReasoningEffort as ReasoningEffortType } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
@@ -562,9 +562,36 @@ export interface GentClient {
   listSkills: () => Effect.Effect<readonly SkillContent[], GentRpcError>
 
   getSkillContent: (name: string) => Effect.Effect<SkillContent | null, GentRpcError>
+
+  /** Fire-and-forget — run an effect on the client's captured runtime */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly runFork: <A, E>(effect: Effect.Effect<A, E, any>) => Fiber.Fiber<A, E>
+  /** Run an effect as a Promise on the client's captured runtime */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly runPromise: <A, E>(effect: Effect.Effect<A, E, any>) => Promise<A>
+
+  /** Connection lifecycle — present on all clients, behavior varies by transport */
+  readonly lifecycle: GentLifecycle
 }
 
-/** Internal client with access to ServiceMap for running fire-and-forget effects */
-export interface GentClientInternal extends GentClient {
-  services: ServiceMap.ServiceMap<unknown>
+// ---------------------------------------------------------------------------
+// Connection lifecycle
+// ---------------------------------------------------------------------------
+
+export class GentConnectionError extends Schema.TaggedErrorClass<GentConnectionError>()(
+  "@gent/core/GentConnectionError",
+  { message: Schema.String },
+) {}
+
+export type ConnectionState =
+  | { readonly _tag: "connecting" }
+  | { readonly _tag: "connected"; readonly pid?: number; readonly generation: number }
+  | { readonly _tag: "reconnecting"; readonly attempt: number; readonly generation: number }
+  | { readonly _tag: "disconnected"; readonly reason: string }
+
+export interface GentLifecycle {
+  readonly getState: () => ConnectionState
+  readonly subscribe: (listener: (state: ConnectionState) => void) => () => void
+  readonly restart: Effect.Effect<void, GentConnectionError>
+  readonly waitForReady: Effect.Effect<void>
 }

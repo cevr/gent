@@ -1,26 +1,28 @@
 import { Effect, Layer } from "effect"
-import type { ServiceMap, Scope } from "effect"
+import type { Fiber, ServiceMap, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
-import type {
-  GentClient,
-  GentClientInternal,
-  SkillInfo,
-  SkillContent,
-  MessageInfoReadonly,
-  SteerCommand,
-  SessionInfo,
-  BranchInfo,
-  BranchTreeNode,
-  QueueEntryInfoReadonly,
-  QueueSnapshotReadonly,
-  SessionSnapshot,
-  SessionRuntime,
-  SessionTreeNode,
-  CreateSessionResult,
+import {
+  GentConnectionError,
+  type GentClient,
+  type GentLifecycle,
+  type ConnectionState,
+  type SkillInfo,
+  type SkillContent,
+  type MessageInfoReadonly,
+  type SteerCommand,
+  type SessionInfo,
+  type BranchInfo,
+  type BranchTreeNode,
+  type QueueEntryInfoReadonly,
+  type QueueSnapshotReadonly,
+  type SessionSnapshot,
+  type SessionRuntime,
+  type SessionTreeNode,
+  type CreateSessionResult,
 } from "@gent/core/server/transport-contract.js"
 import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
@@ -37,6 +39,7 @@ import type {
 } from "@gent/core/domain/message.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import type { SkillScope } from "@gent/core/domain/skills.js"
+import { startWorkerSupervisor, waitForWorkerRunning, type WorkerSupervisor } from "./supervisor.js"
 
 export type {
   MessagePart,
@@ -56,6 +59,8 @@ export type {
 }
 export type {
   GentClient,
+  GentLifecycle,
+  ConnectionState,
   SkillInfo,
   SkillContent,
   MessageInfoReadonly,
@@ -70,6 +75,7 @@ export type {
   SessionTreeNode,
   CreateSessionResult,
 }
+export { GentConnectionError }
 
 // Re-export RPC types
 export type { GentRpcsClient, GentRpcError }
@@ -78,7 +84,10 @@ export type { SkillScope }
 // RPC client type alias
 export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 
-// Auth provider info
+// ---------------------------------------------------------------------------
+// Utility functions (unchanged)
+// ---------------------------------------------------------------------------
+
 export function extractText(parts: readonly MessagePart[]): string {
   const textPart = parts.find((p): p is TextPart => p.type === "text")
   return textPart?.text ?? ""
@@ -110,7 +119,6 @@ export interface ExtractedToolCall {
   output: string | undefined
 }
 
-// Extract tool calls from a single message's parts (no result joining)
 export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCall[] {
   return parts
     .filter((p): p is ToolCallPart => p.type === "tool-call")
@@ -124,7 +132,6 @@ export function extractToolCalls(parts: readonly MessagePart[]): ExtractedToolCa
     }))
 }
 
-// Build tool result map from all messages for joining
 export function buildToolResultMap(
   messages: readonly MessageInfoReadonly[],
 ): Map<string, { summary: string; output: string; isError: boolean }> {
@@ -148,7 +155,6 @@ export function buildToolResultMap(
   return resultMap
 }
 
-// Extract tool calls with results joined from result map
 export function extractToolCallsWithResults(
   parts: readonly MessagePart[],
   resultMap: Map<string, { summary: string; output: string; isError: boolean }>,
@@ -168,13 +174,15 @@ export function extractToolCallsWithResults(
     })
 }
 
-/**
- * Creates the shared Gent transport contract from an RPC adapter.
- */
-export function createClient(
+// ---------------------------------------------------------------------------
+// Internal: build a GentClient from an RPC adapter
+// ---------------------------------------------------------------------------
+
+function buildClient(
   rpcClient: GentRpcClient,
   services: ServiceMap.ServiceMap<unknown>,
-): GentClientInternal {
+  lifecycle: GentLifecycle,
+): GentClient {
   return {
     sendMessage: (input) => rpcClient.sendMessage(input),
 
@@ -310,127 +318,91 @@ export function createClient(
 
     getSkillContent: (name) => rpcClient.getSkillContent({ name }),
 
-    services,
+    // @effect-diagnostics-next-line *:off
+    runFork: (effect) => {
+      // @effect-diagnostics-next-line *:off
+      const fiber = Effect.runForkWith(services)(effect)
+      return fiber as Fiber.Fiber<unknown, unknown> as never
+    },
+
+    // @effect-diagnostics-next-line *:off
+    runPromise: (effect) => Effect.runPromiseWith(services)(effect) as never,
+
+    lifecycle,
   }
 }
 
-// =============================================================================
-// makeClient - protocol-based client creation
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Static lifecycle for non-supervised connections
+// ---------------------------------------------------------------------------
 
-/**
- * Creates the shared Gent transport contract from RPC protocol layers.
- * Use with HTTP or other RPC transport adapters.
- *
- * @example
- * ```ts
- * const client = await Effect.runPromise(
- *   makeClient.pipe(
- *     Effect.provide(HttpTransport({ url: "http://localhost:3000/rpc" })),
- *     Effect.scoped,
- *   )
- * )
- * ```
- */
-export const makeClient: Effect.Effect<
-  GentClientInternal,
-  never,
-  RpcClient.Protocol | Scope.Scope
-> = Effect.gen(function* () {
-  const rpcClient = yield* RpcClient.make(GentRpcs)
-  const services = yield* Effect.services<never>()
-  // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
-  // defines GentRpcError as the error schema. The cast narrows to our specific error type.
-  return createClient(
-    rpcClient as unknown as GentRpcClient,
-    services as ServiceMap.ServiceMap<unknown>,
-  )
+const staticLifecycle = (state: ConnectionState): GentLifecycle => ({
+  getState: () => state,
+  subscribe: (listener) => {
+    listener(state)
+    return () => {}
+  },
+  restart: Effect.fail(
+    new GentConnectionError({ message: "restart not supported on this transport" }),
+  ),
+  waitForReady: Effect.void,
 })
 
-/**
- * Creates a Gent client over the shared RPC-over-HTTP transport.
- */
-export const makeHttpGentClient = (
-  config: HttpTransportConfig,
-): Effect.Effect<GentClientInternal, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const scope = yield* Effect.scope
-    const transport = yield* Layer.buildWithScope(HttpTransport(config), scope)
-    return yield* makeClient.pipe(Effect.provide(transport))
-  })
+// ---------------------------------------------------------------------------
+// Supervisor → GentLifecycle adapter
+// ---------------------------------------------------------------------------
 
-// =============================================================================
-// In-process transport helpers
-// =============================================================================
-
-/**
- * Context required by RpcHandlersLive.
- * Layer must provide these services for the RPC handlers to work.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
-export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
-
-/**
- * Creates an in-process RPC client for testing or embedded use.
- * Requires a layer that provides the split app-service handlers and their dependencies.
- *
- * The layer must provide RpcHandlersContext, which includes:
- * - SessionQueries
- * - SessionCommands
- * - InteractionCommands
- * - SessionEvents
- * - AskUserHandler
- * - PermissionHandler
- * - PromptHandler
- * - Permission
- * - ConfigService
- * - AuthStore
- * - ProviderFactory
- * - ProviderAuth
- */
-export const makeInProcessRpcClient = <E, R>(
-  handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
-): Effect.Effect<GentRpcClient, E, R> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
-      const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
-      // SAFETY: RpcTest.makeClient types include RpcClientError, but in-process
-      // transport eliminates network errors. Cast narrows to GentRpcError.
-      return client as unknown as GentRpcClient
+const supervisorLifecycle = (supervisor: WorkerSupervisor): GentLifecycle => ({
+  getState: () => {
+    const s = supervisor.getState()
+    switch (s._tag) {
+      case "starting":
+        return { _tag: "connecting" }
+      case "running":
+        return { _tag: "connected", pid: s.pid, generation: s.restartCount }
+      case "restarting":
+        return { _tag: "reconnecting", attempt: s.restartCount, generation: s.restartCount }
+      case "stopped":
+        return { _tag: "disconnected", reason: "stopped" }
+      case "failed":
+        return { _tag: "disconnected", reason: s.message }
+    }
+  },
+  subscribe: (listener) =>
+    supervisor.subscribe((s) => {
+      switch (s._tag) {
+        case "starting":
+          return listener({ _tag: "connecting" })
+        case "running":
+          return listener({ _tag: "connected", pid: s.pid, generation: s.restartCount })
+        case "restarting":
+          return listener({
+            _tag: "reconnecting",
+            attempt: s.restartCount,
+            generation: s.restartCount,
+          })
+        case "stopped":
+          return listener({ _tag: "disconnected", reason: "stopped" })
+        case "failed":
+          return listener({ _tag: "disconnected", reason: s.message })
+      }
     }),
-  )
+  restart: supervisor.restart.pipe(
+    Effect.mapError((e) => new GentConnectionError({ message: e.message })),
+  ),
+  waitForReady: waitForWorkerRunning(supervisor),
+})
 
-/**
- * Creates a full GentClient for in-process use.
- * Includes runtime for synchronous execution.
- */
-export const makeInProcessClient = <E, R>(
-  handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
-): Effect.Effect<GentClientInternal, E, R> =>
-  Effect.gen(function* () {
-    const rpcClient = yield* makeInProcessRpcClient(handlersLayer)
-    const services = yield* Effect.services<never>()
-    return createClient(rpcClient, services as ServiceMap.ServiceMap<unknown>)
-  })
+// ---------------------------------------------------------------------------
+// HTTP transport (internal)
+// ---------------------------------------------------------------------------
 
-// =============================================================================
-// HTTP transport
-// =============================================================================
-
-export interface HttpTransportConfig {
-  /** Base URL for RPC endpoint (e.g., "http://localhost:3000/rpc") */
+interface HttpTransportConfig {
   url: string
-  /** Optional headers to include with requests */
   headers?: Record<string, string>
 }
 
-/**
- * Creates an HTTP transport layer for RPC-over-HTTP.
- * Uses ndjson serialization for streaming support.
- */
-export const HttpTransport = (config: HttpTransportConfig): Layer.Layer<RpcClient.Protocol> => {
+const HttpTransport = (config: HttpTransportConfig): Layer.Layer<RpcClient.Protocol> => {
   const headers = config.headers
   const clientLayer =
     headers !== undefined
@@ -448,3 +420,90 @@ export const HttpTransport = (config: HttpTransportConfig): Layer.Layer<RpcClien
     Layer.provide(clientLayer),
   )
 }
+
+// ---------------------------------------------------------------------------
+// RPC client assembly (internal)
+// ---------------------------------------------------------------------------
+
+const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Scope.Scope> =
+  Effect.gen(function* () {
+    const rpcClient = yield* RpcClient.make(GentRpcs)
+    // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
+    // defines GentRpcError as the error schema. The cast narrows to our specific error type.
+    return rpcClient as unknown as GentRpcClient
+  })
+
+// ---------------------------------------------------------------------------
+// Gent — unified client constructors
+// ---------------------------------------------------------------------------
+
+export interface GentSpawnOptions {
+  readonly cwd: string
+  readonly env?: Record<string, string | undefined>
+  readonly startupTimeoutMs?: number
+  readonly mode?: "default" | "debug"
+}
+
+export interface GentConnectOptions {
+  readonly url: string
+  readonly headers?: Record<string, string>
+}
+
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
+export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
+
+export const Gent = {
+  /** Spawn a supervised child process server and connect to it */
+  spawn: (options: GentSpawnOptions): Effect.Effect<GentClient, GentConnectionError, Scope.Scope> =>
+    Effect.gen(function* () {
+      const supervisor = yield* startWorkerSupervisor(options).pipe(
+        Effect.mapError((e) => new GentConnectionError({ message: e.message })),
+      )
+      const scope = yield* Effect.scope
+      const transport = yield* Layer.buildWithScope(HttpTransport({ url: supervisor.url }), scope)
+      const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
+      const services = yield* Effect.services<never>()
+      return buildClient(
+        rpcClient,
+        services as ServiceMap.ServiceMap<unknown>,
+        supervisorLifecycle(supervisor),
+      )
+    }),
+
+  /** Connect to an already-running server */
+  connect: (
+    options: GentConnectOptions,
+  ): Effect.Effect<GentClient, GentConnectionError, Scope.Scope> =>
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope
+      const transport = yield* Layer.buildWithScope(
+        HttpTransport({ url: options.url, headers: options.headers }),
+        scope,
+      )
+      const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
+      const services = yield* Effect.services<never>()
+      return buildClient(
+        rpcClient,
+        services as ServiceMap.ServiceMap<unknown>,
+        staticLifecycle({ _tag: "connected", generation: 0 }),
+      )
+    }),
+
+  /** In-process client for tests and embedding. Fast, less isolation than spawn. */
+  test: <E, R>(
+    handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
+  ): Effect.Effect<GentClient, E, R | Scope.Scope> =>
+    Effect.gen(function* () {
+      const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
+      const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
+        Effect.provide(context),
+      ) as Effect.Effect<GentRpcClient>
+      const services = yield* Effect.services<never>()
+      return buildClient(
+        rpcClient,
+        services as ServiceMap.ServiceMap<unknown>,
+        staticLifecycle({ _tag: "connected", generation: 0 }),
+      )
+    }),
+} as const

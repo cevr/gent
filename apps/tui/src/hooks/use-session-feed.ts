@@ -269,7 +269,7 @@ export function useSessionFeed(
       const session = sessionId()
       clientLog.info("sessionFeed.activate", { key })
 
-      const streamFiber = Effect.runForkWith(client.client.services)(
+      const streamFiber = client.client.runFork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
@@ -325,7 +325,7 @@ export function useSessionFeed(
               })
               client.setConnectionIssue(formatConnectionIssue(err))
             },
-            waitForRetry: () => client.waitForWorkerRunning(),
+            waitForRetry: () => client.waitForTransportReady(),
           },
         ),
       )

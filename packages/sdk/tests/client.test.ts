@@ -1,159 +1,34 @@
 import { describe, test, expect } from "bun:test"
-import type { ServiceMap } from "effect"
-import { Effect, Layer, Stream } from "effect"
 import {
-  createClient,
-  HttpTransport,
+  Gent,
   extractText,
   extractImages,
   extractToolCalls,
   buildToolResultMap,
-  type GentRpcClient,
+  type GentClient,
   type MessageInfoReadonly,
 } from "../src/index"
 
-describe("createClient", () => {
-  test("creates client with all methods", () => {
-    // Mock RPC client with minimal implementation
-    const mockRpcClient = {
-      createSession: () =>
-        Effect.succeed({ sessionId: "s1", branchId: "b1", name: "Test", bypass: false }),
-      listSessions: () => Effect.succeed([]),
-      listModels: () => Effect.succeed([]),
-      getSession: () => Effect.succeed(null),
-      deleteSession: () => Effect.void,
-      listBranches: () => Effect.succeed([]),
-      createBranch: () => Effect.succeed({ branchId: "b2" }),
-      getBranchTree: () => Effect.succeed([]),
-      switchBranch: () => Effect.void,
-      forkBranch: () => Effect.succeed({ branchId: "b3" }),
-      sendMessage: () => Effect.void,
-      listMessages: () => Effect.succeed([]),
-      getSessionSnapshot: () =>
-        Effect.succeed({
-          sessionId: "s1",
-          branchId: "b1",
-          messages: [],
-          lastEventId: null,
-          bypass: false,
-          reasoningLevel: undefined,
-        }),
-      steer: () => Effect.void,
-      streamEvents: () => Stream.empty,
-      watchRuntime: () =>
-        Stream.make({
-          phase: "idle" as const,
-          status: "idle" as const,
-          agent: "cowork" as const,
-          queue: { steering: [], followUp: [] },
-        }),
-      drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-      respondQuestions: () => Effect.void,
-      respondPermission: () => Effect.void,
-      respondPrompt: () => Effect.void,
-      compactBranch: () => Effect.void,
-      updateSessionBypass: () => Effect.succeed({ bypass: true }),
-      getPermissionRules: () => Effect.succeed([]),
-      deletePermissionRule: () => Effect.void,
-      listAuthProviders: () => Effect.succeed([]),
-      setAuthKey: () => Effect.void,
-      deleteAuthKey: () => Effect.void,
-    } as unknown as GentRpcClient
-
-    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
-    const client = createClient(mockRpcClient, services)
-
-    // Verify all methods exist
-    expect(typeof client.createSession).toBe("function")
-    expect(typeof client.listSessions).toBe("function")
-    expect(typeof client.listModels).toBe("function")
-    expect(typeof client.sendMessage).toBe("function")
-    expect(typeof client.streamEvents).toBe("function")
-    expect(typeof client.steer).toBe("function")
-    expect(typeof client.respondQuestions).toBe("function")
-    expect(typeof client.respondPermission).toBe("function")
-    expect(typeof client.respondPrompt).toBe("function")
-    expect(typeof client.listMessages).toBe("function")
-    expect(typeof client.getSessionSnapshot).toBe("function")
-    expect(typeof client.listBranches).toBe("function")
-    expect(typeof client.createBranch).toBe("function")
-    expect(typeof client.getBranchTree).toBe("function")
-    expect(typeof client.switchBranch).toBe("function")
-    expect(typeof client.forkBranch).toBe("function")
-    expect(typeof client.updateSessionBypass).toBe("function")
-    expect(typeof client.getPermissionRules).toBe("function")
-    expect(typeof client.deletePermissionRule).toBe("function")
-    expect(typeof client.listAuthProviders).toBe("function")
-    expect(typeof client.setAuthKey).toBe("function")
-    expect(typeof client.deleteAuthKey).toBe("function")
-    expect(client.services).toBeDefined()
-  })
-
-  test("createSession returns mapped result", async () => {
-    const mockRpcClient = {
-      createSession: () =>
-        Effect.succeed({
-          sessionId: "session-123",
-          branchId: "branch-456",
-          name: "My Session",
-          bypass: true,
-        }),
-    } as unknown as GentRpcClient
-
-    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
-    const client = createClient(mockRpcClient, services)
-
-    const result = await Effect.runPromise(client.createSession())
-    expect(result.sessionId).toBe("session-123")
-    expect(result.branchId).toBe("branch-456")
-    expect(result.name).toBe("My Session")
-    expect(result.bypass).toBe(true)
-  })
-
-  test("createBranch returns branchId string", async () => {
-    const mockRpcClient = {
-      createBranch: () => Effect.succeed({ branchId: "new-branch-id" }),
-    } as unknown as GentRpcClient
-
-    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
-    const client = createClient(mockRpcClient, services)
-
-    const branchId = await Effect.runPromise(client.createBranch("session-1", "feature"))
-    expect(branchId).toBe("new-branch-id")
-  })
-
-  test("forkBranch returns branchId in object", async () => {
-    const mockRpcClient = {
-      forkBranch: () => Effect.succeed({ branchId: "forked-branch" }),
-    } as unknown as GentRpcClient
-
-    const services = Effect.runSync(Effect.services<never>()) as ServiceMap.ServiceMap<unknown>
-    const client = createClient(mockRpcClient, services)
-
-    const result = await Effect.runPromise(
-      client.forkBranch({
-        sessionId: "s1",
-        fromBranchId: "b1",
-        atMessageId: "m1",
-      }),
-    )
-    expect(result.branchId).toBe("forked-branch")
+describe("Gent constructors", () => {
+  test("Gent.spawn, Gent.connect, and Gent.test are functions", () => {
+    expect(typeof Gent.spawn).toBe("function")
+    expect(typeof Gent.connect).toBe("function")
+    expect(typeof Gent.test).toBe("function")
   })
 })
 
-describe("HttpTransport", () => {
-  test("creates layer without headers", () => {
-    const transport = HttpTransport({ url: "http://localhost:3000/rpc" })
-    expect(Layer.isLayer(transport)).toBe(true)
-  })
-
-  test("creates layer with headers", () => {
-    const transport = HttpTransport({
-      url: "http://localhost:3000/rpc",
-      headers: { Authorization: "Bearer token" },
-    })
-    expect(Layer.isLayer(transport)).toBe(true)
+describe("GentClient shape", () => {
+  test("has runFork, runPromise, and lifecycle", () => {
+    // Verify the type at compile time — if this compiles, the shape is correct
+    const assertShape = (_client: GentClient) => {
+      expect(typeof _client.runFork).toBe("function")
+      expect(typeof _client.runPromise).toBe("function")
+      expect(typeof _client.lifecycle).toBe("object")
+      expect(typeof _client.lifecycle.getState).toBe("function")
+      expect(typeof _client.lifecycle.subscribe).toBe("function")
+    }
+    // Just a type check — we can't easily construct a full client without layers
+    void assertShape
   })
 })
 

@@ -1,7 +1,8 @@
 // Shared transport contract
 export type {
   GentClient,
-  GentClientInternal,
+  GentLifecycle,
+  ConnectionState,
   MessageInfoReadonly,
   SessionInfo,
   BranchInfo,
@@ -17,21 +18,18 @@ export type {
   SkillContent,
 } from "@gent/core/server/transport-contract.js"
 
-// Transport adapters
-export {
-  type GentRpcClient,
-  type GentRpcError,
-  type GentRpcsClient,
-  createClient,
-  makeClient,
-  makeHttpGentClient,
-  makeInProcessClient,
-  makeInProcessRpcClient,
-  type RpcHandlersContext,
-} from "./client.js"
+export { GentConnectionError } from "@gent/core/server/transport-contract.js"
 
-// HTTP transport
-export { HttpTransport, type HttpTransportConfig } from "./client.js"
+// Client constructors
+export {
+  Gent,
+  type GentSpawnOptions,
+  type GentConnectOptions,
+  type RpcHandlersContext,
+  type GentRpcClient,
+  type GentRpcsClient,
+  type GentRpcError,
+} from "./client.js"
 
 // Message types
 export type {

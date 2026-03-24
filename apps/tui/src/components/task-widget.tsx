@@ -39,7 +39,7 @@ type TaskWidgetProps =
 
 export function TaskWidget(props: TaskWidgetProps) {
   const client = useClient()
-  const { cast } = useRuntime(client.client.services)
+  const { cast } = useRuntime(client.client)
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
@@ -71,7 +71,7 @@ export function TaskWidget(props: TaskWidgetProps) {
     if (props.previewTasks !== undefined) return
     if (!client.isActive()) return
 
-    const fiber = Effect.runForkWith(client.client.services)(
+    const fiber = client.client.runFork(
       runWithReconnect(
         () =>
           client.client.streamEvents({ sessionId: props.sessionId, branchId: props.branchId }).pipe(
@@ -91,7 +91,7 @@ export function TaskWidget(props: TaskWidgetProps) {
           ),
         {
           onError: () => undefined,
-          waitForRetry: () => client.waitForWorkerRunning(),
+          waitForRetry: () => client.waitForTransportReady(),
         },
       ),
     )

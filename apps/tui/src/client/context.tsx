@@ -25,23 +25,19 @@ import { tuiError } from "../utils/unified-tracer"
 import { clientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
-import {
-  type WorkerLifecycleState,
-  type WorkerSupervisor,
-  waitForWorkerRunning,
-} from "../worker/supervisor"
 import { reduceAgentLifecycle } from "./agent-lifecycle"
 
-import {
-  type GentClientInternal,
-  type GentRpcError,
-  type MessageInfoReadonly,
-  type QueueSnapshot,
-  type SessionInfo,
-  type BranchInfo,
-  type BranchTreeNode,
-  type SessionTreeNode,
-  type SteerCommand,
+import type {
+  ConnectionState,
+  GentClient,
+  GentRpcError,
+  MessageInfoReadonly,
+  QueueSnapshot,
+  SessionInfo,
+  BranchInfo,
+  BranchTreeNode,
+  SessionTreeNode,
+  SteerCommand,
 } from "@gent/sdk"
 import { SessionState, transitionSessionState, type Session } from "./session-state"
 
@@ -85,7 +81,7 @@ export interface AgentState {
 
 export interface ClientContextValue {
   /** Underlying GentClient - returns Effects */
-  client: GentClientInternal
+  client: GentClient
 
   // Session state (union)
   sessionState: () => SessionState
@@ -104,10 +100,10 @@ export interface ClientContextValue {
   error: () => string | null
   latestInputTokens: () => number
   modelInfo: () => Model | undefined
-  workerState: () => WorkerLifecycleState | undefined
-  waitForWorkerRunning: () => Effect.Effect<void>
+  connectionState: () => ConnectionState | undefined
+  waitForTransportReady: () => Effect.Effect<void>
   isReconnecting: () => boolean
-  workerRestartCount: () => number
+  connectionGeneration: () => number
   connectionIssue: () => string | null
 
   // Agent state setters (for local errors only)
@@ -150,20 +146,16 @@ export function useClient(): ClientContextValue {
 }
 
 interface ClientProviderProps extends ParentProps {
-  client: GentClientInternal
+  client: GentClient
   initialSession: Session | undefined
-  supervisor?: WorkerSupervisor
 }
 
 export function ClientProvider(props: ClientProviderProps) {
   const defaultAgent: AgentName = "cowork"
   const client = props.client
-  const waitForTransportRunning = (): Effect.Effect<void> =>
-    props.supervisor === undefined ? Effect.void : waitForWorkerRunning(props.supervisor)
-
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
-    Effect.runForkWith(client.services)(effect)
+    client.runFork(effect)
   }
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
@@ -204,8 +196,8 @@ export function ClientProvider(props: ClientProviderProps) {
   })
   const [preferredAgent, setPreferredAgent] = createSignal<AgentName>(defaultAgent)
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
-  const [workerState, setWorkerState] = createSignal<WorkerLifecycleState | undefined>(
-    props.supervisor?.getState(),
+  const [connectionState, setConnectionState] = createSignal<ConnectionState | undefined>(
+    client.lifecycle.getState(),
   )
   const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null)
   const [lastSeenEventId, setLastSeenEventId] = createSignal<number | null>(null)
@@ -218,10 +210,8 @@ export function ClientProvider(props: ClientProviderProps) {
   })
 
   createEffect(() => {
-    const supervisor = props.supervisor
-    if (supervisor === undefined) return
-    const unsubscribe = supervisor.subscribe((nextState) => {
-      setWorkerState(nextState)
+    const unsubscribe = client.lifecycle.subscribe((nextState) => {
+      setConnectionState(nextState)
     })
     onCleanup(unsubscribe)
   })
@@ -234,14 +224,16 @@ export function ClientProvider(props: ClientProviderProps) {
   })
 
   const workerEpoch = createMemo<number | null>(() => {
-    const state = workerState()
+    const state = connectionState()
     if (state === undefined) return 0
-    return state._tag === "running" ? state.restartCount : null
+    if (state._tag === "connected") return state.generation
+    if (state._tag === "reconnecting") return null
+    return null
   })
 
   const isReconnecting = () => {
-    const state = workerState()
-    return state?._tag === "starting" || state?._tag === "restarting"
+    const state = connectionState()
+    return state?._tag === "connecting" || state?._tag === "reconnecting"
   }
 
   // Subscribe to events when session becomes active - SINGLE shared subscription
@@ -347,12 +339,12 @@ export function ClientProvider(props: ClientProviderProps) {
         }
       }
 
-      const fiber = Effect.runForkWith(client.services)(
+      const fiber = client.runFork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
-              if (props.supervisor !== undefined && workerState()?._tag !== "running") {
-                yield* waitForWorkerRunning(props.supervisor)
+              if (connectionState()?._tag !== "connected") {
+                yield* client.lifecycle.waitForReady
               }
 
               const snapshot = yield* client.getSessionSnapshot({ sessionId, branchId })
@@ -397,11 +389,11 @@ export function ClientProvider(props: ClientProviderProps) {
           {
             onError: (err) => {
               if (cancelled) return
-              if (props.supervisor !== undefined && workerState()?._tag !== "running") return
+              if (connectionState()?._tag !== "connected") return
               clientLog.error("event.subscription.failed", { error: formatError(err) })
               setConnectionIssue(formatConnectionIssue(err))
             },
-            waitForRetry: waitForTransportRunning,
+            waitForRetry: () => client.lifecycle.waitForReady,
           },
         ),
       )
@@ -436,10 +428,16 @@ export function ClientProvider(props: ClientProviderProps) {
     error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
     latestInputTokens,
     modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
-    workerState,
-    waitForWorkerRunning: waitForTransportRunning,
+    connectionState,
+    waitForTransportReady: () => client.lifecycle.waitForReady,
     isReconnecting,
-    workerRestartCount: () => workerState()?.restartCount ?? 0,
+    connectionGeneration: () => {
+      const state = connectionState()
+      if (state === undefined) return 0
+      if (state._tag === "connected") return state.generation
+      if (state._tag === "reconnecting") return state.generation
+      return 0
+    },
     connectionIssue,
 
     // Agent state setters (for local errors only)

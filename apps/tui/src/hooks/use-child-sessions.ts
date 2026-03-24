@@ -42,7 +42,7 @@ export function useChildSessions(client: ClientContextValue): UseChildSessionsRe
 
     // Single long-running scoped fiber: creates tracker, subscribes to changes,
     // and blocks on Effect.never so the scope (and FiberSet) stays alive.
-    fiber = Effect.runForkWith(client.client.services)(
+    fiber = client.client.runFork(
       Effect.scoped(
         Effect.gen(function* () {
           const tracker = yield* makeChildSessionTracker

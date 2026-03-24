@@ -18,17 +18,17 @@ describe("app bootstrap boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const client = yield* startWorkerWithClient({
             cwd: repoRoot,
             env: createWorkerEnv(root, { providerMode: "debug-scripted" }),
           })
 
-          const first = yield* worker.client.createSession({ cwd: repoRoot, bypass: true })
+          const first = yield* client.createSession({ cwd: repoRoot, bypass: true })
           yield* Effect.sleep("5 millis")
-          const second = yield* worker.client.createSession({ cwd: repoRoot, bypass: false })
+          const second = yield* client.createSession({ cwd: repoRoot, bypass: false })
 
           const state = yield* resolveInitialState({
-            client: worker.client,
+            client: client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,
@@ -53,13 +53,13 @@ describe("app bootstrap boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const client = yield* startWorkerWithClient({
             cwd: repoRoot,
             env: createWorkerEnv(root, { providerMode: "debug-scripted" }),
           })
 
           const state = yield* resolveInitialState({
-            client: worker.client,
+            client: client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,

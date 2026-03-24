@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect, mock } from "bun:test"
-import { Effect, Stream, ServiceMap } from "effect"
+import { Effect, Stream } from "effect"
 import type { AgentEvent, EventEnvelope } from "@gent/core/domain/event"
 import {
   EventEnvelope as EventEnvelopeClass,
@@ -69,7 +69,17 @@ function createMockClient() {
     steer: mock(() => Effect.void),
     getQueuedMessages: mock(() => Effect.succeed({ steering: [], followUp: [] })),
     drainQueuedMessages: mock(() => Effect.succeed({ steering: [], followUp: [] })),
-    services: ServiceMap.empty(),
+    runFork: Effect.runFork as never,
+    runPromise: Effect.runPromise as never,
+    lifecycle: {
+      getState: () => ({ _tag: "connected" as const, generation: 0 }),
+      subscribe: (listener: (s: { _tag: string }) => void) => {
+        listener({ _tag: "connected" })
+        return () => {}
+      },
+      restart: Effect.void,
+      waitForReady: Effect.void,
+    },
   }
 }
 

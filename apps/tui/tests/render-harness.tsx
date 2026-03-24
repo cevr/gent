@@ -13,7 +13,6 @@ import { EnvProvider } from "../src/env/context"
 import { WorkspaceProvider } from "../src/workspace"
 import { ClientProvider, type GentClient } from "../src/client"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
-import type { WorkerSupervisor } from "../src/worker/supervisor"
 import type {
   MessageInfoReadonly,
   QueueSnapshotReadonly,
@@ -140,7 +139,17 @@ export const createMockClient = (overrides: Partial<GentClient> = {}): GentClien
         },
       ] satisfies readonly SkillContent[]),
     getSkillContent: () => noRpcError(null),
-    services: ServiceMap.empty(),
+    runFork: Effect.runFork as never,
+    runPromise: Effect.runPromise as never,
+    lifecycle: {
+      getState: () => ({ _tag: "connected" as const, generation: 0 }),
+      subscribe: (listener: (s: { _tag: string }) => void) => {
+        listener({ _tag: "connected" })
+        return () => {}
+      },
+      restart: Effect.void,
+      waitForReady: Effect.void,
+    },
   }
 
   return { ...base, ...overrides }
@@ -159,7 +168,6 @@ export const renderWithProviders = async (
   options?: {
     client?: GentClient
     initialSession?: SessionInfo
-    supervisor?: WorkerSupervisor
     initialRoute?: AppRoute
     width?: number
     height?: number
@@ -177,11 +185,7 @@ export const renderWithProviders = async (
             <EnvProvider env={{ visual: undefined, editor: undefined }}>
               <CommandProvider>
                 <RouterProvider initialRoute={options?.initialRoute ?? Route.home()}>
-                  <ClientProvider
-                    client={client}
-                    initialSession={options?.initialSession}
-                    supervisor={options?.supervisor}
-                  >
+                  <ClientProvider client={client} initialSession={options?.initialSession}>
                     <WorkspaceProvider
                       cwd={options?.cwd ?? defaultWorkspaceCwd}
                       services={services}

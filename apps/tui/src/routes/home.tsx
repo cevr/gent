@@ -40,7 +40,7 @@ export function Home(props: HomeProps) {
   const command = useCommand()
   const client = useClient()
   const router = useRouter()
-  const { cast } = useRuntime(client.client.services)
+  const { cast } = useRuntime(client.client)
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
   const workspace = useWorkspace()

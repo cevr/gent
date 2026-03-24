@@ -3,7 +3,8 @@ import { Effect } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { makeWorkerHttpClient, startWorkerSupervisor } from "../apps/tui/src/worker/supervisor"
+import { Gent } from "@gent/sdk"
+import { startWorkerSupervisor, type WorkerSupervisorOptions } from "../packages/sdk/src/supervisor"
 
 export const createTempDirFixture = (prefix: string): (() => string) => {
   const tempDirs: string[] = []
@@ -54,11 +55,20 @@ export const createWorkerEnv = (
   return env
 }
 
-export const startWorkerWithClient = (options: Parameters<typeof startWorkerSupervisor>[0]) =>
+/** Start a worker using Gent.spawn — returns a unified GentClient */
+export const startWorkerWithClient = (options: {
+  cwd: string
+  env?: Record<string, string>
+  startupTimeoutMs?: number
+  mode?: "default" | "debug"
+}) => Gent.spawn(options)
+
+/** Start a raw supervisor — for tests that need lifecycle assertions (pid, restartCount, etc.) */
+export const startWorkerWithSupervisor = (options: WorkerSupervisorOptions) =>
   Effect.gen(function* () {
-    const worker = yield* startWorkerSupervisor(options)
-    const client = yield* makeWorkerHttpClient(worker)
-    return { ...worker, client }
+    const supervisor = yield* startWorkerSupervisor(options)
+    const client = yield* Gent.connect({ url: supervisor.url })
+    return { ...supervisor, client }
   })
 
 export const waitFor = <A>(

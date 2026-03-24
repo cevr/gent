@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"
+import type { GentClient } from "@gent/sdk"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
@@ -9,7 +10,7 @@ import { destroyRenderSetup, renderFrame, renderWithProviders } from "../tests/r
 import {
   createTempDirFixture,
   createWorkerEnv,
-  startWorkerWithClient,
+  startWorkerWithSupervisor,
 } from "../../../tests/seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
@@ -17,7 +18,7 @@ const makeTempDir = createTempDirFixture("gent-session-feed-")
 
 const waitForFrame = (
   setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  worker: Awaited<Effect.Effect.Success<ReturnType<typeof startWorkerWithClient>>>,
+  client: GentClient,
   session: { sessionId: string; branchId: string },
   predicate: (frame: string) => boolean,
   label: string,
@@ -42,10 +43,10 @@ const waitForFrame = (
       yield* renderAndMatch
 
       yield* Effect.forkScoped(
-        worker.client.watchRuntime(session).pipe(Stream.runForEach(() => renderAndMatch)),
+        client.watchRuntime(session).pipe(Stream.runForEach(() => renderAndMatch)),
       )
       yield* Effect.forkScoped(
-        worker.client.streamEvents(session).pipe(Stream.runForEach(() => renderAndMatch)),
+        client.streamEvents(session).pipe(Stream.runForEach(() => renderAndMatch)),
       )
 
       return yield* Deferred.await(match).pipe(
@@ -83,7 +84,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
             env: createWorkerEnv(root, { providerMode: "debug-slow" }),
@@ -99,7 +100,6 @@ describe("session feed boundary", () => {
               () => <Session sessionId={created.sessionId} branchId={created.branchId} />,
               {
                 client: worker.client,
-                supervisor: worker,
                 initialSession: makeSessionState(created),
                 initialRoute: Route.session(created.sessionId, created.branchId),
                 cwd: repoRoot,
@@ -121,7 +121,7 @@ describe("session feed boundary", () => {
 
           const thinkingFrame = yield* waitForFrame(
             setup,
-            worker,
+            worker.client,
             created,
             (frame) => frame.includes("thinking"),
             "thinking label",
@@ -131,7 +131,7 @@ describe("session feed boundary", () => {
 
           const streamingFrame = yield* waitForFrame(
             setup,
-            worker,
+            worker.client,
             created,
             (frame) =>
               frame.includes("debug response.") &&
@@ -146,7 +146,7 @@ describe("session feed boundary", () => {
 
           const responseFrame = yield* waitForFrame(
             setup,
-            worker,
+            worker.client,
             created,
             (frame) => frame.includes("debug response") && frame.includes("idle"),
             "assistant debug response",
@@ -168,7 +168,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
             env: createWorkerEnv(root, { providerMode: "debug-scripted" }),
@@ -184,7 +184,6 @@ describe("session feed boundary", () => {
               () => <Session sessionId={created.sessionId} branchId={created.branchId} />,
               {
                 client: worker.client,
-                supervisor: worker,
                 initialSession: makeSessionState(created),
                 initialRoute: Route.session(created.sessionId, created.branchId),
                 cwd: repoRoot,
@@ -208,7 +207,7 @@ describe("session feed boundary", () => {
 
           const frame = yield* waitForFrame(
             setup,
-            worker,
+            worker.client,
             created,
             (next) =>
               next.includes("queue") &&
@@ -234,7 +233,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
             env: createWorkerEnv(root, { providerMode: "debug-failing" }),
@@ -250,7 +249,6 @@ describe("session feed boundary", () => {
               () => <Session sessionId={created.sessionId} branchId={created.branchId} />,
               {
                 client: worker.client,
-                supervisor: worker,
                 initialSession: makeSessionState(created),
                 initialRoute: Route.session(created.sessionId, created.branchId),
                 cwd: repoRoot,
@@ -269,7 +267,7 @@ describe("session feed boundary", () => {
 
           const frame = yield* waitForFrame(
             setup,
-            worker,
+            worker.client,
             created,
             (next) => next.includes("provider exploded"),
             "error event",

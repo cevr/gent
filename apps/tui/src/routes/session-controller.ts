@@ -115,7 +115,7 @@ export function useSessionController(props: {
   const client = useClient()
   const command = useCommand()
   const router = useRouter()
-  const { cast } = useRuntime(client.client.services)
+  const { cast } = useRuntime(client.client)
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
   const workspace = useWorkspace()
@@ -252,10 +252,10 @@ export function useSessionController(props: {
   createEffect(() => {
     void props.sessionId
     void props.branchId
-    const restartCount = client.workerRestartCount()
-    void restartCount
+    const generation = client.connectionGeneration()
+    void generation
     if (!client.isActive()) return
-    const fiber = Effect.runForkWith(client.client.services)(
+    const fiber = client.client.runFork(
       runWithReconnect(
         () =>
           client.client
@@ -275,7 +275,7 @@ export function useSessionController(props: {
           onError: (error) => {
             client.setConnectionIssue(formatConnectionIssue(error))
           },
-          waitForRetry: () => client.waitForWorkerRunning(),
+          waitForRetry: () => client.waitForTransportReady(),
         },
       ),
     )

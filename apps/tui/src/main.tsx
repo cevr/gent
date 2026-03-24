@@ -18,7 +18,7 @@ import { EnvProvider } from "./env/context"
 import { clearClientLog } from "./utils/client-logger"
 import { resolveAppBootstrap, resolveInitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
-import { makeWorkerHttpClient, startWorkerSupervisor } from "./worker/supervisor"
+import { Gent } from "@gent/sdk"
 
 // Clear client log on startup
 clearClientLog()
@@ -87,8 +87,7 @@ const main = Command.make(
         editor: Option.getOrUndefined(editorOpt),
       }
 
-      const supervisor = yield* startWorkerSupervisor({ cwd, mode: debug ? "debug" : "default" })
-      const gentClient = yield* makeWorkerHttpClient(supervisor)
+      const gentClient = yield* Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
 
       const authProviders = yield* gentClient.listAuthProviders()
       const missingProviders = authProviders
@@ -144,11 +143,7 @@ const main = Command.make(
           <EnvProvider env={env}>
             <WorkspaceProvider cwd={cwd} services={uiServices}>
               <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                <ClientProvider
-                  client={gentClient}
-                  initialSession={bootstrap.initialSession}
-                  supervisor={supervisor}
-                >
+                <ClientProvider client={gentClient} initialSession={bootstrap.initialSession}>
                   <RouterProvider initialRoute={bootstrap.initialRoute}>
                     <App
                       initialPrompt={bootstrap.initialPrompt}
@@ -170,8 +165,7 @@ const main = Command.make(
 // Sessions subcommand
 const sessions = Command.make("sessions", {}, () =>
   Effect.gen(function* () {
-    const worker = yield* startWorkerSupervisor({ cwd: process.cwd() })
-    const client = yield* makeWorkerHttpClient(worker)
+    const client = yield* Gent.spawn({ cwd: process.cwd() })
     const allSessions = yield* client.listSessions()
 
     if (allSessions.length === 0) {

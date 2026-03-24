@@ -55,11 +55,11 @@ export function Session(props: SessionProps) {
 
   const topLeftLabels = (): BorderLabelItem[] => {
     const items: BorderLabelItem[] = []
-    const worker = client.workerState()
+    const conn = client.connectionState()
     if (client.isReconnecting()) {
       items.push({ text: "reconnecting", color: theme.warning })
-    } else if (worker?._tag === "running" && worker.restartCount > 0) {
-      items.push({ text: `restart ${worker.restartCount}`, color: theme.textMuted })
+    } else if (conn?._tag === "connected" && conn.generation > 0) {
+      items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
     }
     const c = client.cost()
     if (c > 0) items.push({ text: `$${c.toFixed(2)}`, color: theme.textMuted })
@@ -114,7 +114,7 @@ export function Session(props: SessionProps) {
           <ConnectionWidget
             issue={client.connectionIssue()}
             reconnecting={client.isReconnecting()}
-            restartCount={client.workerRestartCount()}
+            restartCount={client.connectionGeneration()}
           />
           <QueueWidget
             queuedMessages={controller.queueState().followUp}

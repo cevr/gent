@@ -1,6 +1,4 @@
 import { Effect, Layer } from "effect"
-import type { ServiceMap } from "effect"
-import { RpcTest } from "effect/unstable/rpc"
 import * as path from "node:path"
 import { Agents } from "@gent/core/domain/agent.js"
 import { AuthGuard } from "@gent/core/domain/auth-guard.js"
@@ -23,11 +21,9 @@ import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
 import { LocalActorProcessLive } from "@gent/core/runtime/actor-process.js"
 import { EventStoreLive } from "@gent/core/server/event-store.js"
 import { AppServicesLive } from "@gent/core/server/index.js"
-import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
-import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
-import { createClient, type GentClient, type GentRpcClient } from "@gent/sdk"
+import { Gent, type GentClient } from "@gent/sdk"
 import { createTempDirFixture, createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
 
@@ -41,7 +37,7 @@ export interface TransportCase {
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
-const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") => {
+export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") => {
   const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
   const authGuardLive = Layer.provide(AuthGuard.Live, authStoreLive)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authStoreLive)
@@ -97,44 +93,7 @@ const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
   name: "direct",
   run: (assertion) =>
     Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const base = baseLocalLayer(providerMode)
-          const appLayer = Layer.provide(AppServicesLive, base)
-          const handlersLayer = Layer.mergeAll(base, appLayer)
-          const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
-          const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
-          const services = yield* Effect.services<never>()
-          const client = createClient(
-            rpcClient as unknown as GentRpcClient,
-            services as ServiceMap.ServiceMap<unknown>,
-          )
-          return yield* assertion(client)
-        }),
-      ),
-    ),
-})
-
-const makeInProcessCase = (
-  providerMode: HarnessProviderMode = "debug-scripted",
-): TransportCase => ({
-  name: "in-process-rpc",
-  run: (assertion) =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const context = yield* Layer.build(
-            Layer.provide(RpcHandlersLive, baseLocalLayer(providerMode)),
-          )
-          const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
-          const services = yield* Effect.services<never>()
-          const client = createClient(
-            rpcClient as unknown as GentRpcClient,
-            services as ServiceMap.ServiceMap<unknown>,
-          )
-          return yield* assertion(client)
-        }),
-      ),
+      Effect.scoped(Gent.test(baseLocalLayer(providerMode)).pipe(Effect.flatMap(assertion))),
     ),
 })
 
@@ -146,12 +105,12 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
         Effect.scoped(
           Effect.gen(function* () {
             const root = makeTempDir()
-            const worker = yield* startWorkerWithClient({
+            const client = yield* startWorkerWithClient({
               cwd: repoRoot,
               startupTimeoutMs: 20_000,
               env: createWorkerEnv(root, { providerMode }),
             })
-            return yield* assertion(worker.client)
+            return yield* assertion(client)
           }),
         ),
       ),
@@ -160,7 +119,6 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
 
 const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted") => [
   makeDirectCase(providerMode),
-  makeInProcessCase(providerMode),
   makeWorkerCase(providerMode),
 ]
 

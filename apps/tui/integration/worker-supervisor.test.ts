@@ -2,11 +2,14 @@ import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"
 import * as path from "node:path"
 import { extractText } from "@gent/sdk"
-import { type WorkerLifecycleState, WorkerSupervisorInternal } from "../src/worker/supervisor"
+import {
+  type WorkerLifecycleState,
+  WorkerSupervisorInternal,
+} from "../../../packages/sdk/src/supervisor"
 import {
   createTempDirFixture,
   createWorkerEnv,
-  startWorkerWithClient,
+  startWorkerWithSupervisor,
   waitFor,
 } from "../../../tests/seam-fixture"
 
@@ -52,7 +55,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
@@ -80,7 +83,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
@@ -111,7 +114,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
@@ -142,7 +145,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
@@ -197,7 +200,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
@@ -252,7 +255,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             mode: "debug",
           })
@@ -287,7 +290,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: createWorkerEnv(root),
           })
@@ -324,7 +327,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
             env: createWorkerEnv(root, { providerMode: "debug-slow" }),
@@ -431,7 +434,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
@@ -486,7 +489,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
@@ -544,7 +547,7 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* startWorkerWithClient({
+          const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             env: { GENT_DATA_DIR: dataDir },
           })
