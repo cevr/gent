@@ -14,7 +14,7 @@ const EXTENSION_GLOBS = ["*.ts", "*.js", "*.mjs"]
 
 /** TUI extension files — co-located *.client.{tsx,ts,js,mjs} or client.{tsx,ts,js,mjs} in subdirs */
 export const isClientFile = (entry: string): boolean =>
-  /\.client\.[tjm]sx?$/.test(entry) || /^client\.[tjm]sx?$/.test(entry)
+  /\.client\.(?:[tj]sx?|mjs)$/.test(entry) || /^client\.(?:[tj]sx?|mjs)$/.test(entry)
 
 const isExtensionFile = (entry: string): boolean =>
   !isClientFile(entry) &&
