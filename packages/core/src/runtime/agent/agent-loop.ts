@@ -514,6 +514,10 @@ const restoreCheckpointState = (params: {
 // Agent Loop Service
 
 export interface AgentLoopService {
+  readonly submit: (
+    message: Message,
+    options?: { bypass?: boolean },
+  ) => Effect.Effect<void, AgentLoopError>
   readonly run: (
     message: Message,
     options?: { bypass?: boolean },
@@ -1093,6 +1097,29 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         })
 
         const service: AgentLoopService = {
+          submit: Effect.fn("AgentLoop.submit")(function* (
+            message: Message,
+            options?: { bypass?: boolean },
+          ) {
+            const bypass = options?.bypass ?? true
+            const loop = yield* getLoop(message.sessionId, message.branchId)
+            const initialState = yield* loop.actor.snapshot
+            const item: QueuedTurnItem = { message, bypass }
+
+            if (initialState._tag !== "Idle") {
+              const content = messageText(message)
+              yield* loop.actor.sendAndWait(AgentLoopEvent.QueueFollowUp({ item }), (state) =>
+                queueContainsContent(state.queue.followUp, content),
+              )
+              return
+            }
+
+            yield* loop.actor.sendAndWait(
+              AgentLoopEvent.Start({ item }),
+              (state) => state._tag !== "Idle",
+            )
+          }),
+
           run: Effect.fn("AgentLoop.run")(function* (
             message: Message,
             options?: { bypass?: boolean },
@@ -1249,6 +1276,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
   static Test = (): Layer.Layer<AgentLoop> =>
     Layer.succeed(AgentLoop, {
+      submit: () => Effect.void,
       run: () => Effect.void,
       steer: () => Effect.void,
       followUp: () => Effect.void,

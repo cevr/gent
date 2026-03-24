@@ -1,25 +1,25 @@
 import type { Sharding } from "effect/unstable/cluster"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
-import { Cause, ServiceMap, Effect, Layer, Schema } from "effect"
+import { Cause, ServiceMap, Effect, Layer, Schema, Semaphore } from "effect"
 import { AgentName } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
   ErrorOccurred,
   EventStore,
-  MessageReceived,
-  ToolCallStarted,
-  ToolCallSucceeded,
   ToolCallFailed,
+  ToolCallSucceeded,
 } from "../domain/event.js"
 import { ActorCommandId, BranchId, SessionId, ToolCallId, type MessageId } from "../domain/ids.js"
-import { Message, TextPart, ToolCallPart, ToolResultPart } from "../domain/message.js"
+import { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import type { ActorInboxRecord } from "./actor-inbox.schema.js"
+import { invokeToolPhase } from "./agent/agent-loop-phases"
 import { ToolRunner } from "./agent/tool-runner"
 import { AgentLoop, SteerCommand } from "./agent"
+import { ExtensionRegistry } from "./extensions/registry.js"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
   "ActorProcessError",
@@ -155,7 +155,7 @@ const followUpMessageIdForCommand = (commandId: ActorCommandId) =>
 export const LocalActorTransportLive: Layer.Layer<
   ActorTransport,
   never,
-  AgentLoop | Storage | EventStore | ToolRunner
+  AgentLoop | Storage | EventStore | ToolRunner | ExtensionRegistry
 > = Layer.effect(
   ActorTransport,
   Effect.gen(function* () {
@@ -163,6 +163,8 @@ export const LocalActorTransportLive: Layer.Layer<
     const storage = yield* Storage
     const eventStore = yield* EventStore
     const toolRunner = yield* ToolRunner
+    const extensionRegistry = yield* ExtensionRegistry
+    const bashSemaphore = yield* Semaphore.make(1)
 
     return ActorTransport.of({
       sendUserMessage: (input) =>
@@ -190,32 +192,30 @@ export const LocalActorTransportLive: Layer.Layer<
             createdAt: new Date(),
           })
 
-          yield* Effect.forkDetach(
-            agentLoop.run(message, { bypass }).pipe(
-              Effect.catchCause((cause) => {
-                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-                return Effect.gen(function* () {
-                  if (Cause.hasDies(cause)) {
-                    yield* eventStore.publish(
-                      new AgentRestarted({
-                        sessionId: input.sessionId,
-                        branchId: input.branchId,
-                        attempt: 0,
-                        error: Cause.pretty(cause),
-                      }),
-                    )
-                  }
+          yield* agentLoop.submit(message, { bypass }).pipe(
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+              return Effect.gen(function* () {
+                if (Cause.hasDies(cause)) {
                   yield* eventStore.publish(
-                    new ErrorOccurred({
+                    new AgentRestarted({
                       sessionId: input.sessionId,
                       branchId: input.branchId,
+                      attempt: 0,
                       error: Cause.pretty(cause),
                     }),
                   )
-                  yield* Effect.logWarning("agent loop failed", cause)
-                }).pipe(Effect.catchEager(() => Effect.void))
-              }),
-            ),
+                }
+                yield* eventStore.publish(
+                  new ErrorOccurred({
+                    sessionId: input.sessionId,
+                    branchId: input.branchId,
+                    error: Cause.pretty(cause),
+                  }),
+                )
+                yield* Effect.logWarning("agent loop submission failed", cause)
+              }).pipe(Effect.catchEager(() => Effect.void))
+            }),
           )
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
@@ -264,97 +264,26 @@ export const LocalActorTransportLive: Layer.Layer<
           const bypass = session?.bypass ?? true
           const commandId = input.commandId ?? makeCommandId()
           const toolCallId = toolCallIdForCommand(commandId)
+          const currentTurnAgent = (yield* agentLoop.getState(input)).agent
 
-          // Create synthetic assistant message with tool call
-          const callPart = new ToolCallPart({
-            type: "tool-call",
+          yield* invokeToolPhase({
+            assistantMessageId: assistantMessageIdForCommand(commandId),
+            toolResultMessageId: toolResultMessageIdForCommand(commandId),
             toolCallId,
             toolName: input.toolName,
             input: input.input,
+            publishEvent: (event) =>
+              eventStore.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            currentTurnAgent,
+            bypass,
+            toolRunner,
+            extensionRegistry,
+            bashSemaphore,
+            storage,
           })
-          const assistantMessage = new Message({
-            id: assistantMessageIdForCommand(commandId),
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            role: "assistant",
-            parts: [callPart],
-            createdAt: new Date(),
-          })
-          yield* storage.createMessageIfAbsent(assistantMessage)
-          yield* eventStore
-            .publish(
-              new MessageReceived({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                messageId: assistantMessage.id,
-                role: "assistant",
-              }),
-            )
-            .pipe(Effect.catchEager(() => Effect.void))
 
-          // Emit tool call started event
-          yield* eventStore
-            .publish(
-              new ToolCallStarted({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                toolCallId,
-                toolName: input.toolName,
-                input: input.input,
-              }),
-            )
-            .pipe(Effect.catchEager(() => Effect.void))
-
-          // Execute tool via ToolRunner
-          const ctx = {
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            toolCallId,
-          }
-          const resultPart = yield* toolRunner.run(
-            { toolCallId, toolName: input.toolName, input: input.input },
-            ctx,
-            { bypass },
-          )
-
-          // Persist tool result message
-          const resultMessage = new Message({
-            id: toolResultMessageIdForCommand(commandId),
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            role: "tool",
-            parts: [resultPart],
-            createdAt: new Date(),
-          })
-          yield* storage.createMessageIfAbsent(resultMessage)
-          yield* eventStore
-            .publish(
-              new MessageReceived({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                messageId: resultMessage.id,
-                role: "tool",
-              }),
-            )
-            .pipe(Effect.catchEager(() => Effect.void))
-
-          // Emit tool call result event
-          const isError = resultPart.output.type === "error-json"
-          const toolCallFields = {
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            toolCallId,
-            toolName: input.toolName,
-            summary: summarizeToolOutput(resultPart),
-            output: stringifyOutput(resultPart.output.value),
-          }
-          yield* eventStore
-            .publish(
-              isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
-            )
-            .pipe(Effect.catchEager(() => Effect.void))
-
-          // Trigger a follow-up LLM turn to react to the tool result
           const followUpMessage = new Message({
             id: followUpMessageIdForCommand(commandId),
             sessionId: input.sessionId,
@@ -370,21 +299,19 @@ export const LocalActorTransportLive: Layer.Layer<
             createdAt: new Date(),
           })
 
-          yield* Effect.forkDetach(
-            agentLoop.run(followUpMessage, { bypass }).pipe(
-              Effect.catchCause((cause) => {
-                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-                return eventStore
-                  .publish(
-                    new ErrorOccurred({
-                      sessionId: input.sessionId,
-                      branchId: input.branchId,
-                      error: Cause.pretty(cause),
-                    }),
-                  )
-                  .pipe(Effect.catchEager(() => Effect.void))
-              }),
-            ),
+          yield* agentLoop.submit(followUpMessage, { bypass }).pipe(
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+              return eventStore
+                .publish(
+                  new ErrorOccurred({
+                    sessionId: input.sessionId,
+                    branchId: input.branchId,
+                    error: Cause.pretty(cause),
+                  }),
+                )
+                .pipe(Effect.catchEager(() => Effect.void))
+            }),
           )
         }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause)))),
 
@@ -476,7 +403,7 @@ const ActorProcessFromTransportLive: Layer.Layer<ActorProcess, never, ActorTrans
 export const LocalActorProcessLive: Layer.Layer<
   ActorProcess,
   never,
-  AgentLoop | Storage | EventStore | ToolRunner
+  AgentLoop | Storage | EventStore | ToolRunner | ExtensionRegistry
 > = Layer.provide(ActorProcessFromTransportLive, LocalActorTransportLive)
 
 const SendUserMessageRpc = Rpc.make("SendUserMessage", {

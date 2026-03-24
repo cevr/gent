@@ -19,7 +19,7 @@ import {
   ToolCallSucceeded,
   TurnCompleted,
 } from "../../domain/event.js"
-import { type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
+import { type BranchId, type MessageId, type SessionId, type ToolCallId } from "../../domain/ids.js"
 import { type HandoffHandlerService } from "../../domain/interaction-handlers.js"
 import { Message, ReasoningPart, TextPart, ToolCallPart } from "../../domain/message.js"
 import {
@@ -275,7 +275,7 @@ const collectStreamResponse = (params: {
     }
   })
 
-const persistAssistantTurn = (params: {
+export const persistAssistantTurn = (params: {
   storage: StorageService
   publishEvent: PublishEvent
   sessionId: SessionId
@@ -624,6 +624,92 @@ export const executeToolsPhase = (params: {
       createdAt: new Date(),
     })
     yield* params.storage.createMessageIfAbsent(toolResultMessage)
+    yield* params
+      .publishEvent(
+        new MessageReceived({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          messageId: toolResultMessage.id,
+          role: "tool",
+        }),
+      )
+      .pipe(Effect.orDie)
+  })
+
+export const invokeToolPhase = (params: {
+  assistantMessageId: MessageId
+  toolResultMessageId: MessageId
+  toolCallId: ToolCallId
+  toolName: string
+  input: unknown
+  publishEvent: PublishEvent
+  sessionId: SessionId
+  branchId: BranchId
+  currentTurnAgent: AgentNameType
+  bypass: boolean
+  toolRunner: ToolRunnerService
+  extensionRegistry: ExtensionRegistryService
+  bashSemaphore: Semaphore.Semaphore
+  storage: StorageService
+}) =>
+  Effect.gen(function* () {
+    const draft: AssistantDraft = {
+      text: "",
+      reasoning: "",
+      toolCalls: [
+        new ToolCallPart({
+          type: "tool-call",
+          toolCallId: params.toolCallId,
+          toolName: params.toolName,
+          input: params.input,
+        }),
+      ],
+    }
+
+    yield* persistAssistantTurn({
+      storage: params.storage,
+      publishEvent: params.publishEvent,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      messageId: params.assistantMessageId,
+      draft,
+    })
+
+    const existing = yield* params.storage.getMessage(params.toolResultMessageId)
+    if (existing !== undefined) return
+
+    const toolResults = yield* executeToolCalls({
+      draft,
+      publishEvent: params.publishEvent,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      currentTurnAgent: params.currentTurnAgent,
+      bypass: params.bypass,
+      toolRunner: params.toolRunner,
+      extensionRegistry: params.extensionRegistry,
+      bashSemaphore: params.bashSemaphore,
+    })
+
+    yield* params.storage.createMessageIfAbsent(
+      new Message({
+        id: params.toolResultMessageId,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        role: "tool",
+        parts: toolResults,
+        createdAt: new Date(),
+      }),
+    )
+    yield* params
+      .publishEvent(
+        new MessageReceived({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          messageId: params.toolResultMessageId,
+          role: "tool",
+        }),
+      )
+      .pipe(Effect.orDie)
   })
 
 export const finalizeTurnPhase = (params: {

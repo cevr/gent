@@ -29,10 +29,27 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ClusterMemoryLive } from "@gent/core/runtime/cluster-layer"
 import { ConfigService } from "@gent/core/runtime/config-service"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { Agents } from "@gent/core/domain/agent"
+
+const testExtensionRegistryLayer = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin" as const,
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents) },
+    },
+  ]),
+)
 
 describe("SessionCommands → ActorProcess integration", () => {
   const makeActorProcessLayer = (
-    storageDeps: Layer.Layer<Storage | EventStore | AgentLoop | ToolRunner, never, never>,
+    storageDeps: Layer.Layer<
+      Storage | EventStore | AgentLoop | ToolRunner | ExtensionRegistry,
+      never,
+      never
+    >,
     mode: "local" | "cluster",
   ) => {
     if (mode === "cluster") {
@@ -55,18 +72,20 @@ describe("SessionCommands → ActorProcess integration", () => {
       AgentLoop,
       Effect.gen(function* () {
         const log = yield* Effect.succeed(runLog)
+        const appendMessage = (message: Message) =>
+          Ref.update(log, (entries) => [
+            ...entries,
+            {
+              sessionId: message.sessionId,
+              content: message.parts
+                .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                .map((p) => p.text)
+                .join(""),
+            },
+          ])
         return {
-          run: (message: Message) =>
-            Ref.update(log, (entries) => [
-              ...entries,
-              {
-                sessionId: message.sessionId,
-                content: message.parts
-                  .filter((p): p is { type: "text"; text: string } => p.type === "text")
-                  .map((p) => p.text)
-                  .join(""),
-              },
-            ]),
+          submit: (message: Message) => appendMessage(message),
+          run: (message: Message) => appendMessage(message),
           steer: () => Effect.void,
           followUp: () => Effect.void,
           isRunning: () => Effect.succeed(false),
@@ -81,6 +100,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       Storage.Test(),
       eventStoreLayer,
       agentLoopLayer,
+      testExtensionRegistryLayer,
       ToolRunner.Test(),
     )
     const actorProcessLayer = makeActorProcessLayer(storageDeps, mode)
@@ -112,8 +132,6 @@ describe("SessionCommands → ActorProcess integration", () => {
           firstMessage: "hello from createSession",
         })
 
-        yield* Effect.sleep("50 millis")
-
         const entries = yield* Ref.get(runLog)
         expect(entries.length).toBe(1)
         expect(entries[0]!.sessionId).toBe(session.sessionId)
@@ -136,8 +154,6 @@ describe("SessionCommands → ActorProcess integration", () => {
           branchId: session.branchId,
           content: "hello from clustered sendMessage",
         })
-
-        yield* Effect.sleep("50 millis")
 
         const entries = yield* Ref.get(runLog)
         expect(entries.length).toBe(1)
@@ -162,8 +178,6 @@ describe("SessionCommands → ActorProcess integration", () => {
           content: "hello from sendMessage",
         })
 
-        yield* Effect.sleep("50 millis")
-
         const entries = yield* Ref.get(runLog)
         expect(entries.length).toBe(1)
         expect(entries[0]!.sessionId).toBe(session.sessionId)
@@ -176,6 +190,7 @@ describe("SessionCommands → ActorProcess integration", () => {
     let steered = false
 
     const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: () => Effect.void,
       run: () => Effect.void,
       steer: () =>
         Effect.sync(() => {
@@ -191,6 +206,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       Storage.Test(),
       eventStoreLayer,
       agentLoopLayer,
+      testExtensionRegistryLayer,
       ToolRunner.Test(),
     )
     const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
@@ -228,6 +244,7 @@ describe("SessionCommands → ActorProcess integration", () => {
 
   test("actor process getState delegates to the loop snapshot", async () => {
     const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: () => Effect.void,
       run: () => Effect.void,
       steer: () => Effect.void,
       followUp: () => Effect.void,
@@ -246,6 +263,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       Storage.Test(),
       EventStore.Test(),
       agentLoopLayer,
+      testExtensionRegistryLayer,
       ToolRunner.Test(),
     )
     const layer = Layer.provide(LocalActorProcessLive, storageDeps)
@@ -274,6 +292,7 @@ describe("SessionCommands → ActorProcess integration", () => {
     const eventStoreLayer = EventStore.Test()
     const storageLayer = Storage.Test()
     const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: () => Effect.void,
       run: () => Effect.void,
       steer: () => Effect.void,
       followUp: () => Effect.void,
@@ -301,6 +320,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       storageLayer,
       eventStoreLayer,
       agentLoopLayer,
+      testExtensionRegistryLayer,
       toolRunnerLayer,
     )
     const actorProcessLayer = makeActorProcessLayer(storageDeps, "cluster")
@@ -334,8 +354,6 @@ describe("SessionCommands → ActorProcess integration", () => {
           input: {},
         })
 
-        yield* Effect.sleep("50 millis")
-
         const messages = yield* storage.listMessages(branch.id)
         expect(toolCalls).toBe(1)
         expect(messages.some((message) => message.role === "assistant")).toBe(true)
@@ -353,18 +371,20 @@ describe("Durable actor inbox", () => {
       AgentLoop,
       Effect.gen(function* () {
         const log = yield* Effect.succeed(runLog)
+        const appendMessage = (message: Message) =>
+          Ref.update(log, (entries) => [
+            ...entries,
+            {
+              sessionId: message.sessionId,
+              content: message.parts
+                .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                .map((p) => p.text)
+                .join(""),
+            },
+          ])
         return {
-          run: (message: Message) =>
-            Ref.update(log, (entries) => [
-              ...entries,
-              {
-                sessionId: message.sessionId,
-                content: message.parts
-                  .filter((p): p is { type: "text"; text: string } => p.type === "text")
-                  .map((p) => p.text)
-                  .join(""),
-              },
-            ]),
+          submit: (message: Message) => appendMessage(message),
+          run: (message: Message) => appendMessage(message),
           steer: () => Effect.void,
           followUp: () => Effect.void,
           isRunning: () => Effect.succeed(false),
@@ -378,6 +398,7 @@ describe("Durable actor inbox", () => {
       Storage.Test(),
       EventStore.Test(),
       agentLoopLayer,
+      testExtensionRegistryLayer,
       ToolRunner.Test(),
     )
     const actorTransportLayer = Layer.provide(LocalActorTransportLive, storageDeps)
@@ -427,8 +448,6 @@ describe("Durable actor inbox", () => {
           content: "only once",
         })
 
-        yield* Effect.sleep("50 millis")
-
         const entries = yield* Ref.get(runLog)
         const completed = yield* storage.listActorInboxRecordsByStatus(["completed"])
         expect(entries).toEqual([{ sessionId: session.id, content: "only once" }])
@@ -448,18 +467,20 @@ describe("Durable actor inbox", () => {
         AgentLoop,
         Effect.gen(function* () {
           const log = yield* Effect.succeed(runLog)
+          const appendMessage = (message: Message) =>
+            Ref.update(log, (entries) => [
+              ...entries,
+              {
+                sessionId: message.sessionId,
+                content: message.parts
+                  .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                  .map((p) => p.text)
+                  .join(""),
+              },
+            ])
           return {
-            run: (message: Message) =>
-              Ref.update(log, (entries) => [
-                ...entries,
-                {
-                  sessionId: message.sessionId,
-                  content: message.parts
-                    .filter((p): p is { type: "text"; text: string } => p.type === "text")
-                    .map((p) => p.text)
-                    .join(""),
-                },
-              ]),
+            submit: (message: Message) => appendMessage(message),
+            run: (message: Message) => appendMessage(message),
             steer: () => Effect.void,
             followUp: () => Effect.void,
             isRunning: () => Effect.succeed(false),
@@ -473,6 +494,7 @@ describe("Durable actor inbox", () => {
         Storage.Live(dbPath),
         EventStore.Test(),
         agentLoopLayer,
+        testExtensionRegistryLayer,
         ToolRunner.Test(),
       ).pipe(Layer.provide(BunFileSystem.layer), Layer.provide(BunServices.layer))
       const actorTransportLayer = Layer.provide(LocalActorTransportLive, storageDeps)

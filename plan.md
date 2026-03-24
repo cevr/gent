@@ -74,7 +74,7 @@ Those are either projections, tiny reducers, or pure compilation logic.
 ## Task List
 
 - [x] Batch 1 — Serialize loop ownership and stop exporting fictional runtime state
-- [ ] Batch 2 — Collapse duplicate core actor orchestration around one real turn pipeline
+- [x] Batch 2 — Collapse duplicate core actor orchestration around one real turn pipeline
 - [ ] Batch 3 — Give the composer one owner
 - [ ] Batch 4 — De-duplicate and flatten prompt search
 - [ ] Batch 5 — Promote command palette to an explicit reducer
@@ -135,17 +135,18 @@ Tests:
   - `bun run gate`
   - targeted integration seam tests that use `watchSessionState`
 
-## Batch 2 — Collapse Duplicate Core Actor Orchestration
+## Batch 2 — Collapse Duplicate Tool Orchestration At The Actor Boundary
 
 Commit:
 
-- `refactor(runtime): unify actor and loop orchestration`
+- `refactor(runtime): share tool invocation pipeline`
 
 Why:
 
-- `AgentActor` currently wraps a second hand-rolled orchestration loop
-- same turn phases already exist in `AgentLoop`
-- nested machine shell plus imperative loop is inconsistent and costly
+- the real duplicate orchestration is not `AgentActor`
+- the real duplicate orchestration is `LocalActorTransportLive.invokeTool`
+- that path manually persists assistant/tool messages, publishes tool events, runs tools, and forks a follow-up turn outside the shared phase helpers
+- this is the wrong ownership boundary
 
 Relevant skills:
 
@@ -162,25 +163,27 @@ Relevant principles:
 
 Files:
 
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.checkpoint.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
+- `/Users/cvr/Developer/personal/gent/tests/runtime.test.ts`
+- `/Users/cvr/Developer/personal/gent/tests/core-boundary.test.ts`
 
 Detailed spec:
 
-- remove duplicate `while`-loop orchestration where the phase pipeline already exists
-- either:
-  - reuse one shared turn pipeline from both `AgentLoop` and subagent/actor execution
-  - or delete the extra shell if it adds no structural value
-- shrink durable machine payloads
-  - persist durable intent and artifact ids
-  - avoid serializing huge transient resolved payloads where phase code can re-read them
+- extract shared helper(s) for:
+  - synthetic assistant tool-call persistence
+  - tool execution
+  - tool result persistence
+- make `LocalActorTransportLive.invokeTool` delegate to that shared pipeline
+- keep `AgentActor` unless we prove its lifecycle shell adds no value
+- if the shared helper exposes missing invariants, fix them once there
+  - for example tool-result message publication
 
 Tests:
 
-- recovery tests stay green
-- add one test proving subagent/actor path uses the same phase invariants as the main loop
+- add one actor-process test proving `invokeTool` persists assistant + tool messages and schedules one follow-up
+- keep the cluster actor boundary test green
 - run:
   - `bun run gate`
 
@@ -490,6 +493,9 @@ Detailed spec:
 - move shared skills cache ownership under provider or explicit scope
 - reduce lifecycle drift in `subagent-runner` by extracting shared phase helpers
 - fix the broken prompt-search render proof path
+- burn down remaining test sleeps
+  - replace receipt-free waits with deferreds, event waits, or explicit acceptance signals
+  - especially in runtime concurrency proofs where `sleep(...)` is still doing synchronization work
 - document repo rule:
   - workflow state gets one owner
   - projections stay local and dumb

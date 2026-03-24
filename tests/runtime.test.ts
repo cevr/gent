@@ -23,7 +23,7 @@ import {
   FinishChunk,
   convertTools,
 } from "@gent/core/providers/provider"
-import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
+import { Message, TextPart, Session, Branch, ToolResultPart } from "@gent/core/domain/message"
 import {
   Agents,
   AgentDefinition,
@@ -1299,6 +1299,7 @@ describe("ActorProcess", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       agentLoopLayer,
+      makeTestExtRegistry(),
       eventStoreLayer,
       recorderLayer,
       ToolRunner.Test(),
@@ -1309,6 +1310,7 @@ describe("ActorProcess", () => {
   test("steerAgent delegates to AgentLoop.steer", async () => {
     let steered = false
     const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: () => Effect.void,
       run: () => Effect.void,
       steer: () =>
         Effect.sync(() => {
@@ -1337,6 +1339,7 @@ describe("ActorProcess", () => {
 
   test("sendUserMessage publishes AgentRestarted on defect", async () => {
     const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: () => Effect.die("boom"),
       run: () => Effect.die("boom"),
       steer: () => Effect.void,
       followUp: () => Effect.void,
@@ -1376,9 +1379,6 @@ describe("ActorProcess", () => {
           content: "trigger defect",
         })
 
-        // Give the forked fiber time to run
-        yield* Effect.sleep("50 millis")
-
         const calls = yield* recorder.getCalls()
         const publishedTags = calls
           .filter((c) => c.service === "EventStore" && c.method === "publish")
@@ -1391,6 +1391,105 @@ describe("ActorProcess", () => {
         const restartIdx = publishedTags.indexOf("AgentRestarted")
         const errorIdx = publishedTags.indexOf("ErrorOccurred")
         expect(restartIdx).toBeLessThan(errorIdx)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("invokeTool persists assistant and tool messages, then schedules one follow-up", async () => {
+    let followUpText: string | undefined
+
+    const recorderLayer = SequenceRecorder.Live
+    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: (message: Message) =>
+        Effect.sync(() => {
+          followUpText = message.parts
+            .filter((part): part is TextPart => part.type === "text")
+            .map((part) => part.text)
+            .join("")
+        }),
+      run: (message: Message) =>
+        Effect.sync(() => {
+          followUpText = message.parts
+            .filter((part): part is TextPart => part.type === "text")
+            .map((part) => part.text)
+            .join("")
+        }),
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+    })
+    const toolRunnerLayer = Layer.succeed(ToolRunner, {
+      run: (toolCall) =>
+        Effect.succeed(
+          new ToolResultPart({
+            type: "tool-result",
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            output: { type: "json", value: { ok: true } },
+          }),
+        ),
+    })
+
+    const layer = Layer.provideMerge(
+      LocalActorProcessLive,
+      Layer.mergeAll(
+        Storage.Test(),
+        agentLoopLayer,
+        makeTestExtRegistry(),
+        eventStoreLayer,
+        recorderLayer,
+        toolRunnerLayer,
+      ),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const actorProcess = yield* ActorProcess
+        const recorder = yield* SequenceRecorder
+        const now = new Date()
+
+        yield* storage.createSession(
+          new Session({
+            id: "invoke-session",
+            name: "Invoke Tool",
+            bypass: true,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "invoke-branch",
+            sessionId: "invoke-session",
+            createdAt: now,
+          }),
+        )
+
+        yield* actorProcess.invokeTool({
+          sessionId: "invoke-session" as never,
+          branchId: "invoke-branch" as never,
+          toolName: "todo_read",
+          input: {},
+        })
+
+        const messages = yield* storage.listMessages("invoke-branch" as never)
+        const calls = yield* recorder.getCalls()
+        const publishedTags = calls
+          .filter((call) => call.service === "EventStore" && call.method === "publish")
+          .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
+
+        expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
+        expect(messages[0]?.parts[0]?.type).toBe("tool-call")
+        expect(messages[1]?.parts[0]?.type).toBe("tool-result")
+        expect(followUpText).toBe("Tool todo_read completed. Review the result and continue.")
+        expect(publishedTags).toContain("ToolCallStarted")
+        expect(publishedTags).toContain("ToolCallSucceeded")
+        expect(
+          publishedTags.filter((tag) => tag === "MessageReceived").length,
+        ).toBeGreaterThanOrEqual(2)
       }).pipe(Effect.provide(layer)),
     )
   })
