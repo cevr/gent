@@ -426,6 +426,21 @@ export class AgentRestarted extends Schema.TaggedClass<AgentRestarted>()("AgentR
   error: Schema.optional(Schema.String),
 }) {}
 
+// Extension State Events
+
+export class ExtensionUiSnapshot extends Schema.TaggedClass<ExtensionUiSnapshot>()(
+  "ExtensionUiSnapshot",
+  {
+    sessionId: SessionId,
+    branchId: BranchId,
+    extensionId: Schema.String,
+    /** Monotonic version for intent staleness detection */
+    epoch: Schema.Number,
+    /** Serialized uiModel from derive() — schema-validated per extension */
+    model: Schema.Unknown,
+  },
+) {}
+
 // Workflow Events
 
 export class WorkflowPhaseStarted extends Schema.TaggedClass<WorkflowPhaseStarted>()(
@@ -498,6 +513,7 @@ export const AgentEvent = Schema.Union([
   AgentRestarted,
   WorkflowPhaseStarted,
   WorkflowCompleted,
+  ExtensionUiSnapshot,
 ])
 export type AgentEvent = typeof AgentEvent.Type
 

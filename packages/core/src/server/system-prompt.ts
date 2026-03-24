@@ -3,15 +3,9 @@
  */
 
 import { formatSkillsForPrompt, type Skill } from "../domain/skills.js"
+import type { PromptSection } from "../domain/prompt.js"
 
-// Prompt Section — typed, ordered building block for system prompts
-
-export interface PromptSection {
-  readonly id: string
-  readonly content: string
-  /** Lower = earlier in the prompt. Default sections use 0-80 range. */
-  readonly priority: number
-}
+export type { PromptSection } from "../domain/prompt.js"
 
 /** Compile ordered sections into a single system prompt string */
 export const compileSystemPrompt = (sections: ReadonlyArray<PromptSection>): string =>
