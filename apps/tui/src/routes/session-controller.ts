@@ -5,6 +5,11 @@ import type { QueueEntryInfo } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
 import { promptSearchEventFromKey } from "../components/prompt-search-palette"
 import { getPromptSearchItems } from "../components/prompt-search-state"
+import {
+  ComposerInteractionState,
+  transitionComposerInteraction,
+  type ComposerInteractionEvent,
+} from "../components/composer-interaction-state"
 import { transition, type ComposerEvent, ComposerState } from "../components/composer-state"
 import { useClient } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
@@ -40,19 +45,17 @@ type QueueState = {
   followUp: readonly QueueEntryInfo[]
 }
 
-type RestoreTextRequest = { token: number; text: string } | undefined
-
 export interface SessionController {
   client: ReturnType<typeof useClient>
   items: () => SessionItem[]
   messages: () => Message[]
   queueState: () => QueueState
   composerState: () => ComposerState
+  interactionState: () => ComposerInteractionState
   uiState: () => ReturnType<typeof SessionUiState.initial>
   promptEntries: () => readonly string[]
   promptSearchState: () => ReturnType<typeof getPromptSearchState>
   promptSearchOpen: () => boolean
-  restoreTextRequest: () => RestoreTextRequest
   toolsExpanded: () => boolean
   treeOverlay: () => ReturnType<typeof getTreeOverlay>
   activity: () =>
@@ -64,7 +67,7 @@ export interface SessionController {
   elapsed: () => number
   getChildren: ReturnType<typeof useChildSessions>["getChildren"]
   clearMessages: () => void
-  setComposerText: (text: string) => string
+  onComposerInteraction: (event: ComposerInteractionEvent) => void
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void, UiError>
   onRestoreQueue: () => void
@@ -124,15 +127,16 @@ export function useSessionController(props: {
 
   const [uiState, setUiState] = createSignal(SessionUiState.initial())
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
+  const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
   const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
-  const [composerText, setComposerText] = createSignal("")
-  const [restoreTextRequest, setRestoreTextRequest] = createSignal<RestoreTextRequest>(undefined)
   const [elapsed, setElapsed] = createSignal(0)
   let activityStartTime = Date.now()
 
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
     if (effect._tag === "RestoreComposer") {
-      setRestoreTextRequest({ token: Date.now(), text: effect.text })
+      setInteractionState((current) =>
+        transitionComposerInteraction(current, { _tag: "RestoreDraft", text: effect.text }),
+      )
     }
   }
 
@@ -214,6 +218,10 @@ export function useSessionController(props: {
     const result = transition(composerState(), event)
     setComposerState(result.state)
     handleComposerEffect(result.effect)
+  }
+
+  const onComposerInteraction = (event: ComposerInteractionEvent) => {
+    setInteractionState((current) => transitionComposerInteraction(current, event))
   }
 
   const feed = useSessionFeed(
@@ -348,8 +356,8 @@ export function useSessionController(props: {
           Effect.sync(() => {
             const all = [...steering, ...followUp]
             if (all.length === 0) return
-            setRestoreTextRequest({
-              token: Date.now(),
+            onComposerInteraction({
+              _tag: "RestoreDraft",
               text: all.map((entry) => entry.content).join("\n"),
             })
             setQueueState({ steering: [], followUp: [] })
@@ -471,11 +479,11 @@ export function useSessionController(props: {
     if (uiState().overlay._tag !== "none") return false
 
     const clearComposer = () => {
-      setRestoreTextRequest({ token: Date.now(), text: "" })
+      onComposerInteraction({ _tag: "ClearDraft" })
     }
 
     const handleQuitKey = (chainId: string) => {
-      if (composerText().length > 0) {
+      if (interactionState().draft.length > 0) {
         quitChain.trigger(chainId, { first: clearComposer, second: exit })
         return
       }
@@ -512,7 +520,7 @@ export function useSessionController(props: {
     if (event.ctrl === true && event.name === "r") {
       dispatchSessionUi({
         _tag: "PromptSearch",
-        event: { _tag: "Open", draftBeforeOpen: composerText() },
+        event: { _tag: "Open", draftBeforeOpen: interactionState().draft },
         entries: history.entries(),
       })
       quitChain.reset()
@@ -538,11 +546,11 @@ export function useSessionController(props: {
     messages: feed.messages,
     queueState,
     composerState,
+    interactionState,
     uiState,
     promptEntries: history.entries,
     promptSearchState: () => getPromptSearchState(uiState()),
     promptSearchOpen: () => promptSearchOpen(uiState()),
-    restoreTextRequest,
     toolsExpanded: () => uiState().toolsExpanded,
     treeOverlay: () => getTreeOverlay(uiState().overlay),
     activity,
@@ -551,7 +559,7 @@ export function useSessionController(props: {
     elapsed,
     getChildren,
     clearMessages: feed.clear,
-    setComposerText,
+    onComposerInteraction,
     onSubmit,
     onSlashCommand,
     onRestoreQueue,

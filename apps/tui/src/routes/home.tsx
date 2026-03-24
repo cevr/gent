@@ -21,6 +21,10 @@ import { PromptSearchPalette, promptSearchEventFromKey } from "../components/pro
 import { buildTopRightLabels } from "../utils/session-labels"
 import { useScopedKeyboard } from "../keyboard/context"
 import { usePromptHistory } from "../hooks/use-prompt-history"
+import {
+  ComposerInteractionState,
+  transitionComposerInteraction,
+} from "../components/composer-interaction-state"
 import { getPromptSearchItems } from "../components/prompt-search-state"
 import { transitionHome, type HomeEffect, type HomeEvent, type HomeState } from "./home-state"
 
@@ -56,17 +60,16 @@ export function Home(props: HomeProps) {
   const [authProviders, setAuthProviders] = createSignal<
     { hasKey: boolean; provider: string; required: boolean }[]
   >([])
-  const [composerText, setComposerText] = createSignal("")
-  const [restoreTextRequest, setRestoreTextRequest] = createSignal<
-    { token: number; text: string } | undefined
-  >(undefined)
+  const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
   const promptSearchState = () => state().promptSearch
   const promptSearchOpen = () => promptSearchState()._tag === "open"
 
   const handleHomeEffect = (effect: HomeEffect) => {
     switch (effect._tag) {
       case "RestoreComposer":
-        setRestoreTextRequest({ token: Date.now(), text: effect.text })
+        setInteractionState((current) =>
+          transitionComposerInteraction(current, { _tag: "RestoreDraft", text: effect.text }),
+        )
         break
       case "CreateSession":
         cast(
@@ -137,11 +140,13 @@ export function Home(props: HomeProps) {
     if (command.handleKeybind(e)) return true
 
     const clearComposer = () => {
-      setRestoreTextRequest({ token: Date.now(), text: "" })
+      setInteractionState((current) =>
+        transitionComposerInteraction(current, { _tag: "ClearDraft" }),
+      )
     }
 
     const handleQuitKey = (chainId: string) => {
-      if (composerText().length > 0) {
+      if (interactionState().draft.length > 0) {
         quitChain.trigger(chainId, {
           first: clearComposer,
           second: exit,
@@ -178,7 +183,7 @@ export function Home(props: HomeProps) {
     if (e.ctrl === true && e.name === "r") {
       dispatchHome({
         _tag: "PromptSearch",
-        event: { _tag: "Open", draftBeforeOpen: composerText() },
+        event: { _tag: "Open", draftBeforeOpen: interactionState().draft },
         entries: history.entries(),
       })
       quitChain.reset()
@@ -306,8 +311,10 @@ export function Home(props: HomeProps) {
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
           suspended={promptSearchOpen()}
-          onTextChange={setComposerText}
-          restoreTextRequest={restoreTextRequest()}
+          interactionState={interactionState()}
+          onInteractionEvent={(event) =>
+            setInteractionState((current) => transitionComposerInteraction(current, event))
+          }
         >
           <Composer.Autocomplete />
         </Composer>

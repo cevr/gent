@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onMount, type Accessor } from "solid-js"
+import { createEffect, onCleanup, onMount, type Accessor } from "solid-js"
 import { Effect } from "effect"
 import type { TextareaRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -19,7 +19,11 @@ import { expandFileRefs } from "../utils/file-refs"
 import { expandSkillMentions } from "../utils/skill-expansion"
 import { executeShell } from "../utils/shell"
 import { tuiEvent } from "../utils/unified-tracer"
-import type { AutocompleteState, AutocompleteType } from "./autocomplete-popup"
+import type { AutocompleteState } from "./autocomplete-popup"
+import type {
+  ComposerInteractionEvent,
+  ComposerInteractionState,
+} from "./composer-interaction-state"
 import type { ComposerEvent, ComposerState } from "./composer-state"
 
 const PASTE_THRESHOLD_LINES = 3
@@ -66,8 +70,8 @@ export interface ComposerControllerProps {
   clearMessages?: () => void
   onRestoreQueue?: () => void
   suspended?: boolean
-  onTextChange?: (text: string) => void
-  restoreTextRequest?: { token: number; text: string }
+  interactionState: ComposerInteractionState
+  onInteractionEvent: (event: ComposerInteractionEvent) => void
   composerState?: ComposerState
   onComposerEvent?: (event: ComposerEvent) => void
 }
@@ -75,7 +79,7 @@ export interface ComposerControllerProps {
 export interface ComposerController {
   readonly autocomplete: Accessor<AutocompleteState | null>
   readonly currentQuestion: Accessor<Question | null>
-  readonly mode: Accessor<"normal" | "shell" | "prompt">
+  readonly mode: Accessor<"editing" | "shell" | "prompt">
   readonly promptSymbol: Accessor<string>
   readonly inputFocused: Accessor<boolean>
   readonly attachTextarea: (renderable: TextareaRenderable | null) => void
@@ -104,23 +108,19 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   const paste = createPasteManager()
 
   let inputRef: TextareaRenderable | null = null
-  let previousValue = ""
   let submitMode: "queue" | "interject" = "queue"
 
-  const [mode, setMode] = createSignal<"normal" | "shell">("normal")
-  const [autocomplete, setAutocomplete] = createSignal<AutocompleteState | null>(null)
-
-  const effectiveMode = (): "normal" | "shell" | "prompt" =>
-    props.composerState?._tag === "prompt" ? "prompt" : mode()
+  const autocomplete = () => props.interactionState.autocomplete
+  const effectiveMode = (): "editing" | "shell" | "prompt" =>
+    props.composerState?._tag === "prompt" ? "prompt" : props.interactionState.mode
 
   const clearInput = () => {
     if (inputRef !== null) inputRef.setText("")
-    previousValue = ""
-    props.onTextChange?.("")
+    props.onInteractionEvent({ _tag: "ClearDraft" })
   }
 
   const clearAutocomplete = () => {
-    setAutocomplete(null)
+    props.onInteractionEvent({ _tag: "CloseAutocomplete" })
   }
 
   const focusTextarea = () => {
@@ -149,7 +149,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     const nextValue = beforeTrigger + insertion
     inputRef.replaceText(nextValue)
     inputRef.cursorOffset = nextValue.length
-    clearAutocomplete()
+    props.onInteractionEvent({ _tag: "RestoreDraft", text: nextValue })
     focusTextarea()
   }
 
@@ -160,7 +160,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
 
   const handleContentChange = () => {
     const value = inputRef?.plainText ?? ""
-
+    const previousValue = props.interactionState.draft
     if (value.length > previousValue.length && inputRef !== null) {
       const inserted = value.slice(previousValue.length)
       if (isLargePaste(inserted)) {
@@ -168,40 +168,11 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
         const nextValue = previousValue + placeholder
         inputRef.replaceText(nextValue)
         inputRef.cursorOffset = nextValue.length
-        previousValue = nextValue
-        clearAutocomplete()
+        props.onInteractionEvent({ _tag: "RestoreDraft", text: nextValue })
         return
       }
     }
-
-    previousValue = value
-    props.onTextChange?.(value)
-
-    if (effectiveMode() === "shell") {
-      clearAutocomplete()
-      return
-    }
-
-    const currentAutocomplete = autocomplete()
-    if (currentAutocomplete !== null && currentAutocomplete.type === "/") {
-      if (value.startsWith("/")) {
-        setAutocomplete({ type: "/", filter: value.slice(1), triggerPos: 0 })
-      } else {
-        clearAutocomplete()
-      }
-      return
-    }
-
-    const match = value.match(/(?:^|[\s])([$@])([^\s]*)$/)
-    if (match === null) {
-      clearAutocomplete()
-      return
-    }
-
-    const [fullMatch, prefix, filter] = match
-    if (prefix === undefined || prefix.length === 0) return
-    const triggerPos = value.length - fullMatch.length + (fullMatch.startsWith(" ") ? 1 : 0)
-    setAutocomplete({ type: prefix as AutocompleteType, filter: filter ?? "", triggerPos })
+    props.onInteractionEvent({ _tag: "DraftChanged", text: value })
   }
 
   const submitShellCommand = (text: string) => {
@@ -216,7 +187,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
         }),
         Effect.tap((userMessage) =>
           Effect.sync(() => {
-            setMode("normal")
+            props.onInteractionEvent({ _tag: "ExitShell" })
             clearInput()
             props.onSubmit(userMessage)
           }),
@@ -346,7 +317,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
         if (result._tag === "applied" && inputRef !== null) {
           inputRef.replaceText(result.content)
           inputRef.cursorOffset = result.content.length
-          previousValue = result.content
+          props.onInteractionEvent({ _tag: "RestoreDraft", text: result.content })
           return
         }
         if (result._tag === "error") {
@@ -382,24 +353,24 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     if (
       event.name === "!" &&
       inputRef?.cursorOffset === 0 &&
-      effectiveMode() === "normal" &&
+      effectiveMode() === "editing" &&
       autocomplete() === null
     ) {
-      setMode("shell")
+      props.onInteractionEvent({ _tag: "EnterShell" })
       return true
     }
 
     if (effectiveMode() !== "shell") return false
 
     if (event.name === "escape") {
-      setMode("normal")
+      props.onInteractionEvent({ _tag: "ExitShell" })
       clearAutocomplete()
       clearInput()
       return true
     }
 
     if (event.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
-      setMode("normal")
+      props.onInteractionEvent({ _tag: "ExitShell" })
       clearAutocomplete()
       return true
     }
@@ -411,13 +382,16 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     if (
       event.name !== "/" ||
       inputRef?.cursorOffset !== 0 ||
-      effectiveMode() !== "normal" ||
+      effectiveMode() !== "editing" ||
       autocomplete() !== null
     ) {
       return false
     }
 
-    setAutocomplete({ type: "/", filter: "", triggerPos: 0 })
+    props.onInteractionEvent({
+      _tag: "OpenAutocomplete",
+      autocomplete: { type: "/", filter: "", triggerPos: 0 },
+    })
     return true
   }
 
@@ -430,7 +404,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   }): boolean => {
     if (
       (event.name !== "up" && event.name !== "down") ||
-      effectiveMode() !== "normal" ||
+      effectiveMode() !== "editing" ||
       autocomplete() !== null ||
       inputRef === null ||
       event.ctrl === true ||
@@ -451,7 +425,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
 
     inputRef.replaceText(result.text)
     inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
-    previousValue = result.text
+    props.onInteractionEvent({ _tag: "RestoreDraft", text: result.text })
     return true
   }
 
@@ -511,12 +485,10 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   }
 
   createEffect(() => {
-    const request = props.restoreTextRequest
-    if (request === undefined || inputRef === null) return
-    inputRef.replaceText(request.text)
-    inputRef.cursorOffset = request.text.length
-    previousValue = request.text
-    props.onTextChange?.(request.text)
+    const draft = props.interactionState.draft
+    if (inputRef === null || inputRef.plainText === draft) return
+    inputRef.replaceText(draft)
+    inputRef.cursorOffset = draft.length
     clearAutocomplete()
     focusTextarea()
   })

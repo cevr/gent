@@ -75,7 +75,7 @@ Those are either projections, tiny reducers, or pure compilation logic.
 
 - [x] Batch 1 — Serialize loop ownership and stop exporting fictional runtime state
 - [x] Batch 2 — Collapse duplicate core actor orchestration around one real turn pipeline
-- [ ] Batch 3 — Give the composer one owner
+- [x] Batch 3 — Give the composer one owner
 - [ ] Batch 4 — De-duplicate and flatten prompt search
 - [ ] Batch 5 — Promote command palette to an explicit reducer
 - [ ] Batch 6 — Simplify or demote `session-machine`

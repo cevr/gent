@@ -137,8 +137,8 @@ export function Session(props: SessionProps) {
           clearMessages={controller.clearMessages}
           onRestoreQueue={controller.onRestoreQueue}
           suspended={controller.promptSearchOpen()}
-          onTextChange={controller.setComposerText}
-          restoreTextRequest={controller.restoreTextRequest()}
+          interactionState={controller.interactionState()}
+          onInteractionEvent={controller.onComposerInteraction}
           composerState={controller.composerState()}
           onComposerEvent={controller.onComposerEvent}
         >
