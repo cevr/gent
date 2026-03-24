@@ -1,6 +1,6 @@
 # No-Polling Boundary Plan
 
-Status: in progress.
+Status: complete.
 
 ## End-State API
 

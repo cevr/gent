@@ -1,6 +1,5 @@
 import { Effect, Ref, Stream } from "effect"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { HandoffPresented } from "@gent/core/domain/event.js"
 import type { GentClient, GentRpcError } from "@gent/sdk"
 
 export const runHeadless = (
@@ -17,7 +16,6 @@ export const runHeadless = (
       .pipe(Effect.withSpan("Headless.sendMessage"))
 
     const doneRef = yield* Ref.make(false)
-    const handoffPendingRef = yield* Ref.make(false)
 
     yield* eventStream.pipe(
       Stream.tap((envelope) =>
@@ -49,29 +47,17 @@ export const runHeadless = (
               yield* Ref.set(doneRef, true)
               break
             case "TurnCompleted":
-              break
-            case "HandoffPresented": {
-              yield* Ref.set(handoffPendingRef, true)
-              const hp = event as typeof HandoffPresented.Type
-              process.stdout.write(`\n[handoff: auto-confirming]\n`)
-              yield* client
-                .respondHandoff(hp.requestId, "confirm")
-                .pipe(Effect.catchEager(() => Effect.void))
-              break
-            }
-            case "HandoffConfirmed":
-              yield* Ref.set(handoffPendingRef, false)
               yield* Ref.set(doneRef, true)
               break
-            case "HandoffRejected":
-              yield* Ref.set(handoffPendingRef, false)
+            case "HandoffPresented":
+              process.stdout.write(`\n[handoff: auto-confirming]\n`)
+              yield* client
+                .respondHandoff(event.requestId, "confirm")
+                .pipe(Effect.catchEager(() => Effect.void))
               break
-          }
-
-          if (event._tag === "TurnCompleted") {
-            yield* Effect.sleep("50 millis")
-            const pending = yield* Ref.get(handoffPendingRef)
-            if (!pending) yield* Ref.set(doneRef, true)
+            case "HandoffConfirmed":
+            case "HandoffRejected":
+              break
           }
         }),
       ),

@@ -735,6 +735,16 @@ export const finalizeTurnPhase = (params: {
     const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
     yield* params.storage.updateMessageTurnDuration(params.messageId, turnDurationMs)
+    const nextHandoffSuppress = yield* runAutoHandoffIfNeeded({
+      turnInterrupted: params.turnInterrupted,
+      handoffSuppress: params.handoffSuppress,
+      storage: params.storage,
+      branchId: params.branchId,
+      currentAgent: params.currentAgent,
+      extensionRegistry: params.extensionRegistry,
+      sessionId: params.sessionId,
+      handoffHandler: params.handoffHandler,
+    })
     yield* params
       .publishEvent(
         new TurnCompleted({
@@ -752,14 +762,5 @@ export const finalizeTurnPhase = (params: {
       }),
     )
 
-    return yield* runAutoHandoffIfNeeded({
-      turnInterrupted: params.turnInterrupted,
-      handoffSuppress: params.handoffSuppress,
-      storage: params.storage,
-      branchId: params.branchId,
-      currentAgent: params.currentAgent,
-      extensionRegistry: params.extensionRegistry,
-      sessionId: params.sessionId,
-      handoffHandler: params.handoffHandler,
-    })
+    return nextHandoffSuppress
   })
