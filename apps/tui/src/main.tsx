@@ -15,6 +15,7 @@ import { ClientProvider } from "./client/index"
 import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
+import { ExtensionUIProvider } from "./extensions/context"
 import { clearClientLog } from "./utils/client-logger"
 import { resolveAppBootstrap, resolveInitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
@@ -144,13 +145,15 @@ const main = Command.make(
             <WorkspaceProvider cwd={cwd} services={uiServices}>
               <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
                 <ClientProvider client={gentClient} initialSession={bootstrap.initialSession}>
-                  <RouterProvider initialRoute={bootstrap.initialRoute}>
-                    <App
-                      initialPrompt={bootstrap.initialPrompt}
-                      missingAuthProviders={bootstrap.missingAuthProviders}
-                      debugMode={bootstrap.debugMode}
-                    />
-                  </RouterProvider>
+                  <ExtensionUIProvider>
+                    <RouterProvider initialRoute={bootstrap.initialRoute}>
+                      <App
+                        initialPrompt={bootstrap.initialPrompt}
+                        missingAuthProviders={bootstrap.missingAuthProviders}
+                        debugMode={bootstrap.debugMode}
+                      />
+                    </RouterProvider>
+                  </ExtensionUIProvider>
                 </ClientProvider>
               </RegistryProvider>
             </WorkspaceProvider>

@@ -2,7 +2,8 @@ import { createMemo, For, Show } from "solid-js"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
-import { TOOL_RENDERERS, GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
+import { GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
+import { useExtensionUI } from "../extensions/context"
 import { SessionEventIndicator } from "./session-event-indicator"
 import type { SessionEvent } from "./session-event-label"
 import type { ImageInfo } from "../client"
@@ -157,9 +158,11 @@ function SingleToolCall(props: {
   expanded: boolean
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
+  const ext = useExtensionUI()
   const toolName = () => props.toolCall.toolName.toLowerCase()
 
-  const Renderer = () => TOOL_RENDERERS[toolName()] ?? GenericToolRenderer
+  // Resolved map includes builtins + extensions with scope precedence
+  const Renderer = () => ext.renderers().get(toolName()) ?? GenericToolRenderer
 
   const childSessions = () => props.getChildSessions?.(props.toolCall.id)
 
