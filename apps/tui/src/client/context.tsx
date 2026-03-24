@@ -11,7 +11,6 @@ import {
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Effect, Fiber, Stream, Schema } from "effect"
-import { Machine } from "effect-machine"
 import {
   AgentName as AgentNameSchema,
   Agents,
@@ -26,7 +25,6 @@ import { tuiError } from "../utils/unified-tracer"
 import { clientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
-import { useMachine } from "../hooks/use-machine"
 import type { WorkerLifecycleState, WorkerSupervisor } from "../worker/supervisor"
 import { reduceAgentLifecycle } from "./agent-lifecycle"
 
@@ -41,8 +39,7 @@ import {
   type SessionTreeNode,
   type SteerCommand,
 } from "@gent/sdk"
-
-import { SessionMachineState, SessionMachineEvent, sessionMachine } from "./session-machine"
+import { SessionState, transitionSessionState, type Session } from "./session-state"
 
 // Event listener type
 type EventListener = (event: AgentEvent) => void
@@ -58,24 +55,7 @@ const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Mode
   return agentDef !== undefined ? models[resolveAgentModel(agentDef)] : undefined
 }
 
-// =============================================================================
-// Session State
-// =============================================================================
-
-export interface Session {
-  sessionId: SessionId
-  branchId: BranchId
-  name: string
-  bypass: boolean
-  reasoningLevel: ReasoningEffort | undefined
-}
-
-export type SessionState =
-  | { status: "none" }
-  | { status: "creating" }
-  | { status: "loading" }
-  | { status: "active"; session: Session }
-  | { status: "switching"; fromSession: Session; toSessionId: string }
+export type { Session, SessionState } from "./session-state"
 
 // =============================================================================
 // Agent State (derived from events) - discriminated union
@@ -170,30 +150,6 @@ export function useClient(): ClientContextValue {
   return ctx
 }
 
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/** Convert machine state to public SessionState */
-const toSessionState = (ms: typeof SessionMachineState.Type): SessionState => {
-  switch (ms._tag) {
-    case "None":
-      return { status: "none" }
-    case "Creating":
-      return { status: "creating" }
-    case "Loading":
-      return { status: "loading" }
-    case "Active":
-      return { status: "active", session: ms.session }
-    case "Switching":
-      return { status: "switching", fromSession: ms.fromSession, toSessionId: ms.toSessionId }
-  }
-}
-
-// =============================================================================
-// Provider
-// =============================================================================
-
 interface ClientProviderProps extends ParentProps {
   client: GentClient
   initialSession: Session | undefined
@@ -209,28 +165,20 @@ export function ClientProvider(props: ClientProviderProps) {
     Effect.runForkWith(client.services)(effect)
   }
 
-  // ── Session machine ──
-  const initialMachineState =
+  const [sessionState, setSessionState] = createSignal<SessionState>(
     props.initialSession !== undefined
-      ? SessionMachineState.Active({ session: props.initialSession })
-      : SessionMachineState.None
-
-  const { state: machineState, send: sendMachine } = useMachine<
-    typeof SessionMachineState.Type,
-    typeof SessionMachineEvent.Type
-  >(Machine.spawn(sessionMachine), initialMachineState, "session")
-
-  // Derived: convert machine state to public SessionState
-  const sessionState = (): SessionState => toSessionState(machineState())
+      ? SessionState.active(props.initialSession)
+      : SessionState.none(),
+  )
+  const dispatchSession = (event: Parameters<typeof transitionSessionState>[1]) => {
+    setSessionState((current) => transitionSessionState(current, event))
+  }
   const session = (): Session | null => {
-    const ms = machineState()
-    return ms._tag === "Active" ? ms.session : null
+    const current = sessionState()
+    return current.status === "active" ? current.session : null
   }
-  const isActive = () => machineState()._tag === "Active"
-  const isLoading = () => {
-    const tag = machineState()._tag
-    return tag === "Loading" || tag === "Creating" || tag === "Switching"
-  }
+  const isActive = () => sessionState().status === "active"
+  const isLoading = () => sessionState().status === "creating"
 
   onMount(() => {
     cast(
@@ -284,9 +232,9 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // Stable session key — only changes when sessionId:branchId actually changes
   const sessionKey = createMemo<string | null>(() => {
-    const ms = machineState()
-    if (ms._tag !== "Active") return null
-    return `${ms.session.sessionId}:${ms.session.branchId}`
+    const current = sessionState()
+    if (current.status !== "active") return null
+    return `${current.session.sessionId}:${current.session.branchId}`
   })
 
   const workerEpoch = createMemo<number | null>(() => {
@@ -383,13 +331,13 @@ export function ClientProvider(props: ClientProviderProps) {
         switch (event._tag) {
           case "SessionNameUpdated":
             if (event.sessionId === sessionId) {
-              sendMachine(SessionMachineEvent.UpdateName({ name: event.name }))
+              dispatchSession({ _tag: "UpdateName", name: event.name })
             }
             break
 
           case "BranchSwitched":
             if (event.sessionId === sessionId) {
-              sendMachine(SessionMachineEvent.UpdateBranch({ branchId: event.toBranchId }))
+              dispatchSession({ _tag: "UpdateBranch", branchId: event.toBranchId })
             }
             break
         }
@@ -423,14 +371,13 @@ export function ClientProvider(props: ClientProviderProps) {
                   }),
                 )
                 if (snapshot.bypass !== undefined) {
-                  sendMachine(SessionMachineEvent.UpdateBypass({ bypass: snapshot.bypass ?? true }))
+                  dispatchSession({ _tag: "UpdateBypass", bypass: snapshot.bypass ?? true })
                 }
                 if (snapshot.reasoningLevel !== undefined) {
-                  sendMachine(
-                    SessionMachineEvent.UpdateReasoningLevel({
-                      reasoningLevel: snapshot.reasoningLevel,
-                    }),
-                  )
+                  dispatchSession({
+                    _tag: "UpdateReasoningLevel",
+                    reasoningLevel: snapshot.reasoningLevel,
+                  })
                 }
               })
 
@@ -530,22 +477,21 @@ export function ClientProvider(props: ClientProviderProps) {
 
     createSession: (firstMessage) => {
       clientLog.info("createSession", { hasFirstMessage: firstMessage !== undefined })
-      sendMachine(SessionMachineEvent.CreateRequested)
+      dispatchSession({ _tag: "CreateRequested" })
       cast(
         client.createSession(firstMessage !== undefined ? { firstMessage } : undefined).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
-              sendMachine(
-                SessionMachineEvent.CreateSucceeded({
-                  session: {
-                    sessionId: result.sessionId,
-                    branchId: result.branchId,
-                    name: result.name,
-                    bypass: result.bypass,
-                    reasoningLevel: undefined,
-                  },
-                }),
-              )
+              dispatchSession({
+                _tag: "CreateSucceeded",
+                session: {
+                  sessionId: result.sessionId,
+                  branchId: result.branchId,
+                  name: result.name,
+                  bypass: result.bypass,
+                  reasoningLevel: undefined,
+                },
+              })
               const preferred = preferredAgent()
               if (preferred !== defaultAgent) {
                 setAgentStore({ agent: preferred })
@@ -563,7 +509,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.catchEager((err) =>
             Effect.sync(() => {
               tuiError("createSession", err)
-              sendMachine(SessionMachineEvent.CreateFailed)
+              dispatchSession({ _tag: "CreateFailed" })
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }),
           ),
@@ -573,31 +519,18 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     switchSession: (sessionId, branchId, name, bypass) => {
-      const current = session()
-      if (current !== null) {
-        sendMachine(
-          SessionMachineEvent.SwitchFromActive({
-            fromSession: current,
-            toSessionId: sessionId,
-          }),
-        )
-      } else {
-        sendMachine(SessionMachineEvent.LoadRequested)
-      }
-
       // Reset agent state and activate new session
       setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
-      sendMachine(
-        SessionMachineEvent.Activated({
-          session: { sessionId, branchId, name, bypass: bypass ?? true, reasoningLevel: undefined },
-        }),
-      )
+      dispatchSession({
+        _tag: "Activated",
+        session: { sessionId, branchId, name, bypass: bypass ?? true, reasoningLevel: undefined },
+      })
     },
 
     clearSession: () => {
-      sendMachine(SessionMachineEvent.Clear)
+      dispatchSession({ _tag: "Clear" })
       setAgentStore({ agent: preferredAgent(), status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
@@ -624,7 +557,7 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.updateSessionBypass(s.sessionId, bypass).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            sendMachine(SessionMachineEvent.UpdateBypass({ bypass: result.bypass }))
+            dispatchSession({ _tag: "UpdateBypass", bypass: result.bypass })
           }),
         ),
         Effect.asVoid,
@@ -637,11 +570,10 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.updateSessionReasoningLevel(s.sessionId, reasoningLevel).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            sendMachine(
-              SessionMachineEvent.UpdateReasoningLevel({
-                reasoningLevel: result.reasoningLevel,
-              }),
-            )
+            dispatchSession({
+              _tag: "UpdateReasoningLevel",
+              reasoningLevel: result.reasoningLevel,
+            })
           }),
         ),
         Effect.asVoid,
