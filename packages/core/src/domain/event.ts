@@ -1,6 +1,7 @@
 import { ServiceMap, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
 import { BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
+import { ReasoningEffort } from "./agent"
 
 // Event Types
 
@@ -308,6 +309,15 @@ export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()
   },
 ) {}
 
+export class SessionSettingsUpdated extends Schema.TaggedClass<SessionSettingsUpdated>()(
+  "SessionSettingsUpdated",
+  {
+    sessionId: SessionId,
+    bypass: Schema.optional(Schema.Boolean),
+    reasoningLevel: Schema.optional(ReasoningEffort),
+  },
+) {}
+
 export class BranchCreated extends Schema.TaggedClass<BranchCreated>()("BranchCreated", {
   sessionId: SessionId,
   branchId: BranchId,
@@ -471,6 +481,7 @@ export const AgentEvent = Schema.Union([
   QuestionsAsked,
   QuestionsAnswered,
   SessionNameUpdated,
+  SessionSettingsUpdated,
   BranchCreated,
   BranchSwitched,
   BranchSummarized,

@@ -330,6 +330,20 @@ export function ClientProvider(props: ClientProviderProps) {
               dispatchSession({ _tag: "UpdateBranch", branchId: event.toBranchId })
             }
             break
+
+          case "SessionSettingsUpdated":
+            if (event.sessionId === sessionId) {
+              if (event.bypass !== undefined) {
+                dispatchSession({ _tag: "UpdateBypass", bypass: event.bypass })
+              }
+              if (event.reasoningLevel !== undefined) {
+                dispatchSession({
+                  _tag: "UpdateReasoningLevel",
+                  reasoningLevel: event.reasoningLevel,
+                })
+              }
+            }
+            break
         }
       }
 

@@ -10,6 +10,8 @@ import {
   BranchCreated,
   BranchSummarized,
   SessionNameUpdated,
+  SessionStarted,
+  SessionSettingsUpdated,
 } from "../domain/event.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { Provider } from "../providers/provider.js"
@@ -193,6 +195,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
 
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
+        yield* eventStore.publish(new SessionStarted({ sessionId, branchId }))
 
         const firstMessage = input.firstMessage
         if (firstMessage !== undefined) {
@@ -399,6 +402,8 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
 
       return {
         createSession,
+        // SessionEnded is not emitted on delete — FK cascade would immediately
+        // remove the persisted event. Delete is destructive and rare.
         deleteSession: (sessionId) => storage.deleteSession(sessionId),
         createBranch,
         switchBranch,
@@ -423,6 +428,9 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
               updatedAt: new Date(),
             }),
           )
+          yield* eventStore.publish(
+            new SessionSettingsUpdated({ sessionId: input.sessionId, bypass: input.bypass }),
+          )
           return { bypass: input.bypass }
         }),
         updateSessionReasoningLevel: Effect.fn("SessionCommands.updateSessionReasoningLevel")(
@@ -436,6 +444,12 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
                 ...session,
                 reasoningLevel: input.reasoningLevel,
                 updatedAt: new Date(),
+              }),
+            )
+            yield* eventStore.publish(
+              new SessionSettingsUpdated({
+                sessionId: input.sessionId,
+                reasoningLevel: input.reasoningLevel,
               }),
             )
             return { reasoningLevel: input.reasoningLevel }
