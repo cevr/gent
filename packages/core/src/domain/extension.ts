@@ -196,7 +196,7 @@ export interface ExtensionIntentResult<State> {
 }
 
 /** Extension state machine definition — reduce events, derive projections, handle intents */
-export interface ExtensionStateMachine<State, Intent = never> {
+export interface ExtensionStateMachine<State, Intent = void> {
   readonly id: string
   readonly initial: State
   readonly schema: Schema.Schema<State>

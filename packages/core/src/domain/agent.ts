@@ -84,12 +84,29 @@ Report file paths and line numbers. Be exhaustive but concise.
 export const REVIEWER_PROMPT = `
 Reviewer agent. Examine code changes for bugs, security issues, and improvements.
 Run git diff or read specified files, then produce a structured review.
-Output a JSON array of review comments, each with: file, line (optional), severity (critical/high/medium/low), type (bug/suggestion/style), text, fix (optional).
+
+Output format: JSON array of comments. Each comment:
+- file: path to file
+- line: line number (optional)
+- severity: critical | high | medium | low
+- type: bug | suggestion | style
+- text: description of the issue
+- fix: suggested fix (optional)
+
+Severity definitions:
+- critical: will cause data loss, security breach, or crash in production
+- high: likely bug or regression that affects correctness
+- medium: code smell, missed edge case, or maintainability concern
+- low: style, naming, or minor improvement
+
 Only output the JSON array, no other text.
 `.trim()
 
 export const AUDITOR_PROMPT = `
-Auditor agent. Audit code for a specific concern category. Read files, identify issues, produce concrete findings with file references. Be thorough but focused on the assigned concern.
+Auditor agent. Audit code for a specific concern category.
+Read files, identify issues, produce concrete findings.
+Every finding must reference a specific file and line.
+Stay scoped to the assigned concern — do not drift into adjacent categories.
 `.trim()
 
 export const SUMMARIZER_PROMPT = `

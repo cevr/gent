@@ -13,6 +13,27 @@ import type { LoopVerdict } from "../runtime/loop.js"
 type LoopExitReason = "done" | "error" | "max_reached"
 type WorkflowResult = "success" | "rejected" | "error" | "max_iterations"
 
+// ── Shell Command Runner ──
+
+/** Run a shell command, returning stdout. Returns empty string on failure. */
+export const runCommand = (cmd: string[]): Effect.Effect<string> =>
+  Effect.tryPromise(async () => {
+    const proc = Bun.spawn(cmd, {
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    if (exitCode !== 0) {
+      throw new Error(stderr || `Command failed: ${cmd.join(" ")}`)
+    }
+    return stdout
+  }).pipe(Effect.orElseSucceed(() => ""))
+
 // ── Adversarial Pair Runner ──
 
 export interface WorkflowRunContext {

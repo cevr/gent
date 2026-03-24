@@ -15,6 +15,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import {
   extractLoopEvaluation,
   requireText,
+  runCommand,
   workflowResultFromLoopReason,
   type WorkflowRunContext,
 } from "./workflow-helpers.js"
@@ -56,27 +57,6 @@ export const AuditParams = Schema.Struct({
   ),
 })
 
-const runCommand = (cmd: string[]) =>
-  Effect.tryPromise({
-    try: async () => {
-      const proc = Bun.spawn(cmd, {
-        cwd: process.cwd(),
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      if (exitCode !== 0) {
-        throw new Error(stderr || `Command failed: ${cmd.join(" ")}`)
-      }
-      return stdout
-    },
-    catch: () => "",
-  })
-
 const resolveAuditPaths = (paths?: ReadonlyArray<string>) => {
   if (paths !== undefined && paths.length > 0) {
     return Effect.succeed([...paths])
@@ -112,7 +92,8 @@ ${pathsList}
 
 ## Instructions
 Identify ${maxConcerns} or fewer concrete concern categories.
-Each concern should be a distinct audit pass like error handling, typing, concurrency, security, or performance.
+Each concern must be a distinct audit pass — no overlap between concerns.
+Examples: error handling, typing, concurrency, security, performance.
 
 Respond with a numbered list:
 1. <concern name>: <brief description>
@@ -174,7 +155,8 @@ ${notesBlock}
 
 ## Instructions
 Deduplicate and keep only evidence-backed findings.
-Group related findings near each other so the executor can work in batches.
+Drop findings not grounded in a specific file + line reference.
+Group by file proximity so the executor can work in batches.
 Return a numbered list in this exact format:
 1. [critical|warning|suggestion] path/to/file.ts - finding description`
 }
@@ -310,6 +292,11 @@ export const AuditTool = defineWorkflow({
   description:
     "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode executes them iteratively.",
   command: "audit",
+  promptSnippet: "Audit code with dual-model concern analysis",
+  promptGuidelines: [
+    "Use report mode for read-only findings, fix mode for iterative resolution",
+    "Specify paths to scope the audit; defaults to git diff",
+  ],
   phases: ["detect", "audit", "synthesize", "present", "execute", "evaluate"] as const,
   params: AuditParams,
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: WorkflowContext) {

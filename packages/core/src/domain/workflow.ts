@@ -69,6 +69,8 @@ export const defineWorkflow = <
   readonly command?: string
   readonly phases: Phases
   readonly params: Params
+  readonly promptSnippet?: string
+  readonly promptGuidelines?: ReadonlyArray<string>
   readonly execute: (
     params: Schema.Schema.Type<Params>,
     ctx: WorkflowContext,
@@ -79,6 +81,8 @@ export const defineWorkflow = <
     action: "delegate" as const,
     concurrency: "serial" as const,
     description: definition.description,
+    promptSnippet: definition.promptSnippet,
+    promptGuidelines: definition.promptGuidelines,
     params: definition.params,
     execute: definition.execute as ToolDefinition<Name, Params, Result, Error, Deps>["execute"],
   }),

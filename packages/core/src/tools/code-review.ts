@@ -14,6 +14,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import {
   extractLoopEvaluation,
   requireText,
+  runCommand as runCommandBase,
   workflowResultFromLoopReason,
   type WorkflowRunContext,
 } from "./workflow-helpers.js"
@@ -82,29 +83,12 @@ const summarizeComments = (comments: ReadonlyArray<ReviewComment>) => {
 }
 
 const runCommand = (cmd: string[]) =>
-  Effect.tryPromise({
-    try: async () => {
-      const proc = Bun.spawn(cmd, {
-        cwd: process.cwd(),
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      if (exitCode !== 0) {
-        throw new Error(stderr || `Command failed: ${cmd.join(" ")}`)
-      }
-      return stdout
-    },
-    catch: (cause) =>
-      new CodeReviewError({
-        message: `Failed to run command: ${cmd.join(" ")}`,
-        cause,
-      }),
-  })
+  runCommandBase(cmd).pipe(
+    Effect.filterOrFail(
+      (out) => out !== "",
+      () => new CodeReviewError({ message: `Failed to run command: ${cmd.join(" ")}` }),
+    ),
+  )
 
 const resolveReviewInput = (params: {
   content?: string
@@ -143,7 +127,7 @@ const buildReviewPrompt = (reviewInput: string, description?: string) =>
 
 const buildAdversarialPrompt = (peerReview: string, reviewInput: string, description?: string) =>
   [
-    "Critique this review. Find what it missed, where it overreaches, and what should be re-scored.",
+    "Critique this review. Challenge assumptions, re-score overblown findings, and surface what it missed.",
     ...(description !== undefined && description !== "" ? ["", "## Intent", description] : []),
     "",
     "## Changes",
@@ -187,6 +171,7 @@ const buildSynthesisPrompt = (
     "## Instructions",
     "Return ONLY the final JSON array of comments.",
     "Deduplicate. Keep the strongest evidence-backed findings.",
+    "Group by file proximity for executor batching.",
   ].join("\n")
 
 const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?: string) =>
@@ -307,6 +292,11 @@ export const CodeReviewTool = defineWorkflow({
   description:
     "Run adversarial dual-model code review. Report mode returns findings. Fix mode applies fixes iteratively.",
   command: "code_review",
+  promptSnippet: "Adversarial dual-model code review",
+  promptGuidelines: [
+    "report mode for read-only review, fix mode to auto-apply",
+    "Pass description to guide review focus",
+  ],
   phases: ["review", "adversarial", "synthesize", "execute", "evaluate"] as const,
   params: CodeReviewParams,
   execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: WorkflowContext) {
