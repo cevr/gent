@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
@@ -25,6 +25,7 @@ import {
   type UiError,
 } from "../utils/format-error"
 import { useWorkspace } from "../workspace/index"
+import { useExtensionUI } from "../extensions/context"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
@@ -114,6 +115,7 @@ export function useSessionController(props: {
 }): SessionController {
   const client = useClient()
   const command = useCommand()
+  const ext = useExtensionUI()
   const router = useRouter()
   const { cast } = useRuntime(client.client)
   const { exit, handleEsc } = useExit()
@@ -129,6 +131,15 @@ export function useSessionController(props: {
   const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
   const [elapsed, setElapsed] = createSignal(0)
   let activityStartTime = Date.now()
+
+  // Register extension commands via the command system
+  onMount(() => {
+    const cmds = ext.commands()
+    if (cmds.length > 0) {
+      const unsub = command.register([...cmds])
+      onCleanup(unsub)
+    }
+  })
 
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
     if (effect._tag === "RestoreComposer") {

@@ -8,17 +8,21 @@
 import { createContext, useContext, createSignal, onMount, type Accessor, type JSX } from "solid-js"
 // @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os"
+import type { JSX as _JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 import type { ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
 import { loadTuiExtensions } from "./loader"
 import { useWorkspace } from "../workspace/index"
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SolidComponent = (props?: any) => _JSX.Element
+
 export interface ExtensionUIContextValue {
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   readonly commands: Accessor<ReadonlyArray<Command>>
-  readonly overlays: Accessor<Map<string, ToolRenderer>>
+  readonly overlays: Accessor<Map<string, SolidComponent>>
   readonly loading: Accessor<boolean>
 }
 

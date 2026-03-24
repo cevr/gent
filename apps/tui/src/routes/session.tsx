@@ -2,7 +2,7 @@
  * Session route - message list, composer, streaming
  */
 
-import { createMemo } from "solid-js"
+import { createMemo, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList } from "../components/message-list"
@@ -24,6 +24,8 @@ import {
 import { buildTopRightLabels } from "../utils/session-labels"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { useSessionController } from "./session-controller"
+import { ExtensionWidgets } from "../components/extension-widgets"
+import { useExtensionUI } from "../extensions/context"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -38,6 +40,7 @@ export function Session(props: SessionProps) {
   const workspace = useWorkspace()
   const controller = useSessionController(props)
   const client = controller.client
+  const ext = useExtensionUI()
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
   const mermaidDiagrams = createMemo(() =>
@@ -102,6 +105,7 @@ export function Session(props: SessionProps) {
       {/* Messages */}
       <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
         <box flexDirection="column">
+          <ExtensionWidgets slot="above-messages" />
           <MessageList
             items={controller.items()}
             toolsExpanded={controller.toolsExpanded()}
@@ -110,6 +114,7 @@ export function Session(props: SessionProps) {
             getChildSessions={controller.getChildren}
           />
 
+          <ExtensionWidgets slot="below-messages" />
           <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
           <ConnectionWidget
             issue={client.connectionIssue()}
@@ -122,6 +127,8 @@ export function Session(props: SessionProps) {
           />
         </box>
       </scrollbox>
+
+      <ExtensionWidgets slot="above-input" />
 
       {/* Bordered input */}
       <BorderedInput
@@ -172,6 +179,18 @@ export function Session(props: SessionProps) {
         entries={controller.promptEntries()}
         onEvent={controller.onPromptSearchEvent}
       />
+
+      <Show when={controller.uiState().overlay._tag === "extension"}>
+        {(() => {
+          const overlay = controller.uiState().overlay
+          if (overlay._tag !== "extension") return null
+          const Overlay = ext.overlays().get(overlay.overlayId)
+          if (Overlay === undefined) return null
+          return <Overlay />
+        })()}
+      </Show>
+
+      <ExtensionWidgets slot="below-input" />
     </box>
   )
 }

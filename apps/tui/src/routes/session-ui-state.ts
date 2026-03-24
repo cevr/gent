@@ -20,6 +20,7 @@ export type SessionOverlayState =
     }
   | { readonly _tag: "fork" }
   | { readonly _tag: "mermaid" }
+  | { readonly _tag: "extension"; readonly overlayId: string }
   | PromptSearchOverlayState
 
 export interface SessionUiState {
@@ -43,6 +44,7 @@ export type SessionUiEvent =
     }
   | { readonly _tag: "OpenFork" }
   | { readonly _tag: "OpenMermaid" }
+  | { readonly _tag: "OpenExtensionOverlay"; readonly overlayId: string }
   | { readonly _tag: "CloseOverlay" }
   | {
       readonly _tag: "PromptSearch"
@@ -112,6 +114,15 @@ export function transitionSessionUi(
         state: {
           ...state,
           overlay: { _tag: "mermaid" },
+        },
+        effects: [],
+      }
+
+    case "OpenExtensionOverlay":
+      return {
+        state: {
+          ...state,
+          overlay: { _tag: "extension", overlayId: event.overlayId },
         },
         effects: [],
       }

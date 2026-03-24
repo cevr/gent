@@ -331,6 +331,17 @@ export function CommandPalette() {
         closePalette()
       },
     },
+    // Extension-registered commands show up in the palette
+    ...command.commands().map((cmd) => ({
+      id: `ext:${cmd.id}`,
+      title: cmd.title,
+      category: cmd.category ?? "ext",
+      shortcut: cmd.keybind,
+      onSelect: () => {
+        cmd.onSelect()
+        closePalette()
+      },
+    })),
   ]
 
   const levelItems = createMemo<readonly MenuItem[]>(() => {

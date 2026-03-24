@@ -6,8 +6,13 @@
  */
 
 import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
+import type { JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
+
+/** Generic Solid component for widgets/overlays (no required props) */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SolidComponent = (props?: any) => JSX.Element
 
 export type ExtensionKind = "builtin" | "user" | "project"
 
@@ -21,21 +26,21 @@ export interface LoadedTuiExtension {
   readonly id: string
   readonly kind: ExtensionKind
   readonly filePath: string
-  readonly setup: ExtensionClientSetup<ToolRenderer>
+  readonly setup: ExtensionClientSetup<ToolRenderer | SolidComponent>
 }
 
 export interface ResolvedWidget {
   readonly id: string
   readonly slot: "above-messages" | "below-messages" | "above-input" | "below-input"
   readonly priority: number
-  readonly component: ToolRenderer
+  readonly component: SolidComponent
 }
 
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
   readonly commands: ReadonlyArray<Command>
-  readonly overlays: Map<string, ToolRenderer>
+  readonly overlays: Map<string, SolidComponent>
 }
 
 interface ScopeEntry {
@@ -88,7 +93,7 @@ const resolveWidgets = (
         id: entry.id,
         slot: entry.slot,
         priority: entry.priority ?? 100,
-        component: entry.component,
+        component: entry.component as SolidComponent,
       })
       scopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
     }
@@ -137,14 +142,16 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
   return [...commandMap.values()]
 }
 
-const resolveOverlays = (sorted: ReadonlyArray<LoadedTuiExtension>): Map<string, ToolRenderer> => {
-  const overlays = new Map<string, ToolRenderer>()
+const resolveOverlays = (
+  sorted: ReadonlyArray<LoadedTuiExtension>,
+): Map<string, SolidComponent> => {
+  const overlays = new Map<string, SolidComponent>()
   const scopes = new Map<string, ScopeEntry>()
 
   for (const ext of sorted) {
     for (const entry of ext.setup.overlays ?? []) {
       checkCollision(scopes.get(entry.id), ext, "overlay", entry.id)
-      overlays.set(entry.id, entry.component)
+      overlays.set(entry.id, entry.component as SolidComponent)
       scopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
     }
   }
