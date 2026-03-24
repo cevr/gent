@@ -4,6 +4,8 @@ import {
   buildBasePromptSections,
   compileSystemPrompt,
 } from "@gent/core/server/system-prompt"
+import { buildTurnPrompt } from "@gent/core/runtime/agent/agent-loop.utils"
+import { AgentDefinition } from "@gent/core/domain/agent"
 
 describe("buildSystemPrompt", () => {
   const base = {
@@ -97,5 +99,101 @@ describe("buildBasePromptSections", () => {
       { id: "a", content: "first", priority: 10 },
     ])
     expect(result).toBe("first\n\nsecond")
+  })
+})
+
+describe("buildTurnPrompt", () => {
+  const agent = new AgentDefinition({
+    name: "test-agent",
+    kind: "primary",
+    systemPromptAddendum: "Be helpful.",
+  })
+
+  const baseSections = [{ id: "base", content: "You are a test agent.", priority: 0 }]
+
+  test("includes tool snippets when tools have promptSnippet", () => {
+    const tools = [
+      {
+        name: "read",
+        action: "read" as const,
+        description: "Read files",
+        promptSnippet: "Read file contents",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+      {
+        name: "bash",
+        action: "exec" as const,
+        description: "Run commands",
+        promptSnippet: "Execute shell commands",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools)
+    expect(result).toContain("## Available Tools")
+    expect(result).toContain("**read**: Read file contents")
+    expect(result).toContain("**bash**: Execute shell commands")
+  })
+
+  test("includes tool guidelines when tools have promptGuidelines", () => {
+    const tools = [
+      {
+        name: "read",
+        action: "read" as const,
+        description: "Read files",
+        promptGuidelines: ["Use instead of bash cat"] as const,
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools)
+    expect(result).toContain("## Tool Guidelines")
+    expect(result).toContain("Use instead of bash cat")
+  })
+
+  test("deduplicates guidelines", () => {
+    const tools = [
+      {
+        name: "read",
+        action: "read" as const,
+        description: "Read",
+        promptGuidelines: ["Shared guideline"] as const,
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+      {
+        name: "grep",
+        action: "read" as const,
+        description: "Grep",
+        promptGuidelines: ["Shared guideline"] as const,
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools)
+    const count = result.split("Shared guideline").length - 1
+    expect(count).toBe(1)
+  })
+
+  test("includes agent addendum", () => {
+    const result = buildTurnPrompt(baseSections, agent, [])
+    expect(result).toContain("## Agent: test-agent")
+    expect(result).toContain("Be helpful.")
+  })
+
+  test("omits tool sections when no tools have metadata", () => {
+    const tools = [
+      {
+        name: "plain",
+        action: "read" as const,
+        description: "No metadata",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools)
+    expect(result).not.toContain("## Available Tools")
+    expect(result).not.toContain("## Tool Guidelines")
   })
 })

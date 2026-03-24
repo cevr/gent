@@ -727,7 +727,19 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               }
 
               yield* Ref.set(activeStreamRef, activeStream)
-              const turnTools = yield* Ref.get(turnToolsRef)
+              // Re-resolve tools if turnToolsRef is empty (crash recovery path)
+              let turnTools = yield* Ref.get(turnToolsRef)
+              if (turnTools.length === 0) {
+                const agent = yield* extensionRegistry.getAgent(state.currentTurnAgent)
+                if (agent !== undefined) {
+                  turnTools = yield* extensionRegistry.listToolsForAgent(agent, {
+                    sessionId,
+                    branchId,
+                    agentName: state.currentTurnAgent,
+                  })
+                  yield* Ref.set(turnToolsRef, turnTools)
+                }
+              }
               const collected = yield* streamTurnPhase({
                 messageId: state.message.id,
                 resolved: {
