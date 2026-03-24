@@ -36,6 +36,7 @@ describe("app bootstrap boundary", () => {
             prompt: Option.none(),
             promptArg: Option.none(),
             bypass: true,
+            missingProviders: [],
           })
 
           expect(state._tag).toBe("session")
@@ -67,11 +68,12 @@ describe("app bootstrap boundary", () => {
             prompt: Option.some("bootstrap prompt"),
             promptArg: Option.none(),
             bypass: true,
+            missingProviders: [],
           })
 
           expect(state._tag).toBe("session")
           if (state._tag !== "session") return
-          expect(state.prompt).toBeUndefined()
+          expect(state.prompt).toBe("bootstrap prompt")
           expect(state.session.branchId).toBeDefined()
         }),
       ),
