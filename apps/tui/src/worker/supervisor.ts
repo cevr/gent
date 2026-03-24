@@ -44,6 +44,12 @@ export interface WorkerSupervisor {
   readonly restart: Effect.Effect<void, WorkerSupervisorError>
 }
 
+/** Restart limits for crash-loop prevention */
+const MAX_RESTARTS_IN_WINDOW = 5
+const RESTART_WINDOW_MS = 60_000
+const BACKOFF_BASE_MS = 1_000
+const BACKOFF_MAX_MS = 16_000
+
 export interface WorkerSupervisorOptions {
   readonly cwd: string
   readonly env?: Record<string, string | undefined>
@@ -288,6 +294,7 @@ export const startWorkerSupervisor = (
       const listeners = new Set<(state: WorkerLifecycleState) => void>()
       let restartCount = 0
       let stopped = false
+      const restartTimestamps: number[] = []
       let current: Bun.Subprocess | undefined
       let restartPromise: Promise<void> | undefined
       let state: WorkerLifecycleState = {
@@ -339,6 +346,30 @@ export const startWorkerSupervisor = (
         }
 
         restartCount += 1
+        const now = Date.now()
+        restartTimestamps.push(now)
+
+        // Prune timestamps outside the window
+        while (
+          restartTimestamps.length > 0 &&
+          (restartTimestamps[0] ?? 0) < now - RESTART_WINDOW_MS
+        ) {
+          restartTimestamps.shift()
+        }
+
+        // Crash-loop detection: too many restarts in window → permanent failure
+        if (restartTimestamps.length > MAX_RESTARTS_IN_WINDOW) {
+          restartPromise = undefined
+          emit({
+            _tag: "failed",
+            port: assignedPort,
+            restartCount,
+            message: `Crash loop: ${restartTimestamps.length} restarts in ${RESTART_WINDOW_MS / 1000}s`,
+            exitCode: input?.exitCode ?? null,
+          })
+          return
+        }
+
         emit({
           _tag: "restarting",
           port: assignedPort,
@@ -347,8 +378,15 @@ export const startWorkerSupervisor = (
           exitCode: input?.exitCode ?? null,
         })
 
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s cap
+        const backoffMs = Math.min(
+          BACKOFF_BASE_MS * 2 ** (restartTimestamps.length - 1),
+          BACKOFF_MAX_MS,
+        )
+
         restartPromise = Effect.runPromise(
           Effect.gen(function* () {
+            yield* Effect.sleep(`${backoffMs} millis`)
             const proc = current
             if (proc !== undefined) {
               yield* stopSubprocess(proc)

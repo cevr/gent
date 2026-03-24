@@ -724,7 +724,10 @@ export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTran
             concurrency: 1,
           }),
         ),
-        Effect.catchEager((error) => Effect.logWarning("actor inbox recovery failed", error)),
+        Effect.retry({ times: 2 }),
+        Effect.catchEager((error) =>
+          Effect.logWarning("actor inbox recovery exhausted retries", error),
+        ),
       )
 
       yield* recoverPending
