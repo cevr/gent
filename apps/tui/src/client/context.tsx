@@ -135,6 +135,11 @@ export interface ClientContextValue {
 
   // Steering (fire-and-forget)
   steer: (command: SteerCommandInput) => void
+
+  // Extension state snapshot callback (wired by ExtensionUIProvider)
+  onExtensionSnapshot: (
+    cb: (snapshot: { extensionId: string; epoch: number; model: unknown }) => void,
+  ) => void
 }
 
 const ClientContext = createContext<ClientContextValue>()
@@ -157,6 +162,11 @@ export function ClientProvider(props: ClientProviderProps) {
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
     client.runFork(effect)
   }
+
+  // Extension state snapshot callback — wired by ExtensionUIProvider
+  let extensionSnapshotCb:
+    | ((s: { extensionId: string; epoch: number; model: unknown }) => void)
+    | undefined
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
     props.initialSession !== undefined
@@ -257,6 +267,16 @@ export function ClientProvider(props: ClientProviderProps) {
       const branchId = key.slice(sep + 1) as BranchId
       let cancelled = false
 
+      const forwardExtensionSnapshot = (event: EventEnvelope["event"]): void => {
+        if (event._tag === "ExtensionUiSnapshot" && extensionSnapshotCb !== undefined) {
+          extensionSnapshotCb({
+            extensionId: event.extensionId,
+            epoch: event.epoch,
+            model: event.model,
+          })
+        }
+      }
+
       const processEvent = (envelope: EventEnvelope): void => {
         if (cancelled) return
 
@@ -309,6 +329,9 @@ export function ClientProvider(props: ClientProviderProps) {
               break
           }
         }
+
+        // Forward extension snapshots to registered callback
+        forwardExtensionSnapshot(event)
 
         switch (event._tag) {
           case "SessionNameUpdated":
@@ -640,6 +663,10 @@ export function ClientProvider(props: ClientProviderProps) {
         setAgentStore({ agent: fullCommand.agent })
       }
       cast(client.steer(fullCommand))
+    },
+
+    onExtensionSnapshot: (cb) => {
+      extensionSnapshotCb = cb
     },
 
     switchBranch: (branchId, summarize) => {

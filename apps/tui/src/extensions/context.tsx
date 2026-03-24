@@ -14,9 +14,17 @@ import type { Command } from "../command/types"
 import type { ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
 import { loadTuiExtensions } from "./loader"
 import { useWorkspace } from "../workspace/index"
+import { useClient } from "../client/context"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SolidComponent = (props?: any) => _JSX.Element
+
+/** Server-projected UI snapshot from extension state machines */
+export interface ExtensionSnapshot {
+  readonly extensionId: string
+  readonly epoch: number
+  readonly model: unknown
+}
 
 export interface ExtensionUIContextValue {
   readonly renderers: Accessor<Map<string, ToolRenderer>>
@@ -26,6 +34,10 @@ export interface ExtensionUIContextValue {
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
+  /** Server-projected extension state snapshots, keyed by extensionId */
+  readonly snapshots: Accessor<ReadonlyMap<string, ExtensionSnapshot>>
+  /** Update a server-projected snapshot (called from event stream) */
+  readonly updateSnapshot: (snapshot: ExtensionSnapshot) => void
 }
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
@@ -41,6 +53,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const workspace = useWorkspace()
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loading, setLoading] = createSignal(true)
+  const [snapshots, setSnapshots] = createSignal<ReadonlyMap<string, ExtensionSnapshot>>(new Map())
+
+  const updateSnapshot = (snapshot: ExtensionSnapshot) => {
+    setSnapshots((prev) => {
+      const next = new Map(prev)
+      next.set(snapshot.extensionId, snapshot)
+      return next
+    })
+  }
 
   // Mutable overlay dispatch — wired by session controller after mount
   let overlayOpen: (id: string) => void = () => {}
@@ -50,6 +71,10 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     overlayOpen = open
     overlayClose = close
   }
+
+  // Wire extension snapshot events from client event stream
+  const clientCtx = useClient()
+  clientCtx.onExtensionSnapshot(updateSnapshot)
 
   onMount(async () => {
     try {
@@ -81,6 +106,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         overlays: () => resolved().overlays,
         loading,
         setOverlayDispatch,
+        snapshots,
+        updateSnapshot,
       }}
     >
       {props.children}
