@@ -244,6 +244,12 @@ export type ExecutingToolsState = Extract<LoopState, { _tag: "ExecutingTools" }>
 export type FinalizingState = Extract<LoopState, { _tag: "Finalizing" }>
 export type ActiveLoopState = Exclude<LoopState, IdleState>
 export type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
+export type LoopRuntimeStatus = "idle" | "running" | "interrupted"
+export type LoopRuntimeState = {
+  status: LoopRuntimeStatus
+  agent: AgentNameType
+  queueDepth: number
+}
 
 export const buildIdleState = (params?: {
   queue?: LoopQueueState
@@ -404,3 +410,24 @@ export const queueContainsContent = (
   queue: ReadonlyArray<QueuedTurnItem>,
   content: string,
 ): boolean => queue.some((item) => messageText(item.message).includes(content))
+
+export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState => {
+  const queueDepth = state.queue.steering.length + state.queue.followUp.length
+  const agent = state.currentAgent ?? "cowork"
+
+  switch (state._tag) {
+    case "Idle":
+      return { status: "idle", agent, queueDepth }
+    case "Resolving":
+    case "Streaming":
+      return { status: state.turnInterrupted ? "interrupted" : "running", agent, queueDepth }
+    case "ExecutingTools":
+      return {
+        status: state.turnInterrupted || state.interruptAfterTools ? "interrupted" : "running",
+        agent,
+        queueDepth,
+      }
+    case "Finalizing":
+      return { status: state.turnInterrupted ? "interrupted" : "running", agent, queueDepth }
+  }
+}

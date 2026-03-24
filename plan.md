@@ -1,331 +1,541 @@
-# Subscription Seam Plan
+# State Machine Audit Plan
 
-Status: complete.
+Status: in progress.
+
+## Audit Summary
+
+The repo is not “anti-machine”. It has both good machines and obvious misses.
+
+What is good:
+
+- `AgentLoop` phase modeling is the right backbone.
+- small pure reducers in TUI are often the right size:
+  - `home-state`
+  - `session-ui-state`
+  - `composer-state`
+  - `prompt-search-state`
+  - `session-tree-state`
+  - `mermaid-viewer-state`
+- projections like `agent-lifecycle` should stay projections, not get promoted to machines.
+
+What is wrong:
+
+- some canonical runtime state is still reconstructed indirectly instead of read from the owning machine
+- one core actor creation seam is not serialized
+- some TUI workflows have multiple writers instead of one owner
+- one TUI machine (`session-machine`) looks ceremonial rather than structural
+- one TUI workflow (`auth`) is half machine, half component branching
+- one big non-trivial UI workflow (`command-palette`) is still ad hoc local state
+
+## Governing Rules
+
+Use a machine or reducer when:
+
+- the workflow has more than two meaningful modes
+- async phases matter
+- selection/search/loading/open state coexist
+- multiple writers currently mutate the same workflow
+- transition validity matters
+
+Do not force a machine when:
+
+- the state is a projection or cache
+- the state is scalar or monotonic
+- the reducer is already tiny and pure
+- the complexity is in rendering, not control flow
+
+## Brain Principles
+
+- `~/.brain/principles/boundary-discipline.md`
+- `~/.brain/principles/serialize-shared-state-mutations.md`
+- `~/.brain/principles/redesign-from-first-principles.md`
+- `~/.brain/principles/subtract-before-you-add.md`
+- `~/.brain/principles/encode-lessons-in-structure.md`
+- `~/.brain/principles/fix-root-causes.md`
+- `~/.brain/principles/prove-it-works.md`
+- `~/.brain/principles/experience-first.md`
+
+## Non-Goals
+
+Do not machine-ize these just for consistency theater:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/agent-lifecycle.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/session-tree-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/mermaid-viewer-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-spinner-clock.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/permissions.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/branch-picker.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-file-search.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/hooks.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`
+
+Those are either projections, tiny reducers, or pure compilation logic.
 
 ## Task List
 
-- [x] Batch 1 — Decouple supervision from transport
-- [x] Batch 2 — Shared worker fixture and boilerplate collapse
-- [x] Batch 3 — Split subscription semantics
-- [x] Batch 4 — Move TUI/feed tests onto the right seam
-- [x] Batch 5 — Add missing boundary coverage for each seam
-- [x] Batch 6 — DX cleanup, timing pass, final gate
+- [x] Batch 1 — Serialize loop ownership and stop exporting fictional runtime state
+- [ ] Batch 2 — Collapse duplicate core actor orchestration around one real turn pipeline
+- [ ] Batch 3 — Give the composer one owner
+- [ ] Batch 4 — De-duplicate and flatten prompt search
+- [ ] Batch 5 — Promote command palette to an explicit reducer
+- [ ] Batch 6 — Simplify or demote `session-machine`
+- [ ] Batch 7 — Finish or demote `auth-machine`
+- [ ] Batch 8 — Clean up low-priority state ownership drift and test seams
 
-## Summary
+## Batch 1 — Serialize Loop Ownership And Canonical Runtime State
 
-The current subscription model is overloaded.
+Commit:
 
-One API is trying to be three things:
-
-1. durable event log replay
-2. live event subject
-3. current state watcher
-
-That is the source of a lot of the race pain.
-
-The cleaner model is:
-
-- event log:
-  - append-only
-  - cursor-based
-  - replayable
-- live events:
-  - from-now-on
-  - no replay
-  - transient
-- watched state:
-  - immediate current snapshot
-  - then updates
-  - derived from backend state, not rebuilt ad hoc in each caller
-
-Do not force replay-subject semantics onto raw events.
-Do not force current-state semantics onto an event log.
-
-## Principles
-
-### Boundary Discipline
-
-- raw event history is a different boundary from current derived state
-- transport should expose those seams explicitly, not via caller folklore
-- supervision remains separate from transport and from subscriptions
-
-### Prove It Works
-
-- each seam gets its own tests
-- transport parity tests should not depend on TUI projection details
-- TUI/feed tests should use the state/watch seam when that is the real contract
-
-### Subtract Before Add
-
-- stop making callers do “fetch snapshot, subscribe events, reconcile locally” when the backend can expose the right watch seam
-- remove ambiguous subscription behavior before adding more harness cleverness
-
-### Encode Lessons In Structure
-
-- `subscribeEvents` means durable event log semantics
-- `subscribeLiveEvents` means live-only semantics
-- `watchSessionState` / `watchQueue` mean replay-current-value semantics
-
-## Seam Model
-
-### 1. Event Log
-
-Purpose:
-
-- receipts
-- recovery
-- auditability
-- replay from `after`
-
-Properties:
-
-- ordered
-- durable
-- cursor-based
-- append-only
-
-API shape:
-
-- `subscribeEvents({ sessionId, branchId?, after? })`
-
-This stays.
-
-### 2. Live Events
-
-Purpose:
-
-- low-latency “from now on” observation
-- no caller confusion about replay handoff
-
-Properties:
-
-- ephemeral
-- no replay
-- no cursor
-
-API shape:
-
-- `subscribeLiveEvents({ sessionId, branchId? })`
-
-This is new.
-
-### 3. Watched State
-
-Purpose:
-
-- current session/feed/queue state
-- replay-subject semantics
-- TUI-friendly
-
-Properties:
-
-- emits current snapshot immediately
-- then emits updates
-- no caller-side “get snapshot then hope subscription catches up”
-
-API shape:
-
-- `watchSessionState({ sessionId, branchId })`
-- `watchQueue({ sessionId, branchId })`
-- maybe later:
-  - `watchWorkerState`
-  - `watchAuthState`
-
-This is the real “ReplaySubject” seam.
-
-## Current Audit
-
-### What is wrong now
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
-  - only exposes `subscribeEvents({ after })`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
-  - has to fetch snapshot, subscribe, and project local state
-- `/Users/cvr/Developer/personal/gent/tests/event-stream-parity.test.ts`
-  - exists because replay/live semantics are subtle and caller-visible
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/event-store.ts`
-  - disk store is an event-log seam, not a state-watch seam
-
-### What is already good
-
-- supervision and transport are now separate in code
-- worker fixture duplication is reduced
-- transport parity and worker boundary suites exist
-
-## Batch Ordering Rationale
-
-Do the semantic split before more performance work.
+- `fix(runtime): serialize loop ownership and project canonical state`
 
 Why:
 
-- if the seam is still ambiguous, faster tests just hide the wrong model
-- once the seam is explicit, the right test homes become obvious
-- only then does further polling reduction make architectural sense
+- current “one actor per session/branch” guarantee is not actually serialized
+- exported runtime/session state is partly fiction and partly reconstructed from event history
+- this is a correctness problem, not cleanup
 
-## Batches
+Relevant skills:
 
-### Batch 3 — Split Subscription Semantics
+- `architecture`
+- `effect-v4`
+- `code-style`
 
-Goal:
+Relevant principles:
 
-- make the contract explicit:
-  - replayed event log
-  - live event stream
-  - watched derived state
+- `serialize-shared-state-mutations`
+- `fix-root-causes`
+- `boundary-discipline`
+- `prove-it-works`
 
-Checklist:
+Files:
 
-- [x] keep `subscribeEvents` as event-log replay
-- [x] add `subscribeLiveEvents`
-- [x] add `watchSessionState`
-- [x] add `watchQueue`
-- [x] derive types from transport schemas
-- [x] `bun run gate`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-queries.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-subscriptions.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
 
-Execution plan:
+Detailed spec:
 
-1. Extend `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
-   - define live/watch inputs and outputs
-2. Extend server handlers / client adapters
-   - `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs.ts`
-   - `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`
-   - `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
-3. Keep `subscribeEvents` semantics strict
-   - durable replay + `after`
-4. Implement live-only and watch-state surfaces behind the same transport contract
-5. Do not remove old callers yet
+- make `getLoop` creation atomic
+- no double-spawn race for the same `sessionId:branchId`
+- introduce one canonical runtime snapshot from the owning loop
+- make `ActorProcess.getState` honest
+  - either back all fields with real data
+  - or narrow the public type
+- make `SessionQueries.getSessionState` and watch subscriptions read the canonical projection
+- stop reconstructing `isStreaming` and agent solely from event history when the machine already knows
 
-Acceptance:
+Tests:
 
-- each subscription API has one job
-- no API name implies mixed semantics
-- SDK/direct/http all expose the same split contract
+- add a concurrency test proving two concurrent `sendUserMessage` calls do not create two loops
+- add runtime/query tests proving `getSessionState` matches the live machine snapshot
+- run:
+  - `bun run gate`
+  - targeted integration seam tests that use `watchSessionState`
 
-Expected commit:
+## Batch 2 — Collapse Duplicate Core Actor Orchestration
 
-- `feat(transport): split event and state subscriptions`
+Commit:
 
-### Batch 4 — Move TUI / Feed Tests Onto The Right Seam
+- `refactor(runtime): unify actor and loop orchestration`
 
-Goal:
+Why:
 
-- stop making the TUI rebuild replay-subject behavior out of raw events when it really wants watched state
+- `AgentActor` currently wraps a second hand-rolled orchestration loop
+- same turn phases already exist in `AgentLoop`
+- nested machine shell plus imperative loop is inconsistent and costly
 
-Checklist:
+Relevant skills:
 
-- [x] move session/feed projection onto `watchSessionState`
-- [x] move queue widget projection onto `watchQueue`
-- [x] keep raw event subscription only where raw events are actually needed
-- [x] update TUI seam tests
-- [x] `bun run gate`
+- `architecture`
+- `effect-v4`
+- `code-style`
 
-Execution plan:
+Relevant principles:
 
-1. Update `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
-   - use watch seams for derived state
-   - keep raw events for receipts/debug surfaces only
-2. Update session feed projection tests
-   - `/Users/cvr/Developer/personal/gent/apps/tui/tests/session-feed-boundary.test.tsx`
-3. Remove caller-side snapshot + event reconciliation that becomes redundant
-4. Preserve current UI behavior
+- `subtract-before-you-add`
+- `redesign-from-first-principles`
+- `encode-lessons-in-structure`
+- `fix-root-causes`
 
-Acceptance:
+Files:
 
-- TUI feed state no longer depends on replay/live timing luck
-- queue/thinking/current state come from watch seams
-- raw event streams remain available for receipts and machine/debug surfaces
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.checkpoint.ts`
 
-Expected commit:
+Detailed spec:
 
-- `refactor(tui): consume watched session state`
+- remove duplicate `while`-loop orchestration where the phase pipeline already exists
+- either:
+  - reuse one shared turn pipeline from both `AgentLoop` and subagent/actor execution
+  - or delete the extra shell if it adds no structural value
+- shrink durable machine payloads
+  - persist durable intent and artifact ids
+  - avoid serializing huge transient resolved payloads where phase code can re-read them
 
-### Batch 5 — Missing Boundary Coverage For Each Seam
+Tests:
 
-Goal:
+- recovery tests stay green
+- add one test proving subagent/actor path uses the same phase invariants as the main loop
+- run:
+  - `bun run gate`
 
-- prove each seam independently
+## Batch 3 — Give The Composer One Owner
 
-Checklist:
+Commit:
 
-- [x] event-log parity suite
-- [x] live-event parity suite
-- [x] watched-state parity suite
-- [x] worker restart coverage per seam
-- [x] auth and bootstrap seams where still missing
-- [x] `bun run gate`
+- `refactor(tui): unify composer interaction state`
 
-Execution plan:
+Why:
 
-1. Keep event-log parity in:
-   - `/Users/cvr/Developer/personal/gent/tests/event-stream-parity.test.ts`
-2. Add live-event parity suite
-   - immediate post-subscribe delivery
-   - no replay guarantees
-3. Add watched-state parity suite
-   - immediate current snapshot
-   - subsequent updates
-   - restart/reconnect behavior
-4. Add missing seams:
-   - server HTTP entrypoint
-   - system/native auth through worker
-   - route/bootstrap seam against real worker path
+- composer workflow is currently split across:
+  - `use-composer-controller`
+  - `composer-state`
+  - session route/controller suspension and restore flags
+- one user workflow, many writers
 
-Acceptance:
+Relevant skills:
 
-- tests are organized by seam, not by vague “integration”
-- a regression tells us which contract failed
+- `opentui`
+- `react`
+- `architecture`
+- `code-style`
 
-Expected commit:
+Relevant principles:
 
-- `test(seams): cover event live and watch contracts`
+- `serialize-shared-state-mutations`
+- `boundary-discipline`
+- `experience-first`
+- `encode-lessons-in-structure`
 
-### Batch 6 — DX Cleanup, Timing Pass, Final Gate
+Files:
 
-Goal:
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/use-composer-controller.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/composer-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/composer.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/composer-prompt.tsx`
 
-- keep the confidence, reduce the friction
+Detailed spec:
 
-Checklist:
+- define one `ComposerInteractionState`
+- explicit modes:
+  - `editing`
+  - `shell`
+  - `autocomplete`
+  - `prompt`
+  - optionally `restoring` / `history`
+- move transition legality into one reducer/module
+- leave shell execution, IO, and rendering outside the reducer
+- remove split ownership of suspend/restore/autocomplete mode
 
-- [x] measure focused seam runtimes again
-- [x] split fast parity from slow lifecycle suites clearly
-- [x] tidy helper names/docs
-- [x] close the plan
-- [x] `bun run gate`
+Tests:
 
-Execution plan:
+- add reducer tests for mode transitions
+- extend composer render tests for autocomplete/prompt/suspend transitions
+- run:
+  - `bun run gate`
+  - `bun run --cwd apps/tui test:integration -- integration/session-feed-boundary.test.tsx`
 
-1. Re-measure:
-   - transport parity
-   - worker boundary
-   - TUI feed boundary
-2. Separate suite groupings explicitly:
-   - fast seam parity
-   - worker lifecycle/restart
-   - TUI feed/render seam
-3. Update test docs if needed
-4. Mark plan complete only if the contracts are explicit in code and tests
+## Batch 4 — De-Duplicate And Flatten Prompt Search
 
-Acceptance:
+Commit:
 
-- the right seam is obvious from the test file name
-- callers no longer have to guess which subscription semantics they are getting
-- runtimes are no worse than today, preferably better
+- `refactor(tui): share prompt search controller`
 
-Expected commit:
+Why:
 
-- `docs(test): finalize subscription seam coverage`
+- prompt search is implemented twice
+- session path is also unnecessarily nested:
+  - parent says prompt-search is open
+  - child state also says open/closed
+
+Relevant skills:
+
+- `opentui`
+- `react`
+- `architecture`
+- `code-style`
+
+Relevant principles:
+
+- `subtract-before-you-add`
+- `encode-lessons-in-structure`
+- `experience-first`
+- `boundary-discipline`
+
+Files:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/prompt-search-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/home-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/home.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-ui-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/prompt-search-palette.tsx`
+
+Detailed spec:
+
+- extract one prompt-search controller/reducer
+- shared behavior:
+  - query
+  - selection
+  - preview
+  - restore draft
+  - close/submit/cancel
+- flatten session overlay shape so there is not an outer `prompt-search` plus inner `closed|open`
+
+Tests:
+
+- shared prompt-search reducer tests
+- keep render tests for prompt search passing
+- fix the currently broken render proof path if still failing
+- run:
+  - `bun run gate`
+  - `bun run test:integration`
+
+## Batch 5 — Promote Command Palette To An Explicit Reducer
+
+Commit:
+
+- `refactor(tui): model command palette transitions explicitly`
+
+Why:
+
+- command palette is the clearest under-modeled non-trivial UI workflow
+- it already has async loading, hierarchical navigation, search, selection, and reset semantics
+
+Relevant skills:
+
+- `opentui`
+- `react`
+- `architecture`
+- `code-style`
+
+Relevant principles:
+
+- `boundary-discipline`
+- `serialize-shared-state-mutations`
+- `experience-first`
+- `prove-it-works`
+
+Files:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/command-palette.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/command/context.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/router/router.ts`
+
+Detailed spec:
+
+- extract `command-palette-state.ts`
+- define events:
+  - `Open`
+  - `Close`
+  - `LoadSessions`
+  - `SessionsLoaded`
+  - `PushLevel`
+  - `PopLevel`
+  - `SearchTyped`
+  - `SearchBackspaced`
+  - `MoveUp`
+  - `MoveDown`
+  - `ActivateSelection`
+- keep RPC fetching as effects outside the reducer
+- stop splitting open-state ownership between provider and component unless the provider becomes the sole owner
+
+Tests:
+
+- pure reducer tests for palette stack/search/selection behavior
+- render test for keyboard navigation at each level
+- run:
+  - `bun run gate`
+
+## Batch 6 — Simplify Or Demote `session-machine`
+
+Commit:
+
+- `refactor(tui): simplify session lifecycle state`
+
+Why:
+
+- current machine looks ceremonial
+- state is duplicated and rewrapped in `context.tsx`
+- some machine states do not correspond to real async boundaries
+
+Relevant skills:
+
+- `architecture`
+- `react`
+- `code-style`
+
+Relevant principles:
+
+- `subtract-before-you-add`
+- `boundary-discipline`
+- `fix-root-causes`
+- `experience-first`
+
+Files:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/session-machine.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
+
+Detailed spec:
+
+- choose one of two paths:
+  - demote to a plain reducer with only real async states
+  - or keep the machine and make it the sole exported session state
+- delete dead events like `SwitchRequested` if they remain unused
+- ensure `Loading` / `Switching` correspond to real work, not instant ceremony
+- stop wrapping machine state into a second near-identical union
+
+Tests:
+
+- session lifecycle reducer/machine tests
+- client-context tests for create/switch/clear
+- run:
+  - `bun run gate`
+
+## Batch 7 — Finish Or Demote `auth-machine`
+
+Commit:
+
+- `refactor(tui): align auth flow machine with real async states`
+
+Why:
+
+- auth is truly stateful enough for a machine
+- but the current design stops halfway and leaves the component to do the hard part
+
+Relevant skills:
+
+- `opentui`
+- `react`
+- `architecture`
+- `code-style`
+
+Relevant principles:
+
+- `experience-first`
+- `boundary-discipline`
+- `prove-it-works`
+- `encode-lessons-in-structure`
+
+Files:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/auth-machine.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/auth.tsx`
+
+Detailed spec:
+
+- preferred path: keep the machine, but model real async substates
+  - `Loading`
+  - `Deleting`
+  - `SubmittingKey`
+  - `OAuthWaiting`
+  - `OAuthCodeEntry`
+  - `Resolved`
+  - `Failed`
+- or demote completely if `effect-machine` is not pulling its weight
+- remove state-specific branching from the component as much as possible
+
+Tests:
+
+- transition tests for auth states:
+  - load success/failure
+  - method switch
+  - key submit success/failure
+  - oauth start
+  - manual code entry
+  - auto callback
+  - cancel/back behavior
+- run:
+  - `bun run gate`
+  - targeted auth integration tests if present
+
+## Batch 8 — Low-Priority State Ownership Drift And Test Seams
+
+Commit:
+
+- `refactor(state): codify workflow ownership rules`
+
+Why:
+
+- remaining issues are smaller but worth tightening after the major seams
+
+Relevant skills:
+
+- `architecture`
+- `opentui`
+- `effect-v4`
+- `code-style`
+
+Relevant principles:
+
+- `encode-lessons-in-structure`
+- `boundary-discipline`
+- `prove-it-works`
+
+Files:
+
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-skills.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/subagent-runner.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/prompt-search-render.test.tsx`
+
+Detailed spec:
+
+- move shared skills cache ownership under provider or explicit scope
+- reduce lifecycle drift in `subagent-runner` by extracting shared phase helpers
+- fix the broken prompt-search render proof path
+- document repo rule:
+  - workflow state gets one owner
+  - projections stay local and dumb
+
+Tests:
+
+- add/repair tests around the changed ownership seams
+- run:
+  - `bun run gate`
+  - `bun run test:integration`
 
 ## Receipts
 
-- `/Users/cvr/Developer/personal/gent/plan.md`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
+Primary audit receipts used to build this plan:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop-phases.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.checkpoint.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-queries.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-subscriptions.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/hooks.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/session-machine.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`
-- `/Users/cvr/Developer/personal/gent/tests/event-stream-parity.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/event-store.ts`
-- `/Users/cvr/.brain/principles/boundary-discipline.md`
-- `/Users/cvr/.brain/principles/prove-it-works.md`
-- `/Users/cvr/.brain/principles/subtract-before-you-add.md`
-- `/Users/cvr/.brain/principles/encode-lessons-in-structure.md`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/client/agent-lifecycle.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/auth-machine.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/auth.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/home-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-ui-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/composer-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/use-composer-controller.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/prompt-search-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/session-tree-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/mermaid-viewer-state.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/command-palette.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/command/context.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/permissions.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/branch-picker.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-file-search.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-skills.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/subagent-runner.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/home-state.test.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/session-ui-state.test.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/session-tree-state.test.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/mermaid-viewer-state.test.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/prompt-search-render.test.tsx`

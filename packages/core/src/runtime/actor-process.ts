@@ -444,11 +444,11 @@ export const LocalActorTransportLive: Layer.Layer<
 
       getState: (_input) =>
         Effect.gen(function* () {
-          const running = yield* agentLoop.isRunning(_input)
+          const loopState = yield* agentLoop.getState(_input)
           return {
-            status: running ? "running" : "idle",
-            agent: undefined,
-            queueDepth: 0,
+            status: loopState.status,
+            agent: loopState.agent,
+            queueDepth: loopState.queueDepth,
             lastError: undefined,
           } satisfies ActorProcessState
         }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),

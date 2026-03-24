@@ -598,6 +598,73 @@ describe("AgentLoop actor model", () => {
     )
   })
 
+  test("serializes loop creation for the same session and branch", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    let calls = 0
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => {
+        calls += 1
+        if (calls === 1) {
+          return Effect.succeed(
+            Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.map(() => new FinishChunk({ finishReason: "stop" })),
+            ),
+          )
+        }
+
+        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+      },
+      generate: () => Effect.succeed("test response"),
+    })
+
+    const delayedStorage = Layer.effect(
+      Storage,
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        return {
+          ...storage,
+          getLatestEvent: (input) => storage.getLatestEvent(input).pipe(Effect.delay("25 millis")),
+          getAgentLoopCheckpoint: (input) =>
+            storage.getAgentLoopCheckpoint(input).pipe(Effect.delay("25 millis")),
+        }
+      }),
+    )
+
+    const slowStorage = Layer.provide(delayedStorage, Storage.Test())
+
+    const deps = Layer.mergeAll(
+      slowStorage,
+      providerLayer,
+      makeTestExtRegistry(),
+      EventStore.Test(),
+      HandoffHandler.Test(),
+      ToolRunner.Test(),
+      BunServices.layer,
+    )
+    const layer = Layer.provideMerge(AgentLoop.Live({ systemPrompt: "" }), deps)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const fiberA = yield* Effect.forkChild(agentLoop.run(makeMessage("s1", "b1", "first")))
+          const fiberB = yield* Effect.forkChild(agentLoop.run(makeMessage("s1", "b1", "second")))
+
+          yield* Effect.sleep("80 millis")
+          expect(calls).toBe(1)
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiberA)
+          yield* Fiber.join(fiberB)
+
+          expect(calls).toBe(2)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
   test("interrupt scoped to session/branch", async () => {
     const gateA = await Effect.runPromise(Deferred.make<void>())
     const gateB = await Effect.runPromise(Deferred.make<void>())
@@ -1249,6 +1316,7 @@ describe("ActorProcess", () => {
         }),
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
     })
 
     const layer = makeActorProcessLayer(agentLoopLayer)
@@ -1273,6 +1341,7 @@ describe("ActorProcess", () => {
       steer: () => Effect.void,
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
     })
 
     const layer = makeActorProcessLayer(agentLoopLayer)

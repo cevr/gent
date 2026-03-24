@@ -70,6 +70,8 @@ describe("SessionCommands → ActorProcess integration", () => {
           steer: () => Effect.void,
           followUp: () => Effect.void,
           isRunning: () => Effect.succeed(false),
+          getState: () =>
+            Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
         }
       }),
     )
@@ -181,6 +183,7 @@ describe("SessionCommands → ActorProcess integration", () => {
         }),
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
     })
 
     const eventStoreLayer = EventStore.Test()
@@ -223,6 +226,48 @@ describe("SessionCommands → ActorProcess integration", () => {
     )
   })
 
+  test("actor process getState delegates to the loop snapshot", async () => {
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      isRunning: () => Effect.succeed(true),
+      getState: () =>
+        Effect.succeed({
+          status: "interrupted" as const,
+          agent: "deepwork" as const,
+          queueDepth: 2,
+        }),
+    })
+
+    const storageDeps = Layer.mergeAll(
+      Storage.Test(),
+      EventStore.Test(),
+      agentLoopLayer,
+      ToolRunner.Test(),
+    )
+    const layer = Layer.provide(LocalActorProcessLive, storageDeps)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const actorProcess = yield* ActorProcess
+        return yield* actorProcess.getState({
+          sessionId: "state-session" as SessionId,
+          branchId: "state-branch" as BranchId,
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result).toEqual({
+      status: "interrupted",
+      agent: "deepwork",
+      queueDepth: 2,
+      lastError: undefined,
+    })
+  })
+
   test("invokeTool works through cluster actor", async () => {
     let toolCalls = 0
 
@@ -233,6 +278,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       steer: () => Effect.void,
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
     })
     const toolRunnerLayer = Layer.succeed(ToolRunner, {
       run: (toolCall) =>
@@ -322,6 +368,8 @@ describe("Durable actor inbox", () => {
           steer: () => Effect.void,
           followUp: () => Effect.void,
           isRunning: () => Effect.succeed(false),
+          getState: () =>
+            Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
         }
       }),
     )
@@ -415,6 +463,8 @@ describe("Durable actor inbox", () => {
             steer: () => Effect.void,
             followUp: () => Effect.void,
             isRunning: () => Effect.succeed(false),
+            getState: () =>
+              Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
           }
         }),
       )

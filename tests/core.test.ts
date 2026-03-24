@@ -165,13 +165,31 @@ describe("Cost Calculation", () => {
 })
 
 describe("Session State", () => {
-  test("getSessionState returns latest agent switch", async () => {
+  test("getSessionState uses actor process snapshot for runtime state", async () => {
     const eventStoreLayer = EventStore.Test()
+    const actorProcessLayer = Layer.succeed(ActorProcess, {
+      sendUserMessage: () => Effect.void,
+      sendToolResult: () => Effect.void,
+      invokeTool: () => Effect.void,
+      interrupt: () => Effect.void,
+      steerAgent: () => Effect.void,
+      drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+      getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+      getState: () =>
+        Effect.succeed({
+          status: "running" as const,
+          agent: "deepwork" as const,
+          queueDepth: 2,
+          lastError: undefined,
+        }),
+      getMetrics: () =>
+        Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+    })
     const baseWithEventStore = Layer.mergeAll(
       Storage.Test(),
       Provider.Test([]),
       eventStoreLayer,
-      ActorProcess.Test(),
+      actorProcessLayer,
 
       Permission.Live([], "ask"),
       ConfigService.Test(),
@@ -190,13 +208,12 @@ describe("Session State", () => {
         const queries = yield* SessionQueries
         const storage = yield* Storage
         const session = yield* commands.createSession({ name: "Test Session" })
-
         yield* storage.appendEvent(
           new AgentSwitched({
             sessionId: session.sessionId,
             branchId: session.branchId,
-            fromAgent: "cowork",
-            toAgent: "deepwork",
+            fromAgent: "deepwork",
+            toAgent: "cowork",
           }),
         )
 
@@ -207,6 +224,7 @@ describe("Session State", () => {
       }).pipe(Effect.provide(testLayer)),
     )
 
+    expect(result.isStreaming).toBe(true)
     expect(result.agent).toBe("deepwork")
   })
 })

@@ -1,9 +1,8 @@
-import { Effect, Layer, Schema, ServiceMap } from "effect"
+import { Effect, Layer, ServiceMap } from "effect"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import type { Task } from "../domain/task.js"
 import type { QueueSnapshot } from "../domain/queue.js"
-import { AgentName } from "../domain/agent.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
@@ -137,29 +136,18 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           sessionId: input.sessionId,
           branchId: input.branchId,
         })
-        const streamTag = yield* storage.getLatestEventTag({
+        const runtimeState = yield* actorProcess.getState({
           sessionId: input.sessionId,
           branchId: input.branchId,
-          tags: ["StreamStarted", "StreamEnded"],
         })
-        const latestAgentEvent = yield* storage.getLatestEvent({
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-          tags: ["AgentSwitched"],
-        })
-        const rawAgent =
-          latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
-            ? latestAgentEvent.toAgent
-            : undefined
-        const agent: AgentName = Schema.is(AgentName)(rawAgent) ? rawAgent : "cowork"
 
         return {
           sessionId: input.sessionId,
           branchId: input.branchId,
           messages: messages.map(messageToInfo),
           lastEventId: lastEventId ?? null,
-          isStreaming: streamTag === "StreamStarted",
-          agent,
+          isStreaming: runtimeState.status !== "idle",
+          agent: runtimeState.agent ?? "cowork",
           bypass: session.bypass,
           reasoningLevel: session.reasoningLevel,
         }

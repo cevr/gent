@@ -88,6 +88,7 @@ import {
   markTurnInterrupted,
   queueContainsContent,
   queueSnapshotFromState,
+  runtimeStateFromLoopState,
   takeNextQueuedTurn,
   toExecutingToolsState,
   toFinalizingState,
@@ -531,6 +532,11 @@ export interface AgentLoopService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<boolean>
+  readonly getState: (input: { sessionId: SessionId; branchId: BranchId }) => Effect.Effect<{
+    status: "idle" | "running" | "interrupted"
+    agent: AgentNameType
+    queueDepth: number
+  }>
 }
 
 export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()(
@@ -553,6 +559,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const handoffHandler = yield* HandoffHandler
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
+        const loopsSemaphore = yield* Semaphore.make(1)
 
         const stateKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
         const publishEvent = (event: AgentEvent) =>
@@ -1046,15 +1053,19 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           branchId: BranchId,
         ) {
           const key = stateKey(sessionId, branchId)
-          const existing = (yield* Ref.get(loopsRef)).get(key)
-          if (existing !== undefined) return existing
-          const created = yield* makeLoop(sessionId, branchId)
-          yield* Ref.update(loopsRef, (loops) => {
-            const next = new Map(loops)
-            next.set(key, created)
-            return next
-          })
-          return created
+          return yield* loopsSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              const existing = (yield* Ref.get(loopsRef)).get(key)
+              if (existing !== undefined) return existing
+              const created = yield* makeLoop(sessionId, branchId)
+              yield* Ref.update(loopsRef, (loops) => {
+                const next = new Map(loops)
+                next.set(key, created)
+                return next
+              })
+              return created
+            }),
+          )
         })
 
         const findLoop = Effect.fn("AgentLoop.findLoop")(function* (
@@ -1199,7 +1210,25 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) return false
-              return (yield* loop.actor.snapshot)._tag !== "Idle"
+              return runtimeStateFromLoopState(yield* loop.actor.snapshot).status !== "idle"
+            }),
+
+          getState: (input) =>
+            Effect.gen(function* () {
+              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
+              if (loop !== undefined) {
+                return runtimeStateFromLoopState(yield* loop.actor.snapshot)
+              }
+
+              return {
+                status: "idle" as const,
+                agent: yield* resolveStoredAgent({
+                  storage,
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                }),
+                queueDepth: 0,
+              }
             }),
         }
 
@@ -1226,6 +1255,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
       drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       isRunning: (_input) => Effect.succeed(false),
+      getState: () => Effect.succeed({ status: "idle", agent: "cowork", queueDepth: 0 }),
     })
 }
 
