@@ -112,7 +112,7 @@ export interface ClientContextValue {
 
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string) => void
-  createSession: () => void
+  createSession: (onCreated?: (sessionId: SessionId, branchId: BranchId) => void) => void
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, bypass?: boolean) => void
   clearSession: () => void
   updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
@@ -469,7 +469,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    createSession: () => {
+    createSession: (onCreated) => {
       clientLog.info("createSession")
       dispatchSession({ _tag: "CreateRequested" })
       cast(
@@ -498,6 +498,7 @@ export function ClientProvider(props: ClientProviderProps) {
                   }),
                 )
               }
+              onCreated?.(result.sessionId as SessionId, result.branchId as BranchId)
             }),
           ),
           Effect.catchEager((err) =>

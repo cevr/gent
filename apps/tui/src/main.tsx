@@ -110,6 +110,7 @@ const main = Command.make(
         prompt,
         promptArg,
         bypass,
+        missingProviders,
       })
 
       if (state._tag === "headless") {
@@ -148,7 +149,6 @@ const main = Command.make(
                   <ExtensionUIProvider>
                     <RouterProvider initialRoute={bootstrap.initialRoute}>
                       <App
-                        initialPrompt={bootstrap.initialPrompt}
                         missingAuthProviders={bootstrap.missingAuthProviders}
                         debugMode={bootstrap.debugMode}
                       />

@@ -184,7 +184,12 @@ export const renderWithProviders = async (
           <ThemeProvider mode="dark">
             <EnvProvider env={{ visual: undefined, editor: undefined }}>
               <CommandProvider>
-                <RouterProvider initialRoute={options?.initialRoute ?? Route.home()}>
+                <RouterProvider
+                  initialRoute={
+                    options?.initialRoute ??
+                    Route.session("test-session" as SessionId, "test-branch" as BranchId)
+                  }
+                >
                   <ClientProvider client={client} initialSession={options?.initialSession}>
                     <WorkspaceProvider
                       cwd={options?.cwd ?? defaultWorkspaceCwd}

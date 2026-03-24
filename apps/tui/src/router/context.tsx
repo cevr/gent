@@ -11,7 +11,6 @@ import { createAppRouter, type AppRouter } from "./router"
 export interface RouterContextValue {
   route: () => AppRoute
   navigate: (route: AppRoute) => void
-  navigateToHome: () => void
   navigateToSession: (sessionId: SessionId, branchId: BranchId, prompt?: string) => void
   navigateToBranchPicker: (
     sessionId: SessionId,
@@ -28,11 +27,11 @@ export interface RouterContextValue {
 const RouterContext = createContext<RouterContextValue>()
 
 export interface RouterProviderProps {
-  initialRoute?: AppRoute
+  initialRoute: AppRoute
 }
 
 export function RouterProvider(props: ParentProps<RouterProviderProps>) {
-  const initial = props.initialRoute ?? Route.home()
+  const initial = props.initialRoute
 
   const router: AppRouter = createAppRouter({
     current: initial,
@@ -51,7 +50,6 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
   const value: RouterContextValue = {
     route,
     navigate: router.navigate,
-    navigateToHome: () => router.navigate(Route.home()),
     navigateToSession: (sessionId: SessionId, branchId: BranchId, prompt?: string) =>
       router.navigate(Route.session(sessionId, branchId, prompt)),
     navigateToBranchPicker: (sessionId, sessionName, branches, prompt) =>

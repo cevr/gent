@@ -118,7 +118,11 @@ export function BranchPicker(props: BranchPickerProps) {
 
   useScopedKeyboard((e) => {
     if (e.name === "escape") {
-      router.navigateToHome()
+      if (router.canGoBack()) {
+        router.back()
+      } else {
+        process.exit(0)
+      }
       return true
     }
 

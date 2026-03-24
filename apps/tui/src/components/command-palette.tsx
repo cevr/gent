@@ -199,8 +199,7 @@ export function CommandPalette() {
       id: "session.new",
       title: "+ New Session",
       onSelect: () => {
-        client.clearSession()
-        router.navigateToHome()
+        client.createSession((sessionId, branchId) => router.navigateToSession(sessionId, branchId))
         closePalette()
       },
     }
@@ -326,8 +325,7 @@ export function CommandPalette() {
       category: "cmd",
       shortcut: "Ctrl+N",
       onSelect: () => {
-        client.clearSession()
-        router.navigateToHome()
+        client.createSession((sessionId, branchId) => router.navigateToSession(sessionId, branchId))
         closePalette()
       },
     },

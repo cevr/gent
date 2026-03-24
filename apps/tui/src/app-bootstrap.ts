@@ -1,12 +1,13 @@
 import { Console, Effect, Option } from "effect"
-import type { SessionId } from "@gent/core/domain/ids.js"
+import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
 import type { GentClient, GentRpcError, BranchInfo, SessionInfo } from "@gent/sdk"
 import type { Session } from "./client/index"
 import { Route } from "./router/index"
+import type { AppRoute } from "./router/index"
 
 export type InitialState =
-  | { _tag: "home" }
+  | { _tag: "auth" }
   | { _tag: "session"; session: SessionInfo; prompt?: string }
   | {
       _tag: "branchPicker"
@@ -18,8 +19,7 @@ export type InitialState =
 
 export interface AppBootstrap {
   readonly initialSession: Session | undefined
-  readonly initialRoute: ReturnType<typeof Route.home>
-  readonly initialPrompt: string | undefined
+  readonly initialRoute: AppRoute
   readonly debugMode: boolean
   readonly missingAuthProviders: readonly ProviderId[] | undefined
 }
@@ -35,8 +35,24 @@ export const toSession = (session: SessionInfo): Session | undefined => {
   }
 }
 
+const toSessionInfo = (
+  result: { sessionId: SessionId; branchId: BranchId; name: string; bypass: boolean },
+  cwd: string,
+): SessionInfo => ({
+  id: result.sessionId,
+  name: result.name,
+  cwd,
+  bypass: result.bypass,
+  reasoningLevel: undefined,
+  branchId: result.branchId,
+  parentSessionId: undefined,
+  parentBranchId: undefined,
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+})
+
 export const resolveAppBootstrap = (
-  state: Exclude<InitialState, { _tag: "headless" | "debug" }>,
+  state: Exclude<InitialState, { _tag: "headless" }>,
   options: {
     missingProviders: readonly ProviderId[]
     debugMode: boolean
@@ -46,11 +62,10 @@ export const resolveAppBootstrap = (
     options.missingProviders.length > 0 ? options.missingProviders : undefined
 
   switch (state._tag) {
-    case "home":
+    case "auth":
       return {
         initialSession: undefined,
-        initialRoute: Route.home(),
-        initialPrompt: undefined,
+        initialRoute: Route.auth(),
         debugMode: options.debugMode,
         missingAuthProviders,
       }
@@ -59,9 +74,8 @@ export const resolveAppBootstrap = (
         initialSession: toSession(state.session),
         initialRoute:
           state.session.branchId !== undefined
-            ? Route.session(state.session.id, state.session.branchId)
-            : Route.home(),
-        initialPrompt: state.prompt,
+            ? Route.session(state.session.id, state.session.branchId, state.prompt)
+            : Route.auth(),
         debugMode: options.debugMode,
         missingAuthProviders,
       }
@@ -74,7 +88,6 @@ export const resolveAppBootstrap = (
           state.branches,
           state.prompt,
         ),
-        initialPrompt: undefined,
         debugMode: options.debugMode,
         missingAuthProviders,
       }
@@ -90,6 +103,7 @@ export const resolveInitialState = (input: {
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
   bypass: boolean
+  missingProviders: readonly string[]
 }): Effect.Effect<InitialState, GentRpcError> =>
   Effect.gen(function* () {
     const { client, cwd, session, continue_, headless, prompt, promptArg, bypass } = input
@@ -110,19 +124,7 @@ export const resolveInitialState = (input: {
       }
 
       const result = yield* client.createSession({ cwd, bypass })
-      const sess: SessionInfo = {
-        id: result.sessionId,
-        name: result.name,
-        cwd,
-        bypass: result.bypass,
-        reasoningLevel: undefined,
-        branchId: result.branchId,
-        parentSessionId: undefined,
-        parentBranchId: undefined,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }
-      return { _tag: "headless" as const, session: sess, prompt: promptText }
+      return { _tag: "headless" as const, session: toSessionInfo(result, cwd), prompt: promptText }
     }
 
     if (Option.isSome(session)) {
@@ -145,74 +147,38 @@ export const resolveInitialState = (input: {
     }
 
     if (continue_) {
-      const result = yield* Effect.gen(function* () {
-        const existing = yield* client
-          .listSessions()
-          .pipe(
-            Effect.map(
-              (sessions) =>
-                sessions
-                  .filter((candidate) => candidate.cwd === cwd)
-                  .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
-            ),
-          )
-        if (existing !== null) {
-          return { session: existing, createdFromPrompt: false as const }
+      const existing = yield* client
+        .listSessions()
+        .pipe(
+          Effect.map(
+            (sessions) =>
+              sessions
+                .filter((candidate) => candidate.cwd === cwd)
+                .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
+          ),
+        )
+      if (existing !== null) {
+        const promptText = Option.getOrUndefined(prompt)
+        const branches = yield* client.listBranches(existing.id)
+        if (branches.length > 1) {
+          return {
+            _tag: "branchPicker" as const,
+            session: existing,
+            branches,
+            prompt: promptText,
+          }
         }
-
-        const created = yield* client.createSession({
-          cwd,
-          bypass,
-        })
-        return {
-          session: {
-            id: created.sessionId,
-            name: created.name,
-            cwd,
-            bypass: created.bypass,
-            reasoningLevel: undefined,
-            branchId: created.branchId,
-            parentSessionId: undefined,
-            parentBranchId: undefined,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          } satisfies SessionInfo,
-          createdFromPrompt: false as const,
-        }
-      })
-      const sess = result.session
-      const promptText = result.createdFromPrompt ? undefined : Option.getOrUndefined(prompt)
-      const branches = yield* client.listBranches(sess.id)
-      if (branches.length > 1) {
-        return {
-          _tag: "branchPicker" as const,
-          session: sess,
-          branches,
-          prompt: promptText,
-        }
+        return { _tag: "session" as const, session: existing, prompt: promptText }
       }
-      return { _tag: "session" as const, session: sess, prompt: promptText }
+      // No existing session for cwd — fall through to create one
     }
 
-    if (Option.isSome(prompt)) {
-      const result = yield* client.createSession({
-        cwd,
-        bypass,
-      })
-      const sess: SessionInfo = {
-        id: result.sessionId,
-        name: result.name,
-        cwd,
-        bypass: result.bypass,
-        reasoningLevel: undefined,
-        branchId: result.branchId,
-        parentSessionId: undefined,
-        parentBranchId: undefined,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }
-      return { _tag: "session" as const, session: sess, prompt: prompt.value }
+    // Gate: don't create a session if auth is required
+    if (input.missingProviders.length > 0) {
+      return { _tag: "auth" as const }
     }
 
-    return { _tag: "home" as const }
+    const promptText = Option.getOrUndefined(prompt)
+    const result = yield* client.createSession({ cwd, bypass })
+    return { _tag: "session" as const, session: toSessionInfo(result, cwd), prompt: promptText }
   })
