@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import { defineExtension, type LoadedExtension } from "../../../domain/extension.js"
-import { validateExtensions } from "../loader.js"
+import { validateExtensions, isClientFile } from "../loader.js"
 
 const makeLoaded = (
   id: string,
@@ -74,6 +74,47 @@ describe("validateExtensions", () => {
   test("allows same-name tool from same extension", async () => {
     const ext = makeLoaded("ext-a", "builtin", ["tool-a"])
     await Effect.runPromise(validateExtensions([ext]))
+  })
+})
+
+describe("isClientFile", () => {
+  test("matches *.client.tsx", () => {
+    expect(isClientFile("my-tool.client.tsx")).toBe(true)
+  })
+
+  test("matches *.client.ts", () => {
+    expect(isClientFile("my-tool.client.ts")).toBe(true)
+  })
+
+  test("matches *.client.js", () => {
+    expect(isClientFile("my-tool.client.js")).toBe(true)
+  })
+
+  test("matches *.client.mjs", () => {
+    expect(isClientFile("my-tool.client.mjs")).toBe(true)
+  })
+
+  test("matches client.tsx in subdirectory", () => {
+    expect(isClientFile("client.tsx")).toBe(true)
+  })
+
+  test("matches client.ts in subdirectory", () => {
+    expect(isClientFile("client.ts")).toBe(true)
+  })
+
+  test("matches client.jsx", () => {
+    expect(isClientFile("client.jsx")).toBe(true)
+  })
+
+  test("does not match regular extension files", () => {
+    expect(isClientFile("index.ts")).toBe(false)
+    expect(isClientFile("my-tool.ts")).toBe(false)
+    expect(isClientFile("extension.js")).toBe(false)
+  })
+
+  test("does not match partial name matches", () => {
+    expect(isClientFile("my-client.ts")).toBe(false)
+    expect(isClientFile("client-utils.ts")).toBe(false)
   })
 })
 

@@ -12,7 +12,12 @@ import { ExtensionLoadError } from "../../domain/extension.js"
 
 const EXTENSION_GLOBS = ["*.ts", "*.js", "*.mjs"]
 
+/** TUI extension files — co-located *.client.{tsx,ts,js,mjs} or client.{tsx,ts,js,mjs} in subdirs */
+export const isClientFile = (entry: string): boolean =>
+  /\.client\.[tjm]sx?$/.test(entry) || /^client\.[tjm]sx?$/.test(entry)
+
 const isExtensionFile = (entry: string): boolean =>
+  !isClientFile(entry) &&
   EXTENSION_GLOBS.some((glob) => {
     const ext = glob.slice(1) // ".ts", ".js", ".mjs"
     return entry.endsWith(ext)
@@ -37,8 +42,9 @@ const discoverDir = (
     const paths: string[] = []
 
     for (const entry of entries) {
-      // Skip test directories and hidden files
+      // Skip test directories, hidden files, and TUI extension files
       if (entry.startsWith(".") || entry.startsWith("_") || entry === "__tests__") continue
+      if (isClientFile(entry)) continue
 
       const filePath = path.join(dir, entry)
       const stat = yield* fs.stat(filePath)
