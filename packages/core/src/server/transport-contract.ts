@@ -248,8 +248,8 @@ export const SessionSnapshot = Schema.Struct({
   bypass: Schema.optional(Schema.Boolean),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
-  /** Current runtime state (phase/status/agent/queue). Always present; idle sessions return idle runtime. */
-  runtime: Schema.NullOr(Schema.suspend(() => SessionRuntime)),
+  /** Current runtime state (phase/status/agent/queue). Idle sessions return idle runtime. */
+  runtime: Schema.suspend(() => SessionRuntime),
 })
 export type SessionSnapshot = typeof SessionSnapshot.Type
 
