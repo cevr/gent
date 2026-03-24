@@ -77,7 +77,7 @@ Those are either projections, tiny reducers, or pure compilation logic.
 - [x] Batch 2 — Collapse duplicate core actor orchestration around one real turn pipeline
 - [x] Batch 3 — Give the composer one owner
 - [x] Batch 4 — De-duplicate and flatten prompt search
-- [ ] Batch 5 — Promote command palette to an explicit reducer
+- [x] Batch 5 — Promote command palette to an explicit reducer
 - [ ] Batch 6 — Simplify or demote `session-machine`
 - [ ] Batch 7 — Finish or demote `auth-machine`
 - [ ] Batch 8 — Clean up low-priority state ownership drift and test seams

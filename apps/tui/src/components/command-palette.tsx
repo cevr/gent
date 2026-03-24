@@ -1,35 +1,34 @@
-import { createSignal, createEffect, createMemo, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { Agents } from "@gent/core/domain/agent.js"
-import { ChromePanel } from "./chrome-panel"
-import { useCommand } from "../command/index"
-import { useTheme } from "../theme/index"
 import { useClient } from "../client/index"
-import { useRouter } from "../router/index"
-import { useScrollSync } from "../hooks/use-scroll-sync"
-import { useRuntime } from "../hooks/use-runtime"
 import type { SessionInfo } from "../client"
-import { formatError } from "../utils/format-error"
+import { useCommand } from "../command/index"
+import {
+  CommandPaletteState,
+  transitionCommandPalette,
+  type CommandPaletteLevel,
+} from "./command-palette-state"
+import { ChromePanel } from "./chrome-panel"
+import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
+import { useRouter } from "../router/index"
+import { useTheme } from "../theme/index"
+import { formatError } from "../utils/format-error"
+import { useRuntime } from "../hooks/use-runtime"
 
 interface MenuItem {
-  id: string
-  title: string
-  description?: string
-  category?: string
-  shortcut?: string
-  onSelect: () => void
+  readonly id: string
+  readonly title: string
+  readonly description?: string
+  readonly category?: string
+  readonly shortcut?: string
+  readonly disabled?: boolean
+  readonly onSelect: () => void
 }
 
-interface MenuLevel {
-  title: string
-  items: MenuItem[] | (() => MenuItem[])
-  searchable?: boolean
-}
-
-// Simple substring fuzzy filter — matches if all chars of query appear in order
 const fuzzyMatch = (text: string, query: string): boolean => {
   const lower = text.toLowerCase()
   const q = query.toLowerCase()
@@ -40,7 +39,7 @@ const fuzzyMatch = (text: string, query: string): boolean => {
   return j === q.length
 }
 
-const filterItems = (items: MenuItem[], query: string): MenuItem[] => {
+const filterItems = (items: readonly MenuItem[], query: string): readonly MenuItem[] => {
   if (query.length === 0) return items
   return items.filter(
     (item) =>
@@ -50,6 +49,52 @@ const filterItems = (items: MenuItem[], query: string): MenuItem[] => {
   )
 }
 
+type SessionNode = {
+  readonly session: SessionInfo
+  readonly children: SessionNode[]
+}
+
+const buildSessionTree = (list: readonly SessionInfo[]): SessionNode[] => {
+  const nodes = new Map<string, SessionNode>()
+  for (const session of list) {
+    nodes.set(session.id, { session, children: [] })
+  }
+
+  const roots: SessionNode[] = []
+  for (const session of list) {
+    const node = nodes.get(session.id)
+    if (node === undefined) continue
+    if (session.parentSessionId !== undefined && nodes.has(session.parentSessionId)) {
+      nodes.get(session.parentSessionId)?.children.push(node)
+    } else {
+      roots.push(node)
+    }
+  }
+
+  const sortNodes = (tree: SessionNode[]) => {
+    tree.sort((a, b) => b.session.updatedAt - a.session.updatedAt)
+    for (const node of tree) {
+      if (node.children.length > 0) sortNodes(node.children)
+    }
+  }
+
+  sortNodes(roots)
+  return roots
+}
+
+const levelTitle = (level: CommandPaletteLevel): string => {
+  switch (level) {
+    case "root":
+      return "Commands"
+    case "sessions":
+      return "Sessions"
+    case "theme":
+      return "Theme"
+    case "agent":
+      return "Agent"
+  }
+}
+
 export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
@@ -57,154 +102,138 @@ export function CommandPalette() {
   const { cast } = useRuntime(client.client.services)
   const router = useRouter()
   const dimensions = useTerminalDimensions()
+  const [state, setState] = createSignal(CommandPaletteState.initial())
 
-  type SearchState = { _tag: "idle" } | { _tag: "active"; query: string }
-  type PaletteState = {
-    _tag: "open"
-    levelStack: MenuLevel[]
-    selectedIndex: number
-    sessions: SessionInfo[]
-    search: SearchState
-  }
-
-  const [state, setState] = createSignal<PaletteState>({
-    _tag: "open",
-    levelStack: [],
-    selectedIndex: 0,
-    sessions: [],
-    search: { _tag: "idle" },
-  })
-
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef: ScrollBoxRenderable | undefined
 
   useScrollSync(() => `item-${state().selectedIndex}`, { getRef: () => scrollRef })
 
-  // Build root menu
-  const rootMenu = (): MenuLevel => ({
-    title: "Commands",
-    searchable: true,
-    items: [
-      {
-        id: "sessions",
-        title: "Sessions",
-        description: "Browse and switch sessions",
-        category: "nav",
-        onSelect: () => {
-          cast(
-            client.listSessions().pipe(
-              Effect.tap((list) =>
-                Effect.sync(() => {
-                  setState((current) => ({
-                    ...current,
-                    sessions: [...list],
-                    levelStack: [...current.levelStack, sessionsMenu()],
-                    selectedIndex: 0,
-                    search: { _tag: "idle" },
-                  }))
-                }),
-              ),
-              Effect.catchEager((error) =>
-                Effect.sync(() => {
-                  client.setError(formatError(error))
-                }),
-              ),
-            ),
-          )
-        },
-      },
-      {
-        id: "theme",
-        title: "Theme",
-        description: "Switch color theme",
-        category: "config",
-        onSelect: () => pushLevel(themeMenu()),
-      },
-      {
-        id: "agent",
-        title: "Agent",
-        description: "Switch agent mode",
-        category: "config",
-        onSelect: () => pushLevel(agentMenu()),
-      },
-      {
-        id: "bypass",
-        title: bypassLabel(),
-        description: "Toggle permission bypass for this session",
-        category: "config",
-        onSelect: () => {
-          const session = client.session()
-          if (session === null) return
-          cast(
-            client.updateSessionBypass(!session.bypass).pipe(
-              Effect.catchEager((error) =>
-                Effect.sync(() => {
-                  client.setError(formatError(error))
-                }),
-              ),
-            ),
-          )
-          command.closePalette()
-        },
-      },
-      {
-        id: "new-session",
-        title: "New Session",
-        description: "Start a fresh session",
-        category: "cmd",
-        shortcut: "Ctrl+N",
-        onSelect: () => {
-          client.clearSession()
-          router.navigateToHome()
-          command.closePalette()
-        },
-      },
-    ],
-  })
+  const dispatch = (event: Parameters<typeof transitionCommandPalette>[1]) => {
+    setState((current) => transitionCommandPalette(current, event))
+  }
+
+  const closePalette = () => {
+    dispatch({ _tag: "Close" })
+    command.closePalette()
+  }
+
+  const loadSessions = () => {
+    dispatch({ _tag: "LoadSessions" })
+    cast(
+      client.listSessions().pipe(
+        Effect.tap((sessions) =>
+          Effect.sync(() => {
+            dispatch({ _tag: "SessionsLoaded", sessions })
+          }),
+        ),
+        Effect.catchEager((error) =>
+          Effect.sync(() => {
+            dispatch({ _tag: "SessionsFailed", message: formatError(error) })
+          }),
+        ),
+      ),
+    )
+  }
+
+  const currentLevel = () => CommandPaletteState.currentLevel(state())
+  const searchQuery = () => state().searchQuery
 
   const bypassLabel = () => {
     const session = client.session()
     return session?.bypass === true ? "Bypass ✓" : "Bypass"
   }
 
-  // Sessions submenu
-  const sessionsMenu = (): MenuLevel => {
-    type SessionNode = {
-      session: SessionInfo
-      children: SessionNode[]
+  const themeItems = (): readonly MenuItem[] => {
+    const isSystem = selected() === "system"
+    const currentMode = mode()
+    return [
+      {
+        id: "theme.system",
+        title: isSystem ? "System •" : "System",
+        description: "Follow terminal theme",
+        onSelect: () => {
+          set("system")
+          closePalette()
+        },
+      },
+      {
+        id: "theme.dark",
+        title: !isSystem && currentMode === "dark" ? "Dark •" : "Dark",
+        onSelect: () => {
+          set("opencode")
+          setMode("dark")
+          closePalette()
+        },
+      },
+      {
+        id: "theme.light",
+        title: !isSystem && currentMode === "light" ? "Light •" : "Light",
+        onSelect: () => {
+          set("opencode")
+          setMode("light")
+          closePalette()
+        },
+      },
+    ]
+  }
+
+  const agentItems = (): readonly MenuItem[] => {
+    const current = client.agent()
+    const agents = Object.values(Agents).filter(
+      (agent) => agent.kind === "primary" && !agent.hidden,
+    )
+    return agents.map((agent) => ({
+      id: `agent.${agent.name}`,
+      title: agent.name === current ? `${agent.name} •` : agent.name,
+      description: agent.description ?? undefined,
+      onSelect: () => {
+        client.steer({ _tag: "SwitchAgent", agent: agent.name })
+        closePalette()
+      },
+    }))
+  }
+
+  const sessionItems = (): readonly MenuItem[] => {
+    const sessionsState = state().sessions
+    const newSessionItem: MenuItem = {
+      id: "session.new",
+      title: "+ New Session",
+      onSelect: () => {
+        client.clearSession()
+        router.navigateToHome()
+        closePalette()
+      },
     }
 
-    const buildSessionTree = (list: SessionInfo[]): SessionNode[] => {
-      const nodes = new Map<string, SessionNode>()
-      for (const session of list) {
-        nodes.set(session.id, { session, children: [] })
-      }
-
-      const roots: SessionNode[] = []
-      for (const session of list) {
-        const node = nodes.get(session.id)
-        if (node === undefined) continue
-        if (session.parentSessionId !== undefined && nodes.has(session.parentSessionId)) {
-          nodes.get(session.parentSessionId)?.children.push(node)
-        } else {
-          roots.push(node)
-        }
-      }
-
-      const sortNodes = (list: SessionNode[]) => {
-        list.sort((a, b) => b.session.updatedAt - a.session.updatedAt)
-        for (const node of list) {
-          if (node.children.length > 0) sortNodes(node.children)
-        }
-      }
-      sortNodes(roots)
-
-      return roots
+    if (sessionsState._tag === "idle" || sessionsState._tag === "loading") {
+      return [
+        newSessionItem,
+        {
+          id: "session.loading",
+          title: "Loading sessions…",
+          description: "Fetching recent workspaces and branches",
+          disabled: true,
+          onSelect: () => {},
+        },
+      ]
     }
 
-    const flattenSessionTree = (nodes: SessionNode[], depth = 0): MenuItem[] => {
+    if (sessionsState._tag === "failed") {
+      return [
+        newSessionItem,
+        {
+          id: "session.failed",
+          title: "Failed to load sessions",
+          description: sessionsState.message,
+          disabled: true,
+          onSelect: () => {},
+        },
+      ]
+    }
+
+    const flattenSessionTree = (nodes: readonly SessionNode[], depth = 0): MenuItem[] => {
       const items: MenuItem[] = []
       const prefix = depth > 0 ? `${"  ".repeat(depth)}- ` : ""
-
       for (const node of nodes) {
         const session = node.session
         const currentSession = client.session()
@@ -217,11 +246,10 @@ export function CommandPalette() {
           id: `session.${session.id}`,
           title,
           onSelect: () => {
-            if (session.branchId !== undefined) {
-              client.switchSession(session.id, session.branchId, session.name ?? "Unnamed")
-              router.navigateToSession(session.id, session.branchId)
-            }
-            command.closePalette()
+            if (session.branchId === undefined) return
+            client.switchSession(session.id, session.branchId, session.name ?? "Unnamed")
+            router.navigateToSession(session.id, session.branchId)
+            closePalette()
           },
         })
 
@@ -229,188 +257,138 @@ export function CommandPalette() {
           items.push(...flattenSessionTree(node.children, depth + 1))
         }
       }
-
       return items
     }
 
-    return {
+    return [newSessionItem, ...flattenSessionTree(buildSessionTree(sessionsState.items))]
+  }
+
+  const rootItems = (): readonly MenuItem[] => [
+    {
+      id: "sessions",
       title: "Sessions",
-      items: () => [
-        {
-          id: "session.new",
-          title: "+ New Session",
-          onSelect: () => {
-            client.clearSession()
-            router.navigateToHome()
-            command.closePalette()
-          },
-        },
-        ...flattenSessionTree(buildSessionTree(state().sessions)),
-      ],
-      searchable: true,
-    }
-  }
-
-  // Theme submenu
-  const themeMenu = (): MenuLevel => {
-    const isSystem = selected() === "system"
-    const currentMode = mode()
-    return {
+      description: "Browse and switch sessions",
+      category: "nav",
+      onSelect: () => {
+        dispatch({
+          _tag: "ActivateSelection",
+          outcome: { _tag: "PushLevel", level: "sessions" },
+        })
+        loadSessions()
+      },
+    },
+    {
+      id: "theme",
       title: "Theme",
-      items: [
-        {
-          id: "theme.system",
-          title: isSystem ? "System •" : "System",
-          description: "Follow terminal theme",
-          onSelect: () => {
-            set("system")
-            command.closePalette()
-          },
-        },
-        {
-          id: "theme.dark",
-          title: !isSystem && currentMode === "dark" ? "Dark •" : "Dark",
-          onSelect: () => {
-            set("opencode")
-            setMode("dark")
-            command.closePalette()
-          },
-        },
-        {
-          id: "theme.light",
-          title: !isSystem && currentMode === "light" ? "Light •" : "Light",
-          onSelect: () => {
-            set("opencode")
-            setMode("light")
-            command.closePalette()
-          },
-        },
-      ],
-    }
-  }
-
-  // Agent submenu - primary agents only
-  const agentMenu = (): MenuLevel => {
-    const current = client.agent()
-    const agents = Object.values(Agents).filter((a) => a.kind === "primary" && a.hidden !== true)
-
-    return {
+      description: "Switch color theme",
+      category: "config",
+      onSelect: () =>
+        dispatch({
+          _tag: "ActivateSelection",
+          outcome: { _tag: "PushLevel", level: "theme" },
+        }),
+    },
+    {
+      id: "agent",
       title: "Agent",
-      items: agents.map((agent) => ({
-        id: `agent.${agent.name}`,
-        title: agent.name === current ? `${agent.name} •` : agent.name,
-        description: agent.description ?? undefined,
-        onSelect: () => {
-          client.steer({ _tag: "SwitchAgent", agent: agent.name })
-          command.closePalette()
-        },
-      })),
+      description: "Switch agent mode",
+      category: "config",
+      onSelect: () =>
+        dispatch({
+          _tag: "ActivateSelection",
+          outcome: { _tag: "PushLevel", level: "agent" },
+        }),
+    },
+    {
+      id: "bypass",
+      title: bypassLabel(),
+      description: "Toggle permission bypass for this session",
+      category: "config",
+      onSelect: () => {
+        const session = client.session()
+        if (session === null) return
+        cast(
+          client.updateSessionBypass(!session.bypass).pipe(
+            Effect.catchEager((error) =>
+              Effect.sync(() => {
+                client.setError(formatError(error))
+              }),
+            ),
+          ),
+        )
+        closePalette()
+      },
+    },
+    {
+      id: "new-session",
+      title: "New Session",
+      description: "Start a fresh session",
+      category: "cmd",
+      shortcut: "Ctrl+N",
+      onSelect: () => {
+        client.clearSession()
+        router.navigateToHome()
+        closePalette()
+      },
+    },
+  ]
+
+  const levelItems = createMemo<readonly MenuItem[]>(() => {
+    switch (currentLevel()) {
+      case "root":
+        return rootItems()
+      case "sessions":
+        return sessionItems()
+      case "theme":
+        return themeItems()
+      case "agent":
+        return agentItems()
     }
-  }
-
-  const currentLevel = () => {
-    const stack = state().levelStack
-    return stack.length > 0 ? (stack[stack.length - 1] ?? rootMenu()) : rootMenu()
-  }
-
-  const levelItems = (level: MenuLevel) =>
-    typeof level.items === "function" ? level.items() : level.items
-
-  const searchQuery = () => {
-    const current = state().search
-    return current._tag === "active" ? current.query : ""
-  }
-
-  // Filtered items based on search query
-  const filteredItems = createMemo(() => {
-    const level = currentLevel()
-    const items = levelItems(level)
-    const query = searchQuery()
-    if (level.searchable === false || query.length === 0) return items
-    return filterItems(items, query)
   })
 
-  // Compute max category width for alignment
+  const filteredItems = createMemo(() => filterItems(levelItems(), searchQuery()))
+
   const maxCategoryWidth = createMemo(() => {
     let max = 0
     for (const item of filteredItems()) {
-      if (item.category !== undefined && item.category.length > max) {
-        max = item.category.length
-      }
+      if (item.category !== undefined && item.category.length > max) max = item.category.length
     }
     return max
   })
 
-  const pushLevel = (level: MenuLevel) => {
-    setState((current) => ({
-      ...current,
-      levelStack: [...current.levelStack, level],
-      selectedIndex: 0,
-      search: { _tag: "idle" },
-    }))
-  }
-
   const popLevel = () => {
-    const stack = state().levelStack
-    if (stack.length > 0) {
-      setState((current) => ({
-        ...current,
-        levelStack: current.levelStack.slice(0, -1),
-        selectedIndex: 0,
-        search: { _tag: "idle" },
-      }))
-    } else {
-      command.closePalette()
+    if (state().levelStack.length === 0) {
+      closePalette()
+      return
     }
+    dispatch({ _tag: "PopLevel" })
   }
 
   const handleSelect = () => {
-    const items = filteredItems()
-    const item = items[state().selectedIndex]
-    if (item !== undefined) {
-      item.onSelect()
-    }
-  }
-
-  // Reset when palette opens
-  const resetPalette = () => {
-    setState((current) => ({
-      ...current,
-      levelStack: [],
-      selectedIndex: 0,
-      search: { _tag: "idle" },
-    }))
+    const item = filteredItems()[state().selectedIndex]
+    if (item === undefined || item.disabled) return
+    item.onSelect()
   }
 
   useScopedKeyboard(
-    (e) => {
-      if (e.name === "escape") {
-        if (state().search._tag === "active") {
-          setState((current) => ({
-            ...current,
-            search: { _tag: "idle" },
-            selectedIndex: 0,
-          }))
+    (event) => {
+      if (event.name === "escape") {
+        if (searchQuery().length > 0) {
+          dispatch({ _tag: "ClearSearch" })
           return true
         }
         popLevel()
         return true
       }
 
-      if (e.name === "left") {
+      if (event.name === "left") {
         popLevel()
         return true
       }
 
-      if (e.name === "backspace") {
-        const currentSearch = state().search
-        if (currentSearch._tag === "active") {
-          const next = currentSearch.query.slice(0, -1)
-          setState((current) => ({
-            ...current,
-            search: next.length > 0 ? { _tag: "active", query: next } : { _tag: "idle" },
-            selectedIndex: 0,
-          }))
+      if (event.name === "backspace") {
+        if (searchQuery().length > 0) {
+          dispatch({ _tag: "SearchBackspaced" })
           return true
         }
         if (state().levelStack.length > 0) {
@@ -420,84 +398,65 @@ export function CommandPalette() {
         return false
       }
 
-      if (e.name === "return" || e.name === "right") {
+      if (event.name === "return" || event.name === "right") {
         handleSelect()
         return true
       }
 
-      const items = filteredItems()
-      if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-        setState((current) => ({
-          ...current,
-          selectedIndex: current.selectedIndex > 0 ? current.selectedIndex - 1 : items.length - 1,
-        }))
+      if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
+        dispatch({ _tag: "MoveUp", itemCount: filteredItems().length })
         return true
       }
 
-      if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-        setState((current) => ({
-          ...current,
-          selectedIndex: current.selectedIndex < items.length - 1 ? current.selectedIndex + 1 : 0,
-        }))
+      if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
+        dispatch({ _tag: "MoveDown", itemCount: filteredItems().length })
         return true
       }
 
-      // Handle search input — all levels searchable unless explicitly disabled
-      const level = currentLevel()
-      if (level.searchable !== false && e.sequence !== undefined && e.sequence.length === 1) {
-        const char = e.sequence
-        if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-          setState((current) => {
-            const query = current.search._tag === "active" ? current.search.query : ""
-            return {
-              ...current,
-              search: { _tag: "active", query: query + char },
-              selectedIndex: 0,
-            }
-          })
+      if (event.sequence !== undefined && event.sequence.length === 1) {
+        const code = event.sequence.charCodeAt(0)
+        if (code >= 32 && code <= 126) {
+          dispatch({ _tag: "SearchTyped", char: event.sequence })
           return true
         }
       }
+
       return false
     },
     { when: () => command.paletteOpen() },
   )
 
-  // Reset palette state when it opens
   createEffect(() => {
     if (command.paletteOpen()) {
-      resetPalette()
+      dispatch({ _tag: "Open" })
     }
   })
 
-  // Calculate palette dimensions
   const paletteWidth = () => Math.min(50, dimensions().width - 4)
   const paletteHeight = () => Math.min(14, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - paletteWidth()) / 2)
   const top = () => Math.floor((dimensions().height - paletteHeight()) / 2)
 
-  const breadcrumb = () => {
-    const stack = state().levelStack
-    if (stack.length === 0) return ""
-    return stack.map((l) => l.title).join(" › ") + " ›"
-  }
+  const breadcrumb = () =>
+    state()
+      .levelStack.map((level) => levelTitle(level))
+      .join(" › ") + (state().levelStack.length > 0 ? " ›" : "")
 
   return (
     <Show when={command.paletteOpen()}>
       <ChromePanel.Root
-        title={currentLevel().title}
+        title={levelTitle(currentLevel())}
         width={paletteWidth()}
         height={paletteHeight()}
         left={left()}
         top={top()}
       >
-        {/* Search */}
         <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
             <Show when={breadcrumb().length > 0}>
               <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
             </Show>
-            <Show when={currentLevel().searchable !== false && searchQuery().length > 0}>
+            <Show when={searchQuery().length > 0}>
               <span style={{ fg: theme.textMuted }}>› </span>
               {searchQuery()}
               <span style={{ fg: theme.primary }}>│</span>
@@ -505,55 +464,43 @@ export function CommandPalette() {
           </text>
         </ChromePanel.Section>
 
-        {/* Items */}
-        <ChromePanel.Body ref={scrollRef}>
+        <ChromePanel.Body
+          ref={(element) => {
+            scrollRef = element
+          }}
+        >
           <For each={filteredItems()}>
             {(item, index) => {
               const isSelected = () => state().selectedIndex === index()
-              const catW = maxCategoryWidth()
+              const disabled = item.disabled === true
+              const catWidth = maxCategoryWidth()
+              const itemTextColor = () => {
+                if (disabled) return theme.textMuted
+                return isSelected() ? theme.selectedListItemText : theme.text
+              }
+              const metaColor = () => {
+                if (disabled) return theme.textMuted
+                return isSelected() ? theme.selectedListItemText : theme.textMuted
+              }
+
               return (
                 <box
                   id={`item-${index()}`}
-                  backgroundColor={isSelected() ? theme.primary : "transparent"}
+                  backgroundColor={isSelected() && !disabled ? theme.primary : "transparent"}
                   paddingLeft={1}
                 >
-                  <text
-                    style={{
-                      fg: isSelected() ? theme.selectedListItemText : theme.text,
-                    }}
-                  >
-                    {/* Category badge */}
-                    <Show when={catW > 0}>
-                      <span
-                        style={{
-                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
-                        }}
-                      >
-                        {(item.category ?? "").padEnd(catW)}
+                  <text style={{ fg: itemTextColor() }}>
+                    <Show when={catWidth > 0}>
+                      <span style={{ fg: metaColor() }}>
+                        {(item.category ?? "").padEnd(catWidth)}
                       </span>{" "}
                     </Show>
                     {item.title}
-                    {/* Description */}
                     <Show when={item.description !== undefined}>
-                      <span
-                        style={{
-                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
-                        }}
-                      >
-                        {" "}
-                        {item.description}
-                      </span>
+                      <span style={{ fg: metaColor() }}> {item.description}</span>
                     </Show>
-                    {/* Shortcut hint */}
                     <Show when={item.shortcut !== undefined}>
-                      <span
-                        style={{
-                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
-                        }}
-                      >
-                        {" "}
-                        [{item.shortcut}]
-                      </span>
+                      <span style={{ fg: metaColor() }}> [{item.shortcut}]</span>
                     </Show>
                   </text>
                 </box>
