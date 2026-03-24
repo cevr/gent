@@ -1,5 +1,4 @@
 import { Effect, Layer, ServiceMap, Stream } from "effect"
-import { identity } from "effect/Function"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
@@ -9,7 +8,6 @@ import {
   BranchSwitched,
   BranchCreated,
   BranchSummarized,
-  SessionNameUpdated,
   SessionStarted,
   SessionSettingsUpdated,
 } from "../domain/event.js"
@@ -69,43 +67,6 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
       const actorProcess = yield* ActorProcess
       const eventStore = yield* EventStore
       const provider = yield* Provider
-
-      const generateSessionName = Effect.fn("SessionCommands.generateSessionName")(function* (
-        firstMessage: string,
-      ) {
-        const prompt = [
-          "Generate a 3-5 word lowercase title for a conversation that starts with the following message.",
-          "Rules:",
-          "- Lowercase only, no quotes, no punctuation",
-          "- Be specific to the content, not generic",
-          '- Bad: "help with code", "quick question", "new project"',
-          '- Good: "fix auth token refresh", "add dark mode toggle", "migrate postgres to sqlite"',
-          "",
-          `Message: "${firstMessage.slice(0, 300)}"`,
-          "",
-          "Title:",
-        ].join("\n")
-
-        for (let attempt = 0; attempt < 2; attempt++) {
-          const result = yield* provider
-            .generate({
-              model: NAME_GEN_MODEL,
-              prompt,
-              maxTokens: 30,
-            })
-            .pipe(Effect.catchEager(() => Effect.succeed("")))
-
-          const name = result
-            .trim()
-            .replace(/^["']|["']$/g, "")
-            .replace(/\.$/g, "")
-            .toLowerCase()
-
-          if (name.length > 0 && name !== "new chat" && name !== "untitled") return name
-        }
-
-        return "New Chat"
-      })
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -335,35 +296,6 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
       const sendMessage = Effect.fn("SessionCommands.sendMessage")(function* (
         input: SendMessageInput,
       ) {
-        const session = yield* storage.getSession(input.sessionId)
-        const parentSpan = yield* Effect.currentParentSpan.pipe(
-          Effect.orElseSucceed(() => undefined),
-        )
-
-        yield* Effect.forkDetach(
-          Effect.gen(function* () {
-            if (session === undefined || session.name !== "New Chat") return
-            const generatedName = yield* generateSessionName(input.content)
-            // Compare-and-set: only update if name is still "New Chat" (avoids race with concurrent sends)
-            const current = yield* storage.getSession(input.sessionId)
-            if (current === undefined || current.name !== "New Chat") return
-            const updatedSession = new Session({
-              ...current,
-              name: generatedName,
-              updatedAt: new Date(),
-            })
-            yield* storage.updateSession(updatedSession)
-            yield* eventStore.publish(
-              new SessionNameUpdated({ sessionId: input.sessionId, name: generatedName }),
-            )
-          }).pipe(
-            Effect.catchEager((error) =>
-              Effect.logWarning("session name generation failed", error),
-            ),
-            parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-          ),
-        )
-
         yield* actorProcess.sendUserMessage({
           sessionId: input.sessionId,
           branchId: input.branchId,
