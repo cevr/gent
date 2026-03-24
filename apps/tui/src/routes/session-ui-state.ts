@@ -1,9 +1,15 @@
 import type { SessionInfo, SessionTreeNode } from "../client/index"
 import type { PromptSearchEvent, PromptSearchState } from "../components/prompt-search-state"
-import {
-  PromptSearchState as PromptSearchStateFactory,
-  transitionPromptSearch,
-} from "../components/prompt-search-state"
+import { PromptSearchState as PromptSearchStateFactory } from "../components/prompt-search-state"
+import { transitionPromptSearchRoute } from "./prompt-search-flow"
+
+interface PromptSearchOverlayState {
+  readonly _tag: "prompt-search"
+  readonly draftBeforeOpen: string
+  readonly query: string
+  readonly selectedIndex: number
+  readonly hasInteracted: boolean
+}
 
 export type SessionOverlayState =
   | { readonly _tag: "none" }
@@ -14,10 +20,7 @@ export type SessionOverlayState =
     }
   | { readonly _tag: "fork" }
   | { readonly _tag: "mermaid" }
-  | {
-      readonly _tag: "prompt-search"
-      readonly state: Extract<PromptSearchState, { readonly _tag: "open" }>
-    }
+  | PromptSearchOverlayState
 
 export interface SessionUiState {
   readonly toolsExpanded: boolean
@@ -55,7 +58,15 @@ export interface SessionUiTransitionResult {
 }
 
 export const getPromptSearchState = (state: SessionUiState): PromptSearchState =>
-  state.overlay._tag === "prompt-search" ? state.overlay.state : PromptSearchStateFactory.closed()
+  state.overlay._tag === "prompt-search"
+    ? {
+        _tag: "open",
+        draftBeforeOpen: state.overlay.draftBeforeOpen,
+        query: state.overlay.query,
+        selectedIndex: state.overlay.selectedIndex,
+        hasInteracted: state.overlay.hasInteracted,
+      }
+    : PromptSearchStateFactory.closed()
 
 export const promptSearchOpen = (state: SessionUiState): boolean =>
   getPromptSearchState(state)._tag === "open"
@@ -116,12 +127,15 @@ export function transitionSessionUi(
 
     case "PromptSearch": {
       const promptState = getPromptSearchState(state)
-      const result = transitionPromptSearch(promptState, event.event, event.entries)
+      const result = transitionPromptSearchRoute(promptState, event.event, event.entries)
       const nextOverlay =
         result.state._tag === "open"
           ? {
               _tag: "prompt-search" as const,
-              state: result.state,
+              draftBeforeOpen: result.state.draftBeforeOpen,
+              query: result.state.query,
+              selectedIndex: result.state.selectedIndex,
+              hasInteracted: result.state.hasInteracted,
             }
           : { _tag: "none" as const }
       return {
@@ -129,12 +143,7 @@ export function transitionSessionUi(
           ...state,
           overlay: nextOverlay,
         },
-        effects: result.effects
-          .filter((effect) => effect._tag === "Preview")
-          .map((effect) => ({
-            _tag: "RestoreComposer" as const,
-            text: effect.text,
-          })),
+        effects: result.effects,
       }
     }
   }

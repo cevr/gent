@@ -1,8 +1,6 @@
 import type { PromptSearchEvent, PromptSearchState } from "../components/prompt-search-state"
-import {
-  PromptSearchState as PromptSearchStateFactory,
-  transitionPromptSearch,
-} from "../components/prompt-search-state"
+import { PromptSearchState as PromptSearchStateFactory } from "../components/prompt-search-state"
+import { transitionPromptSearchRoute } from "./prompt-search-flow"
 
 export type HomeState =
   | {
@@ -71,15 +69,10 @@ export function transitionHome(state: HomeState, event: HomeEvent): HomeTransiti
       }
 
     case "PromptSearch": {
-      const result = transitionPromptSearch(state.promptSearch, event.event, event.entries)
+      const result = transitionPromptSearchRoute(state.promptSearch, event.event, event.entries)
       return {
         state: updatePromptSearch(state, result.state),
-        effects: result.effects
-          .filter((effect) => effect._tag === "Preview")
-          .map((effect) => ({
-            _tag: "RestoreComposer" as const,
-            text: effect.text,
-          })),
+        effects: result.effects,
       }
     }
 

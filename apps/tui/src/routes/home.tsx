@@ -17,7 +17,7 @@ import { ClientError, formatError, type UiError } from "../utils/format-error"
 import { useWorkspace } from "../workspace/index"
 import { BorderedInput, formatCwdGit, type BorderLabelItem } from "../components/bordered-input"
 import { useKeyChain } from "../hooks/use-key-chain"
-import { PromptSearchPalette, promptSearchEventFromKey } from "../components/prompt-search-palette"
+import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { useScopedKeyboard } from "../keyboard/context"
 import { usePromptHistory } from "../hooks/use-prompt-history"
@@ -25,8 +25,8 @@ import {
   ComposerInteractionState,
   transitionComposerInteraction,
 } from "../components/composer-interaction-state"
-import { getPromptSearchItems } from "../components/prompt-search-state"
 import { transitionHome, type HomeEffect, type HomeEvent, type HomeState } from "./home-state"
+import { createPromptSearchController } from "./prompt-search-controller"
 
 const LOGOS = getLogos()
 
@@ -62,7 +62,17 @@ export function Home(props: HomeProps) {
   >([])
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
   const promptSearchState = () => state().promptSearch
-  const promptSearchOpen = () => promptSearchState()._tag === "open"
+  const promptSearch = createPromptSearchController({
+    state: promptSearchState,
+    entries: history.entries,
+    draft: () => interactionState().draft,
+    dispatch: (event, entries) =>
+      dispatchHome({
+        _tag: "PromptSearch",
+        event,
+        entries,
+      }),
+  })
 
   const handleHomeEffect = (effect: HomeEffect) => {
     switch (effect._tag) {
@@ -121,18 +131,7 @@ export function Home(props: HomeProps) {
   }
 
   useScopedKeyboard((e) => {
-    if (promptSearchOpen()) {
-      const promptEvent = promptSearchEventFromKey(
-        e,
-        getPromptSearchItems(promptSearchState(), history.entries()).length > 0,
-      )
-      if (promptEvent !== undefined) {
-        dispatchHome({
-          _tag: "PromptSearch",
-          event: promptEvent,
-          entries: history.entries(),
-        })
-      }
+    if (promptSearch.handleKey(e)) {
       return true
     }
 
@@ -181,11 +180,7 @@ export function Home(props: HomeProps) {
     }
 
     if (e.ctrl === true && e.name === "r") {
-      dispatchHome({
-        _tag: "PromptSearch",
-        event: { _tag: "Open", draftBeforeOpen: interactionState().draft },
-        entries: history.entries(),
-      })
+      promptSearch.open()
       quitChain.reset()
       return true
     }
@@ -310,7 +305,7 @@ export function Home(props: HomeProps) {
         <Composer
           onSubmit={handleSubmit}
           onSlashCommand={handleSlashCommand}
-          suspended={promptSearchOpen()}
+          suspended={promptSearch.isOpen()}
           interactionState={interactionState()}
           onInteractionEvent={(event) =>
             setInteractionState((current) => transitionComposerInteraction(current, event))
@@ -321,15 +316,9 @@ export function Home(props: HomeProps) {
       </BorderedInput>
 
       <PromptSearchPalette
-        state={promptSearchState()}
+        state={promptSearch.state()}
         entries={history.entries()}
-        onEvent={(event) =>
-          dispatchHome({
-            _tag: "PromptSearch",
-            event,
-            entries: history.entries(),
-          })
-        }
+        onEvent={promptSearch.onEvent}
       />
     </box>
   )

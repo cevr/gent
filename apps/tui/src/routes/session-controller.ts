@@ -3,8 +3,6 @@ import { Effect, Fiber, Stream } from "effect"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
-import { promptSearchEventFromKey } from "../components/prompt-search-palette"
-import { getPromptSearchItems } from "../components/prompt-search-state"
 import {
   ComposerInteractionState,
   transitionComposerInteraction,
@@ -33,12 +31,12 @@ import { useSessionFeed } from "../hooks/use-session-feed"
 import { runWithReconnect } from "../utils/run-with-reconnect"
 import {
   getPromptSearchState,
-  promptSearchOpen,
   SessionUiState,
   transitionSessionUi,
   type SessionUiEffect,
   type SessionUiEvent,
 } from "./session-ui-state"
+import { createPromptSearchController } from "./prompt-search-controller"
 
 type QueueState = {
   steering: readonly QueueEntryInfo[]
@@ -239,6 +237,17 @@ export function useSessionController(props: {
   )
 
   const items = createMemo<SessionItem[]>(() => feed.items())
+  const promptSearch = createPromptSearchController({
+    state: () => getPromptSearchState(uiState()),
+    entries: history.entries,
+    draft: () => interactionState().draft,
+    dispatch: (event, entries) =>
+      dispatchSessionUi({
+        _tag: "PromptSearch",
+        event,
+        entries,
+      }),
+  })
 
   createEffect(() => {
     void props.sessionId
@@ -460,18 +469,7 @@ export function useSessionController(props: {
   }
 
   useScopedKeyboard((event) => {
-    if (promptSearchOpen(uiState())) {
-      const promptEvent = promptSearchEventFromKey(
-        event,
-        getPromptSearchItems(getPromptSearchState(uiState()), history.entries()).length > 0,
-      )
-      if (promptEvent !== undefined) {
-        dispatchSessionUi({
-          _tag: "PromptSearch",
-          event: promptEvent,
-          entries: history.entries(),
-        })
-      }
+    if (promptSearch.handleKey(event)) {
       return true
     }
 
@@ -518,11 +516,7 @@ export function useSessionController(props: {
     }
 
     if (event.ctrl === true && event.name === "r") {
-      dispatchSessionUi({
-        _tag: "PromptSearch",
-        event: { _tag: "Open", draftBeforeOpen: interactionState().draft },
-        entries: history.entries(),
-      })
+      promptSearch.open()
       quitChain.reset()
       return true
     }
@@ -550,7 +544,7 @@ export function useSessionController(props: {
     uiState,
     promptEntries: history.entries,
     promptSearchState: () => getPromptSearchState(uiState()),
-    promptSearchOpen: () => promptSearchOpen(uiState()),
+    promptSearchOpen: promptSearch.isOpen,
     toolsExpanded: () => uiState().toolsExpanded,
     treeOverlay: () => getTreeOverlay(uiState().overlay),
     activity,
@@ -567,11 +561,6 @@ export function useSessionController(props: {
     closeOverlay: () => dispatchSessionUi({ _tag: "CloseOverlay" }),
     onSessionTreeSelect,
     onForkSelect,
-    onPromptSearchEvent: (event) =>
-      dispatchSessionUi({
-        _tag: "PromptSearch",
-        event,
-        entries: history.entries(),
-      }),
+    onPromptSearchEvent: (event) => promptSearch.onEvent(event),
   }
 }
