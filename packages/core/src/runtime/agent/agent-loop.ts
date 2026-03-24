@@ -732,11 +732,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               if (turnTools.length === 0) {
                 const agent = yield* extensionRegistry.getAgent(state.currentTurnAgent)
                 if (agent !== undefined) {
-                  turnTools = yield* extensionRegistry.listToolsForAgent(agent, {
-                    sessionId,
-                    branchId,
-                    agentName: state.currentTurnAgent,
-                  })
+                  const policy = yield* extensionRegistry.resolveToolPolicy(
+                    agent,
+                    { sessionId, branchId, agentName: state.currentTurnAgent },
+                    [],
+                  )
+                  turnTools = policy.tools
                   yield* Ref.set(turnToolsRef, turnTools)
                 }
               }
@@ -1468,18 +1469,23 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
 
           const effectiveAgent = applyAgentOverrides(agent, input)
 
-          const tools = yield* extensionRegistry.listToolsForAgent(effectiveAgent, {
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            agentName: input.agentName,
-            tags: input.tags,
-          })
+          const { tools, promptSections: extensionSections } =
+            yield* extensionRegistry.resolveToolPolicy(
+              effectiveAgent,
+              {
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                agentName: input.agentName,
+                tags: input.tags,
+              },
+              [],
+            )
 
           // Build tool-aware prompt from the base system prompt string
           const baseSections: Array<PromptSection> = [
             { id: "base", content: input.systemPrompt, priority: 0 },
           ]
-          const turnPrompt = buildTurnPrompt(baseSections, effectiveAgent, tools)
+          const turnPrompt = buildTurnPrompt(baseSections, effectiveAgent, tools, extensionSections)
           const basePrompt = yield* extensionRegistry.hooks.runInterceptor(
             "prompt.system",
             { basePrompt: turnPrompt, agent: effectiveAgent },

@@ -1,6 +1,5 @@
 import { Effect } from "effect"
-import { defineExtension, defineInterceptor, type ToolsVisibleInput } from "../domain/extension.js"
-import type { AnyToolDefinition } from "../domain/tool.js"
+import { defineExtension } from "../domain/extension.js"
 import { LoopTool, LoopEvaluationTool } from "../tools/loop.js"
 import { PlanTool } from "../tools/plan.js"
 import { AuditTool } from "../tools/audit.js"
@@ -10,21 +9,6 @@ export const WorkflowToolsExtension = defineExtension({
   setup: () =>
     Effect.succeed({
       tools: [LoopTool, PlanTool, AuditTool],
-      hooks: {
-        interceptors: [
-          defineInterceptor(
-            "tools.visible",
-            (
-              input: ToolsVisibleInput,
-              next: (i: ToolsVisibleInput) => Effect.Effect<ReadonlyArray<AnyToolDefinition>>,
-            ) => {
-              if (input.runContext.tags?.includes("loop-evaluation")) {
-                return next({ ...input, tools: [...input.tools, LoopEvaluationTool] })
-              }
-              return next(input)
-            },
-          ),
-        ],
-      },
+      tagInjections: [{ tag: "loop-evaluation", tools: [LoopEvaluationTool] }],
     }),
 })

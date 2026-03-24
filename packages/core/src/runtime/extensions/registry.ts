@@ -2,10 +2,13 @@ import { ServiceMap, Effect, Layer } from "effect"
 import type { AgentDefinition } from "../../domain/agent.js"
 import type {
   ExtensionKind,
+  ExtensionProjection,
   LoadedExtension,
   RunContext,
   SystemPromptFragment,
+  TagInjection,
 } from "../../domain/extension.js"
+import type { PromptSection } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { type CompiledHookMap, compileHooks } from "./hooks.js"
 
@@ -20,6 +23,7 @@ export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly promptFragments: ReadonlyArray<SystemPromptFragment>
+  readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
 }
@@ -76,9 +80,108 @@ export const resolveExtensions = (
   }
   promptFragments.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))
 
+  // Tag injections: collect from all extensions
+  const tagInjections: TagInjection[] = []
+  for (const ext of sorted) {
+    for (const injection of ext.setup.tagInjections ?? []) {
+      tagInjections.push(injection)
+    }
+  }
+
   const hooks = compileHooks(sorted)
 
-  return { tools, agents, promptFragments, hooks, extensions: sorted }
+  return { tools, agents, promptFragments, tagInjections, hooks, extensions: sorted }
+}
+
+// ToolPolicy compiler — unified tool filtering + prompt section collection
+
+export interface CompiledToolPolicy {
+  readonly tools: ReadonlyArray<AnyToolDefinition>
+  readonly promptSections: ReadonlyArray<PromptSection>
+}
+
+/**
+ * Compile the active tool set and prompt sections for a turn.
+ *
+ * Pipeline:
+ * 1. Agent allow/deny filtering
+ * 2. Tag-conditional injection (declarative replacement for tools.visible interceptor)
+ * 3. Extension projection fragments (include/exclude/overrideSet)
+ * 4. Re-apply agent deny list (extensions can't escape denials)
+ * 5. Collect extension-contributed prompt sections
+ */
+export const compileToolPolicy = (
+  allTools: ReadonlyArray<AnyToolDefinition>,
+  agent: AgentDefinition,
+  runContext: RunContext,
+  tagInjections: ReadonlyArray<TagInjection>,
+  extensionProjections: ReadonlyArray<ExtensionProjection>,
+): CompiledToolPolicy => {
+  const allToolsByName = new Map(allTools.map((t) => [t.name, t]))
+
+  // 1. Agent allow/deny filtering
+  let tools = filterToolsForAgent(allTools, agent)
+
+  // 2. Tag-conditional injection
+  const tags = runContext.tags
+  if (tags !== undefined && tags.length > 0) {
+    const tagSet = new Set(tags)
+    const existing = new Set(tools.map((t) => t.name))
+    for (const injection of tagInjections) {
+      if (tagSet.has(injection.tag)) {
+        for (const tool of injection.tools) {
+          if (!existing.has(tool.name)) {
+            tools.push(tool)
+            existing.add(tool.name)
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Extension projection fragments
+  for (const projection of extensionProjections) {
+    const policy = projection.toolPolicy
+    if (policy === undefined) continue
+
+    if (policy.overrideSet !== undefined) {
+      // Replace the full tool list from the known tool universe
+      tools = policy.overrideSet.flatMap((name) => {
+        const t = allToolsByName.get(name)
+        return t !== undefined ? [t] : []
+      })
+    } else {
+      if (policy.include !== undefined) {
+        const existing = new Set(tools.map((t) => t.name))
+        for (const name of policy.include) {
+          if (!existing.has(name)) {
+            const t = allToolsByName.get(name)
+            if (t !== undefined) {
+              tools.push(t)
+              existing.add(name)
+            }
+          }
+        }
+      }
+      if (policy.exclude !== undefined) {
+        const excludeSet = new Set(policy.exclude)
+        tools = tools.filter((t) => !excludeSet.has(t.name))
+      }
+    }
+  }
+
+  // 4. Re-apply agent deny list — extensions can't escape denials
+  tools = applyDenyFilter(tools, agent)
+
+  // 5. Collect extension-contributed prompt sections
+  const promptSections: PromptSection[] = []
+  for (const projection of extensionProjections) {
+    if (projection.promptSections !== undefined) {
+      promptSections.push(...projection.promptSections)
+    }
+  }
+
+  return { tools, promptSections }
 }
 
 // Extension Registry Service
@@ -87,11 +190,12 @@ export interface ExtensionRegistryService {
   // Tool resolution
   readonly getTool: (name: string) => Effect.Effect<AnyToolDefinition | undefined>
   readonly listTools: () => Effect.Effect<ReadonlyArray<AnyToolDefinition>>
-  /** List tools visible to an agent in a given run context, running the tools.visible interceptor. */
-  readonly listToolsForAgent: (
+  /** Resolve tools + prompt sections for an agent turn, applying tag injections and extension projections. */
+  readonly resolveToolPolicy: (
     agent: AgentDefinition,
     runContext: RunContext,
-  ) => Effect.Effect<ReadonlyArray<AnyToolDefinition>>
+    extensionProjections: ReadonlyArray<ExtensionProjection>,
+  ) => Effect.Effect<CompiledToolPolicy>
 
   // Agent resolution
   readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>
@@ -114,17 +218,16 @@ export class ExtensionRegistry extends ServiceMap.Service<
     Layer.succeed(ExtensionRegistry, {
       getTool: (name) => Effect.succeed(resolved.tools.get(name)),
       listTools: () => Effect.succeed([...resolved.tools.values()]),
-      listToolsForAgent: (agent, runContext) =>
-        resolved.hooks
-          .runInterceptor(
-            "tools.visible",
-            { agent, tools: filterToolsForAgent([...resolved.tools.values()], agent), runContext },
-            (input) => Effect.succeed(input.tools),
-          )
-          .pipe(
-            // Re-apply deny filter after interceptor — hooks can inject but not override deny policy
-            Effect.map((tools) => applyDenyFilter(tools, agent)),
+      resolveToolPolicy: (agent, runContext, extensionProjections) =>
+        Effect.succeed(
+          compileToolPolicy(
+            [...resolved.tools.values()],
+            agent,
+            runContext,
+            resolved.tagInjections,
+            extensionProjections,
           ),
+        ),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       listPrimaryAgents: () =>
@@ -144,9 +247,9 @@ export class ExtensionRegistry extends ServiceMap.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
-// Tool filtering — shared pure helper for agent tool visibility
+// Tool filtering — pure helper for agent tool visibility
 
-export const filterToolsForAgent = (
+const filterToolsForAgent = (
   allTools: ReadonlyArray<AnyToolDefinition>,
   agent: AgentDefinition,
 ): AnyToolDefinition[] => {
@@ -176,7 +279,7 @@ export const filterToolsForAgent = (
   return tools
 }
 
-/** Re-apply deny filter — used after interceptor to prevent hook-based escalation. */
+/** Re-apply deny filter — extensions can't escape agent denials. */
 const applyDenyFilter = (
   tools: ReadonlyArray<AnyToolDefinition>,
   agent: AgentDefinition,

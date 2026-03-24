@@ -9,7 +9,7 @@ import {
 import { estimateTokens } from "@gent/core/runtime/context-estimation"
 import { AgentLoop, AgentActor } from "@gent/core/runtime/agent/agent-loop"
 import {
-  filterToolsForAgent,
+  compileToolPolicy,
   ExtensionRegistry,
   resolveExtensions,
 } from "@gent/core/runtime/extensions/registry"
@@ -179,7 +179,7 @@ describe("Token Estimation", () => {
   })
 })
 
-describe("filterToolsForAgent", () => {
+describe("compileToolPolicy", () => {
   const makeTool = (
     name: string,
     action: "read" | "edit" | "exec" | "delegate" | "interact" | "network" | "state",
@@ -207,16 +207,20 @@ describe("filterToolsForAgent", () => {
     makeTool("todo_read", "state"),
   ]
 
-  const names = (tools: ReturnType<typeof filterToolsForAgent>) => tools.map((t) => t.name).sort()
+  const emptyCtx = { sessionId: "s" as SessionId, branchId: "b" as BranchId }
+
+  const names = (tools: ReadonlyArray<AnyToolDefinition>) => tools.map((t) => t.name).sort()
 
   test("no allow-list → all tools", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
-    expect(names(filterToolsForAgent(allTools, agent))).toEqual(names(allTools))
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(names(allTools))
   })
 
   test("allowedActions filters by action", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedActions: ["read"] })
-    expect(names(filterToolsForAgent(allTools, agent))).toEqual(["glob", "grep", "read"])
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["glob", "grep", "read"])
   })
 
   test("allowedActions + allowedTools unions", () => {
@@ -226,12 +230,14 @@ describe("filterToolsForAgent", () => {
       allowedActions: ["read"],
       allowedTools: ["bash"],
     })
-    expect(names(filterToolsForAgent(allTools, agent))).toEqual(["bash", "glob", "grep", "read"])
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["bash", "glob", "grep", "read"])
   })
 
   test("allowedTools: [] means no tools", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedTools: [] })
-    expect(filterToolsForAgent(allTools, agent)).toEqual([])
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(tools).toEqual([])
   })
 
   test("deniedTools removes from result", () => {
@@ -241,7 +247,8 @@ describe("filterToolsForAgent", () => {
       allowedActions: ["read"],
       deniedTools: ["grep"],
     })
-    expect(names(filterToolsForAgent(allTools, agent))).toEqual(["glob", "read"])
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["glob", "read"])
   })
 
   test("multiple actions", () => {
@@ -250,13 +257,74 @@ describe("filterToolsForAgent", () => {
       kind: "primary",
       allowedActions: ["read", "network"],
     })
-    expect(names(filterToolsForAgent(allTools, agent))).toEqual([
-      "glob",
-      "grep",
-      "read",
-      "webfetch",
-      "websearch",
-    ])
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+  })
+
+  test("tag injection adds tools when tag matches", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const extra = makeTool("loop_evaluation", "state")
+    const tagInjections = [{ tag: "loop-eval", tools: [extra] }]
+    const ctx = { ...emptyCtx, tags: ["loop-eval"] as ReadonlyArray<string> }
+    const { tools } = compileToolPolicy(allTools, agent, ctx, tagInjections, [])
+    expect(names(tools)).toContain("loop_evaluation")
+  })
+
+  test("tag injection skipped when tag absent", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const extra = makeTool("loop_evaluation", "state")
+    const tagInjections = [{ tag: "loop-eval", tools: [extra] }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, tagInjections, [])
+    expect(names(tools)).not.toContain("loop_evaluation")
+  })
+
+  test("extension projection include adds tools", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read"],
+    })
+    const projections = [{ toolPolicy: { include: ["bash"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).toContain("bash")
+    expect(names(tools)).toContain("read")
+  })
+
+  test("extension projection exclude removes tools", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const projections = [{ toolPolicy: { exclude: ["bash", "write"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).not.toContain("bash")
+    expect(names(tools)).not.toContain("write")
+  })
+
+  test("extension projection overrideSet replaces tool list", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const projections = [{ toolPolicy: { overrideSet: ["read", "grep"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).toEqual(["grep", "read"])
+  })
+
+  test("denied tools cannot be re-added by extension projection", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      deniedTools: ["bash"],
+    })
+    const projections = [{ toolPolicy: { include: ["bash"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).not.toContain("bash")
+  })
+
+  test("extension prompt sections collected", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const projections = [
+      { promptSections: [{ id: "ext-a", content: "Section A", priority: 90 }] },
+      { promptSections: [{ id: "ext-b", content: "Section B", priority: 91 }] },
+    ]
+    const { promptSections } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(promptSections).toHaveLength(2)
+    expect(promptSections.map((s) => s.id)).toEqual(["ext-a", "ext-b"])
   })
 })
 

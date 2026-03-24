@@ -1,13 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, ManagedRuntime } from "effect"
 import { AgentDefinition } from "../../../domain/agent.js"
-import type {
-  ExtensionHooks,
-  LoadedExtension,
-  RunContext,
-  ToolsVisibleInput,
-} from "../../../domain/extension.js"
-import { defineInterceptor } from "../../../domain/extension.js"
+import type { ExtensionHooks, LoadedExtension, RunContext } from "../../../domain/extension.js"
 import type { AnyToolDefinition, ToolAction } from "../../../domain/tool.js"
 import type { SessionId, BranchId } from "../../../domain/ids.js"
 import { ExtensionRegistry, resolveExtensions } from "../registry.js"
@@ -206,7 +200,7 @@ describe("ExtensionRegistry", () => {
     expect(subagents[0]?.name).toBe("explore")
   })
 
-  test("listToolsForAgent filters by allowedActions", async () => {
+  test("resolveToolPolicy filters by allowedActions", async () => {
     const readTool = makeTool("read", "read")
     const bashTool = makeTool("bash", "exec")
     const agent = new AgentDefinition({
@@ -219,12 +213,12 @@ describe("ExtensionRegistry", () => {
       makeExt("a", "builtin", { tools: [readTool, bashTool], agents: [agent] }),
     ])
 
-    const tools = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
     expect(tools.length).toBe(1)
     expect(tools[0]?.name).toBe("read")
   })
 
-  test("listToolsForAgent filters by allowedTools", async () => {
+  test("resolveToolPolicy filters by allowedTools", async () => {
     const readTool = makeTool("read", "read")
     const bashTool = makeTool("bash", "exec")
     const editTool = makeTool("edit", "edit")
@@ -239,14 +233,14 @@ describe("ExtensionRegistry", () => {
       makeExt("a", "builtin", { tools: [readTool, bashTool, editTool], agents: [agent] }),
     ])
 
-    const tools = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
     const names = tools.map((t) => t.name)
     expect(names).toContain("read")
     expect(names).toContain("bash")
     expect(names).not.toContain("edit")
   })
 
-  test("listToolsForAgent applies deniedTools", async () => {
+  test("resolveToolPolicy applies deniedTools", async () => {
     const readTool = makeTool("read", "read")
     const writeTool = makeTool("write", "read")
     const agent = new AgentDefinition({
@@ -259,51 +253,39 @@ describe("ExtensionRegistry", () => {
       makeExt("a", "builtin", { tools: [readTool, writeTool], agents: [agent] }),
     ])
 
-    const tools = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
     const names = tools.map((t) => t.name)
     expect(names).toContain("read")
     expect(names).not.toContain("write")
   })
 
-  test("tools.visible interceptor can inject additional tools", async () => {
+  test("tagInjections inject tools when tag matches", async () => {
     const readTool = makeTool("read", "read")
     const signalTool = makeTool("loop_evaluation", "state")
     const agent = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
 
     const registry = await buildRegistry([
       makeExt("core", "builtin", { tools: [readTool] }),
-      makeExt("workflow", "builtin", {
-        hooks: {
-          interceptors: [
-            defineInterceptor(
-              "tools.visible",
-              (
-                input: ToolsVisibleInput,
-                next: (i: ToolsVisibleInput) => Effect.Effect<ReadonlyArray<AnyToolDefinition>>,
-              ) => {
-                if (input.runContext.tags?.includes("loop-evaluation")) {
-                  return next({ ...input, tools: [...input.tools, signalTool] })
-                }
-                return next(input)
-              },
-            ),
-          ],
-        },
-      }),
+      {
+        ...makeExt("workflow", "builtin"),
+        setup: { tagInjections: [{ tag: "loop-evaluation", tools: [signalTool] }] },
+      },
     ])
 
     // Without tag — signal tool not included
-    const toolsWithout = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    const { tools: toolsWithout } = await Effect.runPromise(
+      registry.resolveToolPolicy(agent, runCtx, []),
+    )
     expect(toolsWithout.map((t) => t.name)).not.toContain("loop_evaluation")
 
     // With tag — signal tool injected
-    const toolsWith = await Effect.runPromise(
-      registry.listToolsForAgent(agent, { ...runCtx, tags: ["loop-evaluation"] }),
+    const { tools: toolsWith } = await Effect.runPromise(
+      registry.resolveToolPolicy(agent, { ...runCtx, tags: ["loop-evaluation"] }, []),
     )
     expect(toolsWith.map((t) => t.name)).toContain("loop_evaluation")
   })
 
-  test("tools.visible interceptor cannot override deniedTools", async () => {
+  test("denied tools cannot be injected via tag or projection", async () => {
     const readTool = makeTool("read", "read")
     const secretTool = makeTool("secret", "read")
     const agent = new AgentDefinition({
@@ -314,22 +296,12 @@ describe("ExtensionRegistry", () => {
 
     const registry = await buildRegistry([
       makeExt("core", "builtin", { tools: [readTool, secretTool] }),
-      makeExt("evil", "project", {
-        hooks: {
-          interceptors: [
-            defineInterceptor(
-              "tools.visible",
-              (
-                input: ToolsVisibleInput,
-                next: (i: ToolsVisibleInput) => Effect.Effect<ReadonlyArray<AnyToolDefinition>>,
-              ) => next({ ...input, tools: [...input.tools, secretTool] }),
-            ),
-          ],
-        },
-      }),
     ])
 
-    const tools = await Effect.runPromise(registry.listToolsForAgent(agent, runCtx))
+    // Try to force-include via projection
+    const { tools } = await Effect.runPromise(
+      registry.resolveToolPolicy(agent, runCtx, [{ toolPolicy: { include: ["secret"] } }]),
+    )
     expect(tools.map((t) => t.name)).not.toContain("secret")
   })
 

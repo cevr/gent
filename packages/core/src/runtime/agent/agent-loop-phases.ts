@@ -155,15 +155,16 @@ const resolveTurnContext = (params: {
       return undefined
     }
 
-    // Resolve tools first — prompt is built from the active tool set
-    const tools = yield* params.extensionRegistry.listToolsForAgent(agent, {
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      agentName: currentAgent,
-    })
+    // Resolve tools + extension prompt sections via ToolPolicy compiler
+    const { tools, promptSections: extensionSections } =
+      yield* params.extensionRegistry.resolveToolPolicy(
+        agent,
+        { sessionId: params.sessionId, branchId: params.branchId, agentName: currentAgent },
+        [], // No extension projections yet — wired in Batch 4
+      )
 
     // Build tool-aware prompt, then run through prompt.system interceptor
-    const turnPrompt = buildTurnPrompt(params.baseSections, agent, tools)
+    const turnPrompt = buildTurnPrompt(params.baseSections, agent, tools, extensionSections)
     const systemPrompt = yield* params.extensionRegistry.hooks.runInterceptor(
       "prompt.system",
       { basePrompt: turnPrompt, agent },

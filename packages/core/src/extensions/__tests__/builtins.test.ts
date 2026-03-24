@@ -89,13 +89,15 @@ describe("BuiltinExtensions", () => {
     }
   })
 
-  test("loop_evaluation injected via tools.visible hook", async () => {
+  test("loop_evaluation injected via tagInjections", async () => {
     const results = await loadAll()
     const allToolNames = new Set(results.flatMap((r) => (r.setup.tools ?? []).map((t) => t.name)))
-    // loop_evaluation should NOT be in the base tool set — it's hook-injected
+    // loop_evaluation should NOT be in the base tool set — it's tag-injected
     expect(allToolNames.has("loop_evaluation")).toBe(false)
-    // But the hooks should exist
-    const hookKeys = results.flatMap((r) => Object.keys(r.setup.hooks?.interceptors ?? {}))
-    expect(hookKeys).toContain("tools.visible")
+    // But the tag injection should exist
+    const tagInjections = results.flatMap((r) => r.setup.tagInjections ?? [])
+    const loopTag = tagInjections.find((t) => t.tag === "loop-evaluation")
+    expect(loopTag).toBeDefined()
+    expect(loopTag?.tools.map((t) => t.name)).toContain("loop_evaluation")
   })
 })
