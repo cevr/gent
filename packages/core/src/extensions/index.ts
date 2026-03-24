@@ -8,6 +8,7 @@ import { SessionToolsExtension } from "./session-tools.js"
 import { TaskToolsExtension } from "./task-tools.js"
 import { WorkflowToolsExtension } from "./workflow-tools.js"
 import { AgentsExtension } from "./agents.js"
+import { PlanModeExtension } from "./plan-mode.js"
 
 export {
   FsToolsExtension,
@@ -19,6 +20,7 @@ export {
   TaskToolsExtension,
   WorkflowToolsExtension,
   AgentsExtension,
+  PlanModeExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -31,4 +33,5 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   TaskToolsExtension,
   WorkflowToolsExtension,
   AgentsExtension,
+  PlanModeExtension,
 ]
