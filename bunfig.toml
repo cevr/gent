@@ -1,4 +1,3 @@
 [test]
-# Exclude render tests that require opentui preload
-# Run them from apps/tui directory instead
+preload = ["./apps/tui/node_modules/@opentui/solid/scripts/preload.ts"]
 exclude = ["**/*.render.test.tsx"]
