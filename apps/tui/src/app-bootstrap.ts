@@ -7,7 +7,6 @@ import { Route } from "./router/index"
 import type { AppRoute } from "./router/index"
 
 export type InitialState =
-  | { _tag: "auth" }
   | { _tag: "session"; session: SessionInfo; prompt?: string }
   | {
       _tag: "branchPicker"
@@ -62,23 +61,19 @@ export const resolveAppBootstrap = (
     options.missingProviders.length > 0 ? options.missingProviders : undefined
 
   switch (state._tag) {
-    case "auth":
-      return {
-        initialSession: undefined,
-        initialRoute: Route.auth(),
-        debugMode: options.debugMode,
-        missingAuthProviders,
+    case "session": {
+      // branchId is always present for sessions created by resolveInitialState.
+      // Guard for corrupt session records from -s <id> with missing branch.
+      if (state.session.branchId === undefined) {
+        throw new Error(`Session ${state.session.id} has no branch — cannot render`)
       }
-    case "session":
       return {
         initialSession: toSession(state.session),
-        initialRoute:
-          state.session.branchId !== undefined
-            ? Route.session(state.session.id, state.session.branchId, state.prompt)
-            : Route.auth(),
+        initialRoute: Route.session(state.session.id, state.session.branchId, state.prompt),
         debugMode: options.debugMode,
         missingAuthProviders,
       }
+    }
     case "branchPicker":
       return {
         initialSession: undefined,
@@ -103,7 +98,6 @@ export const resolveInitialState = (input: {
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
   bypass: boolean
-  missingProviders: readonly string[]
 }): Effect.Effect<InitialState, GentRpcError> =>
   Effect.gen(function* () {
     const { client, cwd, session, continue_, headless, prompt, promptArg, bypass } = input
@@ -171,11 +165,6 @@ export const resolveInitialState = (input: {
         return { _tag: "session" as const, session: existing, prompt: promptText }
       }
       // No existing session for cwd — fall through to create one
-    }
-
-    // Gate: don't create a session if auth is required
-    if (input.missingProviders.length > 0) {
-      return { _tag: "auth" as const }
     }
 
     const promptText = Option.getOrUndefined(prompt)

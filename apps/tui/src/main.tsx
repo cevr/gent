@@ -110,7 +110,6 @@ const main = Command.make(
         prompt,
         promptArg,
         bypass,
-        missingProviders,
       })
 
       if (state._tag === "headless") {
