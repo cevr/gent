@@ -158,6 +158,8 @@ interface ClientProviderProps extends ParentProps {
 export function ClientProvider(props: ClientProviderProps) {
   const defaultAgent: AgentName = "cowork"
   const client = props.client
+  const waitForTransportRunning = (): Effect.Effect<void> =>
+    props.supervisor === undefined ? Effect.void : waitForWorkerRunning(props.supervisor)
 
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
@@ -381,10 +383,7 @@ export function ClientProvider(props: ClientProviderProps) {
               clientLog.error("event.subscription.failed", { error: formatError(err) })
               setConnectionIssue(formatConnectionIssue(err))
             },
-            waitForRetry: () =>
-              props.supervisor === undefined
-                ? Effect.sleep(500)
-                : waitForWorkerRunning(props.supervisor),
+            waitForRetry: waitForTransportRunning,
           },
         ),
       )
@@ -420,8 +419,7 @@ export function ClientProvider(props: ClientProviderProps) {
     latestInputTokens,
     modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
     workerState,
-    waitForWorkerRunning: () =>
-      props.supervisor === undefined ? Effect.sleep(500) : waitForWorkerRunning(props.supervisor),
+    waitForWorkerRunning: waitForTransportRunning,
     isReconnecting,
     workerRestartCount: () => workerState()?.restartCount ?? 0,
     connectionIssue,
