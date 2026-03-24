@@ -121,7 +121,7 @@ Sources:
 - [x] Batch 3 — Expose `watchRuntime(...)` from the actor boundary
 - [x] Batch 4 — Migrate transport and SDK to the new seams
 - [x] Batch 5 — Rewrite TUI around snapshot + events + runtime
-- [ ] Batch 6 — Delete legacy APIs and prove the full chain
+- [x] Batch 6 — Delete legacy APIs and prove the full chain
 - [ ] Batch 7 — Burn Down Remaining Production Sleeps
 
 ## Batch 1 — Split Snapshot From Runtime At The Contract Layer

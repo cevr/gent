@@ -19,7 +19,7 @@ import {
   type ReasoningEffort,
 } from "@gent/core/domain/agent.js"
 import { calculateCost, type Model } from "@gent/core/domain/model.js"
-import type { AgentEvent, EventEnvelope } from "@gent/core/domain/event.js"
+import type { EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import { tuiError } from "../utils/unified-tracer"
 import { clientLog } from "../utils/client-logger"
@@ -44,9 +44,6 @@ import {
   type SteerCommand,
 } from "@gent/sdk"
 import { SessionState, transitionSessionState, type Session } from "./session-state"
-
-// Event listener type
-type EventListener = (event: AgentEvent) => void
 
 type SteerCommandInput =
   | { _tag: "Cancel" }
@@ -140,9 +137,6 @@ export interface ClientContextValue {
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId, summarize?: boolean) => void
 
-  // Event subscription (for message updates - agent state handled internally)
-  subscribeEvents: (onEvent: (event: AgentEvent) => void) => () => void
-
   // Steering (fire-and-forget)
   steer: (command: SteerCommandInput) => void
 }
@@ -221,11 +215,6 @@ export function ClientProvider(props: ClientProviderProps) {
     modelsById: {},
   })
 
-  // External event listeners (for components like session.tsx)
-  const eventListeners = new Set<EventListener>()
-  const eventBuffer: EventEnvelope[] = []
-  const EVENT_BUFFER_LIMIT = 1000
-
   createEffect(() => {
     const supervisor = props.supervisor
     if (supervisor === undefined) return
@@ -258,7 +247,6 @@ export function ClientProvider(props: ClientProviderProps) {
   createEffect(
     on([sessionKey, workerEpoch], ([key]) => {
       if (key === null) {
-        eventBuffer.length = 0
         setLastSeenEventId(null)
         setLastSeenSessionKey(null)
         setConnectionIssue(null)
@@ -274,7 +262,6 @@ export function ClientProvider(props: ClientProviderProps) {
       const sessionId = key.slice(0, sep) as SessionId
       const branchId = key.slice(sep + 1) as BranchId
       let cancelled = false
-      eventBuffer.length = 0
 
       const processEvent = (envelope: EventEnvelope): void => {
         if (cancelled) return
@@ -286,11 +273,7 @@ export function ClientProvider(props: ClientProviderProps) {
         })
         setConnectionIssue(null)
 
-        eventBuffer.push(envelope)
         setLastSeenEventId(envelope.id)
-        if (eventBuffer.length > EVENT_BUFFER_LIMIT) {
-          eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_LIMIT)
-        }
 
         const event = envelope.event
 
@@ -345,11 +328,6 @@ export function ClientProvider(props: ClientProviderProps) {
               dispatchSession({ _tag: "UpdateBranch", branchId: event.toBranchId })
             }
             break
-        }
-
-        // Notify external listeners
-        for (const listener of eventListeners) {
-          listener(event)
         }
       }
 
@@ -623,22 +601,6 @@ export function ClientProvider(props: ClientProviderProps) {
         return Effect.succeed({ steering: [] as const, followUp: [] as const })
       }
       return client.getQueuedMessages({ sessionId: s.sessionId, branchId: s.branchId })
-    },
-
-    // Event subscription for message updates (shared with internal agent state subscription)
-    subscribeEvents: (onEvent) => {
-      const lastId = eventBuffer[eventBuffer.length - 1]?.id
-      eventListeners.add(onEvent)
-      if (lastId !== undefined) {
-        for (const env of eventBuffer) {
-          if (env.id <= lastId) {
-            onEvent(env.event)
-          }
-        }
-      }
-      return () => {
-        eventListeners.delete(onEvent)
-      }
     },
 
     // Fire-and-forget steering

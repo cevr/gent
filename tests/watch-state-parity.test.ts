@@ -36,11 +36,7 @@ describe("runtime watch parity", () => {
               }),
             ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const initial = yield* waitFor(
-              Ref.get(runtime),
-              (current) => current.length > 0,
-              timeoutMs,
-            )
+            const initial = yield* Ref.get(runtime)
             expect(initial[0]?.status).toBe("idle")
             expect(initial[0]?.queue.followUp).toEqual([])
             expect(initial[0]?.queue.steering).toEqual([])

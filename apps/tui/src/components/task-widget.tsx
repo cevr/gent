@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import { createSignal, createEffect, onCleanup, Show, For } from "solid-js"
 import type { Task } from "@gent/core/domain/task.js"
 import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
@@ -6,6 +6,7 @@ import { useClient } from "../client/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useTheme } from "../theme/index"
+import { runWithReconnect } from "../utils/run-with-reconnect"
 import { InlineChrome } from "./inline-chrome"
 
 const STATUS_ICONS: Record<string, string> = {
@@ -70,19 +71,34 @@ export function TaskWidget(props: TaskWidgetProps) {
     if (props.previewTasks !== undefined) return
     if (!client.isActive()) return
 
-    const unsub = client.subscribeEvents((event) => {
-      switch (event._tag) {
-        case "TaskCreated":
-        case "TaskUpdated":
-        case "TaskCompleted":
-        case "TaskFailed":
-        case "TaskDeleted":
-          loadTasks()
-          break
-      }
-    })
+    const fiber = Effect.runForkWith(client.client.services)(
+      runWithReconnect(
+        () =>
+          client.client.streamEvents({ sessionId: props.sessionId, branchId: props.branchId }).pipe(
+            Stream.runForEach((envelope) =>
+              Effect.sync(() => {
+                switch (envelope.event._tag) {
+                  case "TaskCreated":
+                  case "TaskUpdated":
+                  case "TaskCompleted":
+                  case "TaskFailed":
+                  case "TaskDeleted":
+                    loadTasks()
+                    break
+                }
+              }),
+            ),
+          ),
+        {
+          onError: () => undefined,
+          waitForRetry: () => client.waitForWorkerRunning(),
+        },
+      ),
+    )
 
-    onCleanup(unsub)
+    onCleanup(() => {
+      Effect.runFork(Fiber.interrupt(fiber))
+    })
   })
 
   const summary = () => {

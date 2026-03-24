@@ -23,7 +23,10 @@ export class SessionSubscriptions extends ServiceMap.Service<
           Stream.unwrap(
             Effect.gen(function* () {
               const actor = yield* agentLoop.getActor(input)
-              return SubscriptionRef.changes(actor.state).pipe(Stream.map(agentLoop.toRuntimeState))
+              return Stream.concat(
+                Stream.make(agentLoop.toRuntimeState(actor.snapshotSync())),
+                SubscriptionRef.changes(actor.state).pipe(Stream.map(agentLoop.toRuntimeState)),
+              )
             }),
           ),
       } satisfies SessionSubscriptionsService
