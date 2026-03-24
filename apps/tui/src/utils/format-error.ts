@@ -36,3 +36,35 @@ export const formatError = (error: UiError): string => {
       return "Unknown error"
   }
 }
+
+const extractUnknownMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  if (typeof error === "string") return error
+  if (error !== null && typeof error === "object" && "message" in error) {
+    const message = (error as { message: unknown }).message
+    if (typeof message === "string") return message
+  }
+  return String(error)
+}
+
+export const formatConnectionIssue = (error: unknown): string => {
+  const message =
+    error !== null && typeof error === "object" && "_tag" in error
+      ? formatError(error as UiError)
+      : extractUnknownMessage(error)
+
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes("timed out") ||
+    normalized.includes("timeout") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("socket hang up") ||
+    normalized.includes("connection reset") ||
+    normalized.includes("fetch failed") ||
+    normalized.includes("network")
+  ) {
+    return "connection lost; retrying"
+  }
+
+  return `connection issue: ${message}`
+}

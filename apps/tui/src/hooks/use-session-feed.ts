@@ -23,7 +23,8 @@ import type { Message, SessionItem } from "../components/message-list"
 import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { clientLog } from "../utils/client-logger"
-import { formatError } from "../utils/format-error"
+import { formatConnectionIssue } from "../utils/format-error"
+import { runWithReconnect } from "../utils/run-with-reconnect"
 import type { ClientContextValue } from "../client/context"
 
 // ── Types ──
@@ -269,25 +270,32 @@ export function useSessionFeed(
       clientLog.info("sessionFeed.activate", { key })
 
       const watchFiber = Effect.runForkWith(client.client.services)(
-        client.client
-          .watchSessionState({
-            sessionId: session,
-            branchId: branch,
-          })
-          .pipe(
-            Stream.runForEach((state) =>
-              Effect.sync(() => {
-                if (currentKey !== key) return
-                setStore("messages", buildMessages(state.messages))
-              }),
-            ),
-            Effect.catchEager((err) =>
-              Effect.sync(() => {
-                if (currentKey !== key) return
-                client.setError(formatError(err))
-              }),
-            ),
-          ),
+        runWithReconnect(
+          () =>
+            client.client
+              .watchSessionState({
+                sessionId: session,
+                branchId: branch,
+              })
+              .pipe(
+                Stream.runForEach((state) =>
+                  Effect.sync(() => {
+                    if (currentKey !== key) return
+                    client.setConnectionIssue(null)
+                    setStore("messages", buildMessages(state.messages))
+                  }),
+                ),
+              ),
+          {
+            onError: (err) => {
+              if (currentKey !== key) return
+              clientLog.error("sessionFeed.watchState.failed", {
+                error: formatConnectionIssue(err),
+              })
+              client.setConnectionIssue(formatConnectionIssue(err))
+            },
+          },
+        ),
       )
 
       const unsubscribe = client.subscribeEvents((event) => {
@@ -314,7 +322,7 @@ export function useSessionFeed(
             .pipe(
               Effect.tapError((err) =>
                 Effect.sync(() => {
-                  client.setError(formatError(err))
+                  client.setConnectionIssue(formatConnectionIssue(err))
                 }),
               ),
             ),

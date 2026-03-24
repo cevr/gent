@@ -15,11 +15,17 @@ import { useKeyChain } from "../hooks/use-key-chain"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router/index"
-import { ClientError, formatError, type UiError } from "../utils/format-error"
+import {
+  ClientError,
+  formatConnectionIssue,
+  formatError,
+  type UiError,
+} from "../utils/format-error"
 import { useWorkspace } from "../workspace/index"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
+import { runWithReconnect } from "../utils/run-with-reconnect"
 import {
   getPromptSearchState,
   promptSearchOpen,
@@ -233,23 +239,27 @@ export function useSessionController(props: {
     void restartCount
     if (!client.isActive()) return
     const fiber = Effect.runForkWith(client.client.services)(
-      client.client
-        .watchQueue({
-          sessionId: props.sessionId,
-          branchId: props.branchId,
-        })
-        .pipe(
-          Stream.runForEach((next) =>
-            Effect.sync(() => {
-              setQueueState(next)
-            }),
-          ),
-          Effect.catchEager((error) =>
-            Effect.sync(() => {
-              client.setError(formatError(error))
-            }),
-          ),
-        ),
+      runWithReconnect(
+        () =>
+          client.client
+            .watchQueue({
+              sessionId: props.sessionId,
+              branchId: props.branchId,
+            })
+            .pipe(
+              Stream.runForEach((next) =>
+                Effect.sync(() => {
+                  client.setConnectionIssue(null)
+                  setQueueState(next)
+                }),
+              ),
+            ),
+        {
+          onError: (error) => {
+            client.setConnectionIssue(formatConnectionIssue(error))
+          },
+        },
+      ),
     )
     onCleanup(() => {
       Effect.runFork(Fiber.interrupt(fiber))

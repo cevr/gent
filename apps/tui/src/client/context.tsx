@@ -10,7 +10,7 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { Effect, Stream, Schema } from "effect"
+import { Effect, Fiber, Stream, Schema } from "effect"
 import { Machine } from "effect-machine"
 import {
   AgentName as AgentNameSchema,
@@ -24,7 +24,8 @@ import type { AgentEvent, EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import { tuiError } from "../utils/unified-tracer"
 import { clientLog } from "../utils/client-logger"
-import { formatError } from "../utils/format-error"
+import { formatConnectionIssue, formatError } from "../utils/format-error"
+import { runWithReconnect } from "../utils/run-with-reconnect"
 import { useMachine } from "../hooks/use-machine"
 import type { WorkerLifecycleState, WorkerSupervisor } from "../worker/supervisor"
 
@@ -124,9 +125,11 @@ export interface ClientContextValue {
   workerState: () => WorkerLifecycleState | undefined
   isReconnecting: () => boolean
   workerRestartCount: () => number
+  connectionIssue: () => string | null
 
   // Agent state setters (for local errors only)
   setError: (error: string | null) => void
+  setConnectionIssue: (error: string | null) => void
 
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string) => void
@@ -254,6 +257,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const [workerState, setWorkerState] = createSignal<WorkerLifecycleState | undefined>(
     props.supervisor?.getState(),
   )
+  const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null)
   const [lastSeenEventId, setLastSeenEventId] = createSignal<number | null>(null)
   const [lastSeenSessionKey, setLastSeenSessionKey] = createSignal<string | null>(null)
 
@@ -303,11 +307,13 @@ export function ClientProvider(props: ClientProviderProps) {
         eventBuffer.length = 0
         setLastSeenEventId(null)
         setLastSeenSessionKey(null)
+        setConnectionIssue(null)
         return
       }
       if (key !== lastSeenSessionKey()) {
         setLastSeenSessionKey(key)
         setLastSeenEventId(null)
+        setConnectionIssue(null)
       }
 
       const sep = key.indexOf(":")
@@ -324,6 +330,7 @@ export function ClientProvider(props: ClientProviderProps) {
           tag: envelope.event._tag,
           traceId: envelope.traceId,
         })
+        setConnectionIssue(null)
 
         eventBuffer.push(envelope)
         setLastSeenEventId(envelope.id)
@@ -394,63 +401,73 @@ export function ClientProvider(props: ClientProviderProps) {
         }
       }
 
-      cast(
-        Effect.gen(function* () {
-          if (props.supervisor !== undefined && workerState()?._tag !== "running") return
-          const snapshot = yield* client.getSessionState({ sessionId, branchId })
-          const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
+      const fiber = Effect.runForkWith(client.services)(
+        runWithReconnect(
+          () =>
+            Effect.gen(function* () {
+              if (props.supervisor !== undefined && workerState()?._tag !== "running") {
+                yield* Effect.sleep("250 millis")
+                return
+              }
 
-          yield* Effect.sync(() => {
-            setAgentStore(
-              produce((draft) => {
-                draft.agent = snapshot.agent ?? defaultAgent
-                draft.status = snapshot.isStreaming ? AgentStatus.streaming() : AgentStatus.idle()
-              }),
-            )
-            if (snapshot.bypass !== undefined) {
-              sendMachine(SessionMachineEvent.UpdateBypass({ bypass: snapshot.bypass ?? true }))
-            }
-            if (snapshot.reasoningLevel !== undefined) {
-              sendMachine(
-                SessionMachineEvent.UpdateReasoningLevel({
-                  reasoningLevel: snapshot.reasoningLevel,
+              const snapshot = yield* client.getSessionState({ sessionId, branchId })
+              const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
+
+              yield* Effect.sync(() => {
+                setConnectionIssue(null)
+                setAgentStore(
+                  produce((draft) => {
+                    draft.agent = snapshot.agent ?? defaultAgent
+                    draft.status = snapshot.isStreaming
+                      ? AgentStatus.streaming()
+                      : AgentStatus.idle()
+                  }),
+                )
+                if (snapshot.bypass !== undefined) {
+                  sendMachine(SessionMachineEvent.UpdateBypass({ bypass: snapshot.bypass ?? true }))
+                }
+                if (snapshot.reasoningLevel !== undefined) {
+                  sendMachine(
+                    SessionMachineEvent.UpdateReasoningLevel({
+                      reasoningLevel: snapshot.reasoningLevel,
+                    }),
+                  )
+                }
+              })
+
+              const events = client.subscribeEvents({
+                sessionId,
+                branchId,
+                ...(after !== undefined ? { after } : {}),
+              })
+
+              yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
+                Effect.sync(() => {
+                  try {
+                    processEvent(envelope)
+                  } catch (err) {
+                    tuiError(
+                      "event processing error",
+                      err instanceof Error ? err.message : String(err),
+                    )
+                  }
                 }),
               )
-            }
-          })
-
-          const events = client.subscribeEvents({
-            sessionId,
-            branchId,
-            ...(after !== undefined ? { after } : {}),
-          })
-
-          yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
-            Effect.sync(() => {
-              try {
-                processEvent(envelope)
-              } catch (err) {
-                // Guard against rendering errors killing the event stream fiber.
-                // @opentui/core MarkdownRenderable can crash if props are applied
-                // in wrong order (content before syntaxStyle). Catch and continue.
-                tuiError("event processing error", err instanceof Error ? err.message : String(err))
-              }
             }),
-          )
-        }).pipe(
-          Effect.catchEager((err) =>
-            Effect.sync(() => {
-              if (!cancelled) {
-                if (props.supervisor !== undefined && workerState()?._tag !== "running") return
-                setAgentStore({ status: AgentStatus.error(formatError(err)) })
-              }
-            }),
-          ),
+          {
+            onError: (err) => {
+              if (cancelled) return
+              if (props.supervisor !== undefined && workerState()?._tag !== "running") return
+              clientLog.error("event.subscription.failed", { error: formatError(err) })
+              setConnectionIssue(formatConnectionIssue(err))
+            },
+          },
         ),
       )
 
       onCleanup(() => {
         cancelled = true
+        Effect.runFork(Fiber.interrupt(fiber))
       })
     }),
   )
@@ -481,10 +498,12 @@ export function ClientProvider(props: ClientProviderProps) {
     workerState,
     isReconnecting,
     workerRestartCount: () => workerState()?.restartCount ?? 0,
+    connectionIssue,
 
     // Agent state setters (for local errors only)
     setError: (error) =>
       setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
+    setConnectionIssue,
 
     // Fire-and-forget actions
     sendMessage: (content) => {
@@ -499,7 +518,14 @@ export function ClientProvider(props: ClientProviderProps) {
             branchId: s.branchId,
             content,
           })
-          .pipe(Effect.withSpan("TUI.sendMessage")),
+          .pipe(
+            Effect.tapError((err) =>
+              Effect.sync(() => {
+                setConnectionIssue(formatConnectionIssue(err))
+              }),
+            ),
+            Effect.withSpan("TUI.sendMessage"),
+          ),
       )
     },
 
@@ -563,6 +589,7 @@ export function ClientProvider(props: ClientProviderProps) {
       // Reset agent state and activate new session
       setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
+      setConnectionIssue(null)
       sendMachine(
         SessionMachineEvent.Activated({
           session: { sessionId, branchId, name, bypass: bypass ?? true, reasoningLevel: undefined },
@@ -574,6 +601,7 @@ export function ClientProvider(props: ClientProviderProps) {
       sendMachine(SessionMachineEvent.Clear)
       setAgentStore({ agent: preferredAgent(), status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
+      setConnectionIssue(null)
     },
 
     // Return Effects for caller to run

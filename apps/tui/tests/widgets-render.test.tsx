@@ -4,6 +4,7 @@ import { describe, test, expect } from "bun:test"
 import { SyntaxStyle } from "@opentui/core"
 import type { QueueEntryInfo } from "@gent/sdk"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
+import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
 import { renderFrame, renderWithProviders } from "./render-harness"
@@ -110,5 +111,16 @@ describe("TUI renderer surfaces", () => {
     expect(frame).toContain("Resolve transport DTOs")
     expect(frame).toContain("Add renderer coverage")
     expect(frame).toContain("+1 more")
+  })
+
+  test("ConnectionWidget renders transport issues outside the composer", async () => {
+    const setup = await renderWithProviders(() => (
+      <ConnectionWidget issue="connection lost; retrying" reconnecting={false} restartCount={2} />
+    ))
+
+    const frame = renderFrame(setup)
+    expect(frame).toContain("connection")
+    expect(frame).toContain("connection lost; retrying")
+    expect(frame).toContain("restart count: 2")
   })
 })

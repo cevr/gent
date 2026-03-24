@@ -191,6 +191,63 @@ describe("worker supervisor", () => {
     )
   }, 15_000)
 
+  test("watchSessionState survives more than 10 seconds of idle time", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerWithClient({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+          })
+
+          const update = yield* Deferred.make<number>()
+
+          yield* worker.client
+            .watchSessionState({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            })
+            .pipe(
+              Stream.runForEach((state) =>
+                state.messages.length > 0
+                  ? Deferred.succeed(update, state.messages.length).pipe(Effect.ignore)
+                  : Effect.void,
+              ),
+              Effect.forkScoped,
+            )
+
+          yield* Effect.sleep("11 seconds")
+
+          yield* worker.client.sendMessage({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "hello after idle",
+          })
+
+          const count = yield* Deferred.await(update).pipe(
+            Effect.timeoutOption("10 seconds"),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new Error("watchSessionState dropped after idle timeout window")),
+                onSome: Effect.succeed,
+              }),
+            ),
+          )
+
+          expect(count).toBeGreaterThan(0)
+        }),
+      ),
+    )
+  }, 25_000)
+
   test("debug mode keeps the worker transport seam with ephemeral runtime state", async () => {
     await Effect.runPromise(
       Effect.scoped(

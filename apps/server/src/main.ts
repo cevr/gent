@@ -187,7 +187,7 @@ const program = Effect.scoped(
 
     // Server
     const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
-      Layer.provide(BunHttpServer.layer({ port: config.port })),
+      Layer.provide(BunHttpServer.layer({ port: config.port, idleTimeout: 0 })),
       Layer.provide(coreServicesLive),
       Layer.provide(BunFileSystem.layer),
     )
