@@ -117,6 +117,7 @@ export const compileToolPolicy = (
   tagInjections: ReadonlyArray<TagInjection>,
   extensionProjections: ReadonlyArray<ExtensionProjection>,
 ): CompiledToolPolicy => {
+  // Build the tool universe — includes base tools plus any tag-injected tools
   const allToolsByName = new Map(allTools.map((t) => [t.name, t]))
 
   // 1. Agent allow/deny filtering
@@ -134,12 +135,16 @@ export const compileToolPolicy = (
             tools.push(tool)
             existing.add(tool.name)
           }
+          // Expand the universe so projections can reference injected tools
+          if (!allToolsByName.has(tool.name)) {
+            allToolsByName.set(tool.name, tool)
+          }
         }
       }
     }
   }
 
-  // 3. Extension projection fragments
+  // 3. Extension projection fragments (overrideSet is exclusive — include/exclude ignored when set)
   for (const projection of extensionProjections) {
     const policy = projection.toolPolicy
     if (policy === undefined) continue
