@@ -112,7 +112,7 @@ export interface ClientContextValue {
 
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string) => void
-  createSession: (firstMessage?: string) => void
+  createSession: () => void
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, bypass?: boolean) => void
   clearSession: () => void
   updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
@@ -469,11 +469,11 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    createSession: (firstMessage) => {
-      clientLog.info("createSession", { hasFirstMessage: firstMessage !== undefined })
+    createSession: () => {
+      clientLog.info("createSession")
       dispatchSession({ _tag: "CreateRequested" })
       cast(
-        client.createSession(firstMessage !== undefined ? { firstMessage } : undefined).pipe(
+        client.createSession().pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               dispatchSession({

@@ -197,38 +197,6 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         yield* storage.createBranch(branch)
         yield* eventStore.publish(new SessionStarted({ sessionId, branchId }))
 
-        const firstMessage = input.firstMessage
-        if (firstMessage !== undefined) {
-          const parentSpan = yield* Effect.currentParentSpan.pipe(
-            Effect.orElseSucceed(() => undefined),
-          )
-
-          yield* Effect.forkDetach(
-            Effect.gen(function* () {
-              const generatedName = yield* generateSessionName(firstMessage)
-              const updatedSession = new Session({
-                ...session,
-                name: generatedName,
-                updatedAt: new Date(),
-              })
-              yield* storage.updateSession(updatedSession)
-              yield* eventStore.publish(new SessionNameUpdated({ sessionId, name: generatedName }))
-            }).pipe(
-              Effect.catchEager((error) =>
-                Effect.logWarning("session name generation failed", error),
-              ),
-              parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-            ),
-          )
-
-          yield* actorProcess.sendUserMessage({
-            sessionId,
-            branchId,
-            content: firstMessage,
-            bypass,
-          })
-        }
-
         return { sessionId, branchId, name, bypass }
       })
 

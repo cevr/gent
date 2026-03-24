@@ -160,11 +160,9 @@ export const resolveInitialState = (input: {
           return { session: existing, createdFromPrompt: false as const }
         }
 
-        const firstMessage = Option.getOrUndefined(prompt)
         const created = yield* client.createSession({
           cwd,
           bypass,
-          ...(firstMessage !== undefined ? { firstMessage } : {}),
         })
         return {
           session: {
@@ -179,7 +177,7 @@ export const resolveInitialState = (input: {
             createdAt: Date.now(),
             updatedAt: Date.now(),
           } satisfies SessionInfo,
-          createdFromPrompt: firstMessage !== undefined,
+          createdFromPrompt: false as const,
         }
       })
       const sess = result.session
@@ -200,7 +198,6 @@ export const resolveInitialState = (input: {
       const result = yield* client.createSession({
         cwd,
         bypass,
-        firstMessage: prompt.value,
       })
       const sess: SessionInfo = {
         id: result.sessionId,
@@ -214,7 +211,7 @@ export const resolveInitialState = (input: {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }
-      return { _tag: "session" as const, session: sess }
+      return { _tag: "session" as const, session: sess, prompt: prompt.value }
     }
 
     return { _tag: "home" as const }

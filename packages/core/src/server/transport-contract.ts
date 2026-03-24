@@ -30,7 +30,6 @@ import type { GentRpcError } from "./errors.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
-  firstMessage: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   bypass: Schema.optional(Schema.Boolean),
   parentSessionId: Schema.optional(SessionId),

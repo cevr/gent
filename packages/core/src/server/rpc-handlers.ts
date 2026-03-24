@@ -43,7 +43,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       createSession: (input) =>
         commands.createSession({
           ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.firstMessage !== undefined ? { firstMessage: input.firstMessage } : {}),
           ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
           ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
           ...(input.parentSessionId !== undefined

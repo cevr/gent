@@ -86,7 +86,6 @@ export function Home(props: HomeProps) {
           client.client
             .createSession({
               cwd: workspace.cwd,
-              firstMessage: effect.prompt,
             })
             .pipe(
               Effect.tap((result) =>

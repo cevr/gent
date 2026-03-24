@@ -125,7 +125,7 @@ describe("SessionCommands → ActorProcess integration", () => {
     return Layer.provideMerge(AppServicesLive, deps)
   }
 
-  test("createSession with firstMessage reaches AgentLoop.run", async () => {
+  test("createSession then sendMessage reaches AgentLoop.run", async () => {
     const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
     const layer = makeIntegrationLayer(runLog)
 
@@ -134,13 +134,18 @@ describe("SessionCommands → ActorProcess integration", () => {
         const commands = yield* SessionCommands
         const session = yield* commands.createSession({
           name: "Integration Test",
-          firstMessage: "hello from createSession",
+        })
+
+        yield* commands.sendMessage({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          content: "hello from sendMessage",
         })
 
         const entries = yield* Ref.get(runLog)
         expect(entries.length).toBe(1)
         expect(entries[0]!.sessionId).toBe(session.sessionId)
-        expect(entries[0]!.content).toBe("hello from createSession")
+        expect(entries[0]!.content).toBe("hello from sendMessage")
       }).pipe(Effect.provide(layer)),
     )
   })
