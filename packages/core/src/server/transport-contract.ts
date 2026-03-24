@@ -242,10 +242,14 @@ export const GetSessionSnapshotPayload = GetSessionSnapshotInput
 export const SessionSnapshot = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
+  name: Schema.optional(Schema.String),
   messages: Schema.Array(MessageInfo),
   lastEventId: Schema.NullOr(Schema.Number),
   bypass: Schema.optional(Schema.Boolean),
   reasoningLevel: Schema.optional(ReasoningEffort),
+  activeBranchId: Schema.optional(BranchId),
+  /** Current runtime state (phase/status/agent/queue). Always present; idle sessions return idle runtime. */
+  runtime: Schema.NullOr(Schema.suspend(() => SessionRuntime)),
 })
 export type SessionSnapshot = typeof SessionSnapshot.Type
 

@@ -137,13 +137,29 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           branchId: input.branchId,
         })
 
+        // Fetch current runtime state — idle sessions return idle runtime
+        const runtime = yield* actorProcess
+          .getState({ sessionId: input.sessionId, branchId: input.branchId })
+          .pipe(
+            Effect.map((state) => ({
+              phase: state.phase,
+              status: state.status,
+              agent: state.agent ?? "cowork",
+              queue: state.queue,
+            })),
+            Effect.catchEager(() => Effect.succeed(null)),
+          )
+
         return {
           sessionId: input.sessionId,
           branchId: input.branchId,
+          name: session.name,
           messages: messages.map(messageToInfo),
           lastEventId: lastEventId ?? null,
           bypass: session.bypass,
           reasoningLevel: session.reasoningLevel,
+          activeBranchId: session.activeBranchId,
+          runtime,
         }
       })
 

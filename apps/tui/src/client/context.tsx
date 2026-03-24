@@ -355,6 +355,12 @@ export function ClientProvider(props: ClientProviderProps) {
                     reasoningLevel: snapshot.reasoningLevel,
                   })
                 }
+                // Hydrate agent state from snapshot runtime (eliminates cold-start gap)
+                if (snapshot.runtime !== null) {
+                  const rt = snapshot.runtime
+                  const status = rt.status === "idle" ? AgentStatus.idle() : AgentStatus.streaming()
+                  setAgentStore({ agent: rt.agent, status })
+                }
               })
 
               const events = client.streamEvents({
