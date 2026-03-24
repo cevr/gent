@@ -21,6 +21,16 @@ const noopCtx: ExtensionClientContext = {
   closeOverlay: () => {},
 }
 
+/** Ctx that records openOverlay calls */
+const createRecordingCtx = () => {
+  const calls: string[] = []
+  const ctx: ExtensionClientContext = {
+    openOverlay: (id) => calls.push(id),
+    closeOverlay: () => calls.push("__close__"),
+  }
+  return { ctx, calls }
+}
+
 beforeAll(() => {
   mkdirSync(USER_DIR, { recursive: true })
   mkdirSync(PROJECT_DIR, { recursive: true })
@@ -52,6 +62,20 @@ export default { manifest: { id: "custom-read" }, setup: () => ({ tools: [] }) }
   id: "@test/override-bash",
   setup: () => ({
     tools: [{ toolNames: ["bash"], component: () => "project-bash-override" }],
+  }),
+}`,
+  )
+
+  // Extension that uses ctx.openOverlay in a command
+  const ctxDir = join(TEST_DIR, "ctx-ext")
+  mkdirSync(ctxDir, { recursive: true })
+  writeFileSync(
+    join(ctxDir, "ctx-user.client.ts"),
+    `export default {
+  id: "@test/ctx-user",
+  setup: (ctx) => ({
+    commands: [{ id: "ctx-cmd", title: "Ctx Command", category: "test", onSelect: () => ctx.openOverlay("ctx-overlay") }],
+    overlays: [{ id: "ctx-overlay", component: () => "ctx-overlay-component" }],
   }),
 }`,
   )
@@ -141,11 +165,11 @@ describe("loadTuiExtensions integration", () => {
       noopCtx,
     )
 
-    // bash should be overridden by project extension
+    // bash should be overridden by project extension — call it to verify
     const bashRenderer = resolved.renderers.get("bash")
     expect(bashRenderer).toBeDefined()
-    // The override returns "project-bash-override"
-    expect(typeof bashRenderer).toBe("function")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((bashRenderer as any)()).toBe("project-bash-override")
   })
 
   test("project extension overrides user extension for same tool", async () => {
@@ -167,12 +191,32 @@ describe("loadTuiExtensions integration", () => {
       noopCtx,
     )
 
-    // Project should win over user
+    // Project should win over user — call the renderer to prove it
     const bashRenderer = resolved.renderers.get("bash")
     expect(bashRenderer).toBeDefined()
-    // Can't easily check which one won without rendering, but we know project > user
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((bashRenderer as any)()).toBe("project-bash-override")
 
     rmSync(userBashDir, { recursive: true, force: true })
+  })
+
+  test("extension command captures ctx.openOverlay from setup", async () => {
+    const ctxDir = join(TEST_DIR, "ctx-ext")
+    const { ctx, calls } = createRecordingCtx()
+
+    const resolved = await loadTuiExtensions(
+      { userDir: ctxDir, projectDir: join(TEST_DIR, "no-project") },
+      ctx,
+    )
+
+    // The command's onSelect should invoke ctx.openOverlay
+    const cmd = resolved.commands.find((c) => c.id === "ctx-cmd")
+    expect(cmd).toBeDefined()
+    cmd!.onSelect()
+    expect(calls).toEqual(["ctx-overlay"])
+
+    // The overlay should also be registered
+    expect(resolved.overlays.has("ctx-overlay")).toBe(true)
   })
 
   test("nonexistent directories are handled gracefully", async () => {
@@ -239,7 +283,7 @@ describe("session UI state — extension overlay", () => {
 
 describe("same-scope collision detection", () => {
   test("two user extensions with same tool name throws", async () => {
-    const collisionDir = join(TEST_DIR, "collision")
+    const collisionDir = join(TEST_DIR, "collision-tool")
     mkdirSync(collisionDir, { recursive: true })
     writeFileSync(
       join(collisionDir, "a.client.ts"),
@@ -262,6 +306,118 @@ describe("same-scope collision detection", () => {
         noopCtx,
       ),
     ).rejects.toThrow("Same-scope TUI renderer collision")
+
+    rmSync(collisionDir, { recursive: true, force: true })
+  })
+
+  test("two user extensions with same widget id throws", async () => {
+    const collisionDir = join(TEST_DIR, "collision-widget")
+    mkdirSync(collisionDir, { recursive: true })
+    writeFileSync(
+      join(collisionDir, "a.client.ts"),
+      `export default {
+  id: "@test/a",
+  setup: () => ({ widgets: [{ id: "dup-widget", slot: "below-messages", component: () => "a" }] }),
+}`,
+    )
+    writeFileSync(
+      join(collisionDir, "b.client.ts"),
+      `export default {
+  id: "@test/b",
+  setup: () => ({ widgets: [{ id: "dup-widget", slot: "above-input", component: () => "b" }] }),
+}`,
+    )
+
+    await expect(
+      loadTuiExtensions(
+        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        noopCtx,
+      ),
+    ).rejects.toThrow("Same-scope TUI widget collision")
+
+    rmSync(collisionDir, { recursive: true, force: true })
+  })
+
+  test("two user extensions with same command id throws", async () => {
+    const collisionDir = join(TEST_DIR, "collision-cmd")
+    mkdirSync(collisionDir, { recursive: true })
+    writeFileSync(
+      join(collisionDir, "a.client.ts"),
+      `export default {
+  id: "@test/a",
+  setup: () => ({ commands: [{ id: "dup-cmd", title: "A", onSelect: () => {} }] }),
+}`,
+    )
+    writeFileSync(
+      join(collisionDir, "b.client.ts"),
+      `export default {
+  id: "@test/b",
+  setup: () => ({ commands: [{ id: "dup-cmd", title: "B", onSelect: () => {} }] }),
+}`,
+    )
+
+    await expect(
+      loadTuiExtensions(
+        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        noopCtx,
+      ),
+    ).rejects.toThrow("Same-scope TUI command collision")
+
+    rmSync(collisionDir, { recursive: true, force: true })
+  })
+
+  test("two user extensions with same keybind throws", async () => {
+    const collisionDir = join(TEST_DIR, "collision-kb")
+    mkdirSync(collisionDir, { recursive: true })
+    writeFileSync(
+      join(collisionDir, "a.client.ts"),
+      `export default {
+  id: "@test/a",
+  setup: () => ({ commands: [{ id: "cmd-a", title: "A", keybind: "ctrl+k", onSelect: () => {} }] }),
+}`,
+    )
+    writeFileSync(
+      join(collisionDir, "b.client.ts"),
+      `export default {
+  id: "@test/b",
+  setup: () => ({ commands: [{ id: "cmd-b", title: "B", keybind: "ctrl+k", onSelect: () => {} }] }),
+}`,
+    )
+
+    await expect(
+      loadTuiExtensions(
+        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        noopCtx,
+      ),
+    ).rejects.toThrow("Same-scope TUI keybind collision")
+
+    rmSync(collisionDir, { recursive: true, force: true })
+  })
+
+  test("two user extensions with same overlay id throws", async () => {
+    const collisionDir = join(TEST_DIR, "collision-overlay")
+    mkdirSync(collisionDir, { recursive: true })
+    writeFileSync(
+      join(collisionDir, "a.client.ts"),
+      `export default {
+  id: "@test/a",
+  setup: () => ({ overlays: [{ id: "dup-overlay", component: () => "a" }] }),
+}`,
+    )
+    writeFileSync(
+      join(collisionDir, "b.client.ts"),
+      `export default {
+  id: "@test/b",
+  setup: () => ({ overlays: [{ id: "dup-overlay", component: () => "b" }] }),
+}`,
+    )
+
+    await expect(
+      loadTuiExtensions(
+        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        noopCtx,
+      ),
+    ).rejects.toThrow("Same-scope TUI overlay collision")
 
     rmSync(collisionDir, { recursive: true, force: true })
   })
