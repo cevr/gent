@@ -7,7 +7,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test tests/client.test.ts",
+    "test:integration": "bun test tests/supervisor.test.ts"
   },
   "dependencies": {
     "@gent/core": "workspace:*"

@@ -49,11 +49,15 @@ const discoverDir = (dir: string, kind: "user" | "project"): DiscoveredTuiExtens
     } else if (stat.isDirectory()) {
       // Check for client.{tsx,ts,js,jsx,mjs} in subdirectory
       const subEntries = readdirSync(filePath)
-      for (const subEntry of subEntries) {
-        if (CLIENT_INDEX_PATTERN.test(subEntry)) {
-          results.push({ filePath: join(filePath, subEntry), kind })
-          break
-        }
+      const clientFiles = subEntries.filter((e) => CLIENT_INDEX_PATTERN.test(e)).sort()
+      if (clientFiles.length > 1) {
+        console.log(
+          `[tui-ext] Warning: multiple client entrypoints in ${filePath}: ${clientFiles.join(", ")}. Using ${clientFiles[0]}.`,
+        )
+      }
+      const firstClient = clientFiles[0]
+      if (firstClient !== undefined) {
+        results.push({ filePath: join(filePath, firstClient), kind })
       }
     }
   }

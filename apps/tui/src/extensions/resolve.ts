@@ -101,6 +101,8 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
   const commandMap = new Map<string, Command>()
   const idScopes = new Map<string, ScopeEntry>()
   const keybindScopes = new Map<string, ScopeEntry>()
+  // Track which command id owns each keybind — for stripping superseded keybinds
+  const keybindOwner = new Map<string, string>() // keybind → command id
 
   for (const ext of sorted) {
     for (const entry of ext.setup.commands ?? []) {
@@ -109,7 +111,16 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
       if (entry.keybind !== undefined) {
         const kb = entry.keybind.toLowerCase()
         checkCollision(keybindScopes.get(kb), ext, "keybind", entry.keybind)
+        // Higher scope wins the keybind — strip it from the previous owner
+        const prevOwnerId = keybindOwner.get(kb)
+        if (prevOwnerId !== undefined) {
+          const prevCmd = commandMap.get(prevOwnerId)
+          if (prevCmd !== undefined) {
+            commandMap.set(prevOwnerId, { ...prevCmd, keybind: undefined })
+          }
+        }
         keybindScopes.set(kb, { kind: ext.kind, source: ext.filePath })
+        keybindOwner.set(kb, entry.id)
       }
 
       commandMap.set(entry.id, {
@@ -148,7 +159,12 @@ const resolveOverlays = (sorted: ReadonlyArray<LoadedTuiExtension>): Map<string,
 export const resolveTuiExtensions = (
   extensions: ReadonlyArray<LoadedTuiExtension>,
 ): ResolvedTuiExtensions => {
-  const sorted = [...extensions].sort((a, b) => SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind])
+  // Sort by scope precedence, then by id for deterministic same-scope order (matches server)
+  const sorted = [...extensions].sort((a, b) => {
+    const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
+    if (scopeDiff !== 0) return scopeDiff
+    return a.id.localeCompare(b.id)
+  })
 
   return {
     renderers: resolveRenderers(sorted),

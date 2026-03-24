@@ -188,7 +188,7 @@ describe("resolveTuiExtensions", () => {
       expect(() => resolveTuiExtensions([ext1, ext2])).toThrow("Same-scope TUI keybind collision")
     })
 
-    test("different-scope keybind override is allowed", () => {
+    test("higher scope wins keybind, lower scope loses it", () => {
       const user = makeExt("user", "user", {
         commands: [{ id: "cmd-u", title: "U", keybind: "ctrl+k", onSelect: () => {} }],
       })
@@ -196,7 +196,11 @@ describe("resolveTuiExtensions", () => {
         commands: [{ id: "cmd-p", title: "P", keybind: "ctrl+k", onSelect: () => {} }],
       })
       const { commands } = resolveTuiExtensions([user, project])
-      expect(commands.length).toBe(2) // Both registered, project's keybind wins at dispatch time
+      expect(commands.length).toBe(2) // Both commands exist
+      const userCmd = commands.find((c) => c.id === "cmd-u")!
+      const projectCmd = commands.find((c) => c.id === "cmd-p")!
+      expect(userCmd.keybind).toBeUndefined() // User lost the keybind
+      expect(projectCmd.keybind).toBe("ctrl+k") // Project won it
     })
   })
 
