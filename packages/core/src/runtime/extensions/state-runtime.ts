@@ -71,6 +71,9 @@ export interface ExtensionStateRuntimeService {
     sessionId: SessionId,
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<ExtensionUiSnapshot>>
+
+  /** Terminate all actors for a session (call on session delete) */
+  readonly terminateAll: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 export class ExtensionStateRuntime extends ServiceMap.Service<
@@ -179,10 +182,23 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 })
               }
 
-              // Actors — supervised dispatch
+              // Actors — supervised dispatch, track version changes
               const actors = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
               for (const { actor } of actors) {
-                yield* actor.handleEvent(event, ctx).pipe(Effect.catchDefect(() => Effect.void))
+                const before = yield* actor.snapshot.pipe(
+                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: -1 })),
+                )
+                yield* actor
+                  .handleEvent(event, ctx)
+                  .pipe(
+                    Effect.catchDefect((defect) =>
+                      Effect.logWarning(`Actor ${actor.id} handleEvent failed: ${defect}`),
+                    ),
+                  )
+                const after = yield* actor.snapshot.pipe(
+                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: -1 })),
+                )
+                if (after.version !== before.version) changed = true
               }
 
               return changed
@@ -197,8 +213,8 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 projection: entry.machine.derive(entry.state, ctx),
               }))
 
-              // Actors
-              const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
+              // Actors (lazy spawn on first access)
+              const actors = yield* getOrSpawnActors(sessionId)
               const actorResults: Array<{ extensionId: string; projection: ExtensionProjection }> =
                 []
               for (const { actor } of actors) {
@@ -317,8 +333,8 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 }
               }
 
-              // Actors
-              const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
+              // Actors (lazy spawn on first access)
+              const actors = yield* getOrSpawnActors(sessionId, branchId)
               for (const { actor } of actors) {
                 if (actor.derive === undefined) continue
                 const { state, version } = yield* actor.snapshot.pipe(
@@ -340,6 +356,24 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               }
 
               return snapshots
+            }),
+
+          terminateAll: (sessionId) =>
+            Effect.gen(function* () {
+              const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
+              for (const { actor } of actors) {
+                yield* actor.terminate.pipe(Effect.catchDefect(() => Effect.void))
+              }
+              yield* Ref.update(actorsRef, (map) => {
+                const next = new Map(map)
+                next.delete(sessionId)
+                return next
+              })
+              yield* Ref.update(sessionsRef, (map) => {
+                const next = new Map(map)
+                next.delete(sessionId)
+                return next
+              })
             }),
         }
       }),

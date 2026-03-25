@@ -107,14 +107,17 @@ export const fromReducer =
 
         handleEvent: (event: AgentEvent, reduceCtx: ExtensionReduceContext) =>
           Effect.gen(function* () {
-            const current = yield* Ref.get(stateRef)
-            const result = config.reduce(current, event, reduceCtx)
-            if (result.state !== current) {
-              yield* Ref.set(stateRef, result.state)
+            // Atomic read-reduce-write: Ref.modify returns the result, writes the new state
+            const { changed, effects } = yield* Ref.modify(stateRef, (current) => {
+              const result = config.reduce(current, event, reduceCtx)
+              const didChange = result.state !== current
+              return [{ changed: didChange, effects: result.effects }, result.state]
+            })
+            if (changed) {
               yield* Ref.update(versionRef, (v) => v + 1)
             }
-            if (result.effects !== undefined && result.effects.length > 0) {
-              yield* runEffects(result.effects)
+            if (effects !== undefined && effects.length > 0) {
+              yield* runEffects(effects)
             }
           }),
 
@@ -130,14 +133,16 @@ export const fromReducer =
                 ).pipe(Effect.orDie)
               }
 
-              const current = yield* Ref.get(stateRef)
-              const result = handler(current, validated)
-              if (result.state !== current) {
-                yield* Ref.set(stateRef, result.state)
+              const { changed, effects } = yield* Ref.modify(stateRef, (current) => {
+                const result = handler(current, validated)
+                const didChange = result.state !== current
+                return [{ changed: didChange, effects: result.effects }, result.state]
+              })
+              if (changed) {
                 yield* Ref.update(versionRef, (v) => v + 1)
               }
-              if (result.effects !== undefined && result.effects.length > 0) {
-                yield* runEffects(result.effects)
+              if (effects !== undefined && effects.length > 0) {
+                yield* runEffects(effects)
               }
             })
         })(),
