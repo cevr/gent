@@ -39,8 +39,8 @@ const initEntries = (machines: MachineList): ExtensionEntry[] =>
 // Service
 
 export interface ExtensionStateRuntimeService {
-  /** Feed an event to all registered state machines for a session */
-  readonly reduce: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<void>
+  /** Feed an event to all registered state machines for a session. Returns true if any machine changed state. */
+  readonly reduce: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
 
   /** Get current projections for all extensions with state machines */
   readonly deriveAll: (
@@ -113,6 +113,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   return next
                 })
               }
+              return changed
             }),
 
           deriveAll: (sessionId, ctx) =>
@@ -143,11 +144,23 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               const handler = entry.machine.handleIntent
               if (handler === undefined) return
 
-              // Validate intent against schema if present
-              const validatedIntent =
-                entry.machine.intentSchema !== undefined
-                  ? Schema.decodeUnknownSync(entry.machine.intentSchema as Schema.Any)(intent)
-                  : intent
+              // Validate intent against schema if present — returns StaleIntentError on bad payload
+              let validatedIntent: unknown = intent
+              if (entry.machine.intentSchema !== undefined) {
+                validatedIntent = yield* Schema.decodeUnknownEffect(
+                  entry.machine.intentSchema as Schema.Any,
+                )(intent).pipe(
+                  Effect.catchEager(() =>
+                    Effect.fail(
+                      new StaleIntentError({
+                        extensionId,
+                        expectedEpoch: entry.epoch,
+                        actualEpoch: epoch,
+                      }),
+                    ),
+                  ),
+                )
+              }
 
               const result = handler(entry.state, validatedIntent)
               yield* Ref.update(sessionsRef, (sessions) => {

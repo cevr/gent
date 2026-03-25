@@ -40,6 +40,9 @@ import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { TaskService } from "../runtime/task-service.js"
+import { Skills } from "../domain/skills.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 
@@ -234,12 +237,10 @@ export interface ToolTestLayerConfig {
 }
 
 /**
- * Create a test layer suitable for testing tool execute functions.
+ * Create a test layer for extension tool execution.
  *
- * Provides: Storage, EventStore, ExtensionRegistry, ExtensionStateRuntime,
- * ExtensionEventBus, ExtensionTurnControl, SubagentRunnerService,
- * PromptPresenter, Permission, PermissionHandler, PromptHandler,
- * HandoffHandler, AskUserHandler, AgentLoop.
+ * Provides core services needed by most tools. Tools that need platform
+ * services (FileSystem, Path) should compose with BunServices.layer.
  */
 export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
   const builtinSetup: ExtensionSetup = {
@@ -278,6 +279,19 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     config.subagentRunner ?? defaultRunner,
   )
 
+  // @effect-diagnostics effectSucceedWithVoid:off
+  const taskServiceLayer = Layer.succeed(TaskService, {
+    create: () => Effect.die("TaskService.create not implemented in test"),
+    get: () => Effect.succeed(undefined),
+    list: () => Effect.succeed([]),
+    update: () => Effect.succeed(undefined),
+    remove: () => Effect.void,
+    run: () => Effect.succeed({ taskId: "t-0" as never, status: "pending" }),
+    addDep: () => Effect.void,
+    removeDep: () => Effect.void,
+    getDeps: () => Effect.succeed([]),
+  })
+
   return Layer.mergeAll(
     Storage.Test(),
     EventStore.Test(),
@@ -293,5 +307,8 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     HandoffHandler.Test(["confirm"]),
     AskUserHandler.Test([["yes"]]),
     AgentLoop.Test(),
+    taskServiceLayer,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    Skills.Test(),
   )
 }
