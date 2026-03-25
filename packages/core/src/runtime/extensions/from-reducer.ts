@@ -166,6 +166,10 @@ export const fromReducer =
             })
             if (changed) {
               yield* Ref.update(versionRef, (v) => v + 1)
+              // Auto-persist on state change when persist: true
+              if (config.persist === true) {
+                yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
+              }
             }
             if (effects !== undefined && effects.length > 0) {
               yield* runEffects(effects)
@@ -191,6 +195,9 @@ export const fromReducer =
               })
               if (changed) {
                 yield* Ref.update(versionRef, (v) => v + 1)
+                if (config.persist === true) {
+                  yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
+                }
               }
               if (effects !== undefined && effects.length > 0) {
                 yield* runEffects(effects)

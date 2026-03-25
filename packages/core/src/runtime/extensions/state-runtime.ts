@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Ref, Schema } from "effect"
+import { ServiceMap, Effect, Layer, Ref, Schema, Semaphore } from "effect"
 import type { AgentEvent, ExtensionUiSnapshot } from "../../domain/event.js"
 import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/event.js"
 import type {
@@ -114,53 +114,59 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
             return [entries, next]
           })
 
+        // Serialized actor spawn — prevents double-init on concurrent access
+        const spawnSemaphore = yield* Semaphore.make(1)
+
         const getOrSpawnActors = (sessionId: SessionId, branchId?: BranchId) =>
-          Effect.gen(function* () {
-            const existing = (yield* Ref.get(actorsRef)).get(sessionId)
-            if (existing !== undefined) return existing
+          spawnSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              // Re-check after acquiring semaphore
+              const existing = (yield* Ref.get(actorsRef)).get(sessionId)
+              if (existing !== undefined) return existing
 
-            // Yield services lazily — they're available at call time (reduce),
-            // not at layer-build time. Provide them to spawn calls.
-            const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
-            const eventBus = yield* Effect.serviceOption(ExtensionEventBus)
-            const spawnLayer = Layer.mergeAll(
-              ...[
-                turnControl._tag === "Some"
-                  ? Layer.succeed(ExtensionTurnControl, turnControl.value)
-                  : ExtensionTurnControl.Test(),
-                eventBus._tag === "Some"
-                  ? Layer.succeed(ExtensionEventBus, eventBus.value)
-                  : ExtensionEventBus.Test(),
-              ],
-            )
+              // Yield services lazily — they're available at call time (reduce),
+              // not at layer-build time. Provide them to spawn calls.
+              const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
+              const eventBus = yield* Effect.serviceOption(ExtensionEventBus)
+              const spawnLayer = Layer.mergeAll(
+                ...[
+                  turnControl._tag === "Some"
+                    ? Layer.succeed(ExtensionTurnControl, turnControl.value)
+                    : ExtensionTurnControl.Test(),
+                  eventBus._tag === "Some"
+                    ? Layer.succeed(ExtensionEventBus, eventBus.value)
+                    : ExtensionEventBus.Test(),
+                ],
+              )
 
-            const entries: ActorEntry[] = []
-            for (const { spawn } of spawnActors) {
-              const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
-                sessionId,
-                branchId,
-              }).pipe(
-                Effect.tap((a) => a.init),
-                // @effect-diagnostics-next-line strictEffectProvide:off
-                Effect.provide(spawnLayer),
-                Effect.catchDefect((defect) =>
-                  Effect.logWarning(`Actor init failed: ${defect}`).pipe(Effect.as(undefined)),
-                ),
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              ) as any
-              const actor = yield* spawnEffect
-              if (actor !== undefined) {
-                entries.push({ actor })
+              const entries: ActorEntry[] = []
+              for (const { spawn } of spawnActors) {
+                const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
+                  sessionId,
+                  branchId,
+                }).pipe(
+                  Effect.tap((a) => a.init),
+                  // @effect-diagnostics-next-line strictEffectProvide:off
+                  Effect.provide(spawnLayer),
+                  Effect.catchDefect((defect) =>
+                    Effect.logWarning(`Actor init failed: ${defect}`).pipe(Effect.as(undefined)),
+                  ),
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                ) as any
+                const actor = yield* spawnEffect
+                if (actor !== undefined) {
+                  entries.push({ actor })
+                }
               }
-            }
 
-            yield* Ref.update(actorsRef, (actors) => {
-              const next = new Map(actors)
-              next.set(sessionId, entries)
-              return next
-            })
-            return entries
-          })
+              yield* Ref.update(actorsRef, (actors) => {
+                const next = new Map(actors)
+                next.set(sessionId, entries)
+                return next
+              })
+              return entries
+            }),
+          )
 
         return {
           reduce: (event, ctx) =>
