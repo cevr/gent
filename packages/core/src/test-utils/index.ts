@@ -334,12 +334,14 @@ import type { ToolCallId } from "../domain/ids.js"
 
 // Extension test harnesses
 export {
-  createStateMachineHarness,
+  createActorHarness,
   createEventFactories,
   expectNoChange,
   createExtensionHarness,
   createToolTestLayer,
-  type StateMachineHarnessOptions,
+  type ActorHarnessOptions,
+  type ActorHarnessConfig,
+  type ActorHarnessResult,
   type EventFactories,
   type EventFactoryContext,
   type ExtensionHarnessResult,

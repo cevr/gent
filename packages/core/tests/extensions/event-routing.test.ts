@@ -9,8 +9,12 @@ import {
 } from "@gent/core/domain/event"
 import type { AgentEvent, EventStoreService } from "@gent/core/domain/event"
 import type { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
-import type { ExtensionStateMachine, LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 
 // ── Test extension that records every event _tag it sees ──
 
@@ -18,20 +22,24 @@ interface RecorderState {
   readonly seen: ReadonlyArray<string>
 }
 
-const RecorderStateMachine: ExtensionStateMachine<RecorderState> = {
-  id: "test-recorder",
-  initial: { seen: [] },
-  schema: Schema.Struct({ seen: Schema.Array(Schema.String) }),
-  uiModelSchema: Schema.Struct({ seen: Schema.Array(Schema.String) }),
-  reduce: (state, event, _ctx) => ({ seen: [...state.seen, event._tag] }),
-  derive: (state) => ({ uiModel: state }),
-}
+const RecorderSchema = Schema.Struct({ seen: Schema.Array(Schema.String) })
 
 const recorderExtension: LoadedExtension = {
   manifest: { id: "test-recorder" },
   kind: "builtin",
   sourcePath: "builtin",
-  setup: { stateMachine: RecorderStateMachine },
+  setup: {
+    spawnActor: fromReducer<RecorderState>({
+      id: "test-recorder",
+      initial: { seen: [] },
+      stateSchema: RecorderSchema,
+      uiModelSchema: RecorderSchema,
+      reduce: (state, event): ReduceResult<RecorderState> => ({
+        state: { seen: [...state.seen, event._tag] },
+      }),
+      derive: (state) => ({ uiModel: state }),
+    }),
+  },
 }
 
 // ── Test extension that mutates on ExtensionUiSnapshot — used to prove recursion guard ──
@@ -40,29 +48,31 @@ interface SnapshotCounterState {
   readonly snapshotsSeen: number
 }
 
-const SnapshotCounterMachine: ExtensionStateMachine<SnapshotCounterState> = {
-  id: "snapshot-counter",
-  initial: { snapshotsSeen: 0 },
-  schema: Schema.Struct({ snapshotsSeen: Schema.Number }),
-  uiModelSchema: Schema.Struct({ snapshotsSeen: Schema.Number }),
-  reduce: (state, event) => {
-    if (event._tag === "ExtensionUiSnapshot") {
-      return { snapshotsSeen: state.snapshotsSeen + 1 }
-    }
-    // Also change state on TurnCompleted to trigger initial snapshot
-    if (event._tag === "TurnCompleted") {
-      return { snapshotsSeen: state.snapshotsSeen }
-    }
-    return state
-  },
-  derive: (state) => ({ uiModel: state }),
-}
+const SnapshotCounterSchema = Schema.Struct({ snapshotsSeen: Schema.Number })
 
 const snapshotCounterExtension: LoadedExtension = {
   manifest: { id: "snapshot-counter" },
   kind: "builtin",
   sourcePath: "builtin",
-  setup: { stateMachine: SnapshotCounterMachine },
+  setup: {
+    spawnActor: fromReducer<SnapshotCounterState>({
+      id: "snapshot-counter",
+      initial: { snapshotsSeen: 0 },
+      stateSchema: SnapshotCounterSchema,
+      uiModelSchema: SnapshotCounterSchema,
+      reduce: (state, event): ReduceResult<SnapshotCounterState> => {
+        if (event._tag === "ExtensionUiSnapshot") {
+          return { state: { snapshotsSeen: state.snapshotsSeen + 1 } }
+        }
+        // Also change state on TurnCompleted to trigger initial snapshot
+        if (event._tag === "TurnCompleted") {
+          return { state: { snapshotsSeen: state.snapshotsSeen } }
+        }
+        return { state }
+      },
+      derive: (state) => ({ uiModel: state }),
+    }),
+  },
 }
 
 /**
@@ -126,7 +136,12 @@ const makeLayer = (extensions: LoadedExtension[]) => {
   const published = Effect.runSync(Ref.make<AgentEvent[]>([]))
   const stateRuntimeLayer = ExtensionStateRuntime.Live(extensions)
   const baseLayer = EventStore.Memory
-  const combinedBase = Layer.merge(baseLayer, stateRuntimeLayer)
+  const servicesLayer = Layer.mergeAll(
+    ExtensionTurnControl.Test(),
+    ExtensionEventBus.Test(),
+    Storage.Test(),
+  )
+  const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer)
   const reducingLayer = Layer.provide(makeTestReducingStore(published), combinedBase)
   const fullLayer = Layer.mergeAll(combinedBase, reducingLayer)
   return { published, fullLayer }
@@ -176,7 +191,7 @@ describe("ReducingEventStore — event routing", () => {
     )
   })
 
-  test("ExtensionUiSnapshot does not recurse — even with a machine that reacts to it", async () => {
+  test("ExtensionUiSnapshot does not recurse — even with an actor that reacts to it", async () => {
     const { published, fullLayer } = makeLayer([snapshotCounterExtension])
 
     await Effect.runPromise(
@@ -193,9 +208,9 @@ describe("ReducingEventStore — event routing", () => {
         // The ReducingEventStore should have:
         // 1. Published TurnCompleted → reduce fires → state may change → snapshot published
         // 2. The snapshot publication does NOT re-enter reduce
-        // So snapshotsSeen in the machine state should be 0 (never fed an ExtensionUiSnapshot)
-        const machineSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-        const counter = machineSnapshots.find((s) => s.extensionId === "snapshot-counter")
+        // So snapshotsSeen in the actor state should be 0 (never fed an ExtensionUiSnapshot)
+        const actorSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+        const counter = actorSnapshots.find((s) => s.extensionId === "snapshot-counter")
         expect(counter).toBeDefined()
         const model = counter!.model as SnapshotCounterState
         expect(model.snapshotsSeen).toBe(0)

@@ -6,7 +6,6 @@ import type {
   ExtensionDeriveContext,
   ExtensionProjection,
   ExtensionReduceContext,
-  ExtensionStateMachine,
   LoadedExtension,
   SpawnActor,
 } from "../../domain/extension.js"
@@ -25,21 +24,6 @@ export class StaleIntentError extends Schema.TaggedErrorClass<StaleIntentError>(
   },
 ) {}
 
-// ── Legacy projection machine entries ──
-
-interface ExtensionEntry {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly machine: ExtensionStateMachine<any, any>
-  state: unknown
-  epoch: number
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MachineList = ReadonlyArray<ExtensionStateMachine<any, any>>
-
-const initEntries = (machines: MachineList): ExtensionEntry[] =>
-  machines.map((machine) => ({ machine, state: machine.initial, epoch: 0 }))
-
 // ── Actor entries ──
 
 interface ActorEntry {
@@ -49,10 +33,10 @@ interface ActorEntry {
 // Service
 
 export interface ExtensionStateRuntimeService {
-  /** Feed an event to all registered state machines + actors for a session. Returns true if any changed. */
+  /** Feed an event to all registered actors for a session. Returns true if any changed. */
   readonly reduce: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
 
-  /** Get current projections from all extensions (machines + actors) */
+  /** Get current projections from all extension actors */
   readonly deriveAll: (
     sessionId: SessionId,
     ctx: ExtensionDeriveContext,
@@ -86,33 +70,15 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
     Layer.effect(
       ExtensionStateRuntime,
       Effect.gen(function* () {
-        // Collect legacy machines from extensions
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const machines: ExtensionStateMachine<any, any>[] = []
         const spawnActors: Array<{ extensionId: string; spawn: SpawnActor }> = []
         for (const ext of extensions) {
-          if (ext.setup.stateMachine !== undefined) {
-            machines.push(ext.setup.stateMachine)
-          }
           if (ext.setup.spawnActor !== undefined) {
             spawnActors.push({ extensionId: ext.manifest.id, spawn: ext.setup.spawnActor })
           }
         }
 
-        // Session-scoped state: legacy machines
-        const sessionsRef = yield* Ref.make<Map<SessionId, ExtensionEntry[]>>(new Map())
         // Session-scoped actors
         const actorsRef = yield* Ref.make<Map<SessionId, ActorEntry[]>>(new Map())
-
-        const getOrInitSession = (sessionId: SessionId) =>
-          Ref.modify(sessionsRef, (sessions) => {
-            const existing = sessions.get(sessionId)
-            if (existing !== undefined) return [existing, sessions]
-            const entries = initEntries(machines)
-            const next = new Map(sessions)
-            next.set(sessionId, entries)
-            return [entries, next]
-          })
 
         // Serialized actor spawn — prevents double-init on concurrent access
         const spawnSemaphore = yield* Semaphore.make(1)
@@ -171,24 +137,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
         return {
           reduce: (event, ctx) =>
             Effect.gen(function* () {
-              // Legacy machines
-              const entries = yield* getOrInitSession(ctx.sessionId)
               let changed = false
-              const updated = entries.map((entry) => {
-                const nextState = entry.machine.reduce(entry.state, event, ctx)
-                if (nextState === entry.state) return entry
-                changed = true
-                return { ...entry, state: nextState, epoch: entry.epoch + 1 }
-              })
-              if (changed) {
-                yield* Ref.update(sessionsRef, (sessions) => {
-                  const next = new Map(sessions)
-                  next.set(ctx.sessionId, updated)
-                  return next
-                })
-              }
-
-              // Actors — supervised dispatch, track version changes
               const actors = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
               for (const { actor } of actors) {
                 const before = yield* actor.snapshot.pipe(
@@ -212,24 +161,15 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
 
           deriveAll: (sessionId, ctx) =>
             Effect.gen(function* () {
-              // Legacy machines
-              const entries = yield* getOrInitSession(sessionId)
-              const machineResults = entries.map((entry) => ({
-                extensionId: entry.machine.id,
-                projection: entry.machine.derive(entry.state, ctx),
-              }))
-
-              // Actors (lazy spawn on first access)
               const actors = yield* getOrSpawnActors(sessionId)
-              const actorResults: Array<{ extensionId: string; projection: ExtensionProjection }> =
-                []
+              const results: Array<{ extensionId: string; projection: ExtensionProjection }> = []
               for (const { actor } of actors) {
                 if (actor.derive !== undefined) {
                   const { state } = yield* actor.snapshot.pipe(
                     Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
                   )
                   if (state !== undefined) {
-                    actorResults.push({
+                    results.push({
                       extensionId: actor.id,
                       projection: actor.derive(state, ctx),
                     })
@@ -237,68 +177,11 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 }
               }
 
-              return [...machineResults, ...actorResults]
+              return results
             }),
 
-          handleIntent: (sessionId, extensionId, intent, epoch) =>
+          handleIntent: (sessionId, extensionId, intent, _epoch) =>
             Effect.gen(function* () {
-              // Try legacy machines first
-              const entries = yield* getOrInitSession(sessionId)
-              const idx = entries.findIndex((e) => e.machine.id === extensionId)
-              if (idx !== -1) {
-                const entry = entries[idx]
-                if (entry === undefined) return
-                if (epoch < entry.epoch) {
-                  return yield* new StaleIntentError({
-                    extensionId,
-                    expectedEpoch: entry.epoch,
-                    actualEpoch: epoch,
-                  })
-                }
-
-                const handler = entry.machine.handleIntent
-                if (handler === undefined) return
-
-                let validatedIntent: unknown = intent
-                if (entry.machine.intentSchema !== undefined) {
-                  validatedIntent = yield* Schema.decodeUnknownEffect(
-                    entry.machine.intentSchema as Schema.Any,
-                  )(intent).pipe(
-                    Effect.catchEager(() =>
-                      Effect.fail(
-                        new StaleIntentError({
-                          extensionId,
-                          expectedEpoch: entry.epoch,
-                          actualEpoch: epoch,
-                        }),
-                      ),
-                    ),
-                  )
-                }
-
-                const result = handler(entry.state, validatedIntent)
-                yield* Ref.update(sessionsRef, (sessions) => {
-                  const current = sessions.get(sessionId)
-                  if (current === undefined) return sessions
-                  const next = new Map(sessions)
-                  next.set(
-                    sessionId,
-                    current.map((e, i) =>
-                      i === idx ? { ...e, state: result.state, epoch: e.epoch + 1 } : e,
-                    ),
-                  )
-                  return next
-                })
-
-                if (result.effects !== undefined) {
-                  for (const eff of result.effects) {
-                    yield* eff.pipe(Effect.catchDefect(() => Effect.void))
-                  }
-                }
-                return
-              }
-
-              // Try actors
               const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
               const actorEntry = actors.find((a) => a.actor.id === extensionId)
               if (actorEntry?.actor.handleIntent !== undefined) {
@@ -311,35 +194,6 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           getUiSnapshots: (sessionId, branchId) =>
             Effect.gen(function* () {
               const snapshots: ExtensionUiSnapshot[] = []
-
-              // Legacy machines
-              const entries = yield* getOrInitSession(sessionId)
-              for (const entry of entries) {
-                if (entry.machine.uiModelSchema === undefined) continue
-                const projection = entry.machine.derive(entry.state, {
-                  agent: undefined as never,
-                  allTools: [],
-                })
-                if (projection.uiModel !== undefined) {
-                  const validated =
-                    entry.machine.uiModelSchema !== undefined
-                      ? Schema.decodeUnknownSync(entry.machine.uiModelSchema as Schema.Any)(
-                          projection.uiModel,
-                        )
-                      : projection.uiModel
-                  snapshots.push(
-                    new ExtensionUiSnapshotClass({
-                      sessionId,
-                      branchId,
-                      extensionId: entry.machine.id,
-                      epoch: entry.epoch,
-                      model: validated,
-                    }),
-                  )
-                }
-              }
-
-              // Actors (lazy spawn on first access)
               const actors = yield* getOrSpawnActors(sessionId, branchId)
               for (const { actor } of actors) {
                 if (actor.derive === undefined) continue
@@ -371,11 +225,6 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 yield* actor.terminate.pipe(Effect.catchDefect(() => Effect.void))
               }
               yield* Ref.update(actorsRef, (map) => {
-                const next = new Map(map)
-                next.delete(sessionId)
-                return next
-              })
-              yield* Ref.update(sessionsRef, (map) => {
                 const next = new Map(map)
                 next.delete(sessionId)
                 return next

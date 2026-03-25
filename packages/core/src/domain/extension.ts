@@ -155,30 +155,6 @@ export interface ExtensionProjection {
   readonly uiModel?: unknown
 }
 
-export interface ExtensionIntentResult<State> {
-  readonly state: State
-  readonly effects?: ReadonlyArray<Effect.Effect<void>>
-}
-
-/** Extension state machine definition — reduce events, derive projections, handle intents */
-export interface ExtensionStateMachine<State, Intent = void> {
-  readonly id: string
-  readonly initial: State
-  readonly schema: Schema.Schema<State>
-  readonly intentSchema?: Schema.Schema<Intent>
-  /** Schema for the uiModel returned by derive() — used for transport encoding/validation */
-  readonly uiModelSchema?: Schema.Schema<unknown>
-  /** Reduce an agent event into new state */
-  readonly reduce: (state: State, event: AgentEvent, ctx: ExtensionReduceContext) => State
-  /** Derive projections from current state */
-  readonly derive: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
-  /**
-   * Handle a typed intent from the client. Only invoked after runtime validates
-   * the intent's epoch is current — stale intents are rejected before reaching this.
-   */
-  readonly handleIntent?: (state: State, intent: Intent) => ExtensionIntentResult<State>
-}
-
 // Extension Actor — OTP-inspired unified state model
 
 /** Typed effect union interpreted by the framework after reduce/handleIntent */
@@ -237,9 +213,6 @@ export interface ExtensionSetup {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Layer<unknown, unknown, unknown>
-  /** Server-owned state machine for this extension (legacy — use spawnActor for new extensions) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly stateMachine?: ExtensionStateMachine<any, any>
   /** Spawn an actor for this extension — unified lifecycle model */
   readonly spawnActor?: SpawnActor
   /** Declarative tag-conditional tool injections */

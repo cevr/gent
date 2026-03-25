@@ -19,7 +19,7 @@ describe("createExtensionHarness", () => {
     expect(harness.tools.has("audit")).toBe(true)
     expect(harness.tools.has("loop")).toBe(true)
     expect(harness.tools.has("plan")).toBe(true)
-    expect(harness.stateMachine).toBeUndefined()
+    expect(harness.spawnActor).toBeUndefined()
     expect(harness.tagInjections).toBeDefined()
     expect(harness.tagInjections!.length).toBeGreaterThan(0)
     const loopTag = harness.tagInjections!.find((t) => t.tag === "loop-evaluation")
@@ -32,13 +32,12 @@ describe("createExtensionHarness", () => {
     expect(harness.tools.has("delegate")).toBe(true)
     expect(harness.tools.has("handoff")).toBe(true)
     expect(harness.tools.has("code_review")).toBe(true)
-    expect(harness.stateMachine).toBeUndefined()
+    expect(harness.spawnActor).toBeUndefined()
   })
 
-  test("PlanModeExtension provides state machine", () => {
+  test("PlanModeExtension provides spawnActor", () => {
     const harness = createExtensionHarness(PlanModeExtension)
-    expect(harness.stateMachine).toBeDefined()
-    expect(harness.stateMachine!.id).toBe("plan-mode")
+    expect(harness.spawnActor).toBeDefined()
   })
 })
 

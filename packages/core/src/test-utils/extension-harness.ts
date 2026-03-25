@@ -1,7 +1,6 @@
 /**
- * Test harness for extension state machines and lifecycle.
+ * Test harness for extension actors and lifecycle.
  *
- * Pure synchronous utilities — no Effect runtime needed.
  * Import from @gent/core/test-utils/extension-harness
  */
 
@@ -20,15 +19,17 @@ import {
   TurnCompleted,
   ToolCallSucceeded,
   ToolCallFailed,
+  type AgentEvent,
 } from "../domain/event.js"
 import type {
   ExtensionDeriveContext,
-  ExtensionIntentResult,
   ExtensionProjection,
   ExtensionReduceContext,
   ExtensionSetup,
-  ExtensionStateMachine,
   GentExtension,
+  LoadedExtension,
+  ReduceResult,
+  SpawnActor,
 } from "../domain/extension.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -48,7 +49,7 @@ import { AskUserHandler } from "../tools/ask-user.js"
 
 // ── Options ──
 
-export interface StateMachineHarnessOptions {
+export interface ActorHarnessOptions {
   readonly sessionId?: SessionId
   readonly branchId?: BranchId
   readonly agent?: AgentDefinition
@@ -102,43 +103,57 @@ export const expectNoChange = <T>(before: T, after: T): void => {
   expect(after).toBe(before)
 }
 
-// ── State Machine Harness ──
+// ── Actor Harness ──
 
-/** Harness return type — `intent` only present when the machine defines `handleIntent` */
-interface StateMachineHarnessBase<State> {
-  readonly machine: ExtensionStateMachine<State>
+/**
+ * Create a pure synchronous harness for testing fromReducer-based actors.
+ *
+ * Wraps the reduce/derive/handleIntent functions so tests can call them
+ * without Effect runtime — useful for pure state transition testing.
+ */
+export interface ActorHarnessResult<State, Intent = void> {
   readonly reduce: (
     state: State,
-    event: Parameters<ExtensionStateMachine<State>["reduce"]>[1],
-  ) => State
+    event: AgentEvent,
+    ctx?: ExtensionReduceContext,
+  ) => ReduceResult<State>
   readonly derive: (state: State) => ExtensionProjection
+  readonly intent: Intent extends void
+    ? undefined
+    : (state: State, i: Intent) => ReduceResult<State>
   readonly ctx: ExtensionReduceContext
   readonly deriveCtx: ExtensionDeriveContext
   readonly events: EventFactories
+  readonly initial: State
 }
 
-interface StateMachineHarnessWithIntent<State, Intent> extends StateMachineHarnessBase<State> {
-  readonly intent: (state: State, i: Intent) => ExtensionIntentResult<State>
+export interface ActorHarnessConfig<State, Intent = void> {
+  readonly id: string
+  readonly initial: State
+  readonly reduce: (
+    state: State,
+    event: AgentEvent,
+    ctx: ExtensionReduceContext,
+  ) => ReduceResult<State>
+  readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
+  readonly handleIntent?: (state: State, intent: Intent) => ReduceResult<State>
 }
 
-/** Machine with handleIntent defined */
-interface MachineWithIntent<State, Intent> extends ExtensionStateMachine<State, Intent> {
-  readonly handleIntent: (state: State, intent: Intent) => ExtensionIntentResult<State>
-}
-
-export function createStateMachineHarness<State, Intent>(
-  machine: MachineWithIntent<State, Intent>,
-  options?: StateMachineHarnessOptions,
-): StateMachineHarnessWithIntent<State, Intent>
-export function createStateMachineHarness<State>(
-  machine: ExtensionStateMachine<State>,
-  options?: StateMachineHarnessOptions,
-): StateMachineHarnessBase<State>
-export function createStateMachineHarness<State, Intent>(
+export function createActorHarness<State, Intent>(
+  config: ActorHarnessConfig<State, Intent> & {
+    handleIntent: (state: State, intent: Intent) => ReduceResult<State>
+  },
+  options?: ActorHarnessOptions,
+): ActorHarnessResult<State, Intent>
+export function createActorHarness<State>(
+  config: ActorHarnessConfig<State>,
+  options?: ActorHarnessOptions,
+): ActorHarnessResult<State>
+export function createActorHarness<State, Intent = void>(
+  config: ActorHarnessConfig<State, Intent>,
+  options?: ActorHarnessOptions,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  machine: ExtensionStateMachine<State, any>,
-  options?: StateMachineHarnessOptions,
-): StateMachineHarnessBase<State> | StateMachineHarnessWithIntent<State, Intent> {
+): ActorHarnessResult<State, any> {
   const ctx: ExtensionReduceContext = {
     sessionId: (options?.sessionId ?? "test-session") as SessionId,
     branchId: (options?.branchId ?? "test-branch") as BranchId,
@@ -153,22 +168,32 @@ export function createStateMachineHarness<State, Intent>(
   const branchId = (options?.branchId ?? "test-branch") as BranchId
   const events = createEventFactories({ sessionId: ctx.sessionId, branchId })
 
-  const reduce = (state: State, event: Parameters<typeof machine.reduce>[1]): State =>
-    machine.reduce(state, event, ctx)
+  const reduce = (
+    state: State,
+    event: AgentEvent,
+    reduceCtx?: ExtensionReduceContext,
+  ): ReduceResult<State> => config.reduce(state, event, reduceCtx ?? ctx)
 
-  const derive = (state: State): ExtensionProjection => machine.derive(state, deriveCtx)
+  const derive = (state: State): ExtensionProjection =>
+    config.derive !== undefined ? config.derive(state, deriveCtx) : {}
 
-  const base = { machine, reduce, derive, ctx, deriveCtx, events }
+  const handler = config.handleIntent
+  const intent =
+    handler !== undefined
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (state: State, i: any): ReduceResult<State> => handler(state, i)
+      : undefined
 
-  if (machine.handleIntent !== undefined) {
-    const handler = machine.handleIntent
-    return {
-      ...base,
-      intent: (state: State, i: Intent): ExtensionIntentResult<State> => handler(state, i),
-    }
-  }
-
-  return base
+  return {
+    reduce,
+    derive,
+    intent,
+    ctx,
+    deriveCtx,
+    events,
+    initial: config.initial,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any
 }
 
 // ── Extension Lifecycle Harness ──
@@ -177,13 +202,7 @@ export interface ExtensionHarnessResult {
   readonly setup: ExtensionSetup
   readonly tools: Map<string, AnyToolDefinition>
   readonly agents: Map<string, AgentDefinition>
-  readonly stateMachine:
-    | {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        readonly machine: ExtensionStateMachine<any, any>
-        readonly id: string
-      }
-    | undefined
+  readonly spawnActor: SpawnActor | undefined
   readonly tagInjections: ExtensionSetup["tagInjections"]
   readonly hooks: ExtensionSetup["hooks"]
 }
@@ -191,7 +210,7 @@ export interface ExtensionHarnessResult {
 /**
  * Load an extension through the full lifecycle and return its resolved setup.
  *
- * Runs setup() via Effect.runSync, extracts tools/agents/state machine/tag injections/hooks.
+ * Runs setup() via Effect.runSync, extracts tools/agents/spawnActor/tag injections/hooks.
  */
 export const createExtensionHarness = (
   extension: GentExtension,
@@ -211,16 +230,11 @@ export const createExtensionHarness = (
     agents.set(agent.name, agent)
   }
 
-  const stateMachine =
-    setup.stateMachine !== undefined
-      ? { machine: setup.stateMachine, id: setup.stateMachine.id }
-      : undefined
-
   return {
     setup,
     tools,
     agents,
-    stateMachine,
+    spawnActor: setup.spawnActor,
     tagInjections: setup.tagInjections,
     hooks: setup.hooks,
   }
@@ -256,7 +270,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     setup: Effect.runSync(ext.setup({ cwd: "/tmp", config: undefined as never, source: "test" })),
   }))
 
-  const allExtensions = [
+  const allExtensions: LoadedExtension[] = [
     {
       manifest: { id: "test-agents" },
       kind: "builtin" as const,

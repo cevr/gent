@@ -1,5 +1,5 @@
 /**
- * Plan-mode extension — first end-to-end extension state machine.
+ * Plan-mode extension — stateful actor using fromReducer.
  *
  * State: mode (normal/plan/executing) + todo items extracted from turn completions.
  * Derive: tool policy restrictions in plan mode, prompt context injection, UI model.
@@ -10,13 +10,13 @@ import { Effect, Schema } from "effect"
 import { defineExtension } from "../domain/extension.js"
 import type {
   ExtensionDeriveContext,
-  ExtensionIntentResult,
   ExtensionProjection,
   ExtensionReduceContext,
-  ExtensionStateMachine,
+  ReduceResult,
 } from "../domain/extension.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PromptSection } from "../domain/prompt.js"
+import { fromReducer } from "../runtime/extensions/from-reducer.js"
 
 // ── State ──
 
@@ -217,28 +217,30 @@ const reduce = (
   state: PlanModeState,
   event: AgentEvent,
   _ctx: ExtensionReduceContext,
-): PlanModeState => {
+): ReduceResult<PlanModeState> => {
   // In plan mode, extract todos from completed turns
   if (state.mode === "plan" && event._tag === "TurnCompleted") {
     // TurnCompleted doesn't carry text — todos are extracted from StreamChunk accumulation.
     // This is a no-op here; the real extraction happens when the assistant message is received.
-    return state
+    return { state }
   }
 
   // In executing mode, mark first pending todo as in-progress on stream start
   if (state.mode === "executing" && event._tag === "StreamStarted") {
     const pendingIdx = state.todos.findIndex((t) => t.status === "pending")
-    if (pendingIdx === -1) return state
+    if (pendingIdx === -1) return { state }
     return {
-      ...state,
-      todos: state.todos.map((t, i) => (i === pendingIdx ? { ...t, status: "in-progress" } : t)),
+      state: {
+        ...state,
+        todos: state.todos.map((t, i) => (i === pendingIdx ? { ...t, status: "in-progress" } : t)),
+      },
     }
   }
 
   // In executing mode, mark in-progress todos as done on turn completion
   if (state.mode === "executing" && event._tag === "TurnCompleted") {
     const hasInProgress = state.todos.some((t) => t.status === "in-progress")
-    if (!hasInProgress) return state
+    if (!hasInProgress) return { state }
 
     const updatedTodos = state.todos.map((t) =>
       t.status === "in-progress" ? { ...t, status: "done" as const } : t,
@@ -246,18 +248,20 @@ const reduce = (
     const allDone = updatedTodos.every((t) => t.status === "done")
 
     return {
-      mode: allDone ? "normal" : state.mode,
-      todos: updatedTodos,
+      state: {
+        mode: allDone ? "normal" : state.mode,
+        todos: updatedTodos,
+      },
     }
   }
 
   // In executing mode, mark in-progress as done on successful tool calls (heuristic)
   if (state.mode === "executing" && event._tag === "ToolCallSucceeded") {
     // Only mark progress on edit/write tools — concrete evidence of work done
-    if (event.toolName !== "edit" && event.toolName !== "write") return state
+    if (event.toolName !== "edit" && event.toolName !== "write") return { state }
 
     const inProgressIdx = state.todos.findIndex((t) => t.status === "in-progress")
-    if (inProgressIdx === -1) return state
+    if (inProgressIdx === -1) return { state }
 
     const updatedTodos = state.todos.map((t, i) =>
       i === inProgressIdx ? { ...t, status: "done" as const } : t,
@@ -271,12 +275,14 @@ const reduce = (
 
     const allDone = updatedTodos.every((t) => t.status === "done")
     return {
-      mode: allDone ? "normal" : state.mode,
-      todos: updatedTodos,
+      state: {
+        mode: allDone ? "normal" : state.mode,
+        todos: updatedTodos,
+      },
     }
   }
 
-  return state
+  return { state }
 }
 
 // ── Handle Intent ──
@@ -284,7 +290,7 @@ const reduce = (
 const handleIntent = (
   state: PlanModeState,
   intent: PlanModeIntent,
-): ExtensionIntentResult<PlanModeState> => {
+): ReduceResult<PlanModeState> => {
   switch (intent._tag) {
     case "TogglePlanMode": {
       if (state.mode === "normal") {
@@ -305,18 +311,18 @@ const handleIntent = (
   }
 }
 
-// ── State Machine ──
+// ── Actor ──
 
-export const PlanModeStateMachine: ExtensionStateMachine<PlanModeState, PlanModeIntent> = {
+export const PlanModeSpawnActor = fromReducer<PlanModeState, PlanModeIntent>({
   id: "plan-mode",
   initial: { mode: "normal", todos: [] },
-  schema: PlanModeState,
+  stateSchema: PlanModeState,
   intentSchema: PlanModeIntent,
   uiModelSchema: PlanModeUiModel,
   reduce,
   derive: deriveProjection,
   handleIntent,
-}
+})
 
 // ── Extension ──
 
@@ -324,6 +330,6 @@ export const PlanModeExtension = defineExtension({
   manifest: { id: "@gent/plan-mode" },
   setup: () =>
     Effect.succeed({
-      stateMachine: PlanModeStateMachine,
+      spawnActor: PlanModeSpawnActor,
     }),
 })
