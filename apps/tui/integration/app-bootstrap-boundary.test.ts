@@ -2,11 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Option } from "effect"
 import * as path from "node:path"
 import { resolveInitialState } from "../src/app-bootstrap"
-import {
-  createTempDirFixture,
-  createWorkerEnv,
-  startWorkerWithClient,
-} from "@gent/e2e/tests/seam-fixture"
+import { createTempDirFixture, createWorkerEnv } from "@gent/core/test-utils/fixtures"
+import { Gent } from "@gent/sdk"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-bootstrap-")
@@ -18,7 +15,7 @@ describe("app bootstrap boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* startWorkerWithClient({
+          const client = yield* Gent.spawn({
             cwd: repoRoot,
             env: createWorkerEnv(root, { providerMode: "debug-scripted" }),
           })
@@ -53,7 +50,7 @@ describe("app bootstrap boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* startWorkerWithClient({
+          const client = yield* Gent.spawn({
             cwd: repoRoot,
             env: createWorkerEnv(root, { providerMode: "debug-scripted" }),
           })

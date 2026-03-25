@@ -7,14 +7,19 @@ import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
 import { destroyRenderSetup, renderFrame, renderWithProviders } from "../tests/render-harness"
-import {
-  createTempDirFixture,
-  createWorkerEnv,
-  startWorkerWithSupervisor,
-} from "@gent/e2e/tests/seam-fixture"
+import { createTempDirFixture, createWorkerEnv } from "@gent/core/test-utils/fixtures"
+import { Gent } from "@gent/sdk"
+import { startWorkerSupervisor } from "@gent/sdk/supervisor"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-session-feed-")
+
+const startWorkerWithSupervisor = (options: Parameters<typeof startWorkerSupervisor>[0]) =>
+  Effect.gen(function* () {
+    const supervisor = yield* startWorkerSupervisor(options)
+    const client = yield* Gent.connect({ url: supervisor.url })
+    return { ...supervisor, client }
+  })
 
 const waitForFrame = (
   setup: Awaited<ReturnType<typeof renderWithProviders>>,

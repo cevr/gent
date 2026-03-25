@@ -10,13 +10,11 @@
     "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests",
-    "test:integration": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts integration",
-    "test:e2e": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts e2e"
+    "test:integration": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts integration"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*",
-    "@gent/e2e": "workspace:*",
     "@gent/sdk": "workspace:*",
     "@opentui/core": "^0.1.90",
     "@opentui/solid": "^0.1.90",

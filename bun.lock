@@ -49,7 +49,6 @@
       "dependencies": {
         "@effect/platform-bun": "catalog:",
         "@gent/core": "workspace:*",
-        "@gent/e2e": "workspace:*",
         "@gent/sdk": "workspace:*",
         "@opentui/core": "^0.1.90",
         "@opentui/solid": "^0.1.90",
@@ -96,6 +95,9 @@
         "@gent/core": "workspace:*",
         "@gent/sdk": "workspace:*",
         "@gent/server-http": "workspace:*",
+      },
+      "devDependencies": {
+        "zigpty": "^0.0.4",
       },
       "peerDependencies": {
         "@effect/platform-bun": "catalog:",
