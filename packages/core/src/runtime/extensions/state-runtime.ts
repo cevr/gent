@@ -180,11 +180,22 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               return results
             }),
 
-          handleIntent: (sessionId, extensionId, intent, _epoch) =>
+          handleIntent: (sessionId, extensionId, intent, epoch) =>
             Effect.gen(function* () {
               const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
               const actorEntry = actors.find((a) => a.actor.id === extensionId)
               if (actorEntry?.actor.handleIntent !== undefined) {
+                // Epoch validation: reject stale intents
+                const { version } = yield* actorEntry.actor.snapshot.pipe(
+                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
+                )
+                if (epoch < version) {
+                  return yield* new StaleIntentError({
+                    extensionId,
+                    expectedEpoch: version,
+                    actualEpoch: epoch,
+                  })
+                }
                 yield* actorEntry.actor
                   .handleIntent(intent)
                   .pipe(Effect.catchDefect(() => Effect.void))

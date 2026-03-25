@@ -313,15 +313,20 @@ const handleIntent = (
 
 // ── Actor ──
 
-export const PlanModeSpawnActor = fromReducer<PlanModeState, PlanModeIntent>({
-  id: "plan-mode",
-  initial: { mode: "normal", todos: [] },
-  stateSchema: PlanModeState,
-  intentSchema: PlanModeIntent,
-  uiModelSchema: PlanModeUiModel,
+/** Exported for pure test harness access */
+export const PlanModeActorConfig = {
+  id: "plan-mode" as const,
+  initial: { mode: "normal" as const, todos: [] as readonly never[] } satisfies PlanModeState,
   reduce,
   derive: deriveProjection,
   handleIntent,
+}
+
+export const PlanModeSpawnActor = fromReducer<PlanModeState, PlanModeIntent>({
+  ...PlanModeActorConfig,
+  stateSchema: PlanModeState,
+  intentSchema: PlanModeIntent,
+  uiModelSchema: PlanModeUiModel,
 })
 
 // ── Extension ──
