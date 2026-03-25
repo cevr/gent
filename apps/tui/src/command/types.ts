@@ -4,6 +4,8 @@ export interface Command {
   description?: string
   category?: string
   keybind?: string
+  /** Slash command trigger (without the /). When set, /name invokes onSelect. */
+  slash?: string
   onSelect: () => void
 }
 

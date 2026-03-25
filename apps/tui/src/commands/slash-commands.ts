@@ -8,24 +8,6 @@ import { Effect } from "effect"
 import type { ReasoningEffort } from "@gent/core/domain/agent.js"
 import { formatError, type UiError } from "../utils/format-error"
 
-export type SlashCommandId =
-  | "agent"
-  | "clear"
-  | "new"
-  | "sessions"
-  | "branch"
-  | "tree"
-  | "fork"
-  | "bypass"
-  | "think"
-  | "permissions"
-  | "auth"
-  | "handoff"
-  | "counsel"
-  | "loop"
-  | "plan"
-  | "audit"
-
 export interface SlashCommandContext {
   openPalette: () => void
   clearMessages: () => void
@@ -59,13 +41,33 @@ const runCommandEffect = (
     ),
   )
 
+export interface ExtensionSlashCommand {
+  readonly slash: string
+  readonly onSelect: () => void
+}
+
+const tryExtensionCommand = (
+  cmd: string,
+  extensionCommands: ReadonlyArray<ExtensionSlashCommand> | undefined,
+): Effect.Effect<SlashCommandResult, UiError> => {
+  const extCmd = extensionCommands?.find((c) => c.slash.toLowerCase() === cmd.toLowerCase())
+  if (extCmd !== undefined) {
+    return Effect.sync(() => {
+      extCmd.onSelect()
+      return { handled: true }
+    })
+  }
+  return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })
+}
+
 /**
- * Execute a slash command
+ * Execute a slash command. Builtins take priority; extension commands are checked on fallthrough.
  */
 export const executeSlashCommand = (
   cmd: string,
   _args: string,
   ctx: SlashCommandContext,
+  extensionCommands?: ReadonlyArray<ExtensionSlashCommand>,
 ): Effect.Effect<SlashCommandResult, UiError> => {
   switch (cmd.toLowerCase()) {
     case "agent":
@@ -191,7 +193,7 @@ export const executeSlashCommand = (
       })
 
     default:
-      return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })
+      return tryExtensionCommand(cmd, extensionCommands)
   }
 }
 

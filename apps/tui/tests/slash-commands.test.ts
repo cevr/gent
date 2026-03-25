@@ -3,6 +3,7 @@ import {
   executeSlashCommand,
   parseSlashCommand,
   type SlashCommandContext,
+  type ExtensionSlashCommand,
 } from "../src/commands/slash-commands"
 import { Effect } from "effect"
 import { ClientError } from "../src/utils/format-error"
@@ -234,5 +235,66 @@ describe("executeSlashCommand", () => {
     const result = await Effect.runPromise(executeSlashCommand("branch", "", ctx))
     expect(result.handled).toBe(true)
     expect(result.error).toBe("Branch failed")
+  })
+
+  test("extension slash command is executed", async () => {
+    const { ctx } = createMockContext()
+    let called = false
+    const extCommands: ExtensionSlashCommand[] = [
+      {
+        slash: "myext",
+        onSelect: () => {
+          called = true
+        },
+      },
+    ]
+
+    const result = await Effect.runPromise(executeSlashCommand("myext", "", ctx, extCommands))
+    expect(result.handled).toBe(true)
+    expect(called).toBe(true)
+  })
+
+  test("builtin commands take precedence over extension commands", async () => {
+    const { ctx, calls } = createMockContext()
+    let extCalled = false
+    const extCommands: ExtensionSlashCommand[] = [
+      {
+        slash: "agent",
+        onSelect: () => {
+          extCalled = true
+        },
+      },
+    ]
+
+    const result = await Effect.runPromise(executeSlashCommand("agent", "", ctx, extCommands))
+    expect(result.handled).toBe(true)
+    expect(calls.openPalette).toBe(1)
+    expect(extCalled).toBe(false)
+  })
+
+  test("extension slash commands are case insensitive", async () => {
+    const { ctx } = createMockContext()
+    let called = false
+    const extCommands: ExtensionSlashCommand[] = [
+      {
+        slash: "MyExt",
+        onSelect: () => {
+          called = true
+        },
+      },
+    ]
+
+    const result = await Effect.runPromise(executeSlashCommand("myext", "", ctx, extCommands))
+    expect(result.handled).toBe(true)
+    expect(called).toBe(true)
+  })
+
+  test("unknown command with no matching extension returns error", async () => {
+    const { ctx } = createMockContext()
+    const extCommands: ExtensionSlashCommand[] = [{ slash: "other", onSelect: () => {} }]
+
+    const result = await Effect.runPromise(executeSlashCommand("unknown", "", ctx, extCommands))
+    expect(result.handled).toBe(false)
+    expect(result.error).toBe("Unknown command: /unknown")
   })
 })

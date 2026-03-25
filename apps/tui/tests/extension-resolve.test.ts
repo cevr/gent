@@ -202,6 +202,45 @@ describe("resolveTuiExtensions", () => {
       expect(userCmd.keybind).toBeUndefined() // User lost the keybind
       expect(projectCmd.keybind).toBe("ctrl+k") // Project won it
     })
+
+    test("same-scope slash collision throws", () => {
+      const ext1: LoadedTuiExtension = {
+        id: "a",
+        kind: "user",
+        filePath: "/test/a",
+        setup: { commands: [{ id: "cmd-a", title: "A", slash: "foo", onSelect: () => {} }] },
+      }
+      const ext2: LoadedTuiExtension = {
+        id: "b",
+        kind: "user",
+        filePath: "/test/b",
+        setup: { commands: [{ id: "cmd-b", title: "B", slash: "foo", onSelect: () => {} }] },
+      }
+      expect(() => resolveTuiExtensions([ext1, ext2])).toThrow("Same-scope TUI slash collision")
+    })
+
+    test("higher scope wins slash, lower scope loses it", () => {
+      const user = makeExt("user", "user", {
+        commands: [{ id: "cmd-u", title: "U", slash: "deploy", onSelect: () => {} }],
+      })
+      const project = makeExt("proj", "project", {
+        commands: [{ id: "cmd-p", title: "P", slash: "deploy", onSelect: () => {} }],
+      })
+      const { commands } = resolveTuiExtensions([user, project])
+      expect(commands.length).toBe(2)
+      const userCmd = commands.find((c) => c.id === "cmd-u")!
+      const projectCmd = commands.find((c) => c.id === "cmd-p")!
+      expect(userCmd.slash).toBeUndefined() // User lost the slash
+      expect(projectCmd.slash).toBe("deploy") // Project won it
+    })
+
+    test("resolves command with slash field", () => {
+      const ext = makeExt("ext", "user", {
+        commands: [{ id: "cmd1", title: "Test", slash: "test", onSelect: () => {} }],
+      })
+      const { commands } = resolveTuiExtensions([ext])
+      expect(commands[0]!.slash).toBe("test")
+    })
   })
 
   describe("overlays", () => {

@@ -106,8 +106,10 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
   const commandMap = new Map<string, Command>()
   const idScopes = new Map<string, ScopeEntry>()
   const keybindScopes = new Map<string, ScopeEntry>()
-  // Track which command id owns each keybind — for stripping superseded keybinds
+  const slashScopes = new Map<string, ScopeEntry>()
+  // Track which command id owns each keybind/slash — for stripping superseded ones
   const keybindOwner = new Map<string, string>() // keybind → command id
+  const slashOwner = new Map<string, string>() // slash → command id
 
   for (const ext of sorted) {
     for (const entry of ext.setup.commands ?? []) {
@@ -128,11 +130,27 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
         keybindOwner.set(kb, entry.id)
       }
 
+      if (entry.slash !== undefined) {
+        const sl = entry.slash.toLowerCase()
+        checkCollision(slashScopes.get(sl), ext, "slash", entry.slash)
+        // Higher scope wins the slash — strip it from the previous owner
+        const prevOwnerId = slashOwner.get(sl)
+        if (prevOwnerId !== undefined) {
+          const prevCmd = commandMap.get(prevOwnerId)
+          if (prevCmd !== undefined) {
+            commandMap.set(prevOwnerId, { ...prevCmd, slash: undefined })
+          }
+        }
+        slashScopes.set(sl, { kind: ext.kind, source: ext.filePath })
+        slashOwner.set(sl, entry.id)
+      }
+
       commandMap.set(entry.id, {
         id: entry.id,
         title: entry.title,
         category: entry.category,
         keybind: entry.keybind,
+        slash: entry.slash,
         onSelect: entry.onSelect,
       })
       idScopes.set(entry.id, { kind: ext.kind, source: ext.filePath })

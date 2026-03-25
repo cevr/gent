@@ -401,39 +401,60 @@ export function useSessionController(props: {
     )
   }
 
+  // Build extension slash commands from resolved commands
+  const extensionSlashCommands = createMemo(() => {
+    const result: Array<{ slash: string; onSelect: () => void }> = []
+    for (const c of ext.commands()) {
+      if (c.slash !== undefined) {
+        result.push({ slash: c.slash, onSelect: c.onSelect })
+      }
+    }
+    return result
+  })
+
   const onSlashCommand = (cmd: string, args: string): Effect.Effect<void, UiError> =>
-    executeSlashCommand(cmd, args, {
-      openPalette: () => command.openPalette(),
-      clearMessages: feed.clear,
-      navigateToSessions: () => command.openPalette(),
-      createBranch: client.createBranch().pipe(Effect.asVoid),
-      openTree: openSessionTree,
-      openFork: openForkPicker,
-      toggleBypass: Effect.gen(function* () {
-        const current = client.session()?.bypass ?? true
-        yield* client.updateSessionBypass(!current)
-      }),
-      setReasoningLevel: (level) => client.updateSessionReasoningLevel(level),
-      openPermissions: () => router.navigateToPermissions(),
-      openAuth: () => router.navigateToAuth(),
-      sendMessage: (content: string) => client.sendMessage(content),
-      newSession: () =>
-        client.client
-          .createSession({
-            cwd: workspace.cwd,
-            bypass: client.session()?.bypass ?? true,
-          })
-          .pipe(
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                client.switchSession(result.sessionId, result.branchId, result.name, result.bypass)
-                router.navigateToSession(result.sessionId, result.branchId)
-              }),
+    executeSlashCommand(
+      cmd,
+      args,
+      {
+        openPalette: () => command.openPalette(),
+        clearMessages: feed.clear,
+        navigateToSessions: () => command.openPalette(),
+        createBranch: client.createBranch().pipe(Effect.asVoid),
+        openTree: openSessionTree,
+        openFork: openForkPicker,
+        toggleBypass: Effect.gen(function* () {
+          const current = client.session()?.bypass ?? true
+          yield* client.updateSessionBypass(!current)
+        }),
+        setReasoningLevel: (level) => client.updateSessionReasoningLevel(level),
+        openPermissions: () => router.navigateToPermissions(),
+        openAuth: () => router.navigateToAuth(),
+        sendMessage: (content: string) => client.sendMessage(content),
+        newSession: () =>
+          client.client
+            .createSession({
+              cwd: workspace.cwd,
+              bypass: client.session()?.bypass ?? true,
+            })
+            .pipe(
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  client.switchSession(
+                    result.sessionId,
+                    result.branchId,
+                    result.name,
+                    result.bypass,
+                  )
+                  router.navigateToSession(result.sessionId, result.branchId)
+                }),
+              ),
+              Effect.asVoid,
+              Effect.catchEager((error) => Effect.fail(ClientError(formatError(error)))),
             ),
-            Effect.asVoid,
-            Effect.catchEager((error) => Effect.fail(ClientError(formatError(error)))),
-          ),
-    }).pipe(
+      },
+      extensionSlashCommands(),
+    ).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
           if (result.error !== undefined) client.setError(result.error)

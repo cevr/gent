@@ -27,6 +27,8 @@ export interface ExtensionClientSetup<TComponent = unknown> {
     readonly title: string
     readonly category?: string
     readonly keybind?: string
+    /** Slash command trigger (without the /). When set, /name invokes onSelect. */
+    readonly slash?: string
     readonly onSelect: () => void
   }>
   /** Full-screen overlay panels */

@@ -14,6 +14,7 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncatePath } from "./message-list-utils"
 import { useScopedKeyboard } from "../keyboard/context"
 import { getFileTag } from "./file-tag"
+import { useExtensionUI } from "../extensions/context"
 
 export type AutocompleteType = "$" | "@" | "/"
 
@@ -35,7 +36,7 @@ interface SlashCommand {
   description: string
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
+const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   { id: "agent", label: "/agent", description: "Switch agent" },
   { id: "clear", label: "/clear", description: "Clear messages" },
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },
@@ -63,10 +64,27 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const workspace = useWorkspace()
   const { skills } = useSkills()
   const fileSearch = useFileSearch({ cwd: workspace.cwd })
+  const extensionUI = useExtensionUI()
 
   const [rawSelectedIndex, setSelectedIndex] = createSignal(0)
 
   let scrollRef: ScrollBoxRenderable | undefined = undefined
+
+  // Merge builtin + extension slash commands. Builtins win on name collision.
+  const slashCommands = createMemo((): SlashCommand[] => {
+    const builtinIds = new Set(BUILTIN_SLASH_COMMANDS.map((c) => c.id.toLowerCase()))
+    const extCommands: SlashCommand[] = []
+    for (const c of extensionUI.commands()) {
+      if (c.slash !== undefined && !builtinIds.has(c.slash.toLowerCase())) {
+        extCommands.push({
+          id: c.slash,
+          label: `/${c.slash}`,
+          description: c.description ?? c.title,
+        })
+      }
+    }
+    return [...BUILTIN_SLASH_COMMANDS, ...extCommands]
+  })
 
   // Memoize filtered items to avoid recomputation on each access
   const items = createMemo((): AutocompleteItem[] => {
@@ -96,13 +114,14 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       }
 
       case "/": {
-        return SLASH_COMMANDS.filter((c) => c.id.includes(filter) || c.label.includes(filter)).map(
-          (c) => ({
+        const all = slashCommands()
+        return all
+          .filter((c) => c.id.includes(filter) || c.label.includes(filter))
+          .map((c) => ({
             id: c.id,
             label: c.label,
             description: c.description,
-          }),
-        )
+          }))
       }
     }
   })
