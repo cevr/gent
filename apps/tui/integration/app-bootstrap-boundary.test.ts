@@ -6,7 +6,7 @@ import {
   createTempDirFixture,
   createWorkerEnv,
   startWorkerWithClient,
-} from "../../../tests/seam-fixture"
+} from "../../../tests/integration/seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-bootstrap-")

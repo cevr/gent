@@ -16,7 +16,8 @@
     "./test-utils/*": "./src/test-utils/*"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests/"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.82",
