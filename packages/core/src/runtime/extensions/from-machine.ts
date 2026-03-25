@@ -4,11 +4,8 @@
  * Parity with fromReducer: handleEvent, handleIntent, persistence,
  * version tracking via Ref, projection externalization.
  *
- * Change detection caveat: effect-machine processes events via async mailbox.
- * Change detection uses before/yieldNow/after — safe when handleEvent calls
- * are serialized (state-runtime.reduce iterates actors sequentially), but
- * NOT safe under concurrent handleEvent calls to the same actor. If concurrent
- * actor access is needed, this must be replaced with a transition receipt model.
+ * Uses ActorRef.dispatch for atomic change detection — sends event through
+ * the queue and gets back a ProcessEventResult receipt. No more before/yield/after.
  */
 
 import { Effect, Ref, Schema } from "effect"
@@ -176,27 +173,37 @@ export const fromMachine = <
             const mapped = config.mapEvent !== undefined ? config.mapEvent(event) : undefined
             if (mapped === undefined) return false
 
-            const before = yield* ref.snapshot
-            yield* ref.send(mapped).pipe(Effect.catchDefect(() => Effect.void))
-            // Yield to let the machine fiber process the queued event
-            yield* Effect.yieldNow
-            const after = yield* ref.snapshot
+            // Atomic: dispatch sends through queue and returns transition receipt
+            const result = yield* ref
+              .dispatch(mapped)
+              .pipe(
+                Effect.catchDefect(() =>
+                  Effect.succeed({
+                    transitioned: false,
+                    previousState: undefined,
+                    newState: undefined,
+                    lifecycleRan: false,
+                    isFinal: false,
+                  }),
+                ),
+              )
 
-            const changed = before !== after
-            if (changed) {
+            if (result.transitioned) {
               yield* Ref.update(versionRef, (v) => v + 1)
               if (config.persist === true) {
                 yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
               }
-              // Run extension effects from afterTransition hook
-              if (config.afterTransition !== undefined) {
-                const effects = config.afterTransition(before, after)
+              if (config.afterTransition !== undefined && result.previousState !== undefined) {
+                const effects = config.afterTransition(
+                  result.previousState as State,
+                  result.newState as State,
+                )
                 if (effects.length > 0) {
                   yield* runEffects(effects, reduceCtx.branchId)
                 }
               }
             }
-            return changed
+            return result.transitioned
           }),
 
         handleIntent: (() => {
@@ -212,26 +219,36 @@ export const fromMachine = <
               }
 
               const machineEvent = mapIntent(validated)
-              const before = yield* ref.snapshot
-              yield* ref.send(machineEvent).pipe(Effect.catchDefect(() => Effect.void))
-              // Yield to let the machine fiber process the queued event
-              yield* Effect.yieldNow
-              const after = yield* ref.snapshot
+              const result = yield* ref
+                .dispatch(machineEvent)
+                .pipe(
+                  Effect.catchDefect(() =>
+                    Effect.succeed({
+                      transitioned: false,
+                      previousState: undefined,
+                      newState: undefined,
+                      lifecycleRan: false,
+                      isFinal: false,
+                    }),
+                  ),
+                )
 
-              const changed = before !== after
-              if (changed) {
+              if (result.transitioned) {
                 yield* Ref.update(versionRef, (v) => v + 1)
                 if (config.persist === true) {
                   yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
                 }
-                if (config.afterTransition !== undefined) {
-                  const effects = config.afterTransition(before, after)
+                if (config.afterTransition !== undefined && result.previousState !== undefined) {
+                  const effects = config.afterTransition(
+                    result.previousState as State,
+                    result.newState as State,
+                  )
                   if (effects.length > 0) {
                     yield* runEffects(effects, branchId)
                   }
                 }
               }
-              return changed
+              return result.transitioned
             })
         })(),
 
