@@ -30,6 +30,7 @@ const emptyInterceptors = (): InterceptorChains => ({
   "prompt.system": [],
   "tool.execute": [],
   "permission.check": [],
+  "context.messages": [],
 })
 
 const appendHooks = (hooks: ExtensionHooks | undefined, interceptors: InterceptorChains) => {

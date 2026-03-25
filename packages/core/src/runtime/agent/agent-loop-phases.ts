@@ -140,7 +140,7 @@ const resolveTurnContext = (params: {
 }): Effect.Effect<ResolvedTurnContext | undefined, StorageError> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? "cowork"
-    const messages = yield* params.storage
+    const rawMessages = yield* params.storage
       .listMessages(params.branchId)
       .pipe(Effect.map((items) => [...items]))
     const agent = yield* params.extensionRegistry.getAgent(currentAgent)
@@ -156,6 +156,13 @@ const resolveTurnContext = (params: {
         .pipe(Effect.orDie)
       return undefined
     }
+
+    // Run context.messages interceptor — extensions can inject hidden context or filter messages
+    const messages = yield* params.extensionRegistry.hooks.runInterceptor(
+      "context.messages",
+      { messages: rawMessages, agent, sessionId: params.sessionId, branchId: params.branchId },
+      (input) => Effect.succeed(input.messages),
+    )
 
     // Derive extension projections from state machines
     const allTools = yield* params.extensionRegistry.listTools()
