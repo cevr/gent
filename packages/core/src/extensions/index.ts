@@ -9,6 +9,7 @@ import { TaskToolsExtension } from "./task-tools.js"
 import { WorkflowToolsExtension } from "./workflow-tools.js"
 import { AgentsExtension } from "./agents.js"
 import { PlanModeExtension } from "./plan-mode.js"
+import { ReviewLoopExtension } from "./review-loop.js"
 
 export {
   FsToolsExtension,
@@ -21,6 +22,7 @@ export {
   WorkflowToolsExtension,
   AgentsExtension,
   PlanModeExtension,
+  ReviewLoopExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -34,4 +36,5 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   WorkflowToolsExtension,
   AgentsExtension,
   PlanModeExtension,
+  ReviewLoopExtension,
 ]
