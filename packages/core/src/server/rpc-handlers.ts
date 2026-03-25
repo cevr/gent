@@ -272,9 +272,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ),
         ),
 
-      sendExtensionIntent: ({ sessionId, extensionId, intent, epoch }) =>
+      sendExtensionIntent: ({ sessionId, extensionId, intent, epoch, branchId }) =>
         extensionStateRuntime
-          .handleIntent(sessionId, extensionId, intent, epoch)
+          .handleIntent(sessionId, extensionId, intent, epoch, branchId)
           .pipe(Effect.orDie),
     }
   }),

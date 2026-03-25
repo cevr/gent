@@ -318,8 +318,8 @@ function buildClient(
 
     getSkillContent: (name) => rpcClient.getSkillContent({ name }),
 
-    sendExtensionIntent: (sessionId, extensionId, intent, epoch) =>
-      rpcClient.sendExtensionIntent({ sessionId, extensionId, intent, epoch }),
+    sendExtensionIntent: (sessionId, extensionId, intent, epoch, branchId) =>
+      rpcClient.sendExtensionIntent({ sessionId, extensionId, intent, epoch, branchId }),
 
     // @effect-diagnostics-next-line *:off
     runFork: (effect) => {

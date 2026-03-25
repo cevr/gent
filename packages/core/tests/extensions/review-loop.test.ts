@@ -286,7 +286,7 @@ const sendIntent = (runtime: ExtensionStateRuntime, intent: unknown) =>
   Effect.gen(function* () {
     const snap = yield* getSnapshot(runtime)
     const epoch = snap?.epoch ?? 0
-    yield* runtime.handleIntent(sessionId, "review-loop", intent, epoch)
+    yield* runtime.handleIntent(sessionId, "review-loop", intent, epoch, branchId)
   })
 
 const reviewSignal = (summary?: string) =>

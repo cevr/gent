@@ -188,7 +188,7 @@ export interface ExtensionActor {
   readonly id: string
   readonly init: Effect.Effect<void>
   readonly handleEvent: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
-  readonly handleIntent?: (intent: unknown) => Effect.Effect<boolean>
+  readonly handleIntent?: (intent: unknown, branchId?: BranchId) => Effect.Effect<boolean>
   readonly getState: Effect.Effect<{ state: unknown; version: number }>
   readonly terminate: Effect.Effect<void>
 }

@@ -438,6 +438,7 @@ export const SendExtensionIntentInput = Schema.Struct({
   extensionId: Schema.String,
   intent: Schema.Unknown,
   epoch: Schema.Number,
+  branchId: Schema.optional(BranchId),
 })
 export type SendExtensionIntentInput = typeof SendExtensionIntentInput.Type
 export const SendExtensionIntentPayload = SendExtensionIntentInput
@@ -586,6 +587,7 @@ export interface GentClient {
     extensionId: string,
     intent: unknown,
     epoch: number,
+    branchId?: BranchId,
   ) => Effect.Effect<void, GentRpcError>
 
   /** Fire-and-forget — run an effect on the client's captured runtime */

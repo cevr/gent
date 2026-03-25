@@ -129,11 +129,14 @@ export const fromReducer = <State, Intent = void>(
             .pipe(Effect.catchEager(() => Effect.void))
         })
 
-      const runEffects = (effects: ReadonlyArray<ExtensionEffect>) =>
+      const runEffects = (
+        effects: ReadonlyArray<ExtensionEffect>,
+        branchId: BranchId | undefined,
+      ) =>
         interpretEffects(
           effects,
           ctx.sessionId,
-          ctx.branchId,
+          branchId,
           turnControl,
           eventBus,
           config.persist === true ? persistState : undefined,
@@ -178,7 +181,8 @@ export const fromReducer = <State, Intent = void>(
               }
             }
             if (effects !== undefined && effects.length > 0) {
-              yield* runEffects(effects)
+              // Use current call-time branchId, not spawn-time branchId
+              yield* runEffects(effects, reduceCtx.branchId)
             }
             return changed
           }),
@@ -186,7 +190,7 @@ export const fromReducer = <State, Intent = void>(
         handleIntent: (() => {
           const handler = config.handleIntent
           if (handler === undefined) return undefined
-          return (intent: unknown) =>
+          return (intent: unknown, branchId?: BranchId) =>
             Effect.gen(function* () {
               let validated: Intent = intent as Intent
               if (config.intentSchema !== undefined) {
@@ -207,7 +211,8 @@ export const fromReducer = <State, Intent = void>(
                 }
               }
               if (effects !== undefined && effects.length > 0) {
-                yield* runEffects(effects)
+                // Use call-time branchId, not spawn-time branchId
+                yield* runEffects(effects, branchId)
               }
               return changed
             })

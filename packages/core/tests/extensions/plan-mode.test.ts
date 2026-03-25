@@ -54,7 +54,7 @@ const sendIntent = (runtime: ExtensionStateRuntime, intent: unknown) =>
   Effect.gen(function* () {
     const snap = yield* getPlanModeSnapshot(runtime)
     const epoch = snap?.epoch ?? 0
-    yield* runtime.handleIntent(sessionId, "plan-mode", intent, epoch)
+    yield* runtime.handleIntent(sessionId, "plan-mode", intent, epoch, branchId)
   })
 
 describe("PlanMode actor", () => {

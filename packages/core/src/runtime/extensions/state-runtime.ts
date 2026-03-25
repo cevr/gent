@@ -50,6 +50,7 @@ export interface ExtensionStateRuntimeService {
     extensionId: string,
     intent: unknown,
     epoch: number,
+    branchId?: BranchId,
   ) => Effect.Effect<void, StaleIntentError>
 
   /** Get current UI snapshots for all extensions with uiModels */
@@ -185,7 +186,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               return results
             }),
 
-          handleIntent: (sessionId, extensionId, intent, epoch) =>
+          handleIntent: (sessionId, extensionId, intent, epoch, branchId) =>
             Effect.gen(function* () {
               const entries = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
               const entry = entries.find((a) => a.actor.id === extensionId)
@@ -201,7 +202,9 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                     actualEpoch: epoch,
                   })
                 }
-                yield* entry.actor.handleIntent(intent).pipe(Effect.catchDefect(() => Effect.void))
+                yield* entry.actor
+                  .handleIntent(intent, branchId)
+                  .pipe(Effect.catchDefect(() => Effect.void))
               }
             }),
 
