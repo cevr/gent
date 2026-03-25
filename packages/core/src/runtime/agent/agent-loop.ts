@@ -585,26 +585,10 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
-            // Session-scoped publish: event store + extension state machine reduction
-            // Shadows the outer publishEvent/publishEventOrDie inside makeLoop
+            // Session-scoped publish — extension reduce + UI snapshot publication
+            // is handled centrally by ReducingEventStore (see dependencies.ts)
             const publishEvent = (event: AgentEvent) =>
               eventStore.publish(event).pipe(
-                Effect.tap(() =>
-                  extensionStateRuntime.reduce(event, { sessionId, branchId }).pipe(
-                    Effect.tap((changed) => {
-                      if (!changed) return Effect.void
-                      return extensionStateRuntime.getUiSnapshots(sessionId, branchId).pipe(
-                        Effect.tap((snapshots) =>
-                          Effect.forEach(snapshots, (snapshot) => eventStore.publish(snapshot), {
-                            concurrency: "unbounded",
-                          }),
-                        ),
-                        Effect.catchEager(() => Effect.void),
-                      )
-                    }),
-                    Effect.catchDefect(() => Effect.void),
-                  ),
-                ),
                 Effect.mapError(
                   (error) =>
                     new AgentLoopError({

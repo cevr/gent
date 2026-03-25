@@ -3,7 +3,13 @@ import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import type { LoadedExtension } from "../domain/extension.js"
-import { EventStore } from "../domain/event.js"
+import {
+  BaseEventStore,
+  EventStore,
+  type AgentEvent,
+  getEventBranchId,
+  getEventSessionId,
+} from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/interaction-handlers.js"
 import { Permission } from "../domain/permission.js"
@@ -117,6 +123,53 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
     }),
   )
 
+/**
+ * ReducingEventStore wraps the BaseEventStore with extension state machine reduction.
+ * On every publish, it:
+ * 1. Delegates to BaseEventStore.publish (raw storage)
+ * 2. Feeds the event to ExtensionStateRuntime.reduce
+ * 3. If any machine changed state, publishes UI snapshots through BaseEventStore (no recursion)
+ *
+ * ExtensionUiSnapshot events skip reduce entirely to avoid infinite loops.
+ */
+const makeReducingEventStore = Layer.effect(
+  EventStore,
+  Effect.gen(function* () {
+    const base = yield* BaseEventStore
+    const stateRuntime = yield* ExtensionStateRuntime
+
+    return {
+      publish: (event: AgentEvent) =>
+        base.publish(event).pipe(
+          Effect.tap(() => {
+            // Skip reduce for synthetic events to avoid recursion
+            if (event._tag === "ExtensionUiSnapshot") return Effect.void
+
+            const sessionId = getEventSessionId(event)
+            if (sessionId === undefined) return Effect.void
+
+            const branchId = getEventBranchId(event)
+            return stateRuntime.reduce(event, { sessionId, branchId }).pipe(
+              Effect.tap((changed) => {
+                if (!changed || branchId === undefined) return Effect.void
+                return stateRuntime.getUiSnapshots(sessionId, branchId).pipe(
+                  Effect.tap((snapshots) =>
+                    Effect.forEach(snapshots, (snapshot) => base.publish(snapshot), {
+                      concurrency: "unbounded",
+                    }),
+                  ),
+                  Effect.catchEager(() => Effect.void),
+                )
+              }),
+              Effect.catchDefect(() => Effect.void),
+            )
+          }),
+        ),
+      subscribe: base.subscribe,
+    }
+  }),
+)
+
 export const createDependencies = (config: DependenciesConfig) => {
   const runtimePlatformLive = RuntimePlatform.Live({
     cwd: config.cwd,
@@ -130,7 +183,8 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const storageLive =
     persistenceMode === "memory" ? Storage.Memory() : Storage.Live(config.dbPath ?? ".gent/data.db")
-  const eventStoreLive =
+  // Base event store: raw storage-backed publisher (provides both BaseEventStore and EventStore initially)
+  const baseEventStoreLive =
     persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, storageLive)
 
   const authStorageLive = AuthStorage.LiveSystem({
@@ -161,10 +215,18 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const extensionEventBusLive = ExtensionEventBus.Live
 
+  // ReducingEventStore wraps BaseEventStore with extension reduce.
+  // It requires BaseEventStore + ExtensionStateRuntime (from extensionRegistryLive).
+  const reducingEventStoreLive = Layer.provide(
+    makeReducingEventStore,
+    Layer.merge(baseEventStoreLive, extensionRegistryLive),
+  )
+
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,
     storageLive,
-    eventStoreLive,
+    baseEventStoreLive,
+    reducingEventStoreLive,
     authStorageLive,
     authStoreLive,
     authGuardLive,

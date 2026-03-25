@@ -520,6 +520,11 @@ export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
   return undefined
 }
 
+export const getEventBranchId = (event: AgentEvent): BranchId | undefined => {
+  if ("branchId" in event) return event.branchId as BranchId | undefined
+  return undefined
+}
+
 export const matchesEventFilter = (
   env: EventEnvelope,
   sessionId: SessionId,
@@ -535,63 +540,80 @@ export const matchesEventFilter = (
 
 // EventStore Service
 
+/**
+ * BaseEventStore — raw storage-backed publisher.
+ * Used directly for synthetic events (ExtensionUiSnapshot) to avoid recursion.
+ * Production code should use EventStore which wraps this with extension reduce.
+ */
+export class BaseEventStore extends ServiceMap.Service<BaseEventStore, EventStoreService>()(
+  "@gent/core/src/domain/event/BaseEventStore",
+) {}
+
+const makeMemoryEventStore = Effect.gen(function* () {
+  const pubsub = yield* PubSub.unbounded<EventEnvelope>()
+  const eventsRef = yield* Ref.make<EventEnvelope[]>([])
+  const idRef = yield* Ref.make(0)
+
+  const service: EventStoreService = {
+    publish: Effect.fn("EventStore.publish")(function* (event) {
+      const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
+      const currentSpan = yield* Effect.currentParentSpan.pipe(
+        Effect.orElseSucceed(() => undefined),
+      )
+      const envelope = new EventEnvelope({
+        id: id as EventId,
+        event,
+        createdAt: Date.now(),
+        ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
+      })
+      yield* Ref.update(eventsRef, (events) => [...events, envelope])
+      yield* PubSub.publish(pubsub, envelope)
+    }),
+
+    subscribe: ({ sessionId, branchId, after }) =>
+      Stream.scoped(
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const afterId = after ?? (0 as EventId)
+            const subscription = yield* PubSub.subscribe(pubsub)
+            const latestId = yield* Ref.get(idRef)
+            const buffered = (yield* Ref.get(eventsRef)).filter(
+              (env) =>
+                env.id > afterId &&
+                env.id <= latestId &&
+                matchesEventFilter(env, sessionId, branchId),
+            )
+            const live = Stream.fromSubscription(subscription).pipe(
+              Stream.filter(
+                (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
+              ),
+            )
+            return Stream.concat(Stream.fromIterable(buffered), live)
+          }),
+        ),
+      ),
+  }
+  return service
+})
+
 export class EventStore extends ServiceMap.Service<EventStore, EventStoreService>()(
   "@gent/core/src/domain/event/EventStore",
 ) {
-  static Memory: Layer.Layer<EventStore> = Layer.effect(
-    EventStore,
-    Effect.gen(function* () {
-      const pubsub = yield* PubSub.unbounded<EventEnvelope>()
-      const eventsRef = yield* Ref.make<EventEnvelope[]>([])
-      const idRef = yield* Ref.make(0)
-
-      return {
-        publish: Effect.fn("EventStore.publish")(function* (event) {
-          const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
-          const currentSpan = yield* Effect.currentParentSpan.pipe(
-            Effect.orElseSucceed(() => undefined),
-          )
-          const envelope = new EventEnvelope({
-            id: id as EventId,
-            event,
-            createdAt: Date.now(),
-            ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
-          })
-          yield* Ref.update(eventsRef, (events) => [...events, envelope])
-          yield* PubSub.publish(pubsub, envelope)
-        }),
-
-        subscribe: ({ sessionId, branchId, after }) =>
-          Stream.scoped(
-            Stream.unwrap(
-              Effect.gen(function* () {
-                const afterId = after ?? (0 as EventId)
-                const subscription = yield* PubSub.subscribe(pubsub)
-                const latestId = yield* Ref.get(idRef)
-                const buffered = (yield* Ref.get(eventsRef)).filter(
-                  (env) =>
-                    env.id > afterId &&
-                    env.id <= latestId &&
-                    matchesEventFilter(env, sessionId, branchId),
-                )
-                const live = Stream.fromSubscription(subscription).pipe(
-                  Stream.filter(
-                    (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
-                  ),
-                )
-                return Stream.concat(Stream.fromIterable(buffered), live)
-              }),
-            ),
-          ),
-      }
-    }),
+  static Memory: Layer.Layer<EventStore | BaseEventStore> = Layer.unwrap(
+    makeMemoryEventStore.pipe(
+      Effect.map((service) =>
+        Layer.merge(Layer.succeed(EventStore, service), Layer.succeed(BaseEventStore, service)),
+      ),
+    ),
   )
 
-  static Live: Layer.Layer<EventStore> = EventStore.Memory
+  static Live: Layer.Layer<EventStore | BaseEventStore> = EventStore.Memory
 
-  static Test = (): Layer.Layer<EventStore> =>
-    Layer.succeed(EventStore, {
+  static Test = (): Layer.Layer<EventStore | BaseEventStore> => {
+    const noop: EventStoreService = {
       publish: () => Effect.void,
       subscribe: (_params) => Stream.empty,
-    })
+    }
+    return Layer.merge(Layer.succeed(EventStore, noop), Layer.succeed(BaseEventStore, noop))
+  }
 }

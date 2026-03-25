@@ -150,7 +150,8 @@ export function createStateMachineHarness<State, Intent>(
     allTools: options?.allTools ?? [],
   }
 
-  const events = createEventFactories(ctx)
+  const branchId = (options?.branchId ?? "test-branch") as BranchId
+  const events = createEventFactories({ sessionId: ctx.sessionId, branchId })
 
   const reduce = (state: State, event: Parameters<typeof machine.reduce>[1]): State =>
     machine.reduce(state, event, ctx)

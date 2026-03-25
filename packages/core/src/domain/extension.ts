@@ -129,7 +129,7 @@ export interface ExtensionHooks {
 
 export interface ExtensionReduceContext {
   readonly sessionId: SessionId
-  readonly branchId: BranchId
+  readonly branchId?: BranchId
 }
 
 export interface ExtensionDeriveContext {
