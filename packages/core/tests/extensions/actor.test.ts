@@ -72,7 +72,7 @@ describe("fromReducer", () => {
     )
   })
 
-  test("QueueFollowUp effect dispatches to turn control", async () => {
+  test("EmitEvent effect dispatches to event bus", async () => {
     const emitted = Effect.runSync(Ref.make<string[]>([]))
 
     const { spawnActor: spawn } = fromReducer<{ active: boolean }>({
@@ -109,6 +109,90 @@ describe("fromReducer", () => {
         const channels = yield* Ref.get(emitted)
         expect(channels).toContain("test:done")
       }).pipe(Effect.provide(Layer.merge(ExtensionTurnControl.Test(), busLayer))),
+    )
+  })
+
+  test("effects use current branch context, not spawn-time branch", async () => {
+    const followUps = Effect.runSync(Ref.make<string[]>([]))
+    const spawnBranch = "branch-A" as BranchId
+    const eventBranch = "branch-B" as BranchId
+
+    const { spawnActor: spawn } = fromReducer<{ count: number }>({
+      id: "branch-checker",
+      initial: { count: 0 },
+      reduce: (state, event): ReduceResult<{ count: number }> => {
+        if (event._tag === "TurnCompleted") {
+          return {
+            state: { count: state.count + 1 },
+            effects: [{ _tag: "QueueFollowUp", content: "follow-up" }],
+          }
+        }
+        return { state }
+      },
+    })
+
+    const turnControlLayer = Layer.succeed(ExtensionTurnControl, {
+      queueFollowUp: (params: { branchId: BranchId }) =>
+        Ref.update(followUps, (arr) => [...arr, params.branchId]),
+      interject: () => Effect.void,
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        // Spawn on branch A
+        const actor = yield* spawn({ sessionId, branchId: spawnBranch })
+        yield* actor.init
+
+        // Dispatch event on branch B — effects should target branch B
+        yield* actor.handleEvent(
+          new TurnCompleted({ sessionId, branchId: eventBranch, durationMs: 50 }),
+          { sessionId, branchId: eventBranch },
+        )
+
+        const branches = yield* Ref.get(followUps)
+        expect(branches).toEqual([eventBranch])
+        // Must NOT contain spawn-time branch A
+        expect(branches).not.toContain(spawnBranch)
+      }).pipe(Effect.provide(Layer.merge(turnControlLayer, ExtensionEventBus.Test()))),
+    )
+  })
+
+  test("handleIntent effects target correct branch", async () => {
+    const { Schema } = await import("effect")
+    const followUps = Effect.runSync(Ref.make<string[]>([]))
+    const spawnBranch = "branch-spawn" as BranchId
+    const intentBranch = "branch-intent" as BranchId
+
+    const IntentSchema = Schema.Struct({ action: Schema.String })
+
+    const { spawnActor: spawn } = fromReducer({
+      id: "intent-branch",
+      initial: { value: "off" },
+      reduce: (state: { value: string }) => ({ state }),
+      handleIntent: (_state: { value: string }, _intent: typeof IntentSchema.Type) => ({
+        state: { value: "on" },
+        effects: [{ _tag: "QueueFollowUp" as const, content: "intent-followup" }],
+      }),
+      intentSchema: IntentSchema,
+    })
+
+    const turnControlLayer = Layer.succeed(ExtensionTurnControl, {
+      queueFollowUp: (params: { branchId: BranchId }) =>
+        Ref.update(followUps, (arr) => [...arr, params.branchId]),
+      interject: () => Effect.void,
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const actor = yield* spawn({ sessionId, branchId: spawnBranch })
+        yield* actor.init
+
+        // Send intent with different branch
+        yield* actor.handleIntent!({ action: "go" }, intentBranch)
+
+        const branches = yield* Ref.get(followUps)
+        expect(branches).toEqual([intentBranch])
+      }).pipe(Effect.provide(Layer.merge(turnControlLayer, ExtensionEventBus.Test()))),
     )
   })
 
