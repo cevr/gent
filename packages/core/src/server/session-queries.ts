@@ -5,6 +5,7 @@ import type { Task } from "../domain/task.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
 import type {
@@ -52,6 +53,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
     Effect.gen(function* () {
       const storage = yield* Storage
       const actorProcess = yield* ActorProcess
+      const extensionStateRuntime = yield* ExtensionStateRuntime
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
         const sessions = yield* storage.listSessions()
@@ -156,6 +158,20 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
             Effect.catchEager(() => Effect.succeed(idleRuntime)),
           )
 
+        // Extension UI snapshots for cold-start hydration
+        const extensionSnapshots = yield* extensionStateRuntime
+          .getUiSnapshots(input.sessionId, input.branchId)
+          .pipe(
+            Effect.map((snapshots) =>
+              snapshots.map((s) => ({
+                extensionId: s.extensionId,
+                epoch: s.epoch,
+                model: s.model,
+              })),
+            ),
+            Effect.catchEager(() => Effect.succeed([] as const)),
+          )
+
         return {
           sessionId: input.sessionId,
           branchId: input.branchId,
@@ -166,6 +182,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,
           runtime,
+          extensionSnapshots: extensionSnapshots.length > 0 ? [...extensionSnapshots] : undefined,
         }
       })
 

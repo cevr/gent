@@ -20,6 +20,7 @@ import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 
 describe("Skills System", () => {
   test("Skills.Test provides test skills", async () => {
@@ -192,7 +193,7 @@ describe("Session Snapshot", () => {
       Provider.Test([]),
       eventStoreLayer,
       actorProcessLayer,
-
+      ExtensionStateRuntime.Test(),
       Permission.Live([], "ask"),
       ConfigService.Test(),
     )
@@ -241,7 +242,7 @@ describe("Session Tree", () => {
       Provider.Test([]),
       eventStoreLayer,
       ActorProcess.Test(),
-
+      ExtensionStateRuntime.Test(),
       Permission.Live([], "ask"),
       ConfigService.Test(),
     )

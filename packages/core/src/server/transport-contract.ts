@@ -239,6 +239,13 @@ export const GetSessionSnapshotInput = Schema.Struct({
 export type GetSessionSnapshotInput = typeof GetSessionSnapshotInput.Type
 export const GetSessionSnapshotPayload = GetSessionSnapshotInput
 
+export const ExtensionSnapshotInfo = Schema.Struct({
+  extensionId: Schema.String,
+  epoch: Schema.Number,
+  model: Schema.Unknown,
+})
+export type ExtensionSnapshotInfo = typeof ExtensionSnapshotInfo.Type
+
 export const SessionSnapshot = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
@@ -250,6 +257,8 @@ export const SessionSnapshot = Schema.Struct({
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (phase/status/agent/queue). Idle sessions return idle runtime. */
   runtime: Schema.suspend(() => SessionRuntime),
+  /** Extension UI snapshots for cold-start hydration */
+  extensionSnapshots: Schema.optional(Schema.Array(ExtensionSnapshotInfo)),
 })
 export type SessionSnapshot = typeof SessionSnapshot.Type
 

@@ -14,6 +14,7 @@ import {
 import { Storage } from "../storage/sqlite-storage.js"
 import { Provider } from "../providers/provider.js"
 import { ActorProcess } from "../runtime/actor-process.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
@@ -67,6 +68,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
       const actorProcess = yield* ActorProcess
       const eventStore = yield* EventStore
       const provider = yield* Provider
+      const extensionStateRuntime = yield* ExtensionStateRuntime
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -307,7 +309,12 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         createSession,
         // SessionEnded is not emitted on delete — FK cascade would immediately
         // remove the persisted event. Delete is destructive and rare.
-        deleteSession: (sessionId) => storage.deleteSession(sessionId),
+        // Terminate actors first to prevent leaks.
+        deleteSession: (sessionId) =>
+          extensionStateRuntime.terminateAll(sessionId).pipe(
+            Effect.catchDefect(() => Effect.void),
+            Effect.tap(() => storage.deleteSession(sessionId)),
+          ),
         createBranch,
         switchBranch,
         forkBranch,

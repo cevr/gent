@@ -173,6 +173,18 @@ export interface StorageService {
     StorageError
   >
 
+  // Extension state persistence
+  readonly saveExtensionState: (params: {
+    sessionId: SessionId
+    extensionId: string
+    stateJson: string
+    version: number
+  }) => Effect.Effect<void, StorageError>
+  readonly loadExtensionState: (params: {
+    sessionId: SessionId
+    extensionId: string
+  }) => Effect.Effect<{ stateJson: string; version: number } | undefined, StorageError>
+
   // Durable actor inbox
   readonly createActorInboxRecord: (
     record: ActorInboxRecord,
@@ -584,6 +596,18 @@ const initSchema = Effect.gen(function* () {
       params_json TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       created_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `)
+
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS extension_state (
+      session_id TEXT NOT NULL,
+      extension_id TEXT NOT NULL,
+      state_json TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, extension_id),
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
   `)
@@ -1245,6 +1269,31 @@ const makeStorage = Effect.gen(function* () {
         }))
       },
       Effect.mapError(mapError("Failed to search messages")),
+    ),
+
+    saveExtensionState: Effect.fn("Storage.saveExtensionState")(
+      function* (params: {
+        sessionId: SessionId
+        extensionId: string
+        stateJson: string
+        version: number
+      }) {
+        yield* sql`INSERT OR REPLACE INTO extension_state (session_id, extension_id, state_json, version, updated_at) VALUES (${params.sessionId}, ${params.extensionId}, ${params.stateJson}, ${params.version}, ${Date.now()})`
+      },
+      Effect.mapError(mapError("Failed to save extension state")),
+    ),
+
+    loadExtensionState: Effect.fn("Storage.loadExtensionState")(
+      function* (params: { sessionId: SessionId; extensionId: string }) {
+        const rows = yield* sql<{
+          state_json: string
+          version: number
+        }>`SELECT state_json, version FROM extension_state WHERE session_id = ${params.sessionId} AND extension_id = ${params.extensionId}`
+        const row = rows[0]
+        if (row === undefined) return undefined
+        return { stateJson: row.state_json, version: row.version }
+      },
+      Effect.mapError(mapError("Failed to load extension state")),
     ),
 
     createActorInboxRecord: Effect.fn("Storage.createActorInboxRecord")(

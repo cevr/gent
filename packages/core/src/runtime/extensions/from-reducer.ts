@@ -18,6 +18,7 @@ import type {
   SpawnActor,
 } from "../../domain/extension.js"
 import type { SessionId, BranchId } from "../../domain/ids.js"
+import { Storage } from "../../storage/sqlite-storage.js"
 import type { ExtensionEventBusService } from "./event-bus.js"
 import { ExtensionEventBus } from "./event-bus.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
@@ -36,6 +37,10 @@ export interface FromReducerConfig<State, Intent = void> {
   readonly intentSchema?: Schema.Schema<Intent>
   /** Schema for the uiModel returned by derive() — used for transport encoding/validation */
   readonly uiModelSchema?: Schema.Schema<unknown>
+  /** Schema for serializing/deserializing state to/from JSON (required for persistence) */
+  readonly stateSchema?: Schema.Schema<State>
+  /** If true, state is persisted on Persist effect and hydrated on init */
+  readonly persist?: boolean
 }
 
 const interpretEffects = (
@@ -44,6 +49,7 @@ const interpretEffects = (
   branchId: BranchId | undefined,
   turnControl: ExtensionTurnControlService,
   eventBus: ExtensionEventBusService,
+  persistFn?: () => Effect.Effect<void>,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     for (const effect of effects) {
@@ -73,7 +79,9 @@ const interpretEffects = (
             .pipe(Effect.catchDefect(() => Effect.void))
           break
         case "Persist":
-          // Persistence wired in Batch 4
+          if (persistFn !== undefined) {
+            yield* persistFn().pipe(Effect.catchDefect(() => Effect.void))
+          }
           break
       }
     }
@@ -92,18 +100,61 @@ export const fromReducer =
     Effect.gen(function* () {
       const turnControl = yield* ExtensionTurnControl
       const eventBus = yield* ExtensionEventBus
+      const storage = yield* Effect.serviceOption(Storage)
       const stateRef = yield* Ref.make<State>(config.initial)
       const versionRef = yield* Ref.make(0)
 
+      // Persistence: save state to storage
+      const persistState = (): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          if (storage._tag !== "Some" || config.stateSchema === undefined) return
+          const state = yield* Ref.get(stateRef)
+          const version = yield* Ref.get(versionRef)
+          const encoded = Schema.encodeSync(
+            Schema.fromJsonString(config.stateSchema as Schema.Any),
+          )(state)
+          yield* storage.value
+            .saveExtensionState({
+              sessionId: ctx.sessionId,
+              extensionId: config.id,
+              stateJson: encoded,
+              version,
+            })
+            .pipe(Effect.catchEager(() => Effect.void))
+        })
+
       const runEffects = (effects: ReadonlyArray<ExtensionEffect>) =>
-        interpretEffects(effects, ctx.sessionId, ctx.branchId, turnControl, eventBus).pipe(
-          Effect.catchDefect(() => Effect.void),
-        )
+        interpretEffects(
+          effects,
+          ctx.sessionId,
+          ctx.branchId,
+          turnControl,
+          eventBus,
+          config.persist === true ? persistState : undefined,
+        ).pipe(Effect.catchDefect(() => Effect.void))
 
       const actor: ExtensionActor = {
         id: config.id,
 
-        init: Effect.void,
+        // Hydrate persisted state on init
+        init:
+          config.persist === true
+            ? Effect.gen(function* () {
+                if (storage._tag !== "Some" || config.stateSchema === undefined) return
+                const loaded = yield* storage.value
+                  .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
+                  .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+                if (loaded === undefined) return
+                const decoded = yield* Schema.decodeUnknownEffect(
+                  Schema.fromJsonString(config.stateSchema as Schema.Any),
+                )(loaded.stateJson).pipe(
+                  Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
+                )
+                if (decoded === undefined) return
+                yield* Ref.set(stateRef, decoded as State)
+                yield* Ref.set(versionRef, loaded.version)
+              })
+            : Effect.void,
 
         handleEvent: (event: AgentEvent, reduceCtx: ExtensionReduceContext) =>
           Effect.gen(function* () {
