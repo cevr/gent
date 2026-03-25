@@ -807,7 +807,9 @@ const makeStorage = Effect.gen(function* () {
     createMessageIfAbsent: Effect.fn("Storage.createMessageIfAbsent")(
       function* (message) {
         const partsJson = yield* encodeMessageParts([...message.parts])
-        yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null})`
+        const metadataJson =
+          message.metadata !== undefined ? encodeMetadataJson(message.metadata) : null
+        yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
         yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
         return message
       },

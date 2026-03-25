@@ -43,6 +43,7 @@ export const messageToInfo = (message: Message): MessageInfoReadonly => ({
   parts: message.parts,
   createdAt: message.createdAt.getTime(),
   turnDurationMs: message.turnDurationMs,
+  metadata: message.metadata,
 })
 
 export const buildBranchTree = (
