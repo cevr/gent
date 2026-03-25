@@ -228,13 +228,18 @@ export const ReviewLoopActorConfig = {
 
 // ── Actor ──
 
-export const ReviewLoopSpawnActor = fromReducer<ReviewLoopState, ReviewLoopIntent>({
+const { spawnActor: ReviewLoopSpawnActor, projection: ReviewLoopProjection } = fromReducer<
+  ReviewLoopState,
+  ReviewLoopIntent
+>({
   ...ReviewLoopActorConfig,
   stateSchema: ReviewLoopState,
   intentSchema: ReviewLoopIntent,
   uiModelSchema: ReviewLoopUiModel,
   persist: true,
 })
+
+export { ReviewLoopSpawnActor }
 
 // ── Extension ──
 
@@ -243,5 +248,6 @@ export const ReviewLoopExtension = defineExtension({
   setup: () =>
     Effect.succeed({
       spawnActor: ReviewLoopSpawnActor,
+      projection: ReviewLoopProjection,
     }),
 })

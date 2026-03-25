@@ -18,8 +18,8 @@ const branchId = "test-branch" as BranchId
 const testLayer = Layer.mergeAll(ExtensionTurnControl.Test(), ExtensionEventBus.Test())
 
 describe("fromReducer", () => {
-  test("basic state transition", async () => {
-    const spawn = fromReducer<{ count: number }>({
+  test("handleEvent advances state and increments version", async () => {
+    const { spawnActor: spawn } = fromReducer<{ count: number }>({
       id: "counter",
       initial: { count: 0 },
       reduce: (state, _event) => ({ state: { count: state.count + 1 } }),
@@ -30,16 +30,17 @@ describe("fromReducer", () => {
         const actor = yield* spawn({ sessionId, branchId })
         yield* actor.init
 
-        const before = yield* actor.snapshot
+        const before = yield* actor.getState
         expect(before.state).toEqual({ count: 0 })
         expect(before.version).toBe(0)
 
-        yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+        const changed = yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
+        expect(changed).toBe(true)
 
-        const after = yield* actor.snapshot
+        const after = yield* actor.getState
         expect(after.state).toEqual({ count: 1 })
         expect(after.version).toBe(1)
 
@@ -48,8 +49,8 @@ describe("fromReducer", () => {
     )
   })
 
-  test("no state change preserves version", async () => {
-    const spawn = fromReducer<{ value: string }>({
+  test("version unchanged when reducer returns same state", async () => {
+    const { spawnActor: spawn } = fromReducer<{ value: string }>({
       id: "stable",
       initial: { value: "unchanged" },
       reduce: (state) => ({ state }),
@@ -58,22 +59,23 @@ describe("fromReducer", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const actor = yield* spawn({ sessionId, branchId })
-        yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+        const changed = yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
+        expect(changed).toBe(false)
 
-        const snap = yield* actor.snapshot
+        const snap = yield* actor.getState
         expect(snap.version).toBe(0)
         expect(snap.state).toEqual({ value: "unchanged" })
       }).pipe(Effect.provide(testLayer)),
     )
   })
 
-  test("effects are interpreted via framework services", async () => {
+  test("QueueFollowUp effect dispatches to turn control", async () => {
     const emitted = Effect.runSync(Ref.make<string[]>([]))
 
-    const spawn = fromReducer<{ active: boolean }>({
+    const { spawnActor: spawn } = fromReducer<{ active: boolean }>({
       id: "effector",
       initial: { active: false },
       reduce: (state, event): ReduceResult<{ active: boolean }> => {
@@ -101,7 +103,7 @@ describe("fromReducer", () => {
           branchId,
         })
 
-        const snap = yield* actor.snapshot
+        const snap = yield* actor.getState
         expect(snap.state).toEqual({ active: true })
 
         const channels = yield* Ref.get(emitted)
@@ -110,8 +112,8 @@ describe("fromReducer", () => {
     )
   })
 
-  test("derive produces projections from state", async () => {
-    const spawn = fromReducer<{ mode: string }>({
+  test("projection registered separately from actor", async () => {
+    const { spawnActor: spawn, projection } = fromReducer<{ mode: string }>({
       id: "projector",
       initial: { mode: "normal" },
       reduce: (state) => ({ state }),
@@ -121,16 +123,18 @@ describe("fromReducer", () => {
       }),
     })
 
+    expect(projection).toBeDefined()
+    const result = projection!.derive({ mode: "plan" }, { agent: undefined as never, allTools: [] })
+    expect(result.uiModel).toEqual({ mode: "plan" })
+    expect(result.promptSections).toHaveLength(1)
+
+    // Actor itself has no derive — projection is framework-owned
     await Effect.runPromise(
       Effect.gen(function* () {
         const actor = yield* spawn({ sessionId, branchId })
-        expect(actor.derive).toBeDefined()
-        const projection = actor.derive!(
-          { mode: "plan" },
-          { agent: undefined as never, allTools: [] },
-        )
-        expect(projection.uiModel).toEqual({ mode: "plan" })
-        expect(projection.promptSections).toHaveLength(1)
+        // getState works
+        const snap = yield* actor.getState
+        expect(snap.state).toEqual({ mode: "normal" })
       }).pipe(Effect.provide(testLayer)),
     )
   })
@@ -142,7 +146,7 @@ describe("fromReducer", () => {
       action: Schema.Literals(["activate", "deactivate"]),
     })
 
-    const spawn = fromReducer({
+    const { spawnActor: spawn } = fromReducer({
       id: "intent-handler",
       initial: { active: false },
       reduce: (state: { active: boolean }) => ({ state }),
@@ -157,8 +161,9 @@ describe("fromReducer", () => {
         const actor = yield* spawn({ sessionId, branchId })
         expect(actor.handleIntent).toBeDefined()
 
-        yield* actor.handleIntent!({ action: "activate" })
-        const snap = yield* actor.snapshot
+        const changed = yield* actor.handleIntent!({ action: "activate" })
+        expect(changed).toBe(true)
+        const snap = yield* actor.getState
         expect(snap.state).toEqual({ active: true })
         expect(snap.version).toBe(1)
       }).pipe(Effect.provide(testLayer)),
@@ -166,7 +171,7 @@ describe("fromReducer", () => {
   })
 
   test("multiple events accumulate state and version", async () => {
-    const spawn = fromReducer<{ seen: string[] }>({
+    const { spawnActor: spawn } = fromReducer<{ seen: string[] }>({
       id: "accumulator",
       initial: { seen: [] },
       reduce: (state, event) => ({
@@ -181,7 +186,7 @@ describe("fromReducer", () => {
         yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), ctx)
         yield* actor.handleEvent(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), ctx)
 
-        const snap = yield* actor.snapshot
+        const snap = yield* actor.getState
         const state = snap.state as { seen: string[] }
         expect(state.seen).toEqual(["SessionStarted", "TurnCompleted"])
         expect(snap.version).toBe(2)
@@ -189,9 +194,9 @@ describe("fromReducer", () => {
     )
   })
 
-  test("state updates are atomic via Ref.modify", async () => {
+  test("concurrent state updates are serialized", async () => {
     let reduceCount = 0
-    const spawn = fromReducer<{ count: number }>({
+    const { spawnActor: spawn } = fromReducer<{ count: number }>({
       id: "atomic",
       initial: { count: 0 },
       reduce: (state) => {
@@ -209,7 +214,7 @@ describe("fromReducer", () => {
           yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), ctx)
         }
 
-        const snap = yield* actor.snapshot
+        const snap = yield* actor.getState
         expect((snap.state as { count: number }).count).toBe(10)
         expect(snap.version).toBe(10)
         expect(reduceCount).toBe(10)
@@ -218,7 +223,7 @@ describe("fromReducer", () => {
   })
 
   test("defect in reducer is catchable by supervision", async () => {
-    const spawn = fromReducer<{ value: string }>({
+    const { spawnActor: spawn } = fromReducer<{ value: string }>({
       id: "crasher",
       initial: { value: "ok" },
       reduce: (_state, event) => {
@@ -237,7 +242,7 @@ describe("fromReducer", () => {
           .handleEvent(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), ctx)
           .pipe(Effect.catchDefect(() => Effect.void))
 
-        const snap = yield* actor.snapshot
+        const snap = yield* actor.getState
         expect((snap.state as { value: string }).value).toBe("ok")
       }).pipe(Effect.provide(testLayer)),
     )
@@ -246,19 +251,19 @@ describe("fromReducer", () => {
 
 describe("ExtensionStateRuntime — actor hosting", () => {
   test("actor state changes return changed=true from reduce", async () => {
+    const { spawnActor, projection } = fromReducer({
+      id: "test-actor",
+      initial: { count: 0 },
+      reduce: (state: { count: number }) => ({ state: { count: state.count + 1 } }),
+      derive: (state: { count: number }) => ({ uiModel: state }),
+    })
+
     const extensions: LoadedExtension[] = [
       {
         manifest: { id: "test-actor" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: {
-          spawnActor: fromReducer({
-            id: "test-actor",
-            initial: { count: 0 },
-            reduce: (state: { count: number }) => ({ state: { count: state.count + 1 } }),
-            derive: (state: { count: number }) => ({ uiModel: state }),
-          }),
-        },
+        setup: { spawnActor, projection },
       },
     ]
 
@@ -294,8 +299,8 @@ describe("ExtensionStateRuntime — actor hosting", () => {
               return {
                 id: "terminable",
                 init: Effect.void,
-                handleEvent: () => Effect.void,
-                snapshot: Effect.succeed({ state: {}, version: 0 }),
+                handleEvent: () => Effect.succeed(false),
+                getState: Effect.succeed({ state: {}, version: 0 }),
                 terminate: Effect.sync(() => {
                   terminated.push("terminable")
                 }),

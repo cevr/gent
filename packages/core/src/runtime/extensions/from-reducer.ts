@@ -13,6 +13,7 @@ import type {
   ExtensionDeriveContext,
   ExtensionEffect,
   ExtensionProjection,
+  ExtensionProjectionConfig,
   ExtensionReduceContext,
   ReduceResult,
   SpawnActor,
@@ -87,16 +88,21 @@ const interpretEffects = (
     }
   })
 
+export interface FromReducerResult {
+  readonly spawnActor: SpawnActor
+  readonly projection?: ExtensionProjectionConfig
+}
+
 /**
- * Create a SpawnActor factory from a pure reducer config.
+ * Create a SpawnActor factory + projection config from a pure reducer config.
  *
  * Services (ExtensionTurnControl, ExtensionEventBus) are acquired at spawn
  * time and closed over — the returned actor's methods have no service requirements.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const fromReducer =
-  <State, Intent = void>(config: FromReducerConfig<State, Intent>): SpawnActor =>
-  (ctx) =>
+export const fromReducer = <State, Intent = void>(
+  config: FromReducerConfig<State, Intent>,
+): FromReducerResult => {
+  const spawnActor: SpawnActor = (ctx) =>
     Effect.gen(function* () {
       const turnControl = yield* ExtensionTurnControl
       const eventBus = yield* ExtensionEventBus
@@ -174,6 +180,7 @@ export const fromReducer =
             if (effects !== undefined && effects.length > 0) {
               yield* runEffects(effects)
             }
+            return changed
           }),
 
         handleIntent: (() => {
@@ -202,24 +209,32 @@ export const fromReducer =
               if (effects !== undefined && effects.length > 0) {
                 yield* runEffects(effects)
               }
+              return changed
             })
         })(),
 
-        snapshot: Effect.gen(function* () {
+        getState: Effect.gen(function* () {
           const state = yield* Ref.get(stateRef)
           const version = yield* Ref.get(versionRef)
           return { state, version }
         }),
-
-        derive: (() => {
-          const deriveFn = config.derive
-          if (deriveFn === undefined) return undefined
-          return (state: unknown, deriveCtx: ExtensionDeriveContext) =>
-            deriveFn(state as State, deriveCtx)
-        })(),
 
         terminate: Effect.void,
       }
 
       return actor
     })
+
+  // Build projection config from derive function (externalized from actor)
+  const projection: ExtensionProjectionConfig | undefined = (() => {
+    const deriveFn = config.derive
+    if (deriveFn === undefined) return undefined
+    return {
+      derive: (state: unknown, deriveCtx: ExtensionDeriveContext) =>
+        deriveFn(state as State, deriveCtx),
+      uiModelSchema: config.uiModelSchema,
+    }
+  })()
+
+  return { spawnActor, projection }
+}

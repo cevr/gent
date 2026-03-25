@@ -5,6 +5,7 @@ import type {
   ExtensionActor,
   ExtensionDeriveContext,
   ExtensionProjection,
+  ExtensionProjectionConfig,
   ExtensionReduceContext,
   LoadedExtension,
   SpawnActor,
@@ -28,6 +29,7 @@ export class StaleIntentError extends Schema.TaggedErrorClass<StaleIntentError>(
 
 interface ActorEntry {
   readonly actor: ExtensionActor
+  readonly projection?: ExtensionProjectionConfig
 }
 
 // Service
@@ -70,10 +72,18 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
     Layer.effect(
       ExtensionStateRuntime,
       Effect.gen(function* () {
-        const spawnActors: Array<{ extensionId: string; spawn: SpawnActor }> = []
+        const spawnActors: Array<{
+          extensionId: string
+          spawn: SpawnActor
+          projection?: ExtensionProjectionConfig
+        }> = []
         for (const ext of extensions) {
           if (ext.setup.spawnActor !== undefined) {
-            spawnActors.push({ extensionId: ext.manifest.id, spawn: ext.setup.spawnActor })
+            spawnActors.push({
+              extensionId: ext.manifest.id,
+              spawn: ext.setup.spawnActor,
+              projection: ext.setup.projection,
+            })
           }
         }
 
@@ -106,7 +116,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               )
 
               const entries: ActorEntry[] = []
-              for (const { spawn } of spawnActors) {
+              for (const { spawn, projection } of spawnActors) {
                 const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
                   sessionId,
                   branchId,
@@ -121,7 +131,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 ) as any
                 const actor = yield* spawnEffect
                 if (actor !== undefined) {
-                  entries.push({ actor })
+                  entries.push({ actor, projection })
                 }
               }
 
@@ -138,22 +148,18 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           reduce: (event, ctx) =>
             Effect.gen(function* () {
               let changed = false
-              const actors = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
-              for (const { actor } of actors) {
-                const before = yield* actor.snapshot.pipe(
-                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: -1 })),
-                )
-                yield* actor
+              const entries = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
+              for (const { actor } of entries) {
+                const actorChanged = yield* actor
                   .handleEvent(event, ctx)
                   .pipe(
                     Effect.catchDefect((defect) =>
-                      Effect.logWarning(`Actor ${actor.id} handleEvent failed: ${defect}`),
+                      Effect.logWarning(`Actor ${actor.id} handleEvent failed: ${defect}`).pipe(
+                        Effect.as(false),
+                      ),
                     ),
                   )
-                const after = yield* actor.snapshot.pipe(
-                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: -1 })),
-                )
-                if (after.version !== before.version) changed = true
+                if (actorChanged) changed = true
               }
 
               return changed
@@ -161,19 +167,18 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
 
           deriveAll: (sessionId, ctx) =>
             Effect.gen(function* () {
-              const actors = yield* getOrSpawnActors(sessionId)
+              const entries = yield* getOrSpawnActors(sessionId)
               const results: Array<{ extensionId: string; projection: ExtensionProjection }> = []
-              for (const { actor } of actors) {
-                if (actor.derive !== undefined) {
-                  const { state } = yield* actor.snapshot.pipe(
-                    Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
-                  )
-                  if (state !== undefined) {
-                    results.push({
-                      extensionId: actor.id,
-                      projection: actor.derive(state, ctx),
-                    })
-                  }
+              for (const { actor, projection } of entries) {
+                if (projection === undefined) continue
+                const { state } = yield* actor.getState.pipe(
+                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
+                )
+                if (state !== undefined) {
+                  results.push({
+                    extensionId: actor.id,
+                    projection: projection.derive(state, ctx),
+                  })
                 }
               }
 
@@ -182,11 +187,11 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
 
           handleIntent: (sessionId, extensionId, intent, epoch) =>
             Effect.gen(function* () {
-              const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
-              const actorEntry = actors.find((a) => a.actor.id === extensionId)
-              if (actorEntry?.actor.handleIntent !== undefined) {
+              const entries = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
+              const entry = entries.find((a) => a.actor.id === extensionId)
+              if (entry?.actor.handleIntent !== undefined) {
                 // Epoch validation: reject stale intents
-                const { version } = yield* actorEntry.actor.snapshot.pipe(
+                const { version } = yield* entry.actor.getState.pipe(
                   Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
                 )
                 if (epoch < version) {
@@ -196,31 +201,32 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                     actualEpoch: epoch,
                   })
                 }
-                yield* actorEntry.actor
-                  .handleIntent(intent)
-                  .pipe(Effect.catchDefect(() => Effect.void))
+                yield* entry.actor.handleIntent(intent).pipe(Effect.catchDefect(() => Effect.void))
               }
             }),
 
           getUiSnapshots: (sessionId, branchId) =>
             Effect.gen(function* () {
               const snapshots: ExtensionUiSnapshot[] = []
-              const actors = yield* getOrSpawnActors(sessionId, branchId)
-              for (const { actor } of actors) {
-                if (actor.derive === undefined) continue
-                const { state, version } = yield* actor.snapshot.pipe(
+              const entries = yield* getOrSpawnActors(sessionId, branchId)
+              for (const { actor, projection } of entries) {
+                if (projection === undefined) continue
+                const { state, version } = yield* actor.getState.pipe(
                   Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
                 )
                 if (state === undefined) continue
-                const projection = actor.derive(state, { agent: undefined as never, allTools: [] })
-                if (projection.uiModel !== undefined) {
+                const derived = projection.derive(state, {
+                  agent: undefined as never,
+                  allTools: [],
+                })
+                if (derived.uiModel !== undefined) {
                   snapshots.push(
                     new ExtensionUiSnapshotClass({
                       sessionId,
                       branchId,
                       extensionId: actor.id,
                       epoch: version,
-                      model: projection.uiModel,
+                      model: derived.uiModel,
                     }),
                   )
                 }

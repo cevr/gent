@@ -12,7 +12,7 @@ import type { LoadedExtension } from "@gent/core/domain/extension"
 import {
   extractTodos,
   PlanModeActorConfig,
-  PlanModeSpawnActor,
+  PlanModeExtension,
   type PlanModeState,
 } from "@gent/core/extensions/plan-mode"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
@@ -25,10 +25,12 @@ const sessionId = "pm-session" as SessionId
 const branchId = "pm-branch" as BranchId
 
 const planModeExtension: LoadedExtension = {
-  manifest: { id: "@gent/plan-mode" },
+  manifest: PlanModeExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: { spawnActor: PlanModeSpawnActor },
+  setup: Effect.runSync(
+    PlanModeExtension.setup({ cwd: "/tmp", config: undefined as never, source: "test" }),
+  ),
 }
 
 const makeLayer = () =>

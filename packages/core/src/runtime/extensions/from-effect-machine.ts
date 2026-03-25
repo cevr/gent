@@ -8,19 +8,11 @@
 import { Effect } from "effect"
 import { Machine, type ActorRef, type BuiltMachine } from "effect-machine"
 import type { AgentEvent } from "../../domain/event.js"
-import type {
-  ExtensionActor,
-  ExtensionDeriveContext,
-  ExtensionProjection,
-  ExtensionReduceContext,
-  SpawnActor,
-} from "../../domain/extension.js"
+import type { ExtensionActor, ExtensionReduceContext, SpawnActor } from "../../domain/extension.js"
 
 export interface FromEffectMachineOptions {
   /** Actor/extension id */
   readonly id: string
-  /** Derive projections from machine state snapshot */
-  readonly derive?: (state: unknown, ctx: ExtensionDeriveContext) => ExtensionProjection
   /** Map AgentEvent to machine event. Return undefined to skip. */
   readonly mapEvent?: (event: AgentEvent) => unknown | undefined
 }
@@ -57,23 +49,22 @@ export const fromEffectMachine =
         handleEvent: (event: AgentEvent, _reduceCtx: ExtensionReduceContext) => {
           const mapped =
             options.mapEvent !== undefined ? options.mapEvent(event) : (event as unknown)
-          if (mapped === undefined) return Effect.void
+          if (mapped === undefined) return Effect.succeed(false)
           return ref.send(mapped as Event).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
                 version++
               }),
             ),
-            Effect.catchDefect(() => Effect.void),
+            Effect.as(true),
+            Effect.catchDefect(() => Effect.succeed(false)),
           )
         },
 
-        snapshot: Effect.gen(function* () {
+        getState: Effect.gen(function* () {
           const state = yield* ref.snapshot
           return { state, version }
         }),
-
-        derive: options.derive,
 
         terminate: ref.stop,
       }

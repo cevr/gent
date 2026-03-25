@@ -322,12 +322,17 @@ export const PlanModeActorConfig = {
   handleIntent,
 }
 
-export const PlanModeSpawnActor = fromReducer<PlanModeState, PlanModeIntent>({
+const { spawnActor: PlanModeSpawnActor, projection: PlanModeProjection } = fromReducer<
+  PlanModeState,
+  PlanModeIntent
+>({
   ...PlanModeActorConfig,
   stateSchema: PlanModeState,
   intentSchema: PlanModeIntent,
   uiModelSchema: PlanModeUiModel,
 })
+
+export { PlanModeSpawnActor }
 
 // ── Extension ──
 
@@ -336,5 +341,6 @@ export const PlanModeExtension = defineExtension({
   setup: () =>
     Effect.succeed({
       spawnActor: PlanModeSpawnActor,
+      projection: PlanModeProjection,
     }),
 })

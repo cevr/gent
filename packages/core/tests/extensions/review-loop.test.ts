@@ -10,7 +10,7 @@ import type { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import {
   ReviewLoopActorConfig,
-  ReviewLoopSpawnActor,
+  ReviewLoopExtension,
   type ReviewLoopState,
   type ReviewLoopUiModel,
 } from "@gent/core/extensions/review-loop"
@@ -259,10 +259,12 @@ const sessionId = "rl-session" as SessionId
 const branchId = "rl-branch" as BranchId
 
 const reviewLoopExtension: LoadedExtension = {
-  manifest: { id: "@gent/review-loop" },
+  manifest: ReviewLoopExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: { spawnActor: ReviewLoopSpawnActor },
+  setup: Effect.runSync(
+    ReviewLoopExtension.setup({ cwd: "/tmp", config: undefined as never, source: "test" }),
+  ),
 }
 
 const makeLayer = () =>

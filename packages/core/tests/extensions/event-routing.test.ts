@@ -24,21 +24,24 @@ interface RecorderState {
 
 const RecorderSchema = Schema.Struct({ seen: Schema.Array(Schema.String) })
 
+const recorderReducer = fromReducer<RecorderState>({
+  id: "test-recorder",
+  initial: { seen: [] },
+  stateSchema: RecorderSchema,
+  uiModelSchema: RecorderSchema,
+  reduce: (state, event): ReduceResult<RecorderState> => ({
+    state: { seen: [...state.seen, event._tag] },
+  }),
+  derive: (state) => ({ uiModel: state }),
+})
+
 const recorderExtension: LoadedExtension = {
   manifest: { id: "test-recorder" },
   kind: "builtin",
   sourcePath: "builtin",
   setup: {
-    spawnActor: fromReducer<RecorderState>({
-      id: "test-recorder",
-      initial: { seen: [] },
-      stateSchema: RecorderSchema,
-      uiModelSchema: RecorderSchema,
-      reduce: (state, event): ReduceResult<RecorderState> => ({
-        state: { seen: [...state.seen, event._tag] },
-      }),
-      derive: (state) => ({ uiModel: state }),
-    }),
+    spawnActor: recorderReducer.spawnActor,
+    projection: recorderReducer.projection,
   },
 }
 
@@ -50,28 +53,31 @@ interface SnapshotCounterState {
 
 const SnapshotCounterSchema = Schema.Struct({ snapshotsSeen: Schema.Number })
 
+const snapshotCounterReducer = fromReducer<SnapshotCounterState>({
+  id: "snapshot-counter",
+  initial: { snapshotsSeen: 0 },
+  stateSchema: SnapshotCounterSchema,
+  uiModelSchema: SnapshotCounterSchema,
+  reduce: (state, event): ReduceResult<SnapshotCounterState> => {
+    if (event._tag === "ExtensionUiSnapshot") {
+      return { state: { snapshotsSeen: state.snapshotsSeen + 1 } }
+    }
+    // Also change state on TurnCompleted to trigger initial snapshot
+    if (event._tag === "TurnCompleted") {
+      return { state: { snapshotsSeen: state.snapshotsSeen } }
+    }
+    return { state }
+  },
+  derive: (state) => ({ uiModel: state }),
+})
+
 const snapshotCounterExtension: LoadedExtension = {
   manifest: { id: "snapshot-counter" },
   kind: "builtin",
   sourcePath: "builtin",
   setup: {
-    spawnActor: fromReducer<SnapshotCounterState>({
-      id: "snapshot-counter",
-      initial: { snapshotsSeen: 0 },
-      stateSchema: SnapshotCounterSchema,
-      uiModelSchema: SnapshotCounterSchema,
-      reduce: (state, event): ReduceResult<SnapshotCounterState> => {
-        if (event._tag === "ExtensionUiSnapshot") {
-          return { state: { snapshotsSeen: state.snapshotsSeen + 1 } }
-        }
-        // Also change state on TurnCompleted to trigger initial snapshot
-        if (event._tag === "TurnCompleted") {
-          return { state: { snapshotsSeen: state.snapshotsSeen } }
-        }
-        return { state }
-      },
-      derive: (state) => ({ uiModel: state }),
-    }),
+    spawnActor: snapshotCounterReducer.spawnActor,
+    projection: snapshotCounterReducer.projection,
   },
 }
 

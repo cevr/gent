@@ -18,29 +18,30 @@ interface CounterState {
 
 const CounterSchema = Schema.Struct({ count: Schema.Number })
 
-const makeCounterExtension = (id = "persist-counter"): LoadedExtension => ({
-  manifest: { id },
-  kind: "builtin",
-  sourcePath: "builtin",
-  setup: {
-    spawnActor: fromReducer<CounterState>({
-      id,
-      initial: { count: 0 },
-      stateSchema: CounterSchema,
-      persist: true,
-      reduce: (state, event): ReduceResult<CounterState> => {
-        if (event._tag === "TurnCompleted") {
-          return {
-            state: { count: state.count + 1 },
-            effects: [{ _tag: "Persist" }],
-          }
+const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
+  const { spawnActor, projection } = fromReducer<CounterState>({
+    id,
+    initial: { count: 0 },
+    stateSchema: CounterSchema,
+    persist: true,
+    reduce: (state, event): ReduceResult<CounterState> => {
+      if (event._tag === "TurnCompleted") {
+        return {
+          state: { count: state.count + 1 },
+          effects: [{ _tag: "Persist" }],
         }
-        return { state }
-      },
-      derive: (state) => ({ uiModel: state }),
-    }),
-  },
-})
+      }
+      return { state }
+    },
+    derive: (state) => ({ uiModel: state }),
+  })
+  return {
+    manifest: { id },
+    kind: "builtin",
+    sourcePath: "builtin",
+    setup: { spawnActor, projection },
+  }
+}
 
 const makeLayer = (extensions: LoadedExtension[]) =>
   Layer.mergeAll(
@@ -143,25 +144,24 @@ describe("Extension state persistence", () => {
 
   test("persist: true auto-persists on every state change without explicit Persist effect", async () => {
     // Auto-persist extension: no Persist effect emitted, but persist: true
+    const { spawnActor: autoPersistSpawn } = fromReducer<CounterState>({
+      id: "auto-persist",
+      initial: { count: 0 },
+      stateSchema: CounterSchema,
+      persist: true,
+      reduce: (state, event): ReduceResult<CounterState> => {
+        if (event._tag === "TurnCompleted") {
+          // No Persist effect — auto-persist should handle it
+          return { state: { count: state.count + 1 } }
+        }
+        return { state }
+      },
+    })
     const autoPersistExt: LoadedExtension = {
       manifest: { id: "auto-persist" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: {
-        spawnActor: fromReducer<CounterState>({
-          id: "auto-persist",
-          initial: { count: 0 },
-          stateSchema: CounterSchema,
-          persist: true,
-          reduce: (state, event): ReduceResult<CounterState> => {
-            if (event._tag === "TurnCompleted") {
-              // No Persist effect — auto-persist should handle it
-              return { state: { count: state.count + 1 } }
-            }
-            return { state }
-          },
-        }),
-      },
+      setup: { spawnActor: autoPersistSpawn },
     }
 
     const layer = makeLayer([autoPersistExt])
@@ -188,17 +188,16 @@ describe("Extension state persistence", () => {
   })
 
   test("non-persistent actor does not write to storage", async () => {
+    const { spawnActor: ephemeralSpawn } = fromReducer<{ value: number }>({
+      id: "ephemeral",
+      initial: { value: 0 },
+      reduce: (state) => ({ state: { value: state.value + 1 } }),
+    })
     const nonPersistent: LoadedExtension = {
       manifest: { id: "ephemeral" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: {
-        spawnActor: fromReducer<{ value: number }>({
-          id: "ephemeral",
-          initial: { value: 0 },
-          reduce: (state) => ({ state: { value: state.value + 1 } }),
-        }),
-      },
+      setup: { spawnActor: ephemeralSpawn },
     }
 
     const layer = makeLayer([nonPersistent])

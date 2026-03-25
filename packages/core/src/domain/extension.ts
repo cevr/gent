@@ -178,17 +178,25 @@ export interface ReduceResult<State> {
  * Unified actor interface for stateful extensions.
  * Lifecycle: spawn → init → handleEvent/handleIntent → terminate
  *
+ * OTP GenServer-inspired: process owns state privately, framework owns observation.
+ * handleEvent/handleIntent return boolean (changed) — no snapshot-for-change-detection.
+ *
  * Supervision: handleEvent wrapped with catchDefect — crashing actor logs and continues.
  * Init failure → actor skipped with warning.
  */
 export interface ExtensionActor {
   readonly id: string
   readonly init: Effect.Effect<void>
-  readonly handleEvent: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<void>
-  readonly handleIntent?: (intent: unknown) => Effect.Effect<void>
-  readonly snapshot: Effect.Effect<{ state: unknown; version: number }>
-  readonly derive?: (state: unknown, ctx: ExtensionDeriveContext) => ExtensionProjection
+  readonly handleEvent: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
+  readonly handleIntent?: (intent: unknown) => Effect.Effect<boolean>
+  readonly getState: Effect.Effect<{ state: unknown; version: number }>
   readonly terminate: Effect.Effect<void>
+}
+
+/** Projection config — pure derive function + optional schemas, owned by the framework */
+export interface ExtensionProjectionConfig {
+  readonly derive: (state: unknown, ctx: ExtensionDeriveContext) => ExtensionProjection
+  readonly uiModelSchema?: Schema.Schema<unknown>
 }
 
 /** Factory function that spawns an actor instance for a session.
@@ -215,6 +223,8 @@ export interface ExtensionSetup {
   readonly layer?: Layer.Layer<unknown, unknown, unknown>
   /** Spawn an actor for this extension — unified lifecycle model */
   readonly spawnActor?: SpawnActor
+  /** Projection config — derive function externalized from actor (framework-owned) */
+  readonly projection?: ExtensionProjectionConfig
   /** Declarative tag-conditional tool injections */
   readonly tagInjections?: ReadonlyArray<TagInjection>
 }

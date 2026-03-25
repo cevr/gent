@@ -24,6 +24,7 @@ import {
 import type {
   ExtensionDeriveContext,
   ExtensionProjection,
+  ExtensionProjectionConfig,
   ExtensionReduceContext,
   ExtensionSetup,
   GentExtension,
@@ -203,6 +204,7 @@ export interface ExtensionHarnessResult {
   readonly tools: Map<string, AnyToolDefinition>
   readonly agents: Map<string, AgentDefinition>
   readonly spawnActor: SpawnActor | undefined
+  readonly projection: ExtensionProjectionConfig | undefined
   readonly tagInjections: ExtensionSetup["tagInjections"]
   readonly hooks: ExtensionSetup["hooks"]
 }
@@ -235,6 +237,7 @@ export const createExtensionHarness = (
     tools,
     agents,
     spawnActor: setup.spawnActor,
+    projection: setup.projection,
     tagInjections: setup.tagInjections,
     hooks: setup.hooks,
   }
