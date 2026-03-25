@@ -287,3 +287,114 @@ describe("Extension state storage", () => {
     )
   })
 })
+
+describe("Persistence edge cases", () => {
+  test("corrupted persisted state falls back to initial", async () => {
+    const { spawnActor, projection } = fromReducer<CounterState>({
+      id: "corrupt-test",
+      initial: { count: 0 },
+      stateSchema: CounterSchema,
+      persist: true,
+      reduce: (state, event): ReduceResult<CounterState> => {
+        if (event._tag === "TurnCompleted") return { state: { count: state.count + 1 } }
+        return { state }
+      },
+      derive: (state) => ({ uiModel: state }),
+    })
+
+    const ext: LoadedExtension = {
+      manifest: { id: "corrupt-test" },
+      kind: "builtin",
+      sourcePath: "builtin",
+      setup: { spawnActor, projection },
+    }
+
+    const layer = makeLayer([ext])
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+
+        // Seed with invalid JSON
+        yield* storage.saveExtensionState({
+          sessionId,
+          extensionId: "corrupt-test",
+          stateJson: "not valid json {{{",
+          version: 5,
+        })
+
+        const runtime = yield* ExtensionStateRuntime
+
+        // Actor should init with fallback to initial state, not crash
+        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+
+        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+        const snap = snapshots.find((s) => s.extensionId === "corrupt-test")
+        expect(snap).toBeDefined()
+        // Should have initial state (count: 0), not the corrupt version
+        expect((snap!.model as CounterState).count).toBe(0)
+        // Epoch should be 0 since hydration failed
+        expect(snap!.epoch).toBe(0)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("hydration failure does not prevent actor from functioning", async () => {
+    const { spawnActor, projection } = fromReducer<CounterState>({
+      id: "resilient",
+      initial: { count: 0 },
+      stateSchema: CounterSchema,
+      persist: true,
+      reduce: (state, event): ReduceResult<CounterState> => {
+        if (event._tag === "TurnCompleted") return { state: { count: state.count + 1 } }
+        return { state }
+      },
+      derive: (state) => ({ uiModel: state }),
+    })
+
+    const ext: LoadedExtension = {
+      manifest: { id: "resilient" },
+      kind: "builtin",
+      sourcePath: "builtin",
+      setup: { spawnActor, projection },
+    }
+
+    const layer = makeLayer([ext])
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+
+        // Seed with schema-invalid JSON (wrong shape)
+        yield* storage.saveExtensionState({
+          sessionId,
+          extensionId: "resilient",
+          stateJson: JSON.stringify({ wrong: "shape" }),
+          version: 3,
+        })
+
+        const runtime = yield* ExtensionStateRuntime
+
+        // Init should survive
+        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+
+        // Actor should work normally after failed hydration
+        yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+          sessionId,
+          branchId,
+        })
+
+        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+        const snap = snapshots.find((s) => s.extensionId === "resilient")
+        expect(snap).toBeDefined()
+        expect((snap!.model as CounterState).count).toBe(1)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+})
