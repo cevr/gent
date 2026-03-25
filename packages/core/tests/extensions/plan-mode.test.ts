@@ -145,24 +145,7 @@ describe("PlanMode actor", () => {
       )
     })
 
-    test("executing mode — no tool policy restriction", async () => {
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const runtime = yield* ExtensionStateRuntime
-          yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-            sessionId,
-            branchId,
-          })
-
-          // Toggle to plan → set todos via turn → execute
-          yield* sendIntent(runtime, { _tag: "TogglePlanMode" })
-
-          // We need todos to execute. Since todo extraction is from assistant text,
-          // we'll skip that and just verify executing mode projection works.
-          // We can test the transition through the intent path.
-        }).pipe(Effect.provide(makeLayer())),
-      )
-    })
+    // executing mode tool policy tested in pure reducer suite below
   })
 
   describe("reduce", () => {
