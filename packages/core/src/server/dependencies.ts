@@ -52,6 +52,8 @@ export interface DependenciesConfig {
   cwd: string
   home: string
   platform: string
+  shell?: string
+  osVersion?: string
   subprocessBinaryPath?: string
   dbPath?: string
   authFilePath?: string
@@ -255,6 +257,8 @@ export const createDependencies = (config: DependenciesConfig) => {
         const baseSections = buildBasePromptSections({
           cwd: config.cwd,
           platform: config.platform,
+          shell: config.shell,
+          osVersion: config.osVersion,
           isGitRepo,
           customInstructions,
           skills: availableSkills,

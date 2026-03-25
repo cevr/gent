@@ -39,6 +39,11 @@ export const DelegateTool = defineTool({
   description:
     "Delegate work to specialized subagents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
   promptSnippet: "Delegate work to specialized subagents",
+  promptGuidelines: [
+    "Use for work that benefits from specialized focus or parallelism",
+    "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
+    "Each task prompt must be self-contained — subagents have no conversation history",
+  ],
   params: DelegateParams,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService

@@ -38,6 +38,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const providerOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
   const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
   const debugModeOpt = yield* Config.option(Config.string("GENT_DEBUG_MODE"))
+  const shellOpt = yield* Config.option(Config.string("SHELL"))
 
   const home = Option.getOrElse(homeOpt, () => os.homedir())
   const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
@@ -56,6 +57,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     providerMode: resolveProviderMode(Option.getOrUndefined(providerOpt)),
     isWorker: Option.getOrUndefined(serverModeOpt) === "worker",
     isDebug: Option.getOrUndefined(debugModeOpt) === "1",
+    shell: Option.getOrUndefined(shellOpt),
   }
 })
 
@@ -125,6 +127,8 @@ const program = Effect.scoped(
       cwd: config.cwd,
       home: config.home,
       platform: process.platform,
+      shell: config.shell,
+      osVersion: os.release(),
       dbPath: config.dbPath,
       authFilePath: config.authFilePath,
       authKeyPath: config.authKeyPath,

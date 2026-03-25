@@ -14,15 +14,15 @@ describe("buildSystemPrompt", () => {
     isGitRepo: true,
   }
 
+  test("includes identity with harness mention", () => {
+    const result = buildSystemPrompt(base)
+    expect(result).toContain("operating inside gent, an agent harness")
+  })
+
   test("includes character section", () => {
     const result = buildSystemPrompt(base)
     expect(result).toContain("# Character")
     expect(result).toContain("Finish what you start")
-  })
-
-  test("includes identity", () => {
-    const result = buildSystemPrompt(base)
-    expect(result).toContain("You are Gent, a coding assistant.")
   })
 
   test("includes environment section", () => {
@@ -30,6 +30,27 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Working directory: /home/user/project")
     expect(result).toContain("Platform: linux")
     expect(result).toContain("Git repository: yes")
+  })
+
+  test("includes shell when provided", () => {
+    const result = buildSystemPrompt({ ...base, shell: "/bin/zsh" })
+    expect(result).toContain("Shell: /bin/zsh")
+  })
+
+  test("defaults shell to unknown when not provided", () => {
+    const result = buildSystemPrompt(base)
+    expect(result).toContain("Shell: unknown")
+  })
+
+  test("includes OS version when provided", () => {
+    const result = buildSystemPrompt({ ...base, osVersion: "24.6.0" })
+    expect(result).toContain("Platform: linux (24.6.0)")
+  })
+
+  test("omits OS version parenthetical when not provided", () => {
+    const result = buildSystemPrompt(base)
+    expect(result).toContain("Platform: linux\n")
+    expect(result).not.toContain("Platform: linux (")
   })
 
   test("isGitRepo false → 'no'", () => {
@@ -195,5 +216,40 @@ describe("buildTurnPrompt", () => {
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).not.toContain("## Available Tools")
     expect(result).not.toContain("## Tool Guidelines")
+  })
+
+  test("injects prefer-dedicated-tools guideline when bash + grep active", () => {
+    const tools = [
+      {
+        name: "bash",
+        action: "exec" as const,
+        description: "Run",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+      {
+        name: "grep",
+        action: "read" as const,
+        description: "Search",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools)
+    expect(result).toContain("Prefer grep/glob/read tools over bash")
+  })
+
+  test("omits prefer-dedicated-tools guideline when only bash active", () => {
+    const tools = [
+      {
+        name: "bash",
+        action: "exec" as const,
+        description: "Run",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools)
+    expect(result).not.toContain("Prefer grep/glob/read")
   })
 })

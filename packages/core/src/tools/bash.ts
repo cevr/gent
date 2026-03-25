@@ -102,7 +102,10 @@ export const BashTool = defineTool({
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
   promptSnippet: "Execute shell commands",
-  promptGuidelines: ["Use for git, npm, and system commands — not file reads or searches"],
+  promptGuidelines: [
+    "Use for git, npm, and system commands — not file reads or searches",
+    "Never use cat/head/tail/grep/find/ls when dedicated tools exist",
+  ],
   params: BashParams,
   execute: Effect.fn("BashTool.execute")(function* (params, ctx) {
     const timeout = Math.min(params.timeout ?? 120000, 600000)

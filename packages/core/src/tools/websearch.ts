@@ -89,6 +89,7 @@ export const WebSearchTool = defineTool({
     return `Search the web using Exa AI. Returns content from the most relevant websites. The current year is ${year} — use this year when searching for recent information.`
   },
   promptSnippet: "Search the web for information",
+  promptGuidelines: ["Prefer webfetch when you already have a specific URL"],
   params: WebSearchParams,
   execute: Effect.fn("WebSearchTool.execute")(function* (params) {
     const searchRequest: McpRequest = {

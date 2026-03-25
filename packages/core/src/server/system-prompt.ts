@@ -60,14 +60,21 @@ export function buildBasePromptSections(options: {
   cwd: string
   platform: string
   isGitRepo: boolean
+  shell?: string
+  osVersion?: string
   customInstructions?: string
   skills?: ReadonlyArray<Skill>
 }): ReadonlyArray<PromptSection> {
-  const { cwd, platform, isGitRepo, customInstructions, skills } = options
+  const { cwd, platform, isGitRepo, shell, osVersion, customInstructions, skills } = options
   const date = new Date().toISOString().split("T")[0]
+  const platformDisplay = osVersion !== undefined ? `${platform} (${osVersion})` : platform
 
   const sections: PromptSection[] = [
-    { id: "identity", content: "You are Gent, a coding assistant.", priority: 0 },
+    {
+      id: "identity",
+      content: "You are Gent, a coding assistant operating inside gent, an agent harness.",
+      priority: 0,
+    },
     { id: "character", content: CHARACTER, priority: 10 },
     { id: "communication", content: COMMUNICATION, priority: 20 },
     { id: "code", content: CODE, priority: 30 },
@@ -75,7 +82,7 @@ export function buildBasePromptSections(options: {
     { id: "boundaries", content: BOUNDARIES, priority: 50 },
     {
       id: "environment",
-      content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platform}\nGit repository: ${isGitRepo ? "yes" : "no"}\nDate: ${date}`,
+      content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shell ?? "unknown"}\nGit repository: ${isGitRepo ? "yes" : "no"}\nDate: ${date}`,
       priority: 60,
     },
   ]
@@ -104,6 +111,8 @@ export function buildSystemPrompt(options: {
   cwd: string
   platform: string
   isGitRepo: boolean
+  shell?: string
+  osVersion?: string
   customInstructions?: string
   skills?: ReadonlyArray<Skill>
 }): string {

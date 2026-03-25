@@ -50,8 +50,15 @@ export const buildTurnPrompt = (
     })
   }
 
-  // Tool guidelines — collected from active tools
+  // Tool guidelines — collected from active tools + conditional rules
   const guidelines = tools.flatMap((t) => t.promptGuidelines ?? [])
+  const hasBash = tools.some((t) => t.name === "bash")
+  const hasDedicatedSearch = tools.some(
+    (t) => t.name === "grep" || t.name === "glob" || t.name === "read",
+  )
+  if (hasBash && hasDedicatedSearch) {
+    guidelines.push("Prefer grep/glob/read tools over bash for file searching and reading")
+  }
   if (guidelines.length > 0) {
     const deduped = [...new Set(guidelines)]
     sections.push({
