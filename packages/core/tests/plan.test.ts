@@ -26,7 +26,7 @@ const ctx: ToolContext = {
   toolCallId: "test-call",
 }
 
-describe("Plan Workflow", () => {
+describe("Plan Tool", () => {
   test("runs all 5 phases and returns approved plan", async () => {
     const calls: Array<{ prompt: string }> = []
     let callIdx = 0

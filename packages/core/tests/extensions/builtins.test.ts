@@ -53,7 +53,7 @@ describe("BuiltinExtensions", () => {
     for (const name of ["delegate", "handoff", "search_skills"]) {
       expect(allToolNames.has(name)).toBe(true)
     }
-    // Workflows
+    // Delegate tools
     for (const name of ["plan", "audit", "loop"]) {
       expect(allToolNames.has(name)).toBe(true)
     }

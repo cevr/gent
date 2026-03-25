@@ -46,7 +46,7 @@ const makeSuccess = (
   agentName,
 })
 
-describe("Audit Workflow", () => {
+describe("Audit Tool", () => {
   test("fix mode detects concerns, audits each concern with both models, synthesizes, and executes", async () => {
     const calls: Array<{ agentName: string; prompt: string }> = []
 
