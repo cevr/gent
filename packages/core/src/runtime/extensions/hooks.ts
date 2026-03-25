@@ -31,6 +31,8 @@ const emptyInterceptors = (): InterceptorChains => ({
   "tool.execute": [],
   "permission.check": [],
   "context.messages": [],
+  "turn.after": [],
+  "tool.result": [],
 })
 
 const appendHooks = (hooks: ExtensionHooks | undefined, interceptors: InterceptorChains) => {

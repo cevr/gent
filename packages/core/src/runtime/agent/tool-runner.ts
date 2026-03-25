@@ -117,11 +117,29 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               return errorResult(toolCall, message)
             }
 
+            // Run tool.result interceptor — extensions can enrich/append to tool results
+            const enrichedResult = yield* hooks
+              .runInterceptor(
+                "tool.result",
+                {
+                  toolCallId: toolCall.toolCallId,
+                  toolName: toolCall.toolName,
+                  toolAction: toolDefinition.action,
+                  input: decodedInput.success,
+                  result: executeResult.success,
+                  agentName: ctx.agentName,
+                  sessionId: ctx.sessionId,
+                  branchId: ctx.branchId,
+                },
+                (input) => Effect.succeed(input.result),
+              )
+              .pipe(Effect.catchEager(() => Effect.succeed(executeResult.success)))
+
             return new ToolResultPart({
               type: "tool-result",
               toolCallId: toolCall.toolCallId,
               toolName: toolCall.toolName,
-              output: { type: "json", value: executeResult.success },
+              output: { type: "json", value: enrichedResult },
             })
           }),
         })

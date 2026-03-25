@@ -768,6 +768,22 @@ export const finalizeTurnPhase = (params: {
         }),
       )
       .pipe(Effect.orDie)
+
+    // Run turn.after interceptor — extensions can schedule follow-ups, count turns, etc.
+    yield* params.extensionRegistry.hooks
+      .runInterceptor(
+        "turn.after",
+        {
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          durationMs: Number(turnDurationMs),
+          agentName: params.currentAgent,
+          interrupted: params.turnInterrupted,
+        },
+        () => Effect.void,
+      )
+      .pipe(Effect.catchEager(() => Effect.void))
+
     yield* Effect.logInfo("turn.completed").pipe(
       Effect.annotateLogs({
         durationMs: Number(turnDurationMs),

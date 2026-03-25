@@ -4,7 +4,7 @@ import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message } from "./message"
 import type { PermissionResult } from "./permission"
-import type { AnyToolDefinition } from "./tool"
+import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { PromptSection } from "./prompt.js"
 
 // Extension Manifest — authored by extension author
@@ -80,6 +80,25 @@ export interface ContextMessagesInput {
   readonly branchId: BranchId
 }
 
+export interface TurnAfterInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly durationMs: number
+  readonly agentName: AgentName
+  readonly interrupted: boolean
+}
+
+export interface ToolResultInput {
+  readonly toolCallId: ToolCallId
+  readonly toolName: string
+  readonly toolAction: ToolAction
+  readonly input: unknown
+  readonly result: unknown
+  readonly agentName?: AgentName
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+
 // Interceptor map — only hooks that have production callers
 
 export interface ExtensionInterceptorMap {
@@ -87,6 +106,10 @@ export interface ExtensionInterceptorMap {
   readonly "tool.execute": Interceptor<ToolExecuteInput, unknown>
   readonly "permission.check": Interceptor<PermissionCheckInput, PermissionResult>
   readonly "context.messages": Interceptor<ContextMessagesInput, ReadonlyArray<Message>>
+  /** Post-turn hook — extensions can schedule follow-ups, count turns, trigger side effects */
+  readonly "turn.after": Interceptor<TurnAfterInput, void>
+  /** Post-execution hook — extensions can enrich/append to tool results */
+  readonly "tool.result": Interceptor<ToolResultInput, unknown>
 }
 
 export type ExtensionInterceptorKey = keyof ExtensionInterceptorMap

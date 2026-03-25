@@ -6,6 +6,8 @@ import type {
   ExtensionHooks,
   LoadedExtension,
   SystemPromptInput,
+  ToolResultInput,
+  TurnAfterInput,
 } from "@gent/core/domain/extension"
 import { defineInterceptor } from "@gent/core/domain/extension"
 import { Message, TextPart } from "@gent/core/domain/message"
@@ -231,6 +233,87 @@ describe("compileHooks", () => {
       )
       expect(result).toHaveLength(1)
       expect(result[0]!.role).toBe("user")
+    })
+  })
+
+  describe("turn.after", () => {
+    const baseTurnInput: TurnAfterInput = {
+      sessionId: "test-session" as SessionId,
+      branchId: "test-branch" as BranchId,
+      durationMs: 1500,
+      agentName: "cowork" as never,
+      interrupted: false,
+    }
+
+    test("fires after turn with correct input", async () => {
+      const captured: TurnAfterInput[] = []
+      const ext = makeExt("turn-counter", "builtin", {
+        interceptors: [
+          defineInterceptor(
+            "turn.after",
+            (input: TurnAfterInput, next: (i: TurnAfterInput) => Effect.Effect<void>) => {
+              captured.push(input)
+              return next(input)
+            },
+          ),
+        ],
+      })
+
+      const compiled = compileHooks([ext])
+      await Effect.runPromise(
+        compiled.runInterceptor("turn.after", baseTurnInput, () => Effect.void),
+      )
+      expect(captured).toHaveLength(1)
+      expect(captured[0]!.durationMs).toBe(1500)
+      expect(captured[0]!.agentName).toBe("cowork")
+    })
+  })
+
+  describe("tool.result", () => {
+    const baseToolResultInput: ToolResultInput = {
+      toolCallId: "tc-1" as never,
+      toolName: "read",
+      toolAction: "read",
+      input: { path: "/tmp/file.txt" },
+      result: { content: "hello" },
+      agentName: "cowork" as never,
+      sessionId: "test-session" as SessionId,
+      branchId: "test-branch" as BranchId,
+    }
+
+    test("enriches tool result", async () => {
+      const ext = makeExt("enricher", "builtin", {
+        interceptors: [
+          defineInterceptor(
+            "tool.result",
+            (input: ToolResultInput, next: (i: ToolResultInput) => Effect.Effect<unknown>) =>
+              next(input).pipe(
+                Effect.map((result) => ({
+                  ...(result as Record<string, unknown>),
+                  enriched: true,
+                })),
+              ),
+          ),
+        ],
+      })
+
+      const compiled = compileHooks([ext])
+      const result = await Effect.runPromise(
+        compiled.runInterceptor("tool.result", baseToolResultInput, (input) =>
+          Effect.succeed(input.result),
+        ),
+      )
+      expect(result).toEqual({ content: "hello", enriched: true })
+    })
+
+    test("passes through when no interceptors", async () => {
+      const compiled = compileHooks([])
+      const result = await Effect.runPromise(
+        compiled.runInterceptor("tool.result", baseToolResultInput, (input) =>
+          Effect.succeed(input.result),
+        ),
+      )
+      expect(result).toEqual({ content: "hello" })
     })
   })
 })
