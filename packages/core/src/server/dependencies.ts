@@ -33,6 +33,7 @@ import { discoverExtensions, setupExtension } from "../runtime/extensions/loader
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { SqliteClientLive } from "../runtime/sql-client.js"
@@ -297,7 +298,11 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 
   const taskServiceLive = Layer.provide(TaskService.Live, Layer.merge(allDeps, agentRuntimeLive))
-  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, taskServiceLive)
+  const turnControlLive = Layer.provide(
+    ExtensionTurnControl.Live,
+    Layer.merge(allDeps, agentRuntimeLive),
+  )
+  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, taskServiceLive, turnControlLive)
 
   if (actorRuntime === "cluster") {
     const clusterSqliteLive = SqliteClientLive({
