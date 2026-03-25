@@ -218,7 +218,7 @@ describe("buildTurnPrompt", () => {
     expect(result).not.toContain("## Tool Guidelines")
   })
 
-  test("injects prefer-dedicated-tools guideline when bash + grep active", () => {
+  test("injects prefer-dedicated-tools guideline naming only active tools", () => {
     const tools = [
       {
         name: "bash",
@@ -236,7 +236,43 @@ describe("buildTurnPrompt", () => {
       },
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
-    expect(result).toContain("Prefer grep/glob/read tools over bash")
+    expect(result).toContain("Prefer grep over bash")
+    expect(result).not.toContain("glob")
+  })
+
+  test("names all active dedicated tools in the guideline", () => {
+    const tools = [
+      {
+        name: "bash",
+        action: "exec" as const,
+        description: "Run",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+      {
+        name: "grep",
+        action: "read" as const,
+        description: "Search",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+      {
+        name: "glob",
+        action: "read" as const,
+        description: "Find",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+      {
+        name: "read",
+        action: "read" as const,
+        description: "Read",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools)
+    expect(result).toContain("Prefer grep/glob/read over bash")
   })
 
   test("omits prefer-dedicated-tools guideline when only bash active", () => {
@@ -250,6 +286,6 @@ describe("buildTurnPrompt", () => {
       },
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
-    expect(result).not.toContain("Prefer grep/glob/read")
+    expect(result).not.toContain("Prefer")
   })
 })

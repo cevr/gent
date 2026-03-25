@@ -72,7 +72,6 @@ Deepwork agent. Thorough analysis, careful tradeoffs, explicit assumptions.
 
 export const EXPLORE_PROMPT = `
 Explore agent. Rapid codebase scanning.
-- Prefer grep/glob/read over bash for searching.
 - Report: file paths, line numbers, brief context.
 - End with next steps or open questions.
 `.trim()
