@@ -3,7 +3,7 @@ import {
   ReviewWorkflowStateMachine,
   type ReviewWorkflowState,
 } from "@gent/core/extensions/review-workflow"
-import { createStateMachineHarness } from "@gent/core/test-utils/extension-harness"
+import { createStateMachineHarness, expectNoChange } from "@gent/core/test-utils/extension-harness"
 
 const { reduce, derive, events } = createStateMachineHarness(ReviewWorkflowStateMachine)
 
@@ -64,11 +64,32 @@ describe("ReviewWorkflowStateMachine", () => {
 
   test("ignores events from other workflows", () => {
     const state = ReviewWorkflowStateMachine.initial
-    const next = reduce(
+    expectNoChange(
       state,
-      events.workflowPhaseStarted({ workflowName: "audit", phase: "detect" }),
+      reduce(state, events.workflowPhaseStarted({ workflowName: "audit", phase: "detect" })),
     )
-    expect(next).toBe(state)
+  })
+
+  test("ignores unrelated events in idle", () => {
+    const state = ReviewWorkflowStateMachine.initial
+    expectNoChange(state, reduce(state, events.streamStarted()))
+    expectNoChange(state, reduce(state, events.turnCompleted()))
+    expectNoChange(state, reduce(state, events.toolCallSucceeded()))
+  })
+
+  test("ignores unrelated events in active phase", () => {
+    const state: ReviewWorkflowState = { ...ReviewWorkflowStateMachine.initial, phase: "review" }
+    expectNoChange(state, reduce(state, events.streamStarted()))
+    expectNoChange(state, reduce(state, events.turnCompleted()))
+    expectNoChange(state, reduce(state, events.toolCallSucceeded()))
+  })
+
+  test("WorkflowCompleted from other workflow is a no-op", () => {
+    const state: ReviewWorkflowState = { ...ReviewWorkflowStateMachine.initial, phase: "execute" }
+    expectNoChange(
+      state,
+      reduce(state, events.workflowCompleted({ workflowName: "audit", result: "success" })),
+    )
   })
 
   test("derive — idle has no prompt sections", () => {
@@ -89,5 +110,27 @@ describe("ReviewWorkflowStateMachine", () => {
     expect(projection.promptSections).toBeDefined()
     expect(projection.promptSections!.length).toBe(1)
     expect(projection.promptSections![0]!.id).toBe("review-workflow-context")
+  })
+
+  test("derive — evaluate phase also injects prompt section", () => {
+    const state: ReviewWorkflowState = {
+      ...ReviewWorkflowStateMachine.initial,
+      phase: "evaluate",
+      iteration: 2,
+      maxIterations: 3,
+    }
+    const projection = derive(state)
+    expect(projection.promptSections).toBeDefined()
+    expect(projection.promptSections![0]!.id).toBe("review-workflow-context")
+  })
+
+  test("derive — review/adversarial/synthesize are active but have no prompt sections", () => {
+    for (const phase of ["review", "adversarial", "synthesize"] as const) {
+      const state: ReviewWorkflowState = { ...ReviewWorkflowStateMachine.initial, phase }
+      const projection = derive(state)
+      const ui = projection.uiModel as { active: boolean }
+      expect(ui.active).toBe(true)
+      expect(projection.promptSections).toBeUndefined()
+    }
   })
 })

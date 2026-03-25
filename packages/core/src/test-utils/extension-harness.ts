@@ -103,11 +103,41 @@ export const expectNoChange = <T>(before: T, after: T): void => {
 
 // ── State Machine Harness ──
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const createStateMachineHarness = <State, Intent = any>(
-  machine: ExtensionStateMachine<State, Intent>,
+/** Harness return type — `intent` only present when the machine defines `handleIntent` */
+interface StateMachineHarnessBase<State> {
+  readonly machine: ExtensionStateMachine<State>
+  readonly reduce: (
+    state: State,
+    event: Parameters<ExtensionStateMachine<State>["reduce"]>[1],
+  ) => State
+  readonly derive: (state: State) => ExtensionProjection
+  readonly ctx: ExtensionReduceContext
+  readonly deriveCtx: ExtensionDeriveContext
+  readonly events: EventFactories
+}
+
+interface StateMachineHarnessWithIntent<State, Intent> extends StateMachineHarnessBase<State> {
+  readonly intent: (state: State, i: Intent) => ExtensionIntentResult<State>
+}
+
+/** Machine with handleIntent defined */
+interface MachineWithIntent<State, Intent> extends ExtensionStateMachine<State, Intent> {
+  readonly handleIntent: (state: State, intent: Intent) => ExtensionIntentResult<State>
+}
+
+export function createStateMachineHarness<State, Intent>(
+  machine: MachineWithIntent<State, Intent>,
   options?: StateMachineHarnessOptions,
-) => {
+): StateMachineHarnessWithIntent<State, Intent>
+export function createStateMachineHarness<State>(
+  machine: ExtensionStateMachine<State>,
+  options?: StateMachineHarnessOptions,
+): StateMachineHarnessBase<State>
+export function createStateMachineHarness<State, Intent>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  machine: ExtensionStateMachine<State, any>,
+  options?: StateMachineHarnessOptions,
+): StateMachineHarnessBase<State> | StateMachineHarnessWithIntent<State, Intent> {
   const ctx: ExtensionReduceContext = {
     sessionId: (options?.sessionId ?? "test-session") as SessionId,
     branchId: (options?.branchId ?? "test-branch") as BranchId,
@@ -126,12 +156,15 @@ export const createStateMachineHarness = <State, Intent = any>(
 
   const derive = (state: State): ExtensionProjection => machine.derive(state, deriveCtx)
 
-  const intent = (state: State, i: Intent): ExtensionIntentResult<State> => {
-    if (machine.handleIntent === undefined) {
-      throw new Error(`State machine "${machine.id}" does not define handleIntent`)
+  const base = { machine, reduce, derive, ctx, deriveCtx, events }
+
+  if (machine.handleIntent !== undefined) {
+    const handler = machine.handleIntent
+    return {
+      ...base,
+      intent: (state: State, i: Intent): ExtensionIntentResult<State> => handler(state, i),
     }
-    return machine.handleIntent(state, i)
   }
 
-  return { machine, reduce, derive, intent, ctx, deriveCtx, events }
+  return base
 }

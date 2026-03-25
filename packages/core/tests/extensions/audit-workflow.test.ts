@@ -3,7 +3,7 @@ import {
   AuditWorkflowStateMachine,
   type AuditWorkflowState,
 } from "@gent/core/extensions/audit-workflow"
-import { createStateMachineHarness } from "@gent/core/test-utils/extension-harness"
+import { createStateMachineHarness, expectNoChange } from "@gent/core/test-utils/extension-harness"
 
 const { reduce, derive, events } = createStateMachineHarness(AuditWorkflowStateMachine)
 
@@ -54,11 +54,32 @@ describe("AuditWorkflowStateMachine", () => {
 
   test("ignores events from other workflows", () => {
     const state = AuditWorkflowStateMachine.initial
-    const next = reduce(
+    expectNoChange(
       state,
-      events.workflowPhaseStarted({ workflowName: "code_review", phase: "review" }),
+      reduce(state, events.workflowPhaseStarted({ workflowName: "code_review", phase: "review" })),
     )
-    expect(next).toBe(state)
+  })
+
+  test("ignores unrelated events in idle", () => {
+    const state = AuditWorkflowStateMachine.initial
+    expectNoChange(state, reduce(state, events.streamStarted()))
+    expectNoChange(state, reduce(state, events.turnCompleted()))
+    expectNoChange(state, reduce(state, events.toolCallSucceeded()))
+  })
+
+  test("ignores unrelated events in active phase", () => {
+    const state: AuditWorkflowState = { ...AuditWorkflowStateMachine.initial, phase: "detect" }
+    expectNoChange(state, reduce(state, events.streamStarted()))
+    expectNoChange(state, reduce(state, events.turnCompleted()))
+    expectNoChange(state, reduce(state, events.toolCallSucceeded()))
+  })
+
+  test("WorkflowCompleted from other workflow is a no-op", () => {
+    const state: AuditWorkflowState = { ...AuditWorkflowStateMachine.initial, phase: "execute" }
+    expectNoChange(
+      state,
+      reduce(state, events.workflowCompleted({ workflowName: "code_review", result: "success" })),
+    )
   })
 
   test("derive — idle has no prompt sections", () => {
@@ -91,5 +112,27 @@ describe("AuditWorkflowStateMachine", () => {
     expect(projection.promptSections!.length).toBe(1)
     expect(projection.promptSections![0]!.id).toBe("audit-workflow-context")
     expect(projection.promptSections![0]!.content).toContain("iteration 2/3")
+  })
+
+  test("derive — evaluate phase also injects prompt section", () => {
+    const state: AuditWorkflowState = {
+      ...AuditWorkflowStateMachine.initial,
+      phase: "evaluate",
+      iteration: 1,
+      maxIterations: 3,
+    }
+    const projection = derive(state)
+    expect(projection.promptSections).toBeDefined()
+    expect(projection.promptSections![0]!.id).toBe("audit-workflow-context")
+  })
+
+  test("derive — detect/audit/synthesize/present are active but have no prompt sections", () => {
+    for (const phase of ["detect", "audit", "synthesize", "present"] as const) {
+      const state: AuditWorkflowState = { ...AuditWorkflowStateMachine.initial, phase }
+      const projection = derive(state)
+      const ui = projection.uiModel as { active: boolean }
+      expect(ui.active).toBe(true)
+      expect(projection.promptSections).toBeUndefined()
+    }
   })
 })
