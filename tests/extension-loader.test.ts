@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
-import { defineExtension, type LoadedExtension } from "../../../domain/extension.js"
-import { validateExtensions, isClientFile } from "../loader.js"
+import { defineExtension, type LoadedExtension } from "@gent/core/domain/extension"
+import { validateExtensions, isClientFile } from "@gent/core/runtime/extensions/loader"
 
 const makeLoaded = (
   id: string,

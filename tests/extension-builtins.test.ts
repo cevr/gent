@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
-import { BuiltinExtensions } from "../index.js"
-import type { ExtensionSetup } from "../../domain/extension.js"
+import { BuiltinExtensions } from "@gent/core/extensions"
+import type { ExtensionSetup } from "@gent/core/domain/extension"
 
 const loadAll = (): Promise<{ id: string; setup: ExtensionSetup }[]> =>
   Promise.all(

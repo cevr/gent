@@ -1,10 +1,10 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, ManagedRuntime } from "effect"
-import { AgentDefinition } from "../../../domain/agent.js"
-import type { ExtensionHooks, LoadedExtension, RunContext } from "../../../domain/extension.js"
-import type { AnyToolDefinition, ToolAction } from "../../../domain/tool.js"
-import type { SessionId, BranchId } from "../../../domain/ids.js"
-import { ExtensionRegistry, resolveExtensions } from "../registry.js"
+import { AgentDefinition } from "@gent/core/domain/agent"
+import type { ExtensionHooks, LoadedExtension, RunContext } from "@gent/core/domain/extension"
+import type { AnyToolDefinition, ToolAction } from "@gent/core/domain/tool"
+import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
 const makeTool = (name: string, action: ToolAction = "read"): AnyToolDefinition => ({
   name,

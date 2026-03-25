@@ -1,13 +1,13 @@
 import { describe, test, expect } from "bun:test"
-import { AgentDefinition } from "../../domain/agent.js"
-import { StreamStarted, TurnCompleted, ToolCallSucceeded } from "../../domain/event.js"
-import type { BranchId, SessionId, ToolCallId } from "../../domain/ids.js"
+import { AgentDefinition } from "@gent/core/domain/agent"
+import { StreamStarted, TurnCompleted, ToolCallSucceeded } from "@gent/core/domain/event"
+import type { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   PlanModeStateMachine,
   extractTodos,
   type PlanModeState,
   type PlanModeIntent,
-} from "../plan-mode.js"
+} from "@gent/core/extensions/plan-mode"
 
 const ctx = {
   sessionId: "test-session" as SessionId,

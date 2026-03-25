@@ -1,9 +1,15 @@
 import { describe, test, expect } from "bun:test"
-import { AgentDefinition } from "../../domain/agent.js"
-import { WorkflowPhaseStarted, WorkflowCompleted } from "../../domain/event.js"
-import type { BranchId, SessionId } from "../../domain/ids.js"
-import { AuditWorkflowStateMachine, type AuditWorkflowState } from "../audit-workflow.js"
-import { ReviewWorkflowStateMachine, type ReviewWorkflowState } from "../review-workflow.js"
+import { AgentDefinition } from "@gent/core/domain/agent"
+import { WorkflowPhaseStarted, WorkflowCompleted } from "@gent/core/domain/event"
+import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import {
+  AuditWorkflowStateMachine,
+  type AuditWorkflowState,
+} from "@gent/core/extensions/audit-workflow"
+import {
+  ReviewWorkflowStateMachine,
+  type ReviewWorkflowState,
+} from "@gent/core/extensions/review-workflow"
 
 const ctx = {
   sessionId: "test-session" as SessionId,

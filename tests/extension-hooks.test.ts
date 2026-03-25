@@ -1,13 +1,13 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
-import { Agents } from "../../../domain/agent.js"
+import { Agents } from "@gent/core/domain/agent"
 import type {
   ExtensionHooks,
   LoadedExtension,
   SystemPromptInput,
-} from "../../../domain/extension.js"
-import { defineInterceptor } from "../../../domain/extension.js"
-import { compileHooks } from "../hooks.js"
+} from "@gent/core/domain/extension"
+import { defineInterceptor } from "@gent/core/domain/extension"
+import { compileHooks } from "@gent/core/runtime/extensions/hooks"
 
 const makeExt = (
   id: string,
