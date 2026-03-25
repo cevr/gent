@@ -100,10 +100,20 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       }
 
       const allExtensions = [...loadBuiltinExtensions(config.cwd), ...external]
-      return Layer.merge(
+
+      // Collect extension-provided layers (setup.layer)
+      const extensionLayers = allExtensions
+        .filter((ext) => ext.setup.layer !== undefined)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((ext) => ext.setup.layer as Layer.Layer<any>)
+
+      const baseLayers = Layer.merge(
         ExtensionRegistry.Live(allExtensions),
         ExtensionStateRuntime.Live(allExtensions),
       )
+
+      if (extensionLayers.length === 0) return baseLayers
+      return Layer.mergeAll(baseLayers, ...extensionLayers)
     }),
   )
 

@@ -143,7 +143,13 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               const handler = entry.machine.handleIntent
               if (handler === undefined) return
 
-              const result = handler(entry.state, intent)
+              // Validate intent against schema if present
+              const validatedIntent =
+                entry.machine.intentSchema !== undefined
+                  ? Schema.decodeUnknownSync(entry.machine.intentSchema as Schema.Any)(intent)
+                  : intent
+
+              const result = handler(entry.state, validatedIntent)
               yield* Ref.update(sessionsRef, (sessions) => {
                 const current = sessions.get(sessionId)
                 if (current === undefined) return sessions
@@ -177,13 +183,19 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   allTools: [],
                 })
                 if (projection.uiModel !== undefined) {
+                  const validated =
+                    entry.machine.uiModelSchema !== undefined
+                      ? Schema.decodeUnknownSync(entry.machine.uiModelSchema as Schema.Any)(
+                          projection.uiModel,
+                        )
+                      : projection.uiModel
                   snapshots.push(
                     new ExtensionUiSnapshotClass({
                       sessionId,
                       branchId,
                       extensionId: entry.machine.id,
                       epoch: entry.epoch,
-                      model: projection.uiModel,
+                      model: validated,
                     }),
                   )
                 }

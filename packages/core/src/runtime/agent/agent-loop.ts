@@ -590,9 +590,19 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const publishEvent = (event: AgentEvent) =>
               eventStore.publish(event).pipe(
                 Effect.tap(() =>
-                  extensionStateRuntime
-                    .reduce(event, { sessionId, branchId })
-                    .pipe(Effect.catchDefect(() => Effect.void)),
+                  extensionStateRuntime.reduce(event, { sessionId, branchId }).pipe(
+                    Effect.tap(() =>
+                      extensionStateRuntime.getUiSnapshots(sessionId, branchId).pipe(
+                        Effect.tap((snapshots) =>
+                          Effect.forEach(snapshots, (snapshot) => eventStore.publish(snapshot), {
+                            concurrency: "unbounded",
+                          }),
+                        ),
+                        Effect.catchEager(() => Effect.void),
+                      ),
+                    ),
+                    Effect.catchDefect(() => Effect.void),
+                  ),
                 ),
                 Effect.mapError(
                   (error) =>
