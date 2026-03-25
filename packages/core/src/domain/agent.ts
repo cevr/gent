@@ -257,6 +257,15 @@ export interface AgentExecutionOverrides {
 
 export type BuiltinAgentName = keyof typeof Agents
 
+// Subagent depth
+
+/**
+ * Maximum session nesting depth for subagent spawns. Derived from the persisted
+ * parent chain (includes both subagent spawns and handoff sessions). A depth of 3
+ * means root → child → grandchild → great-grandchild is blocked.
+ */
+export const DEFAULT_MAX_SUBAGENT_DEPTH = 3
+
 // Subagent runner types
 
 export interface SubagentToolCall {

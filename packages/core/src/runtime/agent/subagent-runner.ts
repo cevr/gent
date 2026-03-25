@@ -9,6 +9,7 @@ import {
   SubagentSpawned,
 } from "../../domain/event.js"
 import {
+  DEFAULT_MAX_SUBAGENT_DEPTH,
   SubagentError,
   SubagentRunnerService,
   type SubagentToolCall,
@@ -209,6 +210,20 @@ const buildRunInputOverrides = (overrides: AgentExecutionOverrides | undefined) 
   ...(overrides?.tags !== undefined ? { tags: overrideArray(overrides.tags) } : {}),
 })
 
+/** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
+export const getSessionDepth = (sessionId: SessionId, storage: StorageService) =>
+  storage.getSessionAncestors(sessionId).pipe(
+    // ancestors includes the session itself at index 0, then parents
+    Effect.map((ancestors) => Math.max(0, ancestors.length - 1)),
+    // Fail closed: if we can't read ancestry, refuse to spawn rather than allow unbounded recursion
+    Effect.mapError(
+      () =>
+        new SubagentError({
+          message: `Cannot determine session depth for "${sessionId}" — refusing to spawn subagent.`,
+        }),
+    ),
+  )
+
 const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStoreService) => {
   const collectChildMetadata = (sessionId: SessionId): Effect.Effect<ChildMetadata> =>
     storage.listEvents({ sessionId }).pipe(
@@ -230,6 +245,13 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
     cwd: string
   }) =>
     Effect.gen(function* () {
+      const parentDepth = yield* getSessionDepth(params.parentSessionId, storage)
+      if (parentDepth >= DEFAULT_MAX_SUBAGENT_DEPTH) {
+        return yield* new SubagentError({
+          message: `Subagent depth limit reached (max ${DEFAULT_MAX_SUBAGENT_DEPTH}). Cannot spawn "${params.agent.name}" — parent session is already at depth ${parentDepth}.`,
+        })
+      }
+
       const sessionId = Bun.randomUUIDv7() as SessionId
       const branchId = Bun.randomUUIDv7() as BranchId
       const now = new Date()
