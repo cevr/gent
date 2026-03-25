@@ -18,7 +18,7 @@ import {
   runAdversarialPair,
   workflowResultFromLoopReason,
   type WorkflowRunContext,
-} from "./workflow-helpers.js"
+} from "../runtime/workflow-helpers.js"
 
 export const PlanParams = Schema.Struct({
   prompt: Schema.String.annotate({ description: "What to plan" }),

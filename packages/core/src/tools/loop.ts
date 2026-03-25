@@ -10,7 +10,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { defineTool } from "../domain/tool.js"
 import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
 import { runLoop } from "../runtime/loop.js"
-import { extractLoopEvaluation, workflowResultFromLoopReason } from "./workflow-helpers.js"
+import { extractLoopEvaluation, workflowResultFromLoopReason } from "../runtime/workflow-helpers.js"
 
 const LoopBody = Schema.Struct({
   agent: AgentName,

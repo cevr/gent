@@ -18,7 +18,7 @@ import {
   runCommand,
   workflowResultFromLoopReason,
   type WorkflowRunContext,
-} from "./workflow-helpers.js"
+} from "../runtime/workflow-helpers.js"
 
 interface AuditConcern {
   name: string

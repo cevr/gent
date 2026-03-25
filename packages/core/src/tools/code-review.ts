@@ -17,7 +17,7 @@ import {
   runCommand as runCommandBase,
   workflowResultFromLoopReason,
   type WorkflowRunContext,
-} from "./workflow-helpers.js"
+} from "../runtime/workflow-helpers.js"
 
 export class CodeReviewError extends Schema.TaggedErrorClass<CodeReviewError>()("CodeReviewError", {
   message: Schema.String,

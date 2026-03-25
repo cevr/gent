@@ -6,7 +6,7 @@ import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
-import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session.utils.js"
+import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
 import type {
   BranchInfo,
   BranchTreeNode,
