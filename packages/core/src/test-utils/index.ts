@@ -332,12 +332,16 @@ export const runTestWithRecording = <A, E>(
   )
 import type { ToolCallId } from "../domain/ids.js"
 
-// Extension state machine test harness
+// Extension test harnesses
 export {
   createStateMachineHarness,
   createEventFactories,
   expectNoChange,
+  createExtensionHarness,
+  createToolTestLayer,
   type StateMachineHarnessOptions,
   type EventFactories,
   type EventFactoryContext,
+  type ExtensionHarnessResult,
+  type ToolTestLayerConfig,
 } from "./extension-harness.js"
