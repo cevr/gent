@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"
 import * as path from "node:path"
 import { extractText } from "@gent/sdk"
-import { type WorkerLifecycleState, WorkerSupervisorInternal } from "../src/supervisor"
+import { type WorkerLifecycleState, WorkerSupervisorInternal } from "@gent/sdk/supervisor"
 import {
   createTempDirFixture,
   createWorkerEnv,
   startWorkerWithSupervisor,
   waitFor,
-} from "../../../tests/integration/seam-fixture"
+} from "./seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-worker-")

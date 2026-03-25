@@ -28,7 +28,7 @@ import { Gent, type GentClient } from "@gent/sdk"
 import { createTempDirFixture, createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
 
-const repoRoot = path.resolve(import.meta.dir, "..")
+const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-transport-worker-")
 
 export interface TransportCase {

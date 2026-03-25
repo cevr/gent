@@ -1,0 +1,21 @@
+{
+  "name": "@gent/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tests/seam-fixture": "./tests/seam-fixture.ts"
+  },
+  "scripts": {
+    "test:integration": "bun test tests/"
+  },
+  "dependencies": {
+    "@gent/core": "workspace:*",
+    "@gent/sdk": "workspace:*",
+    "@gent/server-http": "workspace:*"
+  },
+  "peerDependencies": {
+    "@effect/platform-bun": "catalog:",
+    "effect": "catalog:"
+  }
+}

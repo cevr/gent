@@ -11,7 +11,7 @@ import {
   createTempDirFixture,
   createWorkerEnv,
   startWorkerWithSupervisor,
-} from "../../../tests/integration/seam-fixture"
+} from "@gent/e2e/tests/seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-session-feed-")

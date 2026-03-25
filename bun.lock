@@ -49,6 +49,7 @@
       "dependencies": {
         "@effect/platform-bun": "catalog:",
         "@gent/core": "workspace:*",
+        "@gent/e2e": "workspace:*",
         "@gent/sdk": "workspace:*",
         "@opentui/core": "^0.1.90",
         "@opentui/solid": "^0.1.90",
@@ -86,6 +87,19 @@
         "@effect/sql-sqlite-bun": "catalog:",
         "effect": "catalog:",
         "effect-bun-test": "catalog:",
+      },
+    },
+    "packages/e2e": {
+      "name": "@gent/e2e",
+      "version": "0.0.0",
+      "dependencies": {
+        "@gent/core": "workspace:*",
+        "@gent/sdk": "workspace:*",
+        "@gent/server-http": "workspace:*",
+      },
+      "peerDependencies": {
+        "@effect/platform-bun": "catalog:",
+        "effect": "catalog:",
       },
     },
     "packages/sdk": {
@@ -311,6 +325,8 @@
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.0", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-N10dEJNSsUx41Z6pZsXU8FjPjpBEplgH24sfkmITrBED1/U2Esum9F3lfLrMjKHHjmi557zQn7kR9R+XWXu5Rg=="],
 
     "@gent/core": ["@gent/core@workspace:packages/core"],
+
+    "@gent/e2e": ["@gent/e2e@workspace:packages/e2e"],
 
     "@gent/sdk": ["@gent/sdk@workspace:packages/sdk"],
 

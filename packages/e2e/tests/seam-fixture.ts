@@ -4,7 +4,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { Gent } from "@gent/sdk"
-import { startWorkerSupervisor, type WorkerSupervisorOptions } from "../packages/sdk/src/supervisor"
+import { startWorkerSupervisor, type WorkerSupervisorOptions } from "@gent/sdk/supervisor"
 
 export const createTempDirFixture = (prefix: string): (() => string) => {
   const tempDirs: string[] = []

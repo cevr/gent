@@ -29,6 +29,19 @@
       "outputs": [],
       "cache": false
     },
+    "test:integration": {
+      "inputs": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "tests/**/*.ts",
+        "tests/**/*.tsx",
+        "integration/**/*.ts",
+        "integration/**/*.tsx",
+        "package.json"
+      ],
+      "outputs": [],
+      "cache": false
+    },
     "lint": {
       "inputs": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"],
       "outputs": []
