@@ -11,11 +11,14 @@ import type { AgentEvent } from "../../domain/event.js"
 import type {
   ExtensionActor,
   ExtensionDeriveContext,
+  ExtensionEffect,
   ExtensionProjection,
   ExtensionProjectionConfig,
   SpawnActor,
 } from "../../domain/extension.js"
 import type { BranchId } from "../../domain/ids.js"
+import { ExtensionEventBus } from "./event-bus.js"
+import { ExtensionTurnControl } from "./turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 
 export interface FromMachineConfig<
@@ -42,6 +45,8 @@ export interface FromMachineConfig<
   readonly stateSchema?: Schema.Schema<State>
   /** If true, state is persisted on state change and hydrated on init */
   readonly persist?: boolean
+  /** Compute extension effects after a state transition. Called with (before, after). */
+  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
 }
 
 export interface FromMachineResult {
@@ -62,6 +67,8 @@ export const fromMachine = <
 ): FromMachineResult => {
   const spawnActor: SpawnActor = (ctx) =>
     Effect.gen(function* () {
+      const turnControl = yield* ExtensionTurnControl
+      const eventBus = yield* ExtensionEventBus
       const storage = yield* Effect.serviceOption(Storage)
       const versionRef = yield* Ref.make(0)
 
@@ -91,6 +98,46 @@ export const fromMachine = <
             .pipe(Effect.catchEager(() => Effect.void))
         })
 
+      const runEffects = (
+        effects: ReadonlyArray<ExtensionEffect>,
+        branchId: BranchId | undefined,
+      ): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          for (const effect of effects) {
+            switch (effect._tag) {
+              case "QueueFollowUp":
+                if (branchId !== undefined) {
+                  yield* turnControl
+                    .queueFollowUp({
+                      sessionId: ctx.sessionId,
+                      branchId,
+                      content: effect.content,
+                      metadata: effect.metadata,
+                    })
+                    .pipe(Effect.catchDefect(() => Effect.void))
+                }
+                break
+              case "Interject":
+                if (branchId !== undefined) {
+                  yield* turnControl
+                    .interject({ sessionId: ctx.sessionId, branchId, content: effect.content })
+                    .pipe(Effect.catchDefect(() => Effect.void))
+                }
+                break
+              case "EmitEvent":
+                yield* eventBus
+                  .emit(effect.channel, effect.payload)
+                  .pipe(Effect.catchDefect(() => Effect.void))
+                break
+              case "Persist":
+                if (config.persist === true) {
+                  yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
+                }
+                break
+            }
+          }
+        }).pipe(Effect.catchDefect(() => Effect.void))
+
       const actor: ExtensionActor = {
         id: config.id,
 
@@ -116,7 +163,7 @@ export const fromMachine = <
             : Effect.void,
 
         // @effect-diagnostics *:off
-        handleEvent: (event: AgentEvent, _reduceCtx) =>
+        handleEvent: (event: AgentEvent, reduceCtx) =>
           Effect.gen(function* () {
             const mapped = config.mapEvent !== undefined ? config.mapEvent(event) : undefined
             if (mapped === undefined) return false
@@ -133,6 +180,13 @@ export const fromMachine = <
               if (config.persist === true) {
                 yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
               }
+              // Run extension effects from afterTransition hook
+              if (config.afterTransition !== undefined) {
+                const effects = config.afterTransition(before, after)
+                if (effects.length > 0) {
+                  yield* runEffects(effects, reduceCtx.branchId)
+                }
+              }
             }
             return changed
           }),
@@ -140,7 +194,7 @@ export const fromMachine = <
         handleIntent: (() => {
           const mapIntent = config.mapIntent
           if (mapIntent === undefined) return undefined
-          return (intent: unknown, _branchId?: BranchId) =>
+          return (intent: unknown, branchId?: BranchId) =>
             Effect.gen(function* () {
               let validated: Intent = intent as Intent
               if (config.intentSchema !== undefined) {
@@ -161,6 +215,12 @@ export const fromMachine = <
                 yield* Ref.update(versionRef, (v) => v + 1)
                 if (config.persist === true) {
                   yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
+                }
+                if (config.afterTransition !== undefined) {
+                  const effects = config.afterTransition(before, after)
+                  if (effects.length > 0) {
+                    yield* runEffects(effects, branchId)
+                  }
                 }
               }
               return changed

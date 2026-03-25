@@ -30,7 +30,7 @@ describe("ReviewLoop pure reducer", () => {
       expect(ReviewLoopActorConfig.initial._tag).toBe("Inactive")
     })
 
-    test("StartReview intent → Reviewing with QueueFollowUp kickoff", () => {
+    test("StartReview intent → Reviewing state", () => {
       const result = intent!({ _tag: "Inactive" }, { _tag: "StartReview" })
       expect(result.state._tag).toBe("Reviewing")
       if (result.state._tag === "Reviewing") {
@@ -38,9 +38,6 @@ describe("ReviewLoop pure reducer", () => {
         expect(result.state.maxIterations).toBe(3)
         expect(result.state.findings).toEqual([])
       }
-      expect(result.effects).toBeDefined()
-      expect(result.effects!.some((e) => e._tag === "QueueFollowUp")).toBe(true)
-      expect(result.effects!.some((e) => e._tag === "Persist")).toBe(true)
     })
 
     test("StartReview intent with options", () => {
@@ -52,12 +49,6 @@ describe("ReviewLoop pure reducer", () => {
         expect(result.state.focus).toBe("auth module")
         expect(result.state.paths).toEqual(["src/auth/"])
         expect(result.state.maxIterations).toBe(5)
-      }
-      // Kickoff follow-up includes focus
-      const followUp = result.effects!.find((e) => e._tag === "QueueFollowUp")
-      expect(followUp).toBeDefined()
-      if (followUp !== undefined && followUp._tag === "QueueFollowUp") {
-        expect(followUp.content).toContain("auth module")
       }
     })
 
@@ -72,7 +63,7 @@ describe("ReviewLoop pure reducer", () => {
       expect(result.state).toBe(state)
     })
 
-    test("CancelReview → Inactive with Persist", () => {
+    test("CancelReview → Inactive", () => {
       const state: ReviewLoopState = {
         _tag: "Reviewing",
         iteration: 2,
@@ -81,7 +72,6 @@ describe("ReviewLoop pure reducer", () => {
       }
       const result = intent!(state, { _tag: "CancelReview" })
       expect(result.state._tag).toBe("Inactive")
-      expect(result.effects!.some((e) => e._tag === "Persist")).toBe(true)
     })
 
     test("CancelReview when inactive → no-op", () => {
@@ -92,7 +82,7 @@ describe("ReviewLoop pure reducer", () => {
   })
 
   describe("reduce — signal-driven advancement", () => {
-    test("code_review tool success advances iteration with QueueFollowUp", () => {
+    test("code_review tool success advances iteration", () => {
       const state: ReviewLoopState = {
         _tag: "Reviewing",
         iteration: 1,
@@ -112,12 +102,9 @@ describe("ReviewLoop pure reducer", () => {
         expect(result.state.findings.length).toBe(1)
         expect(result.state.findings[0]!.summary).toBe("Found 3 issues in auth module")
       }
-      expect(result.effects).toBeDefined()
-      expect(result.effects!.some((e) => e._tag === "QueueFollowUp")).toBe(true)
-      expect(result.effects!.some((e) => e._tag === "Persist")).toBe(true)
     })
 
-    test("code_review at max iteration → Inactive with EmitEvent", () => {
+    test("code_review at max iteration → Inactive", () => {
       const state: ReviewLoopState = {
         _tag: "Reviewing",
         iteration: 3,
@@ -133,16 +120,6 @@ describe("ReviewLoop pure reducer", () => {
         }),
       )
       expect(result.state._tag).toBe("Inactive")
-      expect(result.effects).toBeDefined()
-      const emitEvent = result.effects!.find((e) => e._tag === "EmitEvent")
-      expect(emitEvent).toBeDefined()
-      if (emitEvent !== undefined && emitEvent._tag === "EmitEvent") {
-        expect(emitEvent.channel).toBe("review:completed")
-        const payload = emitEvent.payload as { findings: readonly { summary: string }[] }
-        // Includes both previous and final finding
-        expect(payload.findings.length).toBe(2)
-        expect(payload.findings[1]!.summary).toBe("Final review clean")
-      }
     })
 
     test("TurnCompleted does not advance — only tool signal does", () => {
