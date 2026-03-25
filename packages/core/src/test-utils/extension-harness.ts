@@ -7,14 +7,7 @@
 
 import { expect } from "bun:test"
 import { AgentDefinition } from "../domain/agent.js"
-import {
-  StreamStarted,
-  TurnCompleted,
-  ToolCallSucceeded,
-  ToolCallFailed,
-  WorkflowPhaseStarted,
-  WorkflowCompleted,
-} from "../domain/event.js"
+import { StreamStarted, TurnCompleted, ToolCallSucceeded, ToolCallFailed } from "../domain/event.js"
 import type {
   ExtensionDeriveContext,
   ExtensionIntentResult,
@@ -68,26 +61,6 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
       branchId: ctx.branchId,
       toolCallId: "tc-test" as ToolCallId,
       toolName: "test",
-      ...overrides,
-    }),
-
-  workflowPhaseStarted: (
-    overrides?: Partial<ConstructorParameters<typeof WorkflowPhaseStarted>[0]>,
-  ) =>
-    new WorkflowPhaseStarted({
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
-      workflowName: "test",
-      phase: "idle",
-      ...overrides,
-    }),
-
-  workflowCompleted: (overrides?: Partial<ConstructorParameters<typeof WorkflowCompleted>[0]>) =>
-    new WorkflowCompleted({
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
-      workflowName: "test",
-      result: "success",
       ...overrides,
     }),
 })

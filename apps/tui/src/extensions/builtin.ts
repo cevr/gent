@@ -9,7 +9,6 @@ import type { ExtensionClientModule } from "@gent/core/domain/extension-client.j
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import { BUILTIN_TOOL_RENDERERS } from "../components/tool-renderers/index"
 import { PlanModeWidget } from "./plan-mode-widget"
-import { WorkflowProgressWidget } from "./workflow-progress-widget"
 
 export const BUILTIN_CLIENT_EXTENSION: ExtensionClientModule<ToolRenderer> = {
   id: "@gent/builtin",
@@ -21,12 +20,6 @@ export const BUILTIN_CLIENT_EXTENSION: ExtensionClientModule<ToolRenderer> = {
         slot: "above-input",
         priority: 10,
         component: PlanModeWidget,
-      },
-      {
-        id: "workflow-progress",
-        slot: "above-input",
-        priority: 20,
-        component: WorkflowProgressWidget,
       },
     ],
   }),

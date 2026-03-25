@@ -4,8 +4,8 @@ import type { SessionId, BranchId } from "./ids"
 import type { EventStoreError, PromptDecision } from "./event"
 import { PromptHandler } from "./interaction-handlers"
 
-// PromptPresenter — reusable presentation service for workflows
-// Extracts review/confirm/present from PromptTool so workflows can present
+// PromptPresenter — reusable presentation service for delegate tools
+// Extracts review/confirm/present from PromptTool so tools can present
 // without tool-calls-tool.
 
 export interface PromptPresenterService {

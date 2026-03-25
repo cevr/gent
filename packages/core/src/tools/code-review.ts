@@ -6,16 +6,14 @@ import {
   type AgentDefinition,
   type SubagentRunner,
 } from "../domain/agent.js"
-import { EventStore, WorkflowCompleted, WorkflowPhaseStarted } from "../domain/event.js"
+import { defineTool, type ToolContext } from "../domain/tool.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
 import { runLoop } from "../runtime/loop.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
   extractLoopEvaluation,
   requireText,
   runCommand as runCommandBase,
-  workflowResultFromLoopReason,
   type WorkflowRunContext,
 } from "../runtime/workflow-helpers.js"
 
@@ -212,7 +210,6 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   runnerContext: WorkflowRunContext
   reviewInput: string
   description?: string
-  emitPhase: (phase: string) => Effect.Effect<void, never>
 }) {
   const [modelA, modelB] = getAdversarialModels()
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
@@ -221,7 +218,6 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
     deniedTools: ["bash"] as const,
   }
 
-  yield* params.emitPhase("review")
   const [reviewResultA, reviewResultB] = yield* Effect.all(
     [
       params.runner.run({
@@ -242,7 +238,6 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   const reviewA = yield* requireText(reviewResultA, "review-A")
   const reviewB = yield* requireText(reviewResultB, "review-B")
 
-  yield* params.emitPhase("adversarial")
   const [critiqueResultOfA, critiqueResultOfB] = yield* Effect.all(
     [
       params.runner.run({
@@ -263,7 +258,6 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   const critiqueOfA = yield* requireText(critiqueResultOfA, "critique-of-A")
   const critiqueOfB = yield* requireText(critiqueResultOfB, "critique-of-B")
 
-  yield* params.emitPhase("synthesize")
   const synthesisResult = yield* params.runner.run({
     agent: params.reviewer,
     prompt: buildSynthesisPrompt(
@@ -287,21 +281,20 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   }
 })
 
-export const CodeReviewTool = defineWorkflow({
+export const CodeReviewTool = defineTool({
   name: "code_review",
+  action: "delegate" as const,
+  concurrency: "serial" as const,
   description:
     "Run adversarial dual-model code review. Report mode returns findings. Fix mode applies fixes iteratively.",
-  command: "code_review",
   promptSnippet: "Adversarial dual-model code review",
   promptGuidelines: [
     "report mode for read-only review, fix mode to auto-apply",
     "Pass description to guide review focus",
   ],
-  phases: ["review", "adversarial", "synthesize", "execute", "evaluate"] as const,
   params: CodeReviewParams,
-  execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: WorkflowContext) {
+  execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
-    const eventStore = yield* EventStore
     const storage = yield* Storage
     const registry = yield* ExtensionRegistry
 
@@ -318,44 +311,6 @@ export const CodeReviewTool = defineWorkflow({
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = (yield* registry.getAgent(callerAgentName)) ?? Agents.cowork
 
-    const emitPhase = (phase: string) =>
-      eventStore
-        .publish(
-          new WorkflowPhaseStarted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "code_review",
-            phase,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
-    const emitIterationPhase = (phase: string, iteration: number) =>
-      eventStore
-        .publish(
-          new WorkflowPhaseStarted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "code_review",
-            phase,
-            iteration,
-            maxIterations,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
-    const completeWorkflow = (result: "success" | "rejected" | "error" | "max_iterations") =>
-      eventStore
-        .publish(
-          new WorkflowCompleted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "code_review",
-            result,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
     const reviewInput = yield* resolveReviewInput({
       content: params.content,
       files: params.files,
@@ -369,10 +324,8 @@ export const CodeReviewTool = defineWorkflow({
         runnerContext,
         reviewInput,
         description: params.description,
-        emitPhase,
       })
       const summary = summarizeComments(report.comments)
-      yield* completeWorkflow("success")
 
       return {
         comments: report.comments,
@@ -397,7 +350,6 @@ export const CodeReviewTool = defineWorkflow({
                 ? `${reviewInput}\n\n## Remaining Issues\n${evaluatorFeedback}`
                 : reviewInput,
             description: params.description,
-            emitPhase,
           })
           latestComments = reviewReport.comments
 
@@ -410,7 +362,6 @@ export const CodeReviewTool = defineWorkflow({
             }
           }
 
-          yield* emitIterationPhase("execute", iteration)
           return yield* runner.run({
             agent: executor,
             prompt: buildExecutePrompt(reviewReport.comments, params.description),
@@ -423,7 +374,6 @@ export const CodeReviewTool = defineWorkflow({
             return { verdict: "done" as const, feedback: "No findings remain." }
           }
 
-          yield* emitIterationPhase("evaluate", iteration)
           const evalResult = yield* runner.run({
             agent: reviewer,
             prompt: buildEvaluatePrompt(bodyOutput, latestComments),
@@ -442,8 +392,6 @@ export const CodeReviewTool = defineWorkflow({
           return extractLoopEvaluation(envelopes, evalResult.text)
         }),
     })
-
-    yield* completeWorkflow(workflowResultFromLoopReason(loopResult.reason))
 
     const summary = summarizeComments(latestComments)
     return {

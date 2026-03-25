@@ -114,11 +114,7 @@ export { TaskListTool, TaskListParams } from "./task-list"
 export { TaskGetTool, TaskGetParams } from "./task-get"
 export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
 
-// Loop Workflow Tool
+// Delegate Tools
 export { LoopTool, LoopParams, LoopEvaluationTool } from "./loop"
-
-// Plan Workflow Tool
 export { PlanTool, PlanParams } from "./plan"
-
-// Audit Workflow Tool
 export { AuditTool, AuditParams } from "./audit"

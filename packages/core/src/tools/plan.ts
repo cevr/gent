@@ -7,16 +7,14 @@ import {
   type AgentDefinition,
 } from "../domain/agent.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { EventStore, WorkflowCompleted, WorkflowPhaseStarted } from "../domain/event.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
+import { defineTool, type ToolContext } from "../domain/tool.js"
 import { runLoop } from "../runtime/loop.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
   extractLoopEvaluation,
   requireText,
   runAdversarialPair,
-  workflowResultFromLoopReason,
   type WorkflowRunContext,
 } from "../runtime/workflow-helpers.js"
 
@@ -151,11 +149,9 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   context?: string
   files?: ReadonlyArray<string>
   evaluatorFeedback?: string
-  emitPhase: (phase: string) => Effect.Effect<void, never>
 }) {
   const [modelA, modelB] = getAdversarialModels()
 
-  yield* params.emitPhase("plan")
   const planPrompt = buildPlanPrompt(
     params.prompt,
     params.context,
@@ -173,7 +169,6 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   const planA = yield* requireText(planResultA, "plan-A")
   const planB = yield* requireText(planResultB, "plan-B")
 
-  yield* params.emitPhase("review")
   const [reviewResultOfB, reviewResultOfA] = yield* Effect.all(
     [
       params.runner.run({
@@ -194,7 +189,6 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   const reviewOfB = yield* requireText(reviewResultOfB, "review-A-to-B")
   const reviewOfA = yield* requireText(reviewResultOfA, "review-B-to-A")
 
-  yield* params.emitPhase("incorporate")
   const [revisedResultA, revisedResultB] = yield* Effect.all(
     [
       params.runner.run({
@@ -215,7 +209,6 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   const revisedA = yield* requireText(revisedResultA, "incorporate-A")
   const revisedB = yield* requireText(revisedResultB, "incorporate-B")
 
-  yield* params.emitPhase("synthesize")
   const synthesisResult = yield* params.runner.run({
     agent: params.architect,
     prompt: buildSynthesizePrompt(revisedA, revisedB, params.mode),
@@ -227,24 +220,15 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   return synthesizedPlan
 })
 
-export const PlanTool = defineWorkflow({
+export const PlanTool = defineTool({
   name: "plan",
+  action: "delegate" as const,
+  concurrency: "serial" as const,
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode executes it iteratively.",
-  command: "plan",
-  phases: [
-    "plan",
-    "review",
-    "incorporate",
-    "synthesize",
-    "present",
-    "execute",
-    "evaluate",
-  ] as const,
   params: PlanParams,
-  execute: Effect.fn("PlanTool.execute")(function* (params, ctx: WorkflowContext) {
+  execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
-    const eventStore = yield* EventStore
     const presenter = yield* PromptPresenter
     const registry = yield* ExtensionRegistry
 
@@ -261,44 +245,6 @@ export const PlanTool = defineWorkflow({
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = (yield* registry.getAgent(callerAgentName)) ?? Agents.cowork
 
-    const completeWorkflow = (result: "success" | "rejected" | "error" | "max_iterations") =>
-      eventStore
-        .publish(
-          new WorkflowCompleted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "plan",
-            result,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
-    const emitPlanPhase = (phase: string) =>
-      eventStore
-        .publish(
-          new WorkflowPhaseStarted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "plan",
-            phase,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
-    const emitPlanIterationPhase = (phase: string, iteration: number) =>
-      eventStore
-        .publish(
-          new WorkflowPhaseStarted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "plan",
-            phase,
-            iteration,
-            maxIterations,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
     if (mode === "plan-only") {
       const synthesizedPlan = yield* runPlanningCycle({
         runner,
@@ -308,10 +254,8 @@ export const PlanTool = defineWorkflow({
         prompt: params.prompt,
         context: params.context,
         files: params.files,
-        emitPhase: emitPlanPhase,
       })
 
-      yield* emitPlanPhase("present")
       const reviewResult = yield* presenter.review({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
@@ -319,10 +263,6 @@ export const PlanTool = defineWorkflow({
         title: "Implementation Plan",
         fileNameSeed: ctx.toolCallId,
       })
-
-      const workflowResult =
-        reviewResult.decision === "yes" || reviewResult.decision === "edit" ? "success" : "rejected"
-      yield* completeWorkflow(workflowResult)
 
       return {
         decision: reviewResult.decision,
@@ -349,10 +289,8 @@ export const PlanTool = defineWorkflow({
             context: params.context,
             files: params.files,
             evaluatorFeedback,
-            emitPhase: emitPlanPhase,
           })
 
-          yield* emitPlanIterationPhase("execute", iteration)
           return yield* runner.run({
             agent: executor,
             prompt: buildExecutePrompt(synthesizedPlan),
@@ -361,7 +299,6 @@ export const PlanTool = defineWorkflow({
         }),
       evaluate: (iteration, bodyOutput) =>
         Effect.gen(function* () {
-          yield* emitPlanIterationPhase("evaluate", iteration)
           const evalResult = yield* runner.run({
             agent: architect,
             prompt: buildEvaluatePrompt(bodyOutput),
@@ -376,8 +313,6 @@ export const PlanTool = defineWorkflow({
           return extractLoopEvaluation(envelopes, evalResult.text)
         }),
     })
-
-    yield* completeWorkflow(workflowResultFromLoopReason(loopResult.reason))
 
     return {
       iterations: loopResult.iterations,

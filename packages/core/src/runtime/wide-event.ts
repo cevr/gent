@@ -143,8 +143,6 @@ const ignoredWideEventTags = new Set([
   "TaskFailed",
   "TaskDeleted",
   "AgentRestarted",
-  "WorkflowPhaseStarted",
-  "WorkflowCompleted",
 ])
 
 // =============================================================================

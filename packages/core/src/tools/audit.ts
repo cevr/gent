@@ -6,9 +6,8 @@ import {
   type AgentDefinition,
   type SubagentRunner,
 } from "../domain/agent.js"
-import { EventStore, WorkflowCompleted, WorkflowPhaseStarted } from "../domain/event.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
+import { defineTool, type ToolContext } from "../domain/tool.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { runLoop } from "../runtime/loop.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -16,7 +15,6 @@ import {
   extractLoopEvaluation,
   requireText,
   runCommand,
-  workflowResultFromLoopReason,
   type WorkflowRunContext,
 } from "../runtime/workflow-helpers.js"
 
@@ -215,7 +213,6 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   prompt?: string
   maxConcerns: number
   evaluatorFeedback?: string
-  emitPhase: (phase: string) => Effect.Effect<void, never>
 }) {
   const [coworkModel, deepworkModel] = getAdversarialModels()
   const auditOverrides = {
@@ -223,7 +220,6 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     deniedTools: ["bash"] as const,
   }
 
-  yield* params.emitPhase("detect")
   const detectResult = yield* params.runner.run({
     agent: params.architect,
     prompt: buildDetectPrompt(
@@ -242,7 +238,6 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     return { raw: "No concerns detected.", findings: [] as AuditFinding[] }
   }
 
-  yield* params.emitPhase("audit")
   const pairedNotes = yield* Effect.forEach(
     concerns,
     (concern) =>
@@ -275,7 +270,6 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     { concurrency: 4 },
   )
 
-  yield* params.emitPhase("synthesize")
   const synthesisResult = yield* params.runner.run({
     agent: params.architect,
     prompt: buildSynthesisPrompt(pairedNotes, params.prompt),
@@ -287,21 +281,20 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   return { raw, findings }
 })
 
-export const AuditTool = defineWorkflow({
+export const AuditTool = defineTool({
   name: "audit",
+  action: "delegate" as const,
+  concurrency: "serial" as const,
   description:
     "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode executes them iteratively.",
-  command: "audit",
   promptSnippet: "Audit code with dual-model concern analysis",
   promptGuidelines: [
     "Use report mode for read-only findings, fix mode for iterative resolution",
     "Specify paths to scope the audit; defaults to git diff",
   ],
-  phases: ["detect", "audit", "synthesize", "present", "execute", "evaluate"] as const,
   params: AuditParams,
-  execute: Effect.fn("AuditTool.execute")(function* (params, ctx: WorkflowContext) {
+  execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
-    const eventStore = yield* EventStore
     const presenter = yield* PromptPresenter
     const storage = yield* Storage
     const registry = yield* ExtensionRegistry
@@ -322,44 +315,6 @@ export const AuditTool = defineWorkflow({
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = (yield* registry.getAgent(callerAgentName)) ?? Agents.cowork
 
-    const emitPhase = (phase: string) =>
-      eventStore
-        .publish(
-          new WorkflowPhaseStarted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "audit",
-            phase,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
-    const emitIterationPhase = (phase: string, iteration: number) =>
-      eventStore
-        .publish(
-          new WorkflowPhaseStarted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "audit",
-            phase,
-            iteration,
-            maxIterations,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
-    const completeWorkflow = (result: "success" | "rejected" | "error" | "max_iterations") =>
-      eventStore
-        .publish(
-          new WorkflowCompleted({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            workflowName: "audit",
-            result,
-          }),
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
-
     if (mode === "report") {
       const report = yield* runAuditCycle({
         runner,
@@ -369,18 +324,14 @@ export const AuditTool = defineWorkflow({
         paths,
         prompt: params.prompt,
         maxConcerns,
-        emitPhase,
       })
 
-      yield* emitPhase("present")
       yield* presenter.present({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
         content: report.raw,
         title: "Audit Findings",
       })
-      yield* completeWorkflow("success")
-
       return {
         iterations: 1,
         reason: "done" as const,
@@ -406,7 +357,6 @@ export const AuditTool = defineWorkflow({
             prompt: params.prompt,
             maxConcerns,
             evaluatorFeedback,
-            emitPhase,
           })
           latestFindings = report.findings
 
@@ -419,7 +369,6 @@ export const AuditTool = defineWorkflow({
             }
           }
 
-          yield* emitIterationPhase("execute", iteration)
           return yield* runner.run({
             agent: executor,
             prompt: buildExecutionPrompt(report.findings, params.prompt),
@@ -432,7 +381,6 @@ export const AuditTool = defineWorkflow({
             return { verdict: "done" as const, feedback: "No findings remain." }
           }
 
-          yield* emitIterationPhase("evaluate", iteration)
           const evalResult = yield* runner.run({
             agent: architect,
             prompt: buildEvaluationPrompt(bodyOutput, latestFindings),
@@ -451,8 +399,6 @@ export const AuditTool = defineWorkflow({
           return extractLoopEvaluation(envelopes, evalResult.text)
         }),
     })
-
-    yield* completeWorkflow(workflowResultFromLoopReason(loopResult.reason))
 
     return {
       findings: latestFindings,

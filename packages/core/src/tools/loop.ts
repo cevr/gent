@@ -1,16 +1,10 @@
 import { Effect, Schema } from "effect"
 import { AgentName, SubagentRunnerService } from "../domain/agent.js"
-import {
-  EventStore,
-  WorkflowPhaseStarted,
-  WorkflowCompleted,
-  type EventEnvelope,
-} from "../domain/event.js"
+import { type EventEnvelope } from "../domain/event.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { defineTool } from "../domain/tool.js"
-import { defineWorkflow, type WorkflowContext } from "../domain/workflow.js"
+import { defineTool, type ToolContext } from "../domain/tool.js"
 import { runLoop } from "../runtime/loop.js"
-import { extractLoopEvaluation, workflowResultFromLoopReason } from "../runtime/workflow-helpers.js"
+import { extractLoopEvaluation } from "../runtime/workflow-helpers.js"
 
 const LoopBody = Schema.Struct({
   agent: AgentName,
@@ -59,17 +53,16 @@ export const LoopEvaluationTool = defineTool({
   execute: (params) => Effect.succeed(params),
 })
 
-export const LoopTool = defineWorkflow({
+export const LoopTool = defineTool({
   name: "loop",
+  action: "delegate" as const,
+  concurrency: "serial" as const,
   description:
     "Iterate: run body agent, evaluate condition, repeat until done or max iterations. " +
     "The evaluator agent calls the loop_evaluation tool to report its verdict.",
-  command: "loop",
-  phases: ["body", "evaluate"] as const,
   params: LoopParams,
-  execute: Effect.fn("LoopTool.execute")(function* (params, ctx: WorkflowContext) {
+  execute: Effect.fn("LoopTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
-    const eventStore = yield* EventStore
     const storage = yield* Storage
     const maxIterations = params.maxIterations ?? 5
 
@@ -122,33 +115,7 @@ export const LoopTool = defineWorkflow({
 
         return extractLoopEvaluation(envelopes, evalResult.text)
       }),
-
-      onIteration: Effect.fn("LoopTool.onIteration")(function* (iteration, phase) {
-        yield* eventStore
-          .publish(
-            new WorkflowPhaseStarted({
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-              workflowName: "loop",
-              phase,
-              iteration,
-              maxIterations,
-            }),
-          )
-          .pipe(Effect.catchEager(() => Effect.void))
-      }),
     })
-
-    yield* eventStore
-      .publish(
-        new WorkflowCompleted({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          workflowName: "loop",
-          result: workflowResultFromLoopReason(result.reason),
-        }),
-      )
-      .pipe(Effect.catchEager(() => Effect.void))
 
     return {
       iterations: result.iterations,

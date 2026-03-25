@@ -1,17 +1,14 @@
 /**
- * Shared workflow helpers — used by plan, review, and audit workflows.
+ * Shared helpers — used by plan, review, and audit tools.
  */
 
 import { Effect, Schema } from "effect"
 import type { ModelId } from "../domain/model.js"
 import { SubagentError } from "../domain/agent.js"
 import type { AgentDefinition, SubagentResult, SubagentRunner } from "../domain/agent.js"
-import { EventStore, WorkflowPhaseStarted, type EventEnvelope } from "../domain/event.js"
+import type { EventEnvelope } from "../domain/event.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import type { LoopVerdict } from "../runtime/loop.js"
-
-type LoopExitReason = "done" | "error" | "max_reached"
-type WorkflowResult = "success" | "rejected" | "error" | "max_iterations"
 
 // ── Shell Command Runner ──
 
@@ -111,38 +108,6 @@ export const extractLoopVerdict = (
   envelopes: ReadonlyArray<EventEnvelope>,
   resultText: string,
 ): LoopVerdict => extractLoopEvaluation(envelopes, resultText).verdict
-
-export const workflowResultFromLoopReason = (reason: LoopExitReason): WorkflowResult => {
-  if (reason === "done") return "success"
-  if (reason === "error") return "error"
-  return "max_iterations"
-}
-
-// ── Phase Emitter ──
-
-/** Emit a workflow phase event, swallowing errors */
-export const emitPhase = (
-  workflowName: string,
-  sessionId: SessionId,
-  branchId: BranchId,
-  phase: string,
-  iteration?: number,
-  maxIterations?: number,
-): Effect.Effect<void, never, EventStore> =>
-  Effect.gen(function* () {
-    const eventStore = yield* EventStore
-    yield* eventStore
-      .publish(
-        new WorkflowPhaseStarted({
-          sessionId,
-          branchId,
-          workflowName,
-          phase,
-          ...(iteration !== undefined ? { iteration, maxIterations } : {}),
-        }),
-      )
-      .pipe(Effect.catchEager(() => Effect.void))
-  })
 
 // ── Require Text ──
 
