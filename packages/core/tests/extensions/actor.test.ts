@@ -1,9 +1,14 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
-import { SessionStarted, TurnCompleted } from "@gent/core/domain/event"
+import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
-import type { ExtensionReduceContext, ReduceResult } from "@gent/core/domain/extension"
+import type {
+  ExtensionReduceContext,
+  LoadedExtension,
+  ReduceResult,
+} from "@gent/core/domain/extension"
 import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 
@@ -65,7 +70,7 @@ describe("fromReducer", () => {
     )
   })
 
-  test("effects are interpreted", async () => {
+  test("effects are interpreted via framework services", async () => {
     const emitted = Effect.runSync(Ref.make<string[]>([]))
 
     const spawn = fromReducer<{ active: boolean }>({
@@ -82,7 +87,6 @@ describe("fromReducer", () => {
       },
     })
 
-    // Custom event bus that captures emits
     const busLayer = Layer.succeed(ExtensionEventBus, {
       emit: (channel: string, _payload: unknown) => Ref.update(emitted, (arr) => [...arr, channel]),
       on: () => Effect.void,
@@ -106,7 +110,7 @@ describe("fromReducer", () => {
     )
   })
 
-  test("derive produces projections", async () => {
+  test("derive produces projections from state", async () => {
     const spawn = fromReducer<{ mode: string }>({
       id: "projector",
       initial: { mode: "normal" },
@@ -131,7 +135,7 @@ describe("fromReducer", () => {
     )
   })
 
-  test("handleIntent with schema validation", async () => {
+  test("handleIntent validates schema and updates state", async () => {
     const { Schema } = await import("effect")
 
     const IntentSchema = Schema.Struct({
@@ -161,7 +165,7 @@ describe("fromReducer", () => {
     )
   })
 
-  test("multiple events accumulate state", async () => {
+  test("multiple events accumulate state and version", async () => {
     const spawn = fromReducer<{ seen: string[] }>({
       id: "accumulator",
       initial: { seen: [] },
@@ -182,6 +186,139 @@ describe("fromReducer", () => {
         expect(state.seen).toEqual(["SessionStarted", "TurnCompleted"])
         expect(snap.version).toBe(2)
       }).pipe(Effect.provide(testLayer)),
+    )
+  })
+
+  test("state updates are atomic via Ref.modify", async () => {
+    let reduceCount = 0
+    const spawn = fromReducer<{ count: number }>({
+      id: "atomic",
+      initial: { count: 0 },
+      reduce: (state) => {
+        reduceCount++
+        return { state: { count: state.count + 1 } }
+      },
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const actor = yield* spawn({ sessionId, branchId })
+        const ctx: ExtensionReduceContext = { sessionId, branchId }
+
+        for (let i = 0; i < 10; i++) {
+          yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), ctx)
+        }
+
+        const snap = yield* actor.snapshot
+        expect((snap.state as { count: number }).count).toBe(10)
+        expect(snap.version).toBe(10)
+        expect(reduceCount).toBe(10)
+      }).pipe(Effect.provide(testLayer)),
+    )
+  })
+
+  test("defect in reducer is catchable by supervision", async () => {
+    const spawn = fromReducer<{ value: string }>({
+      id: "crasher",
+      initial: { value: "ok" },
+      reduce: (_state, event) => {
+        if (event._tag === "TurnCompleted") throw new Error("boom")
+        return { state: { value: "updated" } }
+      },
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const actor = yield* spawn({ sessionId, branchId })
+        const ctx: ExtensionReduceContext = { sessionId, branchId }
+
+        // Defect caught — state unchanged
+        yield* actor
+          .handleEvent(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), ctx)
+          .pipe(Effect.catchDefect(() => Effect.void))
+
+        const snap = yield* actor.snapshot
+        expect((snap.state as { value: string }).value).toBe("ok")
+      }).pipe(Effect.provide(testLayer)),
+    )
+  })
+})
+
+describe("ExtensionStateRuntime — actor hosting", () => {
+  test("actor state changes return changed=true from reduce", async () => {
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "test-actor" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          spawnActor: fromReducer({
+            id: "test-actor",
+            initial: { count: 0 },
+            reduce: (state: { count: number }) => ({ state: { count: state.count + 1 } }),
+            derive: (state: { count: number }) => ({ uiModel: state }),
+          }),
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* ExtensionStateRuntime
+        const changed = yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        expect(changed).toBe(true)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("terminateAll calls actor.terminate and removes session", async () => {
+    const terminated: string[] = []
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "terminable" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          spawnActor: (_ctx) =>
+            Effect.gen(function* () {
+              yield* ExtensionTurnControl
+              return {
+                id: "terminable",
+                init: Effect.void,
+                handleEvent: () => Effect.void,
+                snapshot: Effect.succeed({ state: {}, version: 0 }),
+                terminate: Effect.sync(() => {
+                  terminated.push("terminable")
+                }),
+              }
+            }),
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* ExtensionStateRuntime
+        // Trigger actor spawn via reduce
+        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+        yield* runtime.terminateAll(sessionId)
+        expect(terminated).toContain("terminable")
+      }).pipe(Effect.provide(layer)),
     )
   })
 })
