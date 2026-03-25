@@ -42,7 +42,7 @@ export class ExtensionTurnControl extends ServiceMap.Service<
           content: string
         }) {
           const message = new Message({
-            id: `ext-followup-${Date.now()}` as MessageId,
+            id: Bun.randomUUIDv7() as MessageId,
             sessionId: input.sessionId,
             branchId: input.branchId,
             kind: "regular",
