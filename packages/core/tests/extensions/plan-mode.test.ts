@@ -1,31 +1,13 @@
 import { describe, test, expect } from "bun:test"
-import { AgentDefinition } from "@gent/core/domain/agent"
-import { StreamStarted, TurnCompleted, ToolCallSucceeded } from "@gent/core/domain/event"
-import type { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import type { ToolCallId } from "@gent/core/domain/ids"
 import {
   PlanModeStateMachine,
   extractTodos,
   type PlanModeState,
-  type PlanModeIntent,
 } from "@gent/core/extensions/plan-mode"
+import { createStateMachineHarness } from "@gent/core/test-utils/extension-harness"
 
-const ctx = {
-  sessionId: "test-session" as SessionId,
-  branchId: "test-branch" as BranchId,
-}
-
-const deriveCtx = {
-  agent: new AgentDefinition({ name: "cowork" as never, kind: "primary" }),
-  allTools: [],
-}
-
-const reduce = (state: PlanModeState, event: Parameters<typeof PlanModeStateMachine.reduce>[1]) =>
-  PlanModeStateMachine.reduce(state, event, ctx)
-
-const derive = (state: PlanModeState) => PlanModeStateMachine.derive(state, deriveCtx)
-
-const intent = (state: PlanModeState, i: PlanModeIntent) =>
-  PlanModeStateMachine.handleIntent!(state, i)
+const { reduce, derive, intent, events } = createStateMachineHarness(PlanModeStateMachine)
 
 describe("PlanModeStateMachine", () => {
   describe("initial state", () => {
@@ -103,10 +85,7 @@ describe("PlanModeStateMachine", () => {
           { id: 2, text: "B", status: "pending" },
         ],
       }
-      const next = reduce(
-        state,
-        new StreamStarted({ sessionId: ctx.sessionId, branchId: ctx.branchId }),
-      )
+      const next = reduce(state, events.streamStarted())
       expect(next.todos[0]!.status).toBe("in-progress")
       expect(next.todos[1]!.status).toBe("pending")
     })
@@ -119,14 +98,7 @@ describe("PlanModeStateMachine", () => {
           { id: 2, text: "B", status: "pending" },
         ],
       }
-      const next = reduce(
-        state,
-        new TurnCompleted({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          durationMs: 100,
-        }),
-      )
+      const next = reduce(state, events.turnCompleted({ durationMs: 100 }))
       expect(next.todos[0]!.status).toBe("done")
       expect(next.mode).toBe("executing") // Still have pending items
     })
@@ -136,14 +108,7 @@ describe("PlanModeStateMachine", () => {
         mode: "executing",
         todos: [{ id: 1, text: "A", status: "in-progress" }],
       }
-      const next = reduce(
-        state,
-        new TurnCompleted({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          durationMs: 100,
-        }),
-      )
+      const next = reduce(state, events.turnCompleted({ durationMs: 100 }))
       expect(next.todos[0]!.status).toBe("done")
       expect(next.mode).toBe("normal")
     })
@@ -158,12 +123,7 @@ describe("PlanModeStateMachine", () => {
       }
       const next = reduce(
         state,
-        new ToolCallSucceeded({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          toolCallId: "tc1" as ToolCallId,
-          toolName: "edit",
-        }),
+        events.toolCallSucceeded({ toolCallId: "tc1" as ToolCallId, toolName: "edit" }),
       )
       expect(next.todos[0]!.status).toBe("done")
       expect(next.todos[1]!.status).toBe("in-progress")
@@ -176,26 +136,14 @@ describe("PlanModeStateMachine", () => {
       }
       const next = reduce(
         state,
-        new ToolCallSucceeded({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          toolCallId: "tc1" as ToolCallId,
-          toolName: "read",
-        }),
+        events.toolCallSucceeded({ toolCallId: "tc1" as ToolCallId, toolName: "read" }),
       )
       expect(next.todos[0]!.status).toBe("in-progress")
     })
 
     test("normal mode — events are no-ops", () => {
       const state: PlanModeState = { mode: "normal", todos: [] }
-      const next = reduce(
-        state,
-        new TurnCompleted({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          durationMs: 100,
-        }),
-      )
+      const next = reduce(state, events.turnCompleted({ durationMs: 100 }))
       expect(next).toBe(state) // Reference equality — no change
     })
   })
