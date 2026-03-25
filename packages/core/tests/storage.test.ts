@@ -602,4 +602,73 @@ describe("Storage", () => {
       )
     })
   })
+
+  describe("Message Metadata", () => {
+    test("metadata round-trips through storage", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          yield* storage.createSession(
+            new Session({ id: "meta-s", createdAt: new Date(), updatedAt: new Date() }),
+          )
+          yield* storage.createBranch(
+            new Branch({ id: "meta-b", sessionId: "meta-s", createdAt: new Date() }),
+          )
+
+          const message = new Message({
+            id: "meta-msg-1",
+            sessionId: "meta-s",
+            branchId: "meta-b",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "hello" })],
+            createdAt: new Date(),
+            metadata: {
+              customType: "review-status",
+              extensionId: "review-loop",
+              hidden: true,
+              details: { iteration: 3 },
+            },
+          })
+          yield* storage.createMessage(message)
+
+          const messages = yield* storage.listMessages("meta-b")
+          expect(messages.length).toBe(1)
+          const m = messages[0]!
+          expect(m.metadata).toBeDefined()
+          expect(m.metadata!.customType).toBe("review-status")
+          expect(m.metadata!.extensionId).toBe("review-loop")
+          expect(m.metadata!.hidden).toBe(true)
+          expect((m.metadata!.details as { iteration: number }).iteration).toBe(3)
+        }),
+      )
+    })
+
+    test("messages without metadata have undefined metadata", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          yield* storage.createSession(
+            new Session({ id: "no-meta-s", createdAt: new Date(), updatedAt: new Date() }),
+          )
+          yield* storage.createBranch(
+            new Branch({ id: "no-meta-b", sessionId: "no-meta-s", createdAt: new Date() }),
+          )
+
+          yield* storage.createMessage(
+            new Message({
+              id: "no-meta-msg",
+              sessionId: "no-meta-s",
+              branchId: "no-meta-b",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "plain" })],
+              createdAt: new Date(),
+            }),
+          )
+
+          const messages = yield* storage.listMessages("no-meta-b")
+          expect(messages[0]!.metadata).toBeUndefined()
+        }),
+      )
+    })
+  })
 })

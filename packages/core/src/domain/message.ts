@@ -60,6 +60,20 @@ export type MessagePart = typeof MessagePart.Type
 export const MessageRole = Schema.Literals(["user", "assistant", "system", "tool"])
 export type MessageRole = typeof MessageRole.Type
 
+// Message Metadata — extension-authored envelope for hidden/custom messages
+
+export const MessageMetadata = Schema.Struct({
+  /** Extension-defined type tag for custom message rendering */
+  customType: Schema.optional(Schema.String),
+  /** Which extension authored this message */
+  extensionId: Schema.optional(Schema.String),
+  /** If true, message is excluded from LLM context but visible in transcript */
+  hidden: Schema.optional(Schema.Boolean),
+  /** Arbitrary structured details for the custom message */
+  details: Schema.optional(Schema.Unknown),
+})
+export type MessageMetadata = typeof MessageMetadata.Type
+
 // Message
 
 export class Message extends Schema.Class<Message>("Message")({
@@ -71,6 +85,7 @@ export class Message extends Schema.Class<Message>("Message")({
   parts: Schema.Array(MessagePart),
   createdAt: DateFromNumber,
   turnDurationMs: Schema.optional(Schema.Number),
+  metadata: Schema.optional(MessageMetadata),
 }) {}
 
 // Session

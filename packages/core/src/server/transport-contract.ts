@@ -15,7 +15,7 @@ import type {
   PromptDecision as PromptDecisionType,
 } from "../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { MessagePart } from "../domain/message.js"
+import { MessageMetadata, MessagePart } from "../domain/message.js"
 import { PermissionDecision } from "../domain/permission.js"
 import type {
   PermissionDecision as PermissionDecisionType,
@@ -222,6 +222,7 @@ export const MessageInfo = Schema.Struct({
   parts: Schema.Array(MessagePart),
   createdAt: Schema.Number,
   turnDurationMs: Schema.optional(Schema.Number),
+  metadata: Schema.optional(MessageMetadata),
 })
 export type MessageInfoReadonly = typeof MessageInfo.Type
 

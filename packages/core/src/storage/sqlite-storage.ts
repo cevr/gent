@@ -262,6 +262,7 @@ interface MessageRow {
   parts: string
   created_at: number
   turn_duration_ms: number | null
+  metadata: string | null
 }
 
 interface EventRow {
@@ -355,6 +356,8 @@ const messageFromRow = (row: MessageRow, parts: ReadonlyArray<MessagePart>) =>
     parts,
     createdAt: new Date(row.created_at),
     turnDurationMs: row.turn_duration_ms ?? undefined,
+    metadata:
+      row.metadata !== null ? (safeJsonParse(row.metadata) as Message["metadata"]) : undefined,
   })
 
 const safeJsonParse = (s: string): unknown => {
@@ -483,6 +486,7 @@ const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN kind TEXT`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN metadata TEXT`).pipe(Effect.ignoreCause)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS events (
@@ -791,7 +795,9 @@ const makeStorage = Effect.gen(function* () {
     createMessage: Effect.fn("Storage.createMessage")(
       function* (message) {
         const partsJson = yield* encodeMessageParts([...message.parts])
-        yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null})`
+        const metadataJson =
+          message.metadata !== undefined ? encodeMetadataJson(message.metadata) : null
+        yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
         yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
         return message
       },
@@ -811,7 +817,7 @@ const makeStorage = Effect.gen(function* () {
     getMessage: Effect.fn("Storage.getMessage")(
       function* (id) {
         const rows =
-          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE id = ${id}`
+          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE id = ${id}`
         const row = rows[0]
         if (row === undefined) return undefined
         const parts = yield* decodeMessageParts(row.parts)
@@ -823,7 +829,7 @@ const makeStorage = Effect.gen(function* () {
     listMessages: Effect.fn("Storage.listMessages")(
       function* (branchId) {
         const rows =
-          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ${branchId} ORDER BY created_at ASC, id ASC`
+          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id = ${branchId} ORDER BY created_at ASC, id ASC`
         return yield* Effect.forEach(rows, (row) =>
           Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
         )
@@ -1182,7 +1188,7 @@ const makeStorage = Effect.gen(function* () {
         const result = yield* Effect.forEach(branches, (branch) =>
           Effect.gen(function* () {
             const msgRows =
-              yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms FROM messages WHERE branch_id = ${branch.id} ORDER BY created_at ASC, id ASC`
+              yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id = ${branch.id} ORDER BY created_at ASC, id ASC`
             const messages = yield* Effect.forEach(msgRows, (row) =>
               Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
             )

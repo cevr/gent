@@ -7,7 +7,7 @@
 
 import { ServiceMap, Effect, Layer } from "effect"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
-import { Message, TextPart } from "../../domain/message.js"
+import { Message, type MessageMetadata, TextPart } from "../../domain/message.js"
 import { AgentLoop } from "../agent/agent-loop.js"
 
 export interface ExtensionTurnControlService {
@@ -16,6 +16,7 @@ export interface ExtensionTurnControlService {
     readonly sessionId: SessionId
     readonly branchId: BranchId
     readonly content: string
+    readonly metadata?: MessageMetadata
   }) => Effect.Effect<void>
 
   /** Interject urgently — interrupts the current turn */
@@ -40,6 +41,7 @@ export class ExtensionTurnControl extends ServiceMap.Service<
           sessionId: SessionId
           branchId: BranchId
           content: string
+          metadata?: MessageMetadata
         }) {
           const message = new Message({
             id: Bun.randomUUIDv7() as MessageId,
@@ -49,6 +51,7 @@ export class ExtensionTurnControl extends ServiceMap.Service<
             role: "user",
             parts: [new TextPart({ type: "text", text: input.content })],
             createdAt: new Date(),
+            metadata: input.metadata,
           })
           yield* agentLoop.followUp(message).pipe(Effect.catchEager(() => Effect.void))
         }),

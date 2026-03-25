@@ -76,6 +76,7 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
       images: extractImages(m.parts),
       createdAt: m.createdAt,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      metadata: m.metadata,
     }
   })
 }

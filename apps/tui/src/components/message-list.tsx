@@ -11,6 +11,13 @@ import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { replaceMermaidBlocks } from "../utils/mermaid"
 export type { ToolCall }
 
+export interface MessageMetadataInfo {
+  customType?: string
+  extensionId?: string
+  hidden?: boolean
+  details?: unknown
+}
+
 export interface Message {
   _tag: "message"
   id: string
@@ -22,6 +29,7 @@ export interface Message {
   images: ImageInfo[]
   createdAt: number
   toolCalls: ToolCall[] | undefined
+  metadata?: MessageMetadataInfo
 }
 
 export type SessionItem = Message | SessionEvent
@@ -181,9 +189,13 @@ interface MessageListProps {
 }
 
 export function MessageList(props: MessageListProps) {
+  const visibleItems = createMemo(() =>
+    props.items.filter((item) => item._tag !== "message" || item.metadata?.hidden !== true),
+  )
+
   return (
     <box flexDirection="column">
-      <For each={props.items}>
+      <For each={visibleItems()}>
         {(item, index) =>
           item._tag === "event" ? (
             <SessionEventIndicator event={item} />

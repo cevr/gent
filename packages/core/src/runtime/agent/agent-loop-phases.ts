@@ -158,11 +158,14 @@ const resolveTurnContext = (params: {
     }
 
     // Run context.messages interceptor — extensions can inject hidden context or filter messages
-    const messages = yield* params.extensionRegistry.hooks.runInterceptor(
+    const interceptedMessages = yield* params.extensionRegistry.hooks.runInterceptor(
       "context.messages",
       { messages: rawMessages, agent, sessionId: params.sessionId, branchId: params.branchId },
       (input) => Effect.succeed(input.messages),
     )
+
+    // Filter out hidden messages — visible in transcript but excluded from LLM context
+    const messages = interceptedMessages.filter((m) => m.metadata?.hidden !== true)
 
     // Derive extension projections from state machines
     const allTools = yield* params.extensionRegistry.listTools()
