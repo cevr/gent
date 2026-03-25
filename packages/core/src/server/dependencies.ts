@@ -31,6 +31,7 @@ import {
 import { ConfigService } from "../runtime/config-service.js"
 import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -147,6 +148,8 @@ export const createDependencies = (config: DependenciesConfig) => {
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
   else if (providerMode === "debug-slow") providerLive = DebugSlowProvider
 
+  const extensionEventBusLive = ExtensionEventBus.Live
+
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,
     storageLive,
@@ -162,6 +165,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     fileLockServiceLive,
     providerFactoryLive,
     providerLive,
+    extensionEventBusLive,
   )
 
   const permissionLive = Layer.provide(
