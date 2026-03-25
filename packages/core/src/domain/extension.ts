@@ -2,7 +2,7 @@ import type { Effect, Layer, Schema } from "effect"
 import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
-import type { Message } from "./message"
+import type { Message, MessageMetadata } from "./message"
 import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { PromptSection } from "./prompt.js"
@@ -179,6 +179,51 @@ export interface ExtensionStateMachine<State, Intent = void> {
   readonly handleIntent?: (state: State, intent: Intent) => ExtensionIntentResult<State>
 }
 
+// Extension Actor — OTP-inspired unified state model
+
+/** Typed effect union interpreted by the framework after reduce/handleIntent */
+export type ExtensionEffect =
+  | {
+      readonly _tag: "QueueFollowUp"
+      readonly content: string
+      readonly metadata?: MessageMetadata
+    }
+  | { readonly _tag: "Interject"; readonly content: string }
+  | { readonly _tag: "EmitEvent"; readonly channel: string; readonly payload: unknown }
+  | { readonly _tag: "Persist" }
+
+/** Result of a reduce or handleIntent call — always object form */
+export interface ReduceResult<State> {
+  readonly state: State
+  readonly effects?: ReadonlyArray<ExtensionEffect>
+}
+
+/**
+ * Unified actor interface for stateful extensions.
+ * Lifecycle: spawn → init → handleEvent/handleIntent → terminate
+ *
+ * Supervision: handleEvent wrapped with catchDefect — crashing actor logs and continues.
+ * Init failure → actor skipped with warning.
+ */
+export interface ExtensionActor {
+  readonly id: string
+  readonly init: Effect.Effect<void>
+  readonly handleEvent: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<void>
+  readonly handleIntent?: (intent: unknown) => Effect.Effect<void>
+  readonly snapshot: Effect.Effect<{ state: unknown; version: number }>
+  readonly derive?: (state: unknown, ctx: ExtensionDeriveContext) => ExtensionProjection
+  readonly terminate: Effect.Effect<void>
+}
+
+/** Factory function that spawns an actor instance for a session.
+ *  May require services from context — the runtime provides them at spawn time.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type SpawnActor<R = any> = (ctx: {
+  readonly sessionId: SessionId
+  readonly branchId?: BranchId
+}) => Effect.Effect<ExtensionActor, never, R>
+
 /** Tag-conditional tool injection — declarative replacement for old tools.visible interceptor */
 export interface TagInjection {
   readonly tag: string
@@ -192,9 +237,11 @@ export interface ExtensionSetup {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Layer<unknown, unknown, unknown>
-  /** Server-owned state machine for this extension */
+  /** Server-owned state machine for this extension (legacy — use spawnActor for new extensions) */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly stateMachine?: ExtensionStateMachine<any, any>
+  /** Spawn an actor for this extension — unified lifecycle model */
+  readonly spawnActor?: SpawnActor
   /** Declarative tag-conditional tool injections */
   readonly tagInjections?: ReadonlyArray<TagInjection>
 }
