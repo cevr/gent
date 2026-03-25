@@ -1,8 +1,14 @@
 /**
  * fromMachine — wraps an effect-machine BuiltMachine into an ExtensionActor.
  *
- * Full parity with fromReducer: handleEvent, handleIntent, persistence,
- * atomic version tracking via Ref, projection externalization.
+ * Parity with fromReducer: handleEvent, handleIntent, persistence,
+ * version tracking via Ref, projection externalization.
+ *
+ * Change detection caveat: effect-machine processes events via async mailbox.
+ * Change detection uses before/yieldNow/after — safe when handleEvent calls
+ * are serialized (state-runtime.reduce iterates actors sequentially), but
+ * NOT safe under concurrent handleEvent calls to the same actor. If concurrent
+ * actor access is needed, this must be replaced with a transition receipt model.
  */
 
 import { Effect, Ref, Schema } from "effect"
