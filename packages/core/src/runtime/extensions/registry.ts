@@ -2,7 +2,7 @@ import { ServiceMap, Effect, Layer } from "effect"
 import type { AgentDefinition } from "../../domain/agent.js"
 import type {
   ExtensionKind,
-  ExtensionProjection,
+  TurnProjection,
   LoadedExtension,
   RunContext,
   TagInjection,
@@ -104,7 +104,7 @@ export const compileToolPolicy = (
   agent: AgentDefinition,
   runContext: RunContext,
   tagInjections: ReadonlyArray<TagInjection>,
-  extensionProjections: ReadonlyArray<ExtensionProjection>,
+  extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
   // Build the tool universe — includes base tools plus any tag-injected tools
   const allToolsByName = new Map(allTools.map((t) => [t.name, t]))
@@ -188,7 +188,7 @@ export interface ExtensionRegistryService {
   readonly resolveToolPolicy: (
     agent: AgentDefinition,
     runContext: RunContext,
-    extensionProjections: ReadonlyArray<ExtensionProjection>,
+    extensionProjections: ReadonlyArray<TurnProjection>,
   ) => Effect.Effect<CompiledToolPolicy>
 
   // Agent resolution

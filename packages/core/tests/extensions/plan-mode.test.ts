@@ -96,7 +96,6 @@ describe("PlanMode actor", () => {
           expect(pm).toBeDefined()
           expect(pm!.projection.toolPolicy).toBeUndefined()
           expect(pm!.projection.promptSections).toBeUndefined()
-          expect(pm!.projection.uiModel).toBeDefined()
         }).pipe(Effect.provide(makeLayer())),
       )
     })

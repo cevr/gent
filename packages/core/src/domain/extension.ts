@@ -147,10 +147,14 @@ export interface ToolPolicyFragment {
   readonly overrideSet?: ReadonlyArray<string>
 }
 
-/** What derive() produces — projections from extension state */
-export interface ExtensionProjection {
+/** Turn-time projection — needs agent/tool context, used during prompt assembly */
+export interface TurnProjection {
   readonly toolPolicy?: ToolPolicyFragment
   readonly promptSections?: ReadonlyArray<PromptSection>
+}
+
+/** What derive() produces — projections from extension state */
+export interface ExtensionProjection extends TurnProjection {
   /** Serializable UI model snapshot for client rendering */
   readonly uiModel?: unknown
 }
@@ -193,9 +197,18 @@ export interface ExtensionActor {
   readonly terminate: Effect.Effect<void>
 }
 
-/** Projection config — pure derive function + optional schemas, owned by the framework */
+/**
+ * Projection config — framework-owned, separated by boundary.
+ *
+ * Two boundaries, two derive functions:
+ * - deriveTurn: needs {agent, allTools}, produces toolPolicy + promptSections
+ * - deriveUi: state-only, produces uiModel for client rendering
+ */
 export interface ExtensionProjectionConfig {
-  readonly derive: (state: unknown, ctx: ExtensionDeriveContext) => ExtensionProjection
+  /** Turn-time projection — called during prompt assembly with full context */
+  readonly deriveTurn?: (state: unknown, ctx: ExtensionDeriveContext) => TurnProjection
+  /** UI projection — state-only, called for UI snapshots without turn context */
+  readonly deriveUi?: (state: unknown) => unknown
   readonly uiModelSchema?: Schema.Schema<unknown>
 }
 

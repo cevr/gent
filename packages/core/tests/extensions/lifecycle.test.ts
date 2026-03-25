@@ -176,6 +176,7 @@ describe("Actor lifecycle", () => {
   test("PlanModeExtension harness exposes projection", () => {
     const harness = createExtensionHarness(PlanModeExtension)
     expect(harness.projection).toBeDefined()
-    expect(harness.projection!.derive).toBeInstanceOf(Function)
+    expect(harness.projection!.deriveTurn).toBeInstanceOf(Function)
+    expect(harness.projection!.deriveUi).toBeInstanceOf(Function)
   })
 })

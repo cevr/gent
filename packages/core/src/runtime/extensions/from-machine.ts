@@ -37,9 +37,11 @@ export interface FromMachineConfig<
   readonly mapIntent?: (intent: Intent) => Event
   /** Intent schema for validation */
   readonly intentSchema?: Schema.Schema<Intent>
-  /** Derive projections from machine state */
+  /** Full derive — turn + UI projection from one function */
   readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
-  /** Schema for the uiModel returned by derive() */
+  /** Context-free UI model derivation — preferred over derive for UI snapshots */
+  readonly deriveUi?: (state: State) => unknown
+  /** Schema for the uiModel returned by derive/deriveUi */
   readonly uiModelSchema?: Schema.Schema<unknown>
   /** Schema for serializing/deserializing state to/from JSON */
   readonly stateSchema?: Schema.Schema<State>
@@ -239,15 +241,29 @@ export const fromMachine = <
       return actor
     })
 
-  // Build projection config from derive function
+  // Build projection config — split into turn-time and UI boundaries
   const projection: ExtensionProjectionConfig | undefined = (() => {
     const deriveFn = config.derive
-    if (deriveFn === undefined) return undefined
-    return {
-      derive: (state: unknown, deriveCtx: ExtensionDeriveContext) =>
-        deriveFn(state as State, deriveCtx),
-      uiModelSchema: config.uiModelSchema,
+    const deriveUiFn = config.deriveUi
+    if (deriveFn === undefined && deriveUiFn === undefined) return undefined
+
+    let deriveTurn: ExtensionProjectionConfig["deriveTurn"]
+    if (deriveFn !== undefined) {
+      deriveTurn = (state: unknown, deriveCtx: ExtensionDeriveContext) => {
+        const { uiModel: _, ...turn } = deriveFn(state as State, deriveCtx)
+        return turn
+      }
     }
+
+    let deriveUi: ExtensionProjectionConfig["deriveUi"]
+    if (deriveUiFn !== undefined) {
+      deriveUi = (state: unknown) => deriveUiFn(state as State)
+    } else if (deriveFn !== undefined) {
+      deriveUi = (state: unknown) =>
+        deriveFn(state as State, { agent: undefined as never, allTools: [] }).uiModel
+    }
+
+    return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }
   })()
 
   return { spawnActor, projection }

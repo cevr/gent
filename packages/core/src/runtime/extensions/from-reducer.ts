@@ -33,10 +33,13 @@ export interface FromReducerConfig<State, Intent = void> {
     event: AgentEvent,
     ctx: ExtensionReduceContext,
   ) => ReduceResult<State>
+  /** Full derive — used when extension needs both turn + UI projection from one function */
   readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
+  /** Context-free UI model derivation — preferred over derive for UI snapshots */
+  readonly deriveUi?: (state: State) => unknown
   readonly handleIntent?: (state: State, intent: Intent) => ReduceResult<State>
   readonly intentSchema?: Schema.Schema<Intent>
-  /** Schema for the uiModel returned by derive() — used for transport encoding/validation */
+  /** Schema for the uiModel returned by derive/deriveUi — used for transport encoding/validation */
   readonly uiModelSchema?: Schema.Schema<unknown>
   /** Schema for serializing/deserializing state to/from JSON (required for persistence) */
   readonly stateSchema?: Schema.Schema<State>
@@ -230,15 +233,30 @@ export const fromReducer = <State, Intent = void>(
       return actor
     })
 
-  // Build projection config from derive function (externalized from actor)
+  // Build projection config — split into turn-time and UI boundaries
   const projection: ExtensionProjectionConfig | undefined = (() => {
     const deriveFn = config.derive
-    if (deriveFn === undefined) return undefined
-    return {
-      derive: (state: unknown, deriveCtx: ExtensionDeriveContext) =>
-        deriveFn(state as State, deriveCtx),
-      uiModelSchema: config.uiModelSchema,
+    const deriveUiFn = config.deriveUi
+    if (deriveFn === undefined && deriveUiFn === undefined) return undefined
+
+    let deriveTurn: ExtensionProjectionConfig["deriveTurn"]
+    if (deriveFn !== undefined) {
+      deriveTurn = (state: unknown, deriveCtx: ExtensionDeriveContext) => {
+        const { uiModel: _, ...turn } = deriveFn(state as State, deriveCtx)
+        return turn
+      }
     }
+
+    let deriveUi: ExtensionProjectionConfig["deriveUi"]
+    if (deriveUiFn !== undefined) {
+      deriveUi = (state: unknown) => deriveUiFn(state as State)
+    } else if (deriveFn !== undefined) {
+      // Fallback: extract uiModel from full derive with empty context
+      deriveUi = (state: unknown) =>
+        deriveFn(state as State, { agent: undefined as never, allTools: [] }).uiModel
+    }
+
+    return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }
   })()
 
   return { spawnActor, projection }

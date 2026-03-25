@@ -4,11 +4,11 @@ import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/ev
 import type {
   ExtensionActor,
   ExtensionDeriveContext,
-  ExtensionProjection,
   ExtensionProjectionConfig,
   ExtensionReduceContext,
   LoadedExtension,
   SpawnActor,
+  TurnProjection,
 } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import { ExtensionEventBus } from "./event-bus.js"
@@ -38,11 +38,11 @@ export interface ExtensionStateRuntimeService {
   /** Feed an event to all registered actors for a session. Returns true if any changed. */
   readonly reduce: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
 
-  /** Get current projections from all extension actors */
+  /** Get turn-time projections (toolPolicy + promptSections) from all extension actors */
   readonly deriveAll: (
     sessionId: SessionId,
     ctx: ExtensionDeriveContext,
-  ) => Effect.Effect<ReadonlyArray<{ extensionId: string; projection: ExtensionProjection }>>
+  ) => Effect.Effect<ReadonlyArray<{ extensionId: string; projection: TurnProjection }>>
 
   /** Handle a typed intent from the client (epoch-validated, schema-validated) */
   readonly handleIntent: (
@@ -169,16 +169,16 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           deriveAll: (sessionId, ctx) =>
             Effect.gen(function* () {
               const entries = yield* getOrSpawnActors(sessionId)
-              const results: Array<{ extensionId: string; projection: ExtensionProjection }> = []
+              const results: Array<{ extensionId: string; projection: TurnProjection }> = []
               for (const { actor, projection } of entries) {
-                if (projection === undefined) continue
+                if (projection?.deriveTurn === undefined) continue
                 const { state } = yield* actor.getState.pipe(
                   Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
                 )
                 if (state !== undefined) {
                   results.push({
                     extensionId: actor.id,
-                    projection: projection.derive(state, ctx),
+                    projection: projection.deriveTurn(state, ctx),
                   })
                 }
               }
@@ -218,18 +218,16 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
                 )
                 if (state === undefined) continue
-                const derived = projection.derive(state, {
-                  agent: undefined as never,
-                  allTools: [],
-                })
-                if (derived.uiModel !== undefined) {
+                if (projection.deriveUi === undefined) continue
+                const uiModel = projection.deriveUi(state)
+                if (uiModel !== undefined) {
                   snapshots.push(
                     new ExtensionUiSnapshotClass({
                       sessionId,
                       branchId,
                       extensionId: actor.id,
                       epoch: version,
-                      model: derived.uiModel,
+                      model: uiModel,
                     }),
                   )
                 }

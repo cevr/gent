@@ -218,11 +218,8 @@ describe("fromMachine", () => {
     })
 
     expect(projection).toBeDefined()
-    const result = projection!.derive(
-      { _tag: "Counting", count: 5 },
-      { agent: undefined as never, allTools: [] },
-    )
-    expect(result.uiModel).toEqual({ tag: "Counting" })
+    const ui = projection!.deriveUi!({ _tag: "Counting", count: 5 })
+    expect(ui).toEqual({ tag: "Counting" })
   })
 
   test("no projection when derive not provided", () => {
