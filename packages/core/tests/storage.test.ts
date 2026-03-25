@@ -4,6 +4,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import { TodoItem } from "@gent/core/domain/todo"
 import { AgentSwitched } from "@gent/core/domain/event"
+import { messageToInfo } from "@gent/core/server/session-utils"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
   Effect.runPromise(Effect.provide(effect, Storage.Test()))
@@ -643,6 +644,37 @@ describe("Storage", () => {
       )
     })
 
+    test("createMessageIfAbsent preserves metadata", async () => {
+      await run(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          yield* storage.createSession(
+            new Session({ id: "upsert-s", createdAt: new Date(), updatedAt: new Date() }),
+          )
+          yield* storage.createBranch(
+            new Branch({ id: "upsert-b", sessionId: "upsert-s", createdAt: new Date() }),
+          )
+
+          const message = new Message({
+            id: "upsert-msg",
+            sessionId: "upsert-s",
+            branchId: "upsert-b",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "follow-up" })],
+            createdAt: new Date(),
+            metadata: { hidden: true, extensionId: "review-loop" },
+          })
+          yield* storage.createMessageIfAbsent(message)
+
+          const messages = yield* storage.listMessages("upsert-b")
+          expect(messages.length).toBe(1)
+          expect(messages[0]!.metadata).toBeDefined()
+          expect(messages[0]!.metadata!.hidden).toBe(true)
+          expect(messages[0]!.metadata!.extensionId).toBe("review-loop")
+        }),
+      )
+    })
+
     test("messages without metadata have undefined metadata", async () => {
       await run(
         Effect.gen(function* () {
@@ -669,6 +701,37 @@ describe("Storage", () => {
           expect(messages[0]!.metadata).toBeUndefined()
         }),
       )
+    })
+
+    test("messageToInfo preserves metadata for transport", () => {
+      const message = new Message({
+        id: "info-msg",
+        sessionId: "info-s",
+        branchId: "info-b",
+        role: "assistant",
+        parts: [new TextPart({ type: "text", text: "response" })],
+        createdAt: new Date(),
+        metadata: { customType: "review-status", hidden: true },
+      })
+
+      const info = messageToInfo(message)
+      expect(info.metadata).toBeDefined()
+      expect(info.metadata!.customType).toBe("review-status")
+      expect(info.metadata!.hidden).toBe(true)
+    })
+
+    test("messageToInfo omits metadata when absent", () => {
+      const message = new Message({
+        id: "plain-msg",
+        sessionId: "plain-s",
+        branchId: "plain-b",
+        role: "user",
+        parts: [new TextPart({ type: "text", text: "hi" })],
+        createdAt: new Date(),
+      })
+
+      const info = messageToInfo(message)
+      expect(info.metadata).toBeUndefined()
     })
   })
 })
