@@ -12,6 +12,7 @@ import { CommandProvider } from "../src/command"
 import { EnvProvider } from "../src/env/context"
 import { WorkspaceProvider } from "../src/workspace"
 import { ClientProvider, type GentClient } from "../src/client"
+import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import type {
   MessageInfoReadonly,
@@ -195,7 +196,7 @@ export const renderWithProviders = async (
                       cwd={options?.cwd ?? defaultWorkspaceCwd}
                       services={services}
                     >
-                      {node()}
+                      <ExtensionUIProvider>{node()}</ExtensionUIProvider>
                     </WorkspaceProvider>
                   </ClientProvider>
                 </RouterProvider>
