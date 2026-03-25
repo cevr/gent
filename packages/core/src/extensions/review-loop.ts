@@ -137,23 +137,30 @@ const reduce = (
 ): ReduceResult<ReviewLoopState> => {
   if (state._tag !== "Reviewing") return { state }
 
-  // On TurnCompleted: advance iteration or finish
-  if (event._tag === "TurnCompleted") {
+  // On code_review tool success: record finding, then advance or complete
+  if (event._tag === "ToolCallSucceeded" && event.toolName === REVIEW_SIGNAL_TOOL) {
+    const summary = event.summary ?? event.output ?? `Review iteration ${state.iteration}`
+    const updatedFindings = [...state.findings, { iteration: state.iteration, summary }]
+
     if (state.iteration >= state.maxIterations) {
       // Review complete
       return {
         state: INITIAL_STATE,
         effects: [
-          { _tag: "EmitEvent", channel: "review:completed", payload: { findings: state.findings } },
+          {
+            _tag: "EmitEvent",
+            channel: "review:completed",
+            payload: { findings: updatedFindings },
+          },
           { _tag: "Persist" },
         ],
       }
     }
 
-    // Queue next iteration
+    // Advance to next iteration
     const nextIteration = state.iteration + 1
     return {
-      state: { ...state, iteration: nextIteration },
+      state: { ...state, iteration: nextIteration, findings: updatedFindings },
       effects: [
         {
           _tag: "QueueFollowUp",
@@ -162,22 +169,6 @@ const reduce = (
         },
         { _tag: "Persist" },
       ],
-    }
-  }
-
-  // On ToolCallSucceeded with the signal tool: record finding
-  if (event._tag === "ToolCallSucceeded" && event.toolName === REVIEW_SIGNAL_TOOL) {
-    return {
-      state: {
-        ...state,
-        findings: [
-          ...state.findings,
-          {
-            iteration: state.iteration,
-            summary: `Review completed for iteration ${state.iteration}`,
-          },
-        ],
-      },
     }
   }
 
@@ -193,17 +184,26 @@ const handleIntent = (
   switch (intent._tag) {
     case "StartReview": {
       if (state._tag === "Reviewing") return { state }
+      const maxIterations = intent.maxIterations ?? 3
       const newState: ReviewLoopState = {
         _tag: "Reviewing",
         iteration: 1,
-        maxIterations: intent.maxIterations ?? 3,
+        maxIterations,
         focus: intent.focus,
         paths: intent.paths,
         findings: [],
       }
+      const focusLabel = intent.focus !== undefined ? ` focusing on ${intent.focus}` : ""
       return {
         state: newState,
-        effects: [{ _tag: "Persist" }],
+        effects: [
+          {
+            _tag: "QueueFollowUp",
+            content: `Begin code review — iteration 1/${maxIterations}${focusLabel}. Use the \`code_review\` tool to submit findings.`,
+            metadata: { extensionId: "review-loop", hidden: true },
+          },
+          { _tag: "Persist" },
+        ],
       }
     }
     case "CancelReview": {

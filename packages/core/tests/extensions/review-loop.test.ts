@@ -30,7 +30,7 @@ describe("ReviewLoop pure reducer", () => {
       expect(ReviewLoopActorConfig.initial._tag).toBe("Inactive")
     })
 
-    test("StartReview intent → Reviewing with defaults", () => {
+    test("StartReview intent → Reviewing with QueueFollowUp kickoff", () => {
       const result = intent!({ _tag: "Inactive" }, { _tag: "StartReview" })
       expect(result.state._tag).toBe("Reviewing")
       if (result.state._tag === "Reviewing") {
@@ -39,6 +39,7 @@ describe("ReviewLoop pure reducer", () => {
         expect(result.state.findings).toEqual([])
       }
       expect(result.effects).toBeDefined()
+      expect(result.effects!.some((e) => e._tag === "QueueFollowUp")).toBe(true)
       expect(result.effects!.some((e) => e._tag === "Persist")).toBe(true)
     })
 
@@ -52,6 +53,12 @@ describe("ReviewLoop pure reducer", () => {
         expect(result.state.paths).toEqual(["src/auth/"])
         expect(result.state.maxIterations).toBe(5)
       }
+      // Kickoff follow-up includes focus
+      const followUp = result.effects!.find((e) => e._tag === "QueueFollowUp")
+      expect(followUp).toBeDefined()
+      if (followUp !== undefined && followUp._tag === "QueueFollowUp") {
+        expect(followUp.content).toContain("auth module")
+      }
     })
 
     test("StartReview when already reviewing → no-op", () => {
@@ -62,7 +69,7 @@ describe("ReviewLoop pure reducer", () => {
         findings: [],
       }
       const result = intent!(state, { _tag: "StartReview" })
-      expect(result.state).toBe(state) // Reference equality
+      expect(result.state).toBe(state)
     })
 
     test("CancelReview → Inactive with Persist", () => {
@@ -74,7 +81,6 @@ describe("ReviewLoop pure reducer", () => {
       }
       const result = intent!(state, { _tag: "CancelReview" })
       expect(result.state._tag).toBe("Inactive")
-      expect(result.effects).toBeDefined()
       expect(result.effects!.some((e) => e._tag === "Persist")).toBe(true)
     })
 
@@ -85,54 +91,11 @@ describe("ReviewLoop pure reducer", () => {
     })
   })
 
-  describe("reduce — iteration advancement", () => {
-    test("TurnCompleted in Reviewing advances iteration with QueueFollowUp", () => {
+  describe("reduce — signal-driven advancement", () => {
+    test("code_review tool success advances iteration with QueueFollowUp", () => {
       const state: ReviewLoopState = {
         _tag: "Reviewing",
         iteration: 1,
-        maxIterations: 3,
-        findings: [],
-      }
-      const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
-      if (result.state._tag === "Reviewing") {
-        expect(result.state.iteration).toBe(2)
-      }
-      expect(result.effects).toBeDefined()
-      const followUp = result.effects!.find((e) => e._tag === "QueueFollowUp")
-      expect(followUp).toBeDefined()
-      const persist = result.effects!.find((e) => e._tag === "Persist")
-      expect(persist).toBeDefined()
-    })
-
-    test("TurnCompleted at max iteration → Inactive with EmitEvent", () => {
-      const state: ReviewLoopState = {
-        _tag: "Reviewing",
-        iteration: 3,
-        maxIterations: 3,
-        findings: [{ iteration: 1, summary: "issue found" }],
-      }
-      const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
-      expect(result.state._tag).toBe("Inactive")
-      expect(result.effects).toBeDefined()
-      const emitEvent = result.effects!.find((e) => e._tag === "EmitEvent")
-      expect(emitEvent).toBeDefined()
-      if (emitEvent !== undefined && emitEvent._tag === "EmitEvent") {
-        expect(emitEvent.channel).toBe("review:completed")
-      }
-    })
-
-    test("TurnCompleted when Inactive → no-op", () => {
-      const state: ReviewLoopState = { _tag: "Inactive" }
-      const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
-      expect(result.state).toBe(state)
-    })
-  })
-
-  describe("reduce — finding recording", () => {
-    test("code_review tool success records finding", () => {
-      const state: ReviewLoopState = {
-        _tag: "Reviewing",
-        iteration: 2,
         maxIterations: 3,
         findings: [],
       }
@@ -141,15 +104,60 @@ describe("ReviewLoop pure reducer", () => {
         events.toolCallSucceeded({
           toolCallId: "tc-1" as ToolCallId,
           toolName: "code_review",
+          summary: "Found 3 issues in auth module",
         }),
       )
       if (result.state._tag === "Reviewing") {
+        expect(result.state.iteration).toBe(2)
         expect(result.state.findings.length).toBe(1)
-        expect(result.state.findings[0]!.iteration).toBe(2)
+        expect(result.state.findings[0]!.summary).toBe("Found 3 issues in auth module")
+      }
+      expect(result.effects).toBeDefined()
+      expect(result.effects!.some((e) => e._tag === "QueueFollowUp")).toBe(true)
+      expect(result.effects!.some((e) => e._tag === "Persist")).toBe(true)
+    })
+
+    test("code_review at max iteration → Inactive with EmitEvent", () => {
+      const state: ReviewLoopState = {
+        _tag: "Reviewing",
+        iteration: 3,
+        maxIterations: 3,
+        findings: [{ iteration: 1, summary: "issue found" }],
+      }
+      const result = reduce(
+        state,
+        events.toolCallSucceeded({
+          toolCallId: "tc-1" as ToolCallId,
+          toolName: "code_review",
+          summary: "Final review clean",
+        }),
+      )
+      expect(result.state._tag).toBe("Inactive")
+      expect(result.effects).toBeDefined()
+      const emitEvent = result.effects!.find((e) => e._tag === "EmitEvent")
+      expect(emitEvent).toBeDefined()
+      if (emitEvent !== undefined && emitEvent._tag === "EmitEvent") {
+        expect(emitEvent.channel).toBe("review:completed")
+        const payload = emitEvent.payload as { findings: readonly { summary: string }[] }
+        // Includes both previous and final finding
+        expect(payload.findings.length).toBe(2)
+        expect(payload.findings[1]!.summary).toBe("Final review clean")
       }
     })
 
-    test("non-signal tool success does not record finding", () => {
+    test("TurnCompleted does not advance — only tool signal does", () => {
+      const state: ReviewLoopState = {
+        _tag: "Reviewing",
+        iteration: 1,
+        maxIterations: 3,
+        findings: [],
+      }
+      const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
+      expect(result.state).toBe(state) // No change
+      expect(result.effects).toBeUndefined()
+    })
+
+    test("non-signal tool success does not advance", () => {
       const state: ReviewLoopState = {
         _tag: "Reviewing",
         iteration: 1,
@@ -163,9 +171,39 @@ describe("ReviewLoop pure reducer", () => {
           toolName: "read",
         }),
       )
-      if (result.state._tag === "Reviewing") {
-        expect(result.state.findings.length).toBe(0)
+      expect(result.state).toBe(state)
+    })
+
+    test("uses event.summary for finding, falls back to event.output", () => {
+      const state: ReviewLoopState = {
+        _tag: "Reviewing",
+        iteration: 1,
+        maxIterations: 3,
+        findings: [],
       }
+      // With output but no summary
+      const result = reduce(
+        state,
+        events.toolCallSucceeded({
+          toolCallId: "tc-1" as ToolCallId,
+          toolName: "code_review",
+          output: "Detailed review output here",
+        }),
+      )
+      if (result.state._tag === "Reviewing") {
+        expect(result.state.findings[0]!.summary).toBe("Detailed review output here")
+      }
+    })
+
+    test("Inactive ignores all events", () => {
+      const state: ReviewLoopState = { _tag: "Inactive" }
+      const r1 = reduce(state, events.turnCompleted({ durationMs: 100 }))
+      expect(r1.state).toBe(state)
+      const r2 = reduce(
+        state,
+        events.toolCallSucceeded({ toolCallId: "tc" as ToolCallId, toolName: "code_review" }),
+      )
+      expect(r2.state).toBe(state)
     })
   })
 
@@ -249,46 +287,73 @@ const sendIntent = (runtime: ExtensionStateRuntime, intent: unknown) =>
     yield* runtime.handleIntent(sessionId, "review-loop", intent, epoch)
   })
 
+const reviewSignal = (summary?: string) =>
+  new ToolCallSucceeded({
+    sessionId,
+    branchId,
+    toolCallId: "tc-review" as ToolCallId,
+    toolName: "code_review",
+    summary,
+  })
+
 describe("ReviewLoop runtime integration", () => {
-  test("full lifecycle: start → iterate → complete", async () => {
+  test("full lifecycle: start → signal → iterate → signal → complete", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        // Spawn
         yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
-        // Start review
+        // Start review (queues first follow-up)
         yield* sendIntent(runtime, { _tag: "StartReview", focus: "test", maxIterations: 2 })
 
         const snap1 = yield* getSnapshot(runtime)
         const ui1 = snap1!.model as ReviewLoopUiModel
         expect(ui1.active).toBe(true)
         expect(ui1.iteration).toBe(1)
-        expect(ui1.maxIterations).toBe(2)
 
-        // Simulate first iteration complete
-        yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 100 }), {
-          sessionId,
-          branchId,
-        })
+        // First review signal — advances to iteration 2
+        yield* runtime.reduce(reviewSignal("Found auth issue"), { sessionId, branchId })
 
         const snap2 = yield* getSnapshot(runtime)
         const ui2 = snap2!.model as ReviewLoopUiModel
         expect(ui2.active).toBe(true)
         expect(ui2.iteration).toBe(2)
+        expect(ui2.findingsCount).toBe(1)
 
-        // Second iteration (last) — should complete
-        yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 100 }), {
-          sessionId,
-          branchId,
-        })
+        // Second review signal (at max) — completes
+        yield* runtime.reduce(reviewSignal("All clear"), { sessionId, branchId })
 
         const snap3 = yield* getSnapshot(runtime)
         const ui3 = snap3!.model as ReviewLoopUiModel
         expect(ui3.active).toBe(false)
+      }).pipe(Effect.provide(makeLayer())),
+    )
+  })
+
+  test("TurnCompleted does not advance the loop in runtime", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* ExtensionStateRuntime
+        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+
+        yield* sendIntent(runtime, { _tag: "StartReview", maxIterations: 2 })
+
+        // TurnCompleted should not change state
+        const changed = yield* runtime.reduce(
+          new TurnCompleted({ sessionId, branchId, durationMs: 100 }),
+          { sessionId, branchId },
+        )
+        expect(changed).toBe(false)
+
+        const snap = yield* getSnapshot(runtime)
+        const ui = snap!.model as ReviewLoopUiModel
+        expect(ui.iteration).toBe(1) // Unchanged
       }).pipe(Effect.provide(makeLayer())),
     )
   })
@@ -303,25 +368,19 @@ describe("ReviewLoop runtime integration", () => {
         })
 
         yield* sendIntent(runtime, { _tag: "StartReview" })
-
-        const snap1 = yield* getSnapshot(runtime)
-        expect((snap1!.model as ReviewLoopUiModel).active).toBe(true)
+        expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: true })
 
         yield* sendIntent(runtime, { _tag: "CancelReview" })
-
-        const snap2 = yield* getSnapshot(runtime)
-        expect((snap2!.model as ReviewLoopUiModel).active).toBe(false)
+        expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
       }).pipe(Effect.provide(makeLayer())),
     )
   })
 
   test("persistence: state survives actor hydration", async () => {
-    const layer = makeLayer()
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
 
-        // Pre-seed persisted state
         const reviewState: ReviewLoopState = {
           _tag: "Reviewing",
           iteration: 2,
@@ -335,7 +394,6 @@ describe("ReviewLoop runtime integration", () => {
           version: 3,
         })
 
-        // Create runtime — actor init should hydrate
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -349,11 +407,11 @@ describe("ReviewLoop runtime integration", () => {
         expect(ui.active).toBe(true)
         expect(ui.iteration).toBe(2)
         expect(ui.findingsCount).toBe(1)
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(makeLayer())),
     )
   })
 
-  test("tool signal records finding in runtime", async () => {
+  test("tool signal records real summary from event", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
@@ -362,22 +420,21 @@ describe("ReviewLoop runtime integration", () => {
           branchId,
         })
 
-        yield* sendIntent(runtime, { _tag: "StartReview" })
+        yield* sendIntent(runtime, { _tag: "StartReview", maxIterations: 3 })
 
-        // Simulate code_review tool success
-        yield* runtime.reduce(
-          new ToolCallSucceeded({
-            sessionId,
-            branchId,
-            toolCallId: "tc-review" as ToolCallId,
-            toolName: "code_review",
-          }),
-          { sessionId, branchId },
-        )
+        yield* runtime.reduce(reviewSignal("Missing error handling in src/api.ts"), {
+          sessionId,
+          branchId,
+        })
 
-        const snap = yield* getSnapshot(runtime)
-        const ui = snap!.model as ReviewLoopUiModel
-        expect(ui.findingsCount).toBe(1)
+        // Verify the real summary is captured (via derive prompt section)
+        const projections = yield* runtime.deriveAll(sessionId, {
+          agent: undefined as never,
+          allTools: [],
+        })
+        const pm = projections.find((p) => p.extensionId === "review-loop")
+        const section = pm!.projection.promptSections![0]!
+        expect(section.content).toContain("Missing error handling in src/api.ts")
       }).pipe(Effect.provide(makeLayer())),
     )
   })
