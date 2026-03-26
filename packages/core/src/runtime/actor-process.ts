@@ -157,8 +157,8 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new ActorProcessError({ message, cause })
 
 const makeCommandId = () => Bun.randomUUIDv7() as ActorCommandId
-const userMessageIdForCommand = (commandId: ActorCommandId) => commandId as unknown as MessageId
-const toolCallIdForCommand = (commandId: ActorCommandId) => commandId as unknown as ToolCallId
+const userMessageIdForCommand = (commandId: ActorCommandId) => commandId as string as MessageId
+const toolCallIdForCommand = (commandId: ActorCommandId) => commandId as string as ToolCallId
 const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
   `${commandId}:assistant` as MessageId
 const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>

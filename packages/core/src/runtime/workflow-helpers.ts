@@ -12,23 +12,31 @@ import type { LoopVerdict } from "../runtime/loop.js"
 
 // ── Shell Command Runner ──
 
+class CommandError extends Schema.TaggedErrorClass<CommandError>()("CommandError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
+
 /** Run a shell command, returning stdout. Returns empty string on failure. */
 export const runCommand = (cmd: string[]): Effect.Effect<string> =>
-  Effect.tryPromise(async () => {
-    const proc = Bun.spawn(cmd, {
-      cwd: process.cwd(),
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
-    if (exitCode !== 0) {
-      throw new Error(stderr || `Command failed: ${cmd.join(" ")}`)
-    }
-    return stdout
+  Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(cmd, {
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      if (exitCode !== 0) {
+        throw new CommandError({ message: stderr || `Command failed: ${cmd.join(" ")}` })
+      }
+      return stdout
+    },
+    catch: (e) => new CommandError({ message: String(e), cause: e }),
   }).pipe(Effect.orElseSucceed(() => ""))
 
 // ── Adversarial Pair Runner ──

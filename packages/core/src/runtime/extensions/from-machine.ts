@@ -171,7 +171,6 @@ export const fromMachine = <
         // Hydration happens before spawn via Machine.spawn({ hydrate })
         init: Effect.void,
 
-        // @effect-diagnostics *:off
         handleEvent: (event: AgentEvent, reduceCtx) =>
           Effect.gen(function* () {
             const mapped = config.mapEvent !== undefined ? config.mapEvent(event) : undefined
