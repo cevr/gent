@@ -101,8 +101,14 @@ const makeProviderAuth = (
           message: `Provider "${provider}" does not support authorize`,
         })
       }
+      const authorizationId = Bun.randomUUIDv7()
       const extResult = yield* extProvider.auth
-        .authorize(sessionId, method, makePersist(provider))
+        .authorize({
+          sessionId,
+          methodIndex: method,
+          authorizationId,
+          persist: makePersist(provider),
+        })
         .pipe(
           Effect.catchDefect((e) =>
             Effect.fail(
@@ -114,7 +120,6 @@ const makeProviderAuth = (
           ),
         )
       if (extResult === undefined) return undefined
-      const authorizationId = Bun.randomUUIDv7()
       return new AuthAuthorization({
         authorizationId,
         url: extResult.url,
@@ -136,7 +141,13 @@ const makeProviderAuth = (
         return
       }
       yield* extProvider.auth
-        .callback(sessionId, method, authorizationId, makePersist(provider), code)
+        .callback({
+          sessionId,
+          methodIndex: method,
+          authorizationId,
+          persist: makePersist(provider),
+          code,
+        })
         .pipe(
           Effect.catchDefect((e) =>
             Effect.fail(

@@ -136,16 +136,16 @@ export const AnthropicExtension = defineExtension({
             new AuthMethod({ type: "oauth", label: "Claude Code" }),
             new AuthMethod({ type: "api", label: "Manually enter API key" }),
           ],
-          authorize: (_, methodIndex, persist) =>
+          authorize: (ctx) =>
             Effect.gen(function* () {
-              if (methodIndex !== 0) return undefined
+              if (ctx.methodIndex !== 0) return undefined
               let creds = yield* readClaudeCodeCredentials()
               if (creds.expiresAt < Date.now() + 60_000) {
                 yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
                 creds = yield* readClaudeCodeCredentials()
               }
               // Persist keychain creds to AuthStore
-              yield* persist({
+              yield* ctx.persist({
                 type: "oauth",
                 access: creds.accessToken,
                 refresh: creds.refreshToken,

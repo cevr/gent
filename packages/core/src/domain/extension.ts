@@ -284,20 +284,23 @@ export type PersistAuth = (
       },
 ) => Effect.Effect<void>
 
+export interface ProviderAuthorizeContext {
+  readonly sessionId: string
+  readonly methodIndex: number
+  readonly authorizationId: string
+  readonly persist: PersistAuth
+}
+
+export interface ProviderCallbackContext extends ProviderAuthorizeContext {
+  readonly code?: string
+}
+
 export interface ProviderAuthContribution {
   readonly methods: ReadonlyArray<AuthMethod>
   readonly authorize?: (
-    sessionId: string,
-    methodIndex: number,
-    persist: PersistAuth,
+    ctx: ProviderAuthorizeContext,
   ) => Effect.Effect<ProviderAuthorizationResult | undefined>
-  readonly callback?: (
-    sessionId: string,
-    methodIndex: number,
-    authorizationId: string,
-    persist: PersistAuth,
-    code?: string,
-  ) => Effect.Effect<void>
+  readonly callback?: (ctx: ProviderCallbackContext) => Effect.Effect<void>
 }
 
 export interface ProviderAuthorizationResult {

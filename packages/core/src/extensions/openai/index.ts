@@ -131,14 +131,12 @@ export const OpenAIExtension = defineExtension({
             new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
             new AuthMethod({ type: "api", label: "Manually enter API key" }),
           ],
-          authorize: (sessionId, methodIndex) =>
+          authorize: (ctx) =>
             Effect.tryPromise({
               try: async () => {
-                if (methodIndex !== 0) return undefined
+                if (ctx.methodIndex !== 0) return undefined
                 const { authorization, callback: cb } = await authorizeOpenAI()
-                // Store callback for later retrieval — keyed by session+method
-                const key = `${sessionId}:${methodIndex}`
-                pendingCallbacks.set(key, cb)
+                pendingCallbacks.set(ctx.authorizationId, cb)
                 return authorization
               },
               catch: (e) => ({
@@ -146,20 +144,19 @@ export const OpenAIExtension = defineExtension({
                 cause: e,
               }),
             }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
-          callback: (sessionId, methodIndex, _authorizationId, persist, code) =>
+          callback: (ctx) =>
             Effect.gen(function* () {
-              const key = `${sessionId}:${methodIndex}`
-              const cb = pendingCallbacks.get(key)
-              pendingCallbacks.delete(key)
+              const cb = pendingCallbacks.get(ctx.authorizationId)
+              pendingCallbacks.delete(ctx.authorizationId)
               if (cb === undefined) return
               const result = yield* Effect.tryPromise({
-                try: () => cb(code),
+                try: () => cb(ctx.code),
                 catch: (e) => ({
                   _tag: "OpenAIOAuthCallbackError" as const,
                   cause: e,
                 }),
               })
-              yield* persist({
+              yield* ctx.persist({
                 type: "oauth",
                 access: result.access,
                 refresh: result.refresh,

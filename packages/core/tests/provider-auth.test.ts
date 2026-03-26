@@ -16,11 +16,10 @@ const oauthProvider: ProviderContribution = {
   resolveModel: () => ({}),
   auth: {
     methods: [new AuthMethod({ type: "oauth", label: "OAuth" })],
-    authorize: (sessionId, _methodIndex, _persist) =>
+    authorize: (ctx) =>
       Effect.tryPromise({
         try: async () => {
-          const key = `${sessionId}`
-          pendingCallbacks.set(key, (code) => code ?? "")
+          pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
           return {
             url: "http://example.com/auth",
             method: "code" as const,
@@ -29,13 +28,12 @@ const oauthProvider: ProviderContribution = {
         },
         catch: (e) => ({ _tag: "AuthError" as const, cause: e }),
       }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
-    callback: (sessionId, _methodIndex, _authorizationId, persist, code) =>
+    callback: (ctx) =>
       Effect.gen(function* () {
-        const key = `${sessionId}`
-        const cb = pendingCallbacks.get(key)
-        pendingCallbacks.delete(key)
-        const apiKey = cb !== undefined ? cb(code) : ""
-        yield* persist({ type: "api", key: apiKey })
+        const cb = pendingCallbacks.get(ctx.authorizationId)
+        pendingCallbacks.delete(ctx.authorizationId)
+        const apiKey = cb !== undefined ? cb(ctx.code) : ""
+        yield* ctx.persist({ type: "api", key: apiKey })
       }),
   },
 }
