@@ -151,37 +151,47 @@ export const BashTool = defineTool({
       }
     }
 
-    const result = yield* Effect.tryPromise({
-      try: async () => {
-        const spawnOpts: Parameters<typeof Bun.spawn>[1] = {
-          stdout: "pipe",
-          stderr: "pipe",
-        }
-        if (cwd !== undefined) spawnOpts.cwd = cwd
-        const proc = Bun.spawn(["bash", "-c", command], spawnOpts)
-
-        const timeoutId = setTimeout(() => killGracefully(proc), timeout)
-
-        try {
-          const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
-          const stderrStream = proc.stderr as ReadableStream<Uint8Array>
-          const [stdout, stderr] = await Promise.all([
-            new Response(stdoutStream).text(),
-            new Response(stderrStream).text(),
-          ])
-          const exitCode = await proc.exited
-
-          return { stdout, stderr, exitCode }
-        } finally {
-          clearTimeout(timeoutId)
-        }
-      },
-      catch: (e) =>
-        new BashError({
-          message: `Failed to execute command: ${e}`,
-          command,
+    const result = yield* Effect.acquireUseRelease(
+      Effect.try({
+        try: () => {
+          const spawnOpts: Parameters<typeof Bun.spawn>[1] = {
+            stdout: "pipe",
+            stderr: "pipe",
+          }
+          if (cwd !== undefined) spawnOpts.cwd = cwd
+          return Bun.spawn(["bash", "-c", command], spawnOpts)
+        },
+        catch: (e) =>
+          new BashError({
+            message: `Failed to spawn command: ${e}`,
+            command,
+          }),
+      }),
+      (proc) =>
+        Effect.tryPromise({
+          try: async () => {
+            const timeoutId = setTimeout(() => killGracefully(proc), timeout)
+            try {
+              const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
+              const stderrStream = proc.stderr as ReadableStream<Uint8Array>
+              const [stdout, stderr] = await Promise.all([
+                new Response(stdoutStream).text(),
+                new Response(stderrStream).text(),
+              ])
+              const exitCode = await proc.exited
+              return { stdout, stderr, exitCode }
+            } finally {
+              clearTimeout(timeoutId)
+            }
+          },
+          catch: (e) =>
+            new BashError({
+              message: `Failed to execute command: ${e}`,
+              command,
+            }),
         }),
-    })
+      (proc) => Effect.sync(() => killGracefully(proc)),
+    )
 
     // Use OutputBuffer for head+tail truncation
     const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)

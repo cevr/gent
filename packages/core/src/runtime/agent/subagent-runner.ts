@@ -509,40 +509,53 @@ export const SubprocessRunner: Layer.Layer<
                 params.prompt,
               ]
 
-              const proc = Bun.spawn({
-                cmd: args,
-                cwd: params.cwd,
-                stdout: "pipe",
-                stderr: "pipe",
-                env: {
-                  ...Bun.env,
-                  ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
-                  ...(currentSpan !== undefined
-                    ? {
-                        GENT_TRACE_ID: currentSpan.traceId,
-                        GENT_PARENT_SPAN_ID: currentSpan.spanId,
-                      }
-                    : {}),
-                },
-              })
+              const killSubprocess = (proc: Bun.Subprocess) => {
+                try {
+                  proc.kill()
+                } catch {
+                  // already dead
+                }
+              }
 
-              const [exitCode, stderrText] = yield* Effect.tryPromise({
-                try: async () => {
-                  const stdoutPromise =
-                    proc.stdout !== null
-                      ? new Response(proc.stdout).text().catch(() => "")
-                      : Promise.resolve("")
-                  const stderrPromise =
-                    proc.stderr !== null
-                      ? new Response(proc.stderr).text().catch(() => "")
-                      : Promise.resolve("")
-                  const code = await proc.exited
-                  await stdoutPromise
-                  const err = await stderrPromise
-                  return [code, err] as const
-                },
-                catch: () => [1, "Subprocess failed"] as const,
-              })
+              const [exitCode, stderrText] = yield* Effect.acquireUseRelease(
+                Effect.sync(() =>
+                  Bun.spawn({
+                    cmd: args,
+                    cwd: params.cwd,
+                    stdout: "pipe",
+                    stderr: "pipe",
+                    env: {
+                      ...Bun.env,
+                      ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
+                      ...(currentSpan !== undefined
+                        ? {
+                            GENT_TRACE_ID: currentSpan.traceId,
+                            GENT_PARENT_SPAN_ID: currentSpan.spanId,
+                          }
+                        : {}),
+                    },
+                  }),
+                ),
+                (proc) =>
+                  Effect.tryPromise({
+                    try: async () => {
+                      const stdoutPromise =
+                        proc.stdout !== null
+                          ? new Response(proc.stdout).text().catch(() => "")
+                          : Promise.resolve("")
+                      const stderrPromise =
+                        proc.stderr !== null
+                          ? new Response(proc.stderr).text().catch(() => "")
+                          : Promise.resolve("")
+                      const code = await proc.exited
+                      await stdoutPromise
+                      const err = await stderrPromise
+                      return [code, err] as const
+                    },
+                    catch: () => [1, "Subprocess failed"] as const,
+                  }),
+                (proc) => Effect.sync(() => killSubprocess(proc)),
+              )
 
               if (exitCode !== 0) {
                 yield* shared.publishSubagentFailed({
