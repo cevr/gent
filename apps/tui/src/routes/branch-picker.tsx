@@ -4,7 +4,7 @@
 
 import { createEffect, createSignal, For } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions, useRenderer } from "@opentui/solid"
 import { Effect } from "effect"
 import { useTheme } from "../theme/index"
 import { useClient } from "../client/index"
@@ -50,6 +50,7 @@ const collectCounts = (nodes: readonly BranchTreeNode[]) => {
 
 export function BranchPicker(props: BranchPickerProps) {
   const { theme } = useTheme()
+  const renderer = useRenderer()
   const client = useClient()
   const router = useRouter()
   const env = useEnv()
@@ -123,6 +124,7 @@ export function BranchPicker(props: BranchPickerProps) {
       if (router.canGoBack()) {
         router.back()
       } else {
+        renderer.destroy()
         env.shutdown()
       }
       return true

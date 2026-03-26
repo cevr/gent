@@ -143,12 +143,24 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           }
         }).pipe(
           Effect.onInterrupt(() =>
-            storage
-              .updateTask(taskId, {
-                status: "failed",
-                metadata: { error: "interrupted by shutdown" },
-              })
-              .pipe(Effect.catchEager(() => Effect.void)),
+            Effect.gen(function* () {
+              yield* storage
+                .updateTask(taskId, {
+                  status: "failed",
+                  metadata: { error: "interrupted by shutdown" },
+                })
+                .pipe(Effect.catchEager(() => Effect.void))
+              yield* eventStore
+                .publish(
+                  new TaskFailed({
+                    sessionId: task.sessionId,
+                    branchId: task.branchId,
+                    taskId,
+                    error: "interrupted by shutdown",
+                  }),
+                )
+                .pipe(Effect.catchEager(() => Effect.void))
+            }),
           ),
           Effect.catchEager(() => Effect.void),
         )
