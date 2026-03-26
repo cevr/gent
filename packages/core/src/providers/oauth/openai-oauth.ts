@@ -1,4 +1,4 @@
-import { AuthOauth } from "../../domain/auth-store.js"
+import type { AuthOauth } from "../../domain/auth-store.js"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
 
@@ -394,25 +394,6 @@ export const refreshOpenAIOauth = async (refreshToken: string) => {
     expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
     ...(accountId !== undefined && accountId.length > 0 ? { accountId } : {}),
   }
-}
-
-type OpenAIOAuthStore = {
-  readonly getCurrent: () => Promise<AuthOauth | undefined>
-  readonly setCurrent: (auth: AuthOauth) => Promise<void>
-}
-
-export const loadOpenAIOAuth = async (store: OpenAIOAuthStore): Promise<AuthOauth> => {
-  const current = await store.getCurrent()
-  if (current === undefined || current.type !== "oauth") {
-    throw new Error("OpenAI OAuth credentials missing")
-  }
-  const auth = current as AuthOauth
-  if (auth.access.length > 0 && auth.expires >= Date.now()) return auth
-
-  const refreshed = await refreshOpenAIOauth(auth.refresh)
-  const next = new AuthOauth({ type: "oauth", ...refreshed })
-  await store.setCurrent(next)
-  return next
 }
 
 const copyHeadersInto = (headers: Headers, source: HeadersInit) => {

@@ -2,11 +2,9 @@ import { ServiceMap, Effect, Layer, Schema } from "effect"
 import type { LanguageModel } from "ai"
 import { AuthOauth, AuthStore, type AuthInfo } from "../domain/auth-store.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
+import { BUILTIN_PROVIDER_IDS } from "../domain/model.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ProviderError } from "./provider"
-
-/** Known builtin provider IDs — used for isCustom classification */
-const BUILTIN_PROVIDER_IDS = new Set(["anthropic", "openai", "bedrock", "google", "mistral"])
 
 // Provider info for listing
 export class ProviderInfo extends Schema.Class<ProviderInfo>("ProviderInfo")({

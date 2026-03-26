@@ -40,7 +40,7 @@ export const calculateCost = (
   return inputCost + outputCost
 }
 
-const BUILTIN_PROVIDER_IDS = new Set<string>([
+export const BUILTIN_PROVIDER_IDS = new Set<string>([
   "anthropic",
   "bedrock",
   "openai",

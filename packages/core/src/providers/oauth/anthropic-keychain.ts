@@ -1,7 +1,6 @@
 import { Effect, Schedule, Schema } from "effect"
 import * as os from "node:os"
 import { ProviderAuthError } from "../provider-auth"
-import { AuthOauth } from "../../domain/auth-store.js"
 
 // ── Claude Code Keychain Reader ──
 
@@ -497,67 +496,6 @@ const fetchWithBetaRetry = (
     Effect.catchEager((e) => Effect.succeed(e.response)),
   )
 }
-
-// Credential cache
-const CREDENTIAL_CACHE_TTL_MS = 30_000
-let cachedCredentials: ClaudeCredentials | null = null
-let cachedCredentialsAt = 0
-
-const isCredentialUsable = (creds: ClaudeCredentials): boolean =>
-  creds.expiresAt > Date.now() + 60_000
-
-export const getCachedCredentials = (
-  persistOauth: (auth: AuthOauth) => Effect.Effect<void>,
-): Effect.Effect<ClaudeCredentials | null> =>
-  Effect.gen(function* () {
-    const now = Date.now()
-    if (
-      cachedCredentials !== null &&
-      now - cachedCredentialsAt < CREDENTIAL_CACHE_TTL_MS &&
-      isCredentialUsable(cachedCredentials)
-    ) {
-      return cachedCredentials
-    }
-
-    // Read fresh from keychain
-    const result = yield* readClaudeCodeCredentials().pipe(
-      Effect.catchEager(() => Effect.succeed(null)),
-    )
-    if (result === null) {
-      cachedCredentials = null
-      cachedCredentialsAt = 0
-      return null
-    }
-
-    if (!isCredentialUsable(result)) {
-      // Try refresh
-      yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
-      const refreshed = yield* readClaudeCodeCredentials().pipe(
-        Effect.catchEager(() => Effect.succeed(null)),
-      )
-      if (refreshed === null || !isCredentialUsable(refreshed)) {
-        cachedCredentials = null
-        cachedCredentialsAt = 0
-        return null
-      }
-      // Update store with refreshed creds
-      yield* persistOauth(
-        new AuthOauth({
-          type: "oauth",
-          access: refreshed.accessToken,
-          refresh: refreshed.refreshToken,
-          expires: refreshed.expiresAt,
-        }),
-      ).pipe(Effect.catchEager(() => Effect.void))
-      cachedCredentials = refreshed
-      cachedCredentialsAt = now
-      return refreshed
-    }
-
-    cachedCredentials = result
-    cachedCredentialsAt = now
-    return result
-  })
 
 export const createAnthropicKeychainFetch = (
   loadCredentials: () => Promise<ClaudeCredentials | null>,
