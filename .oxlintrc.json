@@ -52,6 +52,19 @@
         "typescript/no-non-null-assertion": "off",
         "typescript/no-explicit-any": "off"
       }
+    },
+    {
+      "files": [
+        "**/extensions/anthropic/**",
+        "**/extensions/openai/**",
+        "**/extensions/bedrock/**",
+        "**/extensions/google/**",
+        "**/extensions/mistral/**"
+      ],
+      "rules": {
+        "node/no-process-env": "off",
+        "gent/no-direct-env": "off"
+      }
     }
   ]
 }

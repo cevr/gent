@@ -15,11 +15,7 @@ import {
   createOpenAIOAuthFetch,
   loadOpenAIOAuth,
 } from "./oauth/openai-oauth"
-import {
-  createAnthropicKeychainFetch,
-  getCachedCredentials,
-  initAnthropicKeychainEnv,
-} from "./oauth/anthropic-keychain"
+import { createAnthropicKeychainFetch, getCachedCredentials } from "./oauth/anthropic-keychain"
 
 type ProviderApi =
   | "anthropic"
@@ -66,14 +62,7 @@ export class ProviderFactory extends ServiceMap.Service<ProviderFactory, Provide
 ) {
   static Live: Layer.Layer<ProviderFactory, never, AuthStore | ExtensionRegistry> = Layer.effect(
     ProviderFactory,
-    Effect.gen(function* () {
-      // Read Anthropic env vars via Config at layer construction
-      const betaFlags = yield* readEnv("ANTHROPIC_BETA_FLAGS")
-      const cliVersion = yield* readEnv("ANTHROPIC_CLI_VERSION")
-      const userAgent = yield* readEnv("ANTHROPIC_USER_AGENT")
-      initAnthropicKeychainEnv({ betaFlags, cliVersion, userAgent })
-      return yield* makeProviderFactory()
-    }),
+    makeProviderFactory(),
   )
 
   static Test: Layer.Layer<ProviderFactory> = Layer.provide(
@@ -242,8 +231,16 @@ function makeProviderFactory(): Effect.Effect<
         // Try extension-registered provider first
         const extensionProvider = yield* extensionRegistry.getProvider(providerName)
         if (extensionProvider !== undefined) {
+          // Pass stored auth so the extension can honor manually entered API keys
+          const authInfo = yield* resolveAuthFromStore(providerName)
+          let authParam: { type: string; key?: string } | undefined
+          if (authInfo?.type === "api") {
+            authParam = { type: "api", key: authInfo.key }
+          } else if (authInfo?.type === "oauth") {
+            authParam = { type: "oauth" }
+          }
           return yield* Effect.try({
-            try: () => extensionProvider.resolveModel(modelName) as LanguageModel,
+            try: () => extensionProvider.resolveModel(modelName, authParam) as LanguageModel,
             catch: (e) =>
               new ProviderError({
                 message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
