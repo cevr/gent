@@ -79,7 +79,7 @@ const loadBuiltinExtensions = (cwd: string): LoadedExtension[] =>
     manifest: extension.manifest,
     kind: "builtin" as const,
     sourcePath: "builtin",
-    setup: Effect.runSync(extension.setup({ cwd, config: undefined as never, source: "builtin" })),
+    setup: Effect.runSync(extension.setup({ cwd, source: "builtin" })),
   }))
 
 const makeExtensionLayers = (config: DependenciesConfig) =>

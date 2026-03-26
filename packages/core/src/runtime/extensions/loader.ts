@@ -178,7 +178,6 @@ export const setupExtension = (
     const setup: ExtensionSetup = yield* extension
       .setup({
         cwd,
-        config: undefined as never, // TODO: config resolution
         source: sourcePath,
       })
       .pipe(

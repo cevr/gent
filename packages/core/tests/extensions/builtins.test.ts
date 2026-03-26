@@ -6,9 +6,10 @@ import type { ExtensionSetup } from "@gent/core/domain/extension"
 const loadAll = (): Promise<{ id: string; setup: ExtensionSetup }[]> =>
   Promise.all(
     BuiltinExtensions.map((ext) =>
-      Effect.runPromise(
-        ext.setup({ cwd: "/tmp", config: undefined as never, source: "test" }),
-      ).then((setup) => ({ id: ext.manifest.id, setup })),
+      Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" })).then((setup) => ({
+        id: ext.manifest.id,
+        setup,
+      })),
     ),
   )
 

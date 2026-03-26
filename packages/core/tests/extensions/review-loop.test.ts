@@ -239,9 +239,7 @@ const reviewLoopExtension: LoadedExtension = {
   manifest: ReviewLoopExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: Effect.runSync(
-    ReviewLoopExtension.setup({ cwd: "/tmp", config: undefined as never, source: "test" }),
-  ),
+  setup: Effect.runSync(ReviewLoopExtension.setup({ cwd: "/tmp", source: "test" })),
 }
 
 const makeLayer = () =>

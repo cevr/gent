@@ -246,20 +246,17 @@ export interface ExtensionSetup {
 
 // Extension — the core primitive
 
-export interface GentExtension<Config = void> {
+export interface GentExtension {
   readonly manifest: ExtensionManifest
-  readonly configSchema?: Schema.Schema<Config>
   readonly setup: (ctx: {
     readonly cwd: string
-    readonly config: Config
     readonly source: string
   }) => Effect.Effect<ExtensionSetup, ExtensionLoadError>
 }
 
 // Factory
 
-export const defineExtension = <Config = void>(ext: GentExtension<Config>): GentExtension<Config> =>
-  ext
+export const defineExtension = (ext: GentExtension): GentExtension => ext
 
 export const defineInterceptor = <K extends ExtensionInterceptorKey>(
   key: K,

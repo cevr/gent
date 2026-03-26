@@ -28,9 +28,7 @@ const planModeExtension: LoadedExtension = {
   manifest: PlanModeExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: Effect.runSync(
-    PlanModeExtension.setup({ cwd: "/tmp", config: undefined as never, source: "test" }),
-  ),
+  setup: Effect.runSync(PlanModeExtension.setup({ cwd: "/tmp", source: "test" })),
 }
 
 const makeLayer = () =>
