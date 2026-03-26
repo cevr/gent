@@ -51,6 +51,5 @@ export const BUILTIN_PROVIDER_IDS = new Set<string>([
 export const parseModelProvider = (modelId: string): ProviderId | undefined => {
   const slash = modelId.indexOf("/")
   if (slash <= 0 || slash === modelId.length - 1) return undefined
-  const prefix = modelId.slice(0, slash)
-  return BUILTIN_PROVIDER_IDS.has(prefix) ? (prefix as ProviderId) : undefined
+  return modelId.slice(0, slash) as ProviderId
 }

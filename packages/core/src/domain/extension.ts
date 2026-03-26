@@ -263,22 +263,36 @@ export interface ProviderAuthInfo {
     expires: number
     accountId?: string
   }) => Promise<void>
-  /** Filter/extend the model catalog for this provider */
-  readonly listModels?: (baseCatalog: ReadonlyArray<unknown>) => ReadonlyArray<unknown>
-  /** Auth configuration — methods + authorize/callback handlers */
-  readonly auth?: ProviderAuthContribution
 }
+
+/** Persist auth credentials — passed by ProviderAuth to extension auth handlers */
+export type PersistAuth = (
+  auth:
+    | {
+        readonly type: "api"
+        readonly key: string
+      }
+    | {
+        readonly type: "oauth"
+        readonly access: string
+        readonly refresh: string
+        readonly expires: number
+        readonly accountId?: string
+      },
+) => Effect.Effect<void>
 
 export interface ProviderAuthContribution {
   readonly methods: ReadonlyArray<AuthMethod>
   readonly authorize?: (
     sessionId: string,
     methodIndex: number,
+    persist: PersistAuth,
   ) => Effect.Effect<ProviderAuthorizationResult | undefined>
   readonly callback?: (
     sessionId: string,
     methodIndex: number,
     authorizationId: string,
+    persist: PersistAuth,
     code?: string,
   ) => Effect.Effect<void>
 }

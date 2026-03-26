@@ -136,9 +136,26 @@ export const AnthropicExtension = defineExtension({
             new AuthMethod({ type: "oauth", label: "Claude Code" }),
             new AuthMethod({ type: "api", label: "Manually enter API key" }),
           ],
-          // authorize/callback not defined — falls through to legacy buildProviders
-          // which persists keychain creds to AuthStore. Will be migrated when
-          // ProviderAuthContribution gains access to persist callbacks.
+          authorize: (_, methodIndex, persist) =>
+            Effect.gen(function* () {
+              if (methodIndex !== 0) return undefined
+              let creds = yield* readClaudeCodeCredentials()
+              if (creds.expiresAt < Date.now() + 60_000) {
+                yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
+                creds = yield* readClaudeCodeCredentials()
+              }
+              // Persist keychain creds to AuthStore
+              yield* persist({
+                type: "oauth",
+                access: creds.accessToken,
+                refresh: creds.refreshToken,
+                expires: creds.expiresAt,
+              })
+              return {
+                url: "" as string,
+                method: "done" as const,
+              }
+            }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
         },
       }
 

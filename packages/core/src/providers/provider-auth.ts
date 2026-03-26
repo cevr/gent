@@ -5,6 +5,7 @@ import {
   AuthAuthorization,
   type AuthAuthorizationMethod,
 } from "../domain/auth-method.js"
+import type { PersistAuth } from "../domain/extension.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
 import { readClaudeCodeCredentials, refreshClaudeCodeCredentials } from "./oauth/anthropic-keychain"
@@ -225,6 +226,29 @@ const makeProviderAuth = (
     const authStore = yield* AuthStore
     const pending = yield* Ref.make<Map<string, PendingCallback>>(new Map())
 
+    /** Build a PersistAuth callback for a provider — writes credentials to AuthStore */
+    const makePersist =
+      (providerId: string): PersistAuth =>
+      (auth) => {
+        if (auth.type === "api") {
+          return authStore
+            .set(providerId, new AuthApi({ type: "api", key: auth.key }))
+            .pipe(Effect.catchEager(() => Effect.void))
+        }
+        return authStore
+          .set(
+            providerId,
+            new AuthOauth({
+              type: "oauth",
+              access: auth.access,
+              refresh: auth.refresh,
+              expires: auth.expires,
+              ...(auth.accountId !== undefined ? { accountId: auth.accountId } : {}),
+            }),
+          )
+          .pipe(Effect.catchEager(() => Effect.void))
+      }
+
     const listMethods = Effect.fn("ProviderAuth.listMethods")(function* () {
       const result: Record<string, ReadonlyArray<typeof AuthMethod.Type>> = {}
 
@@ -261,16 +285,18 @@ const makeProviderAuth = (
       if (extensionRegistry !== undefined) {
         const extProvider = yield* extensionRegistry.getProvider(provider)
         if (extProvider?.auth?.authorize !== undefined) {
-          const extResult = yield* extProvider.auth.authorize(sessionId, method).pipe(
-            Effect.catchDefect((e) =>
-              Effect.fail(
-                new ProviderAuthError({
-                  message: `Provider auth failed: ${e instanceof Error ? e.message : String(e)}`,
-                  cause: e,
-                }),
+          const extResult = yield* extProvider.auth
+            .authorize(sessionId, method, makePersist(provider))
+            .pipe(
+              Effect.catchDefect((e) =>
+                Effect.fail(
+                  new ProviderAuthError({
+                    message: `Provider auth failed: ${e instanceof Error ? e.message : String(e)}`,
+                    cause: e,
+                  }),
+                ),
               ),
-            ),
-          )
+            )
           if (extResult === undefined) return undefined
           const authorizationId = Bun.randomUUIDv7()
           return new AuthAuthorization({
@@ -323,16 +349,18 @@ const makeProviderAuth = (
       if (extensionRegistry !== undefined) {
         const extProvider = yield* extensionRegistry.getProvider(provider)
         if (extProvider?.auth?.callback !== undefined) {
-          yield* extProvider.auth.callback(sessionId, method, authorizationId, code).pipe(
-            Effect.catchDefect((e) =>
-              Effect.fail(
-                new ProviderAuthError({
-                  message: `Provider auth callback failed: ${e instanceof Error ? e.message : String(e)}`,
-                  cause: e,
-                }),
+          yield* extProvider.auth
+            .callback(sessionId, method, authorizationId, makePersist(provider), code)
+            .pipe(
+              Effect.catchDefect((e) =>
+                Effect.fail(
+                  new ProviderAuthError({
+                    message: `Provider auth callback failed: ${e instanceof Error ? e.message : String(e)}`,
+                    cause: e,
+                  }),
+                ),
               ),
-            ),
-          )
+            )
           return
         }
       }

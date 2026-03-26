@@ -1,6 +1,6 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { AuthStore, AuthType } from "./auth-store"
-import { Agents, resolveAgentModel } from "./agent"
+import { resolveAgentModel } from "./agent"
 import { ProviderId, parseModelProvider } from "./model"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 
@@ -22,16 +22,6 @@ export interface AuthGuardService {
   readonly missingRequiredProviders: () => Effect.Effect<readonly ProviderId[]>
 }
 
-const REQUIRED_PROVIDERS: readonly ProviderId[] = (() => {
-  const providers = new Set<ProviderId>()
-  for (const agent of Object.values(Agents)) {
-    const modelId = resolveAgentModel(agent)
-    const provider = parseModelProvider(modelId)
-    if (provider !== undefined) providers.add(provider)
-  }
-  return [...providers]
-})()
-
 export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()(
   "@gent/core/src/domain/auth-guard/AuthGuard",
 ) {
@@ -40,11 +30,26 @@ export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()
     Effect.gen(function* () {
       const authStore = yield* AuthStore
       const extensionRegistry = yield* ExtensionRegistry
-      const requiredSet = new Set(REQUIRED_PROVIDERS)
+
+      // Derive required providers from all primary agents' model prefixes,
+      // intersected with registered provider IDs (supports extension-contributed agents)
+      const agents = yield* extensionRegistry.listPrimaryAgents()
+      const registeredProviders = yield* extensionRegistry.listProviders()
+      const registeredIds = new Set(registeredProviders.map((p) => p.id))
+      const requiredProviders: ProviderId[] = []
+      const seen = new Set<string>()
+      for (const agent of agents) {
+        const modelId = resolveAgentModel(agent)
+        const provider = parseModelProvider(modelId)
+        if (provider !== undefined && registeredIds.has(provider) && !seen.has(provider)) {
+          requiredProviders.push(provider)
+          seen.add(provider)
+        }
+      }
+      const requiredSet = new Set(requiredProviders)
 
       const listProviders = Effect.fn("AuthGuard.listProviders")(function* () {
         const providers: AuthProviderInfo[] = []
-        const registeredProviders = yield* extensionRegistry.listProviders()
 
         for (const provider of registeredProviders) {
           const storedInfo = yield* authStore
@@ -77,7 +82,7 @@ export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()
       )
 
       return AuthGuard.of({
-        requiredProviders: () => Effect.succeed(REQUIRED_PROVIDERS),
+        requiredProviders: () => Effect.succeed(requiredProviders),
         listProviders,
         missingRequiredProviders,
       })
@@ -86,7 +91,7 @@ export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()
 
   static Test = (providers: readonly AuthProviderInfo[] = []): Layer.Layer<AuthGuard> =>
     Layer.succeed(AuthGuard, {
-      requiredProviders: () => Effect.succeed(REQUIRED_PROVIDERS),
+      requiredProviders: () => Effect.succeed([]),
       listProviders: () => Effect.succeed(providers),
       missingRequiredProviders: () =>
         Effect.succeed(providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)),

@@ -8,6 +8,7 @@ import { AuthApi, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import type { LoadedExtension, ProviderContribution } from "@gent/core/domain/extension"
+import { AgentDefinition } from "@gent/core/domain/agent"
 import { Effect, Layer } from "effect"
 
 const testProviders: ProviderContribution[] = [
@@ -18,13 +19,26 @@ const testProviders: ProviderContribution[] = [
   { id: "mistral", name: "Mistral", resolveModel: () => ({}) },
 ]
 
+const testAgents = [
+  new AgentDefinition({
+    name: "cowork" as never,
+    kind: "primary",
+    model: "anthropic/claude-opus-4-6" as never,
+  }),
+  new AgentDefinition({
+    name: "deepwork" as never,
+    kind: "primary",
+    model: "openai/gpt-5.4" as never,
+  }),
+]
+
 const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
     {
       manifest: { id: "test-providers" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { providers: testProviders },
+      setup: { providers: testProviders, agents: testAgents },
     } satisfies LoadedExtension,
   ]),
 )
