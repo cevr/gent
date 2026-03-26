@@ -135,19 +135,24 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
         Effect.withSpan("ModelRegistry.fetchRemote"),
       )
 
-      const load = Effect.gen(function* () {
+      /** Load raw models (disk → remote fallback), cache unfiltered */
+      const loadRaw = Effect.gen(function* () {
         const cached = yield* Ref.get(cacheRef)
         if (cached !== null) return cached
         const disk = yield* loadFromDisk
         if (disk.length > 0) {
-          const result = yield* applyFilters(disk)
-          yield* Ref.set(cacheRef, result)
-          return result
+          yield* Ref.set(cacheRef, disk)
+          return disk
         }
         const remote = yield* fetchRemote
-        const result = yield* applyFilters(remote)
-        yield* Ref.set(cacheRef, result)
-        return result
+        yield* Ref.set(cacheRef, remote)
+        return remote
+      })
+
+      /** Load + apply auth-sensitive provider filters (not cached — re-evaluated per call) */
+      const load = Effect.gen(function* () {
+        const raw = yield* loadRaw
+        return yield* applyFilters(raw)
       }).pipe(Effect.withSpan("ModelRegistry.load"))
 
       const resolveAuth = (providerId: string): Effect.Effect<ProviderAuthInfo | undefined> =>
@@ -178,8 +183,7 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
       const refresh = Effect.gen(function* () {
         const remote = yield* fetchRemote
         if (remote.length > 0) {
-          const filtered = yield* applyFilters(remote)
-          yield* Ref.set(cacheRef, filtered)
+          yield* Ref.set(cacheRef, remote)
         }
       }).pipe(Effect.withSpan("ModelRegistry.refresh"))
 
