@@ -182,6 +182,8 @@ export const fromMachine = <
                   newState: undefined,
                   lifecycleRan: false,
                   isFinal: false,
+                  hasReply: false,
+                  postponed: false,
                 }),
               ),
             )
