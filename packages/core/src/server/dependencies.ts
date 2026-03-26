@@ -118,6 +118,20 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         }
       }
 
+      // Register extension onShutdown hooks as scope finalizers
+      for (const ext of allExtensions) {
+        if (ext.setup.onShutdown !== undefined) {
+          const shutdown = ext.setup.onShutdown
+          yield* Effect.addFinalizer(() =>
+            shutdown.pipe(
+              Effect.catchEager(() =>
+                Effect.logWarning(`Extension ${ext.manifest.id} onShutdown failed`),
+              ),
+            ),
+          )
+        }
+      }
+
       // Collect extension-provided layers (setup.layer)
       const extensionLayers = allExtensions
         .filter((ext) => ext.setup.layer !== undefined)

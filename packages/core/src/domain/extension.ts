@@ -242,6 +242,8 @@ export interface ExtensionSetup {
   readonly tagInjections?: ReadonlyArray<TagInjection>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
+  /** Cleanup effect — runs as scope finalizer during graceful shutdown. */
+  readonly onShutdown?: Effect.Effect<void>
 }
 
 // Extension — the core primitive

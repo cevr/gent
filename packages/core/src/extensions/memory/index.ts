@@ -28,7 +28,7 @@ import { MemoryIntent } from "./intents.js"
 import { deriveProjection } from "./projection.js"
 import { MemoryAgents } from "./agents.js"
 import { MemoryVault, Live as MemoryVaultLive, projectKey } from "./vault.js"
-import { registerDreamJobs } from "./dreaming.js"
+import { registerDreamJobs, removeDreamJobs } from "./dreaming.js"
 
 // ── Handle Intent ──
 
@@ -120,6 +120,7 @@ export const MemoryExtension = defineExtension({
       projection: MemoryProjection,
       layer: MemoryVaultLive(),
       onStartup: registerDreamJobs,
+      onShutdown: removeDreamJobs,
     }
     return Effect.succeed(setup)
   },
