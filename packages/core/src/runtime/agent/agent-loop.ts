@@ -517,11 +517,11 @@ const restoreCheckpointState = (params: {
 export interface AgentLoopService {
   readonly submit: (
     message: Message,
-    options?: { bypass?: boolean },
+    options?: { bypass?: boolean; agentOverride?: AgentNameType },
   ) => Effect.Effect<void, AgentLoopError>
   readonly run: (
     message: Message,
-    options?: { bypass?: boolean },
+    options?: { bypass?: boolean; agentOverride?: AgentNameType },
   ) => Effect.Effect<void, AgentLoopError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void>
   readonly followUp: (message: Message) => Effect.Effect<void, AgentLoopError>
@@ -1136,12 +1136,18 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const service: AgentLoopService = {
           submit: Effect.fn("AgentLoop.submit")(function* (
             message: Message,
-            options?: { bypass?: boolean },
+            options?: { bypass?: boolean; agentOverride?: AgentNameType },
           ) {
             const bypass = options?.bypass ?? true
             const loop = yield* getLoop(message.sessionId, message.branchId)
             const initialState = yield* loop.actor.snapshot
-            const item: QueuedTurnItem = { message, bypass }
+            const item: QueuedTurnItem = {
+              message,
+              bypass,
+              ...(options?.agentOverride !== undefined
+                ? { agentOverride: options.agentOverride }
+                : {}),
+            }
 
             if (initialState._tag !== "Idle") {
               yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))
@@ -1153,12 +1159,18 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
           run: Effect.fn("AgentLoop.run")(function* (
             message: Message,
-            options?: { bypass?: boolean },
+            options?: { bypass?: boolean; agentOverride?: AgentNameType },
           ) {
             const bypass = options?.bypass ?? true
             const loop = yield* getLoop(message.sessionId, message.branchId)
             const initialState = yield* loop.actor.snapshot
-            const item: QueuedTurnItem = { message, bypass }
+            const item: QueuedTurnItem = {
+              message,
+              bypass,
+              ...(options?.agentOverride !== undefined
+                ? { agentOverride: options.agentOverride }
+                : {}),
+            }
 
             if (initialState._tag !== "Idle") {
               yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))

@@ -187,15 +187,6 @@ export const LocalActorTransportLive: Layer.Layer<
           const bypass = input.bypass ?? session?.bypass ?? true
           const commandId = input.commandId ?? makeCommandId()
 
-          if (input.mode !== undefined) {
-            yield* agentLoop.steer({
-              _tag: "SwitchAgent",
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              agent: input.mode,
-            })
-          }
-
           const message = new Message({
             id: userMessageIdForCommand(commandId),
             sessionId: input.sessionId,
@@ -206,31 +197,36 @@ export const LocalActorTransportLive: Layer.Layer<
             createdAt: new Date(),
           })
 
-          yield* agentLoop.submit(message, { bypass }).pipe(
-            Effect.catchCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-              return Effect.gen(function* () {
-                if (Cause.hasDies(cause)) {
+          yield* agentLoop
+            .submit(message, {
+              bypass,
+              ...(input.mode !== undefined ? { agentOverride: input.mode } : {}),
+            })
+            .pipe(
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+                return Effect.gen(function* () {
+                  if (Cause.hasDies(cause)) {
+                    yield* eventStore.publish(
+                      new AgentRestarted({
+                        sessionId: input.sessionId,
+                        branchId: input.branchId,
+                        attempt: 0,
+                        error: Cause.pretty(cause),
+                      }),
+                    )
+                  }
                   yield* eventStore.publish(
-                    new AgentRestarted({
+                    new ErrorOccurred({
                       sessionId: input.sessionId,
                       branchId: input.branchId,
-                      attempt: 0,
                       error: Cause.pretty(cause),
                     }),
                   )
-                }
-                yield* eventStore.publish(
-                  new ErrorOccurred({
-                    sessionId: input.sessionId,
-                    branchId: input.branchId,
-                    error: Cause.pretty(cause),
-                  }),
-                )
-                yield* Effect.logWarning("agent loop submission failed", cause)
-              }).pipe(Effect.catchEager(() => Effect.void))
-            }),
-          )
+                  yield* Effect.logWarning("agent loop submission failed", cause)
+                }).pipe(Effect.catchEager(() => Effect.void))
+              }),
+            )
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
         ),
