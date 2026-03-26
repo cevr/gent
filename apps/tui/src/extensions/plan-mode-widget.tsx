@@ -5,6 +5,7 @@
  * Placed in `above-input` slot so it's always visible during session interaction.
  */
 
+import { Schema } from "effect"
 import { Show, For, createMemo } from "solid-js"
 import type { RGBA } from "@opentui/core"
 import { useExtensionUI } from "./context"
@@ -12,19 +13,24 @@ import { useTheme } from "../theme/context"
 
 const EXTENSION_ID = "plan-mode"
 
-interface PlanModeUiModel {
-  readonly mode: "normal" | "plan" | "executing"
-  readonly todos: ReadonlyArray<{
-    readonly id: number
-    readonly text: string
-    readonly status: "pending" | "in-progress" | "done"
-  }>
-  readonly progress: {
-    readonly total: number
-    readonly done: number
-    readonly inProgress: number
-  }
-}
+const PlanModeUiModel = Schema.Struct({
+  mode: Schema.Literals(["normal", "plan", "executing"]),
+  todos: Schema.Array(
+    Schema.Struct({
+      id: Schema.Number,
+      text: Schema.String,
+      status: Schema.Literals(["pending", "in-progress", "done"]),
+    }),
+  ),
+  progress: Schema.Struct({
+    total: Schema.Number,
+    done: Schema.Number,
+    inProgress: Schema.Number,
+  }),
+})
+type PlanModeUiModel = typeof PlanModeUiModel.Type
+
+const decodePlanMode = Schema.decodeUnknownOption(PlanModeUiModel)
 
 export function PlanModeWidget() {
   const ext = useExtensionUI()
@@ -33,7 +39,9 @@ export function PlanModeWidget() {
   const model = createMemo((): PlanModeUiModel | undefined => {
     const snapshot = ext.snapshots().get(EXTENSION_ID)
     if (snapshot === undefined) return undefined
-    return snapshot.model as PlanModeUiModel
+    return decodePlanMode(snapshot.model).pipe((opt) =>
+      opt._tag === "Some" ? opt.value : undefined,
+    )
   })
 
   const isActive = createMemo(() => {

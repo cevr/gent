@@ -219,7 +219,22 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 )
                 if (state === undefined) continue
                 if (projection.deriveUi === undefined) continue
-                const uiModel = projection.deriveUi(state)
+                let uiModel = projection.deriveUi(state)
+                if (uiModel !== undefined) {
+                  // Validate against schema if provided
+                  if (projection.uiModelSchema !== undefined) {
+                    const validated = yield* Schema.decodeUnknownEffect(
+                      projection.uiModelSchema as Schema.Any,
+                    )(uiModel).pipe(
+                      Effect.catchEager(() =>
+                        Effect.logWarning(
+                          `Extension ${actor.id} uiModel failed schema validation`,
+                        ).pipe(Effect.as(undefined)),
+                      ),
+                    )
+                    uiModel = validated
+                  }
+                }
                 if (uiModel !== undefined) {
                   snapshots.push(
                     new ExtensionUiSnapshotClass({
