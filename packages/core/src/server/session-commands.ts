@@ -23,8 +23,6 @@ import type {
   CreateSessionResult,
   ForkBranchInput,
   SendMessageInput,
-  StartSessionInput,
-  StartSessionResult,
   SwitchBranchInput,
   UpdateSessionBypassInput,
   UpdateSessionBypassResult,
@@ -35,10 +33,6 @@ import type {
 const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
 
 export interface SessionCommandsService {
-  /** Create session + optionally send initial prompt atomically */
-  readonly startSession: (
-    input: StartSessionInput,
-  ) => Effect.Effect<StartSessionResult, AppServiceError>
   readonly createSession: (
     input: CreateSessionInput,
   ) => Effect.Effect<CreateSessionResult, AppServiceError>
@@ -165,6 +159,16 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         yield* eventStore.publish(new SessionStarted({ sessionId, branchId }))
+
+        // Optional initial prompt — sends immediately after creation
+        if (input.initialPrompt !== undefined && input.initialPrompt.length > 0) {
+          yield* actorProcess.sendUserMessage({
+            sessionId,
+            branchId,
+            content: input.initialPrompt,
+            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+          })
+        }
 
         return { sessionId, branchId, name, bypass }
       })
@@ -312,28 +316,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         })
       })
 
-      const startSession = Effect.fn("SessionCommands.startSession")(function* (
-        input: StartSessionInput,
-      ) {
-        const result = yield* createSession({
-          cwd: input.cwd,
-          bypass: input.bypass,
-        })
-
-        if (input.initialPrompt !== undefined && input.initialPrompt.length > 0) {
-          yield* sendMessage({
-            sessionId: result.sessionId,
-            branchId: result.branchId,
-            content: input.initialPrompt,
-            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-          })
-        }
-
-        return result
-      })
-
       return {
-        startSession,
         createSession,
         // SessionEnded is not emitted on delete — FK cascade would immediately
         // remove the persisted event. Delete is destructive and rare.

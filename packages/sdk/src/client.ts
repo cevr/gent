@@ -186,16 +186,6 @@ function buildClient(
   return {
     sendMessage: (input) => rpcClient.sendMessage(input),
 
-    startSession: (input) =>
-      rpcClient.startSession(input ?? {}).pipe(
-        Effect.map((result) => ({
-          sessionId: result.sessionId,
-          branchId: result.branchId,
-          name: result.name,
-          bypass: result.bypass,
-        })),
-      ),
-
     createSession: (input) =>
       rpcClient.createSession(input ?? {}).pipe(
         Effect.map((result) => ({

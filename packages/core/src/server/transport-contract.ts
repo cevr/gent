@@ -34,6 +34,10 @@ export const CreateSessionInput = Schema.Struct({
   bypass: Schema.optional(Schema.Boolean),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
+  /** If provided, sends this message immediately after creation */
+  initialPrompt: Schema.optional(Schema.String),
+  /** Agent override for the initial prompt (turn-scoped, not persistent) */
+  agentOverride: Schema.optional(Schema.String),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
 export const CreateSessionPayload = CreateSessionInput
@@ -204,26 +208,6 @@ export const ForkBranchResult = Schema.Struct({
 })
 export type ForkBranchResult = typeof ForkBranchResult.Type
 export const ForkBranchSuccess = ForkBranchResult
-
-export const StartSessionInput = Schema.Struct({
-  cwd: Schema.optional(Schema.String),
-  bypass: Schema.optional(Schema.Boolean),
-  /** Initial message content — if provided, sends immediately after creation */
-  initialPrompt: Schema.optional(Schema.String),
-  /** Agent override for the initial prompt (turn-scoped, not persistent) */
-  agentOverride: Schema.optional(Schema.String),
-})
-export type StartSessionInput = typeof StartSessionInput.Type
-
-export const StartSessionResult = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  name: Schema.String,
-  bypass: Schema.Boolean,
-})
-export type StartSessionResult = typeof StartSessionResult.Type
-export const StartSessionPayload = StartSessionInput
-export const StartSessionSuccess = StartSessionResult
 
 export const SendMessageInput = Schema.Struct({
   sessionId: SessionId,
@@ -484,9 +468,6 @@ export type SkillContent = typeof SkillContent.Type
 
 export interface GentClient {
   sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentRpcError>
-
-  /** Create session + optionally send initial prompt in one atomic operation */
-  startSession: (input?: StartSessionInput) => Effect.Effect<StartSessionResult, GentRpcError>
 
   createSession: (
     input?: Omit<CreateSessionInput, "name">,

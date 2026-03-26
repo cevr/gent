@@ -51,12 +51,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             ? { parentSessionId: input.parentSessionId }
             : {}),
           ...(input.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
-        }),
-
-      startSession: (input) =>
-        commands.startSession({
-          ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-          ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
           ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
           ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
         }),
