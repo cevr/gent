@@ -233,7 +233,7 @@ export interface ExtensionSetup {
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ExtensionHooks
-  readonly layer?: Layer.Layer<unknown, unknown, unknown>
+  readonly layer?: Layer.Any
   /** Spawn an actor for this extension — unified lifecycle model */
   readonly spawnActor?: SpawnActor
   /** Projection config — derive function externalized from actor (framework-owned) */

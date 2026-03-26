@@ -45,6 +45,9 @@ export interface FromReducerConfig<State, Intent = void> {
   readonly stateSchema?: Schema.Schema<State>
   /** If true, state is persisted on Persist effect and hydrated on init */
   readonly persist?: boolean
+  /** Custom init logic — runs after persistence hydration, receives stateRef for mutation.
+   *  Runs in the ambient runtime context — extension layer services (from setup.layer) are available. */
+  readonly onInit?: (ctx: { sessionId: SessionId; stateRef: Ref.Ref<State> }) => Effect.Effect<void>
 }
 
 const interpretEffects = (
@@ -149,24 +152,35 @@ export const fromReducer = <State, Intent = void>(
         id: config.id,
 
         // Hydrate persisted state on init
-        init:
-          config.persist === true
-            ? Effect.gen(function* () {
-                if (storage._tag !== "Some" || config.stateSchema === undefined) return
-                const loaded = yield* storage.value
-                  .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
-                  .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
-                if (loaded === undefined) return
-                const decoded = yield* Schema.decodeUnknownEffect(
-                  Schema.fromJsonString(config.stateSchema as Schema.Any),
-                )(loaded.stateJson).pipe(
-                  Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
-                )
-                if (decoded === undefined) return
+        init: Effect.gen(function* () {
+          // Persistence hydration
+          if (
+            config.persist === true &&
+            storage._tag === "Some" &&
+            config.stateSchema !== undefined
+          ) {
+            const loaded = yield* storage.value
+              .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
+              .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+            if (loaded !== undefined) {
+              const decoded = yield* Schema.decodeUnknownEffect(
+                Schema.fromJsonString(config.stateSchema as Schema.Any),
+              )(loaded.stateJson).pipe(
+                Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
+              )
+              if (decoded !== undefined) {
                 yield* Ref.set(stateRef, decoded as State)
                 yield* Ref.set(versionRef, loaded.version)
-              })
-            : Effect.void,
+              }
+            }
+          }
+          // Custom init hook
+          if (config.onInit !== undefined) {
+            yield* config
+              .onInit({ sessionId: ctx.sessionId, stateRef })
+              .pipe(Effect.catchEager(() => Effect.void))
+          }
+        }),
 
         handleEvent: (event: AgentEvent, reduceCtx: ExtensionReduceContext) =>
           Effect.gen(function* () {
