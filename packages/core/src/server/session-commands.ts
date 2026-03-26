@@ -302,7 +302,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           sessionId: input.sessionId,
           branchId: input.branchId,
           content: input.content,
-          ...(input.agentOverride !== undefined ? { mode: input.agentOverride } : {}),
+          ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
         })
       })
 

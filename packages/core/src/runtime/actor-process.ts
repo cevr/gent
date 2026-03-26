@@ -40,7 +40,7 @@ export const SendUserMessagePayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   content: Schema.String,
-  mode: Schema.optional(AgentName),
+  agentOverride: Schema.optional(AgentName),
   bypass: Schema.optional(Schema.Boolean),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
@@ -200,7 +200,7 @@ export const LocalActorTransportLive: Layer.Layer<
           yield* agentLoop
             .submit(message, {
               bypass,
-              ...(input.mode !== undefined ? { agentOverride: input.mode } : {}),
+              ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
             })
             .pipe(
               Effect.catchCause((cause) => {
