@@ -2,7 +2,8 @@
 /**
  * Dream scheduling — registers Bun.cron jobs for memory consolidation.
  *
- * Called ONLY from the long-lived server process, NOT from headless workers.
+ * Registered via extension onStartup hook during dependency initialization.
+ * Idempotent — same title overwrites the launchd plist.
  * The dream worker shells out to gent headless with the appropriate memory agent.
  */
 
@@ -13,7 +14,6 @@ const WORKER_PATH = Path.resolve(import.meta.dir, "dream-worker.ts")
 
 /**
  * Register dream cron jobs. Idempotent — same title overwrites.
- * Only call from server startup, never from headless runs.
  */
 export const registerDreamJobs = Effect.sync(() => {
   if (typeof Bun === "undefined" || typeof Bun.cron !== "function") {

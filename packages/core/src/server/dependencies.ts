@@ -107,6 +107,17 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
 
       const allExtensions = [...loadBuiltinExtensions(config.cwd), ...external]
 
+      // Run extension onStartup hooks (fire-and-forget, no service requirements)
+      for (const ext of allExtensions) {
+        if (ext.setup.onStartup !== undefined) {
+          yield* ext.setup.onStartup.pipe(
+            Effect.catchEager(() =>
+              Effect.logWarning(`Extension ${ext.manifest.id} onStartup failed`),
+            ),
+          )
+        }
+      }
+
       // Collect extension-provided layers (setup.layer)
       const extensionLayers = allExtensions
         .filter((ext) => ext.setup.layer !== undefined)

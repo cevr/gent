@@ -240,6 +240,8 @@ export interface ExtensionSetup {
   readonly projection?: ExtensionProjectionConfig
   /** Declarative tag-conditional tool injections */
   readonly tagInjections?: ReadonlyArray<TagInjection>
+  /** One-time startup effect — runs during dependency initialization. No service requirements. */
+  readonly onStartup?: Effect.Effect<void>
 }
 
 // Extension — the core primitive

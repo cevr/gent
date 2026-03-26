@@ -204,6 +204,72 @@ Important files:
 - `tests/runtime.test.ts`
 - `apps/tui/tests/render-harness.tsx`
 
+## Memory Extension
+
+Builtin extension (`@gent/memory`). Persistent memory across sessions via flat `.md` files.
+
+### Vault
+
+```text
+~/.gent/memory/
+├── index.md                          # Root index
+├── global/
+│   ├── index.md
+│   └── <topic>.md
+└── project/
+    └── <project-name>-<sha256_6>/
+        ├── index.md
+        └── <topic>.md
+```
+
+Session-local memories are volatile (actor state only). Promotion to disk is explicit via tools.
+
+Project key: `<basename>-<sha256_6>` of canonical repo root — collision-safe across same-named repos.
+
+### Tools
+
+- `memory_remember` — write to vault (project/global) or session state
+- `memory_recall` — search/list memories, full content for search, index for no-query
+- `memory_forget` — remove from vault or session state
+
+### Prompt Injection
+
+Compact summary injected as system prompt section. Capped at 8 entries (session + project + global). `memory_recall` tool available for deep dives beyond the cap.
+
+### Dreaming
+
+Extension-defined system agents run in headless mode for memory consolidation:
+
+- `memory:reflect` — review recent sessions, extract project-level memories (weekday evenings)
+- `memory:meditate` — consolidate vault, merge duplicates, promote patterns to global (weekly)
+
+Architecture:
+
+```text
+Bun.cron (launchd plist on macOS)
+  → dream-worker.ts
+    → bun run --cwd apps/tui dev -H -a memory:reflect "..."
+    → gent headless session with system agent
+    → agent uses memory_remember/recall/forget tools
+```
+
+Dream worker is a thin scheduler. Intelligence lives in agent definitions and gent's runtime.
+
+Cron jobs are registered via the extension's `onStartup` hook (idempotent — same title overwrites the launchd plist). The framework runs all `onStartup` hooks during dependency initialization.
+
+Key files:
+
+| File                                                  | Purpose                       |
+| ----------------------------------------------------- | ----------------------------- |
+| `packages/core/src/extensions/memory/vault.ts`        | Vault I/O service             |
+| `packages/core/src/extensions/memory/state.ts`        | Extension state + helpers     |
+| `packages/core/src/extensions/memory/tools.ts`        | Agent tools                   |
+| `packages/core/src/extensions/memory/agents.ts`       | reflect + meditate agent defs |
+| `packages/core/src/extensions/memory/dreaming.ts`     | Bun.cron registration         |
+| `packages/core/src/extensions/memory/dream-worker.ts` | Cron entry point              |
+| `packages/core/src/extensions/memory/projection.ts`   | Prompt section + UI model     |
+| `packages/core/src/extensions/memory/index.ts`        | Extension registration        |
+
 ## Non-Goals
 
 - No cluster/distribution roadmap in this document.
