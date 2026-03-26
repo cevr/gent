@@ -232,7 +232,10 @@ export const createDependencies = (config: DependenciesConfig) => {
   const extensionRegistryLive = makeExtensionLayers(config)
   const fileLockServiceLive = FileLockService.layer
 
-  const providerFactoryLive = Layer.provide(ProviderFactory.Live, authStoreLive)
+  const providerFactoryLive = Layer.provide(
+    ProviderFactory.Live,
+    Layer.merge(authStoreLive, extensionRegistryLive),
+  )
   let providerLive = Layer.provide(Provider.Live, providerFactoryLive)
   if (providerMode === "debug-scripted") providerLive = DebugProvider
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider

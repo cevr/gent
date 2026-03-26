@@ -8,6 +8,7 @@ import { createMistral } from "@ai-sdk/mistral"
 import { fromIni } from "@aws-sdk/credential-providers"
 import { AuthStore, type AuthInfo } from "../domain/auth-store.js"
 import { SUPPORTED_PROVIDERS } from "../domain/model.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ProviderError } from "./provider"
 import {
   OPENAI_OAUTH_ALLOWED_MODELS,
@@ -63,7 +64,7 @@ const readEnv = (name: string) =>
 export class ProviderFactory extends ServiceMap.Service<ProviderFactory, ProviderFactoryService>()(
   "@gent/core/src/providers/provider-factory/ProviderFactory",
 ) {
-  static Live: Layer.Layer<ProviderFactory, never, AuthStore> = Layer.effect(
+  static Live: Layer.Layer<ProviderFactory, never, AuthStore | ExtensionRegistry> = Layer.effect(
     ProviderFactory,
     Effect.gen(function* () {
       // Read Anthropic env vars via Config at layer construction
@@ -77,7 +78,7 @@ export class ProviderFactory extends ServiceMap.Service<ProviderFactory, Provide
 
   static Test: Layer.Layer<ProviderFactory> = Layer.provide(
     Layer.effect(ProviderFactory, makeProviderFactory()),
-    Layer.succeed(AuthStore, testAuthStorage),
+    Layer.merge(Layer.succeed(AuthStore, testAuthStorage), ExtensionRegistry.Test()),
   )
 }
 
@@ -196,9 +197,14 @@ const getBuiltinApi = (providerId: string): ProviderApi | undefined => {
 }
 
 // Factory implementation
-function makeProviderFactory(): Effect.Effect<ProviderFactoryService, never, AuthStore> {
+function makeProviderFactory(): Effect.Effect<
+  ProviderFactoryService,
+  never,
+  AuthStore | ExtensionRegistry
+> {
   return Effect.gen(function* () {
     const authStore = yield* AuthStore
+    const extensionRegistry = yield* ExtensionRegistry
     const resolveAuthFromStore = (providerName: string) =>
       authStore
         .get(providerName)
@@ -233,6 +239,20 @@ function makeProviderFactory(): Effect.Effect<ProviderFactoryService, never, Aut
         }
         const [providerName, modelName] = parsed
 
+        // Try extension-registered provider first
+        const extensionProvider = yield* extensionRegistry.getProvider(providerName)
+        if (extensionProvider !== undefined) {
+          return yield* Effect.try({
+            try: () => extensionProvider.resolveModel(modelName) as LanguageModel,
+            catch: (e) =>
+              new ProviderError({
+                message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
+                model: modelId,
+              }),
+          })
+        }
+
+        // Fall back to builtin dispatch
         const api = getBuiltinApi(providerName)
         if (api === undefined) {
           return yield* new ProviderError({
@@ -274,11 +294,25 @@ function makeProviderFactory(): Effect.Effect<ProviderFactoryService, never, Aut
       }),
 
       listProviders: () =>
-        Effect.succeed(
-          SUPPORTED_PROVIDERS.map(
-            (provider) =>
-              new ProviderInfo({ id: provider.id, name: provider.name, isCustom: false }),
-          ),
+        extensionRegistry.listProviders().pipe(
+          Effect.map((extProviders) => {
+            const extIds = new Set(extProviders.map((p) => p.id))
+            // Builtin providers not yet registered as extensions
+            const builtins = SUPPORTED_PROVIDERS.filter((p) => !extIds.has(p.id)).map(
+              (p) => new ProviderInfo({ id: p.id, name: p.name, isCustom: false }),
+            )
+            // Extension-registered providers (builtins migrated to extensions keep isCustom: false)
+            const builtinIds = new Set<string>(SUPPORTED_PROVIDERS.map((p) => p.id))
+            const fromExtensions = extProviders.map(
+              (p) =>
+                new ProviderInfo({
+                  id: p.id,
+                  name: p.name,
+                  isCustom: !builtinIds.has(p.id),
+                }),
+            )
+            return [...builtins, ...fromExtensions]
+          }),
         ),
     }
   })
