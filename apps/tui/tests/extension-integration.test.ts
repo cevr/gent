@@ -281,6 +281,82 @@ describe("session UI state — extension overlay", () => {
   })
 })
 
+describe("disabled extensions", () => {
+  test("disabled builtin is excluded from resolved output", async () => {
+    const emptyUser = join(TEST_DIR, "disabled-empty-user")
+    const emptyProject = join(TEST_DIR, "disabled-empty-project")
+    mkdirSync(emptyUser, { recursive: true })
+    mkdirSync(emptyProject, { recursive: true })
+
+    const resolved = await loadTuiExtensions(
+      { userDir: emptyUser, projectDir: emptyProject, disabled: ["@gent/tools"] },
+      noopCtx,
+    )
+
+    // Tool renderers from @gent/tools should be gone
+    expect(resolved.renderers.has("read")).toBe(false)
+    expect(resolved.renderers.has("bash")).toBe(false)
+
+    // Other builtins should still be present
+    const widgetIds = resolved.widgets.map((w) => w.id)
+    expect(widgetIds).toContain("plan-mode")
+
+    rmSync(emptyUser, { recursive: true, force: true })
+    rmSync(emptyProject, { recursive: true, force: true })
+  })
+
+  test("disabled user extension is not loaded or setup() called", async () => {
+    const disabledDir = join(TEST_DIR, "disabled-user")
+    mkdirSync(disabledDir, { recursive: true })
+    // Extension that would throw in setup() if called
+    writeFileSync(
+      join(disabledDir, "bomb.client.ts"),
+      `export default {
+  id: "@test/bomb",
+  setup: () => { throw new Error("setup() should not be called for disabled extension") },
+}`,
+    )
+
+    // Should not throw — setup() should never be called
+    const resolved = await loadTuiExtensions(
+      { userDir: disabledDir, projectDir: join(TEST_DIR, "no-project"), disabled: ["@test/bomb"] },
+      noopCtx,
+    )
+
+    // Builtins still present
+    expect(resolved.renderers.has("read")).toBe(true)
+
+    rmSync(disabledDir, { recursive: true, force: true })
+  })
+
+  test("multiple builtins can be disabled independently", async () => {
+    const emptyUser = join(TEST_DIR, "disabled-multi-user")
+    const emptyProject = join(TEST_DIR, "disabled-multi-project")
+    mkdirSync(emptyUser, { recursive: true })
+    mkdirSync(emptyProject, { recursive: true })
+
+    const resolved = await loadTuiExtensions(
+      {
+        userDir: emptyUser,
+        projectDir: emptyProject,
+        disabled: ["@gent/plan-mode", "@gent/tasks"],
+      },
+      noopCtx,
+    )
+
+    const widgetIds = resolved.widgets.map((w) => w.id)
+    expect(widgetIds).not.toContain("plan-mode")
+    expect(widgetIds).not.toContain("tasks")
+    // Connection widget should still be there
+    expect(widgetIds).toContain("connection")
+    // Tool renderers should still be there
+    expect(resolved.renderers.has("read")).toBe(true)
+
+    rmSync(emptyUser, { recursive: true, force: true })
+    rmSync(emptyProject, { recursive: true, force: true })
+  })
+})
+
 describe("same-scope collision detection", () => {
   test("two user extensions with same tool name throws", async () => {
     const collisionDir = join(TEST_DIR, "collision-tool")
