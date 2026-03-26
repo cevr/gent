@@ -6,9 +6,10 @@ import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createMistral } from "@ai-sdk/mistral"
 import { fromIni } from "@aws-sdk/credential-providers"
-import { AuthStore, type AuthInfo } from "../domain/auth-store.js"
+import { AuthOauth, AuthStore, type AuthInfo } from "../domain/auth-store.js"
 /** Known builtin provider IDs — used for isCustom classification until batch 7 fully removes legacy substrate */
 const BUILTIN_PROVIDER_IDS = new Set(["anthropic", "openai", "bedrock", "google", "mistral"])
+import type { ProviderAuthInfo } from "../domain/extension.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ProviderError } from "./provider"
 import {
@@ -234,11 +235,34 @@ function makeProviderFactory(): Effect.Effect<
         if (extensionProvider !== undefined) {
           // Pass stored auth so the extension can honor manually entered API keys
           const authInfo = yield* resolveAuthFromStore(providerName)
-          let authParam: { type: string; key?: string } | undefined
+          let authParam: ProviderAuthInfo | undefined
           if (authInfo?.type === "api") {
             authParam = { type: "api", key: authInfo.key }
           } else if (authInfo?.type === "oauth") {
-            authParam = { type: "oauth" }
+            authParam = {
+              type: "oauth",
+              access: authInfo.access,
+              refresh: authInfo.refresh,
+              expires: authInfo.expires,
+              accountId: authInfo.accountId,
+              persist: (updated) =>
+                Effect.runPromise(
+                  authStore
+                    .set(
+                      providerName,
+                      new AuthOauth({
+                        type: "oauth",
+                        access: updated.access,
+                        refresh: updated.refresh,
+                        expires: updated.expires,
+                        ...(updated.accountId !== undefined
+                          ? { accountId: updated.accountId }
+                          : {}),
+                      }),
+                    )
+                    .pipe(Effect.catchEager(() => Effect.void)),
+                ),
+            }
           }
           const resolved = yield* Effect.try({
             try: () => extensionProvider.resolveModel(modelName, authParam),

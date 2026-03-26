@@ -1,12 +1,65 @@
 import { Effect } from "effect"
 import { createOpenAI } from "@ai-sdk/openai"
 import { defineExtension } from "../../domain/extension.js"
-import type { ProviderContribution } from "../../domain/extension.js"
+import type { ProviderAuthInfo, ProviderContribution } from "../../domain/extension.js"
+import {
+  createOpenAIOAuthFetch,
+  refreshOpenAIOauth,
+  OPENAI_OAUTH_ALLOWED_MODELS,
+} from "../../providers/oauth/openai-oauth.js"
+import { AuthOauth } from "../../domain/auth-store.js"
 import { AuthMethod } from "../../domain/auth-method.js"
 
 const readEnv = (name: string): string | undefined => {
   const val = process.env[name]
   return val !== undefined && val !== "" ? val : undefined
+}
+
+/** Build an OAuth fetch wrapper from ProviderAuthInfo tokens + persist callback */
+const buildOAuthLoader = (authInfo: ProviderAuthInfo) => {
+  // Mutable token state for the lifetime of this model resolution
+  let current = {
+    access: authInfo.access ?? "",
+    refresh: authInfo.refresh ?? "",
+    expires: authInfo.expires ?? 0,
+    accountId: authInfo.accountId,
+  }
+
+  return async (): Promise<AuthOauth> => {
+    if (current.access.length > 0 && current.expires >= Date.now()) {
+      return new AuthOauth({
+        type: "oauth",
+        access: current.access,
+        refresh: current.refresh,
+        expires: current.expires,
+        ...(current.accountId !== undefined ? { accountId: current.accountId } : {}),
+      })
+    }
+
+    // Token expired — refresh
+    const refreshed = await refreshOpenAIOauth(current.refresh)
+    current = {
+      access: refreshed.access,
+      refresh: refreshed.refresh,
+      expires: refreshed.expires,
+      accountId: refreshed.accountId ?? current.accountId,
+    }
+
+    // Persist back to AuthStore
+    if (authInfo.persist !== undefined) {
+      await authInfo.persist(current).catch((e) => {
+        console.warn("[openai] failed to persist refreshed OAuth tokens:", e)
+      })
+    }
+
+    return new AuthOauth({
+      type: "oauth",
+      access: current.access,
+      refresh: current.refresh,
+      expires: current.expires,
+      ...(current.accountId !== undefined ? { accountId: current.accountId } : {}),
+    })
+  }
 }
 
 export const OpenAIExtension = defineExtension({
@@ -17,9 +70,20 @@ export const OpenAIExtension = defineExtension({
         id: "openai",
         name: "OpenAI",
         resolveModel: (modelName, authInfo) => {
-          // Stored OAuth is the user's explicit auth choice — fall through to
-          // builtin dispatch which handles token refresh via AuthStore.
-          if (authInfo?.type === "oauth") return undefined
+          // Stored OAuth — handle inline with token refresh
+          if (authInfo?.type === "oauth") {
+            if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
+              throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
+            }
+            const loadAuth = buildOAuthLoader(authInfo)
+            const oauthFetch = createOpenAIOAuthFetch(loadAuth)
+            const client = createOpenAI({
+              apiKey: "oauth",
+              fetch: oauthFetch,
+              headers: { originator: "gent" },
+            })
+            return client.responses(modelName)
+          }
 
           // Stored API key takes precedence over env var
           const storedApiKey =
