@@ -4,7 +4,7 @@
  * Parity with fromReducer: handleEvent, handleIntent, persistence,
  * version tracking via Ref, projection externalization.
  *
- * Uses ActorRef.dispatch for atomic change detection — sends event through
+ * Uses ActorRef.call for atomic change detection — sends event through
  * the queue and gets back a ProcessEventResult receipt. No more before/yield/after.
  */
 
@@ -174,7 +174,7 @@ export const fromMachine = <
             if (mapped === undefined) return false
 
             // Atomic: dispatch sends through queue and returns transition receipt
-            const result = yield* ref.dispatch(mapped).pipe(
+            const result = yield* ref.call(mapped).pipe(
               Effect.catchDefect(() =>
                 Effect.succeed({
                   transitioned: false,
@@ -217,7 +217,7 @@ export const fromMachine = <
               }
 
               const machineEvent = mapIntent(validated)
-              const result = yield* ref.dispatch(machineEvent).pipe(
+              const result = yield* ref.call(machineEvent).pipe(
                 Effect.catchDefect(() =>
                   Effect.succeed({
                     transitioned: false,
