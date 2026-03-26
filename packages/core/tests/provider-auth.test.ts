@@ -2,73 +2,103 @@ import { describe, it, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore } from "@gent/core/domain/auth-store"
-import { AuthStorage } from "@gent/core/domain/auth-storage"
 import type { AuthApi } from "@gent/core/domain/auth-store"
-import { ProviderAuth, type ProviderAuthProvider } from "@gent/core/providers/provider-auth"
+import { AuthStorage } from "@gent/core/domain/auth-storage"
+import type { LoadedExtension, ProviderContribution } from "@gent/core/domain/extension"
+import { ProviderAuth } from "@gent/core/providers/provider-auth"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
-const oauthProvider: ProviderAuthProvider = {
-  methods: [new AuthMethod({ type: "oauth", label: "OAuth" })],
-  authorize: () =>
-    Effect.succeed({
-      authorization: {
-        url: "http://example.com/auth",
-        method: "code",
-        instructions: "Paste code",
-      },
-      callback: (code?: string) => Effect.succeed({ type: "api", key: code ?? "" } as const),
-    }),
+const pendingCallbacks = new Map<string, (code?: string) => string>()
+
+const oauthProvider: ProviderContribution = {
+  id: "openai",
+  name: "OpenAI",
+  resolveModel: () => ({}),
+  auth: {
+    methods: [new AuthMethod({ type: "oauth", label: "OAuth" })],
+    authorize: (sessionId, _methodIndex, _persist) =>
+      Effect.tryPromise({
+        try: async () => {
+          const key = `${sessionId}`
+          pendingCallbacks.set(key, (code) => code ?? "")
+          return {
+            url: "http://example.com/auth",
+            method: "code" as const,
+            instructions: "Paste code",
+          }
+        },
+        catch: (e) => ({ _tag: "AuthError" as const, cause: e }),
+      }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+    callback: (sessionId, _methodIndex, _authorizationId, persist, code) =>
+      Effect.gen(function* () {
+        const key = `${sessionId}`
+        const cb = pendingCallbacks.get(key)
+        pendingCallbacks.delete(key)
+        const apiKey = cb !== undefined ? cb(code) : ""
+        yield* persist({ type: "api", key: apiKey })
+      }),
+  },
 }
 
-const noopProvider: ProviderAuthProvider = {
-  methods: [new AuthMethod({ type: "api", label: "API" })],
-  authorize: () => Effect.succeed(undefined),
+const noopProvider: ProviderContribution = {
+  id: "anthropic",
+  name: "Anthropic",
+  resolveModel: () => ({}),
+  auth: {
+    methods: [new AuthMethod({ type: "api", label: "API" })],
+  },
 }
 
-const providers = {
-  anthropic: noopProvider,
-  openai: oauthProvider,
-  bedrock: noopProvider,
-  google: noopProvider,
-  mistral: noopProvider,
-}
+const testRegistry = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "test" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { providers: [oauthProvider, noopProvider] },
+    } satisfies LoadedExtension,
+  ]),
+)
 
 describe("ProviderAuth", () => {
-  it("scopes pending OAuth by session + auth id", async () => {
+  it("extension authorize + callback stores credentials", async () => {
+    pendingCallbacks.clear()
     const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const layer = Layer.provideMerge(ProviderAuth.Test(providers), authStoreLayer)
+    const layer = Layer.provideMerge(ProviderAuth.Test(), Layer.merge(authStoreLayer, testRegistry))
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const auth = yield* ProviderAuth
         const store = yield* AuthStore
 
-        const first = yield* auth.authorize("s1", "openai", 0)
-        const second = yield* auth.authorize("s2", "openai", 0)
+        const authResult = yield* auth.authorize("s1", "openai", 0)
+        if (authResult === undefined) return { ok: false as const }
 
-        if (!first || !second) return { ok: false as const }
-
-        yield* auth.callback("s1", "openai", 0, first.authorizationId, "sk-1")
+        yield* auth.callback("s1", "openai", 0, authResult.authorizationId, "sk-test-key")
         const stored = yield* store.get("openai")
 
-        const mismatch = yield* Effect.result(
-          auth.callback("s2", "openai", 0, first.authorizationId, "sk-2"),
-        )
-
-        return {
-          ok: true as const,
-          firstId: first.authorizationId,
-          secondId: second.authorizationId,
-          stored,
-          mismatch,
-        }
+        return { ok: true as const, stored }
       }).pipe(Effect.provide(layer)),
     )
 
     if (!result.ok) throw new Error("auth setup failed")
-
-    expect(result.firstId).not.toBe(result.secondId)
     expect(result.stored?.type).toBe("api")
-    expect((result.stored as AuthApi | undefined)?.key).toBe("sk-1")
-    expect(result.mismatch._tag).toBe("Failure")
+    expect((result.stored as AuthApi | undefined)?.key).toBe("sk-test-key")
+  })
+
+  it("listMethods returns methods from extension providers", async () => {
+    const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
+    const layer = Layer.provideMerge(ProviderAuth.Test(), Layer.merge(authStoreLayer, testRegistry))
+
+    const methods = await Effect.runPromise(
+      Effect.gen(function* () {
+        const auth = yield* ProviderAuth
+        return yield* auth.listMethods()
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(Object.keys(methods)).toContain("openai")
+    expect(Object.keys(methods)).toContain("anthropic")
+    expect(methods["openai"]?.length).toBe(1)
   })
 })

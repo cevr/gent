@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai"
 import { defineExtension } from "../../domain/extension.js"
 import type { ProviderAuthInfo, ProviderContribution } from "../../domain/extension.js"
 import {
+  authorizeOpenAI,
   createOpenAIOAuthFetch,
   refreshOpenAIOauth,
   OPENAI_OAUTH_ALLOWED_MODELS,
@@ -62,10 +63,20 @@ const buildOAuthLoader = (authInfo: ProviderAuthInfo) => {
   }
 }
 
+type OAuthCallback = (code?: string) => Promise<{
+  type: "oauth"
+  access: string
+  refresh: string
+  expires: number
+  accountId?: string
+}>
+
 export const OpenAIExtension = defineExtension({
   manifest: { id: "@gent/provider-openai" },
   setup: () =>
     Effect.sync(() => {
+      // Pending OAuth callbacks keyed by authorizationId (closure state)
+      const pendingCallbacks = new Map<string, OAuthCallback>()
       const openaiProvider: ProviderContribution = {
         id: "openai",
         name: "OpenAI",
@@ -120,6 +131,42 @@ export const OpenAIExtension = defineExtension({
             new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
             new AuthMethod({ type: "api", label: "Manually enter API key" }),
           ],
+          authorize: (sessionId, methodIndex) =>
+            Effect.tryPromise({
+              try: async () => {
+                if (methodIndex !== 0) return undefined
+                const { authorization, callback: cb } = await authorizeOpenAI()
+                // Store callback for later retrieval — keyed by session+method
+                const key = `${sessionId}:${methodIndex}`
+                pendingCallbacks.set(key, cb)
+                return authorization
+              },
+              catch: (e) => ({
+                _tag: "OpenAIOAuthError" as const,
+                cause: e,
+              }),
+            }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+          callback: (sessionId, methodIndex, _authorizationId, persist, code) =>
+            Effect.gen(function* () {
+              const key = `${sessionId}:${methodIndex}`
+              const cb = pendingCallbacks.get(key)
+              pendingCallbacks.delete(key)
+              if (cb === undefined) return
+              const result = yield* Effect.tryPromise({
+                try: () => cb(code),
+                catch: (e) => ({
+                  _tag: "OpenAIOAuthCallbackError" as const,
+                  cause: e,
+                }),
+              })
+              yield* persist({
+                type: "oauth",
+                access: result.access,
+                refresh: result.refresh,
+                expires: result.expires,
+                ...(result.accountId !== undefined ? { accountId: result.accountId } : {}),
+              })
+            }).pipe(Effect.catchEager(() => Effect.void)),
         },
       }
 
