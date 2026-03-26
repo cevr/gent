@@ -1,10 +1,9 @@
 import { Effect } from "effect"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { defineExtension } from "../../domain/extension.js"
-import type { ProviderContribution } from "../../domain/extension.js"
+import type { ProviderAuthInfo, ProviderContribution } from "../../domain/extension.js"
 import {
   createAnthropicKeychainFetch,
-  getCachedCredentials,
   initAnthropicKeychainEnv,
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
@@ -19,6 +18,83 @@ const readEnv = (name: string): string | undefined => {
   return val !== undefined && val !== "" ? val : undefined
 }
 
+/** Credential cache — owned by extension closure, not module globals */
+interface CredentialCache {
+  creds: { accessToken: string; refreshToken: string; expiresAt: number } | null
+  at: number
+}
+
+const CREDENTIAL_CACHE_TTL_MS = 30_000
+
+type ClaudeCredentials = { accessToken: string; refreshToken: string; expiresAt: number }
+
+const loadCredentialsEffect = (
+  cache: CredentialCache,
+  authInfo?: ProviderAuthInfo,
+): Effect.Effect<ClaudeCredentials | null> =>
+  Effect.gen(function* () {
+    const now = Date.now()
+
+    // Check cache
+    if (
+      cache.creds !== null &&
+      now - cache.at < CREDENTIAL_CACHE_TTL_MS &&
+      cache.creds.expiresAt > now + 60_000
+    ) {
+      return cache.creds
+    }
+
+    // Read fresh from keychain
+    const result = yield* readClaudeCodeCredentials().pipe(
+      Effect.catchEager(() => Effect.succeed(null)),
+    )
+    if (result === null) {
+      cache.creds = null
+      cache.at = 0
+      return null
+    }
+
+    if (result.expiresAt <= now + 60_000) {
+      // Try refresh
+      yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
+      const refreshed = yield* readClaudeCodeCredentials().pipe(
+        Effect.catchEager(() => Effect.succeed(null)),
+      )
+      if (refreshed === null || refreshed.expiresAt <= now + 60_000) {
+        cache.creds = null
+        cache.at = 0
+        return null
+      }
+      // Persist refreshed creds
+      const persist = authInfo?.persist
+      if (persist !== undefined) {
+        yield* Effect.tryPromise({
+          try: () =>
+            persist({
+              access: refreshed.accessToken,
+              refresh: refreshed.refreshToken,
+              expires: refreshed.expiresAt,
+            }),
+          catch: (cause) => ({ _tag: "PersistError" as const, cause }),
+        }).pipe(
+          Effect.catchEager((e) =>
+            Effect.logWarning("[anthropic] failed to persist refreshed credentials", e.cause),
+          ),
+        )
+      }
+      cache.creds = refreshed
+      cache.at = now
+      return refreshed
+    }
+
+    cache.creds = result
+    cache.at = now
+    return result
+  })
+
+const buildCredentialLoader = (cache: CredentialCache, authInfo?: ProviderAuthInfo) => () =>
+  Effect.runPromise(loadCredentialsEffect(cache, authInfo))
+
 export const AnthropicExtension = defineExtension({
   manifest: { id: "@gent/provider-anthropic" },
   setup: () =>
@@ -30,12 +106,8 @@ export const AnthropicExtension = defineExtension({
       }
       initAnthropicKeychainEnv(env)
 
-      // Credential loader — reads from keychain/file, no AuthStore dependency.
-      // AuthStore persistence is handled by ProviderFactory's existing codepath
-      // until batch 6 migrates auth into the extension.
-      const loadCredentials = () => Effect.runPromise(getCachedCredentials(() => Effect.void))
-
-      const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
+      // Credential cache owned by this extension closure
+      const credentialCache: CredentialCache = { creds: null, at: 0 }
 
       const anthropicProvider: ProviderContribution = {
         id: "anthropic",
@@ -51,7 +123,9 @@ export const AnthropicExtension = defineExtension({
             return createAnthropic({ apiKey })(modelName)
           }
 
-          // Fall back to keychain/OAuth
+          // Fall back to keychain/OAuth with extension-owned credential cache
+          const loadCredentials = buildCredentialLoader(credentialCache, authInfo)
+          const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
           return createAnthropic({
             apiKey: "oauth-placeholder",
             fetch: keychainFetch,
