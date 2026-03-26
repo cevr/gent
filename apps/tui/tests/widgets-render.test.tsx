@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, test, expect } from "bun:test"
+import { Schema } from "effect"
 import { SyntaxStyle } from "@opentui/core"
 import type { QueueEntryInfo } from "@gent/sdk"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
@@ -120,5 +121,51 @@ describe("TUI renderer surfaces", () => {
 
     const frame = renderFrame(setup)
     expect(frame).not.toContain("connection")
+  })
+})
+
+describe("uiModel schema validation", () => {
+  const PlanModeUiModel = Schema.Struct({
+    mode: Schema.Literals(["normal", "plan", "executing"]),
+    todos: Schema.Array(
+      Schema.Struct({
+        id: Schema.Number,
+        text: Schema.String,
+        status: Schema.Literals(["pending", "in-progress", "done"]),
+      }),
+    ),
+    progress: Schema.Struct({
+      total: Schema.Number,
+      done: Schema.Number,
+      inProgress: Schema.Number,
+    }),
+  })
+  const decode = Schema.decodeUnknownOption(PlanModeUiModel)
+
+  test("valid plan-mode snapshot decodes correctly", () => {
+    const valid = {
+      mode: "plan",
+      todos: [{ id: 1, text: "Do thing", status: "pending" }],
+      progress: { total: 1, done: 0, inProgress: 0 },
+    }
+    const result = decode(valid)
+    expect(result._tag).toBe("Some")
+  })
+
+  test("malformed snapshot decodes to None (not crash)", () => {
+    const malformed = { mode: "invalid-mode", todos: "not-an-array" }
+    const result = decode(malformed)
+    expect(result._tag).toBe("None")
+  })
+
+  test("missing fields decode to None", () => {
+    const partial = { mode: "plan" }
+    const result = decode(partial)
+    expect(result._tag).toBe("None")
+  })
+
+  test("null snapshot decodes to None", () => {
+    const result = decode(null)
+    expect(result._tag).toBe("None")
   })
 })

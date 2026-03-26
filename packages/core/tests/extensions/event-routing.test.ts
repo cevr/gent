@@ -227,6 +227,64 @@ describe("ReducingEventStore — event routing", () => {
     )
   })
 
+  test("invalid uiModel is dropped when uiModelSchema validation fails", async () => {
+    // Extension with a strict schema that rejects what deriveUi actually returns
+    const strictSchema = Schema.Struct({ count: Schema.Number, label: Schema.String })
+    const { spawnActor, projection } = fromReducer({
+      id: "bad-model",
+      initial: { count: 0 },
+      reduce: (state: { count: number }, event): ReduceResult<{ count: number }> => {
+        if (event._tag === "TurnCompleted") return { state: { count: state.count + 1 } }
+        return { state }
+      },
+      // deriveUi returns { count: number } but schema requires { count, label }
+      derive: (state: { count: number }) => ({ uiModel: { count: state.count } }),
+      uiModelSchema: strictSchema,
+    })
+
+    const badModelExtension: LoadedExtension = {
+      manifest: { id: "bad-model" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { spawnActor, ...projection },
+    }
+
+    const { fullLayer } = makeLayer([badModelExtension])
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const eventStore = yield* EventStore
+        const stateRuntime = yield* ExtensionStateRuntime
+
+        yield* eventStore.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }))
+
+        // Snapshot should be empty — invalid model was dropped
+        const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+        const badSnapshot = snapshots.find((s) => s.extensionId === "bad-model")
+        expect(badSnapshot).toBeUndefined()
+      }).pipe(Effect.provide(fullLayer)),
+    )
+  })
+
+  test("valid uiModel passes schema validation and appears in snapshots", async () => {
+    // Extension where deriveUi output matches the schema
+    const { fullLayer } = makeLayer([recorderExtension])
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const eventStore = yield* EventStore
+        const stateRuntime = yield* ExtensionStateRuntime
+
+        yield* eventStore.publish(new SessionStarted({ sessionId, branchId }))
+
+        const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+        const recorder = snapshots.find((s) => s.extensionId === "test-recorder")
+        expect(recorder).toBeDefined()
+        expect((recorder!.model as RecorderState).seen).toContain("SessionStarted")
+      }).pipe(Effect.provide(fullLayer)),
+    )
+  })
+
   test("events without branchId skip snapshot publication but still reduce", async () => {
     const { fullLayer } = makeLayer([recorderExtension])
 
