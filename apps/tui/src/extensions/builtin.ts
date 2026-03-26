@@ -9,8 +9,13 @@ import type { ExtensionClientModule } from "@gent/core/domain/extension-client.j
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import { BUILTIN_TOOL_RENDERERS } from "../components/tool-renderers/index"
 import { PlanModeWidget } from "./plan-mode-widget"
+import { TaskWidget } from "../components/task-widget"
+import { ConnectionWidget } from "../components/connection-widget"
 
-export const BUILTIN_CLIENT_EXTENSION: ExtensionClientModule<ToolRenderer> = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyComponent = ToolRenderer | ((props?: any) => any)
+
+export const BUILTIN_CLIENT_EXTENSION: ExtensionClientModule<AnyComponent> = {
   id: "@gent/builtin",
   setup: () => ({
     tools: BUILTIN_TOOL_RENDERERS,
@@ -20,6 +25,18 @@ export const BUILTIN_CLIENT_EXTENSION: ExtensionClientModule<ToolRenderer> = {
         slot: "above-input",
         priority: 10,
         component: PlanModeWidget,
+      },
+      {
+        id: "tasks",
+        slot: "below-messages",
+        priority: 20,
+        component: TaskWidget,
+      },
+      {
+        id: "connection",
+        slot: "below-messages",
+        priority: 30,
+        component: ConnectionWidget,
       },
     ],
   }),

@@ -1,22 +1,19 @@
 import { Show } from "solid-js"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
+import { useClient } from "../client/index"
 
-export interface ConnectionWidgetProps {
-  issue: string | null
-  reconnecting: boolean
-  restartCount?: number | null
-}
-
-export function ConnectionWidget(props: ConnectionWidgetProps) {
+export function ConnectionWidget() {
+  const client = useClient()
   const { theme } = useTheme()
 
-  const visible = () => props.reconnecting || props.issue !== null
-  const accent = () => (props.reconnecting ? theme.warning : theme.error)
+  const visible = () => client.isReconnecting() || client.connectionIssue() !== null
+  const accent = () => (client.isReconnecting() ? theme.warning : theme.error)
   const subtitle = () => {
-    if (props.reconnecting) return "worker reconnect in progress"
-    return props.issue ?? ""
+    if (client.isReconnecting()) return "worker reconnect in progress"
+    return client.connectionIssue() ?? ""
   }
+  const restartCount = () => client.connectionGeneration()
 
   return (
     <Show when={visible()}>
@@ -29,28 +26,22 @@ export function ConnectionWidget(props: ConnectionWidgetProps) {
           subtitleColor={theme.textMuted}
         />
         <InlineChrome.Body accentColor={accent()}>
-          <Show when={props.reconnecting}>
+          <Show when={client.isReconnecting()}>
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>reconnecting to worker...</span>
             </text>
           </Show>
-          <Show
-            when={
-              props.restartCount !== null &&
-              props.restartCount !== undefined &&
-              props.restartCount > 0
-            }
-          >
+          <Show when={restartCount() > 0}>
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
-              <span style={{ fg: theme.textMuted }}>restart count: {props.restartCount}</span>
+              <span style={{ fg: theme.textMuted }}>restart count: {restartCount()}</span>
             </text>
           </Show>
-          <Show when={props.issue !== null}>
+          <Show when={client.connectionIssue() !== null}>
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
-              <span style={{ fg: theme.text }}>{props.issue}</span>
+              <span style={{ fg: theme.text }}>{client.connectionIssue()}</span>
             </text>
           </Show>
         </InlineChrome.Body>

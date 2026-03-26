@@ -25,31 +25,32 @@ export interface TaskPreview {
   status: Task["status"]
 }
 
-type TaskWidgetProps =
-  | {
-      sessionId: SessionId
-      branchId: BranchId
-      previewTasks?: undefined
-    }
-  | {
-      previewTasks: readonly TaskPreview[]
-      sessionId?: undefined
-      branchId?: undefined
-    }
+type TaskWidgetProps = {
+  sessionId?: SessionId
+  branchId?: BranchId
+  previewTasks?: readonly TaskPreview[]
+}
 
-export function TaskWidget(props: TaskWidgetProps) {
+export function TaskWidget(props?: TaskWidgetProps) {
   const client = useClient()
   const { cast } = useRuntime(client.client)
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
+  // Resolve sessionId/branchId from props or active session
+  const sessionId = () => props?.sessionId ?? client.session()?.sessionId
+  const branchId = () => props?.branchId ?? client.session()?.branchId
+
   const [tasks, setTasks] = createSignal<Task[]>([])
-  const currentTasks = () => props.previewTasks ?? tasks()
+  const currentTasks = () => props?.previewTasks ?? tasks()
 
   const loadTasks = () => {
-    if (props.previewTasks !== undefined) return
+    if (props?.previewTasks !== undefined) return
+    const sid = sessionId()
+    const bid = branchId()
+    if (sid === undefined || bid === undefined) return
     cast(
-      client.client.listTasks(props.sessionId, props.branchId).pipe(
+      client.client.listTasks(sid, bid).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             setTasks([...result])
@@ -62,19 +63,22 @@ export function TaskWidget(props: TaskWidgetProps) {
 
   // Initial load
   createEffect(() => {
-    if (props.previewTasks !== undefined) return
+    if (props?.previewTasks !== undefined) return
     loadTasks()
   })
 
   // Subscribe to task events for live updates
   createEffect(() => {
-    if (props.previewTasks !== undefined) return
+    if (props?.previewTasks !== undefined) return
     if (!client.isActive()) return
+    const sid = sessionId()
+    const bid = branchId()
+    if (sid === undefined || bid === undefined) return
 
     const fiber = client.client.runFork(
       runWithReconnect(
         () =>
-          client.client.streamEvents({ sessionId: props.sessionId, branchId: props.branchId }).pipe(
+          client.client.streamEvents({ sessionId: sid, branchId: bid }).pipe(
             Stream.runForEach((envelope) =>
               Effect.sync(() => {
                 switch (envelope.event._tag) {

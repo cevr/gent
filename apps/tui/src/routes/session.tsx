@@ -11,9 +11,7 @@ import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
-import { TaskWidget } from "../components/task-widget"
 import { QueueWidget } from "../components/queue-widget"
-import { ConnectionWidget } from "../components/connection-widget"
 import { useWorkspace } from "../workspace/index"
 import {
   BorderedInput,
@@ -115,12 +113,8 @@ export function Session(props: SessionProps) {
           />
 
           <ExtensionWidgets slot="below-messages" />
-          <TaskWidget sessionId={props.sessionId} branchId={props.branchId} />
-          <ConnectionWidget
-            issue={client.connectionIssue()}
-            reconnecting={client.isReconnecting()}
-            restartCount={client.connectionGeneration()}
-          />
+          {/* QueueWidget stays hardwired — its data comes from session controller state,
+              not available via extension context yet (planned for batch 9) */}
           <QueueWidget
             queuedMessages={controller.queueState().followUp}
             steerMessages={controller.queueState().steering}

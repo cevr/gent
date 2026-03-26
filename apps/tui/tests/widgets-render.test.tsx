@@ -113,14 +113,12 @@ describe("TUI renderer surfaces", () => {
     expect(frame).toContain("+1 more")
   })
 
-  test("ConnectionWidget renders transport issues outside the composer", async () => {
-    const setup = await renderWithProviders(() => (
-      <ConnectionWidget issue="connection lost; retrying" reconnecting={false} restartCount={2} />
-    ))
+  test("ConnectionWidget renders nothing when no connection issue", async () => {
+    // ConnectionWidget now self-sources from useClient() — no props.
+    // Default mock client has no connection issues, so widget renders nothing.
+    const setup = await renderWithProviders(() => <ConnectionWidget />)
 
     const frame = renderFrame(setup)
-    expect(frame).toContain("connection")
-    expect(frame).toContain("connection lost; retrying")
-    expect(frame).toContain("restart count: 2")
+    expect(frame).not.toContain("connection")
   })
 })
