@@ -74,12 +74,7 @@ export class InteractionCommands extends ServiceMap.Service<
             ...(parentSession?.bypass !== undefined ? { bypass: parentSession.bypass } : {}),
             parentSessionId: entry.sessionId,
             parentBranchId: entry.branchId,
-          })
-
-          yield* commands.sendMessage({
-            sessionId: result.sessionId,
-            branchId: result.branchId,
-            content: `[Handoff]\n\n${entry.summary}`,
+            initialPrompt: `[Handoff]\n\n${entry.summary}`,
           })
 
           yield* handoffHandler.respond(input.requestId, "confirm", result.sessionId)
