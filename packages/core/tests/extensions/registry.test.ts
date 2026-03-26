@@ -1,7 +1,12 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, ManagedRuntime } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
-import type { ExtensionHooks, LoadedExtension, RunContext } from "@gent/core/domain/extension"
+import type {
+  ExtensionHooks,
+  LoadedExtension,
+  ProviderContribution,
+  RunContext,
+} from "@gent/core/domain/extension"
 import type { AnyToolDefinition, ToolAction } from "@gent/core/domain/tool"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
@@ -17,6 +22,12 @@ const makeTool = (name: string, action: ToolAction = "read"): AnyToolDefinition 
 const makeAgent = (name: string, kind: "primary" | "subagent" | "system" = "subagent") =>
   new AgentDefinition({ name: name as never, kind })
 
+const makeProvider = (providerId: string, name?: string): ProviderContribution => ({
+  id: providerId,
+  name: name ?? providerId,
+  resolveModel: (modelName) => ({ modelId: `${providerId}/${modelName}` }),
+})
+
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
@@ -24,6 +35,7 @@ const makeExt = (
     tools?: AnyToolDefinition[]
     agents?: AgentDefinition[]
     hooks?: ExtensionHooks
+    providers?: ProviderContribution[]
   },
 ): LoadedExtension => ({
   manifest: { id },
@@ -33,6 +45,7 @@ const makeExt = (
     tools: opts?.tools,
     agents: opts?.agents,
     hooks: opts?.hooks,
+    providers: opts?.providers,
   },
 })
 
@@ -112,6 +125,32 @@ describe("resolveExtensions", () => {
         makeExt("b", "project", { tools: [makeTool("read")], agents: [makeAgent("explore")] }),
       ]),
     ).not.toThrow()
+  })
+
+  test("collects providers from extensions", () => {
+    const resolved = resolveExtensions([
+      makeExt("a", "builtin", { providers: [makeProvider("anthropic"), makeProvider("openai")] }),
+    ])
+    expect(resolved.providers.size).toBe(2)
+    expect(resolved.providers.has("anthropic")).toBe(true)
+    expect(resolved.providers.has("openai")).toBe(true)
+  })
+
+  test("later scope wins for same-id provider", () => {
+    const resolved = resolveExtensions([
+      makeExt("a", "builtin", { providers: [makeProvider("anthropic", "Builtin Anthropic")] }),
+      makeExt("b", "project", { providers: [makeProvider("anthropic", "Custom Anthropic")] }),
+    ])
+    expect(resolved.providers.get("anthropic")?.name).toBe("Custom Anthropic")
+  })
+
+  test("throws on same-scope provider collision from different extensions", () => {
+    expect(() =>
+      resolveExtensions([
+        makeExt("ext-a", "builtin", { providers: [makeProvider("anthropic")] }),
+        makeExt("ext-b", "builtin", { providers: [makeProvider("anthropic")] }),
+      ]),
+    ).toThrow(/same-scope provider collision.*"anthropic"/i)
   })
 })
 
@@ -283,6 +322,30 @@ describe("ExtensionRegistry", () => {
     expect(tools.map((t) => t.name)).not.toContain("secret")
   })
 
+  test("getProvider returns provider by id", async () => {
+    const registry = await buildRegistry([
+      makeExt("a", "builtin", { providers: [makeProvider("anthropic")] }),
+    ])
+    const provider = await Effect.runPromise(registry.getProvider("anthropic"))
+    expect(provider?.id).toBe("anthropic")
+  })
+
+  test("getProvider returns undefined for missing provider", async () => {
+    const registry = await buildRegistry([])
+    const provider = await Effect.runPromise(registry.getProvider("nonexistent"))
+    expect(provider).toBeUndefined()
+  })
+
+  test("listProviders returns all providers", async () => {
+    const registry = await buildRegistry([
+      makeExt("a", "builtin", {
+        providers: [makeProvider("anthropic"), makeProvider("openai")],
+      }),
+    ])
+    const providers = await Effect.runPromise(registry.listProviders())
+    expect(providers.length).toBe(2)
+  })
+
   test("Test layer provides empty registry", async () => {
     const registry = await ManagedRuntime.make(ExtensionRegistry.Test()).runPromise(
       Effect.gen(function* () {
@@ -295,5 +358,8 @@ describe("ExtensionRegistry", () => {
 
     const agents = await Effect.runPromise(registry.listAgents())
     expect(agents.length).toBe(0)
+
+    const providers = await Effect.runPromise(registry.listProviders())
+    expect(providers.length).toBe(0)
   })
 })

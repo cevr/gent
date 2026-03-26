@@ -4,6 +4,7 @@ import type {
   ExtensionKind,
   TurnProjection,
   LoadedExtension,
+  ProviderContribution,
   RunContext,
   TagInjection,
 } from "../../domain/extension.js"
@@ -21,55 +22,66 @@ const SCOPE_PRECEDENCE: Record<ExtensionKind, number> = { builtin: 0, user: 1, p
 export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
+  readonly providers: ReadonlyMap<string, ProviderContribution>
   readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
+}
+
+/** Compile a keyed contribution from sorted extensions. Later scope wins; same-scope collisions throw. */
+const compileContributions = <T>(
+  sorted: ReadonlyArray<LoadedExtension>,
+  extract: (setup: LoadedExtension["setup"]) => ReadonlyArray<T> | undefined,
+  getKey: (item: T) => string,
+  label: string,
+): Map<string, T> => {
+  const result = new Map<string, T>()
+  const scopes = new Map<string, { kind: ExtensionKind; extId: string }>()
+  for (const ext of sorted) {
+    for (const item of extract(ext.setup) ?? []) {
+      const key = getKey(item)
+      const prev = scopes.get(key)
+      if (prev !== undefined && prev.kind === ext.kind && prev.extId !== ext.manifest.id) {
+        throw new Error(
+          `Same-scope ${label} collision: "${key}" provided by both "${prev.extId}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
+        )
+      }
+      result.set(key, item)
+      scopes.set(key, { kind: ext.kind, extId: ext.manifest.id })
+    }
+  }
+  return result
 }
 
 /** Compile loaded extensions into an immutable resolved snapshot. Throws on same-scope collisions. */
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ResolvedExtensions => {
-  // Sort by scope precedence (builtin first, project last)
   const sorted = [...extensions].sort((a, b) => {
     const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-  // Tools: later scope wins for same name; reject same-scope collisions
-  const tools = new Map<string, AnyToolDefinition>()
-  const toolScopes = new Map<string, { kind: ExtensionKind; extId: string }>()
-  for (const ext of sorted) {
-    for (const tool of ext.setup.tools ?? []) {
-      const prev = toolScopes.get(tool.name)
-      if (prev !== undefined && prev.kind === ext.kind && prev.extId !== ext.manifest.id) {
-        throw new Error(
-          `Same-scope tool collision: "${tool.name}" provided by both "${prev.extId}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
-        )
-      }
-      tools.set(tool.name, tool)
-      toolScopes.set(tool.name, { kind: ext.kind, extId: ext.manifest.id })
-    }
-  }
+  const tools = compileContributions(
+    sorted,
+    (s) => s.tools,
+    (t) => t.name,
+    "tool",
+  )
+  const agents = compileContributions(
+    sorted,
+    (s) => s.agents,
+    (a) => a.name,
+    "agent",
+  )
+  const providers = compileContributions(
+    sorted,
+    (s) => s.providers,
+    (p) => p.id,
+    "provider",
+  )
 
-  // Agents: later scope wins for same name; reject same-scope collisions
-  const agents = new Map<string, AgentDefinition>()
-  const agentScopes = new Map<string, { kind: ExtensionKind; extId: string }>()
-  for (const ext of sorted) {
-    for (const agent of ext.setup.agents ?? []) {
-      const prev = agentScopes.get(agent.name)
-      if (prev !== undefined && prev.kind === ext.kind && prev.extId !== ext.manifest.id) {
-        throw new Error(
-          `Same-scope agent collision: "${agent.name}" provided by both "${prev.extId}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
-        )
-      }
-      agents.set(agent.name, agent)
-      agentScopes.set(agent.name, { kind: ext.kind, extId: ext.manifest.id })
-    }
-  }
-
-  // Tag injections: collect from all extensions
   const tagInjections: TagInjection[] = []
   for (const ext of sorted) {
     for (const injection of ext.setup.tagInjections ?? []) {
@@ -79,7 +91,7 @@ export const resolveExtensions = (
 
   const hooks = compileHooks(sorted)
 
-  return { tools, agents, tagInjections, hooks, extensions: sorted }
+  return { tools, agents, providers, tagInjections, hooks, extensions: sorted }
 }
 
 // ToolPolicy compiler — unified tool filtering + prompt section collection
@@ -197,6 +209,10 @@ export interface ExtensionRegistryService {
   readonly listPrimaryAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
   readonly listSubagents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
+  // Provider resolution
+  readonly getProvider: (id: string) => Effect.Effect<ProviderContribution | undefined>
+  readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderContribution>>
+
   // Hooks
   readonly hooks: CompiledHookMap
 }
@@ -221,6 +237,8 @@ export class ExtensionRegistry extends ServiceMap.Service<
         ),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
+      getProvider: (id) => Effect.succeed(resolved.providers.get(id)),
+      listProviders: () => Effect.succeed([...resolved.providers.values()]),
       listPrimaryAgents: () =>
         Effect.succeed(
           [...resolved.agents.values()].filter((a) => a.kind === "primary" && a.hidden !== true),

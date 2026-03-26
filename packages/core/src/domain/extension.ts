@@ -1,5 +1,6 @@
 import type { Effect, Layer, Schema } from "effect"
 import type { AgentDefinition, AgentName } from "./agent"
+import type { AuthMethod, AuthAuthorizationMethod } from "./auth-method"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata } from "./message"
@@ -227,6 +228,41 @@ export interface TagInjection {
   readonly tools: ReadonlyArray<AnyToolDefinition>
 }
 
+// Provider Contribution — what a provider extension registers
+
+export interface ProviderContribution {
+  /** Provider identifier — e.g. "anthropic", "openai", "my-custom" */
+  readonly id: string
+  /** Display name */
+  readonly name: string
+  /** Resolve a model name to a LanguageModel instance (typed as unknown to avoid domain→ai dep) */
+  readonly resolveModel: (modelName: string) => unknown
+  /** Filter/extend the model catalog for this provider */
+  readonly listModels?: (baseCatalog: ReadonlyArray<unknown>) => ReadonlyArray<unknown>
+  /** Auth configuration — methods + authorize/callback handlers */
+  readonly auth?: ProviderAuthContribution
+}
+
+export interface ProviderAuthContribution {
+  readonly methods: ReadonlyArray<AuthMethod>
+  readonly authorize?: (
+    sessionId: string,
+    methodIndex: number,
+  ) => Effect.Effect<ProviderAuthorizationResult | undefined>
+  readonly callback?: (
+    sessionId: string,
+    methodIndex: number,
+    authorizationId: string,
+    code?: string,
+  ) => Effect.Effect<void>
+}
+
+export interface ProviderAuthorizationResult {
+  readonly url: string
+  readonly method: AuthAuthorizationMethod
+  readonly instructions?: string
+}
+
 // Extension Setup — what an extension provides
 
 export interface ExtensionSetup {
@@ -240,6 +276,8 @@ export interface ExtensionSetup {
   readonly projection?: ExtensionProjectionConfig
   /** Declarative tag-conditional tool injections */
   readonly tagInjections?: ReadonlyArray<TagInjection>
+  /** Provider contributions — register AI provider implementations */
+  readonly providers?: ReadonlyArray<ProviderContribution>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
   /** Cleanup effect — runs as scope finalizer during graceful shutdown. */

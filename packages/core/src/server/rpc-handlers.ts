@@ -5,7 +5,7 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
-import { Model, type ProviderId } from "../domain/model.js"
+import { Model } from "../domain/model.js"
 import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { ActorProcess } from "../runtime/actor-process.js"
@@ -222,15 +222,13 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       listAuthMethods: () => providerAuth.listMethods(),
 
-      // SAFETY: provider is validated as ProviderId by the RPC schema layer
       authorizeAuth: ({ sessionId, provider, method }) =>
         providerAuth
-          .authorize(sessionId, provider as ProviderId, method)
+          .authorize(sessionId, provider, method)
           .pipe(Effect.map((result) => result ?? null)),
 
-      // SAFETY: provider is validated as ProviderId by the RPC schema layer
       callbackAuth: ({ sessionId, provider, method, authorizationId, code }) =>
-        providerAuth.callback(sessionId, provider as ProviderId, method, authorizationId, code),
+        providerAuth.callback(sessionId, provider, method, authorizationId, code),
 
       listTasks: ({ sessionId, branchId }) => queries.listTasks(sessionId, branchId),
 

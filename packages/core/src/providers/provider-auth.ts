@@ -5,7 +5,7 @@ import {
   AuthAuthorization,
   type AuthAuthorizationMethod,
 } from "../domain/auth-method.js"
-import { SUPPORTED_PROVIDERS, type ProviderId } from "../domain/model.js"
+import { SUPPORTED_PROVIDERS } from "../domain/model.js"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
 import { readClaudeCodeCredentials, refreshClaudeCodeCredentials } from "./oauth/anthropic-keychain"
 
@@ -41,8 +41,8 @@ export interface ProviderAuthProvider {
 }
 
 const buildProviders = (
-  setAuth: (provider: ProviderId, auth: AuthOauth) => Effect.Effect<void, ProviderAuthError>,
-): Record<ProviderId, ProviderAuthProvider> => {
+  setAuth: (provider: string, auth: AuthOauth) => Effect.Effect<void, ProviderAuthError>,
+): Record<string, ProviderAuthProvider> => {
   const methodsDefault = [new AuthMethod({ type: "api", label: "Manually enter API key" })]
 
   const openaiMethods = [
@@ -171,12 +171,12 @@ export interface ProviderAuthService {
   readonly listMethods: () => Effect.Effect<Record<string, ReadonlyArray<typeof AuthMethod.Type>>>
   readonly authorize: (
     sessionId: string,
-    provider: ProviderId,
+    provider: string,
     method: number,
   ) => Effect.Effect<typeof AuthAuthorization.Type | undefined, ProviderAuthError>
   readonly callback: (
     sessionId: string,
-    provider: ProviderId,
+    provider: string,
     method: number,
     authorizationId: string,
     code?: string,
@@ -190,7 +190,7 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
     ProviderAuth,
     Effect.gen(function* () {
       const authStore = yield* AuthStore
-      const setOauth = (provider: ProviderId, auth: AuthOauth) =>
+      const setOauth = (provider: string, auth: AuthOauth) =>
         authStore.set(provider, auth).pipe(
           Effect.mapError(
             (cause) =>
@@ -205,7 +205,7 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
   )
 
   static Test = (
-    providers: Record<ProviderId, ProviderAuthProvider>,
+    providers: Record<string, ProviderAuthProvider>,
   ): Layer.Layer<ProviderAuth, never, AuthStore> =>
     Layer.effect(
       ProviderAuth,
@@ -217,7 +217,7 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
 }
 
 const makeProviderAuth = (
-  providers: Record<ProviderId, ProviderAuthProvider>,
+  providers: Record<string, ProviderAuthProvider>,
 ): Effect.Effect<ProviderAuthService, never, AuthStore> =>
   Effect.gen(function* () {
     const authStore = yield* AuthStore
@@ -227,7 +227,7 @@ const makeProviderAuth = (
       Effect.sync(() => {
         const result: Record<string, ReadonlyArray<typeof AuthMethod.Type>> = {}
         for (const provider of SUPPORTED_PROVIDERS) {
-          const entry = providers[provider.id as ProviderId]
+          const entry = providers[provider.id]
           result[provider.id] = entry?.methods ?? [
             new AuthMethod({ type: "api", label: "Manually enter API key" }),
           ]
@@ -238,7 +238,7 @@ const makeProviderAuth = (
 
     const authorize = Effect.fn("ProviderAuth.authorize")(function* (
       sessionId: string,
-      provider: ProviderId,
+      provider: string,
       method: number,
     ) {
       const entry = providers[provider]
@@ -270,7 +270,7 @@ const makeProviderAuth = (
 
     const callback = Effect.fn("ProviderAuth.callback")(function* (
       sessionId: string,
-      provider: ProviderId,
+      provider: string,
       method: number,
       authorizationId: string,
       code?: string,

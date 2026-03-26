@@ -5,13 +5,13 @@ import { Schema } from "effect"
 export const ModelId = Schema.String.pipe(Schema.brand("ModelId"))
 export type ModelId = typeof ModelId.Type
 
-// Provider - supported AI provider
+// Provider - AI provider identifier (open, branded string — extensible via extensions)
 
-export const ProviderId = Schema.Literals(["anthropic", "bedrock", "openai", "google", "mistral"])
+export const ProviderId = Schema.String.pipe(Schema.brand("ProviderId"))
 export type ProviderId = typeof ProviderId.Type
 
 export class Provider extends Schema.Class<Provider>("Provider")({
-  id: ProviderId,
+  id: Schema.String.pipe(Schema.brand("ProviderId")),
   name: Schema.String,
 }) {}
 
@@ -47,19 +47,26 @@ export const calculateCost = (
 
 // Supported providers with display names
 
+/** Builtin providers — kept for AuthGuard/ProviderAuth until batch 6 migrates them. */
 export const SUPPORTED_PROVIDERS: readonly Provider[] = [
-  new Provider({ id: "anthropic", name: "Anthropic" }),
-  new Provider({ id: "bedrock", name: "AWS Bedrock" }),
-  new Provider({ id: "openai", name: "OpenAI" }),
-  new Provider({ id: "google", name: "Google" }),
-  new Provider({ id: "mistral", name: "Mistral" }),
+  new Provider({ id: "anthropic" as ProviderId, name: "Anthropic" }),
+  new Provider({ id: "bedrock" as ProviderId, name: "AWS Bedrock" }),
+  new Provider({ id: "openai" as ProviderId, name: "OpenAI" }),
+  new Provider({ id: "google" as ProviderId, name: "Google" }),
+  new Provider({ id: "mistral" as ProviderId, name: "Mistral" }),
 ]
 
-const PROVIDER_ID_SET = new Set<ProviderId>(["anthropic", "bedrock", "openai", "google", "mistral"])
+const BUILTIN_PROVIDER_IDS = new Set<string>([
+  "anthropic",
+  "bedrock",
+  "openai",
+  "google",
+  "mistral",
+])
 
 export const parseModelProvider = (modelId: string): ProviderId | undefined => {
   const slash = modelId.indexOf("/")
   if (slash <= 0 || slash === modelId.length - 1) return undefined
-  const provider = modelId.slice(0, slash) as ProviderId
-  return PROVIDER_ID_SET.has(provider) ? provider : undefined
+  const prefix = modelId.slice(0, slash)
+  return BUILTIN_PROVIDER_IDS.has(prefix) ? (prefix as ProviderId) : undefined
 }
