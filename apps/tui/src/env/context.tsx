@@ -11,6 +11,8 @@ export interface EnvContextValue {
   visual: string | undefined
   /** $EDITOR editor */
   editor: string | undefined
+  /** Graceful shutdown — triggers Effect scope cleanup instead of process.exit */
+  shutdown: () => void
 }
 
 const EnvContext = createContext<EnvContextValue>()

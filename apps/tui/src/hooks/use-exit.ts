@@ -1,4 +1,5 @@
 import { useRenderer } from "@opentui/solid"
+import { useEnv } from "../env/context"
 
 const ESC_DOUBLE_TAP_MS = 500
 
@@ -8,11 +9,12 @@ const ESC_DOUBLE_TAP_MS = 500
  */
 export function useExit() {
   const renderer = useRenderer()
+  const env = useEnv()
   let lastEscTime = 0
 
   const exit = () => {
     renderer.destroy()
-    process.exit(0)
+    env.shutdown()
   }
 
   /** Call on ESC press. Returns true if exiting, false if first tap. */

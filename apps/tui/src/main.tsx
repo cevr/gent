@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Layer, Option, Tracer } from "effect"
+import { Config, Console, Deferred, Effect, Layer, Option, Tracer } from "effect"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
@@ -103,7 +103,7 @@ const main = Command.make(
       if (missingProviders.length > 0 && headless && !debug) {
         const hint = formatMissingProviders(missingProviders)
         yield* Console.error(`Error: missing required API keys: ${hint}`)
-        return process.exit(1)
+        return yield* Effect.die(hint)
       }
 
       const state = yield* resolveInitialState({
@@ -121,7 +121,7 @@ const main = Command.make(
         const branchId = state.session.branchId
         if (branchId === undefined) {
           yield* Console.error("Error: session has no branch")
-          return process.exit(1)
+          return yield* Effect.die("session has no branch")
         }
         const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
         const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
@@ -144,16 +144,25 @@ const main = Command.make(
           Effect.withSpan("Headless.run"),
           parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
         )
-        return process.exit(0)
+        return
       }
       const bootstrap = resolveAppBootstrap(state, {
         missingProviders: missingProviders as readonly ProviderId[],
         debugMode: debug,
       })
 
+      // Shutdown signal — components call env.shutdown() instead of process.exit()
+      const shutdownDeferred = yield* Deferred.make<void>()
+      const envWithShutdown = {
+        ...env,
+        shutdown: () => {
+          Effect.runFork(Deferred.complete(shutdownDeferred, Effect.void))
+        },
+      }
+
       yield* Effect.sync(() =>
         render(() => (
-          <EnvProvider env={env}>
+          <EnvProvider env={envWithShutdown}>
             <WorkspaceProvider cwd={cwd} services={uiServices}>
               <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
                 <ClientProvider client={gentClient} initialSession={bootstrap.initialSession}>
@@ -172,7 +181,8 @@ const main = Command.make(
         )),
       )
 
-      return yield* Effect.never
+      // Block until shutdown signal — then scope closes cleanly
+      yield* Deferred.await(shutdownDeferred)
     }),
 )
 

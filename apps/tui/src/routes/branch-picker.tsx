@@ -9,6 +9,7 @@ import { Effect } from "effect"
 import { useTheme } from "../theme/index"
 import { useClient } from "../client/index"
 import { useRouter } from "../router/index"
+import { useEnv } from "../env/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { ChromePanel } from "../components/chrome-panel"
@@ -51,6 +52,7 @@ export function BranchPicker(props: BranchPickerProps) {
   const { theme } = useTheme()
   const client = useClient()
   const router = useRouter()
+  const env = useEnv()
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime(client.client)
 
@@ -121,7 +123,7 @@ export function BranchPicker(props: BranchPickerProps) {
       if (router.canGoBack()) {
         router.back()
       } else {
-        process.exit(0)
+        env.shutdown()
       }
       return true
     }

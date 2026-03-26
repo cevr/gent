@@ -11,7 +11,7 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
-- **Exit pattern** - Use `renderer.destroy()` then `process.exit(0)` for clean exit.
+- **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (worker cleanup, SQLite WAL checkpoint).
 - **Solid underscores** - Multi-word components use underscores: `scroll_box`, `tab_select`.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 

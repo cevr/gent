@@ -106,13 +106,13 @@ export const resolveInitialState = (input: {
       const promptText = Option.isSome(promptArg) ? promptArg.value : undefined
       if (promptText === undefined || promptText.length === 0) {
         yield* Console.error("Error: --headless requires a prompt argument")
-        return process.exit(1)
+        return yield* Effect.die("fatal")
       }
       if (Option.isSome(session)) {
         const sess = yield* client.getSession(session.value as SessionId)
         if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
-          return process.exit(1)
+          return yield* Effect.die("fatal")
         }
         return { _tag: "headless" as const, session: sess, prompt: promptText }
       }
@@ -125,7 +125,7 @@ export const resolveInitialState = (input: {
       const sess = yield* client.getSession(session.value as SessionId)
       if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
-        return process.exit(1)
+        return yield* Effect.die("fatal")
       }
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
       const branches = yield* client.listBranches(sess.id)
