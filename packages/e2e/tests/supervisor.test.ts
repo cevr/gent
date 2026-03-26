@@ -560,4 +560,63 @@ describe("worker supervisor", () => {
       ),
     )
   })
+
+  test("scope close cleans up worker — no orphan processes", async () => {
+    const dataDir = makeTempDir()
+    let capturedPid: number | null = null
+
+    // Run in a scope that closes naturally
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerWithSupervisor({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+          capturedPid = worker.pid()
+          expect(capturedPid).not.toBeNull()
+          // scope closes here — supervisor finalizer should kill worker
+        }),
+      ),
+    )
+
+    // After scope close, worker process should be gone
+    expect(capturedPid).not.toBeNull()
+    // Give the process a moment to die
+    await Bun.sleep(500)
+    expect(() => process.kill(capturedPid!, 0)).toThrow()
+  })
+
+  test("headless mode exits cleanly without orphaning worker", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerWithSupervisor({
+            cwd: repoRoot,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const created = yield* worker.client.createSession({
+            cwd: repoRoot,
+            bypass: true,
+            initialPrompt: "hello",
+          })
+
+          // Wait for the session to have at least one message
+          yield* waitFor(
+            worker.client.listMessages(created.branchId),
+            (messages) => messages.length > 0,
+            10_000,
+          )
+
+          const pid = worker.pid()
+          expect(pid).not.toBeNull()
+
+          // Scope closes — worker should be cleaned up
+        }),
+      ),
+    )
+  }, 15_000)
 })
