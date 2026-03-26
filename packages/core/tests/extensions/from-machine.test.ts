@@ -222,6 +222,21 @@ describe("fromMachine", () => {
     expect(ui).toEqual({ tag: "Counting" })
   })
 
+  test("deriveUi fallback uses safe sentinel when derive reads ctx.agent", () => {
+    const { projection } = fromMachine({
+      id: "sentinel-test",
+      built: counterMachine,
+      derive: (state, ctx) => ({
+        uiModel: { tag: state._tag, agentName: ctx.agent.name },
+      }),
+    })
+
+    expect(projection).toBeDefined()
+    const ui = projection!.deriveUi!({ _tag: "Idle" }) as { tag: string; agentName: string }
+    expect(ui.tag).toBe("Idle")
+    expect(ui.agentName).toBe("__derive_ui__")
+  })
+
   test("no projection when derive not provided", () => {
     const { projection } = fromMachine({
       id: "no-derive",

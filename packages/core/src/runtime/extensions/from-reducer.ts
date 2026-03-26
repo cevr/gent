@@ -18,6 +18,7 @@ import type {
   ReduceResult,
   SpawnActor,
 } from "../../domain/extension.js"
+import { AgentDefinition, type AgentName as AgentNameType } from "../../domain/agent.js"
 import type { SessionId, BranchId } from "../../domain/ids.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import type { ExtensionEventBusService } from "./event-bus.js"
@@ -265,9 +266,14 @@ export const fromReducer = <State, Intent = void>(
     if (deriveUiFn !== undefined) {
       deriveUi = (state: unknown) => deriveUiFn(state as State)
     } else if (deriveFn !== undefined) {
-      // Fallback: extract uiModel from full derive with empty context
+      // Fallback: extract uiModel from full derive with sentinel context.
+      // Extensions should not rely on ctx.agent in the UI derivation path.
+      const sentinel = new AgentDefinition({
+        name: "__derive_ui__" as AgentNameType,
+        kind: "system",
+      })
       deriveUi = (state: unknown) =>
-        deriveFn(state as State, { agent: undefined as never, allTools: [] }).uiModel
+        deriveFn(state as State, { agent: sentinel, allTools: [] }).uiModel
     }
 
     return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }

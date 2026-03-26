@@ -19,6 +19,7 @@ import type {
   ExtensionProjectionConfig,
   SpawnActor,
 } from "../../domain/extension.js"
+import { AgentDefinition, type AgentName as AgentNameType } from "../../domain/agent.js"
 import type { BranchId } from "../../domain/ids.js"
 import { ExtensionEventBus } from "./event-bus.js"
 import { ExtensionTurnControl } from "./turn-control.js"
@@ -282,8 +283,12 @@ export const fromMachine = <
     if (deriveUiFn !== undefined) {
       deriveUi = (state: unknown) => deriveUiFn(state as State)
     } else if (deriveFn !== undefined) {
+      const sentinel = new AgentDefinition({
+        name: "__derive_ui__" as AgentNameType,
+        kind: "system",
+      })
       deriveUi = (state: unknown) =>
-        deriveFn(state as State, { agent: undefined as never, allTools: [] }).uiModel
+        deriveFn(state as State, { agent: sentinel, allTools: [] }).uiModel
     }
 
     return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }

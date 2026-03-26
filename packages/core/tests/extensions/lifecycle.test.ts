@@ -179,4 +179,20 @@ describe("Actor lifecycle", () => {
     expect(harness.projection!.deriveTurn).toBeInstanceOf(Function)
     expect(harness.projection!.deriveUi).toBeInstanceOf(Function)
   })
+
+  test("fromReducer deriveUi fallback uses safe sentinel when derive reads ctx.agent", () => {
+    const { projection } = fromReducer({
+      id: "sentinel-test",
+      initial: { label: "" },
+      reduce: (state: { label: string }) => ({ state }),
+      // derive reads ctx.agent.name — would crash with undefined as never
+      derive: (state: { label: string }, ctx) => ({
+        uiModel: { label: state.label, agentName: ctx.agent.name },
+      }),
+    })
+    expect(projection.deriveUi).toBeInstanceOf(Function)
+    const ui = projection.deriveUi!({ label: "test" }) as { label: string; agentName: string }
+    expect(ui.label).toBe("test")
+    expect(ui.agentName).toBe("__derive_ui__")
+  })
 })
