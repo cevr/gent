@@ -22,6 +22,7 @@ import {
 import { MemoryTools } from "./tools.js"
 import { MemoryIntent } from "./intents.js"
 import { deriveProjection } from "./projection.js"
+import { MemoryAgents } from "./agents.js"
 
 // ── Handle Intent ──
 
@@ -88,6 +89,7 @@ export const MemoryExtension = defineExtension({
   setup: () =>
     Effect.succeed({
       tools: [...MemoryTools],
+      agents: [...MemoryAgents],
       spawnActor: MemorySpawnActor,
       projection: MemoryProjection,
     }),
