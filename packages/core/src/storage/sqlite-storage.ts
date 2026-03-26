@@ -173,6 +173,22 @@ export interface StorageService {
     StorageError
   >
 
+  // Dream queries (for memory extension background consolidation)
+  readonly getRecentSessions: (since: Date) => Effect.Effect<
+    ReadonlyArray<{
+      id: SessionId
+      name: string | null
+      cwd: string | null
+      createdAt: Date
+      updatedAt: Date
+    }>,
+    StorageError
+  >
+  readonly getSessionMessages: (
+    sessionId: SessionId,
+    options?: { since?: Date; roles?: ReadonlyArray<string> },
+  ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
+
   // Extension state persistence
   readonly saveExtensionState: (params: {
     sessionId: SessionId
@@ -1428,6 +1444,60 @@ const makeStorage = Effect.gen(function* () {
         yield* sql`DELETE FROM interaction_requests WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND status = 'pending'`
       },
       Effect.mapError(mapError("Failed to delete pending interaction requests")),
+    ),
+
+    // Dream queries
+    getRecentSessions: Effect.fn("Storage.getRecentSessions")(
+      function* (since) {
+        const sinceTs = since.getTime()
+        const rows =
+          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE updated_at > ${sinceTs} ORDER BY updated_at DESC`
+        return rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          cwd: row.cwd,
+          createdAt: new Date(row.created_at),
+          updatedAt: new Date(row.updated_at),
+        }))
+      },
+      Effect.mapError(mapError("Failed to get recent sessions")),
+    ),
+
+    getSessionMessages: Effect.fn("Storage.getSessionMessages")(
+      function* (sessionId, options) {
+        const since = options?.since
+        const roles = options?.roles
+
+        // Get all branch IDs for this session
+        const branchRows = yield* sql<{
+          id: BranchId
+        }>`SELECT id FROM branches WHERE session_id = ${sessionId}`
+        if (branchRows.length === 0) return []
+
+        // Build message query across all branches
+        const branchIds = branchRows.map((r) => r.id)
+        const placeholders = branchIds.map(() => "?").join(",")
+        let query = `SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id IN (${placeholders})`
+        const params: unknown[] = [...branchIds]
+
+        if (since !== undefined) {
+          query += ` AND created_at > ?`
+          params.push(since.getTime())
+        }
+        if (roles !== undefined && roles.length > 0) {
+          const rolePlaceholders = roles.map(() => "?").join(",")
+          query += ` AND role IN (${rolePlaceholders})`
+          params.push(...roles)
+        }
+
+        query += ` ORDER BY created_at ASC, id ASC`
+
+        const rows = yield* sql.unsafe<MessageRow>(query, params)
+        return yield* Effect.forEach(rows, (row) =>
+          Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
+        )
+      },
+      Effect.mapError(mapError("Failed to get session messages")),
     ),
   } satisfies StorageService
 })
