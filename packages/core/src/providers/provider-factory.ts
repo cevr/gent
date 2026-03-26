@@ -7,7 +7,8 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createMistral } from "@ai-sdk/mistral"
 import { fromIni } from "@aws-sdk/credential-providers"
 import { AuthStore, type AuthInfo } from "../domain/auth-store.js"
-import { SUPPORTED_PROVIDERS } from "../domain/model.js"
+/** Known builtin provider IDs — used for isCustom classification until batch 7 fully removes legacy substrate */
+const BUILTIN_PROVIDER_IDS = new Set(["anthropic", "openai", "bedrock", "google", "mistral"])
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ProviderError } from "./provider"
 import {
@@ -294,24 +295,16 @@ function makeProviderFactory(): Effect.Effect<
 
       listProviders: () =>
         extensionRegistry.listProviders().pipe(
-          Effect.map((extProviders) => {
-            const extIds = new Set(extProviders.map((p) => p.id))
-            // Builtin providers not yet registered as extensions
-            const builtins = SUPPORTED_PROVIDERS.filter((p) => !extIds.has(p.id)).map(
-              (p) => new ProviderInfo({ id: p.id, name: p.name, isCustom: false }),
-            )
-            // Extension-registered providers (builtins migrated to extensions keep isCustom: false)
-            const builtinIds = new Set<string>(SUPPORTED_PROVIDERS.map((p) => p.id))
-            const fromExtensions = extProviders.map(
+          Effect.map((extProviders) =>
+            extProviders.map(
               (p) =>
                 new ProviderInfo({
                   id: p.id,
                   name: p.name,
-                  isCustom: !builtinIds.has(p.id),
+                  isCustom: !BUILTIN_PROVIDER_IDS.has(p.id),
                 }),
-            )
-            return [...builtins, ...fromExtensions]
-          }),
+            ),
+          ),
         ),
     }
   })

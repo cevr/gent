@@ -88,17 +88,18 @@ describe("ProviderFactory extension dispatch", () => {
     expect(model.modelId).toBe("custom-anthropic/claude-sonnet-4-20250514")
   })
 
-  test("listProviders merges extension and builtin providers", async () => {
-    const factory = await buildFactory([makeExt("ext", [makeProvider("custom", "My Custom")])])
+  test("listProviders shows extension-registered providers with correct isCustom", async () => {
+    const factory = await buildFactory([
+      makeExt("ext", [makeProvider("anthropic", "Anthropic"), makeProvider("custom", "My Custom")]),
+    ])
     const providers = await Effect.runPromise(factory.listProviders())
     const ids = providers.map((p) => p.id)
-    // Should have all builtins + the custom one
     expect(ids).toContain("anthropic")
     expect(ids).toContain("custom")
     // Custom should be marked as custom
     const custom = providers.find((p) => p.id === "custom")
     expect(custom?.isCustom).toBe(true)
-    // Builtins should not be custom
+    // Builtin ID should not be custom
     const anthropic = providers.find((p) => p.id === "anthropic")
     expect(anthropic?.isCustom).toBe(false)
   })

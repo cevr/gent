@@ -5,7 +5,6 @@ import {
   AuthAuthorization,
   type AuthAuthorizationMethod,
 } from "../domain/auth-method.js"
-import { SUPPORTED_PROVIDERS } from "../domain/model.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
 import { readClaudeCodeCredentials, refreshClaudeCodeCredentials } from "./oauth/anthropic-keychain"
@@ -244,12 +243,9 @@ const makeProviderAuth = (
           }
         }
       } else {
-        // Test/fallback: use hardcoded provider list
-        for (const provider of SUPPORTED_PROVIDERS) {
-          const entry = providers[provider.id]
-          result[provider.id] = entry?.methods ?? [
-            new AuthMethod({ type: "api", label: "Manually enter API key" }),
-          ]
+        // Test/fallback: use buildProviders map
+        for (const [id, entry] of Object.entries(providers)) {
+          result[id] = entry.methods
         }
       }
 

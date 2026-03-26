@@ -10,11 +10,6 @@ export type ModelId = typeof ModelId.Type
 export const ProviderId = Schema.String.pipe(Schema.brand("ProviderId"))
 export type ProviderId = typeof ProviderId.Type
 
-export class Provider extends Schema.Class<Provider>("Provider")({
-  id: Schema.String.pipe(Schema.brand("ProviderId")),
-  name: Schema.String,
-}) {}
-
 // Model pricing per million tokens (USD)
 
 export const ModelPricing = Schema.Struct({
@@ -44,17 +39,6 @@ export const calculateCost = (
   const outputCost = (usage.outputTokens / 1_000_000) * pricing.output
   return inputCost + outputCost
 }
-
-// Supported providers with display names
-
-/** Builtin providers — kept for AuthGuard/ProviderAuth until batch 6 migrates them. */
-export const SUPPORTED_PROVIDERS: readonly Provider[] = [
-  new Provider({ id: "anthropic" as ProviderId, name: "Anthropic" }),
-  new Provider({ id: "bedrock" as ProviderId, name: "AWS Bedrock" }),
-  new Provider({ id: "openai" as ProviderId, name: "OpenAI" }),
-  new Provider({ id: "google" as ProviderId, name: "Google" }),
-  new Provider({ id: "mistral" as ProviderId, name: "Mistral" }),
-]
 
 const BUILTIN_PROVIDER_IDS = new Set<string>([
   "anthropic",
