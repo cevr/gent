@@ -38,6 +38,10 @@ export interface ExtensionUIContextValue {
   readonly snapshots: Accessor<ReadonlyMap<string, ExtensionSnapshot>>
   /** Update a server-projected snapshot (called from event stream) */
   readonly updateSnapshot: (snapshot: ExtensionSnapshot) => void
+  /** Current session ID (undefined before session is active) */
+  readonly sessionId: Accessor<string | undefined>
+  /** Current branch ID (undefined before session is active) */
+  readonly branchId: Accessor<string | undefined>
 }
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
@@ -87,6 +91,12 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         {
           openOverlay: (id) => overlayOpen(id),
           closeOverlay: () => overlayClose(),
+          get sessionId() {
+            return clientCtx.session()?.sessionId
+          },
+          get branchId() {
+            return clientCtx.session()?.branchId
+          },
         },
       )
       setResolved(result)
@@ -108,6 +118,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         setOverlayDispatch,
         snapshots,
         updateSnapshot,
+        sessionId: () => clientCtx.session()?.sessionId,
+        branchId: () => clientCtx.session()?.branchId,
       }}
     >
       {props.children}

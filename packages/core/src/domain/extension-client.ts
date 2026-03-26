@@ -42,6 +42,10 @@ export interface ExtensionClientSetup<TComponent = unknown> {
 export interface ExtensionClientContext {
   readonly openOverlay: (id: string) => void
   readonly closeOverlay: () => void
+  /** Current session ID (reactive — may be undefined before session is active) */
+  readonly sessionId?: string
+  /** Current branch ID (reactive — may be undefined before session is active) */
+  readonly branchId?: string
 }
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */
