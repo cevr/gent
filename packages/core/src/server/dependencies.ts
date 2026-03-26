@@ -220,7 +220,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   const authStoreLive = Layer.provide(AuthStore.Live, authStorageLive)
 
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
-  const modelRegistryLive = Layer.provide(ModelRegistry.Live, runtimePlatformLive)
   const skillsLive = Skills.Live({
     cwd: config.cwd,
     globalDir: `${config.home}/.gent/skills`,
@@ -228,6 +227,10 @@ export const createDependencies = (config: DependenciesConfig) => {
     extraDirs: config.skillsDirs,
   })
   const extensionRegistryLive = makeExtensionLayers(config)
+  const modelRegistryLive = Layer.provide(
+    ModelRegistry.Live,
+    Layer.merge(runtimePlatformLive, extensionRegistryLive),
+  )
   const authGuardLive = Layer.provide(
     AuthGuard.Live,
     Layer.merge(authStoreLive, extensionRegistryLive),

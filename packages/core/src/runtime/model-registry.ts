@@ -1,6 +1,7 @@
 import { Config, ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { Model } from "../domain/model.js"
 import type { ModelId, ModelPricing } from "../domain/model.js"
+import { ExtensionRegistry } from "./extensions/registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
 const MODELS_URL = "https://models.dev"
@@ -70,13 +71,14 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
   static Live: Layer.Layer<
     ModelRegistry,
     never,
-    FileSystem.FileSystem | Path.Path | RuntimePlatform
+    FileSystem.FileSystem | Path.Path | RuntimePlatform | ExtensionRegistry
   > = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const runtimePlatform = yield* RuntimePlatform
+      const extensionRegistry = yield* ExtensionRegistry
       const homeOption = yield* Effect.gen(function* () {
         return yield* Config.option(Config.string("HOME"))
       }).pipe(Effect.catchEager(() => Effect.succeed(Option.none())))
@@ -135,18 +137,27 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
         if (cached !== null) return cached
         const disk = yield* loadFromDisk
         if (disk.length > 0) {
-          yield* Ref.set(cacheRef, disk)
-          return disk
+          const result = yield* applyFilters(disk)
+          yield* Ref.set(cacheRef, result)
+          return result
         }
         const remote = yield* fetchRemote
-        yield* Ref.set(cacheRef, remote)
-        return remote
+        const result = yield* applyFilters(remote)
+        yield* Ref.set(cacheRef, result)
+        return result
       }).pipe(Effect.withSpan("ModelRegistry.load"))
+
+      const applyFilters = (models: readonly Model[]) =>
+        extensionRegistry.filterProviderModels(models).pipe(
+          Effect.map((filtered) => filtered as readonly Model[]),
+          Effect.catchEager(() => Effect.succeed(models)),
+        )
 
       const refresh = Effect.gen(function* () {
         const remote = yield* fetchRemote
         if (remote.length > 0) {
-          yield* Ref.set(cacheRef, remote)
+          const filtered = yield* applyFilters(remote)
+          yield* Ref.set(cacheRef, filtered)
         }
       }).pipe(Effect.withSpan("ModelRegistry.refresh"))
 

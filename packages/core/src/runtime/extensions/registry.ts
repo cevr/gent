@@ -212,6 +212,10 @@ export interface ExtensionRegistryService {
   // Provider resolution
   readonly getProvider: (id: string) => Effect.Effect<ProviderContribution | undefined>
   readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderContribution>>
+  /** Run base catalog through each provider's listModels filter */
+  readonly filterProviderModels: (
+    baseCatalog: ReadonlyArray<unknown>,
+  ) => Effect.Effect<ReadonlyArray<unknown>>
 
   // Hooks
   readonly hooks: CompiledHookMap
@@ -239,6 +243,16 @@ export class ExtensionRegistry extends ServiceMap.Service<
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       getProvider: (id) => Effect.succeed(resolved.providers.get(id)),
       listProviders: () => Effect.succeed([...resolved.providers.values()]),
+      filterProviderModels: (baseCatalog) =>
+        Effect.sync(() => {
+          let catalog = baseCatalog
+          for (const provider of resolved.providers.values()) {
+            if (provider.listModels !== undefined) {
+              catalog = provider.listModels(catalog)
+            }
+          }
+          return catalog
+        }),
       listPrimaryAgents: () =>
         Effect.succeed(
           [...resolved.agents.values()].filter((a) => a.kind === "primary" && a.hidden !== true),
