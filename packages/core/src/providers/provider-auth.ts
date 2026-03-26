@@ -257,6 +257,34 @@ const makeProviderAuth = (
       provider: string,
       method: number,
     ) {
+      // Try extension-registered provider auth first
+      if (extensionRegistry !== undefined) {
+        const extProvider = yield* extensionRegistry.getProvider(provider)
+        if (extProvider?.auth?.authorize !== undefined) {
+          const extResult = yield* extProvider.auth.authorize(sessionId, method).pipe(
+            Effect.catchDefect((e) =>
+              Effect.fail(
+                new ProviderAuthError({
+                  message: `Provider auth failed: ${e instanceof Error ? e.message : String(e)}`,
+                  cause: e,
+                }),
+              ),
+            ),
+          )
+          if (extResult === undefined) return undefined
+          const authorizationId = Bun.randomUUIDv7()
+          return new AuthAuthorization({
+            authorizationId,
+            url: extResult.url,
+            method: extResult.method,
+            ...(extResult.instructions !== undefined
+              ? { instructions: extResult.instructions }
+              : {}),
+          })
+        }
+      }
+
+      // Fall back to legacy buildProviders
       const entry = providers[provider]
       if (entry === undefined) {
         return yield* new ProviderAuthError({
@@ -291,6 +319,25 @@ const makeProviderAuth = (
       authorizationId: string,
       code?: string,
     ) {
+      // Try extension-registered provider auth callback first
+      if (extensionRegistry !== undefined) {
+        const extProvider = yield* extensionRegistry.getProvider(provider)
+        if (extProvider?.auth?.callback !== undefined) {
+          yield* extProvider.auth.callback(sessionId, method, authorizationId, code).pipe(
+            Effect.catchDefect((e) =>
+              Effect.fail(
+                new ProviderAuthError({
+                  message: `Provider auth callback failed: ${e instanceof Error ? e.message : String(e)}`,
+                  cause: e,
+                }),
+              ),
+            ),
+          )
+          return
+        }
+      }
+
+      // Fall back to legacy pending map
       const key = `${sessionId}:${provider}:${method}:${authorizationId}`
       const map = yield* Ref.get(pending)
       const cb = map.get(key)
