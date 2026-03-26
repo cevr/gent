@@ -18,13 +18,13 @@ import type {
   ReduceResult,
   SpawnActor,
 } from "../../domain/extension.js"
-import { AgentDefinition, type AgentName as AgentNameType } from "../../domain/agent.js"
 import type { SessionId, BranchId } from "../../domain/ids.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import type { ExtensionEventBusService } from "./event-bus.js"
 import { ExtensionEventBus } from "./event-bus.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
 import { ExtensionTurnControl } from "./turn-control.js"
+import { buildProjectionConfig } from "./extension-actor-shared.js"
 
 export interface FromReducerConfig<State, Intent = void> {
   readonly id: string
@@ -121,7 +121,6 @@ export const fromReducer = <State, Intent = void>(
       const stateRef = yield* Ref.make<State>(config.initial)
       const versionRef = yield* Ref.make(0)
 
-      // Persistence: save state to storage
       const persistState = (): Effect.Effect<void> =>
         Effect.gen(function* () {
           if (storage._tag !== "Some" || config.stateSchema === undefined) return
@@ -158,7 +157,6 @@ export const fromReducer = <State, Intent = void>(
 
         // Hydrate persisted state on init
         init: Effect.gen(function* () {
-          // Persistence hydration
           if (
             config.persist === true &&
             storage._tag === "Some" &&
@@ -259,36 +257,11 @@ export const fromReducer = <State, Intent = void>(
       return actor
     })
 
-  // Build projection config — split into turn-time and UI boundaries
-  const projection: ExtensionProjectionConfig | undefined = (() => {
-    const deriveFn = config.derive
-    const deriveUiFn = config.deriveUi
-    if (deriveFn === undefined && deriveUiFn === undefined) return undefined
-
-    let deriveTurn: ExtensionProjectionConfig["deriveTurn"]
-    if (deriveFn !== undefined) {
-      deriveTurn = (state: unknown, deriveCtx: ExtensionDeriveContext) => {
-        const { uiModel: _, ...turn } = deriveFn(state as State, deriveCtx)
-        return turn
-      }
-    }
-
-    let deriveUi: ExtensionProjectionConfig["deriveUi"]
-    if (deriveUiFn !== undefined) {
-      deriveUi = (state: unknown) => deriveUiFn(state as State)
-    } else if (deriveFn !== undefined) {
-      // Fallback: extract uiModel from full derive with sentinel context.
-      // Extensions should not rely on ctx.agent in the UI derivation path.
-      const sentinel = new AgentDefinition({
-        name: "__derive_ui__" as AgentNameType,
-        kind: "system",
-      })
-      deriveUi = (state: unknown) =>
-        deriveFn(state as State, { agent: sentinel, allTools: [] }).uiModel
-    }
-
-    return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }
-  })()
+  const projection = buildProjectionConfig<State>({
+    derive: config.derive,
+    deriveUi: config.deriveUi,
+    uiModelSchema: config.uiModelSchema as Schema.Any | undefined,
+  })
 
   return { spawnActor, projection }
 }

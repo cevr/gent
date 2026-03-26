@@ -19,11 +19,11 @@ import type {
   ExtensionProjectionConfig,
   SpawnActor,
 } from "../../domain/extension.js"
-import { AgentDefinition, type AgentName as AgentNameType } from "../../domain/agent.js"
 import type { BranchId } from "../../domain/ids.js"
 import { ExtensionEventBus } from "./event-bus.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
+import { buildProjectionConfig } from "./extension-actor-shared.js"
 
 export interface FromMachineConfig<
   State extends { readonly _tag: string },
@@ -268,34 +268,11 @@ export const fromMachine = <
       return actor
     })
 
-  // Build projection config — split into turn-time and UI boundaries
-  const projection: ExtensionProjectionConfig | undefined = (() => {
-    const deriveFn = config.derive
-    const deriveUiFn = config.deriveUi
-    if (deriveFn === undefined && deriveUiFn === undefined) return undefined
-
-    let deriveTurn: ExtensionProjectionConfig["deriveTurn"]
-    if (deriveFn !== undefined) {
-      deriveTurn = (state: unknown, deriveCtx: ExtensionDeriveContext) => {
-        const { uiModel: _, ...turn } = deriveFn(state as State, deriveCtx)
-        return turn
-      }
-    }
-
-    let deriveUi: ExtensionProjectionConfig["deriveUi"]
-    if (deriveUiFn !== undefined) {
-      deriveUi = (state: unknown) => deriveUiFn(state as State)
-    } else if (deriveFn !== undefined) {
-      const sentinel = new AgentDefinition({
-        name: "__derive_ui__" as AgentNameType,
-        kind: "system",
-      })
-      deriveUi = (state: unknown) =>
-        deriveFn(state as State, { agent: sentinel, allTools: [] }).uiModel
-    }
-
-    return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }
-  })()
+  const projection = buildProjectionConfig<State>({
+    derive: config.derive,
+    deriveUi: config.deriveUi,
+    uiModelSchema: config.uiModelSchema as Schema.Any | undefined,
+  })
 
   return { spawnActor, projection }
 }
