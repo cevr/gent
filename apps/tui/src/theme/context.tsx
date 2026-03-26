@@ -1,4 +1,4 @@
-import { createContext, useContext, createMemo, onMount } from "solid-js"
+import { createContext, useContext, createMemo, onMount, onCleanup } from "solid-js"
 import type { JSX } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useRenderer } from "@opentui/solid"
@@ -96,10 +96,12 @@ export function ThemeProvider(props: ThemeProviderProps) {
   }
 
   // Listen for SIGUSR2 to refresh palette
-  process.on("SIGUSR2", () => {
+  const sigusr2Handler = () => {
     renderer.clearPaletteCache()
     init()
-  })
+  }
+  process.on("SIGUSR2", sigusr2Handler)
+  onCleanup(() => process.off("SIGUSR2", sigusr2Handler))
 
   const values = createMemo(() => {
     const activeTheme = store.themes[store.active] ?? store.themes["opencode"]
