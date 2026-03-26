@@ -10,6 +10,7 @@ import { WorkflowToolsExtension } from "./workflow-tools.js"
 import { AgentsExtension } from "./agents.js"
 import { PlanModeExtension } from "./plan-mode.js"
 import { ReviewLoopExtension } from "./review-loop.js"
+import { MemoryExtension } from "./memory/index.js"
 
 export {
   FsToolsExtension,
@@ -23,6 +24,7 @@ export {
   AgentsExtension,
   PlanModeExtension,
   ReviewLoopExtension,
+  MemoryExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -37,4 +39,5 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   AgentsExtension,
   PlanModeExtension,
   ReviewLoopExtension,
+  MemoryExtension,
 ]
