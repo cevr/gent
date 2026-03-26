@@ -66,7 +66,7 @@ SubagentActor (router)
 
 Requests
 
-- SendUserMessage { sessionId, branchId, content, mode?, bypass? }
+- SendUserMessage { sessionId, branchId, content, agentOverride?, bypass? }
 - SendToolResult { sessionId, branchId, toolCallId, toolName, output, isError? }
 - Interrupt { sessionId, branchId, kind: cancel|interrupt|interject, message? }
 - GetState { sessionId, branchId }

@@ -657,12 +657,17 @@ const replayStoredCommand = (
     const exit = yield* Effect.exit(
       Effect.gen(function* () {
         switch (record.kind) {
-          case "send-user-message":
+          case "send-user-message": {
+            // Normalize legacy "mode" field to "agentOverride" for pre-rename inbox records
+            const raw = parseJson(record.payloadJson) as Record<string, unknown>
+            if (raw["mode"] !== undefined && raw["agentOverride"] === undefined) {
+              raw["agentOverride"] = raw["mode"]
+              delete raw["mode"]
+            }
             return yield* transport.sendUserMessage(
-              yield* Schema.decodeUnknownEffect(SendUserMessagePayload)(
-                parseJson(record.payloadJson),
-              ),
+              yield* Schema.decodeUnknownEffect(SendUserMessagePayload)(raw),
             )
+          }
           case "send-tool-result":
             return yield* transport.sendToolResult(
               yield* Schema.decodeUnknownEffect(SendToolResultPayload)(
