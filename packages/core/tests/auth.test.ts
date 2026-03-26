@@ -2,7 +2,7 @@
  * Auth storage tests
  */
 
-import { describe, it, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
 import { AuthGuard } from "@gent/core/domain/auth-guard"
 import { AuthApi, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
@@ -12,107 +12,99 @@ describe("AuthStore", () => {
   const storeLayer = (initial: Record<string, string> = {}) =>
     Layer.provide(AuthStore.Live, AuthStorage.Test(initial))
 
-  it("get returns undefined for missing key", async () => {
-    const result = await Effect.runPromise(
-      AuthStore.use((auth) => auth.get("anthropic")).pipe(Effect.provide(storeLayer())),
-    )
-    expect(result).toBeUndefined()
-  })
+  it.live("get returns undefined for missing key", () =>
+    AuthStore.use((auth) => auth.get("anthropic")).pipe(
+      Effect.tap((result) => Effect.sync(() => expect(result).toBeUndefined())),
+      Effect.provide(storeLayer()),
+    ),
+  )
 
-  it("get returns stored api auth", async () => {
-    const layer = storeLayer({ anthropic: "sk-test-key" })
-    const result = await Effect.runPromise(
-      AuthStore.use((auth) => auth.get("anthropic")).pipe(Effect.provide(layer)),
-    )
-    expect(result?.type).toBe("api")
-  })
+  it.live("get returns stored api auth", () =>
+    AuthStore.use((auth) => auth.get("anthropic")).pipe(
+      Effect.tap((result) => Effect.sync(() => expect(result?.type).toBe("api"))),
+      Effect.provide(storeLayer({ anthropic: "sk-test-key" })),
+    ),
+  )
 
-  it("set stores api auth for retrieval", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const auth = yield* AuthStore
-        yield* auth.set("openai", new AuthApi({ type: "api", key: "sk-openai-key" }))
-        return yield* auth.get("openai")
-      }).pipe(Effect.provide(storeLayer())),
-    )
-    expect(result?.type).toBe("api")
-  })
+  it.live("set stores api auth for retrieval", () =>
+    Effect.gen(function* () {
+      const auth = yield* AuthStore
+      yield* auth.set("openai", new AuthApi({ type: "api", key: "sk-openai-key" }))
+      const result = yield* auth.get("openai")
+      expect(result?.type).toBe("api")
+    }).pipe(Effect.provide(storeLayer())),
+  )
 
-  it("set stores oauth auth for retrieval", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const auth = yield* AuthStore
-        yield* auth.set(
-          "anthropic",
-          new AuthOauth({
-            type: "oauth",
-            access: "token",
-            refresh: "refresh",
-            expires: Date.now() + 1000,
-          }),
-        )
-        return yield* auth.get("anthropic")
-      }).pipe(Effect.provide(storeLayer())),
-    )
-    expect(result?.type).toBe("oauth")
-  })
+  it.live("set stores oauth auth for retrieval", () =>
+    Effect.gen(function* () {
+      const auth = yield* AuthStore
+      yield* auth.set(
+        "anthropic",
+        new AuthOauth({
+          type: "oauth",
+          access: "token",
+          refresh: "refresh",
+          expires: Date.now() + 1000,
+        }),
+      )
+      const result = yield* auth.get("anthropic")
+      expect(result?.type).toBe("oauth")
+    }).pipe(Effect.provide(storeLayer())),
+  )
 
-  it("listInfo returns auth info for all providers", async () => {
-    const layer = storeLayer({ anthropic: "key1", openai: "key2" })
-    const result = await Effect.runPromise(
-      AuthStore.use((auth) => auth.listInfo()).pipe(Effect.provide(layer)),
-    )
-    expect(Object.keys(result)).toContain("anthropic")
-    expect(Object.keys(result)).toContain("openai")
-  })
+  it.live("listInfo returns auth info for all providers", () =>
+    AuthStore.use((auth) => auth.listInfo()).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(Object.keys(result)).toContain("anthropic")
+          expect(Object.keys(result)).toContain("openai")
+        }),
+      ),
+      Effect.provide(storeLayer({ anthropic: "key1", openai: "key2" })),
+    ),
+  )
 })
 
 describe("AuthGuard", () => {
-  it("requiredProviders include cowork + deepwork providers", async () => {
+  it.live("requiredProviders include cowork + deepwork providers", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
     )
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const guard = yield* AuthGuard
-        return yield* guard.requiredProviders()
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result).toContain("anthropic")
-    expect(result).toContain("openai")
+    return Effect.gen(function* () {
+      const guard = yield* AuthGuard
+      const result = yield* guard.requiredProviders()
+      expect(result).toContain("anthropic")
+      expect(result).toContain("openai")
+    }).pipe(Effect.provide(layer))
   })
 
-  it("missingRequiredProviders returns missing when no keys", async () => {
+  it.live("missingRequiredProviders returns missing when no keys", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
     )
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const guard = yield* AuthGuard
-        return yield* guard.missingRequiredProviders()
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result).toContain("anthropic")
-    expect(result).toContain("openai")
+    return Effect.gen(function* () {
+      const guard = yield* AuthGuard
+      const result = yield* guard.missingRequiredProviders()
+      expect(result).toContain("anthropic")
+      expect(result).toContain("openai")
+    }).pipe(Effect.provide(layer))
   })
 
-  it("missingRequiredProviders clears when keys are present", async () => {
+  it.live("missingRequiredProviders clears when keys are present", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test({ openai: "sk-openai", anthropic: "sk-anthropic" })),
     )
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const guard = yield* AuthGuard
-        return yield* guard.missingRequiredProviders()
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result).toEqual([])
+    return Effect.gen(function* () {
+      const guard = yield* AuthGuard
+      const result = yield* guard.missingRequiredProviders()
+      expect(result).toEqual([])
+    }).pipe(Effect.provide(layer))
   })
 
-  it("listProviders uses get even when listInfo fails", async () => {
+  it.live("listProviders uses get even when listInfo fails", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(
         Layer.succeed(AuthStore, {
@@ -127,17 +119,14 @@ describe("AuthGuard", () => {
         }),
       ),
     )
+    return Effect.gen(function* () {
+      const guard = yield* AuthGuard
+      const result = yield* guard.listProviders()
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const guard = yield* AuthGuard
-        return yield* guard.listProviders()
-      }).pipe(Effect.provide(layer)),
-    )
-
-    const anthropic = result.find((p) => p.provider === "anthropic")
-    const openai = result.find((p) => p.provider === "openai")
-    expect(anthropic?.hasKey).toBe(true)
-    expect(openai?.hasKey).toBe(false)
+      const anthropic = result.find((p) => p.provider === "anthropic")
+      const openai = result.find((p) => p.provider === "openai")
+      expect(anthropic?.hasKey).toBe(true)
+      expect(openai?.hasKey).toBe(false)
+    }).pipe(Effect.provide(layer))
   })
 })

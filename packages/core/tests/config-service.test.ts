@@ -2,158 +2,139 @@
  * ConfigService tests - permission persistence and first-run setup
  */
 
-import { describe, it, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { ConfigService, UserConfig } from "@gent/core/runtime/config-service"
 
 describe("ConfigService", () => {
   describe("Test implementation", () => {
-    it("get returns empty config initially", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        ConfigService.use((cfg) => cfg.get()).pipe(Effect.provide(layer)),
-      )
-      expect(result.permissions).toBeUndefined()
-    })
+    it.live("get returns empty config initially", () =>
+      ConfigService.use((cfg) => cfg.get()).pipe(
+        Effect.tap((result) => Effect.sync(() => expect(result.permissions).toBeUndefined())),
+        Effect.provide(ConfigService.Test()),
+      ),
+    )
 
-    it("get returns initial config when provided", async () => {
+    it.live("get returns initial config when provided", () => {
       const initial = new UserConfig({
         permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
       })
-      const layer = ConfigService.Test(initial)
-      const result = await Effect.runPromise(
-        ConfigService.use((cfg) => cfg.get()).pipe(Effect.provide(layer)),
+      return ConfigService.use((cfg) => cfg.get()).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            expect(result.permissions?.length).toBe(1)
+            expect(result.permissions?.[0]?.tool).toBe("Bash")
+          }),
+        ),
+        Effect.provide(ConfigService.Test(initial)),
       )
-      expect(result.permissions?.length).toBe(1)
-      expect(result.permissions?.[0]?.tool).toBe("Bash")
     })
 
-    it("set updates config", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          yield* cfg.set({ permissions: [new PermissionRule({ tool: "Read", action: "allow" })] })
-          return yield* cfg.get()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.permissions?.length).toBe(1)
-      expect(result.permissions?.[0]?.tool).toBe("Read")
-    })
+    it.live("set updates config", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        yield* cfg.set({ permissions: [new PermissionRule({ tool: "Read", action: "allow" })] })
+        const result = yield* cfg.get()
+        expect(result.permissions?.length).toBe(1)
+        expect(result.permissions?.[0]?.tool).toBe("Read")
+      }).pipe(Effect.provide(ConfigService.Test())),
+    )
   })
 
   describe("Permission rules", () => {
-    it("getPermissionRules returns empty array initially", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(Effect.provide(layer)),
-      )
-      expect(result).toEqual([])
-    })
+    it.live("getPermissionRules returns empty array initially", () =>
+      ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(
+        Effect.tap((result) => Effect.sync(() => expect(result).toEqual([]))),
+        Effect.provide(ConfigService.Test()),
+      ),
+    )
 
-    it("getPermissionRules returns rules from config", async () => {
+    it.live("getPermissionRules returns rules from config", () => {
       const initial = new UserConfig({
         permissions: [
           new PermissionRule({ tool: "Bash", action: "deny" }),
           new PermissionRule({ tool: "Read", action: "allow" }),
         ],
       })
-      const layer = ConfigService.Test(initial)
-      const result = await Effect.runPromise(
-        ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(Effect.provide(layer)),
+      return ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(
+        Effect.tap((result) => Effect.sync(() => expect(result.length).toBe(2))),
+        Effect.provide(ConfigService.Test(initial)),
       )
-      expect(result.length).toBe(2)
     })
 
-    it("addPermissionRule adds rule to config", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
+    it.live("addPermissionRule adds rule to config", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
 
-          // Add rule
-          yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
+        // Add rule
+        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
 
-          // Verify
-          return yield* cfg.getPermissionRules()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.length).toBe(1)
-      expect(result[0]?.tool).toBe("Bash")
-      expect(result[0]?.action).toBe("deny")
-    })
+        // Verify
+        const result = yield* cfg.getPermissionRules()
+        expect(result.length).toBe(1)
+        expect(result[0]?.tool).toBe("Bash")
+        expect(result[0]?.action).toBe("deny")
+      }).pipe(Effect.provide(ConfigService.Test())),
+    )
 
-    it("addPermissionRule accumulates rules", async () => {
-      const layer = ConfigService.Test()
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
+    it.live("addPermissionRule accumulates rules", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
 
-          yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
-          yield* cfg.addPermissionRule(new PermissionRule({ tool: "Read", action: "allow" }))
-          yield* cfg.addPermissionRule(
-            new PermissionRule({ tool: "Write", pattern: "/etc", action: "deny" }),
-          )
+        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
+        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Read", action: "allow" }))
+        yield* cfg.addPermissionRule(
+          new PermissionRule({ tool: "Write", pattern: "/etc", action: "deny" }),
+        )
 
-          return yield* cfg.getPermissionRules()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.length).toBe(3)
-    })
+        const result = yield* cfg.getPermissionRules()
+        expect(result.length).toBe(3)
+      }).pipe(Effect.provide(ConfigService.Test())),
+    )
 
-    it("removePermissionRule removes matching rule", async () => {
+    it.live("removePermissionRule removes matching rule", () => {
       const initial = new UserConfig({
         permissions: [
           new PermissionRule({ tool: "Bash", action: "deny" }),
           new PermissionRule({ tool: "Read", action: "allow" }),
         ],
       })
-      const layer = ConfigService.Test(initial)
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
+      return Effect.gen(function* () {
+        const cfg = yield* ConfigService
 
-          // Remove Bash rule
-          yield* cfg.removePermissionRule("Bash", undefined)
+        // Remove Bash rule
+        yield* cfg.removePermissionRule("Bash", undefined)
 
-          return yield* cfg.getPermissionRules()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.length).toBe(1)
-      expect(result[0]?.tool).toBe("Read")
+        const result = yield* cfg.getPermissionRules()
+        expect(result.length).toBe(1)
+        expect(result[0]?.tool).toBe("Read")
+      }).pipe(Effect.provide(ConfigService.Test(initial)))
     })
 
-    it("removePermissionRule matches on pattern", async () => {
+    it.live("removePermissionRule matches on pattern", () => {
       const initial = new UserConfig({
         permissions: [
           new PermissionRule({ tool: "Bash", pattern: "rm", action: "deny" }),
           new PermissionRule({ tool: "Bash", action: "allow" }),
         ],
       })
-      const layer = ConfigService.Test(initial)
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const cfg = yield* ConfigService
+      return Effect.gen(function* () {
+        const cfg = yield* ConfigService
 
-          // Remove only the pattern-specific rule
-          yield* cfg.removePermissionRule("Bash", "rm")
+        // Remove only the pattern-specific rule
+        yield* cfg.removePermissionRule("Bash", "rm")
 
-          return yield* cfg.getPermissionRules()
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result.length).toBe(1)
-      expect(result[0]?.pattern).toBeUndefined()
+        const result = yield* cfg.getPermissionRules()
+        expect(result.length).toBe(1)
+        expect(result[0]?.pattern).toBeUndefined()
+      }).pipe(Effect.provide(ConfigService.Test(initial)))
     })
 
-    it("removePermissionRule is idempotent for missing rule", async () => {
-      const layer = ConfigService.Test()
-      // Should not throw
-      await Effect.runPromise(
-        ConfigService.use((cfg) => cfg.removePermissionRule("NonExistent", undefined)).pipe(
-          Effect.provide(layer),
-        ),
-      )
-    })
+    it.live("removePermissionRule is idempotent for missing rule", () =>
+      ConfigService.use((cfg) => cfg.removePermissionRule("NonExistent", undefined)).pipe(
+        Effect.provide(ConfigService.Test()),
+      ),
+    )
   })
 })

@@ -1,4 +1,5 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
+import { test } from "bun:test"
 import { Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
@@ -6,702 +7,659 @@ import { TodoItem } from "@gent/core/domain/todo"
 import { AgentSwitched } from "@gent/core/domain/event"
 import { messageToInfo } from "@gent/core/server/session-utils"
 
-const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
-  Effect.runPromise(Effect.provide(effect, Storage.Test()))
-
 describe("Storage", () => {
   describe("Sessions", () => {
-    test("creates and retrieves a session", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const session = new Session({
-            id: "test-session",
-            name: "Test Session",
+    it.live("creates and retrieves a session", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const session = new Session({
+          id: "test-session",
+          name: "Test Session",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+
+        yield* storage.createSession(session)
+        const retrieved = yield* storage.getSession("test-session")
+
+        expect(retrieved).toBeDefined()
+        expect(retrieved?.id).toBe("test-session")
+        expect(retrieved?.name).toBe("Test Session")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
+
+    it.live("lists sessions", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+
+        yield* storage.createSession(
+          new Session({
+            id: "s1",
+            name: "Session 1",
             createdAt: new Date(),
             updatedAt: new Date(),
-          })
-
-          yield* storage.createSession(session)
-          const retrieved = yield* storage.getSession("test-session")
-
-          expect(retrieved).toBeDefined()
-          expect(retrieved?.id).toBe("test-session")
-          expect(retrieved?.name).toBe("Test Session")
-        }),
-      )
-    })
-
-    test("lists sessions", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-
-          yield* storage.createSession(
-            new Session({
-              id: "s1",
-              name: "Session 1",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
-          yield* storage.createSession(
-            new Session({
-              id: "s2",
-              name: "Session 2",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
-
-          const sessions = yield* storage.listSessions()
-          expect(sessions.length).toBe(2)
-        }),
-      )
-    })
-
-    test("lists first branch per session", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const now = Date.now()
-
-          yield* storage.createSession(
-            new Session({
-              id: "s1",
-              createdAt: new Date(now),
-              updatedAt: new Date(now),
-            }),
-          )
-          yield* storage.createSession(
-            new Session({
-              id: "s2",
-              createdAt: new Date(now + 1),
-              updatedAt: new Date(now + 1),
-            }),
-          )
-
-          yield* storage.createBranch(
-            new Branch({
-              id: "s1-b1",
-              sessionId: "s1",
-              createdAt: new Date(now + 10),
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "s1-b0",
-              sessionId: "s1",
-              createdAt: new Date(now),
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "s2-b1",
-              sessionId: "s2",
-              createdAt: new Date(now + 5),
-            }),
-          )
-
-          const firstBranches = yield* storage.listFirstBranches()
-          const map = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
-
-          expect(map.get("s1")).toBe("s1-b0")
-          expect(map.get("s2")).toBe("s2-b1")
-        }),
-      )
-    })
-
-    test("updates a session", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const session = new Session({
-            id: "update-test",
-            name: "Original",
+          }),
+        )
+        yield* storage.createSession(
+          new Session({
+            id: "s2",
+            name: "Session 2",
             createdAt: new Date(),
             updatedAt: new Date(),
-          })
+          }),
+        )
 
-          yield* storage.createSession(session)
-          yield* storage.updateSession(new Session({ ...session, name: "Updated" }))
+        const sessions = yield* storage.listSessions()
+        expect(sessions.length).toBe(2)
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-          const retrieved = yield* storage.getSession("update-test")
-          expect(retrieved?.name).toBe("Updated")
-        }),
-      )
-    })
+    it.live("lists first branch per session", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = Date.now()
 
-    test("deletes a session", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          yield* storage.createSession(
-            new Session({
-              id: "delete-test",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
+        yield* storage.createSession(
+          new Session({
+            id: "s1",
+            createdAt: new Date(now),
+            updatedAt: new Date(now),
+          }),
+        )
+        yield* storage.createSession(
+          new Session({
+            id: "s2",
+            createdAt: new Date(now + 1),
+            updatedAt: new Date(now + 1),
+          }),
+        )
 
-          yield* storage.deleteSession("delete-test")
-          const retrieved = yield* storage.getSession("delete-test")
+        yield* storage.createBranch(
+          new Branch({
+            id: "s1-b1",
+            sessionId: "s1",
+            createdAt: new Date(now + 10),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "s1-b0",
+            sessionId: "s1",
+            createdAt: new Date(now),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "s2-b1",
+            sessionId: "s2",
+            createdAt: new Date(now + 5),
+          }),
+        )
 
-          expect(retrieved).toBeUndefined()
-        }),
-      )
-    })
+        const firstBranches = yield* storage.listFirstBranches()
+        const map = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
+
+        expect(map.get("s1")).toBe("s1-b0")
+        expect(map.get("s2")).toBe("s2-b1")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
+
+    it.live("updates a session", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const session = new Session({
+          id: "update-test",
+          name: "Original",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.updateSession(new Session({ ...session, name: "Updated" }))
+
+        const retrieved = yield* storage.getSession("update-test")
+        expect(retrieved?.name).toBe("Updated")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
+
+    it.live("deletes a session", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* storage.createSession(
+          new Session({
+            id: "delete-test",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+
+        yield* storage.deleteSession("delete-test")
+        const retrieved = yield* storage.getSession("delete-test")
+
+        expect(retrieved).toBeUndefined()
+      }).pipe(Effect.provide(Storage.Test())),
+    )
   })
 
   describe("Events", () => {
-    test("getLatestEvent returns latest event by tag", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const session = new Session({
-            id: "event-session",
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-          const branch = new Branch({
-            id: "event-branch",
-            sessionId: "event-session",
-            createdAt: new Date(),
-          })
+    it.live("getLatestEvent returns latest event by tag", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const session = new Session({
+          id: "event-session",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        const branch = new Branch({
+          id: "event-branch",
+          sessionId: "event-session",
+          createdAt: new Date(),
+        })
 
-          yield* storage.createSession(session)
-          yield* storage.createBranch(branch)
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
 
-          yield* storage.appendEvent(
-            new AgentSwitched({
-              sessionId: session.id,
-              branchId: branch.id,
-              fromAgent: "cowork",
-              toAgent: "deepwork",
-            }),
-          )
-
-          yield* storage.appendEvent(
-            new AgentSwitched({
-              sessionId: session.id,
-              branchId: branch.id,
-              fromAgent: "deepwork",
-              toAgent: "cowork",
-            }),
-          )
-
-          const latest = yield* storage.getLatestEvent({
+        yield* storage.appendEvent(
+          new AgentSwitched({
             sessionId: session.id,
             branchId: branch.id,
-            tags: ["AgentSwitched"],
-          })
+            fromAgent: "cowork",
+            toAgent: "deepwork",
+          }),
+        )
 
-          expect(latest?._tag).toBe("AgentSwitched")
-          if (latest && latest._tag === "AgentSwitched") {
-            expect(latest.toAgent).toBe("cowork")
-          }
-        }),
-      )
-    })
+        yield* storage.appendEvent(
+          new AgentSwitched({
+            sessionId: session.id,
+            branchId: branch.id,
+            fromAgent: "deepwork",
+            toAgent: "cowork",
+          }),
+        )
+
+        const latest = yield* storage.getLatestEvent({
+          sessionId: session.id,
+          branchId: branch.id,
+          tags: ["AgentSwitched"],
+        })
+
+        expect(latest?._tag).toBe("AgentSwitched")
+        if (latest && latest._tag === "AgentSwitched") {
+          expect(latest.toAgent).toBe("cowork")
+        }
+      }).pipe(Effect.provide(Storage.Test())),
+    )
   })
 
   describe("Branches", () => {
-    test("creates and retrieves a branch", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
+    it.live("creates and retrieves a branch", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
 
-          yield* storage.createSession(
-            new Session({
-              id: "branch-session",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
-
-          const branch = new Branch({
-            id: "test-branch",
-            sessionId: "branch-session",
+        yield* storage.createSession(
+          new Session({
+            id: "branch-session",
             createdAt: new Date(),
-          })
+            updatedAt: new Date(),
+          }),
+        )
 
-          yield* storage.createBranch(branch)
-          const retrieved = yield* storage.getBranch("test-branch")
+        const branch = new Branch({
+          id: "test-branch",
+          sessionId: "branch-session",
+          createdAt: new Date(),
+        })
 
-          expect(retrieved).toBeDefined()
-          expect(retrieved?.sessionId).toBe("branch-session")
-        }),
-      )
-    })
+        yield* storage.createBranch(branch)
+        const retrieved = yield* storage.getBranch("test-branch")
 
-    test("lists branches for a session", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
+        expect(retrieved).toBeDefined()
+        expect(retrieved?.sessionId).toBe("branch-session")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-          yield* storage.createSession(
-            new Session({
-              id: "multi-branch",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
+    it.live("lists branches for a session", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
 
-          yield* storage.createBranch(
-            new Branch({
-              id: "b1",
-              sessionId: "multi-branch",
-              createdAt: new Date(),
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "b2",
-              sessionId: "multi-branch",
-              parentBranchId: "b1",
-              createdAt: new Date(),
-            }),
-          )
+        yield* storage.createSession(
+          new Session({
+            id: "multi-branch",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
 
-          const branches = yield* storage.listBranches("multi-branch")
-          expect(branches.length).toBe(2)
-        }),
-      )
-    })
+        yield* storage.createBranch(
+          new Branch({
+            id: "b1",
+            sessionId: "multi-branch",
+            createdAt: new Date(),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "b2",
+            sessionId: "multi-branch",
+            parentBranchId: "b1",
+            createdAt: new Date(),
+          }),
+        )
 
-    test("updates branch summary", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
+        const branches = yield* storage.listBranches("multi-branch")
+        expect(branches.length).toBe(2)
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-          yield* storage.createSession(
-            new Session({
-              id: "summary-session",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
+    it.live("updates branch summary", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
 
-          yield* storage.createBranch(
-            new Branch({
-              id: "summary-branch",
-              sessionId: "summary-session",
-              createdAt: new Date(),
-            }),
-          )
+        yield* storage.createSession(
+          new Session({
+            id: "summary-session",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
 
-          yield* storage.updateBranchSummary("summary-branch", "Short summary")
+        yield* storage.createBranch(
+          new Branch({
+            id: "summary-branch",
+            sessionId: "summary-session",
+            createdAt: new Date(),
+          }),
+        )
 
-          const retrieved = yield* storage.getBranch("summary-branch")
-          expect(retrieved?.summary).toBe("Short summary")
-        }),
-      )
-    })
+        yield* storage.updateBranchSummary("summary-branch", "Short summary")
+
+        const retrieved = yield* storage.getBranch("summary-branch")
+        expect(retrieved?.summary).toBe("Short summary")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
   })
 
   describe("Messages", () => {
-    test("creates and retrieves messages", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
+    it.live("creates and retrieves messages", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
 
-          yield* storage.createSession(
-            new Session({
-              id: "msg-session",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "msg-branch",
-              sessionId: "msg-session",
-              createdAt: new Date(),
-            }),
-          )
-
-          const message = new Message({
-            id: "msg-1",
-            sessionId: "msg-session",
-            branchId: "msg-branch",
-            role: "user",
-            parts: [new TextPart({ type: "text", text: "Hello" })],
+        yield* storage.createSession(
+          new Session({
+            id: "msg-session",
             createdAt: new Date(),
-          })
+            updatedAt: new Date(),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "msg-branch",
+            sessionId: "msg-session",
+            createdAt: new Date(),
+          }),
+        )
 
-          yield* storage.createMessage(message)
-          const retrieved = yield* storage.getMessage("msg-1")
+        const message = new Message({
+          id: "msg-1",
+          sessionId: "msg-session",
+          branchId: "msg-branch",
+          role: "user",
+          parts: [new TextPart({ type: "text", text: "Hello" })],
+          createdAt: new Date(),
+        })
 
-          expect(retrieved).toBeDefined()
-          expect(retrieved?.role).toBe("user")
-          expect(retrieved?.parts[0]?.type).toBe("text")
-        }),
-      )
-    })
+        yield* storage.createMessage(message)
+        const retrieved = yield* storage.getMessage("msg-1")
 
-    test("counts messages in a branch", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
+        expect(retrieved).toBeDefined()
+        expect(retrieved?.role).toBe("user")
+        expect(retrieved?.parts[0]?.type).toBe("text")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-          yield* storage.createSession(
-            new Session({
-              id: "count-session",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "count-branch",
-              sessionId: "count-session",
-              createdAt: new Date(),
-            }),
-          )
+    it.live("counts messages in a branch", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
 
-          yield* storage.createMessage(
-            new Message({
-              id: "count-msg-1",
-              sessionId: "count-session",
-              branchId: "count-branch",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "one" })],
-              createdAt: new Date(),
-            }),
-          )
-          yield* storage.createMessage(
-            new Message({
-              id: "count-msg-2",
-              sessionId: "count-session",
-              branchId: "count-branch",
-              role: "assistant",
-              parts: [new TextPart({ type: "text", text: "two" })],
-              createdAt: new Date(),
-            }),
-          )
+        yield* storage.createSession(
+          new Session({
+            id: "count-session",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "count-branch",
+            sessionId: "count-session",
+            createdAt: new Date(),
+          }),
+        )
 
-          const count = yield* storage.countMessages("count-branch")
-          expect(count).toBe(2)
-        }),
-      )
-    })
+        yield* storage.createMessage(
+          new Message({
+            id: "count-msg-1",
+            sessionId: "count-session",
+            branchId: "count-branch",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "one" })],
+            createdAt: new Date(),
+          }),
+        )
+        yield* storage.createMessage(
+          new Message({
+            id: "count-msg-2",
+            sessionId: "count-session",
+            branchId: "count-branch",
+            role: "assistant",
+            parts: [new TextPart({ type: "text", text: "two" })],
+            createdAt: new Date(),
+          }),
+        )
 
-    test("lists messages for a branch", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
+        const count = yield* storage.countMessages("count-branch")
+        expect(count).toBe(2)
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-          yield* storage.createSession(
-            new Session({
-              id: "list-msg-session",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "list-msg-branch",
-              sessionId: "list-msg-session",
-              createdAt: new Date(),
-            }),
-          )
+    it.live("lists messages for a branch", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
 
-          yield* storage.createMessage(
-            new Message({
-              id: "lm1",
-              sessionId: "list-msg-session",
-              branchId: "list-msg-branch",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "First" })],
-              createdAt: new Date(),
-            }),
-          )
-          yield* storage.createMessage(
-            new Message({
-              id: "lm2",
-              sessionId: "list-msg-session",
-              branchId: "list-msg-branch",
-              role: "assistant",
-              parts: [new TextPart({ type: "text", text: "Response" })],
-              createdAt: new Date(),
-            }),
-          )
+        yield* storage.createSession(
+          new Session({
+            id: "list-msg-session",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "list-msg-branch",
+            sessionId: "list-msg-session",
+            createdAt: new Date(),
+          }),
+        )
 
-          const messages = yield* storage.listMessages("list-msg-branch")
-          expect(messages.length).toBe(2)
-          expect(messages[0]?.role).toBe("user")
-          expect(messages[1]?.role).toBe("assistant")
-        }),
-      )
-    })
+        yield* storage.createMessage(
+          new Message({
+            id: "lm1",
+            sessionId: "list-msg-session",
+            branchId: "list-msg-branch",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "First" })],
+            createdAt: new Date(),
+          }),
+        )
+        yield* storage.createMessage(
+          new Message({
+            id: "lm2",
+            sessionId: "list-msg-session",
+            branchId: "list-msg-branch",
+            role: "assistant",
+            parts: [new TextPart({ type: "text", text: "Response" })],
+            createdAt: new Date(),
+          }),
+        )
 
-    test("updates session updatedAt when creating message", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const start = new Date(0)
-          const messageTime = new Date(1000)
+        const messages = yield* storage.listMessages("list-msg-branch")
+        expect(messages.length).toBe(2)
+        expect(messages[0]?.role).toBe("user")
+        expect(messages[1]?.role).toBe("assistant")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-          yield* storage.createSession(
-            new Session({
-              id: "session-updated-at",
-              createdAt: start,
-              updatedAt: start,
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "branch-updated-at",
-              sessionId: "session-updated-at",
-              createdAt: start,
-            }),
-          )
+    it.live("updates session updatedAt when creating message", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const start = new Date(0)
+        const messageTime = new Date(1000)
 
-          yield* storage.createMessage(
-            new Message({
-              id: "msg-updated-at",
-              sessionId: "session-updated-at",
-              branchId: "branch-updated-at",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "Ping" })],
-              createdAt: messageTime,
-            }),
-          )
+        yield* storage.createSession(
+          new Session({
+            id: "session-updated-at",
+            createdAt: start,
+            updatedAt: start,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "branch-updated-at",
+            sessionId: "session-updated-at",
+            createdAt: start,
+          }),
+        )
 
-          const session = yield* storage.getSession("session-updated-at")
-          expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
-        }),
-      )
-    })
+        yield* storage.createMessage(
+          new Message({
+            id: "msg-updated-at",
+            sessionId: "session-updated-at",
+            branchId: "branch-updated-at",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "Ping" })],
+            createdAt: messageTime,
+          }),
+        )
 
-    test("orders messages by createdAt then id", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const timestamp = new Date()
+        const session = yield* storage.getSession("session-updated-at")
+        expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-          yield* storage.createSession(
-            new Session({
-              id: "order-session",
-              createdAt: timestamp,
-              updatedAt: timestamp,
-            }),
-          )
-          yield* storage.createBranch(
-            new Branch({
-              id: "order-branch",
-              sessionId: "order-session",
-              createdAt: timestamp,
-            }),
-          )
+    it.live("orders messages by createdAt then id", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const timestamp = new Date()
 
-          yield* storage.createMessage(
-            new Message({
-              id: "b",
-              sessionId: "order-session",
-              branchId: "order-branch",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "Second" })],
-              createdAt: timestamp,
-            }),
-          )
-          yield* storage.createMessage(
-            new Message({
-              id: "a",
-              sessionId: "order-session",
-              branchId: "order-branch",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "First" })],
-              createdAt: timestamp,
-            }),
-          )
+        yield* storage.createSession(
+          new Session({
+            id: "order-session",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "order-branch",
+            sessionId: "order-session",
+            createdAt: timestamp,
+          }),
+        )
 
-          const messages = yield* storage.listMessages("order-branch")
-          expect(messages[0]?.id).toBe("a")
-          expect(messages[1]?.id).toBe("b")
-        }),
-      )
-    })
+        yield* storage.createMessage(
+          new Message({
+            id: "b",
+            sessionId: "order-session",
+            branchId: "order-branch",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "Second" })],
+            createdAt: timestamp,
+          }),
+        )
+        yield* storage.createMessage(
+          new Message({
+            id: "a",
+            sessionId: "order-session",
+            branchId: "order-branch",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "First" })],
+            createdAt: timestamp,
+          }),
+        )
+
+        const messages = yield* storage.listMessages("order-branch")
+        expect(messages[0]?.id).toBe("a")
+        expect(messages[1]?.id).toBe("b")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
   })
 
   describe("Todos", () => {
-    test("listTodos returns empty for new branch", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const todos = yield* storage.listTodos("nonexistent")
-          expect(todos.length).toBe(0)
-        }),
-      )
-    })
+    it.live("listTodos returns empty for new branch", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const todos = yield* storage.listTodos("nonexistent")
+        expect(todos.length).toBe(0)
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-    test("replaceTodos stores and retrieves todos", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const now = new Date()
+    it.live("replaceTodos stores and retrieves todos", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
 
-          const todos = [
-            new TodoItem({
-              id: "t1",
-              content: "Task 1",
-              status: "pending",
-              priority: "high",
-              createdAt: now,
-              updatedAt: now,
-            }),
-            new TodoItem({
-              id: "t2",
-              content: "Task 2",
-              status: "in_progress",
-              createdAt: now,
-              updatedAt: now,
-            }),
-          ]
+        const todos = [
+          new TodoItem({
+            id: "t1",
+            content: "Task 1",
+            status: "pending",
+            priority: "high",
+            createdAt: now,
+            updatedAt: now,
+          }),
+          new TodoItem({
+            id: "t2",
+            content: "Task 2",
+            status: "in_progress",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        ]
 
-          yield* storage.replaceTodos("test-branch", todos)
-          const retrieved = yield* storage.listTodos("test-branch")
+        yield* storage.replaceTodos("test-branch", todos)
+        const retrieved = yield* storage.listTodos("test-branch")
 
-          expect(retrieved.length).toBe(2)
-          expect(retrieved[0]?.content).toBe("Task 1")
-          expect(retrieved[0]?.priority).toBe("high")
-          expect(retrieved[1]?.status).toBe("in_progress")
-        }),
-      )
-    })
+        expect(retrieved.length).toBe(2)
+        expect(retrieved[0]?.content).toBe("Task 1")
+        expect(retrieved[0]?.priority).toBe("high")
+        expect(retrieved[1]?.status).toBe("in_progress")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
-    test("replaceTodos replaces existing todos", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const now = new Date()
+    it.live("replaceTodos replaces existing todos", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
 
-          yield* storage.replaceTodos("branch", [
-            new TodoItem({
-              id: "old",
-              content: "Old",
-              status: "pending",
-              createdAt: now,
-              updatedAt: now,
-            }),
-          ])
+        yield* storage.replaceTodos("branch", [
+          new TodoItem({
+            id: "old",
+            content: "Old",
+            status: "pending",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        ])
 
-          yield* storage.replaceTodos("branch", [
-            new TodoItem({
-              id: "new",
-              content: "New",
-              status: "completed",
-              createdAt: now,
-              updatedAt: now,
-            }),
-          ])
+        yield* storage.replaceTodos("branch", [
+          new TodoItem({
+            id: "new",
+            content: "New",
+            status: "completed",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        ])
 
-          const todos = yield* storage.listTodos("branch")
-          expect(todos.length).toBe(1)
-          expect(todos[0]?.content).toBe("New")
-        }),
-      )
-    })
+        const todos = yield* storage.listTodos("branch")
+        expect(todos.length).toBe(1)
+        expect(todos[0]?.content).toBe("New")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
   })
 
   describe("Message Metadata", () => {
-    test("metadata round-trips through storage", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          yield* storage.createSession(
-            new Session({ id: "meta-s", createdAt: new Date(), updatedAt: new Date() }),
-          )
-          yield* storage.createBranch(
-            new Branch({ id: "meta-b", sessionId: "meta-s", createdAt: new Date() }),
-          )
+    it.live("metadata round-trips through storage", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* storage.createSession(
+          new Session({ id: "meta-s", createdAt: new Date(), updatedAt: new Date() }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "meta-b", sessionId: "meta-s", createdAt: new Date() }),
+        )
 
-          const message = new Message({
-            id: "meta-msg-1",
-            sessionId: "meta-s",
-            branchId: "meta-b",
+        const message = new Message({
+          id: "meta-msg-1",
+          sessionId: "meta-s",
+          branchId: "meta-b",
+          role: "user",
+          parts: [new TextPart({ type: "text", text: "hello" })],
+          createdAt: new Date(),
+          metadata: {
+            customType: "review-status",
+            extensionId: "review-loop",
+            hidden: true,
+            details: { iteration: 3 },
+          },
+        })
+        yield* storage.createMessage(message)
+
+        const messages = yield* storage.listMessages("meta-b")
+        expect(messages.length).toBe(1)
+        const m = messages[0]!
+        expect(m.metadata).toBeDefined()
+        expect(m.metadata!.customType).toBe("review-status")
+        expect(m.metadata!.extensionId).toBe("review-loop")
+        expect(m.metadata!.hidden).toBe(true)
+        expect((m.metadata!.details as { iteration: number }).iteration).toBe(3)
+      }).pipe(Effect.provide(Storage.Test())),
+    )
+
+    it.live("createMessageIfAbsent preserves metadata", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* storage.createSession(
+          new Session({ id: "upsert-s", createdAt: new Date(), updatedAt: new Date() }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "upsert-b", sessionId: "upsert-s", createdAt: new Date() }),
+        )
+
+        const message = new Message({
+          id: "upsert-msg",
+          sessionId: "upsert-s",
+          branchId: "upsert-b",
+          role: "user",
+          parts: [new TextPart({ type: "text", text: "follow-up" })],
+          createdAt: new Date(),
+          metadata: { hidden: true, extensionId: "review-loop" },
+        })
+        yield* storage.createMessageIfAbsent(message)
+
+        const messages = yield* storage.listMessages("upsert-b")
+        expect(messages.length).toBe(1)
+        expect(messages[0]!.metadata).toBeDefined()
+        expect(messages[0]!.metadata!.hidden).toBe(true)
+        expect(messages[0]!.metadata!.extensionId).toBe("review-loop")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
+
+    it.live("messages without metadata have undefined metadata", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* storage.createSession(
+          new Session({ id: "no-meta-s", createdAt: new Date(), updatedAt: new Date() }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "no-meta-b", sessionId: "no-meta-s", createdAt: new Date() }),
+        )
+
+        yield* storage.createMessage(
+          new Message({
+            id: "no-meta-msg",
+            sessionId: "no-meta-s",
+            branchId: "no-meta-b",
             role: "user",
-            parts: [new TextPart({ type: "text", text: "hello" })],
+            parts: [new TextPart({ type: "text", text: "plain" })],
             createdAt: new Date(),
-            metadata: {
-              customType: "review-status",
-              extensionId: "review-loop",
-              hidden: true,
-              details: { iteration: 3 },
-            },
-          })
-          yield* storage.createMessage(message)
+          }),
+        )
 
-          const messages = yield* storage.listMessages("meta-b")
-          expect(messages.length).toBe(1)
-          const m = messages[0]!
-          expect(m.metadata).toBeDefined()
-          expect(m.metadata!.customType).toBe("review-status")
-          expect(m.metadata!.extensionId).toBe("review-loop")
-          expect(m.metadata!.hidden).toBe(true)
-          expect((m.metadata!.details as { iteration: number }).iteration).toBe(3)
-        }),
-      )
-    })
-
-    test("createMessageIfAbsent preserves metadata", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          yield* storage.createSession(
-            new Session({ id: "upsert-s", createdAt: new Date(), updatedAt: new Date() }),
-          )
-          yield* storage.createBranch(
-            new Branch({ id: "upsert-b", sessionId: "upsert-s", createdAt: new Date() }),
-          )
-
-          const message = new Message({
-            id: "upsert-msg",
-            sessionId: "upsert-s",
-            branchId: "upsert-b",
-            role: "user",
-            parts: [new TextPart({ type: "text", text: "follow-up" })],
-            createdAt: new Date(),
-            metadata: { hidden: true, extensionId: "review-loop" },
-          })
-          yield* storage.createMessageIfAbsent(message)
-
-          const messages = yield* storage.listMessages("upsert-b")
-          expect(messages.length).toBe(1)
-          expect(messages[0]!.metadata).toBeDefined()
-          expect(messages[0]!.metadata!.hidden).toBe(true)
-          expect(messages[0]!.metadata!.extensionId).toBe("review-loop")
-        }),
-      )
-    })
-
-    test("messages without metadata have undefined metadata", async () => {
-      await run(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          yield* storage.createSession(
-            new Session({ id: "no-meta-s", createdAt: new Date(), updatedAt: new Date() }),
-          )
-          yield* storage.createBranch(
-            new Branch({ id: "no-meta-b", sessionId: "no-meta-s", createdAt: new Date() }),
-          )
-
-          yield* storage.createMessage(
-            new Message({
-              id: "no-meta-msg",
-              sessionId: "no-meta-s",
-              branchId: "no-meta-b",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "plain" })],
-              createdAt: new Date(),
-            }),
-          )
-
-          const messages = yield* storage.listMessages("no-meta-b")
-          expect(messages[0]!.metadata).toBeUndefined()
-        }),
-      )
-    })
+        const messages = yield* storage.listMessages("no-meta-b")
+        expect(messages[0]!.metadata).toBeUndefined()
+      }).pipe(Effect.provide(Storage.Test())),
+    )
 
     test("messageToInfo preserves metadata for transport", () => {
       const message = new Message({
