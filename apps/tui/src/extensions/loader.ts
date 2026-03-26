@@ -44,7 +44,7 @@ const importExtension = async (
  * Load all TUI extensions: discover files, import modules, resolve with scope precedence.
  *
  * @param opts.disabled — extension ids to skip (applies to builtins and discovered alike).
- *   Disabled extensions are not imported or setup() is not called.
+ *   Discovered extensions are imported to read their id, but setup() is skipped when disabled.
  */
 export const loadTuiExtensions = async (
   opts: {
