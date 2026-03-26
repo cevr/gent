@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, expect, test } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { Skills, Skill, formatSkillsForPrompt } from "@gent/core/domain/skills"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
@@ -23,7 +23,7 @@ import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 
 describe("Skills System", () => {
-  test("Skills.Test provides test skills", async () => {
+  it.live("Skills.Test provides test skills", () => {
     const testSkills = [
       new Skill({
         name: "test-skill",
@@ -34,15 +34,12 @@ describe("Skills System", () => {
       }),
     ]
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const skills = yield* Skills
-        return yield* skills.list()
-      }).pipe(Effect.provide(Skills.Test(testSkills))),
-    )
-
-    expect(result.length).toBe(1)
-    expect(result[0]?.name).toBe("test-skill")
+    return Effect.gen(function* () {
+      const skills = yield* Skills
+      const result = yield* skills.list()
+      expect(result.length).toBe(1)
+      expect(result[0]?.name).toBe("test-skill")
+    }).pipe(Effect.provide(Skills.Test(testSkills)))
   })
 
   test("formatSkillsForPrompt formats skills correctly", () => {
@@ -98,46 +95,37 @@ describe("Skills System", () => {
 })
 
 describe("Auth Store", () => {
-  test("AuthStore stores and retrieves keys", async () => {
+  it.live("AuthStore stores and retrieves keys", () => {
     const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const auth = yield* AuthStore
-        yield* auth.set("anthropic", new AuthApi({ type: "api", key: "test-key-123" }))
-        return yield* auth.get("anthropic")
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(result?.type).toBe("api")
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      yield* auth.set("anthropic", new AuthApi({ type: "api", key: "test-key-123" }))
+      const result = yield* auth.get("anthropic")
+      expect(result?.type).toBe("api")
+    }).pipe(Effect.provide(layer))
   })
 
-  test("AuthStore deletes keys", async () => {
+  it.live("AuthStore deletes keys", () => {
     const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const auth = yield* AuthStore
-        yield* auth.set("openai", new AuthApi({ type: "api", key: "key" }))
-        yield* auth.remove("openai")
-        return yield* auth.get("openai")
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(result).toBeUndefined()
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      yield* auth.set("openai", new AuthApi({ type: "api", key: "key" }))
+      yield* auth.remove("openai")
+      const result = yield* auth.get("openai")
+      expect(result).toBeUndefined()
+    }).pipe(Effect.provide(layer))
   })
 
-  test("AuthStore lists providers", async () => {
+  it.live("AuthStore lists providers", () => {
     const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const auth = yield* AuthStore
-        yield* auth.set("anthropic", new AuthApi({ type: "api", key: "k1" }))
-        yield* auth.set("openai", new AuthApi({ type: "api", key: "k2" }))
-        return yield* auth.list()
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(result).toContain("anthropic")
-    expect(result).toContain("openai")
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      yield* auth.set("anthropic", new AuthApi({ type: "api", key: "k1" }))
+      yield* auth.set("openai", new AuthApi({ type: "api", key: "k2" }))
+      const result = yield* auth.list()
+      expect(result).toContain("anthropic")
+      expect(result).toContain("openai")
+    }).pipe(Effect.provide(layer))
   })
 })
 
@@ -167,7 +155,7 @@ describe("Cost Calculation", () => {
 })
 
 describe("Session Snapshot", () => {
-  test("getSessionSnapshot only returns persisted state", async () => {
+  it.live("getSessionSnapshot only returns persisted state", () => {
     const eventStoreLayer = EventStore.Test()
     const actorProcessLayer = Layer.succeed(ActorProcess, {
       sendUserMessage: () => Effect.void,
@@ -206,31 +194,28 @@ describe("Session Snapshot", () => {
     )
     const testLayer = Layer.provideMerge(AppServicesLive, deps)
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const queries = yield* SessionQueries
-        const storage = yield* Storage
-        const session = yield* commands.createSession({ name: "Test Session" })
-        yield* storage.appendEvent(
-          new AgentSwitched({
-            sessionId: session.sessionId,
-            branchId: session.branchId,
-            fromAgent: "deepwork",
-            toAgent: "cowork",
-          }),
-        )
-
-        return yield* queries.getSessionSnapshot({
+    return Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const queries = yield* SessionQueries
+      const storage = yield* Storage
+      const session = yield* commands.createSession({ name: "Test Session" })
+      yield* storage.appendEvent(
+        new AgentSwitched({
           sessionId: session.sessionId,
           branchId: session.branchId,
-        })
-      }).pipe(Effect.provide(testLayer)),
-    )
+          fromAgent: "deepwork",
+          toAgent: "cowork",
+        }),
+      )
 
-    expect(result.sessionId).toBeDefined()
-    expect(result.messages).toEqual([])
-    expect(result.bypass).toBe(true)
+      const result = yield* queries.getSessionSnapshot({
+        sessionId: session.sessionId,
+        branchId: session.branchId,
+      })
+      expect(result.sessionId).toBeDefined()
+      expect(result.messages).toEqual([])
+      expect(result.bypass).toBe(true)
+    }).pipe(Effect.provide(testLayer))
   })
 })
 
@@ -256,92 +241,80 @@ describe("Session Tree", () => {
     return Layer.provideMerge(AppServicesLive, deps)
   }
 
-  test("getChildSessions returns direct children", async () => {
+  it.live("getChildSessions returns direct children", () => {
     const testLayer = makeTestLayer()
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const queries = yield* SessionQueries
-        const parent = yield* commands.createSession({ name: "Parent" })
-        yield* commands.createSession({
-          name: "Child 1",
-          parentSessionId: parent.sessionId,
-          parentBranchId: parent.branchId,
-        })
-        yield* commands.createSession({
-          name: "Child 2",
-          parentSessionId: parent.sessionId,
-          parentBranchId: parent.branchId,
-        })
-        return yield* queries.getChildSessions(parent.sessionId)
-      }).pipe(Effect.provide(testLayer)),
-    )
-
-    expect(result.length).toBe(2)
+    return Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const queries = yield* SessionQueries
+      const parent = yield* commands.createSession({ name: "Parent" })
+      yield* commands.createSession({
+        name: "Child 1",
+        parentSessionId: parent.sessionId,
+        parentBranchId: parent.branchId,
+      })
+      yield* commands.createSession({
+        name: "Child 2",
+        parentSessionId: parent.sessionId,
+        parentBranchId: parent.branchId,
+      })
+      const result = yield* queries.getChildSessions(parent.sessionId)
+      expect(result.length).toBe(2)
+    }).pipe(Effect.provide(testLayer))
   })
 
-  test("getSessionTree builds recursive hierarchy", async () => {
+  it.live("getSessionTree builds recursive hierarchy", () => {
     const testLayer = makeTestLayer()
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const queries = yield* SessionQueries
-        const root = yield* commands.createSession({ name: "Root" })
-        const child = yield* commands.createSession({
-          name: "Child",
-          parentSessionId: root.sessionId,
-          parentBranchId: root.branchId,
-        })
-        yield* commands.createSession({
-          name: "Grandchild",
-          parentSessionId: child.sessionId,
-          parentBranchId: child.branchId,
-        })
-        return yield* queries.getSessionTree(root.sessionId)
-      }).pipe(Effect.provide(testLayer)),
-    )
-
-    expect(result.session.name).toBe("Root")
-    expect(result.children.length).toBe(1)
-    expect(result.children[0]!.session.name).toBe("Child")
-    expect(result.children[0]!.children.length).toBe(1)
-    expect(result.children[0]!.children[0]!.session.name).toBe("Grandchild")
+    return Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const queries = yield* SessionQueries
+      const root = yield* commands.createSession({ name: "Root" })
+      const child = yield* commands.createSession({
+        name: "Child",
+        parentSessionId: root.sessionId,
+        parentBranchId: root.branchId,
+      })
+      yield* commands.createSession({
+        name: "Grandchild",
+        parentSessionId: child.sessionId,
+        parentBranchId: child.branchId,
+      })
+      const result = yield* queries.getSessionTree(root.sessionId)
+      expect(result.session.name).toBe("Root")
+      expect(result.children.length).toBe(1)
+      expect(result.children[0]!.session.name).toBe("Child")
+      expect(result.children[0]!.children.length).toBe(1)
+      expect(result.children[0]!.children[0]!.session.name).toBe("Grandchild")
+    }).pipe(Effect.provide(testLayer))
   })
 
-  test("createSession rejects invalid parentSessionId", async () => {
+  it.live("createSession rejects invalid parentSessionId", () => {
     const testLayer = makeTestLayer()
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        return yield* Effect.result(
-          commands.createSession({
-            name: "Orphan",
-            parentSessionId: "nonexistent" as SessionId,
-          }),
-        )
-      }).pipe(Effect.provide(testLayer)),
-    )
-
-    expect(result._tag).toBe("Failure")
+    return Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const result = yield* Effect.result(
+        commands.createSession({
+          name: "Orphan",
+          parentSessionId: "nonexistent" as SessionId,
+        }),
+      )
+      expect(result._tag).toBe("Failure")
+    }).pipe(Effect.provide(testLayer))
   })
 
-  test("createSession threads parentSessionId to storage", async () => {
+  it.live("createSession threads parentSessionId to storage", () => {
     const testLayer = makeTestLayer()
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const queries = yield* SessionQueries
-        const parent = yield* commands.createSession({ name: "Parent" })
-        const child = yield* commands.createSession({
-          name: "Child",
-          parentSessionId: parent.sessionId,
-          parentBranchId: parent.branchId,
-        })
-        return yield* queries.getSession(child.sessionId)
-      }).pipe(Effect.provide(testLayer)),
-    )
-
-    expect(result).not.toBeNull()
-    expect(result!.parentSessionId).toBeDefined()
+    return Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const queries = yield* SessionQueries
+      const parent = yield* commands.createSession({ name: "Parent" })
+      const child = yield* commands.createSession({
+        name: "Child",
+        parentSessionId: parent.sessionId,
+        parentBranchId: parent.branchId,
+      })
+      const result = yield* queries.getSession(child.sessionId)
+      expect(result).not.toBeNull()
+      expect(result!.parentSessionId).toBeDefined()
+    }).pipe(Effect.provide(testLayer))
   })
 })

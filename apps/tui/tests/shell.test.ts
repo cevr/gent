@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
+import { beforeAll, afterAll } from "bun:test"
 import { executeShell } from "../src/utils/shell"
 import { Effect, Layer } from "effect"
 import { BunServices, BunFileSystem } from "@effect/platform-bun"

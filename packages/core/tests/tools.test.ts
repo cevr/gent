@@ -1,5 +1,5 @@
-import { describe, test, expect } from "bun:test"
-import { Effect, FileSystem, Layer, pipe, type Path, type Scope } from "effect"
+import { describe, it, expect } from "effect-bun-test"
+import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "@gent/core/tools/read"
 import { GlobTool } from "@gent/core/tools/glob"
@@ -34,82 +34,72 @@ const ctx: ToolContext = {
 // Layer providing FileSystem and Path from @effect/platform-bun
 const PlatformLayer = BunServices.layer
 
-// Helper to run scoped effects with platform layer
-const runScoped = <A, E>(
-  effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Scope.Scope>,
-) => Effect.runPromise(pipe(effect, Effect.scoped, Effect.provide(PlatformLayer)))
-
 describe("Tools", () => {
   describe("ReadTool", () => {
-    test("reads a file", () =>
-      runScoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const tmpDir = yield* fs.makeTempDirectoryScoped()
-          const testFile = `${tmpDir}/test.txt`
-          yield* fs.writeFileString(testFile, "Hello, World!")
+    it.scopedLive("reads a file", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        const testFile = `${tmpDir}/test.txt`
+        yield* fs.writeFileString(testFile, "Hello, World!")
 
-          const result = yield* ReadTool.execute({ path: testFile }, ctx)
-          expect(result.content).toBe("1\tHello, World!")
-        }),
-      ))
+        const result = yield* ReadTool.execute({ path: testFile }, ctx)
+        expect(result.content).toBe("1\tHello, World!")
+      }).pipe(Effect.provide(PlatformLayer)),
+    )
 
-    test("returns error for non-existent file", () =>
-      runScoped(
-        Effect.gen(function* () {
-          const result = yield* Effect.result(
-            ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx),
-          )
-          expect(result._tag).toBe("Failure")
-        }),
-      ))
+    it.scopedLive("returns error for non-existent file", () =>
+      Effect.gen(function* () {
+        const result = yield* Effect.result(
+          ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx),
+        )
+        expect(result._tag).toBe("Failure")
+      }).pipe(Effect.provide(PlatformLayer)),
+    )
 
-    test("returns error for directory", () =>
-      runScoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const tmpDir = yield* fs.makeTempDirectoryScoped()
+    it.scopedLive("returns error for directory", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
 
-          const result = yield* Effect.result(ReadTool.execute({ path: tmpDir }, ctx))
-          expect(result._tag).toBe("Failure")
-          if (result._tag === "Failure") {
-            expect(result.failure.message).toContain("Cannot read directory")
-          }
-        }),
-      ))
+        const result = yield* Effect.result(ReadTool.execute({ path: tmpDir }, ctx))
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure.message).toContain("Cannot read directory")
+        }
+      }).pipe(Effect.provide(PlatformLayer)),
+    )
   })
 
   describe("GlobTool", () => {
-    test("finds files matching pattern", () =>
-      runScoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const tmpDir = yield* fs.makeTempDirectoryScoped()
-          yield* fs.writeFileString(`${tmpDir}/a.ts`, "")
-          yield* fs.writeFileString(`${tmpDir}/b.ts`, "")
-          yield* fs.writeFileString(`${tmpDir}/c.js`, "")
+    it.scopedLive("finds files matching pattern", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/a.ts`, "")
+        yield* fs.writeFileString(`${tmpDir}/b.ts`, "")
+        yield* fs.writeFileString(`${tmpDir}/c.js`, "")
 
-          const result = yield* GlobTool.execute({ pattern: "*.ts", path: tmpDir }, ctx)
-          expect(result.files.length).toBe(2)
-          expect(result.files.every((f) => f.endsWith(".ts"))).toBe(true)
-        }),
-      ))
+        const result = yield* GlobTool.execute({ pattern: "*.ts", path: tmpDir }, ctx)
+        expect(result.files.length).toBe(2)
+        expect(result.files.every((f) => f.endsWith(".ts"))).toBe(true)
+      }).pipe(Effect.provide(PlatformLayer)),
+    )
   })
 
   describe("GrepTool", () => {
-    test("finds pattern in files", () =>
-      runScoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const tmpDir = yield* fs.makeTempDirectoryScoped()
-          yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
-          yield* fs.writeFileString(`${tmpDir}/file2.ts`, "const bar = 2")
-          yield* fs.writeFileString(`${tmpDir}/file3.ts`, "const foo = 3")
+    it.scopedLive("finds pattern in files", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
+        yield* fs.writeFileString(`${tmpDir}/file2.ts`, "const bar = 2")
+        yield* fs.writeFileString(`${tmpDir}/file3.ts`, "const foo = 3")
 
-          const result = yield* GrepTool.execute({ pattern: "foo", path: tmpDir }, ctx)
-          expect(result.matches.length).toBe(2)
-        }),
-      ))
+        const result = yield* GrepTool.execute({ pattern: "foo", path: tmpDir }, ctx)
+        expect(result.matches.length).toBe(2)
+      }).pipe(Effect.provide(PlatformLayer)),
+    )
   })
 })
 
@@ -127,20 +117,22 @@ describe("Todo Tools", () => {
     PlatformLayer,
   )
 
-  test("TodoReadTool reads existing todos", async () => {
-    const result = await Effect.runPromise(
-      TodoReadTool.execute({}, ctx).pipe(Effect.provide(todoLayer)),
-    )
-    expect(result.todos.length).toBe(1)
-    expect(result.todos[0]?.content).toBe("First task")
-    expect(result.todos[0]?.status).toBe("pending")
-  })
+  it.live("TodoReadTool reads existing todos", () =>
+    TodoReadTool.execute({}, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.todos.length).toBe(1)
+        expect(result.todos[0]?.content).toBe("First task")
+        expect(result.todos[0]?.status).toBe("pending")
+      }),
+      Effect.provide(todoLayer),
+    ),
+  )
 
-  test("TodoWriteTool replaces todos", async () => {
+  it.live("TodoWriteTool replaces todos", () => {
     const layer = Layer.merge(TodoHandler.Test([]), PlatformLayer)
 
-    const writeResult = await Effect.runPromise(
-      TodoWriteTool.execute(
+    return Effect.gen(function* () {
+      const writeResult = yield* TodoWriteTool.execute(
         {
           todos: [
             { content: "New task", status: "in_progress" },
@@ -148,105 +140,105 @@ describe("Todo Tools", () => {
           ],
         },
         ctx,
-      ).pipe(Effect.provide(layer)),
-    )
-    expect(writeResult.count).toBe(2)
+      )
+      expect(writeResult.count).toBe(2)
 
-    const readResult = await Effect.runPromise(
-      TodoReadTool.execute({}, ctx).pipe(Effect.provide(layer)),
-    )
-    expect(readResult.todos.length).toBe(2)
-    expect(readResult.todos[0]?.status).toBe("in_progress")
-    expect(readResult.todos[1]?.priority).toBe("high")
+      const readResult = yield* TodoReadTool.execute({}, ctx)
+      expect(readResult.todos.length).toBe(2)
+      expect(readResult.todos[0]?.status).toBe("in_progress")
+      expect(readResult.todos[1]?.priority).toBe("high")
+    }).pipe(Effect.provide(layer))
   })
 })
 
 describe("AskUser Tool", () => {
-  test("asks questions and returns answers", async () => {
+  it.live("asks questions and returns answers", () => {
     const layer = Layer.merge(
       AskUserHandler.Test([["Option A"], ["Option B", "Option C"]]),
       PlatformLayer,
     )
 
-    const result = await Effect.runPromise(
-      AskUserTool.execute(
-        {
-          questions: [
-            {
-              question: "Which approach?",
-              header: "Approach",
-              options: [
-                { label: "Option A", description: "First option" },
-                { label: "Option B", description: "Second option" },
-              ],
-            },
-            {
-              question: "Which features?",
-              header: "Features",
-              options: [
-                { label: "Option B", description: "Feature B" },
-                { label: "Option C", description: "Feature C" },
-              ],
-              multiple: true,
-            },
-          ],
-        },
-        ctx,
-      ).pipe(Effect.provide(layer)),
+    return AskUserTool.execute(
+      {
+        questions: [
+          {
+            question: "Which approach?",
+            header: "Approach",
+            options: [
+              { label: "Option A", description: "First option" },
+              { label: "Option B", description: "Second option" },
+            ],
+          },
+          {
+            question: "Which features?",
+            header: "Features",
+            options: [
+              { label: "Option B", description: "Feature B" },
+              { label: "Option C", description: "Feature C" },
+            ],
+            multiple: true,
+          },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers.length).toBe(2)
+        expect(result.answers[0]).toEqual(["Option A"])
+        expect(result.answers[1]).toEqual(["Option B", "Option C"])
+      }),
+      Effect.provide(layer),
     )
-
-    expect(result.answers.length).toBe(2)
-    expect(result.answers[0]).toEqual(["Option A"])
-    expect(result.answers[1]).toEqual(["Option B", "Option C"])
   })
 })
 
 describe("Prompt Tool", () => {
-  test("review mode: writes content and returns decision", async () => {
+  it.live("review mode: writes content and returns decision", () => {
     const layer = Layer.merge(PromptPresenter.Test([], ["yes"]), PlatformLayer)
 
-    const result = await Effect.runPromise(
-      PromptTool.execute({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+    return PromptTool.execute({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.mode).toBe("review")
+        if (result.mode === "review") {
+          expect(result.decision).toBe("yes")
+          expect(result.path).toBe("/tmp/test-prompt.md")
+        }
+      }),
+      Effect.provide(layer),
     )
-
-    expect(result.mode).toBe("review")
-    if (result.mode === "review") {
-      expect(result.decision).toBe("yes")
-      expect(result.path).toBe("/tmp/test-prompt.md")
-    }
   })
 
-  test("confirm mode: returns yes/no decision", async () => {
+  it.live("confirm mode: returns yes/no decision", () => {
     const layer = Layer.merge(PromptPresenter.Test(["no"]), PlatformLayer)
 
-    const result = await Effect.runPromise(
-      PromptTool.execute({ mode: "confirm", content: "Proceed?" }, ctx).pipe(Effect.provide(layer)),
+    return PromptTool.execute({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.mode).toBe("confirm")
+        if (result.mode === "confirm") {
+          expect(result.decision).toBe("no")
+        }
+      }),
+      Effect.provide(layer),
     )
-
-    expect(result.mode).toBe("confirm")
-    if (result.mode === "confirm") {
-      expect(result.decision).toBe("no")
-    }
   })
 
-  test("present mode: returns shown status", async () => {
+  it.live("present mode: returns shown status", () => {
     const layer = Layer.merge(PromptPresenter.Test(), PlatformLayer)
 
-    const result = await Effect.runPromise(
-      PromptTool.execute({ mode: "present", content: "Info" }, ctx).pipe(Effect.provide(layer)),
+    return PromptTool.execute({ mode: "present", content: "Info" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.mode).toBe("present")
+        if (result.mode === "present") {
+          expect(result.status).toBe("shown")
+        }
+      }),
+      Effect.provide(layer),
     )
-
-    expect(result.mode).toBe("present")
-    if (result.mode === "present") {
-      expect(result.status).toBe("shown")
-    }
   })
 })
 
 describe("Delegate Tool", () => {
-  test("delegates to subagent and returns output", async () => {
+  it.live("delegates to subagent and returns output", () => {
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
         Effect.succeed({
@@ -259,14 +251,15 @@ describe("Delegate Tool", () => {
 
     const layer = Layer.mergeAll(runnerLayer, TestExtRegistry)
 
-    const result = await Effect.runPromise(
-      DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(Effect.provide(layer)),
+    return DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.output).toBe("explore:hello\n\nFull session: session://child-session")
+      }),
+      Effect.provide(layer),
     )
-
-    expect(result.output).toBe("explore:hello\n\nFull session: session://child-session")
   })
 
-  test("chain mode appends session refs for all steps", async () => {
+  it.live("chain mode appends session refs for all steps", () => {
     let stepIdx = 0
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
@@ -280,21 +273,23 @@ describe("Delegate Tool", () => {
       },
     })
     const layer = Layer.mergeAll(runnerLayer, TestExtRegistry)
-    const result = await Effect.runPromise(
-      DelegateTool.execute(
-        {
-          chain: [
-            { agent: "explore", task: "first" },
-            { agent: "explore", task: "second" },
-          ],
-        },
-        ctx,
-      ).pipe(Effect.provide(layer)),
+    return DelegateTool.execute(
+      {
+        chain: [
+          { agent: "explore", task: "first" },
+          { agent: "explore", task: "second" },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.output).toContain("Full sessions: session://session-0, session://session-1")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.output).toContain("Full sessions: session://session-0, session://session-1")
   })
 
-  test("parallel mode appends session refs for successes", async () => {
+  it.live("parallel mode appends session refs for successes", () => {
     let callIdx = 0
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
@@ -308,19 +303,21 @@ describe("Delegate Tool", () => {
       },
     })
     const layer = Layer.mergeAll(runnerLayer, TestExtRegistry)
-    const result = await Effect.runPromise(
-      DelegateTool.execute(
-        {
-          tasks: [
-            { agent: "explore", task: "a" },
-            { agent: "explore", task: "b" },
-          ],
-        },
-        ctx,
-      ).pipe(Effect.provide(layer)),
+    return DelegateTool.execute(
+      {
+        tasks: [
+          { agent: "explore", task: "a" },
+          { agent: "explore", task: "b" },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.output).toContain("2/2 succeeded")
+        expect(result.output).toContain("Full sessions:")
+        expect(result.output).toContain("session://session-")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.output).toContain("2/2 succeeded")
-    expect(result.output).toContain("Full sessions:")
-    expect(result.output).toContain("session://session-")
   })
 })

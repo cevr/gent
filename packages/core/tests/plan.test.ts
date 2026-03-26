@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { PlanTool } from "@gent/core/tools/plan"
@@ -27,7 +27,7 @@ const ctx: ToolContext = {
 }
 
 describe("Plan Tool", () => {
-  test("runs all 5 phases and returns approved plan", async () => {
+  it.live("runs all 5 phases and returns approved plan", () => {
     const calls: Array<{ prompt: string }> = []
     let callIdx = 0
 
@@ -53,33 +53,34 @@ describe("Plan Tool", () => {
       BunServices.layer,
     )
 
-    const result = await Effect.runPromise(
-      PlanTool.execute({ prompt: "implement caching" }, ctx).pipe(Effect.provide(layer)),
+    return PlanTool.execute({ prompt: "implement caching" }, ctx).pipe(
+      Effect.map((result) => {
+        // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
+        expect(calls.length).toBe(7)
+
+        // First two calls are parallel planning
+        expect(calls[0]!.prompt).toContain("implement caching")
+        expect(calls[1]!.prompt).toContain("implement caching")
+
+        // Next two are cross-reviews
+        expect(calls[2]!.prompt).toContain("Review this implementation plan")
+        expect(calls[3]!.prompt).toContain("Review this implementation plan")
+
+        // Next two are incorporations
+        expect(calls[4]!.prompt).toContain("Revise your implementation plan")
+        expect(calls[5]!.prompt).toContain("Revise your implementation plan")
+
+        // Last is synthesis
+        expect(calls[6]!.prompt).toContain("Synthesize these two")
+
+        expect(result.decision).toBe("yes")
+        expect(result.plan).toBeDefined()
+      }),
+      Effect.provide(layer),
     )
-
-    // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
-    expect(calls.length).toBe(7)
-
-    // First two calls are parallel planning
-    expect(calls[0]!.prompt).toContain("implement caching")
-    expect(calls[1]!.prompt).toContain("implement caching")
-
-    // Next two are cross-reviews
-    expect(calls[2]!.prompt).toContain("Review this implementation plan")
-    expect(calls[3]!.prompt).toContain("Review this implementation plan")
-
-    // Next two are incorporations
-    expect(calls[4]!.prompt).toContain("Revise your implementation plan")
-    expect(calls[5]!.prompt).toContain("Revise your implementation plan")
-
-    // Last is synthesis
-    expect(calls[6]!.prompt).toContain("Synthesize these two")
-
-    expect(result.decision).toBe("yes")
-    expect(result.plan).toBeDefined()
   })
 
-  test("includes context and files in plan prompt", async () => {
+  it.live("includes context and files in plan prompt", () => {
     const calls: Array<{ prompt: string }> = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
@@ -103,23 +104,24 @@ describe("Plan Tool", () => {
       BunServices.layer,
     )
 
-    await Effect.runPromise(
-      PlanTool.execute(
-        {
-          prompt: "add auth",
-          context: "Using JWT tokens",
-          files: ["src/auth.ts", "src/middleware.ts"],
-        },
-        ctx,
-      ).pipe(Effect.provide(layer)),
+    return PlanTool.execute(
+      {
+        prompt: "add auth",
+        context: "Using JWT tokens",
+        files: ["src/auth.ts", "src/middleware.ts"],
+      },
+      ctx,
+    ).pipe(
+      Effect.map(() => {
+        // Planning prompts should include context and files
+        expect(calls[0]!.prompt).toContain("JWT tokens")
+        expect(calls[0]!.prompt).toContain("src/auth.ts")
+      }),
+      Effect.provide(layer),
     )
-
-    // Planning prompts should include context and files
-    expect(calls[0]!.prompt).toContain("JWT tokens")
-    expect(calls[0]!.prompt).toContain("src/auth.ts")
   })
 
-  test("returns rejected when user rejects plan", async () => {
+  it.live("returns rejected when user rejects plan", () => {
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
         Effect.succeed({
@@ -139,14 +141,15 @@ describe("Plan Tool", () => {
       BunServices.layer,
     )
 
-    const result = await Effect.runPromise(
-      PlanTool.execute({ prompt: "refactor" }, ctx).pipe(Effect.provide(layer)),
+    return PlanTool.execute({ prompt: "refactor" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.decision).toBe("no")
+      }),
+      Effect.provide(layer),
     )
-
-    expect(result.decision).toBe("no")
   })
 
-  test("uses different models for adversarial planning", async () => {
+  it.live("uses different models for adversarial planning", () => {
     const models: string[] = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
@@ -172,14 +175,17 @@ describe("Plan Tool", () => {
       BunServices.layer,
     )
 
-    await Effect.runPromise(PlanTool.execute({ prompt: "test" }, ctx).pipe(Effect.provide(layer)))
-
-    // Should have at least 2 different models used
-    const uniqueModels = new Set(models)
-    expect(uniqueModels.size).toBe(2)
+    return PlanTool.execute({ prompt: "test" }, ctx).pipe(
+      Effect.map(() => {
+        // Should have at least 2 different models used
+        const uniqueModels = new Set(models)
+        expect(uniqueModels.size).toBe(2)
+      }),
+      Effect.provide(layer),
+    )
   })
 
-  test("fix mode synthesizes an execution plan in batches and executes batch-by-batch", async () => {
+  it.live("fix mode synthesizes an execution plan in batches and executes batch-by-batch", () => {
     const calls: string[] = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
@@ -248,20 +254,19 @@ describe("Plan Tool", () => {
       Storage.Test(),
     )
 
-    const result = await Effect.runPromise(
-      PlanTool.execute({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+    return PlanTool.execute({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.reason).toBe("done")
+        expect(
+          calls.some((prompt) =>
+            prompt.includes("Organize the output into a small number of ordered batches"),
+          ),
+        ).toBe(true)
+        expect(
+          calls.some((prompt) => prompt.includes("Work through the plan batch by batch, in order")),
+        ).toBe(true)
+      }),
+      Effect.provide(layer),
     )
-
-    expect(result.reason).toBe("done")
-    expect(
-      calls.some((prompt) =>
-        prompt.includes("Organize the output into a small number of ordered batches"),
-      ),
-    ).toBe(true)
-    expect(
-      calls.some((prompt) => prompt.includes("Work through the plan batch by batch, in order")),
-    ).toBe(true)
   })
 })

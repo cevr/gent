@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FinderTool } from "@gent/core/tools/finder"
@@ -62,27 +62,31 @@ const platformLayer = BunServices.layer
 const workflowTestLayer = Layer.mergeAll(TestExtRegistry, EventStore.Test(), Storage.Test())
 
 describe("FinderTool", () => {
-  test("success → { found: true, response }", async () => {
+  it.live("success → { found: true, response }", () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
-    const result = await Effect.runPromise(
-      FinderTool.execute({ query: "find auth module" }, ctx).pipe(Effect.provide(layer)),
+    return FinderTool.execute({ query: "find auth module" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.found).toBe(true)
+        expect(result.response).toContain("response from")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.found).toBe(true)
-    expect(result.response).toContain("response from")
   })
 
-  test("error → { found: false, error }", async () => {
+  it.live("error → { found: false, error }", () => {
     const layer = Layer.mergeAll(mockRunnerError, platformLayer)
-    const result = await Effect.runPromise(
-      FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
+    return FinderTool.execute({ query: "find something" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.found).toBe(false)
+        expect(result.error).toBe("runner failed")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.found).toBe(false)
-    expect(result.error).toBe("runner failed")
   })
 })
 
 describe("CodeReviewTool", () => {
-  test("passes description to runner", async () => {
+  it.live("passes description to runner", () => {
     let capturedPrompt = ""
     const capturedOverrides: Array<Record<string, unknown> | undefined> = []
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
@@ -98,21 +102,23 @@ describe("CodeReviewTool", () => {
       },
     })
     const layer = Layer.mergeAll(capturingRunner, platformLayer, workflowTestLayer)
-    await Effect.runPromise(
-      CodeReviewTool.execute(
-        { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
-        ctx,
-      ).pipe(Effect.provide(layer)),
+    return CodeReviewTool.execute(
+      { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
+      ctx,
+    ).pipe(
+      Effect.map(() => {
+        expect(capturedPrompt).toContain("refactored auth module")
+        const reviewOverrides = capturedOverrides.find(
+          (overrides) => overrides?.["deniedTools"] !== undefined,
+        )
+        expect(reviewOverrides?.["allowedActions"]).toEqual(["read"])
+        expect(reviewOverrides?.["deniedTools"]).toEqual(["bash"])
+      }),
+      Effect.provide(layer),
     )
-    expect(capturedPrompt).toContain("refactored auth module")
-    const reviewOverrides = capturedOverrides.find(
-      (overrides) => overrides?.["deniedTools"] !== undefined,
-    )
-    expect(reviewOverrides?.["allowedActions"]).toEqual(["read"])
-    expect(reviewOverrides?.["deniedTools"]).toEqual(["bash"])
   })
 
-  test("parses structured JSON review output", async () => {
+  it.live("parses structured JSON review output", () => {
     const jsonOutput = JSON.stringify([
       {
         file: "src/auth.ts",
@@ -132,17 +138,17 @@ describe("CodeReviewTool", () => {
         }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
-    const result = await Effect.runPromise(
-      CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+    return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.comments.length).toBe(1)
+        expect(result.comments[0]!.severity).toBe("high")
+        expect(result.summary?.high).toBe(1)
+      }),
+      Effect.provide(layer),
     )
-    expect(result.comments.length).toBe(1)
-    expect(result.comments[0]!.severity).toBe("high")
-    expect(result.summary?.high).toBe(1)
   })
 
-  test("falls back to raw text on parse failure", async () => {
+  it.live("falls back to raw text on parse failure", () => {
     const runner = Layer.succeed(SubagentRunnerService, {
       run: () =>
         Effect.succeed({
@@ -153,16 +159,16 @@ describe("CodeReviewTool", () => {
         }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
-    const result = await Effect.runPromise(
-      CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+    return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.comments.length).toBe(0)
+        expect(result.raw).toBe("not valid json")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.comments.length).toBe(0)
-    expect(result.raw).toBe("not valid json")
   })
 
-  test("fix mode tells executor to work findings in batches", async () => {
+  it.live("fix mode tells executor to work findings in batches", () => {
     const prompts: string[] = []
     const runner = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
@@ -220,60 +226,69 @@ describe("CodeReviewTool", () => {
         }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
-    const result = await Effect.runPromise(
-      CodeReviewTool.execute({ description: "test", content: "fake diff", mode: "fix" }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+    return CodeReviewTool.execute(
+      { description: "test", content: "fake diff", mode: "fix" },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.raw).toContain("[]")
+        expect(
+          prompts.some((prompt) => prompt.includes("Work through the findings in small batches")),
+        ).toBe(true)
+      }),
+      Effect.provide(layer),
     )
-    expect(result.raw).toContain("[]")
-    expect(
-      prompts.some((prompt) => prompt.includes("Work through the findings in small batches")),
-    ).toBe(true)
   })
 })
 
 describe("HandoffTool", () => {
-  test("returns handoff confirmed when user accepts", async () => {
+  it.live("returns handoff confirmed when user accepts", () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer, HandoffHandler.Test(["confirm"]))
-    const result = await Effect.runPromise(
-      HandoffTool.execute(
-        {
-          context: "Current task: implement auth. Key files: src/auth.ts",
-          reason: "context window filling up",
-        },
-        ctx,
-      ).pipe(Effect.provide(layer)),
+    return HandoffTool.execute(
+      {
+        context: "Current task: implement auth. Key files: src/auth.ts",
+        reason: "context window filling up",
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.handoff).toBe(true)
+        expect(result.summary).toContain("implement auth")
+        expect(result.parentSessionId).toBe("test-session")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.handoff).toBe(true)
-    expect(result.summary).toContain("implement auth")
-    expect(result.parentSessionId).toBe("test-session")
   })
 
-  test("returns handoff rejected when user declines", async () => {
+  it.live("returns handoff rejected when user declines", () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer, HandoffHandler.Test(["reject"]))
-    const result = await Effect.runPromise(
-      HandoffTool.execute(
-        {
-          context: "Current task: implement auth",
-        },
-        ctx,
-      ).pipe(Effect.provide(layer)),
+    return HandoffTool.execute(
+      {
+        context: "Current task: implement auth",
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.handoff).toBe(false)
+        expect(result.reason).toBe("User rejected handoff")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.handoff).toBe(false)
-    expect(result.reason).toBe("User rejected handoff")
   })
 })
 
 describe("Session refs in subagent output", () => {
-  test("FinderTool appends session ref to response", async () => {
+  it.live("FinderTool appends session ref to response", () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
-    const result = await Effect.runPromise(
-      FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
+    return FinderTool.execute({ query: "find something" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.response).toContain("\n\nFull session: session://child-session")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.response).toContain("\n\nFull session: session://child-session")
   })
 
-  test("CodeReviewTool includes session ref on structured output", async () => {
+  it.live("CodeReviewTool includes session ref on structured output", () => {
     const jsonOutput = JSON.stringify([
       { file: "a.ts", severity: "low", type: "style", text: "minor" },
     ])
@@ -287,35 +302,39 @@ describe("Session refs in subagent output", () => {
         }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
-    const result = await Effect.runPromise(
-      CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
-        Effect.provide(layer),
-      ),
+    return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.session).toBe("session://child")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.session).toBe("session://child")
   })
 
-  test("error path includes session ref when sessionId present", async () => {
+  it.live("error path includes session ref when sessionId present", () => {
     const layer = Layer.mergeAll(mockRunnerErrorWithSession, platformLayer)
-    const result = await Effect.runPromise(
-      FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
+    return FinderTool.execute({ query: "find something" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.found).toBe(false)
+        expect(result.error).toContain("session://error-session")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.found).toBe(false)
-    expect(result.error).toContain("session://error-session")
   })
 
-  test("error path omits session ref when sessionId absent", async () => {
+  it.live("error path omits session ref when sessionId absent", () => {
     const layer = Layer.mergeAll(mockRunnerError, platformLayer)
-    const result = await Effect.runPromise(
-      FinderTool.execute({ query: "find something" }, ctx).pipe(Effect.provide(layer)),
+    return FinderTool.execute({ query: "find something" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.error).toBe("runner failed")
+        expect(result.error).not.toContain("session://")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.error).toBe("runner failed")
-    expect(result.error).not.toContain("session://")
   })
 })
 
 describe("CounselTool", () => {
-  test("routes to opposite agent (cowork → deepwork)", async () => {
+  it.live("routes to opposite agent (cowork → deepwork)", () => {
     let capturedAgent = ""
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
@@ -330,16 +349,18 @@ describe("CounselTool", () => {
     })
     const layer = Layer.mergeAll(capturingRunner, platformLayer)
     const coworkCtx: ToolContext = { ...ctx, agentName: "cowork" }
-    const result = await Effect.runPromise(
-      CounselTool.execute({ prompt: "review this code" }, coworkCtx).pipe(Effect.provide(layer)),
+    return CounselTool.execute({ prompt: "review this code" }, coworkCtx).pipe(
+      Effect.map((result) => {
+        expect(capturedAgent).toBe("deepwork")
+        expect(result.review).toContain("review from deepwork")
+        expect(result.review).toContain("session://counsel-session")
+        expect(result.reviewer).toBe("deepwork")
+      }),
+      Effect.provide(layer),
     )
-    expect(capturedAgent).toBe("deepwork")
-    expect(result.review).toContain("review from deepwork")
-    expect(result.review).toContain("session://counsel-session")
-    expect(result.reviewer).toBe("deepwork")
   })
 
-  test("routes to opposite agent (deepwork → cowork)", async () => {
+  it.live("routes to opposite agent (deepwork → cowork)", () => {
     let capturedAgent = ""
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
@@ -354,14 +375,16 @@ describe("CounselTool", () => {
     })
     const layer = Layer.mergeAll(capturingRunner, platformLayer)
     const deepworkCtx: ToolContext = { ...ctx, agentName: "deepwork" }
-    const result = await Effect.runPromise(
-      CounselTool.execute({ prompt: "check for bugs" }, deepworkCtx).pipe(Effect.provide(layer)),
+    return CounselTool.execute({ prompt: "check for bugs" }, deepworkCtx).pipe(
+      Effect.map((result) => {
+        expect(capturedAgent).toBe("cowork")
+        expect(result.reviewer).toBe("cowork")
+      }),
+      Effect.provide(layer),
     )
-    expect(capturedAgent).toBe("cowork")
-    expect(result.reviewer).toBe("cowork")
   })
 
-  test("includes adversarial framing in prompt", async () => {
+  it.live("includes adversarial framing in prompt", () => {
     let capturedPrompt = ""
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
@@ -375,14 +398,16 @@ describe("CounselTool", () => {
       },
     })
     const layer = Layer.mergeAll(capturingRunner, platformLayer)
-    await Effect.runPromise(
-      CounselTool.execute({ prompt: "review auth module" }, ctx).pipe(Effect.provide(layer)),
+    return CounselTool.execute({ prompt: "review auth module" }, ctx).pipe(
+      Effect.map(() => {
+        expect(capturedPrompt).toContain("adversarial peer reviewer")
+        expect(capturedPrompt).toContain("review auth module")
+      }),
+      Effect.provide(layer),
     )
-    expect(capturedPrompt).toContain("adversarial peer reviewer")
-    expect(capturedPrompt).toContain("review auth module")
   })
 
-  test("inlines file contents when provided", async () => {
+  it.live("inlines file contents when provided", () => {
     let capturedPrompt = ""
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
@@ -396,28 +421,33 @@ describe("CounselTool", () => {
       },
     })
     const layer = Layer.mergeAll(capturingRunner, platformLayer)
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const tmpDir = yield* fs.makeTempDirectory()
-        const filePath = `${tmpDir}/auth.ts`
-        yield* fs.writeFileString(filePath, "export const secret = 42")
-        yield* CounselTool.execute({ prompt: "review this", files: [filePath] }, ctx)
-      }).pipe(Effect.scoped, Effect.provide(layer)),
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectory()
+      const filePath = `${tmpDir}/auth.ts`
+      yield* fs.writeFileString(filePath, "export const secret = 42")
+      yield* CounselTool.execute({ prompt: "review this", files: [filePath] }, ctx)
+    }).pipe(
+      Effect.scoped,
+      Effect.map(() => {
+        expect(capturedPrompt).toContain("export const secret = 42")
+      }),
+      Effect.provide(layer),
     )
-    expect(capturedPrompt).toContain("export const secret = 42")
   })
 
-  test("returns error with session ref on failure", async () => {
+  it.live("returns error with session ref on failure", () => {
     const layer = Layer.mergeAll(mockRunnerErrorWithSession, platformLayer)
-    const result = await Effect.runPromise(
-      CounselTool.execute({ prompt: "review" }, ctx).pipe(Effect.provide(layer)),
+    return CounselTool.execute({ prompt: "review" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.error).toContain("runner failed")
+        expect(result.error).toContain("session://error-session")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.error).toContain("runner failed")
-    expect(result.error).toContain("session://error-session")
   })
 
-  test("spawns agent with restricted read-only tools", async () => {
+  it.live("spawns agent with restricted read-only tools", () => {
     let capturedAllowedActions: readonly string[] | undefined
     let capturedDeniedTools: readonly string[] | undefined
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
@@ -433,23 +463,27 @@ describe("CounselTool", () => {
       },
     })
     const layer = Layer.mergeAll(capturingRunner, platformLayer)
-    await Effect.runPromise(
-      CounselTool.execute({ prompt: "review" }, ctx).pipe(Effect.provide(layer)),
+    return CounselTool.execute({ prompt: "review" }, ctx).pipe(
+      Effect.map(() => {
+        expect(capturedAllowedActions).toBeDefined()
+        expect(capturedAllowedActions).toContain("read")
+        expect(capturedAllowedActions).not.toContain("edit")
+        expect(capturedAllowedActions).not.toContain("exec")
+        expect(capturedDeniedTools).toBeDefined()
+        expect(capturedDeniedTools).toContain("bash")
+      }),
+      Effect.provide(layer),
     )
-    expect(capturedAllowedActions).toBeDefined()
-    expect(capturedAllowedActions).toContain("read")
-    expect(capturedAllowedActions).not.toContain("edit")
-    expect(capturedAllowedActions).not.toContain("exec")
-    expect(capturedDeniedTools).toBeDefined()
-    expect(capturedDeniedTools).toContain("bash")
   })
 
-  test("rejects non-primary agent caller", async () => {
+  it.live("rejects non-primary agent caller", () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
     const explorerCtx: ToolContext = { ...ctx, agentName: "explore" }
-    const result = await Effect.runPromise(
-      CounselTool.execute({ prompt: "review" }, explorerCtx).pipe(Effect.provide(layer)),
+    return CounselTool.execute({ prompt: "review" }, explorerCtx).pipe(
+      Effect.map((result) => {
+        expect(result.error).toContain("requires a primary agent")
+      }),
+      Effect.provide(layer),
     )
-    expect(result.error).toContain("requires a primary agent")
   })
 })

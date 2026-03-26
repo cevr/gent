@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
+import { beforeAll, afterAll } from "bun:test"
 import { parseFileRefs, expandFileRefs } from "../src/utils/file-refs"
 import { Effect } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"

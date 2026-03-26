@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TaskCreateTool } from "@gent/core/tools/task-create"
@@ -75,167 +75,149 @@ const setup = Effect.gen(function* () {
 })
 
 describe("TaskCreateTool", () => {
-  test("creates a task and returns id", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        return yield* TaskCreateTool.execute({ subject: "Fix auth bug" }, ctx)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.taskId).toBeDefined()
-    expect(result.subject).toBe("Fix auth bug")
-    expect(result.status).toBe("pending")
-  })
+  it.live("creates a task and returns id", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const result = yield* TaskCreateTool.execute({ subject: "Fix auth bug" }, ctx)
+      expect(result.taskId).toBeDefined()
+      expect(result.subject).toBe("Fix auth bug")
+      expect(result.status).toBe("pending")
+    }).pipe(Effect.provide(layer)),
+  )
 
-  test("creates task with dependencies", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        const t1 = yield* TaskCreateTool.execute({ subject: "First" }, ctx)
-        const t2 = yield* TaskCreateTool.execute(
-          {
-            subject: "Second",
-            blockedBy: [t1.taskId],
-          },
-          ctx,
-        )
-        expect(t2.blockedBy).toEqual([t1.taskId])
-        return t2
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.status).toBe("pending")
-  })
+  it.live("creates task with dependencies", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const t1 = yield* TaskCreateTool.execute({ subject: "First" }, ctx)
+      const t2 = yield* TaskCreateTool.execute(
+        {
+          subject: "Second",
+          blockedBy: [t1.taskId],
+        },
+        ctx,
+      )
+      expect(t2.blockedBy).toEqual([t1.taskId])
+      expect(t2.status).toBe("pending")
+    }).pipe(Effect.provide(layer)),
+  )
 })
 
 describe("TaskListTool", () => {
-  test("lists tasks for session", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        yield* TaskCreateTool.execute({ subject: "Task A" }, ctx)
-        yield* TaskCreateTool.execute({ subject: "Task B" }, ctx)
-        return yield* TaskListTool.execute({}, ctx)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.tasks.length).toBe(2)
-    expect(result.summary.total).toBe(2)
-    expect(result.summary.pending).toBe(2)
-  })
+  it.live("lists tasks for session", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* TaskCreateTool.execute({ subject: "Task A" }, ctx)
+      yield* TaskCreateTool.execute({ subject: "Task B" }, ctx)
+      const result = yield* TaskListTool.execute({}, ctx)
+      expect(result.tasks.length).toBe(2)
+      expect(result.summary.total).toBe(2)
+      expect(result.summary.pending).toBe(2)
+    }).pipe(Effect.provide(layer)),
+  )
 
-  test("returns empty for no tasks", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        return yield* TaskListTool.execute({}, ctx)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.tasks.length).toBe(0)
-    expect(result.summary).toBe("No tasks")
-  })
+  it.live("returns empty for no tasks", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const result = yield* TaskListTool.execute({}, ctx)
+      expect(result.tasks.length).toBe(0)
+      expect(result.summary).toBe("No tasks")
+    }).pipe(Effect.provide(layer)),
+  )
 })
 
 describe("TaskGetTool", () => {
-  test("returns task details", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        const created = yield* TaskCreateTool.execute(
-          {
-            subject: "Review code",
-            description: "Full review of auth module",
-          },
-          ctx,
-        )
-        return yield* TaskGetTool.execute({ taskId: created.taskId }, ctx)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.subject).toBe("Review code")
-    expect(result.description).toBe("Full review of auth module")
-  })
+  it.live("returns task details", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const created = yield* TaskCreateTool.execute(
+        {
+          subject: "Review code",
+          description: "Full review of auth module",
+        },
+        ctx,
+      )
+      const result = yield* TaskGetTool.execute({ taskId: created.taskId }, ctx)
+      expect(result.subject).toBe("Review code")
+      expect(result.description).toBe("Full review of auth module")
+    }).pipe(Effect.provide(layer)),
+  )
 
-  test("returns error for missing task", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        return yield* TaskGetTool.execute({ taskId: "nonexistent" }, ctx)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.error).toContain("not found")
-  })
+  it.live("returns error for missing task", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const result = yield* TaskGetTool.execute({ taskId: "nonexistent" }, ctx)
+      expect(result.error).toContain("not found")
+    }).pipe(Effect.provide(layer)),
+  )
 })
 
 describe("TaskUpdateTool", () => {
-  test("updates task status", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        const created = yield* TaskCreateTool.execute({ subject: "Fix it" }, ctx)
-        // Must follow valid transition: pending → in_progress → completed
-        yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
-        return yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "completed" }, ctx)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.status).toBe("completed")
-  })
+  it.live("updates task status", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const created = yield* TaskCreateTool.execute({ subject: "Fix it" }, ctx)
+      // Must follow valid transition: pending → in_progress → completed
+      yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
+      const result = yield* TaskUpdateTool.execute(
+        { taskId: created.taskId, status: "completed" },
+        ctx,
+      )
+      expect(result.status).toBe("completed")
+    }).pipe(Effect.provide(layer)),
+  )
 
-  test("publishes completed event when status becomes completed", async () => {
-    const events = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        const eventStore = yield* EventStore
-        const created = yield* TaskCreateTool.execute({ subject: "Ship it" }, ctx)
-        // Valid transition: pending → in_progress → completed
-        yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
-        yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "completed" }, ctx)
-        const envelopes = yield* eventStore
-          .subscribe({ sessionId: "s1" as SessionId })
-          .pipe(Stream.take(3), Stream.runCollect)
-        return Array.from(envelopes, (envelope) => envelope.event._tag)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(events).toContain("TaskCompleted")
-  })
+  it.live("publishes completed event when status becomes completed", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const eventStore = yield* EventStore
+      const created = yield* TaskCreateTool.execute({ subject: "Ship it" }, ctx)
+      // Valid transition: pending → in_progress → completed
+      yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
+      yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "completed" }, ctx)
+      const envelopes = yield* eventStore
+        .subscribe({ sessionId: "s1" as SessionId })
+        .pipe(Stream.take(3), Stream.runCollect)
+      const events = Array.from(envelopes, (envelope) => envelope.event._tag)
+      expect(events).toContain("TaskCompleted")
+    }).pipe(Effect.provide(layer)),
+  )
 })
 
 describe("TaskService.remove", () => {
-  test("publishes deleted event", async () => {
-    const events = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        const eventStore = yield* EventStore
-        const taskService = yield* TaskService
-        const created = yield* taskService.create({
-          sessionId: "s1" as SessionId,
-          branchId: "b1",
-          subject: "Ephemeral debug task",
-        })
-        yield* taskService.remove(created.id)
-        const envelopes = yield* eventStore
-          .subscribe({ sessionId: "s1" as SessionId })
-          .pipe(Stream.take(2), Stream.runCollect)
-        return Array.from(envelopes, (envelope) => envelope.event._tag)
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(events).toContain("TaskDeleted")
-  })
+  it.live("publishes deleted event", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const eventStore = yield* EventStore
+      const taskService = yield* TaskService
+      const created = yield* taskService.create({
+        sessionId: "s1" as SessionId,
+        branchId: "b1",
+        subject: "Ephemeral debug task",
+      })
+      yield* taskService.remove(created.id)
+      const envelopes = yield* eventStore
+        .subscribe({ sessionId: "s1" as SessionId })
+        .pipe(Stream.take(2), Stream.runCollect)
+      const events = Array.from(envelopes, (envelope) => envelope.event._tag)
+      expect(events).toContain("TaskDeleted")
+    }).pipe(Effect.provide(layer)),
+  )
 })
 
 describe("DelegateTool background mode", () => {
-  test("returns running status via background param", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* setup
-        return yield* DelegateTool.execute(
-          {
-            agent: "explore" as const,
-            task: "analyze the codebase",
-            background: true,
-          },
-          ctx,
-        )
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(result.taskId).toBeDefined()
-    expect(result.status).toBe("running")
-  })
+  it.live("returns running status via background param", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const result = yield* DelegateTool.execute(
+        {
+          agent: "explore" as const,
+          task: "analyze the codebase",
+          background: true,
+        },
+        ctx,
+      )
+      expect(result.taskId).toBeDefined()
+      expect(result.status).toBe("running")
+    }).pipe(Effect.provide(layer)),
+  )
 })

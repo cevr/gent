@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, expect, test } from "effect-bun-test"
 import {
   executeSlashCommand,
   parseSlashCommand,
@@ -107,117 +107,141 @@ describe("executeSlashCommand", () => {
     return { ctx, calls }
   }
 
-  test("/agent opens palette", async () => {
+  it.live("/agent opens palette", () => {
     const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("agent", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(result.error).toBeUndefined()
-    expect(calls.openPalette).toBe(1)
-  })
-
-  test("/clear starts a new session", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("clear", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(result.error).toBeUndefined()
-    expect(calls.newSession).toBe(1)
-  })
-
-  test("/new starts a new session", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("new", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(result.error).toBeUndefined()
-    expect(calls.newSession).toBe(1)
-  })
-
-  test("/sessions navigates to sessions", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("sessions", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(result.error).toBeUndefined()
-    expect(calls.navigateToSessions).toBe(1)
-  })
-
-  test("/branch calls createBranch", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("branch", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(calls.createBranch).toBe(1)
-  })
-
-  test("/tree opens branch tree", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("tree", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(calls.openTree).toBe(1)
-  })
-
-  test("/fork opens fork picker", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("fork", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(calls.openFork).toBe(1)
-  })
-
-  test("/bypass toggles bypass", async () => {
-    const { ctx, calls } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("bypass", "", ctx))
-
-    expect(result.handled).toBe(true)
-    expect(calls.toggleBypass).toBe(1)
-  })
-
-  test("unknown command returns error", async () => {
-    const { ctx } = createMockContext()
-    const result = await Effect.runPromise(executeSlashCommand("unknown", "", ctx))
-
-    expect(result.handled).toBe(false)
-    expect(result.error).toBe("Unknown command: /unknown")
-  })
-
-  test("case insensitive commands", async () => {
-    const { ctx: ctx1, calls: calls1 } = createMockContext()
-    await Effect.runPromise(executeSlashCommand("AGENT", "", ctx1))
-    expect(calls1.openPalette).toBe(1)
-
-    const { ctx: ctx2, calls: calls2 } = createMockContext()
-    await Effect.runPromise(executeSlashCommand("Clear", "", ctx2))
-    expect(calls2.newSession).toBe(1)
-  })
-
-  test("/counsel sends counsel message", async () => {
-    let sentMessage = ""
-    const { ctx } = createMockContext()
-    ctx.sendMessage = (msg) => {
-      sentMessage = msg
-    }
-    const result = await Effect.runPromise(executeSlashCommand("counsel", "", ctx))
-    expect(result.handled).toBe(true)
-    expect(sentMessage).toContain("counsel tool")
-  })
-
-  test("/counsel with args passes prompt", async () => {
-    let sentMessage = ""
-    const { ctx } = createMockContext()
-    ctx.sendMessage = (msg) => {
-      sentMessage = msg
-    }
-    const result = await Effect.runPromise(
-      executeSlashCommand("counsel", "review auth module", ctx),
+    return executeSlashCommand("agent", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(result.error).toBeUndefined()
+        expect(calls.openPalette).toBe(1)
+      }),
     )
-    expect(result.handled).toBe(true)
-    expect(sentMessage).toContain("review auth module")
   })
 
-  test("handles async errors gracefully", async () => {
+  it.live("/clear starts a new session", () => {
+    const { ctx, calls } = createMockContext()
+    return executeSlashCommand("clear", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(result.error).toBeUndefined()
+        expect(calls.newSession).toBe(1)
+      }),
+    )
+  })
+
+  it.live("/new starts a new session", () => {
+    const { ctx, calls } = createMockContext()
+    return executeSlashCommand("new", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(result.error).toBeUndefined()
+        expect(calls.newSession).toBe(1)
+      }),
+    )
+  })
+
+  it.live("/sessions navigates to sessions", () => {
+    const { ctx, calls } = createMockContext()
+    return executeSlashCommand("sessions", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(result.error).toBeUndefined()
+        expect(calls.navigateToSessions).toBe(1)
+      }),
+    )
+  })
+
+  it.live("/branch calls createBranch", () => {
+    const { ctx, calls } = createMockContext()
+    return executeSlashCommand("branch", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(calls.createBranch).toBe(1)
+      }),
+    )
+  })
+
+  it.live("/tree opens branch tree", () => {
+    const { ctx, calls } = createMockContext()
+    return executeSlashCommand("tree", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(calls.openTree).toBe(1)
+      }),
+    )
+  })
+
+  it.live("/fork opens fork picker", () => {
+    const { ctx, calls } = createMockContext()
+    return executeSlashCommand("fork", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(calls.openFork).toBe(1)
+      }),
+    )
+  })
+
+  it.live("/bypass toggles bypass", () => {
+    const { ctx, calls } = createMockContext()
+    return executeSlashCommand("bypass", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(calls.toggleBypass).toBe(1)
+      }),
+    )
+  })
+
+  it.live("unknown command returns error", () => {
+    const { ctx } = createMockContext()
+    return executeSlashCommand("unknown", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(false)
+        expect(result.error).toBe("Unknown command: /unknown")
+      }),
+    )
+  })
+
+  it.live("case insensitive commands", () => {
+    const { ctx: ctx1, calls: calls1 } = createMockContext()
+    const { ctx: ctx2, calls: calls2 } = createMockContext()
+    return Effect.gen(function* () {
+      yield* executeSlashCommand("AGENT", "", ctx1)
+      expect(calls1.openPalette).toBe(1)
+
+      yield* executeSlashCommand("Clear", "", ctx2)
+      expect(calls2.newSession).toBe(1)
+    })
+  })
+
+  it.live("/counsel sends counsel message", () => {
+    let sentMessage = ""
+    const { ctx } = createMockContext()
+    ctx.sendMessage = (msg) => {
+      sentMessage = msg
+    }
+    return executeSlashCommand("counsel", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(sentMessage).toContain("counsel tool")
+      }),
+    )
+  })
+
+  it.live("/counsel with args passes prompt", () => {
+    let sentMessage = ""
+    const { ctx } = createMockContext()
+    ctx.sendMessage = (msg) => {
+      sentMessage = msg
+    }
+    return executeSlashCommand("counsel", "review auth module", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(sentMessage).toContain("review auth module")
+      }),
+    )
+  })
+
+  it.live("handles async errors gracefully", () => {
     const ctx: SlashCommandContext = {
       openPalette: () => {},
       clearMessages: () => {},
@@ -232,12 +256,15 @@ describe("executeSlashCommand", () => {
       newSession: () => Effect.void,
     }
 
-    const result = await Effect.runPromise(executeSlashCommand("branch", "", ctx))
-    expect(result.handled).toBe(true)
-    expect(result.error).toBe("Branch failed")
+    return executeSlashCommand("branch", "", ctx).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(result.error).toBe("Branch failed")
+      }),
+    )
   })
 
-  test("extension slash command is executed", async () => {
+  it.live("extension slash command is executed", () => {
     const { ctx } = createMockContext()
     let called = false
     const extCommands: ExtensionSlashCommand[] = [
@@ -249,12 +276,15 @@ describe("executeSlashCommand", () => {
       },
     ]
 
-    const result = await Effect.runPromise(executeSlashCommand("myext", "", ctx, extCommands))
-    expect(result.handled).toBe(true)
-    expect(called).toBe(true)
+    return executeSlashCommand("myext", "", ctx, extCommands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(called).toBe(true)
+      }),
+    )
   })
 
-  test("builtin commands take precedence over extension commands", async () => {
+  it.live("builtin commands take precedence over extension commands", () => {
     const { ctx, calls } = createMockContext()
     let extCalled = false
     const extCommands: ExtensionSlashCommand[] = [
@@ -266,13 +296,16 @@ describe("executeSlashCommand", () => {
       },
     ]
 
-    const result = await Effect.runPromise(executeSlashCommand("agent", "", ctx, extCommands))
-    expect(result.handled).toBe(true)
-    expect(calls.openPalette).toBe(1)
-    expect(extCalled).toBe(false)
+    return executeSlashCommand("agent", "", ctx, extCommands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(calls.openPalette).toBe(1)
+        expect(extCalled).toBe(false)
+      }),
+    )
   })
 
-  test("extension slash commands are case insensitive", async () => {
+  it.live("extension slash commands are case insensitive", () => {
     const { ctx } = createMockContext()
     let called = false
     const extCommands: ExtensionSlashCommand[] = [
@@ -284,17 +317,23 @@ describe("executeSlashCommand", () => {
       },
     ]
 
-    const result = await Effect.runPromise(executeSlashCommand("myext", "", ctx, extCommands))
-    expect(result.handled).toBe(true)
-    expect(called).toBe(true)
+    return executeSlashCommand("myext", "", ctx, extCommands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(called).toBe(true)
+      }),
+    )
   })
 
-  test("unknown command with no matching extension returns error", async () => {
+  it.live("unknown command with no matching extension returns error", () => {
     const { ctx } = createMockContext()
     const extCommands: ExtensionSlashCommand[] = [{ slash: "other", onSelect: () => {} }]
 
-    const result = await Effect.runPromise(executeSlashCommand("unknown", "", ctx, extCommands))
-    expect(result.handled).toBe(false)
-    expect(result.error).toBe("Unknown command: /unknown")
+    return executeSlashCommand("unknown", "", ctx, extCommands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(false)
+        expect(result.error).toBe("Unknown command: /unknown")
+      }),
+    )
   })
 })
