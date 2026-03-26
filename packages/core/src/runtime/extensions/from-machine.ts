@@ -9,7 +9,7 @@
  */
 
 import { Effect, Ref, Schema } from "effect"
-import { Machine, type ActorRef, type BuiltMachine } from "effect-machine"
+import { Machine, type BuiltMachine } from "effect-machine"
 import type { AgentEvent } from "../../domain/event.js"
 import type {
   ExtensionActor,
@@ -79,11 +79,32 @@ export const fromMachine = <
       const versionRef = yield* Ref.make(0)
 
       const spawnId = `${config.id}-${ctx.sessionId}`
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const spawnEffect = (Machine.spawn as any)(config.built, spawnId) as Effect.Effect<
-        ActorRef<State, Event>
-      >
-      const ref = yield* spawnEffect
+
+      // Load persisted state before spawn so we can hydrate
+      let hydratedState: State | undefined
+      let initialVersion = 0
+      if (config.persist === true && storage._tag === "Some" && config.stateSchema !== undefined) {
+        const loaded = yield* storage.value
+          .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
+          .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+        if (loaded !== undefined) {
+          const decoded = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(config.stateSchema as Schema.Any),
+          )(loaded.stateJson).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+          if (decoded !== undefined) {
+            hydratedState = decoded as State
+            initialVersion = loaded.version
+          }
+        }
+      }
+
+      const ref = yield* Machine.spawn(config.built, {
+        id: spawnId,
+        ...(hydratedState !== undefined ? { hydrate: hydratedState } : {}),
+      })
+      if (initialVersion > 0) {
+        yield* Ref.set(versionRef, initialVersion)
+      }
 
       // Persistence: save state to storage
       const persistState = (): Effect.Effect<void> =>
@@ -147,26 +168,8 @@ export const fromMachine = <
       const actor: ExtensionActor = {
         id: config.id,
 
-        // Hydrate persisted state on init
-        init:
-          config.persist === true
-            ? Effect.gen(function* () {
-                if (storage._tag !== "Some" || config.stateSchema === undefined) return
-                const loaded = yield* storage.value
-                  .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
-                  .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
-                if (loaded === undefined) return
-                const decoded = yield* Schema.decodeUnknownEffect(
-                  Schema.fromJsonString(config.stateSchema as Schema.Any),
-                )(loaded.stateJson).pipe(
-                  Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
-                )
-                if (decoded === undefined) return
-                // Hydrate by directly setting the SubscriptionRef's value
-                ref.state.value = decoded
-                yield* Ref.set(versionRef, loaded.version)
-              })
-            : Effect.void,
+        // Hydration happens before spawn via Machine.spawn({ hydrate })
+        init: Effect.void,
 
         // @effect-diagnostics *:off
         handleEvent: (event: AgentEvent, reduceCtx) =>
