@@ -38,52 +38,60 @@ interface SubmitCall {
   options?: { bypass?: boolean; agentOverride?: AgentName }
 }
 
+const makeTestLayer = (logs: {
+  submitLog: Ref.Ref<SubmitCall[]>
+  steerLog?: Ref.Ref<SteerCommand[]>
+}) => {
+  const agentLoopLayer = Layer.succeed(AgentLoop, {
+    submit: (message: Message, options?: { bypass?: boolean; agentOverride?: AgentName }) =>
+      Ref.update(logs.submitLog, (log) => [...log, { message, options }]),
+    run: (_message: Message) => Effect.void,
+    steer: logs.steerLog
+      ? (command: SteerCommand) => Ref.update(logs.steerLog!, (log) => [...log, command])
+      : () => Effect.void,
+    followUp: () => Effect.void,
+    isRunning: () => Effect.succeed(false),
+    getState: () =>
+      Effect.succeed({
+        phase: "idle" as const,
+        status: "idle" as const,
+        agent: "cowork" as const,
+        queue: { steering: [], followUp: [] },
+      }),
+  })
+
+  const storageDeps = Layer.mergeAll(
+    Storage.Test(),
+    EventStore.Test(),
+    agentLoopLayer,
+    ExtensionRegistry.fromResolved(testExtensions),
+    ExtensionStateRuntime.Live([]),
+    ExtensionTurnControl.Test(),
+    ExtensionEventBus.Test(),
+    ToolRunner.Test(),
+  )
+  const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
+  const baseWithActorProcess = Layer.mergeAll(
+    storageDeps,
+    actorProcessLayer,
+    Provider.Test([]),
+    Permission.Live([], "ask"),
+    ConfigService.Test(),
+  )
+  const deps = Layer.mergeAll(
+    baseWithActorProcess,
+    Layer.provide(PermissionHandler.Live, baseWithActorProcess),
+    Layer.provide(PromptHandler.Live, baseWithActorProcess),
+    Layer.provide(HandoffHandler.Live, baseWithActorProcess),
+  )
+  return Layer.provideMerge(AppServicesLive, deps)
+}
+
 describe("sendMessage with agentOverride", () => {
   test("agentOverride is passed through submit as turn-scoped (no SwitchAgent)", async () => {
     const submitLog = Ref.makeUnsafe<SubmitCall[]>([])
     const steerLog = Ref.makeUnsafe<SteerCommand[]>([])
-
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: (message: Message, options?: { bypass?: boolean; agentOverride?: AgentName }) =>
-        Ref.update(submitLog, (log) => [...log, { message, options }]),
-      run: (_message: Message) => Effect.void,
-      steer: (command: SteerCommand) => Ref.update(steerLog, (log) => [...log, command]),
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
-      getState: () =>
-        Effect.succeed({
-          phase: "idle" as const,
-          status: "idle" as const,
-          agent: "cowork" as const,
-          queue: { steering: [], followUp: [] },
-        }),
-    })
-
-    const storageDeps = Layer.mergeAll(
-      Storage.Test(),
-      EventStore.Test(),
-      agentLoopLayer,
-      ExtensionRegistry.fromResolved(testExtensions),
-      ExtensionStateRuntime.Live([]),
-      ExtensionTurnControl.Test(),
-      ExtensionEventBus.Test(),
-      ToolRunner.Test(),
-    )
-    const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
-    const baseWithActorProcess = Layer.mergeAll(
-      storageDeps,
-      actorProcessLayer,
-      Provider.Test([]),
-      Permission.Live([], "ask"),
-      ConfigService.Test(),
-    )
-    const deps = Layer.mergeAll(
-      baseWithActorProcess,
-      Layer.provide(PermissionHandler.Live, baseWithActorProcess),
-      Layer.provide(PromptHandler.Live, baseWithActorProcess),
-      Layer.provide(HandoffHandler.Live, baseWithActorProcess),
-    )
-    const layer = Layer.provideMerge(AppServicesLive, deps)
+    const layer = makeTestLayer({ submitLog, steerLog })
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -97,12 +105,10 @@ describe("sendMessage with agentOverride", () => {
           agentOverride: "memory:reflect",
         })
 
-        // Verify agentOverride was passed through submit (turn-scoped)
         const submits = yield* Ref.get(submitLog)
         expect(submits.length).toBe(1)
         expect(submits[0]!.options?.agentOverride).toBe("memory:reflect")
 
-        // Verify NO SwitchAgent steer was called (not persistent)
         const steers = yield* Ref.get(steerLog)
         expect(steers.length).toBe(0)
       }).pipe(Effect.provide(layer)),
@@ -111,48 +117,7 @@ describe("sendMessage with agentOverride", () => {
 
   test("sendMessage without agentOverride does not pass override", async () => {
     const submitLog = Ref.makeUnsafe<SubmitCall[]>([])
-
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: (message: Message, options?: { bypass?: boolean; agentOverride?: AgentName }) =>
-        Ref.update(submitLog, (log) => [...log, { message, options }]),
-      run: (_message: Message) => Effect.void,
-      steer: () => Effect.void,
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
-      getState: () =>
-        Effect.succeed({
-          phase: "idle" as const,
-          status: "idle" as const,
-          agent: "cowork" as const,
-          queue: { steering: [], followUp: [] },
-        }),
-    })
-
-    const storageDeps = Layer.mergeAll(
-      Storage.Test(),
-      EventStore.Test(),
-      agentLoopLayer,
-      ExtensionRegistry.fromResolved(testExtensions),
-      ExtensionStateRuntime.Live([]),
-      ExtensionTurnControl.Test(),
-      ExtensionEventBus.Test(),
-      ToolRunner.Test(),
-    )
-    const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
-    const baseWithActorProcess = Layer.mergeAll(
-      storageDeps,
-      actorProcessLayer,
-      Provider.Test([]),
-      Permission.Live([], "ask"),
-      ConfigService.Test(),
-    )
-    const deps = Layer.mergeAll(
-      baseWithActorProcess,
-      Layer.provide(PermissionHandler.Live, baseWithActorProcess),
-      Layer.provide(PromptHandler.Live, baseWithActorProcess),
-      Layer.provide(HandoffHandler.Live, baseWithActorProcess),
-    )
-    const layer = Layer.provideMerge(AppServicesLive, deps)
+    const layer = makeTestLayer({ submitLog })
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -168,6 +133,88 @@ describe("sendMessage with agentOverride", () => {
         const submits = yield* Ref.get(submitLog)
         expect(submits.length).toBe(1)
         expect(submits[0]!.options?.agentOverride).toBeUndefined()
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+})
+
+describe("createSession with initialPrompt", () => {
+  test("initialPrompt sends message immediately after creation", async () => {
+    const submitLog = Ref.makeUnsafe<SubmitCall[]>([])
+    const layer = makeTestLayer({ submitLog })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const session = yield* commands.createSession({
+          name: "Initial Prompt Test",
+          initialPrompt: "hello from creation",
+        })
+
+        expect(session.sessionId).toBeDefined()
+        expect(session.branchId).toBeDefined()
+
+        const submits = yield* Ref.get(submitLog)
+        expect(submits.length).toBe(1)
+        expect(submits[0]!.message.parts[0]!.type).toBe("text")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("initialPrompt with agentOverride threads override through", async () => {
+    const submitLog = Ref.makeUnsafe<SubmitCall[]>([])
+    const steerLog = Ref.makeUnsafe<SteerCommand[]>([])
+    const layer = makeTestLayer({ submitLog, steerLog })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        yield* commands.createSession({
+          name: "Override Prompt Test",
+          initialPrompt: "test with override",
+          agentOverride: "memory:reflect",
+        })
+
+        const submits = yield* Ref.get(submitLog)
+        expect(submits.length).toBe(1)
+        expect(submits[0]!.options?.agentOverride).toBe("memory:reflect")
+
+        // No SwitchAgent — turn-scoped
+        const steers = yield* Ref.get(steerLog)
+        expect(steers.length).toBe(0)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("createSession without initialPrompt does not send message", async () => {
+    const submitLog = Ref.makeUnsafe<SubmitCall[]>([])
+    const layer = makeTestLayer({ submitLog })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        yield* commands.createSession({ name: "No Prompt Test" })
+
+        const submits = yield* Ref.get(submitLog)
+        expect(submits.length).toBe(0)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("empty initialPrompt does not send message", async () => {
+    const submitLog = Ref.makeUnsafe<SubmitCall[]>([])
+    const layer = makeTestLayer({ submitLog })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        yield* commands.createSession({
+          name: "Empty Prompt Test",
+          initialPrompt: "",
+        })
+
+        const submits = yield* Ref.get(submitLog)
+        expect(submits.length).toBe(0)
       }).pipe(Effect.provide(layer)),
     )
   })
