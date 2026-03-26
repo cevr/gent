@@ -6,7 +6,28 @@ import { describe, it, expect } from "effect-bun-test"
 import { AuthGuard } from "@gent/core/domain/auth-guard"
 import { AuthApi, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import type { LoadedExtension, ProviderContribution } from "@gent/core/domain/extension"
 import { Effect, Layer } from "effect"
+
+const testProviders: ProviderContribution[] = [
+  { id: "anthropic", name: "Anthropic", resolveModel: () => ({}) },
+  { id: "openai", name: "OpenAI", resolveModel: () => ({}) },
+  { id: "bedrock", name: "AWS Bedrock", resolveModel: () => ({}) },
+  { id: "google", name: "Google", resolveModel: () => ({}) },
+  { id: "mistral", name: "Mistral", resolveModel: () => ({}) },
+]
+
+const testRegistryLayer = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "test-providers" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { providers: testProviders },
+    } satisfies LoadedExtension,
+  ]),
+)
 
 describe("AuthStore", () => {
   const storeLayer = (initial: Record<string, string> = {}) =>
@@ -70,6 +91,7 @@ describe("AuthGuard", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
+      Layer.provide(testRegistryLayer),
     )
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
@@ -83,6 +105,7 @@ describe("AuthGuard", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),
+      Layer.provide(testRegistryLayer),
     )
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
@@ -96,6 +119,7 @@ describe("AuthGuard", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test({ openai: "sk-openai", anthropic: "sk-anthropic" })),
+      Layer.provide(testRegistryLayer),
     )
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
@@ -118,6 +142,7 @@ describe("AuthGuard", () => {
           listInfo: () => Effect.fail(new Error("listInfo failed")),
         }),
       ),
+      Layer.provide(testRegistryLayer),
     )
     return Effect.gen(function* () {
       const guard = yield* AuthGuard

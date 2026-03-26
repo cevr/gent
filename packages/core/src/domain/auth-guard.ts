@@ -1,7 +1,8 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { AuthStore, AuthType } from "./auth-store"
 import { Agents, resolveAgentModel } from "./agent"
-import { ProviderId, SUPPORTED_PROVIDERS, parseModelProvider } from "./model"
+import { ProviderId, parseModelProvider } from "./model"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 
 export const AuthSource = Schema.Literal("stored")
 export type AuthSource = typeof AuthSource.Type
@@ -34,24 +35,27 @@ const REQUIRED_PROVIDERS: readonly ProviderId[] = (() => {
 export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()(
   "@gent/core/src/domain/auth-guard/AuthGuard",
 ) {
-  static Live: Layer.Layer<AuthGuard, never, AuthStore> = Layer.effect(
+  static Live: Layer.Layer<AuthGuard, never, AuthStore | ExtensionRegistry> = Layer.effect(
     AuthGuard,
     Effect.gen(function* () {
       const authStore = yield* AuthStore
+      const extensionRegistry = yield* ExtensionRegistry
       const requiredSet = new Set(REQUIRED_PROVIDERS)
 
       const listProviders = Effect.fn("AuthGuard.listProviders")(function* () {
         const providers: AuthProviderInfo[] = []
-        for (const provider of SUPPORTED_PROVIDERS) {
+        const registeredProviders = yield* extensionRegistry.listProviders()
+
+        for (const provider of registeredProviders) {
           const storedInfo = yield* authStore
             .get(provider.id)
             .pipe(Effect.catchEager(() => Effect.void))
           const hasStored = storedInfo !== undefined
-          const required = requiredSet.has(provider.id)
+          const required = requiredSet.has(provider.id as ProviderId)
 
           if (hasStored) {
             providers.push({
-              provider: provider.id,
+              provider: provider.id as ProviderId,
               hasKey: true,
               source: "stored" as const,
               authType: storedInfo?.type as AuthType | undefined,
@@ -59,7 +63,7 @@ export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()
             })
             continue
           }
-          providers.push({ provider: provider.id, hasKey: false, required })
+          providers.push({ provider: provider.id as ProviderId, hasKey: false, required })
         }
 
         return providers

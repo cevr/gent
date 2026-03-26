@@ -218,8 +218,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     ...(config.authKeyPath !== undefined ? { keyPath: config.authKeyPath } : {}),
   })
   const authStoreLive = Layer.provide(AuthStore.Live, authStorageLive)
-  const authGuardLive = Layer.provide(AuthGuard.Live, authStoreLive)
-  const providerAuthLive = Layer.provide(ProviderAuth.Live, authStoreLive)
 
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
   const modelRegistryLive = Layer.provide(ModelRegistry.Live, runtimePlatformLive)
@@ -230,6 +228,14 @@ export const createDependencies = (config: DependenciesConfig) => {
     extraDirs: config.skillsDirs,
   })
   const extensionRegistryLive = makeExtensionLayers(config)
+  const authGuardLive = Layer.provide(
+    AuthGuard.Live,
+    Layer.merge(authStoreLive, extensionRegistryLive),
+  )
+  const providerAuthLive = Layer.provide(
+    ProviderAuth.Live,
+    Layer.merge(authStoreLive, extensionRegistryLive),
+  )
   const fileLockServiceLive = FileLockService.layer
 
   const providerFactoryLive = Layer.provide(

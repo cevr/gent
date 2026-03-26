@@ -6,6 +6,7 @@ import {
   type AuthAuthorizationMethod,
 } from "../domain/auth-method.js"
 import { SUPPORTED_PROVIDERS } from "../domain/model.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
 import { authorizeOpenAI } from "./oauth/openai-oauth"
 import { readClaudeCodeCredentials, refreshClaudeCodeCredentials } from "./oauth/anthropic-keychain"
 
@@ -186,10 +187,11 @@ export interface ProviderAuthService {
 export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthService>()(
   "@gent/core/src/providers/provider-auth/ProviderAuth",
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, AuthStore> = Layer.effect(
+  static Live: Layer.Layer<ProviderAuth, never, AuthStore | ExtensionRegistry> = Layer.effect(
     ProviderAuth,
     Effect.gen(function* () {
       const authStore = yield* AuthStore
+      const extensionRegistry = yield* ExtensionRegistry
       const setOauth = (provider: string, auth: AuthOauth) =>
         authStore.set(provider, auth).pipe(
           Effect.mapError(
@@ -200,7 +202,7 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
               }),
           ),
         )
-      return yield* makeProviderAuth(buildProviders(setOauth))
+      return yield* makeProviderAuth(buildProviders(setOauth), extensionRegistry)
     }),
   )
 
@@ -211,30 +213,48 @@ export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthS
       ProviderAuth,
       Effect.gen(function* () {
         yield* AuthStore
-        return yield* makeProviderAuth(providers)
+        return yield* makeProviderAuth(providers, undefined)
       }),
     )
 }
 
 const makeProviderAuth = (
   providers: Record<string, ProviderAuthProvider>,
+  extensionRegistry: ExtensionRegistryService | undefined,
 ): Effect.Effect<ProviderAuthService, never, AuthStore> =>
   Effect.gen(function* () {
     const authStore = yield* AuthStore
     const pending = yield* Ref.make<Map<string, PendingCallback>>(new Map())
 
-    const listMethods = Effect.fn("ProviderAuth.listMethods")(() =>
-      Effect.sync(() => {
-        const result: Record<string, ReadonlyArray<typeof AuthMethod.Type>> = {}
+    const listMethods = Effect.fn("ProviderAuth.listMethods")(function* () {
+      const result: Record<string, ReadonlyArray<typeof AuthMethod.Type>> = {}
+
+      if (extensionRegistry !== undefined) {
+        // Derive from extension-registered providers
+        const registeredProviders = yield* extensionRegistry.listProviders()
+        for (const provider of registeredProviders) {
+          if (provider.auth !== undefined && provider.auth.methods.length > 0) {
+            result[provider.id] = provider.auth.methods
+          } else {
+            // Legacy fallback for providers registered without auth config
+            const entry = providers[provider.id]
+            result[provider.id] = entry?.methods ?? [
+              new AuthMethod({ type: "api", label: "Manually enter API key" }),
+            ]
+          }
+        }
+      } else {
+        // Test/fallback: use hardcoded provider list
         for (const provider of SUPPORTED_PROVIDERS) {
           const entry = providers[provider.id]
           result[provider.id] = entry?.methods ?? [
             new AuthMethod({ type: "api", label: "Manually enter API key" }),
           ]
         }
-        return result
-      }),
-    )
+      }
+
+      return result
+    })
 
     const authorize = Effect.fn("ProviderAuth.authorize")(function* (
       sessionId: string,
