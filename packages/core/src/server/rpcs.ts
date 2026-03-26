@@ -17,6 +17,8 @@ import { GentRpcError } from "./errors.js"
 import {
   CreateSessionPayload,
   CreateSessionSuccess,
+  StartSessionPayload,
+  StartSessionSuccess,
   SessionInfo,
   SessionTreeNodeSchema,
   GetChildSessionsPayload,
@@ -123,6 +125,11 @@ export {
 
 export class GentRpcs extends RpcGroup.make(
   // Session RPCs
+  Rpc.make("startSession", {
+    payload: StartSessionPayload.fields,
+    success: StartSessionSuccess,
+    error: GentRpcError,
+  }),
   Rpc.make("createSession", {
     payload: CreateSessionPayload.fields,
     success: CreateSessionSuccess,
