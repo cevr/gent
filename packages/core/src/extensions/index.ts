@@ -13,6 +13,9 @@ import { ReviewLoopExtension } from "./review-loop.js"
 import { MemoryExtension } from "./memory/index.js"
 import { AnthropicExtension } from "./anthropic/index.js"
 import { OpenAIExtension } from "./openai/index.js"
+import { BedrockExtension } from "./bedrock/index.js"
+import { GoogleExtension } from "./google/index.js"
+import { MistralExtension } from "./mistral/index.js"
 
 export {
   FsToolsExtension,
@@ -44,4 +47,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   MemoryExtension,
   AnthropicExtension,
   OpenAIExtension,
+  BedrockExtension,
+  GoogleExtension,
+  MistralExtension,
 ]
