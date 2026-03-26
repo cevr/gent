@@ -511,9 +511,14 @@ export const SubprocessRunner: Layer.Layer<
 
               const killSubprocess = (proc: Bun.Subprocess) => {
                 try {
-                  proc.kill()
+                  // Kill process group (negative PID) to clean up descendants
+                  process.kill(-proc.pid, "SIGTERM")
                 } catch {
-                  // already dead
+                  try {
+                    proc.kill()
+                  } catch {
+                    // already dead
+                  }
                 }
               }
 

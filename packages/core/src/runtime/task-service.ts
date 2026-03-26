@@ -141,7 +141,17 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
               )
               .pipe(Effect.catchEager(() => Effect.void))
           }
-        }).pipe(Effect.catchEager(() => Effect.void))
+        }).pipe(
+          Effect.onInterrupt(() =>
+            storage
+              .updateTask(taskId, {
+                status: "failed",
+                metadata: { error: "interrupted by shutdown" },
+              })
+              .pipe(Effect.catchEager(() => Effect.void)),
+          ),
+          Effect.catchEager(() => Effect.void),
+        )
 
       const checkAndRunDependents: (completedTaskId: TaskId) => Effect.Effect<void> = (
         completedTaskId,
