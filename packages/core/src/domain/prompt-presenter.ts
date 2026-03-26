@@ -3,6 +3,7 @@ import type { PlatformError } from "effect"
 import type { SessionId, BranchId } from "./ids"
 import type { EventStoreError, PromptDecision } from "./event"
 import { PromptHandler } from "./interaction-handlers"
+import { RuntimePlatform } from "../runtime/runtime-platform"
 
 // PromptPresenter — reusable presentation service for delegate tools
 // Extracts review/confirm/present from PromptTool so tools can present
@@ -42,9 +43,9 @@ const slugify = (text: string): string =>
     .replace(/^-|-$/g, "")
     .slice(0, 40)
 
-const defaultPromptPath = (title: string | undefined, fileNameSeed: string) => {
+const defaultPromptPath = (cwd: string, title: string | undefined, fileNameSeed: string) => {
   const slug = title !== undefined ? slugify(title) : "prompt"
-  return `${process.cwd()}/.gent/prompts/${slug}-${fileNameSeed}.md`
+  return `${cwd}/.gent/prompts/${slug}-${fileNameSeed}.md`
 }
 
 export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptPresenterService>()(
@@ -53,13 +54,14 @@ export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptP
   static Live: Layer.Layer<
     PromptPresenter,
     never,
-    PromptHandler | FileSystem.FileSystem | Path.Path
+    PromptHandler | FileSystem.FileSystem | Path.Path | RuntimePlatform
   > = Layer.effect(
     PromptPresenter,
     Effect.gen(function* () {
       const promptHandler = yield* PromptHandler
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
+      const platform = yield* RuntimePlatform
 
       return PromptPresenter.of({
         present: Effect.fn("PromptPresenter.present")(function* (params) {
@@ -84,7 +86,9 @@ export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptP
         }),
 
         review: Effect.fn("PromptPresenter.review")(function* (params) {
-          const resolvedPath = path.resolve(defaultPromptPath(params.title, params.fileNameSeed))
+          const resolvedPath = path.resolve(
+            defaultPromptPath(platform.cwd, params.title, params.fileNameSeed),
+          )
           const text =
             params.title !== undefined ? `# ${params.title}\n\n${params.content}` : params.content
 

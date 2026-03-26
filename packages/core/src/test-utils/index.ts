@@ -14,6 +14,7 @@ import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.j
 import { Permission, type PermissionDecision } from "../domain/permission.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { PromptDecision, HandoffDecision } from "../domain/event.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 
@@ -202,6 +203,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
     AgentLoop.Test(),
+    RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
   )
 }
 
@@ -234,6 +236,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
     AgentLoop.Test(),
+    RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
   ).pipe(
     Layer.provideMerge(RecordingProvider(providerResponses)),
     Layer.provideMerge(RecordingEventStore),

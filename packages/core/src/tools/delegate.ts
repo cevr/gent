@@ -7,6 +7,7 @@ import {
   type SubagentError,
 } from "../domain/agent.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { TaskService } from "../runtime/task-service.js"
 
 const MAX_PARALLEL_TASKS = 8
@@ -48,6 +49,7 @@ export const DelegateTool = defineTool({
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
     const registry = yield* ExtensionRegistry
+    const platform = yield* RuntimePlatform
 
     const caller = ctx.agentName !== undefined ? yield* registry.getAgent(ctx.agentName) : undefined
 
@@ -102,7 +104,7 @@ export const DelegateTool = defineTool({
         subject: params.description ?? params.task ?? "background task",
         agentType: resolved.agent.name,
         prompt: params.task,
-        cwd: process.cwd(),
+        cwd: platform.cwd,
       })
       const result = yield* taskService.run(task.id)
       return { taskId: result.taskId, status: result.status }
@@ -125,7 +127,7 @@ export const DelegateTool = defineTool({
           subject: summarizeTaskSubject(item.task),
           agentType: resolved.agent.name,
           prompt: item.task,
-          cwd: process.cwd(),
+          cwd: platform.cwd,
         })
         yield* taskService.run(task.id)
         taskIds.push(task.id)
@@ -148,7 +150,7 @@ export const DelegateTool = defineTool({
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
-          cwd: process.cwd(),
+          cwd: platform.cwd,
         })
 
         results.push(result)
@@ -198,7 +200,7 @@ export const DelegateTool = defineTool({
               parentSessionId: ctx.sessionId,
               parentBranchId: ctx.branchId,
               toolCallId: ctx.toolCallId,
-              cwd: process.cwd(),
+              cwd: platform.cwd,
             })
           }),
         )
@@ -228,7 +230,7 @@ export const DelegateTool = defineTool({
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-        cwd: process.cwd(),
+        cwd: platform.cwd,
       })
 
       if (result._tag === "error") {

@@ -9,6 +9,7 @@ import {
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { runLoop } from "../runtime/loop.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
   extractLoopEvaluation,
@@ -297,6 +298,7 @@ export const CodeReviewTool = defineTool({
     const runner = yield* SubagentRunnerService
     const storage = yield* Storage
     const registry = yield* ExtensionRegistry
+    const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "report"
     const maxIterations = params.maxIterations ?? 3
@@ -304,7 +306,7 @@ export const CodeReviewTool = defineTool({
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
       toolCallId: ctx.toolCallId,
-      cwd: process.cwd(),
+      cwd: platform.cwd,
     }
 
     const reviewer = (yield* registry.getAgent("reviewer")) ?? Agents.reviewer

@@ -11,6 +11,7 @@ import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const TestExtRegistry = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -31,8 +32,14 @@ const ctx: ToolContext = {
   toolCallId: "test-call",
 }
 
+const RuntimePlatformLayer = RuntimePlatform.Test({
+  cwd: process.cwd(),
+  home: "/tmp/test-home",
+  platform: "test",
+})
+
 // Layer providing FileSystem and Path from @effect/platform-bun
-const PlatformLayer = BunServices.layer
+const PlatformLayer = Layer.merge(BunServices.layer, RuntimePlatformLayer)
 
 describe("Tools", () => {
   describe("ReadTool", () => {
@@ -249,7 +256,7 @@ describe("Delegate Tool", () => {
         }),
     })
 
-    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry)
+    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry, RuntimePlatformLayer)
 
     return DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(
       Effect.map((result) => {
@@ -272,7 +279,7 @@ describe("Delegate Tool", () => {
         })
       },
     })
-    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry)
+    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry, RuntimePlatformLayer)
     return DelegateTool.execute(
       {
         chain: [
@@ -302,7 +309,7 @@ describe("Delegate Tool", () => {
         })
       },
     })
-    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry)
+    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry, RuntimePlatformLayer)
     return DelegateTool.execute(
       {
         tasks: [

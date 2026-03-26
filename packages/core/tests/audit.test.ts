@@ -4,6 +4,7 @@ import { BunServices } from "@effect/platform-bun"
 import { AuditTool } from "@gent/core/tools/audit"
 import { Agents, SubagentRunnerService, type SubagentResult } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const TestExtRegistry = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -19,6 +20,12 @@ import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { EventStore, ToolCallStarted, ToolCallSucceeded } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { ToolContext } from "@gent/core/domain/tool"
+
+const RuntimePlatformLayer = RuntimePlatform.Test({
+  cwd: process.cwd(),
+  home: "/tmp/test-home",
+  platform: "test",
+})
 
 const ctx: ToolContext = {
   sessionId: "test-session",
@@ -179,6 +186,7 @@ describe("Audit Tool", () => {
         EventStore.Test(),
         Storage.Test(),
         BunServices.layer,
+        RuntimePlatformLayer,
       )
 
       return AuditTool.execute(
@@ -246,6 +254,7 @@ describe("Audit Tool", () => {
       EventStore.Test(),
       Storage.Test(),
       BunServices.layer,
+      RuntimePlatformLayer,
     )
 
     return AuditTool.execute({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
@@ -272,6 +281,7 @@ describe("Audit Tool", () => {
       EventStore.Test(),
       Storage.Test(),
       BunServices.layer,
+      RuntimePlatformLayer,
     )
 
     return AuditTool.execute({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
@@ -340,6 +350,7 @@ describe("Audit Tool", () => {
       EventStore.Test(),
       Storage.Test(),
       BunServices.layer,
+      RuntimePlatformLayer,
     )
 
     return AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
@@ -408,6 +419,7 @@ describe("Audit Tool", () => {
       EventStore.Test(),
       Storage.Test(),
       BunServices.layer,
+      RuntimePlatformLayer,
     )
 
     return AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(

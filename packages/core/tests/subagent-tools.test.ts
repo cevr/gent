@@ -10,6 +10,7 @@ import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
 import { EventStore, ToolCallStarted, ToolCallSucceeded } from "@gent/core/domain/event"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
@@ -57,7 +58,13 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
   ]),
 )
 
-const platformLayer = BunServices.layer
+const runtimePlatformLayer = RuntimePlatform.Test({
+  cwd: process.cwd(),
+  home: "/tmp/test-home",
+  platform: "test",
+})
+
+const platformLayer = Layer.merge(BunServices.layer, runtimePlatformLayer)
 
 const workflowTestLayer = Layer.mergeAll(TestExtRegistry, EventStore.Test(), Storage.Test())
 

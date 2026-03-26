@@ -15,6 +15,7 @@ import {
 } from "../domain/event.js"
 import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
+import { RuntimePlatform } from "./runtime-platform.js"
 import type { TaskId, SessionId, BranchId } from "../domain/ids.js"
 import { Storage } from "../storage/sqlite-storage.js"
 
@@ -66,7 +67,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
   static Live: Layer.Layer<
     TaskService,
     never,
-    Storage | EventStore | SubagentRunnerService | ExtensionRegistry
+    Storage | EventStore | SubagentRunnerService | ExtensionRegistry | RuntimePlatform
   > = Layer.effect(
     TaskService,
     Effect.gen(function* () {
@@ -74,6 +75,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
       const eventStore = yield* EventStore
       const runner = yield* SubagentRunnerService
       const extensionRegistry = yield* ExtensionRegistry
+      const platform = yield* RuntimePlatform
       const taskFibers = yield* FiberSet.make<void>()
 
       const runTaskInternal: (taskId: TaskId, task: Task) => Effect.Effect<void> = (taskId, task) =>
@@ -106,7 +108,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             prompt: task.prompt ?? task.subject,
             parentSessionId,
             parentBranchId,
-            cwd: task.cwd ?? process.cwd(),
+            cwd: task.cwd ?? platform.cwd,
           })
 
           if (result._tag === "success") {

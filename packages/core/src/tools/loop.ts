@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { AgentName, SubagentRunnerService } from "../domain/agent.js"
 import { type EventEnvelope } from "../domain/event.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { runLoop } from "../runtime/loop.js"
@@ -64,6 +65,7 @@ export const LoopTool = defineTool({
   execute: Effect.fn("LoopTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
     const storage = yield* Storage
+    const platform = yield* RuntimePlatform
     const maxIterations = params.maxIterations ?? 5
 
     const result = yield* runLoop({
@@ -88,7 +90,7 @@ export const LoopTool = defineTool({
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
-          cwd: process.cwd(),
+          cwd: platform.cwd,
         })
       },
 
@@ -101,7 +103,7 @@ export const LoopTool = defineTool({
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
-          cwd: process.cwd(),
+          cwd: platform.cwd,
           overrides: {
             tags: ["loop-evaluation"],
           },

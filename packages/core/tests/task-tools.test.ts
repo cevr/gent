@@ -12,10 +12,14 @@ import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { TaskService } from "@gent/core/runtime/task-service"
 
-const platformLayer = BunServices.layer
+const platformLayer = Layer.merge(
+  BunServices.layer,
+  RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
+)
 
 const mockRunnerSuccess = Layer.succeed(SubagentRunnerService, {
   run: (params) =>

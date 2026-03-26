@@ -10,6 +10,7 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { runLoop } from "../runtime/loop.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
   extractLoopEvaluation,
@@ -231,6 +232,7 @@ export const PlanTool = defineTool({
     const runner = yield* SubagentRunnerService
     const presenter = yield* PromptPresenter
     const registry = yield* ExtensionRegistry
+    const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "plan-only"
     const maxIterations = params.maxIterations ?? 3
@@ -238,7 +240,7 @@ export const PlanTool = defineTool({
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
       toolCallId: ctx.toolCallId,
-      cwd: process.cwd(),
+      cwd: platform.cwd,
     }
 
     const architect = (yield* registry.getAgent("architect")) ?? Agents.architect

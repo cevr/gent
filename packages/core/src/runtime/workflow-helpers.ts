@@ -9,6 +9,7 @@ import type { AgentDefinition, SubagentResult, SubagentRunner } from "../domain/
 import type { EventEnvelope } from "../domain/event.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import type { LoopVerdict } from "../runtime/loop.js"
+import { RuntimePlatform } from "./runtime-platform.js"
 
 // ── Shell Command Runner ──
 
@@ -18,26 +19,29 @@ class CommandError extends Schema.TaggedErrorClass<CommandError>()("CommandError
 }) {}
 
 /** Run a shell command, returning stdout. Returns empty string on failure. */
-export const runCommand = (cmd: string[]): Effect.Effect<string> =>
-  Effect.tryPromise({
-    try: async () => {
-      const proc = Bun.spawn(cmd, {
-        cwd: process.cwd(),
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      if (exitCode !== 0) {
-        throw new CommandError({ message: stderr || `Command failed: ${cmd.join(" ")}` })
-      }
-      return stdout
-    },
-    catch: (e) => new CommandError({ message: String(e), cause: e }),
-  }).pipe(Effect.orElseSucceed(() => ""))
+export const runCommand = (cmd: string[]): Effect.Effect<string, never, RuntimePlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* RuntimePlatform
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const proc = Bun.spawn(cmd, {
+          cwd: platform.cwd,
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ])
+        if (exitCode !== 0) {
+          throw new CommandError({ message: stderr || `Command failed: ${cmd.join(" ")}` })
+        }
+        return stdout
+      },
+      catch: (e) => new CommandError({ message: String(e), cause: e }),
+    }).pipe(Effect.orElseSucceed(() => ""))
+  })
 
 // ── Adversarial Pair Runner ──
 

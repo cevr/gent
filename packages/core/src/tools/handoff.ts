@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { SubagentRunnerService, Agents } from "../domain/agent.js"
 import { HandoffHandler } from "../domain/interaction-handlers.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Handoff Tool Error
 
@@ -41,6 +42,7 @@ export const HandoffTool = defineTool({
   execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
     const handoffHandler = yield* HandoffHandler
+    const platform = yield* RuntimePlatform
 
     // Use summarizer agent to refine context if it's large
     let summary = params.context
@@ -51,7 +53,7 @@ export const HandoffTool = defineTool({
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-        cwd: process.cwd(),
+        cwd: platform.cwd,
       })
       if (summarizeResult._tag === "success") {
         summary = summarizeResult.text

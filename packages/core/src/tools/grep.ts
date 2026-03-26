@@ -1,6 +1,7 @@
 import { Effect, Option, Schema, Stream, FileSystem, Path } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { Glob } from "bun"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Grep Tool Error
 
@@ -78,8 +79,9 @@ export const GrepTool = defineTool({
   execute: Effect.fn("GrepTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
+    const platform = yield* RuntimePlatform
 
-    const basePath = params.path !== undefined ? pathService.resolve(params.path) : process.cwd()
+    const basePath = params.path !== undefined ? pathService.resolve(params.path) : platform.cwd
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
     const flags = params.caseSensitive === false ? "gi" : "g"

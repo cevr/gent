@@ -1,6 +1,7 @@
 import { Effect, Schema, FileSystem } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { Agents, AgentDefinition, SubagentRunnerService } from "../domain/agent.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Counsel Tool Error
 
@@ -44,6 +45,7 @@ export const CounselTool = defineTool({
   execute: Effect.fn("CounselTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
     const fs = yield* FileSystem.FileSystem
+    const platform = yield* RuntimePlatform
 
     // Resolve opposite agent with read-only tool restriction
     const current = ctx.agentName ?? "cowork"
@@ -96,7 +98,7 @@ Instructions:
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
       toolCallId: ctx.toolCallId,
-      cwd: process.cwd(),
+      cwd: platform.cwd,
     })
 
     if (result._tag === "error") {

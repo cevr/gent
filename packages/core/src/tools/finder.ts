@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { Agents, SubagentRunnerService } from "../domain/agent.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Finder Tool Error
 
@@ -29,6 +30,7 @@ export const FinderTool = defineTool({
   params: FinderParams,
   execute: Effect.fn("FinderTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
+    const platform = yield* RuntimePlatform
 
     const result = yield* runner.run({
       agent: Agents.finder,
@@ -36,7 +38,7 @@ export const FinderTool = defineTool({
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
       toolCallId: ctx.toolCallId,
-      cwd: process.cwd(),
+      cwd: platform.cwd,
     })
 
     if (result._tag === "error") {
