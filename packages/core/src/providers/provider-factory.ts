@@ -239,14 +239,16 @@ function makeProviderFactory(): Effect.Effect<
           } else if (authInfo?.type === "oauth") {
             authParam = { type: "oauth" }
           }
-          return yield* Effect.try({
-            try: () => extensionProvider.resolveModel(modelName, authParam) as LanguageModel,
+          const resolved = yield* Effect.try({
+            try: () => extensionProvider.resolveModel(modelName, authParam),
             catch: (e) =>
               new ProviderError({
                 message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
                 model: modelId,
               }),
           })
+          // undefined return signals fall-through to builtin dispatch
+          if (resolved !== undefined) return resolved as LanguageModel
         }
 
         // Fall back to builtin dispatch

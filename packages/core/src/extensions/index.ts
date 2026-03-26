@@ -12,6 +12,7 @@ import { PlanModeExtension } from "./plan-mode.js"
 import { ReviewLoopExtension } from "./review-loop.js"
 import { MemoryExtension } from "./memory/index.js"
 import { AnthropicExtension } from "./anthropic/index.js"
+import { OpenAIExtension } from "./openai/index.js"
 
 export {
   FsToolsExtension,
@@ -42,4 +43,5 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   ReviewLoopExtension,
   MemoryExtension,
   AnthropicExtension,
+  OpenAIExtension,
 ]
