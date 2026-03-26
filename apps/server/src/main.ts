@@ -199,7 +199,7 @@ const program = Effect.scoped(
     const baseUrl = `http://localhost:${config.port}`
     if (config.isWorker && config.isDebug) {
       const seeded = yield* seedDebugSession(config.cwd).pipe(Effect.provide(coreServices))
-      yield* Effect.forkDetach(
+      yield* Effect.forkScoped(
         startDebugScenario({
           sessionId: seeded.sessionId,
           branchId: seeded.branchId,

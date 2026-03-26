@@ -621,6 +621,6 @@ const runTurnLifecycle = (params: DebugScenarioParams) =>
 export const startDebugScenario = Effect.fn("DebugScenario.start")(function* (
   params: DebugScenarioParams,
 ) {
-  yield* Effect.forkDetach(runTaskLifecycle(params))
-  yield* Effect.forkDetach(runTurnLifecycle(params))
+  yield* Effect.forkScoped(runTaskLifecycle(params))
+  yield* Effect.forkScoped(runTurnLifecycle(params))
 })

@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer } from "effect"
+import { ServiceMap, Effect, FiberSet, Layer } from "effect"
 import {
   Task,
   TaskTransitionError,
@@ -74,6 +74,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
       const eventStore = yield* EventStore
       const runner = yield* SubagentRunnerService
       const extensionRegistry = yield* ExtensionRegistry
+      const taskFibers = yield* FiberSet.make<void>()
 
       const runTaskInternal: (taskId: TaskId, task: Task) => Effect.Effect<void> = (taskId, task) =>
         Effect.gen(function* () {
@@ -179,7 +180,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                   }),
                 )
                 .pipe(Effect.catchEager(() => Effect.void))
-              yield* Effect.forkDetach(runTaskInternal(depTaskId, depTask))
+              yield* FiberSet.run(taskFibers)(runTaskInternal(depTaskId, depTask))
             }
           }
         }).pipe(Effect.catchEager(() => Effect.void))
@@ -322,7 +323,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
               )
               .pipe(Effect.catchEager(() => Effect.void))
 
-            yield* Effect.forkDetach(runTaskInternal(id, claimed))
+            yield* FiberSet.run(taskFibers)(runTaskInternal(id, claimed))
             return { taskId: id, status: "running" }
           }),
 
