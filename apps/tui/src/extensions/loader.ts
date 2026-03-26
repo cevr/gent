@@ -13,7 +13,7 @@ import {
   type LoadedTuiExtension,
   type ResolvedTuiExtensions,
 } from "./resolve"
-import { BUILTIN_CLIENT_EXTENSION } from "./builtin"
+import { BUILTIN_CLIENT_EXTENSIONS } from "./builtins/index"
 
 const importExtension = async (
   entry: DiscoveredTuiExtension,
@@ -42,27 +42,34 @@ const importExtension = async (
 
 /**
  * Load all TUI extensions: discover files, import modules, resolve with scope precedence.
+ *
+ * @param opts.disabled — extension ids to skip (applies to builtins and discovered alike)
  */
 export const loadTuiExtensions = async (
   opts: {
     readonly userDir: string
     readonly projectDir: string
+    readonly disabled?: ReadonlyArray<string>
   },
   ctx: ExtensionClientContext,
 ): Promise<ResolvedTuiExtensions> => {
+  const disabledSet = new Set(opts.disabled ?? [])
   const discovered = discoverTuiExtensions(opts)
 
   const results = await Promise.all(discovered.map((entry) => importExtension(entry, ctx)))
 
-  const loaded: LoadedTuiExtension[] = [
-    {
-      id: BUILTIN_CLIENT_EXTENSION.id,
-      kind: "builtin",
-      filePath: "builtin",
-      setup: BUILTIN_CLIENT_EXTENSION.setup(ctx),
-    },
-    ...results.filter((r): r is LoadedTuiExtension => r !== undefined),
-  ]
+  const builtins: LoadedTuiExtension[] = BUILTIN_CLIENT_EXTENSIONS.filter(
+    (ext) => !disabledSet.has(ext.id),
+  ).map((ext) => ({
+    id: ext.id,
+    kind: "builtin" as const,
+    filePath: `builtin:${ext.id}`,
+    setup: ext.setup(ctx),
+  }))
 
-  return resolveTuiExtensions(loaded)
+  const external = results
+    .filter((r): r is LoadedTuiExtension => r !== undefined)
+    .filter((r) => !disabledSet.has(r.id))
+
+  return resolveTuiExtensions([...builtins, ...external])
 }

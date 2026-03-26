@@ -26,7 +26,8 @@ export interface LoadedTuiExtension {
   readonly id: string
   readonly kind: ExtensionKind
   readonly filePath: string
-  readonly setup: ExtensionClientSetup<ToolRenderer | SolidComponent>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly setup: ExtensionClientSetup<any>
 }
 
 export interface ResolvedWidget {
