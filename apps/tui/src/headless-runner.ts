@@ -7,12 +7,13 @@ export const runHeadless = (
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
+  agentOverride?: string,
 ): Effect.Effect<void, GentRpcError, never> =>
   Effect.gen(function* () {
     const eventStream = client.streamEvents({ sessionId, branchId })
 
     yield* client
-      .sendMessage({ sessionId, branchId, content: promptText })
+      .sendMessage({ sessionId, branchId, content: promptText, agentOverride })
       .pipe(Effect.withSpan("Headless.sendMessage"))
 
     const doneRef = yield* Ref.make(false)

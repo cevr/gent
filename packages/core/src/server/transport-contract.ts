@@ -209,6 +209,8 @@ export const SendMessageInput = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   content: Schema.String,
+  /** Per-run agent override — switches agent for this message only. Uses fresh ephemeral sessions to avoid state bleed. */
+  agentOverride: Schema.optional(Schema.String),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 export const SendMessagePayload = SendMessageInput

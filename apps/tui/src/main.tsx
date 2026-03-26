@@ -72,8 +72,13 @@ const main = Command.make(
       Flag.withDescription("Auto-allow all tool calls (default: true, use --no-bypass to disable)"),
       Flag.withDefault(true),
     ),
+    agent: Flag.string("agent").pipe(
+      Flag.withAlias("a"),
+      Flag.withDescription("Agent to use for headless mode (e.g. memory:reflect)"),
+      Flag.optional,
+    ),
   },
-  ({ session, continue_, headless, debug, prompt, promptArg, bypass }) =>
+  ({ session, continue_, headless, debug, prompt, promptArg, bypass, agent }) =>
     Effect.gen(function* () {
       const cwd = process.cwd()
       const scope = yield* Effect.scope
@@ -128,7 +133,14 @@ const main = Command.make(
                 sampled: true,
               })
             : undefined
-        yield* runHeadless(gentClient, state.session.id, branchId, state.prompt).pipe(
+        const agentOverride = Option.getOrUndefined(agent)
+        yield* runHeadless(
+          gentClient,
+          state.session.id,
+          branchId,
+          state.prompt,
+          agentOverride,
+        ).pipe(
           Effect.withSpan("Headless.run"),
           parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
         )
