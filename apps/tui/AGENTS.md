@@ -143,6 +143,24 @@ Special prefixes at input start trigger different modes:
 | `/fork`     | Fork from a message      |
 | `/bypass`   | Toggle permission bypass |
 
+## Extensions
+
+Builtins are individual `.client.ts` files in `src/extensions/builtins/`:
+
+| File                            | Extension ID       | What                     |
+| ------------------------------- | ------------------ | ------------------------ |
+| `builtins/tools.client.ts`      | `@gent/tools`      | Tool renderers           |
+| `builtins/plan-mode.client.ts`  | `@gent/plan-mode`  | Plan mode widget         |
+| `builtins/tasks.client.ts`      | `@gent/tasks`      | Task widget              |
+| `builtins/connection.client.ts` | `@gent/connection` | Connection status widget |
+
+Extension pipeline: `discovery.ts` → `loader.ts` → `resolve.ts` → `context.tsx`
+
+- Builtins go through the same pipeline as user/project extensions
+- `loader.ts` accepts `disabled` list — skips `setup()` for disabled extensions
+- Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
+- `useExtensionUI()` provides `sessionId()`, `branchId()`, `snapshots()`
+
 ## Key Files (Composer + Session)
 
 | File                                        | Purpose                           |

@@ -178,16 +178,38 @@ Rules:
 
 Extension shape lives in:
 
-- `packages/core/src/domain/extension.ts`
-- `packages/core/src/runtime/extensions/hooks.ts`
-- `packages/core/src/runtime/extensions/registry.ts`
+- `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
+- `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule`, `ExtensionClientContext`)
+- `packages/core/src/runtime/extensions/hooks.ts` — interceptor compilation
+- `packages/core/src/runtime/extensions/registry.ts` — server registry
+- `apps/tui/src/extensions/` — TUI discovery, loading, resolution
 
 Rules:
 
 - hooks are typed descriptors
-- registration shape is structural
+- registration shape is structural — builtins, user, and project extensions share the same pipeline
 - dispatch compiles once, then runs from typed hook maps
 - extension hook boundaries are where plugin typing must stay strict
+- `uiModelSchema` is enforced at runtime — invalid models are dropped, not passed through
+- `onStartup` hooks run during dependency initialization (no service requirements)
+- `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
+
+### Server Extensions
+
+- `GentExtension` — no Config generic (removed). Setup receives `{ cwd, source }`.
+- `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
+- `ExtensionSetup.onStartup` — one-time startup effect (e.g., cron registration)
+- Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`
+- `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send
+
+### TUI Extensions
+
+- Builtins are individual `.client.ts` files in `apps/tui/src/extensions/builtins/`
+- Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
+- Loader accepts `disabled` list to filter extensions by id before `setup()` is called
+- `ExtensionClientContext` provides `sessionId`, `branchId`, `openOverlay`, `closeOverlay`
+- `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, `snapshots()` for widgets
+- Widgets are zero-prop components that self-source from context hooks
 
 ## Testing
 
