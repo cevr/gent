@@ -1,4 +1,4 @@
-import { Effect, Schedule, Duration, Schema } from "effect"
+import { Cause, Effect, Schedule, Duration, Schema } from "effect"
 import { ProviderError } from "../providers/provider.js"
 
 // Retry Config Schema
@@ -128,28 +128,31 @@ export const withRetry = <A, R, R2 = never>(
     readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
   },
 ): Effect.Effect<A, ProviderError, R | R2> => {
-  const loop = (attempt: number): Effect.Effect<A, ProviderError, R | R2> =>
-    effect.pipe(
-      Effect.catchTag("ProviderError", (error) => {
-        if (attempt >= config.maxAttempts - 1 || !isRetryable(error)) {
-          return Effect.fail(error)
-        }
-
-        const delayMs = getRetryDelay(attempt, error, config)
-        return Effect.gen(function* () {
-          if (options?.onRetry !== undefined) {
-            yield* options.onRetry({
-              attempt: attempt + 1,
+  // meta.attempt is 1-indexed: 1 after first failure, 2 after second, etc.
+  // Allow retries while attempt < maxAttempts (i.e. maxAttempts-1 retries total)
+  const schedule = Schedule.fromStepWithMetadata<ProviderError, number, R2, never, never, never>(
+    Effect.succeed((meta: Schedule.InputMetadata<ProviderError>) => {
+      if (meta.attempt >= config.maxAttempts) {
+        return Cause.done(meta.attempt)
+      }
+      const delayMs = getRetryDelay(meta.attempt - 1, meta.input, config)
+      const notify =
+        options?.onRetry !== undefined
+          ? options.onRetry({
+              attempt: meta.attempt,
               maxAttempts: config.maxAttempts,
               delayMs,
-              error,
+              error: meta.input,
             })
-          }
-          yield* Effect.sleep(Duration.millis(delayMs))
-          return yield* loop(attempt + 1)
-        })
-      }),
-    )
+          : Effect.void
+      return notify.pipe(
+        Effect.as<[number, Duration.Duration]>([meta.attempt, Duration.millis(delayMs)]),
+      )
+    }),
+  )
 
-  return loop(0).pipe(Effect.withSpan("withRetry"))
+  return Effect.retry(effect, {
+    schedule,
+    while: (error) => isRetryable(error),
+  }).pipe(Effect.withSpan("withRetry"))
 }
