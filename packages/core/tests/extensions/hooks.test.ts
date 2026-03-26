@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { Agents } from "@gent/core/domain/agent"
 import type {
@@ -27,19 +27,16 @@ const makeExt = (
 
 describe("compileHooks", () => {
   describe("interceptors", () => {
-    test("runs base when no interceptors registered", async () => {
+    it.live("runs base when no interceptors registered", () => {
       const compiled = compileHooks([])
-      const result = await Effect.runPromise(
-        compiled.runInterceptor(
-          "prompt.system",
-          { basePrompt: "hello", agent: Agents.cowork },
-          (input) => Effect.succeed(input.basePrompt),
-        ),
-      )
-      expect(result).toBe("hello")
+      return compiled
+        .runInterceptor("prompt.system", { basePrompt: "hello", agent: Agents.cowork }, (input) =>
+          Effect.succeed(input.basePrompt),
+        )
+        .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("hello"))))
     })
 
-    test("single interceptor wraps base", async () => {
+    it.live("single interceptor wraps base", () => {
       const ext = makeExt("a", "builtin", {
         interceptors: [
           defineInterceptor(
@@ -51,17 +48,14 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([ext])
-      const result = await Effect.runPromise(
-        compiled.runInterceptor(
-          "prompt.system",
-          { basePrompt: "hello", agent: Agents.cowork },
-          (input) => Effect.succeed(input.basePrompt),
-        ),
-      )
-      expect(result).toBe("[wrapped] hello")
+      return compiled
+        .runInterceptor("prompt.system", { basePrompt: "hello", agent: Agents.cowork }, (input) =>
+          Effect.succeed(input.basePrompt),
+        )
+        .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("[wrapped] hello"))))
     })
 
-    test("chain order: builtin inner, project outer", async () => {
+    it.live("chain order: builtin inner, project outer", () => {
       const log: string[] = []
 
       const builtinExt = makeExt("a-builtin", "builtin", {
@@ -99,17 +93,26 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([builtinExt, projectExt])
-      await Effect.runPromise(
-        compiled.runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
+      return compiled
+        .runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
           Effect.succeed("base"),
-        ),
-      )
-
-      // Project is outermost (left fold: builtin wraps base, project wraps that)
-      expect(log).toEqual(["project-before", "builtin-before", "builtin-after", "project-after"])
+        )
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              // Project is outermost (left fold: builtin wraps base, project wraps that)
+              expect(log).toEqual([
+                "project-before",
+                "builtin-before",
+                "builtin-after",
+                "project-after",
+              ])
+            }),
+          ),
+        )
     })
 
-    test("same scope tie-breaks by id alphabetically", async () => {
+    it.live("same scope tie-breaks by id alphabetically", () => {
       const log: string[] = []
 
       const extB = makeExt("b", "builtin", {
@@ -137,14 +140,18 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([extB, extA])
-      await Effect.runPromise(
-        compiled.runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
+      return compiled
+        .runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
           Effect.succeed("base"),
-        ),
-      )
-
-      // Sorted: [a, b]. Left fold: a wraps base, b wraps a. b is outermost.
-      expect(log).toEqual(["b", "a"])
+        )
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              // Sorted: [a, b]. Left fold: a wraps base, b wraps a. b is outermost.
+              expect(log).toEqual(["b", "a"])
+            }),
+          ),
+        )
     })
   })
 
@@ -166,17 +173,14 @@ describe("compileHooks", () => {
       branchId: "test-branch" as BranchId,
     }
 
-    test("passes through when no interceptors", async () => {
+    it.live("passes through when no interceptors", () => {
       const compiled = compileHooks([])
-      const result = await Effect.runPromise(
-        compiled.runInterceptor("context.messages", baseInput, (input) =>
-          Effect.succeed(input.messages),
-        ),
-      )
-      expect(result).toHaveLength(2)
+      return compiled
+        .runInterceptor("context.messages", baseInput, (input) => Effect.succeed(input.messages))
+        .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toHaveLength(2))))
     })
 
-    test("interceptor injects hidden context message", async () => {
+    it.live("interceptor injects hidden context message", () => {
       const ext = makeExt("injector", "builtin", {
         interceptors: [
           defineInterceptor(
@@ -193,22 +197,25 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([ext])
-      const result = await Effect.runPromise(
-        compiled.runInterceptor("context.messages", baseInput, (input) =>
-          Effect.succeed(input.messages),
-        ),
-      )
-      expect(result).toHaveLength(3)
-      const texts = result.map((m) =>
-        m.parts
-          .filter((p): p is typeof TextPart.Type => p.type === "text")
-          .map((p) => p.text)
-          .join(""),
-      )
-      expect(texts).toContain("[system context] Remember: be concise")
+      return compiled
+        .runInterceptor("context.messages", baseInput, (input) => Effect.succeed(input.messages))
+        .pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              expect(result).toHaveLength(3)
+              const texts = result.map((m) =>
+                m.parts
+                  .filter((p): p is typeof TextPart.Type => p.type === "text")
+                  .map((p) => p.text)
+                  .join(""),
+              )
+              expect(texts).toContain("[system context] Remember: be concise")
+            }),
+          ),
+        )
     })
 
-    test("interceptor filters messages", async () => {
+    it.live("interceptor filters messages", () => {
       const ext = makeExt("filter", "project", {
         interceptors: [
           defineInterceptor(
@@ -226,13 +233,16 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([ext])
-      const result = await Effect.runPromise(
-        compiled.runInterceptor("context.messages", baseInput, (input) =>
-          Effect.succeed(input.messages),
-        ),
-      )
-      expect(result).toHaveLength(1)
-      expect(result[0]!.role).toBe("user")
+      return compiled
+        .runInterceptor("context.messages", baseInput, (input) => Effect.succeed(input.messages))
+        .pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              expect(result).toHaveLength(1)
+              expect(result[0]!.role).toBe("user")
+            }),
+          ),
+        )
     })
   })
 
@@ -245,7 +255,7 @@ describe("compileHooks", () => {
       interrupted: false,
     }
 
-    test("fires after turn with correct input", async () => {
+    it.live("fires after turn with correct input", () => {
       const captured: TurnAfterInput[] = []
       const ext = makeExt("turn-counter", "builtin", {
         interceptors: [
@@ -260,12 +270,17 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([ext])
-      await Effect.runPromise(
-        compiled.runInterceptor("turn.after", baseTurnInput, () => Effect.void),
-      )
-      expect(captured).toHaveLength(1)
-      expect(captured[0]!.durationMs).toBe(1500)
-      expect(captured[0]!.agentName).toBe("cowork")
+      return compiled
+        .runInterceptor("turn.after", baseTurnInput, () => Effect.void)
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              expect(captured).toHaveLength(1)
+              expect(captured[0]!.durationMs).toBe(1500)
+              expect(captured[0]!.agentName).toBe("cowork")
+            }),
+          ),
+        )
     })
   })
 
@@ -281,7 +296,7 @@ describe("compileHooks", () => {
       branchId: "test-branch" as BranchId,
     }
 
-    test("enriches tool result", async () => {
+    it.live("enriches tool result", () => {
       const ext = makeExt("enricher", "builtin", {
         interceptors: [
           defineInterceptor(
@@ -298,22 +313,22 @@ describe("compileHooks", () => {
       })
 
       const compiled = compileHooks([ext])
-      const result = await Effect.runPromise(
-        compiled.runInterceptor("tool.result", baseToolResultInput, (input) =>
-          Effect.succeed(input.result),
-        ),
-      )
-      expect(result).toEqual({ content: "hello", enriched: true })
+      return compiled
+        .runInterceptor("tool.result", baseToolResultInput, (input) => Effect.succeed(input.result))
+        .pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => expect(result).toEqual({ content: "hello", enriched: true })),
+          ),
+        )
     })
 
-    test("passes through when no interceptors", async () => {
+    it.live("passes through when no interceptors", () => {
       const compiled = compileHooks([])
-      const result = await Effect.runPromise(
-        compiled.runInterceptor("tool.result", baseToolResultInput, (input) =>
-          Effect.succeed(input.result),
-        ),
-      )
-      expect(result).toEqual({ content: "hello" })
+      return compiled
+        .runInterceptor("tool.result", baseToolResultInput, (input) => Effect.succeed(input.result))
+        .pipe(
+          Effect.tap((result) => Effect.sync(() => expect(result).toEqual({ content: "hello" }))),
+        )
     })
   })
 })

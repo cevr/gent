@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import {
   EventStore,
@@ -274,145 +274,135 @@ const reviewSignal = (summary?: string) =>
   })
 
 describe("ReviewLoop runtime integration", () => {
-  test("full lifecycle: start → signal → iterate → signal → complete", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
+  it.live("full lifecycle: start → signal → iterate → signal → complete", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
 
-        // Start review (queues first follow-up)
-        yield* sendIntent(runtime, { _tag: "StartReview", focus: "test", maxIterations: 2 })
+      // Start review (queues first follow-up)
+      yield* sendIntent(runtime, { _tag: "StartReview", focus: "test", maxIterations: 2 })
 
-        const snap1 = yield* getSnapshot(runtime)
-        const ui1 = snap1!.model as ReviewLoopUiModel
-        expect(ui1.active).toBe(true)
-        expect(ui1.iteration).toBe(1)
+      const snap1 = yield* getSnapshot(runtime)
+      const ui1 = snap1!.model as ReviewLoopUiModel
+      expect(ui1.active).toBe(true)
+      expect(ui1.iteration).toBe(1)
 
-        // First review signal — advances to iteration 2
-        yield* runtime.reduce(reviewSignal("Found auth issue"), { sessionId, branchId })
+      // First review signal — advances to iteration 2
+      yield* runtime.reduce(reviewSignal("Found auth issue"), { sessionId, branchId })
 
-        const snap2 = yield* getSnapshot(runtime)
-        const ui2 = snap2!.model as ReviewLoopUiModel
-        expect(ui2.active).toBe(true)
-        expect(ui2.iteration).toBe(2)
-        expect(ui2.findingsCount).toBe(1)
+      const snap2 = yield* getSnapshot(runtime)
+      const ui2 = snap2!.model as ReviewLoopUiModel
+      expect(ui2.active).toBe(true)
+      expect(ui2.iteration).toBe(2)
+      expect(ui2.findingsCount).toBe(1)
 
-        // Second review signal (at max) — completes
-        yield* runtime.reduce(reviewSignal("All clear"), { sessionId, branchId })
+      // Second review signal (at max) — completes
+      yield* runtime.reduce(reviewSignal("All clear"), { sessionId, branchId })
 
-        const snap3 = yield* getSnapshot(runtime)
-        const ui3 = snap3!.model as ReviewLoopUiModel
-        expect(ui3.active).toBe(false)
-      }).pipe(Effect.provide(makeLayer())),
-    )
-  })
+      const snap3 = yield* getSnapshot(runtime)
+      const ui3 = snap3!.model as ReviewLoopUiModel
+      expect(ui3.active).toBe(false)
+    }).pipe(Effect.provide(makeLayer())),
+  )
 
-  test("TurnCompleted does not advance the loop in runtime", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
+  it.live("TurnCompleted does not advance the loop in runtime", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
 
-        yield* sendIntent(runtime, { _tag: "StartReview", maxIterations: 2 })
+      yield* sendIntent(runtime, { _tag: "StartReview", maxIterations: 2 })
 
-        // TurnCompleted should not change state
-        const changed = yield* runtime.reduce(
-          new TurnCompleted({ sessionId, branchId, durationMs: 100 }),
-          { sessionId, branchId },
-        )
-        expect(changed).toBe(false)
+      // TurnCompleted should not change state
+      const changed = yield* runtime.reduce(
+        new TurnCompleted({ sessionId, branchId, durationMs: 100 }),
+        { sessionId, branchId },
+      )
+      expect(changed).toBe(false)
 
-        const snap = yield* getSnapshot(runtime)
-        const ui = snap!.model as ReviewLoopUiModel
-        expect(ui.iteration).toBe(1) // Unchanged
-      }).pipe(Effect.provide(makeLayer())),
-    )
-  })
+      const snap = yield* getSnapshot(runtime)
+      const ui = snap!.model as ReviewLoopUiModel
+      expect(ui.iteration).toBe(1) // Unchanged
+    }).pipe(Effect.provide(makeLayer())),
+  )
 
-  test("cancel mid-review returns to Inactive", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
+  it.live("cancel mid-review returns to Inactive", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
 
-        yield* sendIntent(runtime, { _tag: "StartReview" })
-        expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: true })
+      yield* sendIntent(runtime, { _tag: "StartReview" })
+      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: true })
 
-        yield* sendIntent(runtime, { _tag: "CancelReview" })
-        expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
-      }).pipe(Effect.provide(makeLayer())),
-    )
-  })
+      yield* sendIntent(runtime, { _tag: "CancelReview" })
+      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
+    }).pipe(Effect.provide(makeLayer())),
+  )
 
-  test("persistence: state survives actor hydration", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const storage = yield* Storage
+  it.live("persistence: state survives actor hydration", () =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
 
-        const reviewState: ReviewLoopState = {
-          _tag: "Reviewing",
-          iteration: 2,
-          maxIterations: 5,
-          findings: [{ iteration: 1, summary: "found issue" }],
-        }
-        yield* storage.saveExtensionState({
-          sessionId,
-          extensionId: "review-loop",
-          stateJson: JSON.stringify(reviewState),
-          version: 3,
-        })
+      const reviewState: ReviewLoopState = {
+        _tag: "Reviewing",
+        iteration: 2,
+        maxIterations: 5,
+        findings: [{ iteration: 1, summary: "found issue" }],
+      }
+      yield* storage.saveExtensionState({
+        sessionId,
+        extensionId: "review-loop",
+        stateJson: JSON.stringify(reviewState),
+        version: 3,
+      })
 
-        const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
 
-        const snap = yield* getSnapshot(runtime)
-        expect(snap).toBeDefined()
-        expect(snap!.epoch).toBe(3)
-        const ui = snap!.model as ReviewLoopUiModel
-        expect(ui.active).toBe(true)
-        expect(ui.iteration).toBe(2)
-        expect(ui.findingsCount).toBe(1)
-      }).pipe(Effect.provide(makeLayer())),
-    )
-  })
+      const snap = yield* getSnapshot(runtime)
+      expect(snap).toBeDefined()
+      expect(snap!.epoch).toBe(3)
+      const ui = snap!.model as ReviewLoopUiModel
+      expect(ui.active).toBe(true)
+      expect(ui.iteration).toBe(2)
+      expect(ui.findingsCount).toBe(1)
+    }).pipe(Effect.provide(makeLayer())),
+  )
 
-  test("tool signal records real summary from event", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
+  it.live("tool signal records real summary from event", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
 
-        yield* sendIntent(runtime, { _tag: "StartReview", maxIterations: 3 })
+      yield* sendIntent(runtime, { _tag: "StartReview", maxIterations: 3 })
 
-        yield* runtime.reduce(reviewSignal("Missing error handling in src/api.ts"), {
-          sessionId,
-          branchId,
-        })
+      yield* runtime.reduce(reviewSignal("Missing error handling in src/api.ts"), {
+        sessionId,
+        branchId,
+      })
 
-        // Verify the real summary is captured (via derive prompt section)
-        const projections = yield* runtime.deriveAll(sessionId, {
-          agent: undefined as never,
-          allTools: [],
-        })
-        const pm = projections.find((p) => p.extensionId === "review-loop")
-        const section = pm!.projection.promptSections![0]!
-        expect(section.content).toContain("Missing error handling in src/api.ts")
-      }).pipe(Effect.provide(makeLayer())),
-    )
-  })
+      // Verify the real summary is captured (via derive prompt section)
+      const projections = yield* runtime.deriveAll(sessionId, {
+        agent: undefined as never,
+        allTools: [],
+      })
+      const pm = projections.find((p) => p.extensionId === "review-loop")
+      const section = pm!.projection.promptSections![0]!
+      expect(section.content).toContain("Missing error handling in src/api.ts")
+    }).pipe(Effect.provide(makeLayer())),
+  )
 })

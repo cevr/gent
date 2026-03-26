@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, test, expect } from "effect-bun-test"
 import {
   WorkflowToolsExtension,
   SubagentToolsExtension,
@@ -48,39 +48,35 @@ describe("createExtensionHarness", () => {
 })
 
 describe("createToolTestLayer", () => {
-  test("provides all required services", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const registry = yield* ExtensionRegistry
-        const bus = yield* ExtensionEventBus
-        const tc = yield* ExtensionTurnControl
+  it.live("provides all required services", () =>
+    Effect.gen(function* () {
+      const registry = yield* ExtensionRegistry
+      const bus = yield* ExtensionEventBus
+      const tc = yield* ExtensionTurnControl
 
-        // Registry provides agents
-        const cowork = yield* registry.getAgent("cowork")
-        expect(cowork).toBeDefined()
+      // Registry provides agents
+      const cowork = yield* registry.getAgent("cowork")
+      expect(cowork).toBeDefined()
 
-        // EventBus works
-        yield* bus.emit("test:ch", { data: 1 })
+      // EventBus works
+      yield* bus.emit("test:ch", { data: 1 })
 
-        // TurnControl works (no-op in test)
-        yield* tc.queueFollowUp({
-          sessionId: "s" as never,
-          branchId: "b" as never,
-          content: "test",
-        })
-      }).pipe(Effect.provide(createToolTestLayer())),
-    )
-  })
+      // TurnControl works (no-op in test)
+      yield* tc.queueFollowUp({
+        sessionId: "s" as never,
+        branchId: "b" as never,
+        content: "test",
+      })
+    }).pipe(Effect.provide(createToolTestLayer())),
+  )
 
-  test("loads extension tools when extensions provided", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const registry = yield* ExtensionRegistry
-        const tool = yield* registry.getTool("audit")
-        expect(tool).toBeDefined()
-      }).pipe(Effect.provide(createToolTestLayer({ extensions: [WorkflowToolsExtension] }))),
-    )
-  })
+  it.live("loads extension tools when extensions provided", () =>
+    Effect.gen(function* () {
+      const registry = yield* ExtensionRegistry
+      const tool = yield* registry.getTool("audit")
+      expect(tool).toBeDefined()
+    }).pipe(Effect.provide(createToolTestLayer({ extensions: [WorkflowToolsExtension] }))),
+  )
 })
 
 // ── Actor lifecycle tests ──
@@ -116,61 +112,57 @@ const makeLifecycleLayer = (extensions: LoadedExtension[]) =>
   )
 
 describe("Actor lifecycle", () => {
-  test("multiple extensions receive same event", async () => {
+  it.live("multiple extensions receive same event", () => {
     const ext1 = makeCounterExtension("counter-a")
     const ext2 = makeCounterExtension("counter-b")
     const layer = makeLifecycleLayer([ext1, ext2])
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
-          sessionId,
-          branchId,
-        })
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+        sessionId,
+        branchId,
+      })
 
-        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
-        expect(snapshots.length).toBe(2)
+      const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+      expect(snapshots.length).toBe(2)
 
-        const a = snapshots.find((s) => s.extensionId === "counter-a")
-        const b = snapshots.find((s) => s.extensionId === "counter-b")
-        expect(a).toBeDefined()
-        expect(b).toBeDefined()
-        expect((a!.model as { count: number }).count).toBe(1)
-        expect((b!.model as { count: number }).count).toBe(1)
-      }).pipe(Effect.provide(layer)),
-    )
+      const a = snapshots.find((s) => s.extensionId === "counter-a")
+      const b = snapshots.find((s) => s.extensionId === "counter-b")
+      expect(a).toBeDefined()
+      expect(b).toBeDefined()
+      expect((a!.model as { count: number }).count).toBe(1)
+      expect((b!.model as { count: number }).count).toBe(1)
+    }).pipe(Effect.provide(layer))
   })
 
-  test("terminated actor is removed from session", async () => {
+  it.live("terminated actor is removed from session", () => {
     const ext = makeCounterExtension("ephemeral")
     const layer = makeLifecycleLayer([ext])
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
 
-        // Spawn via reduce
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
-        const snap1 = yield* runtime.getUiSnapshots(sessionId, branchId)
-        expect(snap1.length).toBe(1)
+      // Spawn via reduce
+      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+      const snap1 = yield* runtime.getUiSnapshots(sessionId, branchId)
+      expect(snap1.length).toBe(1)
 
-        // Terminate
-        yield* runtime.terminateAll(sessionId)
+      // Terminate
+      yield* runtime.terminateAll(sessionId)
 
-        // After terminate + re-spawn, actor starts fresh
-        yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
-          sessionId,
-          branchId,
-        })
-        const snap2 = yield* runtime.getUiSnapshots(sessionId, branchId)
-        // Re-spawned fresh — count is 1 not 2
-        expect((snap2[0]!.model as { count: number }).count).toBe(1)
-      }).pipe(Effect.provide(layer)),
-    )
+      // After terminate + re-spawn, actor starts fresh
+      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+        sessionId,
+        branchId,
+      })
+      const snap2 = yield* runtime.getUiSnapshots(sessionId, branchId)
+      // Re-spawned fresh — count is 1 not 2
+      expect((snap2[0]!.model as { count: number }).count).toBe(1)
+    }).pipe(Effect.provide(layer))
   })
 
   test("PlanModeExtension harness exposes projection", () => {

@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, it, test, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { defineExtension, type LoadedExtension } from "@gent/core/domain/extension"
 import { validateExtensions, isClientFile } from "@gent/core/runtime/extensions/loader"
@@ -34,46 +34,48 @@ const makeLoaded = (
 })
 
 describe("validateExtensions", () => {
-  test("passes with no extensions", async () => {
-    await Effect.runPromise(validateExtensions([]))
-  })
+  it.live("passes with no extensions", () => validateExtensions([]))
 
-  test("passes with unique extensions in same scope", async () => {
+  it.live("passes with unique extensions in same scope", () => {
     const exts = [makeLoaded("a", "builtin", ["tool-a"]), makeLoaded("b", "builtin", ["tool-b"])]
-    await Effect.runPromise(validateExtensions(exts))
+    return validateExtensions(exts)
   })
 
-  test("passes with same tool name in different scopes", async () => {
+  it.live("passes with same tool name in different scopes", () => {
     const exts = [
       makeLoaded("builtin-fs", "builtin", ["read"]),
       makeLoaded("custom-fs", "project", ["read"]),
     ]
-    await Effect.runPromise(validateExtensions(exts))
+    return validateExtensions(exts)
   })
 
-  test("fails on duplicate manifest id within same scope", async () => {
+  it.live("fails on duplicate manifest id within same scope", () => {
     const exts = [makeLoaded("dupe", "user"), makeLoaded("dupe", "user")]
-    const result = await Effect.runPromise(validateExtensions(exts).pipe(Effect.result))
-    expect(result._tag).toBe("Failure")
+    return validateExtensions(exts).pipe(
+      Effect.result,
+      Effect.tap((result) => Effect.sync(() => expect(result._tag).toBe("Failure"))),
+    )
   })
 
-  test("allows same manifest id in different scopes", async () => {
+  it.live("allows same manifest id in different scopes", () => {
     const exts = [makeLoaded("same-id", "builtin"), makeLoaded("same-id", "project")]
-    await Effect.runPromise(validateExtensions(exts))
+    return validateExtensions(exts)
   })
 
-  test("fails on same-name tool from two extensions in same scope", async () => {
+  it.live("fails on same-name tool from two extensions in same scope", () => {
     const exts = [
       makeLoaded("ext-a", "builtin", ["conflicting-tool"]),
       makeLoaded("ext-b", "builtin", ["conflicting-tool"]),
     ]
-    const result = await Effect.runPromise(validateExtensions(exts).pipe(Effect.result))
-    expect(result._tag).toBe("Failure")
+    return validateExtensions(exts).pipe(
+      Effect.result,
+      Effect.tap((result) => Effect.sync(() => expect(result._tag).toBe("Failure"))),
+    )
   })
 
-  test("allows same-name tool from same extension", async () => {
+  it.live("allows same-name tool from same extension", () => {
     const ext = makeLoaded("ext-a", "builtin", ["tool-a"])
-    await Effect.runPromise(validateExtensions([ext]))
+    return validateExtensions([ext])
   })
 })
 
