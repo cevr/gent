@@ -88,7 +88,6 @@ import {
   countQueuedFollowUps,
   markInterruptAfterTools,
   markTurnInterrupted,
-  queueContainsContent,
   queueSnapshotFromState,
   runtimeStateFromLoopState,
   takeNextQueuedTurn,
@@ -111,7 +110,6 @@ import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,
   buildTurnPrompt,
-  messageText,
   resolveReasoning,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
@@ -1146,17 +1144,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const item: QueuedTurnItem = { message, bypass }
 
             if (initialState._tag !== "Idle") {
-              const content = messageText(message)
-              yield* loop.actor.sendAndWait(AgentLoopEvent.QueueFollowUp({ item }), (state) =>
-                queueContainsContent(state.queue.followUp, content),
-              )
+              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))
               return
             }
 
-            yield* loop.actor.sendAndWait(
-              AgentLoopEvent.Start({ item }),
-              (state) => state._tag !== "Idle",
-            )
+            yield* loop.actor.call(AgentLoopEvent.Start({ item }))
           }),
 
           run: Effect.fn("AgentLoop.run")(function* (
@@ -1169,10 +1161,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const item: QueuedTurnItem = { message, bypass }
 
             if (initialState._tag !== "Idle") {
-              const content = messageText(message)
-              yield* loop.actor.sendAndWait(AgentLoopEvent.QueueFollowUp({ item }), (state) =>
-                queueContainsContent(state.queue.followUp, content),
-              )
+              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))
               return
             }
 
@@ -1187,12 +1176,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               switch (command._tag) {
                 case "SwitchAgent":
-                  yield* loop.actor.send(AgentLoopEvent.SwitchAgent({ agent: command.agent }))
+                  yield* loop.actor.cast(AgentLoopEvent.SwitchAgent({ agent: command.agent }))
                   return
                 case "Cancel":
                 case "Interrupt":
                   if (loopState._tag === "Streaming" || loopState._tag === "ExecutingTools") {
-                    yield* loop.actor.send(AgentLoopEvent.Interrupt)
+                    yield* loop.actor.cast(AgentLoopEvent.Interrupt)
                   }
                   return
                 case "Interject": {
@@ -1216,11 +1205,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   }
                   const urgent =
                     loopState._tag === "Streaming" || loopState._tag === "ExecutingTools"
-                  const content = command.message
-                  yield* loop.actor.sendAndWait(
-                    AgentLoopEvent.QueueSteering({ item, urgent }),
-                    (state) => queueContainsContent(state.queue.steering, content),
-                  )
+                  yield* loop.actor.call(AgentLoopEvent.QueueSteering({ item, urgent }))
                   return
                 }
               }
@@ -1239,11 +1224,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 .getSession(message.sessionId)
                 .pipe(Effect.catchEager(() => Effect.void))
               const bypass = session?.bypass ?? true
-              const content = messageText(message)
-              yield* loop.actor.sendAndWait(
-                AgentLoopEvent.QueueFollowUp({ item: { message, bypass } }),
-                (state) => queueContainsContent(state.queue.followUp, content),
-              )
+              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item: { message, bypass } }))
             }),
 
           drainQueue: (input) =>
@@ -1255,10 +1236,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               const loopState = yield* loop.actor.snapshot
               const snapshot = queueSnapshotFromState(loopState)
-              yield* loop.actor.sendAndWait(
-                AgentLoopEvent.ClearQueue,
-                (state) => state.queue.steering.length === 0 && state.queue.followUp.length === 0,
-              )
+              yield* loop.actor.call(AgentLoopEvent.ClearQueue)
               return snapshot
             }),
 
