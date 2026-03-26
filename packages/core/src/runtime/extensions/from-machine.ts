@@ -174,19 +174,17 @@ export const fromMachine = <
             if (mapped === undefined) return false
 
             // Atomic: dispatch sends through queue and returns transition receipt
-            const result = yield* ref
-              .dispatch(mapped)
-              .pipe(
-                Effect.catchDefect(() =>
-                  Effect.succeed({
-                    transitioned: false,
-                    previousState: undefined,
-                    newState: undefined,
-                    lifecycleRan: false,
-                    isFinal: false,
-                  }),
-                ),
-              )
+            const result = yield* ref.dispatch(mapped).pipe(
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  transitioned: false,
+                  previousState: undefined,
+                  newState: undefined,
+                  lifecycleRan: false,
+                  isFinal: false,
+                }),
+              ),
+            )
 
             if (result.transitioned) {
               yield* Ref.update(versionRef, (v) => v + 1)
@@ -219,19 +217,17 @@ export const fromMachine = <
               }
 
               const machineEvent = mapIntent(validated)
-              const result = yield* ref
-                .dispatch(machineEvent)
-                .pipe(
-                  Effect.catchDefect(() =>
-                    Effect.succeed({
-                      transitioned: false,
-                      previousState: undefined,
-                      newState: undefined,
-                      lifecycleRan: false,
-                      isFinal: false,
-                    }),
-                  ),
-                )
+              const result = yield* ref.dispatch(machineEvent).pipe(
+                Effect.catchDefect(() =>
+                  Effect.succeed({
+                    transitioned: false,
+                    previousState: undefined,
+                    newState: undefined,
+                    lifecycleRan: false,
+                    isFinal: false,
+                  }),
+                ),
+              )
 
               if (result.transitioned) {
                 yield* Ref.update(versionRef, (v) => v + 1)
