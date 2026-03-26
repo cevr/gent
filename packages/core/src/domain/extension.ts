@@ -236,9 +236,8 @@ export interface ProviderContribution {
   /** Display name */
   readonly name: string
   /** Resolve a model name to a LanguageModel instance (typed as unknown to avoid domain→ai dep).
-   *  authInfo is the stored auth from AuthStore (api key or oauth tokens), if available.
-   *  Return undefined to signal the factory should fall back to builtin dispatch. */
-  readonly resolveModel: (modelName: string, authInfo?: ProviderAuthInfo) => unknown | undefined
+   *  authInfo is the stored auth from AuthStore (api key or oauth tokens), if available. */
+  readonly resolveModel: (modelName: string, authInfo?: ProviderAuthInfo) => unknown
   /** Filter/extend the model catalog for this provider */
   readonly listModels?: (baseCatalog: ReadonlyArray<unknown>) => ReadonlyArray<unknown>
   /** Auth configuration — methods + authorize/callback handlers */

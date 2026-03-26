@@ -53,15 +53,10 @@ describe("ProviderFactory extension dispatch", () => {
     expect(model.modelId).toBe("custom/gpt-5")
   })
 
-  test("falls back to builtin for unregistered provider", async () => {
+  test("errors for unregistered provider", async () => {
     const factory = await buildFactory([])
-    // anthropic is a builtin — without API key it will still create a client
-    // We just verify it doesn't error with "Unknown provider"
-    const result = await Effect.runPromiseExit(
-      factory.getModel("anthropic/claude-sonnet-4-20250514"),
-    )
-    // Should succeed (builtin dispatch creates an Anthropic client)
-    expect(result._tag).toBe("Success")
+    const result = await Effect.runPromiseExit(factory.getModel("unknown-provider/some-model"))
+    expect(result._tag).toBe("Failure")
   })
 
   test("wraps extension resolveModel errors as ProviderError", async () => {
