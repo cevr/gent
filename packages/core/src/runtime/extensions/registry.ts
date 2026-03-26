@@ -4,6 +4,7 @@ import type {
   ExtensionKind,
   TurnProjection,
   LoadedExtension,
+  ProviderAuthInfo,
   ProviderContribution,
   RunContext,
   TagInjection,
@@ -212,9 +213,11 @@ export interface ExtensionRegistryService {
   // Provider resolution
   readonly getProvider: (id: string) => Effect.Effect<ProviderContribution | undefined>
   readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderContribution>>
-  /** Run base catalog through each provider's listModels filter */
+  /** Run base catalog through each provider's listModels filter.
+   *  resolveAuth is called per provider to get stored auth info. */
   readonly filterProviderModels: (
     baseCatalog: ReadonlyArray<unknown>,
+    resolveAuth?: (providerId: string) => Effect.Effect<ProviderAuthInfo | undefined>,
   ) => Effect.Effect<ReadonlyArray<unknown>>
 
   // Hooks
@@ -243,12 +246,18 @@ export class ExtensionRegistry extends ServiceMap.Service<
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       getProvider: (id) => Effect.succeed(resolved.providers.get(id)),
       listProviders: () => Effect.succeed([...resolved.providers.values()]),
-      filterProviderModels: (baseCatalog) =>
-        Effect.sync(() => {
+      filterProviderModels: (baseCatalog, resolveAuth) =>
+        Effect.gen(function* () {
           let catalog = baseCatalog
           for (const provider of resolved.providers.values()) {
             if (provider.listModels !== undefined) {
-              catalog = provider.listModels(catalog)
+              const authInfo =
+                resolveAuth !== undefined
+                  ? yield* resolveAuth(provider.id).pipe(
+                      Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
+                    )
+                  : undefined
+              catalog = provider.listModels(catalog, authInfo)
             }
           }
           return catalog

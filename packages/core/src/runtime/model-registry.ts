@@ -1,4 +1,6 @@
 import { Config, ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import { AuthStore } from "../domain/auth-store.js"
+import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model } from "../domain/model.js"
 import type { ModelId, ModelPricing } from "../domain/model.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
@@ -71,7 +73,7 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
   static Live: Layer.Layer<
     ModelRegistry,
     never,
-    FileSystem.FileSystem | Path.Path | RuntimePlatform | ExtensionRegistry
+    FileSystem.FileSystem | Path.Path | RuntimePlatform | ExtensionRegistry | AuthStore
   > = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
@@ -79,6 +81,7 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
       const path = yield* Path.Path
       const runtimePlatform = yield* RuntimePlatform
       const extensionRegistry = yield* ExtensionRegistry
+      const authStore = yield* AuthStore
       const homeOption = yield* Effect.gen(function* () {
         return yield* Config.option(Config.string("HOME"))
       }).pipe(Effect.catchEager(() => Effect.succeed(Option.none())))
@@ -147,8 +150,27 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
         return result
       }).pipe(Effect.withSpan("ModelRegistry.load"))
 
+      const resolveAuth = (providerId: string): Effect.Effect<ProviderAuthInfo | undefined> =>
+        authStore.get(providerId).pipe(
+          Effect.map((info): ProviderAuthInfo | undefined => {
+            if (info === undefined) return undefined
+            if (info.type === "api") return { type: "api", key: info.key }
+            if (info.type === "oauth") {
+              return {
+                type: "oauth",
+                access: info.access,
+                refresh: info.refresh,
+                expires: info.expires,
+                accountId: info.accountId,
+              }
+            }
+            return undefined
+          }),
+          Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
+        )
+
       const applyFilters = (models: readonly Model[]) =>
-        extensionRegistry.filterProviderModels(models).pipe(
+        extensionRegistry.filterProviderModels(models, resolveAuth).pipe(
           Effect.map((filtered) => filtered as readonly Model[]),
           Effect.catchEager(() => Effect.succeed(models)),
         )

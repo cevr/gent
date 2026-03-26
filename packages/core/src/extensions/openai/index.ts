@@ -98,6 +98,23 @@ export const OpenAIExtension = defineExtension({
           // No auth available — try unauthenticated (will fail at API call time)
           return createOpenAI({})(modelName)
         },
+        listModels: (baseCatalog, authInfo) => {
+          // When OAuth is active, filter to allowed models + zero pricing
+          if (authInfo?.type !== "oauth") return baseCatalog
+          return baseCatalog
+            .filter((model) => {
+              const m = model as { provider?: string; id?: string }
+              if (m.provider !== "openai") return true
+              const parts = String(m.id ?? "").split("/", 2)
+              const modelName = parts[1]
+              return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
+            })
+            .map((model) => {
+              const m = model as { provider?: string; pricing?: unknown }
+              if (m.provider !== "openai") return model
+              return { ...m, pricing: { input: 0, output: 0 } }
+            })
+        },
         auth: {
           methods: [
             new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),

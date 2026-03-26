@@ -5,14 +5,12 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
-import { Model } from "../domain/model.js"
 import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { OPENAI_OAUTH_ALLOWED_MODELS } from "../providers/oauth/openai-oauth.js"
 import { SessionQueries } from "./session-queries.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionEvents } from "./session-events.js"
@@ -182,31 +180,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           yield* permission.removeRule(tool, pattern)
         }),
 
-      listModels: () =>
-        Effect.gen(function* () {
-          const models = yield* modelRegistry.list()
-          const authInfo = yield* authStore.get("openai").pipe(Effect.catchEager(() => Effect.void))
-          if (authInfo?.type !== "oauth") return models
-
-          return models
-            .filter((model) => {
-              if (model.provider !== "openai") return true
-              const [, modelName] = String(model.id).split("/", 2)
-              return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
-            })
-            .map((model) => {
-              if (model.provider !== "openai") return model
-              return new Model({
-                id: model.id,
-                name: model.name,
-                provider: model.provider,
-                ...(model.contextLength !== undefined
-                  ? { contextLength: model.contextLength }
-                  : {}),
-                pricing: { input: 0, output: 0 },
-              })
-            })
-        }),
+      listModels: () => modelRegistry.list(),
 
       listAuthProviders: () => authGuard.listProviders(),
 
