@@ -48,7 +48,11 @@ export interface FromReducerConfig<State, Intent = void> {
   readonly persist?: boolean
   /** Custom init logic — runs after persistence hydration, receives stateRef for mutation.
    *  Runs in the ambient runtime context — extension layer services (from setup.layer) are available. */
-  readonly onInit?: (ctx: { sessionId: SessionId; stateRef: Ref.Ref<State> }) => Effect.Effect<void>
+  readonly onInit?: (ctx: {
+    sessionId: SessionId
+    stateRef: Ref.Ref<State>
+    sessionCwd?: string
+  }) => Effect.Effect<void>
 }
 
 const interpretEffects = (
@@ -177,8 +181,15 @@ export const fromReducer = <State, Intent = void>(
           }
           // Custom init hook
           if (config.onInit !== undefined) {
+            let sessionCwd: string | undefined
+            if (storage._tag === "Some") {
+              const session = yield* storage.value
+                .getSession(ctx.sessionId)
+                .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+              sessionCwd = session?.cwd ?? undefined
+            }
             yield* config
-              .onInit({ sessionId: ctx.sessionId, stateRef })
+              .onInit({ sessionId: ctx.sessionId, stateRef, sessionCwd })
               .pipe(Effect.catchEager(() => Effect.void))
           }
         }),

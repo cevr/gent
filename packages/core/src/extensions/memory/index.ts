@@ -11,7 +11,6 @@ import { Effect, Ref } from "effect"
 import { defineExtension } from "../../domain/extension.js"
 import type { ExtensionSetup, ReduceResult } from "../../domain/extension.js"
 import { fromReducer } from "../../runtime/extensions/from-reducer.js"
-import { Storage } from "../../storage/sqlite-storage.js"
 import type { SessionId } from "../../domain/ids.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import {
@@ -87,9 +86,9 @@ const { spawnActor: MemorySpawnActor, projection: MemoryProjection } = fromReduc
 >({
   ...MemoryActorConfig,
   intentSchema: MemoryIntent,
-  // onInit runs in ambient runtime where MemoryVault + Storage are provided via setup.layer
+  // onInit runs in ambient runtime where MemoryVault is provided via setup.layer
   // @effect-diagnostics strictEffectProvide:off
-  onInit: (({ sessionId, stateRef }) =>
+  onInit: (({ stateRef, sessionCwd }) =>
     Effect.gen(function* () {
       const vault = yield* MemoryVault
       yield* vault.ensureDirs()
@@ -97,18 +96,16 @@ const { spawnActor: MemorySpawnActor, projection: MemoryProjection } = fromReduc
       const entries = yield* vault.list()
       yield* Ref.update(stateRef, (s) => updateVaultIndex(s, entries))
 
-      const storage = yield* Effect.serviceOption(Storage)
-      if (storage._tag === "Some") {
-        const session = yield* storage.value
-          .getSession(sessionId)
-          .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
-        if (session?.cwd !== undefined && session.cwd !== null) {
-          const key = projectKey(session.cwd)
-          yield* Ref.update(stateRef, (s) => setProjectKey(s, key))
-          yield* vault.ensureDirs(key)
-        }
+      if (sessionCwd !== undefined) {
+        const key = projectKey(sessionCwd)
+        yield* Ref.update(stateRef, (s) => setProjectKey(s, key))
+        yield* vault.ensureDirs(key)
       }
-    })) as (ctx: { sessionId: SessionId; stateRef: Ref.Ref<MemoryState> }) => Effect.Effect<void>,
+    })) as (ctx: {
+    sessionId: SessionId
+    stateRef: Ref.Ref<MemoryState>
+    sessionCwd?: string
+  }) => Effect.Effect<void>,
 })
 
 // ── Extension ──
