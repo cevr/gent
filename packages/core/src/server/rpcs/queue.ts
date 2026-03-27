@@ -1,21 +1,16 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { GentRpcError } from "../errors.js"
-import {
-  DrainQueuedMessagesPayload,
-  DrainQueuedMessagesSuccess,
-  GetQueuedMessagesPayload,
-  GetQueuedMessagesSuccess,
-} from "../transport-contract.js"
+import { QueueTarget, QueueSnapshot } from "../transport-contract.js"
 
 export class QueueRpcs extends RpcGroup.make(
   Rpc.make("drain", {
-    payload: DrainQueuedMessagesPayload.fields,
-    success: DrainQueuedMessagesSuccess,
+    payload: QueueTarget.fields,
+    success: QueueSnapshot,
     error: GentRpcError,
   }),
   Rpc.make("get", {
-    payload: GetQueuedMessagesPayload.fields,
-    success: GetQueuedMessagesSuccess,
+    payload: QueueTarget.fields,
+    success: QueueSnapshot,
     error: GentRpcError,
   }),
 ).prefix("queue.") {}

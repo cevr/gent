@@ -18,7 +18,7 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
-  CreateBranchOutput,
+  CreateBranchResult,
   CreateSessionInput,
   CreateSessionResult,
   ForkBranchInput,
@@ -39,11 +39,11 @@ export interface SessionCommandsService {
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, AppServiceError>
   readonly createBranch: (
     input: CreateBranchInput,
-  ) => Effect.Effect<CreateBranchOutput, AppServiceError>
+  ) => Effect.Effect<CreateBranchResult, AppServiceError>
   readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError>
   readonly forkBranch: (
     input: ForkBranchInput,
-  ) => Effect.Effect<CreateBranchOutput, AppServiceError>
+  ) => Effect.Effect<CreateBranchResult, AppServiceError>
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void, AppServiceError>
   readonly drainQueuedMessages: (input: {

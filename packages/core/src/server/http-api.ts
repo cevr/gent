@@ -1,22 +1,22 @@
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Schema } from "effect"
 import {
-  CreateSessionPayload,
-  CreateSessionSuccess,
+  CreateSessionInput,
+  CreateSessionResult,
   SessionInfo,
-  SendMessagePayload,
+  SendMessageInput,
   MessageInfo,
-  SteerPayload,
+  SteerCommand,
 } from "./rpcs.js"
 import { SessionId, BranchId } from "../domain/ids.js"
 
 // Re-export schemas under HTTP-friendly names for backward compatibility
-export const SendMessageRequest = SendMessagePayload
-export const CreateSessionRequest = CreateSessionPayload
-export const CreateSessionResponse = CreateSessionSuccess
+export const SendMessageRequest = SendMessageInput
+export const CreateSessionRequest = CreateSessionInput
+export const CreateSessionResponse = CreateSessionResult
 export const SessionResponse = SessionInfo
 export const MessageResponse = MessageInfo
-export const SteerRequest = SteerPayload
+export const SteerRequest = SteerCommand
 
 // API Groups
 

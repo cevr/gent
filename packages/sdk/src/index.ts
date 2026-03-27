@@ -10,8 +10,6 @@ export type {
   SessionRuntime,
   CreateSessionResult,
   SteerCommand,
-  QueueEntryInfoReadonly,
-  QueueSnapshotReadonly,
   SessionTreeNode,
   SkillInfo,
   SkillContent,

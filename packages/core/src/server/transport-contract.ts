@@ -8,7 +8,6 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 import { PermissionDecision } from "../domain/permission.js"
 import { QueueSnapshot } from "../domain/queue.js"
-import type { QueueEntryInfo } from "../domain/queue.js"
 import { SkillScope } from "../domain/skills.js"
 
 export const CreateSessionInput = Schema.Struct({
@@ -25,7 +24,6 @@ export const CreateSessionInput = Schema.Struct({
   requestId: Schema.optional(Schema.String),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
-export const CreateSessionPayload = CreateSessionInput
 
 export const CreateSessionResult = Schema.Struct({
   sessionId: SessionId,
@@ -34,7 +32,6 @@ export const CreateSessionResult = Schema.Struct({
   bypass: Schema.Boolean,
 })
 export type CreateSessionResult = typeof CreateSessionResult.Type
-export const CreateSessionSuccess = CreateSessionResult
 
 export const SessionInfo = Schema.Struct({
   id: SessionId,
@@ -94,13 +91,11 @@ export const GetChildSessionsInput = Schema.Struct({
   parentSessionId: SessionId,
 })
 export type GetChildSessionsInput = typeof GetChildSessionsInput.Type
-export const GetChildSessionsPayload = GetChildSessionsInput
 
 export const GetSessionTreeInput = Schema.Struct({
   sessionId: SessionId,
 })
 export type GetSessionTreeInput = typeof GetSessionTreeInput.Type
-export const GetSessionTreePayload = GetSessionTreeInput
 
 export const BranchInfo = Schema.Struct({
   id: BranchId,
@@ -117,21 +112,17 @@ export const ListBranchesInput = Schema.Struct({
   sessionId: SessionId,
 })
 export type ListBranchesInput = typeof ListBranchesInput.Type
-export const ListBranchesPayload = ListBranchesInput
 
 export const CreateBranchInput = Schema.Struct({
   sessionId: SessionId,
   name: Schema.optional(Schema.String),
 })
 export type CreateBranchInput = typeof CreateBranchInput.Type
-export const CreateBranchPayload = CreateBranchInput
 
 export const CreateBranchResult = Schema.Struct({
   branchId: BranchId,
 })
 export type CreateBranchResult = typeof CreateBranchResult.Type
-export const CreateBranchSuccess = CreateBranchResult
-export type CreateBranchOutput = CreateBranchResult
 
 export interface BranchTreeNode {
   id: BranchId
@@ -168,7 +159,6 @@ export const GetBranchTreeInput = Schema.Struct({
   sessionId: SessionId,
 })
 export type GetBranchTreeInput = typeof GetBranchTreeInput.Type
-export const GetBranchTreePayload = GetBranchTreeInput
 
 export const SwitchBranchInput = Schema.Struct({
   sessionId: SessionId,
@@ -177,7 +167,6 @@ export const SwitchBranchInput = Schema.Struct({
   summarize: Schema.optional(Schema.Boolean),
 })
 export type SwitchBranchInput = typeof SwitchBranchInput.Type
-export const SwitchBranchPayload = SwitchBranchInput
 
 export const ForkBranchInput = Schema.Struct({
   sessionId: SessionId,
@@ -186,13 +175,11 @@ export const ForkBranchInput = Schema.Struct({
   name: Schema.optional(Schema.String),
 })
 export type ForkBranchInput = typeof ForkBranchInput.Type
-export const ForkBranchPayload = ForkBranchInput
 
 export const ForkBranchResult = Schema.Struct({
   branchId: BranchId,
 })
 export type ForkBranchResult = typeof ForkBranchResult.Type
-export const ForkBranchSuccess = ForkBranchResult
 
 export const SendMessageInput = Schema.Struct({
   sessionId: SessionId,
@@ -204,7 +191,6 @@ export const SendMessageInput = Schema.Struct({
   requestId: Schema.optional(Schema.String),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
-export const SendMessagePayload = SendMessageInput
 
 export const MessageInfo = Schema.Struct({
   id: MessageId,
@@ -223,14 +209,12 @@ export const ListMessagesInput = Schema.Struct({
   branchId: BranchId,
 })
 export type ListMessagesInput = typeof ListMessagesInput.Type
-export const ListMessagesPayload = ListMessagesInput
 
 export const GetSessionSnapshotInput = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
 })
 export type GetSessionSnapshotInput = typeof GetSessionSnapshotInput.Type
-export const GetSessionSnapshotPayload = GetSessionSnapshotInput
 
 export const ExtensionSnapshotInfo = Schema.Struct({
   extensionId: Schema.String,
@@ -291,19 +275,12 @@ export const SteerCommand = Schema.Union([
   Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
 ])
 export type SteerCommand = typeof SteerCommand.Type
-export const SteerPayload = SteerCommand
 
 export const QueueTarget = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
 })
 export type QueueTarget = typeof QueueTarget.Type
-export const DrainQueuedMessagesPayload = QueueTarget
-export const DrainQueuedMessagesSuccess = QueueSnapshot
-export const GetQueuedMessagesPayload = QueueTarget
-export const GetQueuedMessagesSuccess = QueueSnapshot
-export type QueueEntryInfoReadonly = QueueEntryInfo
-export type QueueSnapshotReadonly = QueueSnapshot
 
 export const SubscribeEventsInput = Schema.Struct({
   sessionId: SessionId,
@@ -311,18 +288,15 @@ export const SubscribeEventsInput = Schema.Struct({
   after: Schema.optional(Schema.Number),
 })
 export type SubscribeEventsInput = typeof SubscribeEventsInput.Type
-export const SubscribeEventsPayload = SubscribeEventsInput
 
 export const WatchRuntimeInput = QueueTarget
 export type WatchRuntimeInput = typeof WatchRuntimeInput.Type
-export const WatchRuntimePayload = WatchRuntimeInput
 
 export const RespondQuestionsInput = Schema.Struct({
   requestId: Schema.String,
   answers: Schema.Array(Schema.Array(Schema.String)),
 })
 export type RespondQuestionsInput = typeof RespondQuestionsInput.Type
-export const RespondQuestionsPayload = RespondQuestionsInput
 
 export const RespondPermissionInput = Schema.Struct({
   requestId: Schema.String,
@@ -330,33 +304,28 @@ export const RespondPermissionInput = Schema.Struct({
   persist: Schema.optional(Schema.Boolean),
 })
 export type RespondPermissionInput = typeof RespondPermissionInput.Type
-export const RespondPermissionPayload = RespondPermissionInput
 
 export const UpdateSessionBypassInput = Schema.Struct({
   sessionId: SessionId,
   bypass: Schema.Boolean,
 })
 export type UpdateSessionBypassInput = typeof UpdateSessionBypassInput.Type
-export const UpdateSessionBypassPayload = UpdateSessionBypassInput
 
 export const UpdateSessionBypassResult = Schema.Struct({
   bypass: Schema.Boolean,
 })
 export type UpdateSessionBypassResult = typeof UpdateSessionBypassResult.Type
-export const UpdateSessionBypassSuccess = UpdateSessionBypassResult
 
 export const UpdateSessionReasoningLevelInput = Schema.Struct({
   sessionId: SessionId,
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 export type UpdateSessionReasoningLevelInput = typeof UpdateSessionReasoningLevelInput.Type
-export const UpdateSessionReasoningLevelPayload = UpdateSessionReasoningLevelInput
 
 export const UpdateSessionReasoningLevelResult = Schema.Struct({
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 export type UpdateSessionReasoningLevelResult = typeof UpdateSessionReasoningLevelResult.Type
-export const UpdateSessionReasoningLevelSuccess = UpdateSessionReasoningLevelResult
 
 export const RespondPromptInput = Schema.Struct({
   requestId: Schema.String,
@@ -364,7 +333,6 @@ export const RespondPromptInput = Schema.Struct({
   content: Schema.optional(Schema.String),
 })
 export type RespondPromptInput = typeof RespondPromptInput.Type
-export const RespondPromptPayload = RespondPromptInput
 
 export const RespondHandoffInput = Schema.Struct({
   requestId: Schema.String,
@@ -372,34 +340,29 @@ export const RespondHandoffInput = Schema.Struct({
   reason: Schema.optional(Schema.String),
 })
 export type RespondHandoffInput = typeof RespondHandoffInput.Type
-export const RespondHandoffPayload = RespondHandoffInput
 
 export const RespondHandoffResult = Schema.Struct({
   childSessionId: Schema.optional(SessionId),
   childBranchId: Schema.optional(BranchId),
 })
 export type RespondHandoffResult = typeof RespondHandoffResult.Type
-export const RespondHandoffSuccess = RespondHandoffResult
 
 export const DeletePermissionRuleInput = Schema.Struct({
   tool: Schema.String,
   pattern: Schema.optional(Schema.String),
 })
 export type DeletePermissionRuleInput = typeof DeletePermissionRuleInput.Type
-export const DeletePermissionRulePayload = DeletePermissionRuleInput
 
 export const SetAuthKeyInput = Schema.Struct({
   provider: Schema.String,
   key: Schema.String,
 })
 export type SetAuthKeyInput = typeof SetAuthKeyInput.Type
-export const SetAuthKeyPayload = SetAuthKeyInput
 
 export const DeleteAuthKeyInput = Schema.Struct({
   provider: Schema.String,
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
-export const DeleteAuthKeyPayload = DeleteAuthKeyInput
 
 export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
@@ -409,7 +372,6 @@ export const AuthorizeAuthInput = Schema.Struct({
   method: Schema.Number,
 })
 export type AuthorizeAuthInput = typeof AuthorizeAuthInput.Type
-export const AuthorizeAuthPayload = AuthorizeAuthInput
 
 export const AuthorizeAuthSuccess = Schema.NullOr(AuthAuthorization)
 
@@ -421,10 +383,10 @@ export const CallbackAuthInput = Schema.Struct({
   code: Schema.optional(Schema.String),
 })
 export type CallbackAuthInput = typeof CallbackAuthInput.Type
-export const CallbackAuthPayload = CallbackAuthInput
 
 export { AuthProviderInfo }
 export { EventEnvelope }
+export { QueueSnapshot }
 
 export const SendExtensionIntentInput = Schema.Struct({
   sessionId: SessionId,
@@ -434,7 +396,6 @@ export const SendExtensionIntentInput = Schema.Struct({
   branchId: Schema.optional(BranchId),
 })
 export type SendExtensionIntentInput = typeof SendExtensionIntentInput.Type
-export const SendExtensionIntentPayload = SendExtensionIntentInput
 
 export const SkillInfo = Schema.Struct({
   name: Schema.String,

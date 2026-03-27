@@ -3,12 +3,12 @@ import { Schema } from "effect"
 import { GentRpcError } from "../errors.js"
 import {
   AuthProviderInfo,
-  SetAuthKeyPayload,
-  DeleteAuthKeyPayload,
+  SetAuthKeyInput,
+  DeleteAuthKeyInput,
   ListAuthMethodsSuccess,
-  AuthorizeAuthPayload,
+  AuthorizeAuthInput,
   AuthorizeAuthSuccess,
-  CallbackAuthPayload,
+  CallbackAuthInput,
 } from "../transport-contract.js"
 
 export class AuthRpcs extends RpcGroup.make(
@@ -17,11 +17,11 @@ export class AuthRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("setKey", {
-    payload: SetAuthKeyPayload.fields,
+    payload: SetAuthKeyInput.fields,
     error: GentRpcError,
   }),
   Rpc.make("deleteKey", {
-    payload: DeleteAuthKeyPayload.fields,
+    payload: DeleteAuthKeyInput.fields,
     error: GentRpcError,
   }),
   Rpc.make("listMethods", {
@@ -29,12 +29,12 @@ export class AuthRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("authorize", {
-    payload: AuthorizeAuthPayload.fields,
+    payload: AuthorizeAuthInput.fields,
     success: AuthorizeAuthSuccess,
     error: GentRpcError,
   }),
   Rpc.make("callback", {
-    payload: CallbackAuthPayload.fields,
+    payload: CallbackAuthInput.fields,
     error: GentRpcError,
   }),
 ).prefix("auth.") {}

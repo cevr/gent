@@ -1,29 +1,29 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { GentRpcError } from "../errors.js"
 import {
-  RespondQuestionsPayload,
-  RespondPermissionPayload,
-  RespondPromptPayload,
-  RespondHandoffPayload,
-  RespondHandoffSuccess,
+  RespondQuestionsInput,
+  RespondPermissionInput,
+  RespondPromptInput,
+  RespondHandoffInput,
+  RespondHandoffResult,
 } from "../transport-contract.js"
 
 export class InteractionRpcs extends RpcGroup.make(
   Rpc.make("respondQuestions", {
-    payload: RespondQuestionsPayload.fields,
+    payload: RespondQuestionsInput.fields,
     error: GentRpcError,
   }),
   Rpc.make("respondPermission", {
-    payload: RespondPermissionPayload.fields,
+    payload: RespondPermissionInput.fields,
     error: GentRpcError,
   }),
   Rpc.make("respondPrompt", {
-    payload: RespondPromptPayload.fields,
+    payload: RespondPromptInput.fields,
     error: GentRpcError,
   }),
   Rpc.make("respondHandoff", {
-    payload: RespondHandoffPayload.fields,
-    success: RespondHandoffSuccess,
+    payload: RespondHandoffInput.fields,
+    success: RespondHandoffResult,
     error: GentRpcError,
   }),
 ).prefix("interaction.") {}
