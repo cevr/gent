@@ -67,7 +67,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     tools: [] as const,
   }
 
-  const defaultExtensions: ReadonlyArray<LoadedExtension> = BuiltinExtensions.map((ext) => ({
+  // Exclude extensions that require services not available in test (e.g., MemoryVault)
+  const testSafeBuiltins = BuiltinExtensions.filter((ext) => ext.manifest.id !== "@gent/memory")
+
+  const defaultExtensions: ReadonlyArray<LoadedExtension> = testSafeBuiltins.map((ext) => ({
     manifest: ext.manifest,
     kind: "builtin" as const,
     sourcePath: "builtin",

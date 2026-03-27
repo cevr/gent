@@ -1,6 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
-import { createSequenceProvider, toolCallStep, textStep } from "@gent/core/debug/provider"
+import { Effect, Fiber } from "effect"
+import {
+  createSequenceProvider,
+  toolCallStep,
+  textStep,
+  type SequenceStep,
+} from "@gent/core/debug/provider"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
@@ -164,6 +169,65 @@ describe("Auto extension E2E", () => {
         const autoSnapshot = snapshots.find((s) => s.extensionId === "auto")
         if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
         expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
+      }).pipe(Effect.provide(e2eLayer))
+    }),
+  )
+
+  it.live("gated mid-sequence assertions: verify UI phases between turns", () =>
+    Effect.gen(function* () {
+      const gatedCheckpoint: SequenceStep = {
+        ...toolCallStep("auto_checkpoint", { status: "complete", summary: "Done" }),
+        gated: true,
+      }
+
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+        textStep("Starting."), // Turn 1: initial
+        gatedCheckpoint, // Turn 2: gated — held until we release
+      ])
+
+      const e2eLayer = createE2ELayer({ providerLayer })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const stateRuntime = yield* ExtensionStateRuntime
+
+        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        yield* stateRuntime.handleIntent(
+          sessionId,
+          "auto",
+          { _tag: "StartAuto", goal: "Verify phases" },
+          0,
+          branchId,
+        )
+
+        // Fork the run — it will process turn 1, then start turn 2 which blocks on the gate
+        const runFiber = yield* Effect.forkChild(agentLoop.run(makeMessage("begin")))
+
+        // Wait for the gated turn to start (provider.stream() called for step index 1)
+        yield* controls.waitForCall(1)
+
+        // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked
+        const midSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+        const midAuto = midSnapshots.find((s) => s.extensionId === "auto")
+        if (midAuto === undefined) throw new Error("mid-sequence auto snapshot not found")
+        const midModel = midAuto.model as { active: boolean; phase?: string }
+        expect(midModel.active).toBe(true)
+        expect(midModel.phase).toBe("working")
+
+        // Release the gate — turn 2 completes with auto_checkpoint(complete)
+        yield* controls.emitAll(1)
+
+        // Wait for run to finish
+        yield* Fiber.join(runFiber)
+
+        // Final state: auto is inactive
+        const finalSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+        const finalAuto = finalSnapshots.find((s) => s.extensionId === "auto")
+        if (finalAuto === undefined) throw new Error("final auto snapshot not found")
+        expect((finalAuto.model as { active: boolean }).active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
