@@ -37,13 +37,15 @@ describe("ClientProvider session lifecycle", () => {
   test("createSession activates the created session", async () => {
     let ctx: ClientContextValue | undefined
     const client = createMockClient({
-      createSession: () =>
-        Effect.succeed({
-          sessionId: "session-created" as SessionId,
-          branchId: "branch-created" as BranchId,
-          name: "Created",
-          bypass: false,
-        }),
+      session: {
+        create: () =>
+          Effect.succeed({
+            sessionId: "session-created" as SessionId,
+            branchId: "branch-created" as BranchId,
+            name: "Created",
+            bypass: false,
+          }),
+      },
     })
 
     const setup = await renderWithProviders(

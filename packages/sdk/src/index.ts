@@ -1,6 +1,5 @@
 // Shared transport contract
 export type {
-  GentClient,
   GentLifecycle,
   ConnectionState,
   MessageInfoReadonly,
@@ -29,7 +28,11 @@ export {
   type GentRpcClient,
   type GentRpcsClient,
   type GentRpcError,
+  type GentClientBundle,
 } from "./client.js"
+
+// Namespaced client + runtime types
+export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 
 // Message types
 export type {

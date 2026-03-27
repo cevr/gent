@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import * as path from "node:path"
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
-import { Gent, type GentClient } from "@gent/sdk"
+import { Gent, type GentClientBundle } from "@gent/sdk"
 import {
   createTempDirFixture,
   createWorkerEnv,
@@ -20,7 +20,7 @@ registerWorkerCleanup()
 
 export interface TransportCase {
   readonly name: string
-  readonly run: <A>(assertion: (client: GentClient) => Effect.Effect<A, Error>) => Promise<A>
+  readonly run: <A>(assertion: (bundle: GentClientBundle) => Effect.Effect<A, Error>) => Promise<A>
 }
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
@@ -41,12 +41,12 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
         Effect.scoped(
           Effect.gen(function* () {
             const root = makeTempDir()
-            const client = yield* startWorkerWithClient({
+            const bundle = yield* startWorkerWithClient({
               cwd: repoRoot,
               startupTimeoutMs: 20_000,
               env: createWorkerEnv(root, { providerMode }),
             })
-            return yield* assertion(client)
+            return yield* assertion(bundle)
           }),
         ),
       ),

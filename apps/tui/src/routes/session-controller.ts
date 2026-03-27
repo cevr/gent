@@ -117,7 +117,7 @@ export function useSessionController(props: {
   const command = useCommand()
   const ext = useExtensionUI()
   const router = useRouter()
-  const { cast } = useRuntime(client.client)
+  const { cast } = useRuntime(client.runtime)
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
   const workspace = useWorkspace()
@@ -169,13 +169,18 @@ export function useSessionController(props: {
       case "RespondPrompt":
         if (effect.kind === "questions") {
           cast(
-            client.client.respondQuestions(effect.requestId, effect.answers).pipe(
-              Effect.tapError((error) =>
-                Effect.sync(() => {
-                  client.setError(formatError(error))
-                }),
+            client.client.interaction
+              .respondQuestions({
+                requestId: effect.requestId,
+                answers: [...effect.answers.map((a: readonly string[]) => [...a])],
+              })
+              .pipe(
+                Effect.tapError((error) =>
+                  Effect.sync(() => {
+                    client.setError(formatError(error))
+                  }),
+                ),
               ),
-            ),
           )
           return
         }
@@ -183,13 +188,15 @@ export function useSessionController(props: {
         if (effect.kind === "permission") {
           const { decision, persist } = pickPermissionDecision(effect.answers)
           cast(
-            client.client.respondPermission(effect.requestId, decision, persist).pipe(
-              Effect.tapError((error) =>
-                Effect.sync(() => {
-                  client.setError(formatError(error))
-                }),
+            client.client.interaction
+              .respondPermission({ requestId: effect.requestId, decision, persist })
+              .pipe(
+                Effect.tapError((error) =>
+                  Effect.sync(() => {
+                    client.setError(formatError(error))
+                  }),
+                ),
               ),
-            ),
           )
           return
         }
@@ -199,7 +206,10 @@ export function useSessionController(props: {
           const handoffDecision = decision === "yes" ? "confirm" : "reject"
           cast(
             Effect.gen(function* () {
-              const result = yield* client.client.respondHandoff(effect.requestId, handoffDecision)
+              const result = yield* client.client.interaction.respondHandoff({
+                requestId: effect.requestId,
+                decision: handoffDecision,
+              })
               if (result.childSessionId === undefined || result.childBranchId === undefined) return
               client.switchSession(result.childSessionId, result.childBranchId, "Handoff")
             }).pipe(
@@ -219,13 +229,15 @@ export function useSessionController(props: {
 
         const { decision, content } = pickPromptDecision(effect.answers)
         cast(
-          client.client.respondPrompt(effect.requestId, decision, content).pipe(
-            Effect.tapError((error) =>
-              Effect.sync(() => {
-                client.setError(formatError(error))
-              }),
+          client.client.interaction
+            .respondPrompt({ requestId: effect.requestId, decision, content })
+            .pipe(
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  client.setError(formatError(error))
+                }),
+              ),
             ),
-          ),
         )
         return
     }
@@ -274,10 +286,10 @@ export function useSessionController(props: {
     const generation = client.connectionGeneration()
     void generation
     if (!client.isActive()) return
-    const fiber = client.client.runFork(
+    const fiber = client.runtime.fork(
       runWithReconnect(
         () =>
-          client.client
+          client.client.session
             .watchRuntime({
               sessionId: props.sessionId,
               branchId: props.branchId,
@@ -432,8 +444,8 @@ export function useSessionController(props: {
         openAuth: () => router.navigateToAuth(),
         sendMessage: (content: string) => client.sendMessage(content),
         newSession: () =>
-          client.client
-            .createSession({
+          client.client.session
+            .create({
               cwd: workspace.cwd,
               bypass: client.session()?.bypass ?? true,
             })

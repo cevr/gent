@@ -99,7 +99,7 @@ export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
   const client = useClient()
-  const { cast } = useRuntime(client.client)
+  const { cast } = useRuntime(client.runtime)
   const router = useRouter()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(CommandPaletteState.initial())

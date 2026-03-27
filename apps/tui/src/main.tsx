@@ -93,9 +93,9 @@ const main = Command.make(
         editor: Option.getOrUndefined(editorOpt),
       }
 
-      const gentClient = yield* Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
+      const bundle = yield* Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
 
-      const authProviders = yield* gentClient.listAuthProviders()
+      const authProviders = yield* bundle.client.auth.listProviders()
       const missingProviders = authProviders
         .filter((provider) => provider.required && !provider.hasKey)
         .map((provider) => provider.provider)
@@ -107,7 +107,7 @@ const main = Command.make(
       }
 
       const state = yield* resolveInitialState({
-        client: gentClient,
+        client: bundle.client,
         cwd,
         session,
         continue_: continue_ || debug,
@@ -135,7 +135,7 @@ const main = Command.make(
             : undefined
         const agentOverride = Option.getOrUndefined(agent)
         yield* runHeadless(
-          gentClient,
+          bundle.client,
           state.session.id,
           branchId,
           state.prompt,
@@ -165,7 +165,11 @@ const main = Command.make(
           <EnvProvider env={envWithShutdown}>
             <WorkspaceProvider cwd={cwd} services={uiServices}>
               <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                <ClientProvider client={gentClient} initialSession={bootstrap.initialSession}>
+                <ClientProvider
+                  client={bundle.client}
+                  runtime={bundle.runtime}
+                  initialSession={bootstrap.initialSession}
+                >
                   <ExtensionUIProvider>
                     <RouterProvider initialRoute={bootstrap.initialRoute}>
                       <App
@@ -193,8 +197,8 @@ const main = Command.make(
 // Sessions subcommand
 const sessions = Command.make("sessions", {}, () =>
   Effect.gen(function* () {
-    const client = yield* Gent.spawn({ cwd: process.cwd() })
-    const allSessions = yield* client.listSessions()
+    const bundle = yield* Gent.spawn({ cwd: process.cwd() })
+    const allSessions = yield* bundle.client.session.list()
 
     if (allSessions.length === 0) {
       yield* Console.log("No sessions found.")

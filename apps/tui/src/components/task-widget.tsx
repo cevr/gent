@@ -33,7 +33,7 @@ type TaskWidgetProps = {
 
 export function TaskWidget(props?: TaskWidgetProps) {
   const client = useClient()
-  const { cast } = useRuntime(client.client)
+  const { cast } = useRuntime(client.runtime)
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
@@ -50,7 +50,7 @@ export function TaskWidget(props?: TaskWidgetProps) {
     const bid = branchId()
     if (sid === undefined || bid === undefined) return
     cast(
-      client.client.listTasks(sid, bid).pipe(
+      client.client.task.list({ sessionId: sid, branchId: bid }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             setTasks([...result])
@@ -75,10 +75,10 @@ export function TaskWidget(props?: TaskWidgetProps) {
     const bid = branchId()
     if (sid === undefined || bid === undefined) return
 
-    const fiber = client.client.runFork(
+    const fiber = client.runtime.fork(
       runWithReconnect(
         () =>
-          client.client.streamEvents({ sessionId: sid, branchId: bid }).pipe(
+          client.client.session.events({ sessionId: sid, branchId: bid }).pipe(
             Stream.runForEach((envelope) =>
               Effect.sync(() => {
                 switch (envelope.event._tag) {

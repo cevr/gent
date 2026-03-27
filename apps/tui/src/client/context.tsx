@@ -28,7 +28,8 @@ import { reduceAgentLifecycle } from "./agent-lifecycle"
 
 import type {
   ConnectionState,
-  GentClient,
+  GentNamespacedClient,
+  GentRuntime,
   GentRpcError,
   MessageInfoReadonly,
   QueueSnapshot,
@@ -79,8 +80,10 @@ export interface AgentState {
 // =============================================================================
 
 export interface ClientContextValue {
-  /** Underlying GentClient - returns Effects */
-  client: GentClient
+  /** Namespaced RPC client — returns Effects */
+  client: GentNamespacedClient
+  /** Runtime for executing Effects */
+  runtime: GentRuntime
 
   // Session state (union)
   sessionState: () => SessionState
@@ -150,16 +153,18 @@ export function useClient(): ClientContextValue {
 }
 
 interface ClientProviderProps extends ParentProps {
-  client: GentClient
+  client: GentNamespacedClient
+  runtime: GentRuntime
   initialSession: Session | undefined
 }
 
 export function ClientProvider(props: ClientProviderProps) {
   const defaultAgent: AgentName = "cowork"
   const client = props.client
+  const runtime = props.runtime
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
-    client.runFork(effect)
+    runtime.cast(effect)
   }
 
   // Extension state snapshot callback — wired by ExtensionUIProvider
@@ -184,7 +189,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
   onMount(() => {
     cast(
-      client.listModels().pipe(
+      client.model.list().pipe(
         Effect.tap((models) =>
           Effect.sync(() => {
             const modelsById: Record<string, Model> = {}
@@ -206,7 +211,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const [preferredAgent, setPreferredAgent] = createSignal<AgentName>(defaultAgent)
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
   const [connectionState, setConnectionState] = createSignal<ConnectionState | undefined>(
-    client.lifecycle.getState(),
+    runtime.lifecycle.getState(),
   )
   const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null)
   const [lastSeenEventId, setLastSeenEventId] = createSignal<number | null>(null)
@@ -219,7 +224,7 @@ export function ClientProvider(props: ClientProviderProps) {
   })
 
   createEffect(() => {
-    const unsubscribe = client.lifecycle.subscribe((nextState) => {
+    const unsubscribe = runtime.lifecycle.subscribe((nextState) => {
       setConnectionState(nextState)
     })
     onCleanup(unsubscribe)
@@ -361,15 +366,15 @@ export function ClientProvider(props: ClientProviderProps) {
         }
       }
 
-      const fiber = client.runFork(
+      const fiber = runtime.fork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
               if (connectionState()?._tag !== "connected") {
-                yield* client.lifecycle.waitForReady
+                yield* runtime.lifecycle.waitForReady
               }
 
-              const snapshot = yield* client.getSessionSnapshot({ sessionId, branchId })
+              const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
               const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
 
               yield* Effect.sync(() => {
@@ -399,7 +404,7 @@ export function ClientProvider(props: ClientProviderProps) {
                 }
               })
 
-              const events = client.streamEvents({
+              const events = client.session.events({
                 sessionId,
                 branchId,
                 ...(after !== undefined ? { after } : {}),
@@ -424,7 +429,7 @@ export function ClientProvider(props: ClientProviderProps) {
               clientLog.error("event.subscription.failed", { error: formatError(err) })
               setConnectionIssue(formatConnectionIssue(err))
             },
-            waitForRetry: () => client.lifecycle.waitForReady,
+            waitForRetry: () => runtime.lifecycle.waitForReady,
           },
         ),
       )
@@ -438,6 +443,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const value: ClientContextValue = {
     client,
+    runtime,
 
     // Session state
     sessionState,
@@ -460,7 +466,7 @@ export function ClientProvider(props: ClientProviderProps) {
     latestInputTokens,
     modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
     connectionState,
-    waitForTransportReady: () => client.lifecycle.waitForReady,
+    waitForTransportReady: () => runtime.lifecycle.waitForReady,
     isReconnecting,
     connectionGeneration: () => {
       const state = connectionState()
@@ -484,8 +490,8 @@ export function ClientProvider(props: ClientProviderProps) {
       const requestId = crypto.randomUUID()
       clientLog.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
       cast(
-        client
-          .sendMessage({
+        client.message
+          .send({
             sessionId: s.sessionId,
             branchId: s.branchId,
             content,
@@ -507,7 +513,7 @@ export function ClientProvider(props: ClientProviderProps) {
       clientLog.info("createSession", { requestId })
       dispatchSession({ _tag: "CreateRequested" })
       cast(
-        client.createSession({ requestId }).pipe(
+        client.session.create({ requestId }).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               dispatchSession({
@@ -524,11 +530,13 @@ export function ClientProvider(props: ClientProviderProps) {
               if (preferred !== defaultAgent) {
                 setAgentStore({ agent: preferred })
                 cast(
-                  client.steer({
-                    _tag: "SwitchAgent",
-                    sessionId: result.sessionId,
-                    branchId: result.branchId,
-                    agent: preferred,
+                  client.steer.command({
+                    command: {
+                      _tag: "SwitchAgent",
+                      sessionId: result.sessionId,
+                      branchId: result.branchId,
+                      agent: preferred,
+                    },
                   }),
                 )
               }
@@ -569,21 +577,21 @@ export function ClientProvider(props: ClientProviderProps) {
     listMessages: () => {
       const s = session()
       if (s === null) return Effect.succeed([] as readonly MessageInfoReadonly[])
-      return client.listMessages(s.branchId)
+      return client.message.list({ branchId: s.branchId })
     },
 
-    listSessions: () => client.listSessions(),
+    listSessions: () => client.session.list(),
 
     listBranches: () => {
       const s = session()
       if (s === null) return Effect.succeed([] as readonly BranchInfo[])
-      return client.listBranches(s.sessionId)
+      return client.branch.list({ sessionId: s.sessionId })
     },
 
     updateSessionBypass: (bypass) => {
       const s = session()
       if (s === null) return Effect.sync(() => undefined)
-      return client.updateSessionBypass(s.sessionId, bypass).pipe(
+      return client.session.updateBypass({ sessionId: s.sessionId, bypass }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             dispatchSession({ _tag: "UpdateBypass", bypass: result.bypass })
@@ -596,7 +604,7 @@ export function ClientProvider(props: ClientProviderProps) {
     updateSessionReasoningLevel: (reasoningLevel) => {
       const s = session()
       if (s === null) return Effect.sync(() => undefined)
-      return client.updateSessionReasoningLevel(s.sessionId, reasoningLevel).pipe(
+      return client.session.updateReasoningLevel({ sessionId: s.sessionId, reasoningLevel }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             dispatchSession({
@@ -612,22 +620,24 @@ export function ClientProvider(props: ClientProviderProps) {
     createBranch: (name) => {
       const s = session()
       if (s === null) return Effect.succeed("" as BranchId)
-      return client.createBranch(s.sessionId, name)
+      return client.branch
+        .create({ sessionId: s.sessionId, ...(name !== undefined ? { name } : {}) })
+        .pipe(Effect.map((result) => result.branchId))
     },
 
     getBranchTree: () => {
       const s = session()
       if (s === null) return Effect.succeed([] as readonly BranchTreeNode[])
-      return client.getBranchTree(s.sessionId)
+      return client.branch.getTree({ sessionId: s.sessionId })
     },
 
-    getSessionTree: (sessionId) => client.getSessionTree(sessionId),
+    getSessionTree: (sessionId) => client.session.getTree({ sessionId }),
 
     forkBranch: (messageId, name) => {
       const s = session()
       if (s === null) return Effect.succeed("" as BranchId)
-      return client
-        .forkBranch({
+      return client.branch
+        .fork({
           sessionId: s.sessionId,
           fromBranchId: s.branchId,
           atMessageId: messageId,
@@ -641,7 +651,7 @@ export function ClientProvider(props: ClientProviderProps) {
       if (s === null) {
         return Effect.succeed({ steering: [] as const, followUp: [] as const })
       }
-      return client.drainQueuedMessages({ sessionId: s.sessionId, branchId: s.branchId })
+      return client.queue.drain({ sessionId: s.sessionId, branchId: s.branchId })
     },
 
     getQueuedMessages: () => {
@@ -649,7 +659,7 @@ export function ClientProvider(props: ClientProviderProps) {
       if (s === null) {
         return Effect.succeed({ steering: [] as const, followUp: [] as const })
       }
-      return client.getQueuedMessages({ sessionId: s.sessionId, branchId: s.branchId })
+      return client.queue.get({ sessionId: s.sessionId, branchId: s.branchId })
     },
 
     // Fire-and-forget steering
@@ -673,7 +683,7 @@ export function ClientProvider(props: ClientProviderProps) {
       if (fullCommand._tag === "SwitchAgent") {
         setAgentStore({ agent: fullCommand.agent })
       }
-      cast(client.steer(fullCommand))
+      cast(client.steer.command({ command: fullCommand }))
     },
 
     onExtensionSnapshot: (cb) => {
@@ -685,8 +695,8 @@ export function ClientProvider(props: ClientProviderProps) {
       if (s === null) return
 
       cast(
-        client
-          .switchBranch({
+        client.branch
+          .switch({
             sessionId: s.sessionId,
             fromBranchId: s.branchId,
             toBranchId: branchId,

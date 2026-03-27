@@ -1,6 +1,7 @@
 // Re-export client types/functions from SDK
 export {
-  type GentClient,
+  type GentNamespacedClient,
+  type GentRuntime,
   type GentRpcError,
   type MessageInfoReadonly,
   type SessionInfo,

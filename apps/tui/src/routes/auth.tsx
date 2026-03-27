@@ -7,7 +7,7 @@ import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { GentClient } from "../client"
+import type { GentNamespacedClient, GentRuntime } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
 import { clientLog } from "../utils/client-logger"
@@ -15,7 +15,8 @@ import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./a
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
-  client: GentClient
+  client: GentNamespacedClient
+  runtime: GentRuntime
   enforceAuth?: boolean
   onResolved?: () => void
 }
@@ -28,7 +29,7 @@ export function Auth(props: AuthProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.client)
+  const { cast } = useRuntime(props.runtime)
 
   const [state, setState] = createSignal<AuthRouteState>(AuthState.initial())
   const send = (event: Parameters<typeof transitionAuth>[1]) => {
@@ -57,7 +58,7 @@ export function Auth(props: AuthProps) {
     clientLog.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
-      Effect.all([props.client.listAuthProviders(), props.client.listAuthMethods()]).pipe(
+      Effect.all([props.client.auth.listProviders(), props.client.auth.listMethods()]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
             clientLog.info("auth:load-complete", { providers: loadedProviders.length })
@@ -122,7 +123,7 @@ export function Auth(props: AuthProps) {
     send({ _tag: "DeleteStarted" })
 
     cast(
-      props.client.deleteAuthKey(provider.provider).pipe(
+      props.client.auth.deleteKey({ provider: provider.provider }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             send({ _tag: "ActionSucceeded" })
@@ -146,7 +147,7 @@ export function Auth(props: AuthProps) {
     send({ _tag: "SubmitKeyStarted" })
 
     cast(
-      props.client.setAuthKey(provider.provider, key).pipe(
+      props.client.auth.setKey({ provider: provider.provider, key }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             flashSuccess(`API key saved for ${provider.provider}`)
@@ -177,50 +178,56 @@ export function Auth(props: AuthProps) {
 
     send({ _tag: "StartOAuthAuthorization" })
     cast(
-      props.client.authorizeAuth(authSessionId, provider.provider, current.methodIndex).pipe(
-        Effect.tap((authorization) =>
-          Effect.sync(() => {
-            if (authorization === null) {
-              send({ _tag: "ActionFailed", error: "No authorization available for this method" })
-              return
-            }
-            if (authorization.method === "done") {
-              flashSuccess(`Authenticated ${provider.provider} via keychain`)
-              send({ _tag: "ActionSucceeded" })
-              loadAuth()
-              return
-            }
-            send({
-              _tag: "StartOAuth",
-              authorization,
-              method,
-              providerIndex: current.providerIndex,
-              methodIndex: current.methodIndex,
-            })
+      props.client.auth
+        .authorize({
+          sessionId: authSessionId,
+          provider: provider.provider,
+          method: current.methodIndex,
+        })
+        .pipe(
+          Effect.tap((authorization) =>
+            Effect.sync(() => {
+              if (authorization === null) {
+                send({ _tag: "ActionFailed", error: "No authorization available for this method" })
+                return
+              }
+              if (authorization.method === "done") {
+                flashSuccess(`Authenticated ${provider.provider} via keychain`)
+                send({ _tag: "ActionSucceeded" })
+                loadAuth()
+                return
+              }
+              send({
+                _tag: "StartOAuth",
+                authorization,
+                method,
+                providerIndex: current.providerIndex,
+                methodIndex: current.methodIndex,
+              })
+            }),
+          ),
+          Effect.tap((authorization) => {
+            if (authorization === null || authorization.method === "done") return Effect.void
+            return openAuthorization(authorization.url)
           }),
+          Effect.tap((authorization) => {
+            if (authorization === null || authorization.method === "done") return Effect.void
+            if (authorization.method === "auto") {
+              return Effect.sync(() =>
+                startAutoCallback(
+                  authorization.authorizationId,
+                  provider.provider,
+                  current.providerIndex,
+                  current.methodIndex,
+                ),
+              )
+            }
+            return Effect.void
+          }),
+          Effect.catchEager((err) =>
+            Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
+          ),
         ),
-        Effect.tap((authorization) => {
-          if (authorization === null || authorization.method === "done") return Effect.void
-          return openAuthorization(authorization.url)
-        }),
-        Effect.tap((authorization) => {
-          if (authorization === null || authorization.method === "done") return Effect.void
-          if (authorization.method === "auto") {
-            return Effect.sync(() =>
-              startAutoCallback(
-                authorization.authorizationId,
-                provider.provider,
-                current.providerIndex,
-                current.methodIndex,
-              ),
-            )
-          }
-          return Effect.void
-        }),
-        Effect.catchEager((err) =>
-          Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
-        ),
-      ),
     )
   }
 
@@ -231,18 +238,25 @@ export function Auth(props: AuthProps) {
     methodIndex: number,
   ) => {
     cast(
-      props.client.callbackAuth(authSessionId, providerName, methodIndex, authorizationId).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            flashSuccess(`Authenticated ${providerName} via OAuth`)
-            send({ _tag: "ActionSucceeded" })
-            loadAuth()
-          }),
+      props.client.auth
+        .callback({
+          sessionId: authSessionId,
+          provider: providerName,
+          method: methodIndex,
+          authorizationId,
+        })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              flashSuccess(`Authenticated ${providerName} via OAuth`)
+              send({ _tag: "ActionSucceeded" })
+              loadAuth()
+            }),
+          ),
+          Effect.catchEager((err) =>
+            Effect.sync(() => send({ _tag: "OAuthAutoFailed", error: formatError(err) })),
+          ),
         ),
-        Effect.catchEager((err) =>
-          Effect.sync(() => send({ _tag: "OAuthAutoFailed", error: formatError(err) })),
-        ),
-      ),
     )
   }
 
@@ -263,14 +277,14 @@ export function Auth(props: AuthProps) {
     send({ _tag: "SubmitOAuthStarted" })
 
     cast(
-      props.client
-        .callbackAuth(
-          authSessionId,
-          provider.provider,
-          current.methodIndex,
-          current.authorization.authorizationId,
+      props.client.auth
+        .callback({
+          sessionId: authSessionId,
+          provider: provider.provider,
+          method: current.methodIndex,
+          authorizationId: current.authorization.authorizationId,
           code,
-        )
+        })
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {

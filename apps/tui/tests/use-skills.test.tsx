@@ -39,7 +39,9 @@ const skill = (name: string): SkillContent => ({
 
 const clientWithSkills = (skills: readonly SkillContent[]) =>
   createMockClient({
-    listSkills: () => Effect.succeed(skills),
+    skill: {
+      list: () => Effect.succeed(skills),
+    },
   })
 
 describe("useSkills", () => {

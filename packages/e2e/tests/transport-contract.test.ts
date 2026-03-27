@@ -6,21 +6,21 @@ import { transportCases, waitFor } from "./transport-harness"
 describe("GentClient transport contract", () => {
   for (const transport of transportCases) {
     test(`${transport.name} creates, lists, sends, and snapshots persisted session state`, async () => {
-      await transport.run((client) =>
+      await transport.run(({ client }) =>
         Effect.gen(function* () {
-          const initialSessions = yield* client
-            .listSessions()
+          const initialSessions = yield* client.session
+            .list()
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          const created = yield* client
-            .createSession({
+          const created = yield* client.session
+            .create({
               cwd: process.cwd(),
               bypass: true,
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          const sessions = yield* client
-            .listSessions()
+          const sessions = yield* client.session
+            .list()
             .pipe(Effect.mapError((error) => new Error(String(error))))
           const createdSession = sessions.find((session) => session.id === created.sessionId)
 
@@ -29,14 +29,14 @@ describe("GentClient transport contract", () => {
           expect(createdSession?.branchId).toBe(created.branchId)
           expect(createdSession?.bypass).toBe(true)
 
-          const loaded = yield* client
-            .getSession(created.sessionId)
+          const loaded = yield* client.session
+            .get({ sessionId: created.sessionId })
             .pipe(Effect.mapError((error) => new Error(String(error))))
           expect(loaded?.id).toBe(created.sessionId)
           expect(loaded?.branchId).toBe(created.branchId)
 
-          const initialSnapshot = yield* client
-            .getSessionSnapshot({
+          const initialSnapshot = yield* client.session
+            .getSnapshot({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
@@ -46,8 +46,8 @@ describe("GentClient transport contract", () => {
           expect(initialSnapshot.branchId).toBe(created.branchId)
           expect(initialSnapshot.sessionId).toBe(created.sessionId)
 
-          const initialQueue = yield* client
-            .getQueuedMessages({
+          const initialQueue = yield* client.queue
+            .get({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
@@ -56,8 +56,8 @@ describe("GentClient transport contract", () => {
           expect(initialQueue.followUp).toEqual([])
           expect(initialQueue.steering).toEqual([])
 
-          yield* client
-            .sendMessage({
+          yield* client.message
+            .send({
               sessionId: created.sessionId,
               branchId: created.branchId,
               content: `hello from ${transport.name}`,
@@ -65,8 +65,8 @@ describe("GentClient transport contract", () => {
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
           const messages = yield* waitFor(
-            client
-              .listMessages(created.branchId)
+            client.message
+              .list({ branchId: created.branchId })
               .pipe(Effect.mapError((error) => new Error(String(error)))),
             (items) =>
               items.some(
@@ -82,8 +82,8 @@ describe("GentClient transport contract", () => {
           ).toBe(true)
 
           yield* waitFor(
-            client
-              .getSessionSnapshot({
+            client.session
+              .getSnapshot({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
@@ -96,8 +96,8 @@ describe("GentClient transport contract", () => {
               ),
           )
 
-          const queueAfterSend = yield* client
-            .getQueuedMessages({
+          const queueAfterSend = yield* client.queue
+            .get({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })

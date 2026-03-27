@@ -41,7 +41,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const extensionStateRuntime = yield* ExtensionStateRuntime
 
     return {
-      createSession: (input) =>
+      // -- session --
+      "session.create": (input) =>
         commands
           .createSession({
             ...(input.name !== undefined ? { name: input.name } : {}),
@@ -57,22 +58,22 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           })
           .pipe(
             Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
-            withWideEvent(rpcBoundary("createSession", input.requestId)),
+            withWideEvent(rpcBoundary("session.create", input.requestId)),
           ),
 
-      listSessions: () => queries.listSessions(),
+      "session.list": () => queries.listSessions(),
 
-      getSession: ({ sessionId }) => queries.getSession(sessionId),
+      "session.get": ({ sessionId }) => queries.getSession(sessionId),
 
-      deleteSession: ({ sessionId }) =>
+      "session.delete": ({ sessionId }) =>
         commands.deleteSession(sessionId).pipe(
           Effect.tap(() => WideEvent.set({ sessionId })),
-          withWideEvent(rpcBoundary("deleteSession")),
+          withWideEvent(rpcBoundary("session.delete")),
         ),
 
-      getChildSessions: ({ parentSessionId }) => queries.getChildSessions(parentSessionId),
+      "session.getChildren": ({ parentSessionId }) => queries.getChildSessions(parentSessionId),
 
-      getSessionTree: ({ sessionId }) =>
+      "session.getTree": ({ sessionId }) =>
         queries.getSessionTree(sessionId).pipe(
           Effect.map(function toRpc(node): {
             id: typeof node.session.id
@@ -99,17 +100,37 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           }),
         ),
 
-      listBranches: ({ sessionId }) => queries.listBranches(sessionId),
+      "session.getSnapshot": ({ sessionId, branchId }) =>
+        queries.getSessionSnapshot({ sessionId, branchId }),
 
-      createBranch: ({ sessionId, name }) =>
+      "session.updateBypass": ({ sessionId, bypass }) =>
+        commands.updateSessionBypass({ sessionId, bypass }),
+
+      "session.updateReasoningLevel": ({ sessionId, reasoningLevel }) =>
+        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
+
+      "session.events": ({ sessionId, branchId, after }) =>
+        events.streamEvents({
+          sessionId,
+          ...(branchId !== undefined ? { branchId } : {}),
+          ...(after !== undefined ? { after } : {}),
+        }),
+
+      "session.watchRuntime": ({ sessionId, branchId }) =>
+        subscriptions.watchRuntime({ sessionId, branchId }),
+
+      // -- branch --
+      "branch.list": ({ sessionId }) => queries.listBranches(sessionId),
+
+      "branch.create": ({ sessionId, name }) =>
         commands.createBranch({
           sessionId,
           ...(name !== undefined ? { name } : {}),
         }),
 
-      getBranchTree: ({ sessionId }) => queries.getBranchTree(sessionId),
+      "branch.getTree": ({ sessionId }) => queries.getBranchTree(sessionId),
 
-      switchBranch: ({ sessionId, fromBranchId, toBranchId, summarize }) =>
+      "branch.switch": ({ sessionId, fromBranchId, toBranchId, summarize }) =>
         commands.switchBranch({
           sessionId,
           fromBranchId,
@@ -117,7 +138,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(summarize !== undefined ? { summarize } : {}),
         }),
 
-      forkBranch: ({ sessionId, fromBranchId, atMessageId, name }) =>
+      "branch.fork": ({ sessionId, fromBranchId, atMessageId, name }) =>
         commands.forkBranch({
           sessionId,
           fromBranchId,
@@ -125,7 +146,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(name !== undefined ? { name } : {}),
         }),
 
-      sendMessage: ({ sessionId, branchId, content, agentOverride, requestId }) =>
+      // -- message --
+      "message.send": ({ sessionId, branchId, content, agentOverride, requestId }) =>
         commands
           .sendMessage({
             sessionId,
@@ -136,72 +158,58 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-            withWideEvent(rpcBoundary("sendMessage", requestId)),
+            withWideEvent(rpcBoundary("message.send", requestId)),
           ),
 
-      listMessages: ({ branchId }) => queries.listMessages(branchId),
+      "message.list": ({ branchId }) => queries.listMessages(branchId),
 
-      getSessionSnapshot: ({ sessionId, branchId }) =>
-        queries.getSessionSnapshot({ sessionId, branchId }),
-
+      // -- steer --
       // SAFETY: SteerPayload and SteerCommand are structurally identical Schema.Union types
-      steer: ({ command }) => commands.steer(command as SteerCommand),
+      "steer.command": ({ command }) => commands.steer(command as SteerCommand),
 
-      drainQueuedMessages: ({ sessionId, branchId }) =>
+      // -- queue --
+      "queue.drain": ({ sessionId, branchId }) =>
         commands.drainQueuedMessages({ sessionId, branchId }),
 
-      getQueuedMessages: ({ sessionId, branchId }) =>
-        queries.getQueuedMessages({ sessionId, branchId }),
+      "queue.get": ({ sessionId, branchId }) => queries.getQueuedMessages({ sessionId, branchId }),
 
-      streamEvents: ({ sessionId, branchId, after }) =>
-        // Return the stream directly for streaming RPC
-        events.streamEvents({
-          sessionId,
-          ...(branchId !== undefined ? { branchId } : {}),
-          ...(after !== undefined ? { after } : {}),
-        }),
+      // -- interaction --
+      "interaction.respondQuestions": ({ requestId, answers }) =>
+        askUserHandler.respond(requestId, answers),
 
-      watchRuntime: ({ sessionId, branchId }) =>
-        subscriptions.watchRuntime({ sessionId, branchId }),
-
-      respondQuestions: ({ requestId, answers }) => askUserHandler.respond(requestId, answers),
-
-      respondPermission: ({ requestId, decision, persist }) =>
+      "interaction.respondPermission": ({ requestId, decision, persist }) =>
         interactions.respondPermission({ requestId, decision, persist }),
 
-      respondPrompt: ({ requestId, decision, content }) =>
+      "interaction.respondPrompt": ({ requestId, decision, content }) =>
         interactions.respondPrompt({
           requestId,
           decision,
           ...(content !== undefined ? { content } : {}),
         }),
 
-      respondHandoff: ({ requestId, decision, reason }) =>
+      "interaction.respondHandoff": ({ requestId, decision, reason }) =>
         interactions.respondHandoff({
           requestId,
           decision,
           ...(reason !== undefined ? { reason } : {}),
         }),
 
-      updateSessionBypass: ({ sessionId, bypass }) =>
-        commands.updateSessionBypass({ sessionId, bypass }),
+      // -- permission --
+      "permission.listRules": () => configService.getPermissionRules(),
 
-      updateSessionReasoningLevel: ({ sessionId, reasoningLevel }) =>
-        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
-
-      getPermissionRules: () => configService.getPermissionRules(),
-
-      deletePermissionRule: ({ tool, pattern }) =>
+      "permission.deleteRule": ({ tool, pattern }) =>
         Effect.gen(function* () {
           yield* configService.removePermissionRule(tool, pattern)
           yield* permission.removeRule(tool, pattern)
         }),
 
-      listModels: () => modelRegistry.list(),
+      // -- model --
+      "model.list": () => modelRegistry.list(),
 
-      listAuthProviders: () => authGuard.listProviders(),
+      // -- auth --
+      "auth.listProviders": () => authGuard.listProviders(),
 
-      setAuthKey: ({ provider, key }) =>
+      "auth.setKey": ({ provider, key }) =>
         authStore
           .set(provider, new AuthApi({ type: "api", key }))
           .pipe(
@@ -212,7 +220,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             ),
           ),
 
-      deleteAuthKey: ({ provider }) =>
+      "auth.deleteKey": ({ provider }) =>
         authStore
           .remove(provider)
           .pipe(
@@ -223,32 +231,21 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             ),
           ),
 
-      listAuthMethods: () => providerAuth.listMethods(),
+      "auth.listMethods": () => providerAuth.listMethods(),
 
-      authorizeAuth: ({ sessionId, provider, method }) =>
+      "auth.authorize": ({ sessionId, provider, method }) =>
         providerAuth
           .authorize(sessionId, provider, method)
           .pipe(Effect.map((result) => result ?? null)),
 
-      callbackAuth: ({ sessionId, provider, method, authorizationId, code }) =>
+      "auth.callback": ({ sessionId, provider, method, authorizationId, code }) =>
         providerAuth.callback(sessionId, provider, method, authorizationId, code),
 
-      listTasks: ({ sessionId, branchId }) => queries.listTasks(sessionId, branchId),
+      // -- task --
+      "task.list": ({ sessionId, branchId }) => queries.listTasks(sessionId, branchId),
 
-      actorSendUserMessage: (input) => actorProcess.sendUserMessage(input),
-
-      actorSendToolResult: (input) => actorProcess.sendToolResult(input),
-
-      actorInvokeTool: (input) => actorProcess.invokeTool(input),
-
-      actorInterrupt: (input) => actorProcess.interrupt(input),
-
-      actorGetState: ({ sessionId, branchId }) => actorProcess.getState({ sessionId, branchId }),
-
-      actorGetMetrics: ({ sessionId, branchId }) =>
-        actorProcess.getMetrics({ sessionId, branchId }),
-
-      listSkills: () =>
+      // -- skill --
+      "skill.list": () =>
         skills.list().pipe(
           Effect.map((list) =>
             list.map((s) => ({
@@ -261,7 +258,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ),
         ),
 
-      getSkillContent: ({ name }) =>
+      "skill.getContent": ({ name }) =>
         skills.get(name).pipe(
           Effect.map((s) =>
             s !== undefined
@@ -276,10 +273,25 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ),
         ),
 
-      sendExtensionIntent: ({ sessionId, extensionId, intent, epoch, branchId }) =>
+      // -- extension --
+      "extension.sendIntent": ({ sessionId, extensionId, intent, epoch, branchId }) =>
         extensionStateRuntime
           .handleIntent(sessionId, extensionId, intent, epoch, branchId)
           .pipe(Effect.orDie),
+
+      // -- actor --
+      "actor.sendUserMessage": (input) => actorProcess.sendUserMessage(input),
+
+      "actor.sendToolResult": (input) => actorProcess.sendToolResult(input),
+
+      "actor.invokeTool": (input) => actorProcess.invokeTool(input),
+
+      "actor.interrupt": (input) => actorProcess.interrupt(input),
+
+      "actor.getState": ({ sessionId, branchId }) => actorProcess.getState({ sessionId, branchId }),
+
+      "actor.getMetrics": ({ sessionId, branchId }) =>
+        actorProcess.getMetrics({ sessionId, branchId }),
     }
   }),
 )

@@ -5,7 +5,7 @@ import {
   extractImages,
   extractToolCalls,
   buildToolResultMap,
-  type GentClient,
+  type GentClientBundle,
   type MessageInfoReadonly,
 } from "../src/index"
 
@@ -17,15 +17,17 @@ describe("Gent constructors", () => {
   })
 })
 
-describe("GentClient shape", () => {
-  test("has runFork, runPromise, and lifecycle", () => {
+describe("GentClientBundle shape", () => {
+  test("has client (namespaced), runtime (cast/fork/run/lifecycle)", () => {
     // Verify the type at compile time — if this compiles, the shape is correct
-    const assertShape = (_client: GentClient) => {
-      expect(typeof _client.runFork).toBe("function")
-      expect(typeof _client.runPromise).toBe("function")
-      expect(typeof _client.lifecycle).toBe("object")
-      expect(typeof _client.lifecycle.getState).toBe("function")
-      expect(typeof _client.lifecycle.subscribe).toBe("function")
+    const assertShape = (_bundle: GentClientBundle) => {
+      expect(typeof _bundle.client).toBe("object")
+      expect(typeof _bundle.runtime.cast).toBe("function")
+      expect(typeof _bundle.runtime.fork).toBe("function")
+      expect(typeof _bundle.runtime.run).toBe("function")
+      expect(typeof _bundle.runtime.lifecycle).toBe("object")
+      expect(typeof _bundle.runtime.lifecycle.getState).toBe("function")
+      expect(typeof _bundle.runtime.lifecycle.subscribe).toBe("function")
     }
     // Just a type check — we can't easily construct a full client without layers
     void assertShape

@@ -55,7 +55,7 @@ export function BranchPicker(props: BranchPickerProps) {
   const router = useRouter()
   const env = useEnv()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(client.client)
+  const { cast } = useRuntime(client.runtime)
 
   const [state, setState] = createSignal<BranchPickerState>({
     _tag: "loading",
@@ -72,7 +72,7 @@ export function BranchPicker(props: BranchPickerProps) {
 
   createEffect(() => {
     cast(
-      client.client.getBranchTree(props.sessionId).pipe(
+      client.client.branch.getTree({ sessionId: props.sessionId }).pipe(
         Effect.tap((tree) =>
           Effect.sync(() => {
             setState((current) => ({

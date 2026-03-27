@@ -10,13 +10,14 @@ import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { PermissionRule, GentClient } from "../client"
+import type { PermissionRule, GentNamespacedClient, GentRuntime } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { formatError } from "../utils/format-error"
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface PermissionsProps {
-  client: GentClient
+  client: GentNamespacedClient
+  runtime: GentRuntime
 }
 
 type PermissionsState =
@@ -27,7 +28,7 @@ export function Permissions(props: PermissionsProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.client)
+  const { cast } = useRuntime(props.runtime)
 
   const [state, setState] = createSignal<PermissionsState>({ _tag: "loading" })
   let scrollRef: ScrollBoxRenderable | undefined = undefined
@@ -43,7 +44,7 @@ export function Permissions(props: PermissionsProps) {
   // Load rules on mount
   createEffect(() => {
     cast(
-      props.client.getPermissionRules().pipe(
+      props.client.permission.listRules().pipe(
         Effect.tap((loaded) =>
           Effect.sync(() => {
             setState((current) => {
@@ -89,7 +90,7 @@ export function Permissions(props: PermissionsProps) {
     if (rule === undefined) return
 
     cast(
-      props.client.deletePermissionRule(rule.tool, rule.pattern).pipe(
+      props.client.permission.deleteRule({ tool: rule.tool, pattern: rule.pattern }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             setState((prev) => {

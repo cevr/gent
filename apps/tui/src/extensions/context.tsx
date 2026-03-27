@@ -103,8 +103,14 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             if (sid === undefined) return
             const snap = snapshots().get(extensionId)
             const epoch = snap?.epoch ?? 0
-            clientCtx.client.runFork(
-              clientCtx.client.sendExtensionIntent(sid, extensionId, intent, epoch, bid),
+            clientCtx.runtime.cast(
+              clientCtx.client.extension.sendIntent({
+                sessionId: sid,
+                extensionId,
+                intent,
+                epoch,
+                branchId: bid,
+              }),
             )
           },
           getSnapshot: (extensionId) => {

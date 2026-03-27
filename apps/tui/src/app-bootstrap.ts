@@ -1,7 +1,7 @@
 import { Console, Effect, Option } from "effect"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
-import type { GentClient, GentRpcError, BranchInfo, SessionInfo } from "@gent/sdk"
+import type { GentNamespacedClient, GentRpcError, BranchInfo, SessionInfo } from "@gent/sdk"
 import type { Session } from "./client/index"
 import { Route } from "./router/index"
 import type { AppRoute } from "./router/index"
@@ -90,7 +90,7 @@ export const resolveAppBootstrap = (
 }
 
 export const resolveInitialState = (input: {
-  client: Pick<GentClient, "getSession" | "createSession" | "listBranches" | "listSessions">
+  client: Pick<GentNamespacedClient, "session" | "branch">
   cwd: string
   session: Option.Option<string>
   continue_: boolean
@@ -109,7 +109,7 @@ export const resolveInitialState = (input: {
         return yield* Effect.die("fatal")
       }
       if (Option.isSome(session)) {
-        const sess = yield* client.getSession(session.value as SessionId)
+        const sess = yield* client.session.get({ sessionId: session.value as SessionId })
         if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
           return yield* Effect.die("fatal")
@@ -117,18 +117,18 @@ export const resolveInitialState = (input: {
         return { _tag: "headless" as const, session: sess, prompt: promptText }
       }
 
-      const result = yield* client.createSession({ cwd, bypass })
+      const result = yield* client.session.create({ cwd, bypass })
       return { _tag: "headless" as const, session: toSessionInfo(result, cwd), prompt: promptText }
     }
 
     if (Option.isSome(session)) {
-      const sess = yield* client.getSession(session.value as SessionId)
+      const sess = yield* client.session.get({ sessionId: session.value as SessionId })
       if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
         return yield* Effect.die("fatal")
       }
       const promptText = Option.isSome(prompt) ? prompt.value : undefined
-      const branches = yield* client.listBranches(sess.id)
+      const branches = yield* client.branch.list({ sessionId: sess.id })
       if (branches.length > 1) {
         return {
           _tag: "branchPicker" as const,
@@ -141,8 +141,8 @@ export const resolveInitialState = (input: {
     }
 
     if (continue_) {
-      const existing = yield* client
-        .listSessions()
+      const existing = yield* client.session
+        .list()
         .pipe(
           Effect.map(
             (sessions) =>
@@ -153,7 +153,7 @@ export const resolveInitialState = (input: {
         )
       if (existing !== null) {
         const promptText = Option.getOrUndefined(prompt)
-        const branches = yield* client.listBranches(existing.id)
+        const branches = yield* client.branch.list({ sessionId: existing.id })
         if (branches.length > 1) {
           return {
             _tag: "branchPicker" as const,
@@ -168,6 +168,6 @@ export const resolveInitialState = (input: {
     }
 
     const promptText = Option.getOrUndefined(prompt)
-    const result = yield* client.createSession({ cwd, bypass })
+    const result = yield* client.session.create({ cwd, bypass })
     return { _tag: "session" as const, session: toSessionInfo(result, cwd), prompt: promptText }
   })

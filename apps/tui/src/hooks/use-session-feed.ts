@@ -270,11 +270,11 @@ export function useSessionFeed(
       const session = sessionId()
       clientLog.info("sessionFeed.activate", { key })
 
-      const streamFiber = client.client.runFork(
+      const streamFiber = client.runtime.fork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
-              const snapshot = yield* client.client.getSessionSnapshot({
+              const snapshot = yield* client.client.session.getSnapshot({
                 sessionId: session,
                 branchId: branch,
               })
@@ -285,7 +285,7 @@ export function useSessionFeed(
                 setStore("messages", buildMessages(snapshot.messages))
               })
 
-              const eventStream = client.client.streamEvents({
+              const eventStream = client.client.session.events({
                 sessionId: session,
                 branchId: branch,
                 ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
@@ -309,7 +309,7 @@ export function useSessionFeed(
                   sessionId: session,
                   branchId: branch,
                 })
-                yield* client.client.sendMessage({
+                yield* client.client.message.send({
                   sessionId: session,
                   branchId: branch,
                   content: initialPrompt,
@@ -357,7 +357,7 @@ export function useSessionFeed(
         // User messages from other sources (interjections, multi-client) need fetching
         if (event.role === "user") {
           void Effect.runPromise(
-            client.client.listMessages(event.branchId).pipe(
+            client.client.message.list({ branchId: event.branchId }).pipe(
               Effect.tap((msgs) =>
                 Effect.sync(() => {
                   if (currentKey !== key) return

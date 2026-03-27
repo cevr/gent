@@ -1,32 +1,15 @@
 import { Schema } from "effect"
-import type { Effect, Fiber, Stream } from "effect"
+import type { Effect } from "effect"
 import { AgentName, ReasoningEffort } from "../domain/agent.js"
-import type { ReasoningEffort as ReasoningEffortType } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
-import type {
-  AuthAuthorization as AuthAuthorizationType,
-  AuthMethod as AuthMethodType,
-} from "../domain/auth-method.js"
 import { AuthProviderInfo } from "../domain/auth-guard.js"
-import type { AuthProviderInfo as AuthProviderInfoType } from "../domain/auth-guard.js"
 import { EventEnvelope, HandoffDecision, PromptDecision } from "../domain/event.js"
-import type {
-  HandoffDecision as HandoffDecisionType,
-  PromptDecision as PromptDecisionType,
-} from "../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 import { PermissionDecision } from "../domain/permission.js"
-import type {
-  PermissionDecision as PermissionDecisionType,
-  PermissionRule,
-} from "../domain/permission.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import type { QueueEntryInfo } from "../domain/queue.js"
 import { SkillScope } from "../domain/skills.js"
-import type { Task } from "../domain/task.js"
-import type { Model } from "../domain/model.js"
-import type { GentRpcError } from "./errors.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -469,147 +452,6 @@ export const SkillContent = Schema.Struct({
   content: Schema.String,
 })
 export type SkillContent = typeof SkillContent.Type
-
-export interface GentClient {
-  sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentRpcError>
-
-  createSession: (
-    input?: Omit<CreateSessionInput, "name">,
-  ) => Effect.Effect<CreateSessionResult, GentRpcError>
-
-  listMessages: (branchId: BranchId) => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
-
-  getSessionSnapshot: (
-    input: GetSessionSnapshotInput,
-  ) => Effect.Effect<SessionSnapshot, GentRpcError>
-
-  getSession: (sessionId: SessionId) => Effect.Effect<SessionInfo | null, GentRpcError>
-
-  listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
-
-  getChildSessions: (
-    parentSessionId: SessionId,
-  ) => Effect.Effect<readonly SessionInfo[], GentRpcError>
-
-  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentRpcError>
-
-  listModels: () => Effect.Effect<readonly Model[], GentRpcError>
-
-  listBranches: (sessionId: SessionId) => Effect.Effect<readonly BranchInfo[], GentRpcError>
-
-  listTasks: (
-    sessionId: SessionId,
-    branchId?: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Task>, GentRpcError>
-
-  getBranchTree: (sessionId: SessionId) => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
-
-  createBranch: (
-    sessionId: SessionId,
-    name?: string,
-  ) => Effect.Effect<CreateBranchResult["branchId"], GentRpcError>
-
-  switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, GentRpcError>
-
-  forkBranch: (input: ForkBranchInput) => Effect.Effect<ForkBranchResult, GentRpcError>
-
-  streamEvents: (input: SubscribeEventsInput) => Stream.Stream<EventEnvelope, GentRpcError>
-  watchRuntime: (input: WatchRuntimeInput) => Stream.Stream<SessionRuntime, GentRpcError>
-
-  invokeTool: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-    toolName: string
-    input: unknown
-  }) => Effect.Effect<void, GentRpcError>
-
-  steer: (command: SteerCommand) => Effect.Effect<void, GentRpcError>
-
-  drainQueuedMessages: (input: QueueTarget) => Effect.Effect<QueueSnapshotReadonly, GentRpcError>
-
-  getQueuedMessages: (input: QueueTarget) => Effect.Effect<QueueSnapshotReadonly, GentRpcError>
-
-  respondQuestions: (
-    requestId: string,
-    answers: ReadonlyArray<ReadonlyArray<string>>,
-  ) => Effect.Effect<void, GentRpcError>
-
-  respondPermission: (
-    requestId: string,
-    decision: PermissionDecisionType,
-    persist?: boolean,
-  ) => Effect.Effect<void, GentRpcError>
-
-  respondPrompt: (
-    requestId: string,
-    decision: PromptDecisionType,
-    content?: string,
-  ) => Effect.Effect<void, GentRpcError>
-
-  respondHandoff: (
-    requestId: string,
-    decision: HandoffDecisionType,
-    reason?: string,
-  ) => Effect.Effect<{ childSessionId?: SessionId; childBranchId?: BranchId }, GentRpcError>
-
-  updateSessionBypass: (
-    sessionId: SessionId,
-    bypass: boolean,
-  ) => Effect.Effect<UpdateSessionBypassResult, GentRpcError>
-
-  updateSessionReasoningLevel: (
-    sessionId: SessionId,
-    reasoningLevel: ReasoningEffortType | undefined,
-  ) => Effect.Effect<UpdateSessionReasoningLevelResult, GentRpcError>
-
-  getPermissionRules: () => Effect.Effect<readonly PermissionRule[], GentRpcError>
-
-  deletePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void, GentRpcError>
-
-  listAuthProviders: () => Effect.Effect<readonly AuthProviderInfoType[], GentRpcError>
-
-  setAuthKey: (provider: string, key: string) => Effect.Effect<void, GentRpcError>
-
-  deleteAuthKey: (provider: string) => Effect.Effect<void, GentRpcError>
-
-  listAuthMethods: () => Effect.Effect<Record<string, ReadonlyArray<AuthMethodType>>, GentRpcError>
-
-  authorizeAuth: (
-    sessionId: string,
-    provider: string,
-    method: number,
-  ) => Effect.Effect<AuthAuthorizationType | null, GentRpcError>
-
-  callbackAuth: (
-    sessionId: string,
-    provider: string,
-    method: number,
-    authorizationId: string,
-    code?: string,
-  ) => Effect.Effect<void, GentRpcError>
-
-  listSkills: () => Effect.Effect<readonly SkillContent[], GentRpcError>
-
-  getSkillContent: (name: string) => Effect.Effect<SkillContent | null, GentRpcError>
-
-  sendExtensionIntent: (
-    sessionId: SessionId,
-    extensionId: string,
-    intent: unknown,
-    epoch: number,
-    branchId?: BranchId,
-  ) => Effect.Effect<void, GentRpcError>
-
-  /** Fire-and-forget — run an effect on the client's captured runtime */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly runFork: <A, E>(effect: Effect.Effect<A, E, any>) => Fiber.Fiber<A, E>
-  /** Run an effect as a Promise on the client's captured runtime */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly runPromise: <A, E>(effect: Effect.Effect<A, E, any>) => Promise<A>
-
-  /** Connection lifecycle — present on all clients, behavior varies by transport */
-  readonly lifecycle: GentLifecycle
-}
 
 // ---------------------------------------------------------------------------
 // Connection lifecycle

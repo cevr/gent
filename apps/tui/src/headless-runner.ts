@@ -1,19 +1,19 @@
 import { Effect, Ref, Stream } from "effect"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { GentClient, GentRpcError } from "@gent/sdk"
+import type { GentNamespacedClient, GentRpcError } from "@gent/sdk"
 
 export const runHeadless = (
-  client: GentClient,
+  client: GentNamespacedClient,
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
   agentOverride?: string,
 ): Effect.Effect<void, GentRpcError, never> =>
   Effect.gen(function* () {
-    const eventStream = client.streamEvents({ sessionId, branchId })
+    const eventStream = client.session.events({ sessionId, branchId })
 
-    yield* client
-      .sendMessage({ sessionId, branchId, content: promptText, agentOverride })
+    yield* client.message
+      .send({ sessionId, branchId, content: promptText, agentOverride })
       .pipe(Effect.withSpan("Headless.sendMessage"))
 
     const doneRef = yield* Ref.make(false)
@@ -52,8 +52,8 @@ export const runHeadless = (
               break
             case "HandoffPresented":
               process.stdout.write(`\n[handoff: auto-confirming]\n`)
-              yield* client
-                .respondHandoff(event.requestId, "confirm")
+              yield* client.interaction
+                .respondHandoff({ requestId: event.requestId, decision: "confirm" })
                 .pipe(Effect.catchEager(() => Effect.void))
               break
             case "HandoffConfirmed":

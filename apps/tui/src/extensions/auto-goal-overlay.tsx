@@ -31,14 +31,14 @@ export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
     if (sid === undefined) return
     const snap = ext.snapshots().get("auto")
     const epoch = snap?.epoch ?? 0
-    clientCtx.client.runFork(
-      clientCtx.client.sendExtensionIntent(
-        sid,
-        "auto",
-        { _tag: "StartAuto", goal: text },
+    clientCtx.runtime.cast(
+      clientCtx.client.extension.sendIntent({
+        sessionId: sid,
+        extensionId: "auto",
+        intent: { _tag: "StartAuto", goal: text },
         epoch,
-        bid,
-      ),
+        branchId: bid,
+      }),
     )
     setGoal("")
     props.onClose()

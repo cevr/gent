@@ -10,7 +10,7 @@
 
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import { Effect, Fiber } from "effect"
-import type { SkillContent, GentClient } from "@gent/sdk"
+import type { SkillContent, GentNamespacedClient } from "@gent/sdk"
 import { type Atom, type Registry, atom, useAtomValue, useRegistry } from "../atom-solid"
 import { useClient } from "../client/index"
 
@@ -24,7 +24,7 @@ type SkillsState =
 
 const sharedAtoms = new WeakMap<Registry, Atom<SkillsState>>()
 
-function createSkillsAtom(client: GentClient): Atom<SkillsState> {
+function createSkillsAtom(client: GentNamespacedClient): Atom<SkillsState> {
   return atom((registry) => {
     const [state, setState] = createSignal<SkillsState>({ _tag: "idle", skills: [] })
     const [version, setVersion] = createSignal(0)
@@ -36,7 +36,7 @@ function createSkillsAtom(client: GentClient): Atom<SkillsState> {
           setState((prev) => ({ _tag: "refreshing", skills: prev.skills }))
         })
 
-        const fresh = yield* client.listSkills()
+        const fresh = yield* client.skill.list()
         yield* Effect.sync(() => {
           setState({ _tag: "idle", skills: [...fresh] })
         })
@@ -77,7 +77,7 @@ function createSkillsAtom(client: GentClient): Atom<SkillsState> {
   })
 }
 
-function getOrCreateAtom(registry: Registry, client: GentClient) {
+function getOrCreateAtom(registry: Registry, client: GentNamespacedClient) {
   const existing = sharedAtoms.get(registry)
   if (existing !== undefined) return existing
   const created = createSkillsAtom(client)

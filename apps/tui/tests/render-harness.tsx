@@ -11,39 +11,12 @@ import { ThemeProvider } from "../src/theme"
 import { CommandProvider } from "../src/command"
 import { EnvProvider } from "../src/env/context"
 import { WorkspaceProvider } from "../src/workspace"
-import { ClientProvider, type GentClient } from "../src/client"
+import { ClientProvider } from "../src/client"
+import type { GentNamespacedClient, GentRuntime } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
-import type {
-  MessageInfoReadonly,
-  QueueSnapshotReadonly,
-  SessionInfo,
-  SessionSnapshot,
-  SessionRuntime,
-} from "@gent/sdk"
-import type { GentRpcError } from "@gent/core/server/errors"
+import type { SessionInfo, SessionRuntime } from "@gent/sdk"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
-import type {
-  EventEnvelope,
-  HandoffDecisionType,
-  PermissionDecisionType,
-  PromptDecisionType,
-} from "@gent/core/domain/event"
-import type {
-  BranchInfo,
-  BranchTreeNode,
-  CreateSessionResult,
-  QueueTarget,
-  SessionTreeNode,
-  SkillContent,
-  SteerCommand,
-} from "@gent/core/server/transport-contract"
-import type { AuthAuthorizationType, AuthMethodType } from "@gent/core/domain/auth-method"
-import type { AuthProviderInfoType } from "@gent/core/domain/auth-guard"
-import type { Model } from "@gent/core/domain/model"
-import type { PermissionRule } from "@gent/core/domain/permission"
-import type { ReasoningEffortType } from "@gent/core/domain/agent"
-import type { Task } from "@gent/core/domain/task"
 
 type TestRenderSetup = Awaited<ReturnType<typeof testRender>>
 
@@ -52,109 +25,132 @@ let sharedServices: ServiceMap.ServiceMap<unknown> | undefined
 let sharedScope: Scope.Closeable | undefined
 const defaultWorkspaceCwd = new URL("../../..", import.meta.url).pathname
 
-const emptyQueueSnapshot = (): QueueSnapshotReadonly => ({
-  steering: [],
-  followUp: [],
-})
+type NamespaceOverrides = Partial<Record<string, Record<string, unknown>>>
 
-function noRpcError<A>(value: A): Effect.Effect<A, GentRpcError> {
-  return Effect.succeed(value)
-}
+export const createMockClient = (overrides?: NamespaceOverrides): GentNamespacedClient => {
+  const noRpcError = <A,>(value: A) => Effect.succeed(value)
 
-export const createMockClient = (overrides: Partial<GentClient> = {}): GentClient => {
-  const base: GentClient = {
-    sendMessage: () => noRpcError(undefined),
-    createSession: () =>
-      noRpcError({
-        sessionId: "session-test" as SessionId,
-        branchId: "branch-test" as BranchId,
-        name: "Test Session",
-        bypass: false,
-      } satisfies CreateSessionResult),
-    listMessages: () => noRpcError([] satisfies readonly MessageInfoReadonly[]),
-    getSessionSnapshot: () =>
-      noRpcError({
-        sessionId: "session-test" as SessionId,
-        branchId: "branch-test" as BranchId,
-        messages: [],
-        lastEventId: null,
-        bypass: false,
-        reasoningLevel: undefined,
-      } satisfies SessionSnapshot),
-    getSession: () => noRpcError(null),
-    listSessions: () => noRpcError([] satisfies readonly SessionInfo[]),
-    getChildSessions: () => noRpcError([] satisfies readonly SessionInfo[]),
-    getSessionTree: () =>
-      noRpcError({
-        id: "session-test",
-        name: "Test Session",
-        children: [],
-      } satisfies SessionTreeNode),
-    listModels: () => noRpcError([] satisfies readonly Model[]),
-    listBranches: () => noRpcError([] satisfies readonly BranchInfo[]),
-    listTasks: () => noRpcError([] satisfies ReadonlyArray<Task>),
-    getBranchTree: () => noRpcError([] satisfies readonly BranchTreeNode[]),
-    createBranch: () => noRpcError("branch-test" as BranchId),
-    switchBranch: () => noRpcError(undefined),
-    forkBranch: () => noRpcError({ branchId: "branch-test" as BranchId }),
-    streamEvents: () => Stream.empty as Stream.Stream<EventEnvelope, GentRpcError>,
-    watchRuntime: () =>
-      Stream.empty as Stream.Stream<
-        SessionRuntime & { queue: QueueSnapshotReadonly },
-        GentRpcError
-      >,
-    invokeTool: () => noRpcError(undefined),
-    steer: (_command: SteerCommand) => noRpcError(undefined),
-    drainQueuedMessages: (_input: QueueTarget) => noRpcError(emptyQueueSnapshot()),
-    getQueuedMessages: (_input: QueueTarget) => noRpcError(emptyQueueSnapshot()),
-    respondQuestions: () => noRpcError(undefined),
-    respondPermission: (
-      _requestId: string,
-      _decision: PermissionDecisionType,
-      _persist?: boolean,
-    ) => noRpcError(undefined),
-    respondPrompt: (_requestId: string, _decision: PromptDecisionType, _content?: string) =>
-      noRpcError(undefined),
-    respondHandoff: (_requestId: string, _decision: HandoffDecisionType, _reason?: string) =>
-      noRpcError({}),
-    updateSessionBypass: () => noRpcError({ bypass: false }),
-    updateSessionReasoningLevel: (
-      _sessionId: SessionId,
-      reasoningLevel: ReasoningEffortType | undefined,
-    ) => noRpcError({ reasoningLevel }),
-    getPermissionRules: () => noRpcError([] satisfies readonly PermissionRule[]),
-    deletePermissionRule: () => noRpcError(undefined),
-    listAuthProviders: () => noRpcError([] satisfies readonly AuthProviderInfoType[]),
-    setAuthKey: () => noRpcError(undefined),
-    deleteAuthKey: () => noRpcError(undefined),
-    listAuthMethods: () => noRpcError({} satisfies Record<string, ReadonlyArray<AuthMethodType>>),
-    authorizeAuth: () => noRpcError(null satisfies AuthAuthorizationType | null),
-    callbackAuth: () => noRpcError(undefined),
-    listSkills: () =>
-      noRpcError([
-        {
-          name: "effect-v4",
-          description: "Effect skill",
-          content: "effect skill content",
-          filePath: "/tmp/effect-v4.md",
-        },
-      ] satisfies readonly SkillContent[]),
-    getSkillContent: () => noRpcError(null),
-    runFork: Effect.runFork as never,
-    runPromise: Effect.runPromise as never,
-    lifecycle: {
-      getState: () => ({ _tag: "connected" as const, generation: 0 }),
-      subscribe: (listener: (s: { _tag: string }) => void) => {
-        listener({ _tag: "connected" })
-        return () => {}
-      },
-      restart: Effect.void,
-      waitForReady: Effect.void,
+  const mocks: Record<string, Record<string, unknown>> = {
+    session: {
+      create: () =>
+        noRpcError({
+          sessionId: "session-test" as SessionId,
+          branchId: "branch-test" as BranchId,
+          name: "Test Session",
+          bypass: false,
+        }),
+      list: () => noRpcError([]),
+      get: () => noRpcError(null),
+      delete: () => noRpcError(undefined),
+      getChildren: () => noRpcError([]),
+      getTree: () => noRpcError({ id: "session-test", name: "Test Session", children: [] }),
+      getSnapshot: () =>
+        noRpcError({
+          sessionId: "session-test" as SessionId,
+          branchId: "branch-test" as BranchId,
+          messages: [],
+          lastEventId: null,
+          bypass: false,
+          reasoningLevel: undefined,
+        }),
+      updateBypass: () => noRpcError({ bypass: false }),
+      updateReasoningLevel: () => noRpcError({ reasoningLevel: undefined }),
+      events: () => Stream.empty,
+      watchRuntime: () => Stream.empty as Stream.Stream<SessionRuntime>,
+    },
+    branch: {
+      list: () => noRpcError([]),
+      create: () => noRpcError({ branchId: "branch-test" as BranchId }),
+      getTree: () => noRpcError([]),
+      switch: () => noRpcError(undefined),
+      fork: () => noRpcError({ branchId: "branch-test" as BranchId }),
+    },
+    message: {
+      send: () => noRpcError(undefined),
+      list: () => noRpcError([]),
+    },
+    steer: {
+      command: () => noRpcError(undefined),
+    },
+    queue: {
+      drain: () => noRpcError({ steering: [], followUp: [] }),
+      get: () => noRpcError({ steering: [], followUp: [] }),
+    },
+    interaction: {
+      respondQuestions: () => noRpcError(undefined),
+      respondPermission: () => noRpcError(undefined),
+      respondPrompt: () => noRpcError(undefined),
+      respondHandoff: () => noRpcError({}),
+    },
+    permission: {
+      listRules: () => noRpcError([]),
+      deleteRule: () => noRpcError(undefined),
+    },
+    model: {
+      list: () => noRpcError([]),
+    },
+    auth: {
+      listProviders: () => noRpcError([]),
+      setKey: () => noRpcError(undefined),
+      deleteKey: () => noRpcError(undefined),
+      listMethods: () => noRpcError({}),
+      authorize: () => noRpcError(null),
+      callback: () => noRpcError(undefined),
+    },
+    task: {
+      list: () => noRpcError([]),
+    },
+    skill: {
+      list: () =>
+        noRpcError([
+          {
+            name: "effect-v4",
+            description: "Effect skill",
+            content: "effect skill content",
+            filePath: "/tmp/effect-v4.md",
+          },
+        ]),
+      getContent: () => noRpcError(null),
+    },
+    extension: {
+      sendIntent: () => noRpcError(undefined),
+    },
+    actor: {
+      sendUserMessage: () => noRpcError(undefined),
+      sendToolResult: () => noRpcError(undefined),
+      invokeTool: () => noRpcError(undefined),
+      interrupt: () => noRpcError(undefined),
+      getState: () => noRpcError(undefined),
+      getMetrics: () => noRpcError(undefined),
     },
   }
 
-  return { ...base, ...overrides }
+  return new Proxy({} as GentNamespacedClient, {
+    get(_target, ns: string) {
+      const base = mocks[ns] ?? {}
+      const extra = overrides?.[ns]
+      if (extra !== undefined) return { ...base, ...extra }
+      return base
+    },
+  })
 }
+
+export const createMockRuntime = (): GentRuntime => ({
+  cast: (effect) => {
+    Effect.runFork(effect)
+  },
+  fork: Effect.runFork as never,
+  run: Effect.runPromise as never,
+  lifecycle: {
+    getState: () => ({ _tag: "connected" as const, generation: 0 }),
+    subscribe: (listener) => {
+      listener({ _tag: "connected", generation: 0 })
+      return () => {}
+    },
+    restart: Effect.void,
+    waitForReady: Effect.void,
+  },
+})
 
 const getServices = async () => {
   if (sharedServices !== undefined) return sharedServices
@@ -167,7 +163,8 @@ const getServices = async () => {
 export const renderWithProviders = async (
   node: () => JSX.Element,
   options?: {
-    client?: GentClient
+    client?: GentNamespacedClient
+    runtime?: GentRuntime
     initialSession?: SessionInfo
     initialRoute?: AppRoute
     width?: number
@@ -176,7 +173,8 @@ export const renderWithProviders = async (
   },
 ) => {
   const services = await getServices()
-  const client = options?.client ?? createMockClient({ services })
+  const client = options?.client ?? createMockClient()
+  const runtime = options?.runtime ?? createMockRuntime()
 
   currentSetup = await testRender(
     () => (
@@ -191,7 +189,11 @@ export const renderWithProviders = async (
                     Route.session("test-session" as SessionId, "test-branch" as BranchId)
                   }
                 >
-                  <ClientProvider client={client} initialSession={options?.initialSession}>
+                  <ClientProvider
+                    client={client}
+                    runtime={runtime}
+                    initialSession={options?.initialSession}
+                  >
                     <WorkspaceProvider
                       cwd={options?.cwd ?? defaultWorkspaceCwd}
                       services={services}

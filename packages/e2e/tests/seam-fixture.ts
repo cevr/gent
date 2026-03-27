@@ -5,7 +5,7 @@
 
 import { afterEach } from "bun:test"
 import { Effect, type Scope } from "effect"
-import { Gent, GentConnectionError, type GentClient } from "@gent/sdk"
+import { Gent, GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import { startWorkerSupervisor, type WorkerSupervisorOptions } from "@gent/sdk/supervisor"
 
 // Re-export generic fixtures from core
@@ -47,20 +47,19 @@ const trackSupervisorPid = (supervisor: { pid: () => number | null }) => {
 // Worker helpers
 // ---------------------------------------------------------------------------
 
-/** Start a worker and return a GentClient. Tracks PID for orphan cleanup. */
+/** Start a worker and return a GentClientBundle. Tracks PID for orphan cleanup. */
 export const startWorkerWithClient = (options: {
   cwd: string
   env?: Record<string, string>
   startupTimeoutMs?: number
   mode?: "default" | "debug"
-}): Effect.Effect<GentClient, GentConnectionError, Scope.Scope> =>
+}): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
   Effect.gen(function* () {
     const supervisor = yield* startWorkerSupervisor(options).pipe(
       Effect.mapError((e) => new GentConnectionError({ message: e.message })),
     )
     trackSupervisorPid(supervisor)
-    const client = yield* Gent.connect({ url: supervisor.url })
-    return client
+    return yield* Gent.connect({ url: supervisor.url })
   })
 
 /** Start a raw supervisor — for tests that need lifecycle assertions. Tracks PID for orphan cleanup. */
@@ -68,6 +67,6 @@ export const startWorkerWithSupervisor = (options: WorkerSupervisorOptions) =>
   Effect.gen(function* () {
     const supervisor = yield* startWorkerSupervisor(options)
     trackSupervisorPid(supervisor)
-    const client = yield* Gent.connect({ url: supervisor.url })
-    return { ...supervisor, client }
+    const bundle = yield* Gent.connect({ url: supervisor.url })
+    return { ...supervisor, ...bundle }
   })

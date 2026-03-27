@@ -6,7 +6,7 @@ import { Effect, Exit, Fiber, Cause } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "../atom-solid/result"
 import { clientLog } from "../utils/client-logger"
-import type { GentClient } from "@gent/sdk"
+import type { GentRuntime } from "@gent/sdk"
 
 export interface UseRuntimeReturn {
   /** Run Effect, track result in signal. Returns [result accessor, cancel fn] */
@@ -18,17 +18,17 @@ export interface UseRuntimeReturn {
 }
 
 /**
- * Hook to run Effects via a GentClient
- * @param client - GentClient with runFork/runPromise
+ * Hook to run Effects via a GentRuntime
+ * @param runtime - GentRuntime with cast/fork/run
  */
-export function useRuntime(client: GentClient): UseRuntimeReturn {
+export function useRuntime(runtime: GentRuntime): UseRuntimeReturn {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const call = <A, E>(effect: Effect.Effect<A, E, any>): [Accessor<Result<A, E>>, () => void] => {
     const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))
 
     let cancelled = false
     // @effect-diagnostics-next-line *:off
-    const fiber = client.runFork(effect)
+    const fiber = runtime.fork(effect)
 
     fiber.addObserver((exit) => {
       if (cancelled) return
@@ -52,7 +52,7 @@ export function useRuntime(client: GentClient): UseRuntimeReturn {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cast = <A, E>(effect: Effect.Effect<A, E, any>): void => {
     // @effect-diagnostics-next-line *:off
-    const fiber = client.runFork(effect)
+    const fiber = runtime.fork(effect)
     fiber.addObserver((exit) => {
       if (Exit.isFailure(exit)) {
         clientLog.error("cast.failed", { error: Cause.pretty(exit.cause) })
