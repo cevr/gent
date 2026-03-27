@@ -165,7 +165,7 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
  *
  * ExtensionUiSnapshot events skip reduce entirely to avoid infinite loops.
  */
-const makeReducingEventStore = Layer.effect(
+export const makeReducingEventStore = Layer.effect(
   EventStore,
   Effect.gen(function* () {
     const base = yield* BaseEventStore
