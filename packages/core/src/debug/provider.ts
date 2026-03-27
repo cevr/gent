@@ -1,12 +1,15 @@
-import { Deferred, Duration, Effect, Layer, Queue, Stream } from "effect"
+import { Deferred, Duration, Effect, Layer, Queue, Ref, Stream } from "effect"
 import {
   FinishChunk,
   Provider,
   ProviderError,
   TextChunk,
+  ToolCallChunk,
+  type StreamChunk,
   type GenerateRequest,
   type ProviderRequest,
 } from "../providers/provider.js"
+import type { ToolCallId } from "../domain/ids.js"
 import type { Message, TextPart } from "../domain/message.js"
 
 const extractLatestUserText = (messages: ReadonlyArray<Message>): string => {
@@ -182,3 +185,219 @@ export const createSignalProvider = (
 
     return { layer, controls }
   })
+
+// =============================================================================
+// Sequence provider — scripted multi-turn provider with per-call gates
+// =============================================================================
+
+/** A single scripted turn: the chunks the provider should emit when stream() is called. */
+export interface SequenceStep {
+  /** Chunks to emit for this turn. Use step builders to construct. */
+  readonly chunks: ReadonlyArray<StreamChunk>
+  /** Optional assertion on the incoming request. Throwing fails the stream. */
+  readonly assertRequest?: (request: ProviderRequest) => void
+  /**
+   * When true, chunks are held behind a gate until `controls.emitAll(index)` is called.
+   * Default: false (chunks emit immediately).
+   */
+  readonly gated?: boolean
+}
+
+export interface SequenceProviderControls {
+  /** Resolves when stream() call #index has started (0-based). */
+  readonly waitForCall: (index: number) => Effect.Effect<void>
+  /** Release gated chunks for call #index. No-op if step is not gated. */
+  readonly emitAll: (index: number) => Effect.Effect<void>
+  /** Current number of stream() calls that have started. */
+  readonly callCount: Effect.Effect<number>
+  /** Fails if there are unconsumed steps remaining. */
+  readonly assertDone: () => Effect.Effect<void>
+}
+
+/**
+ * Creates a Provider layer that replays a scripted sequence of turns.
+ *
+ * Each call to `provider.stream()` consumes the next step in order.
+ * Extra calls beyond the scripted steps fail immediately.
+ *
+ * Usage:
+ * ```ts
+ * const { layer, controls } = yield* createSequenceProvider([
+ *   toolCallStep("auto_checkpoint", { status: "continue" }),
+ *   textStep("counsel response"),
+ *   toolCallStep("auto_checkpoint", { status: "complete" }),
+ * ])
+ * ```
+ */
+export const createSequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
+  Effect.gen(function* () {
+    const indexRef = yield* Ref.make(0)
+
+    // Per-step deferreds: call-started signals + emission gates
+    const callStarted = yield* Effect.forEach(steps, () => Deferred.make<void>())
+    const emitGates = yield* Effect.forEach(steps, () => Deferred.make<void>())
+
+    // Pre-resolve gates for non-gated steps
+    yield* Effect.forEach(steps, (step, i) => {
+      const gate = emitGates[i]
+      if (!step.gated && gate) return Deferred.succeed(gate, void 0)
+      return Effect.void
+    })
+
+    const layer = Layer.succeed(Provider, {
+      stream: (request: ProviderRequest) =>
+        Effect.gen(function* () {
+          const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
+
+          if (idx >= steps.length) {
+            return yield* new ProviderError({
+              message: `Sequence provider: stream() called ${idx + 1} times but only ${steps.length} steps scripted`,
+              model: request.model,
+            })
+          }
+
+          const step = steps[idx] ?? steps[0]
+          const started = callStarted[idx] ?? callStarted[0]
+          const gate = emitGates[idx] ?? emitGates[0]
+
+          // Signal that this call has started
+          if (started) yield* Deferred.succeed(started, void 0)
+
+          // Run optional request assertion
+          if (step?.assertRequest) {
+            yield* Effect.try({
+              try: () => step.assertRequest?.(request),
+              catch: (e) =>
+                new ProviderError({
+                  message: `Sequence provider: assertRequest failed at step ${idx}: ${e}`,
+                  model: request.model,
+                }),
+            })
+          }
+
+          // Wait for gate (already resolved for non-gated steps)
+          if (gate) {
+            return Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.flatMap(() => Stream.fromIterable(step?.chunks ?? [])),
+            )
+          }
+          return Stream.fromIterable(step?.chunks ?? [])
+        }),
+      generate: () => Effect.succeed("sequence provider"),
+    })
+
+    const controls: SequenceProviderControls = {
+      waitForCall: (index) => {
+        const deferred = callStarted[index]
+        if (index < 0 || index >= steps.length || !deferred) {
+          return Effect.die(
+            new Error(`waitForCall: index ${index} out of range [0, ${steps.length})`),
+          )
+        }
+        return Deferred.await(deferred)
+      },
+
+      emitAll: (index) => {
+        const deferred = emitGates[index]
+        if (index < 0 || index >= steps.length || !deferred) {
+          return Effect.die(new Error(`emitAll: index ${index} out of range [0, ${steps.length})`))
+        }
+        return Deferred.succeed(deferred, void 0)
+      },
+
+      callCount: Ref.get(indexRef),
+
+      assertDone: () =>
+        Effect.gen(function* () {
+          const consumed = yield* Ref.get(indexRef)
+          if (consumed < steps.length) {
+            return yield* Effect.die(
+              new Error(
+                `Sequence provider: ${steps.length - consumed} unconsumed steps (consumed ${consumed}/${steps.length})`,
+              ),
+            )
+          }
+        }),
+    }
+
+    return { layer, controls }
+  })
+
+// =============================================================================
+// Step builders — construct SequenceStep chunks from high-level descriptions
+// =============================================================================
+
+let stepCallIdCounter = 0
+
+const makeStepToolCallId = () => `step-tc-${++stepCallIdCounter}` as ToolCallId
+
+/** A turn that emits a single text response and finishes with "stop". */
+export const textStep = (text: string): SequenceStep => ({
+  chunks: [
+    new TextChunk({ text }),
+    new FinishChunk({
+      finishReason: "stop",
+      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) },
+    }),
+  ],
+})
+
+/** A turn that emits a single tool call and finishes with "tool_calls". */
+export const toolCallStep = (
+  toolName: string,
+  input: unknown,
+  options?: { toolCallId?: ToolCallId },
+): SequenceStep => ({
+  chunks: [
+    new ToolCallChunk({
+      toolCallId: options?.toolCallId ?? makeStepToolCallId(),
+      toolName,
+      input,
+    }),
+    new FinishChunk({
+      finishReason: "tool_calls",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    }),
+  ],
+})
+
+/** A turn that emits text before a tool call. */
+export const textThenToolCallStep = (
+  text: string,
+  toolName: string,
+  input: unknown,
+  options?: { toolCallId?: ToolCallId },
+): SequenceStep => ({
+  chunks: [
+    new TextChunk({ text }),
+    new ToolCallChunk({
+      toolCallId: options?.toolCallId ?? makeStepToolCallId(),
+      toolName,
+      input,
+    }),
+    new FinishChunk({
+      finishReason: "tool_calls",
+      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) + 20 },
+    }),
+  ],
+})
+
+/** A turn that emits multiple tool calls and finishes with "tool_calls". */
+export const multiToolCallStep = (
+  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
+): SequenceStep => ({
+  chunks: [
+    ...calls.map(
+      (c) =>
+        new ToolCallChunk({
+          toolCallId: c.toolCallId ?? makeStepToolCallId(),
+          toolName: c.toolName,
+          input: c.input,
+        }),
+    ),
+    new FinishChunk({
+      finishReason: "tool_calls",
+      usage: { inputTokens: 10, outputTokens: 20 * calls.length },
+    }),
+  ],
+})
