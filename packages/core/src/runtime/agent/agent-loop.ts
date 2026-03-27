@@ -721,6 +721,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runResolvingState = Effect.fn("AgentLoop.runResolvingState")(function* (
               state: ResolvingState,
             ) {
+              // Reset turn metrics at the start of each turn (before any phase can finalize)
+              yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
+
               const resolved = yield* resolveTurnPhase({
                 message: state.message,
                 agentOverride: state.agentOverride,
@@ -739,6 +742,13 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               // Store tools in side-channel ref (not serializable into state machine)
               yield* Ref.set(turnToolsRef, resolved.tools)
+
+              // Populate turn metrics with agent/model from resolve (available even if stream fails)
+              yield* Ref.update(turnMetricsRef, (m) => ({
+                ...m,
+                agent: resolved.currentTurnAgent,
+                model: resolved.modelId,
+              }))
 
               return AgentLoopEvent.Resolved(resolved)
             })
@@ -767,9 +777,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   yield* Ref.set(turnToolsRef, turnTools)
                 }
               }
-              // Reset turn metrics for this stream cycle
-              yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
-
               const collected = yield* streamTurnPhase({
                 messageId: state.message.id,
                 resolved: {
@@ -839,6 +846,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 startedAtMs: state.startedAtMs,
                 messageId: state.message.id,
                 turnInterrupted: state.turnInterrupted,
+                streamFailed: state.streamFailed,
                 handoffSuppress: state.handoffSuppress,
                 currentAgent: state.currentAgent ?? state.currentTurnAgent ?? "cowork",
                 extensionRegistry,

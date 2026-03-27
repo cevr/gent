@@ -767,6 +767,7 @@ export const finalizeTurnPhase = (params: {
   startedAtMs: number
   messageId: MessageId
   turnInterrupted: boolean
+  streamFailed?: boolean
   handoffSuppress: number
   currentAgent: AgentNameType
   extensionRegistry: ExtensionRegistryService
@@ -829,6 +830,9 @@ export const finalizeTurnPhase = (params: {
     // Emit turn-level wide event with accumulated metrics
     if (params.turnMetrics !== undefined) {
       const metrics = yield* Ref.get(params.turnMetrics)
+      let status: "ok" | "error" | "interrupted" = "ok"
+      if (params.turnInterrupted) status = "interrupted"
+      else if (params.streamFailed === true) status = "error"
       yield* Effect.logInfo("wide-event").pipe(
         Effect.annotateLogs({
           service: "agent-loop",
@@ -842,7 +846,7 @@ export const finalizeTurnPhase = (params: {
           toolCallCount: metrics.toolCallCount,
           durationMs: Number(turnDurationMs),
           interrupted: params.turnInterrupted,
-          status: params.turnInterrupted ? "interrupted" : "ok",
+          status,
         }),
       )
     }
