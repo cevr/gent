@@ -17,7 +17,7 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
   ]),
 )
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
-import { EventStore, ToolCallStarted, ToolCallSucceeded } from "@gent/core/domain/event"
+import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { ToolContext } from "@gent/core/domain/tool"
 
@@ -61,126 +61,32 @@ describe("Audit Tool", () => {
 
       const runnerLayer = Layer.succeed(SubagentRunnerService, {
         run: (params) =>
-          Effect.gen(function* () {
+          Effect.sync(() => {
             const prompt = params.prompt
             calls.push({ agentName: params.agent.name, prompt })
 
-            // Detection response
             if (prompt.includes("Identify audit concerns")) {
               return makeSuccess(
                 "1. error-handling: Check error handling patterns\n2. types: Check type safety",
-                "s1" as SubagentResult & { _tag: "success" } extends { sessionId: infer S }
-                  ? S
-                  : never,
-                params.agent.name as SubagentResult & { _tag: "success" } extends {
-                  agentName: infer A
-                }
-                  ? A
-                  : never,
               )
             }
-
-            // Concern audit responses
             if (prompt.includes("Audit the code for this concern:")) {
-              return makeSuccess(
-                "Found issues in src/foo.ts",
-                "s1" as SubagentResult & { _tag: "success" } extends { sessionId: infer S }
-                  ? S
-                  : never,
-                params.agent.name as SubagentResult & { _tag: "success" } extends {
-                  agentName: infer A
-                }
-                  ? A
-                  : never,
-              )
+              return makeSuccess("Found issues in src/foo.ts")
             }
-
-            // Synthesis response
             if (prompt.includes("Synthesize these audit notes into final findings")) {
               return makeSuccess(
                 "1. [warning] src/foo.ts — missing error handling\n2. [suggestion] src/bar.ts — use stricter types",
-                "s1" as SubagentResult & { _tag: "success" } extends { sessionId: infer S }
-                  ? S
-                  : never,
-                params.agent.name as SubagentResult & { _tag: "success" } extends {
-                  agentName: infer A
-                }
-                  ? A
-                  : never,
               )
             }
-
-            // Execution response
             if (prompt.includes("Execute this audit plan")) {
-              return makeSuccess(
-                "Applied all fixes.",
-                "s1" as SubagentResult & { _tag: "success" } extends { sessionId: infer S }
-                  ? S
-                  : never,
-                params.agent.name as SubagentResult & { _tag: "success" } extends {
-                  agentName: infer A
-                }
-                  ? A
-                  : never,
-              )
+              return makeSuccess("Applied all fixes.")
             }
-
-            // Evaluation response
-            if (prompt.includes("Evaluate whether")) {
-              const storage = yield* Storage
-              const sessionId = "audit-eval-session" as SubagentResult & {
-                _tag: "success"
-              } extends {
-                sessionId: infer S
-              }
-                ? S
-                : never
-              yield* storage.appendEvent(
-                new ToolCallStarted({
-                  sessionId,
-                  branchId: "test-branch",
-                  toolCallId: "audit-loop-eval-call",
-                  toolName: "loop_evaluation",
-                  input: { verdict: "done", summary: "complete" },
-                }),
-              )
-              yield* storage.appendEvent(
-                new ToolCallSucceeded({
-                  sessionId,
-                  branchId: "test-branch",
-                  toolCallId: "audit-loop-eval-call",
-                  toolName: "loop_evaluation",
-                  summary: "complete",
-                }),
-              )
-              return makeSuccess(
-                "evaluation complete",
-                sessionId,
-                params.agent.name as SubagentResult & { _tag: "success" } extends {
-                  agentName: infer A
-                }
-                  ? A
-                  : never,
-              )
-            }
-
-            return makeSuccess(
-              "ok",
-              "s1" as SubagentResult & { _tag: "success" } extends { sessionId: infer S }
-                ? S
-                : never,
-              params.agent.name as SubagentResult & { _tag: "success" } extends {
-                agentName: infer A
-              }
-                ? A
-                : never,
-            )
+            return makeSuccess("ok")
           }),
       })
 
       const layer = Layer.mergeAll(
         runnerLayer,
-
         TestExtRegistry,
         PromptPresenter.Test(["yes"]),
         EventStore.Test(),
@@ -198,9 +104,7 @@ describe("Audit Tool", () => {
         ctx,
       ).pipe(
         Effect.map((result) => {
-          expect(result.reason).toBe("done")
-
-          // detect(1) + audit(2 concerns x 2 models) + synthesize(1) + execute(1) + evaluate(1)
+          // Single-cycle: detect + audit + synthesize + execute (no evaluator loop)
           const detectCalls = calls.filter((c) => c.prompt.includes("Identify audit concerns"))
           const auditCalls = calls.filter((c) =>
             c.prompt.includes("Audit the code for this concern:"),
@@ -211,13 +115,11 @@ describe("Audit Tool", () => {
           const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
 
           expect(detectCalls.length).toBe(1)
-          expect(auditCalls.length).toBe(4)
+          expect(auditCalls.length).toBe(4) // 2 concerns x 2 models
           expect(synthesisCalls.length).toBe(1)
           expect(executeCalls.length).toBe(1)
-          expect(synthesisCalls[0]!.prompt).toContain("executor can work in batches")
-          expect(executeCalls[0]!.prompt).toContain("small batches grouped by file or dependency")
-
-          // Auditor agent used for concern audits
+          expect(result.findings.length).toBe(2)
+          expect(result.output).toBe("Applied all fixes.")
           expect(auditCalls.every((c) => c.agentName === "auditor")).toBe(true)
         }),
         Effect.provide(layer),
@@ -225,7 +127,7 @@ describe("Audit Tool", () => {
     },
   )
 
-  it.live("report mode skips execution and returns done", () => {
+  it.live("report mode skips execution", () => {
     const calls: Array<{ prompt: string }> = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
@@ -248,7 +150,6 @@ describe("Audit Tool", () => {
 
     const layer = Layer.mergeAll(
       runnerLayer,
-
       TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
@@ -259,8 +160,7 @@ describe("Audit Tool", () => {
 
     return AuditTool.execute({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
       Effect.map((result) => {
-        expect(result.reason).toBe("done")
-        // No execution calls in report mode
+        expect(result.findings.length).toBe(1)
         const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
         expect(executeCalls.length).toBe(0)
       }),
@@ -275,7 +175,6 @@ describe("Audit Tool", () => {
 
     const layer = Layer.mergeAll(
       runnerLayer,
-
       TestExtRegistry,
       PromptPresenter.Test(),
       EventStore.Test(),
@@ -286,8 +185,8 @@ describe("Audit Tool", () => {
 
     return AuditTool.execute({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
-        expect(result.reason).toBe("done")
-        expect(result.iterations).toBe(1)
+        expect(result.findings.length).toBe(0)
+        expect(result.output).toBe("No findings to fix.")
       }),
       Effect.provide(layer),
     )
@@ -298,7 +197,7 @@ describe("Audit Tool", () => {
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           if (params.prompt.includes("Execute this audit plan")) {
             executorAgents.push(params.agent.name)
           }
@@ -311,40 +210,12 @@ describe("Audit Tool", () => {
           if (params.prompt.includes("Synthesize these audit notes into final findings")) {
             return makeSuccess("1. [warning] src/a.ts — type issue")
           }
-          if (params.prompt.includes("Evaluate whether")) {
-            const storage = yield* Storage
-            const sessionId = "executor-eval-session" as SubagentResult & {
-              _tag: "success"
-            } extends { sessionId: infer S }
-              ? S
-              : never
-            yield* storage.appendEvent(
-              new ToolCallStarted({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "executor-loop-eval-call",
-                toolName: "loop_evaluation",
-                input: { verdict: "done", summary: "complete" },
-              }),
-            )
-            yield* storage.appendEvent(
-              new ToolCallSucceeded({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "executor-loop-eval-call",
-                toolName: "loop_evaluation",
-                summary: "complete",
-              }),
-            )
-            return makeSuccess("evaluation complete", sessionId)
-          }
           return makeSuccess("done")
         }),
     })
 
     const layer = Layer.mergeAll(
       runnerLayer,
-
       TestExtRegistry,
       PromptPresenter.Test(["yes"]),
       EventStore.Test(),
@@ -355,7 +226,6 @@ describe("Audit Tool", () => {
 
     return AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
       Effect.map(() => {
-        // Executor should be the caller agent (cowork), not architect
         expect(executorAgents.length).toBeGreaterThan(0)
         expect(executorAgents[0]).toBe("cowork")
       }),
@@ -368,7 +238,7 @@ describe("Audit Tool", () => {
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           if (params.prompt.includes("Audit the code for this concern:")) {
             auditOverrides.push(params.overrides as Record<string, unknown> | undefined)
           }
@@ -380,33 +250,6 @@ describe("Audit Tool", () => {
           }
           if (params.prompt.includes("Synthesize these audit notes into final findings")) {
             return makeSuccess("1. [warning] src/a.ts — type issue")
-          }
-          if (params.prompt.includes("Evaluate whether")) {
-            const storage = yield* Storage
-            const sessionId = "readonly-eval-session" as SubagentResult & {
-              _tag: "success"
-            } extends { sessionId: infer S }
-              ? S
-              : never
-            yield* storage.appendEvent(
-              new ToolCallStarted({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "readonly-loop-eval-call",
-                toolName: "loop_evaluation",
-                input: { verdict: "done", summary: "complete" },
-              }),
-            )
-            yield* storage.appendEvent(
-              new ToolCallSucceeded({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "readonly-loop-eval-call",
-                toolName: "loop_evaluation",
-                summary: "complete",
-              }),
-            )
-            return makeSuccess("evaluation complete", sessionId)
           }
           return makeSuccess("done")
         }),

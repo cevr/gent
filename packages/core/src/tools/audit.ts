@@ -9,15 +9,8 @@ import {
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { runLoop } from "../runtime/loop.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { Storage } from "../storage/sqlite-storage.js"
-import {
-  extractLoopEvaluation,
-  requireText,
-  runCommand,
-  type WorkflowRunContext,
-} from "../runtime/workflow-helpers.js"
+import { requireText, runCommand, type WorkflowRunContext } from "../runtime/workflow-helpers.js"
 
 interface AuditConcern {
   name: string
@@ -37,11 +30,6 @@ export const AuditParams = Schema.Struct({
   paths: Schema.optional(
     Schema.Array(Schema.String).annotate({
       description: "Paths to audit (default: changed files from git diff --name-only)",
-    }),
-  ),
-  maxIterations: Schema.optional(
-    Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 10 })).annotate({
-      description: "Max audit loop iterations in fix mode (default 3)",
     }),
   ),
   maxConcerns: Schema.optional(
@@ -188,23 +176,6 @@ Group related fixes where that reduces churn.
 Summarize what changed, which findings are resolved, and what remains.`
 }
 
-const buildEvaluationPrompt = (
-  executionOutput: string,
-  findings: ReadonlyArray<AuditFinding>,
-) => `Evaluate whether the audit findings have been resolved.
-
-## Findings
-${findings.map((finding, index) => `${index + 1}. [${finding.severity}] ${finding.file} - ${finding.description}`).join("\n")}
-
-## Execution Output
-${executionOutput}
-
-## Instructions
-You MUST call the loop_evaluation tool.
-- verdict: "done" if the findings are addressed
-- verdict: "continue" if more work is needed
-- summary: brief explanation of what remains or why it is done`
-
 const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   runner: SubagentRunner
   architect: AgentDefinition
@@ -297,12 +268,10 @@ export const AuditTool = defineTool({
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
     const presenter = yield* PromptPresenter
-    const storage = yield* Storage
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "report"
-    const maxIterations = params.maxIterations ?? 3
     const maxConcerns = params.maxConcerns ?? 5
     const paths = yield* resolveAuditPaths(params.paths)
     const runnerContext: WorkflowRunContext = {
@@ -317,98 +286,39 @@ export const AuditTool = defineTool({
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = (yield* registry.getAgent(callerAgentName)) ?? Agents.cowork
 
-    if (mode === "report") {
-      const report = yield* runAuditCycle({
-        runner,
-        architect,
-        auditor,
-        runnerContext,
-        paths,
-        prompt: params.prompt,
-        maxConcerns,
-      })
+    // Detect → adversarial audit → synthesize (always runs)
+    const report = yield* runAuditCycle({
+      runner,
+      architect,
+      auditor,
+      runnerContext,
+      paths,
+      prompt: params.prompt,
+      maxConcerns,
+    })
 
+    if (mode === "report") {
       yield* presenter.present({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
         content: report.raw,
         title: "Audit Findings",
       })
-      return {
-        iterations: 1,
-        reason: "done" as const,
-        output: report.raw,
-        findings: report.findings,
-        raw: report.raw,
-        paths,
-      }
+      return { mode, output: report.raw, findings: report.findings, paths }
     }
 
-    let latestFindings: ReadonlyArray<AuditFinding> = []
+    // Fix mode: single cycle — audit + execute. Agent uses @gent/auto for iteration.
+    if (report.findings.length === 0) {
+      return { mode, output: "No findings to fix.", findings: [], paths }
+    }
 
-    const loopResult = yield* runLoop({
-      maxIterations,
-      body: (iteration, _previousOutput, evaluatorFeedback) =>
-        Effect.gen(function* () {
-          const report = yield* runAuditCycle({
-            runner,
-            architect,
-            auditor,
-            runnerContext,
-            paths,
-            prompt: params.prompt,
-            maxConcerns,
-            evaluatorFeedback,
-          })
-          latestFindings = report.findings
-
-          if (report.findings.length === 0) {
-            return {
-              _tag: "success" as const,
-              text: "No concerns detected.",
-              sessionId: ctx.sessionId,
-              agentName: callerAgentName,
-            }
-          }
-
-          return yield* runner.run({
-            agent: executor,
-            prompt: buildExecutionPrompt(report.findings, params.prompt),
-            ...runnerContext,
-          })
-        }),
-      evaluate: (iteration, bodyOutput) =>
-        Effect.gen(function* () {
-          if (latestFindings.length === 0) {
-            return { verdict: "done" as const, feedback: "No findings remain." }
-          }
-
-          const evalResult = yield* runner.run({
-            agent: architect,
-            prompt: buildEvaluationPrompt(bodyOutput, latestFindings),
-            ...runnerContext,
-            overrides: {
-              allowedActions: ["read"],
-              deniedTools: ["bash"],
-              tags: ["loop-evaluation"],
-            },
-          })
-
-          if (evalResult._tag === "error") return { verdict: "done" as const }
-          const envelopes = yield* storage
-            .listEvents({ sessionId: evalResult.sessionId })
-            .pipe(Effect.catchEager(() => Effect.succeed([])))
-          return extractLoopEvaluation(envelopes, evalResult.text)
-        }),
+    const execResult = yield* runner.run({
+      agent: executor,
+      prompt: buildExecutionPrompt(report.findings, params.prompt),
+      ...runnerContext,
     })
+    const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 
-    return {
-      findings: latestFindings,
-      iterations: loopResult.iterations,
-      reason: loopResult.reason,
-      output: loopResult.output,
-      paths,
-      ...(loopResult.error !== undefined ? { error: loopResult.error } : {}),
-    }
+    return { mode, output: execOutput, findings: report.findings, paths }
   }),
 })
