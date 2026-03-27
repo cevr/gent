@@ -268,7 +268,9 @@ const collectStreamResponse = (params: {
         Effect.gen(function* () {
           const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
           if (interrupted) return false
-          yield* Effect.logWarning("stream error, persisting partial output", streamError)
+          yield* Effect.logWarning("stream error, persisting partial output").pipe(
+            Effect.annotateLogs({ error: String(streamError) }),
+          )
           yield* params.persistAssistantText(textParts.join(""), reasoningParts.join(""))
           yield* params
             .publishEvent(

@@ -127,7 +127,13 @@ export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegist
           yield* fs.makeDirectory(dir, { recursive: true })
           yield* fs
             .writeFileString(cachePath, text)
-            .pipe(Effect.catchEager((e) => Effect.logWarning("failed to write model cache", e)))
+            .pipe(
+              Effect.catchEager((e) =>
+                Effect.logWarning("failed to write model cache").pipe(
+                  Effect.annotateLogs({ error: String(e) }),
+                ),
+              ),
+            )
         }
         return parsed
       }).pipe(

@@ -78,7 +78,9 @@ const loadCredentialsEffect = (
           catch: (cause) => ({ _tag: "PersistError" as const, cause }),
         }).pipe(
           Effect.catchEager((e) =>
-            Effect.logWarning("[anthropic] failed to persist refreshed credentials", e.cause),
+            Effect.logWarning("anthropic.persist.refreshed.credentials.failed").pipe(
+              Effect.annotateLogs({ error: String(e.cause) }),
+            ),
           ),
         )
       }

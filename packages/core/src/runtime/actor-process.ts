@@ -223,7 +223,9 @@ export const LocalActorTransportLive: Layer.Layer<
                       error: Cause.pretty(cause),
                     }),
                   )
-                  yield* Effect.logWarning("agent loop submission failed", cause)
+                  yield* Effect.logWarning("agent loop submission failed").pipe(
+                    Effect.annotateLogs({ error: String(cause) }),
+                  )
                 }).pipe(Effect.catchEager(() => Effect.void))
               }),
             )
@@ -727,7 +729,9 @@ export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTran
         ),
         Effect.retry({ times: 2 }),
         Effect.catchEager((error) =>
-          Effect.logWarning("actor inbox recovery exhausted retries", error),
+          Effect.logWarning("actor inbox recovery exhausted retries").pipe(
+            Effect.annotateLogs({ error: String(error) }),
+          ),
         ),
       )
 
@@ -750,7 +754,11 @@ export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTran
             { concurrency: 1 },
           ),
         ),
-        Effect.catchEager((error) => Effect.logWarning("loop checkpoint recovery failed", error)),
+        Effect.catchEager((error) =>
+          Effect.logWarning("loop checkpoint recovery failed").pipe(
+            Effect.annotateLogs({ error: String(error) }),
+          ),
+        ),
       )
 
       yield* wakeCheckpointedLoops

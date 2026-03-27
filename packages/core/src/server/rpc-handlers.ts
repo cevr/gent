@@ -187,12 +187,24 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       setAuthKey: ({ provider, key }) =>
         authStore
           .set(provider, new AuthApi({ type: "api", key }))
-          .pipe(Effect.catchEager((e) => Effect.logWarning("failed to set auth key", e))),
+          .pipe(
+            Effect.catchEager((e) =>
+              Effect.logWarning("failed to set auth key").pipe(
+                Effect.annotateLogs({ error: String(e) }),
+              ),
+            ),
+          ),
 
       deleteAuthKey: ({ provider }) =>
         authStore
           .remove(provider)
-          .pipe(Effect.catchEager((e) => Effect.logWarning("failed to delete auth key", e))),
+          .pipe(
+            Effect.catchEager((e) =>
+              Effect.logWarning("failed to delete auth key").pipe(
+                Effect.annotateLogs({ error: String(e) }),
+              ),
+            ),
+          ),
 
       listAuthMethods: () => providerAuth.listMethods(),
 

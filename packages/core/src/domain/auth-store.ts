@@ -98,7 +98,11 @@ export class AuthStore extends ServiceMap.Service<AuthStore, AuthStoreService>()
 
         remove: (provider) =>
           storage.delete(provider).pipe(
-            Effect.catchEager((e) => Effect.logWarning("failed to remove auth key", e)),
+            Effect.catchEager((e) =>
+              Effect.logWarning("failed to remove auth key").pipe(
+                Effect.annotateLogs({ error: String(e) }),
+              ),
+            ),
             Effect.withSpan("AuthStore.remove"),
           ),
 

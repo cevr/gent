@@ -233,7 +233,10 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
         return finalizeChildMetadata(state)
       }),
       Effect.catchEager((e) =>
-        Effect.logWarning("failed to collect subagent metadata", e).pipe(Effect.as({})),
+        Effect.logWarning("failed to collect subagent metadata").pipe(
+          Effect.annotateLogs({ error: String(e) }),
+          Effect.as({}),
+        ),
       ),
     )
 
@@ -334,7 +337,13 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
           branchId: params.parentBranchId,
         }),
       )
-      .pipe(Effect.catchEager((e) => Effect.logWarning("failed to publish subagent event", e)))
+      .pipe(
+        Effect.catchEager((e) =>
+          Effect.logWarning("failed to publish subagent event").pipe(
+            Effect.annotateLogs({ error: String(e) }),
+          ),
+        ),
+      )
 
   const loadSubagentSuccessData = (branchId: BranchId, sessionId: SessionId, agentName: string) =>
     Effect.gen(function* () {

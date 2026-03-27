@@ -97,9 +97,13 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       for (const discoveredExtension of discovered) {
         const loaded = yield* setupExtension(discoveredExtension, config.cwd).pipe(
           Effect.catchEager((error) =>
-            Effect.logWarning(
-              `Failed to load extension ${discoveredExtension.extension.manifest.id}: ${error.message}`,
-            ).pipe(Effect.as(undefined)),
+            Effect.logWarning("extension.load.failed").pipe(
+              Effect.annotateLogs({
+                extensionId: discoveredExtension.extension.manifest.id,
+                error: error.message,
+              }),
+              Effect.as(undefined),
+            ),
           ),
         )
         if (loaded !== undefined) external.push(loaded)
@@ -111,8 +115,10 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       for (const ext of allExtensions) {
         if (ext.setup.onStartup !== undefined) {
           yield* ext.setup.onStartup.pipe(
-            Effect.catchEager(() =>
-              Effect.logWarning(`Extension ${ext.manifest.id} onStartup failed`),
+            Effect.catchEager((error) =>
+              Effect.logWarning("extension.onStartup.failed").pipe(
+                Effect.annotateLogs({ extensionId: ext.manifest.id, error: String(error) }),
+              ),
             ),
           )
         }
@@ -124,8 +130,10 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
           const shutdown = ext.setup.onShutdown
           yield* Effect.addFinalizer(() =>
             shutdown.pipe(
-              Effect.catchEager(() =>
-                Effect.logWarning(`Extension ${ext.manifest.id} onShutdown failed`),
+              Effect.catchEager((error) =>
+                Effect.logWarning("extension.onShutdown.failed").pipe(
+                  Effect.annotateLogs({ extensionId: ext.manifest.id, error: String(error) }),
+                ),
               ),
             ),
           )

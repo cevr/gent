@@ -233,7 +233,11 @@ const publishPhaseFailure = (params: {
       }),
     )
     .pipe(
-      Effect.catchEager((error) => Effect.logWarning("failed to publish ErrorOccurred", error)),
+      Effect.catchEager((error) =>
+        Effect.logWarning("failed to publish ErrorOccurred").pipe(
+          Effect.annotateLogs({ error: String(error) }),
+        ),
+      ),
       Effect.asVoid,
     )
 
@@ -264,7 +268,9 @@ const makePublishingInspector = (params: {
           .pipe(
             Effect.withSpan("Machine.inspect.publish"),
             Effect.catchEager((error) =>
-              Effect.logWarning("failed to publish MachineInspected", error),
+              Effect.logWarning("failed to publish MachineInspected").pipe(
+                Effect.annotateLogs({ error: String(error) }),
+              ),
             ),
           ),
     ),
@@ -304,7 +310,9 @@ const makeCheckpointInspector = (params: {
           state: event.initialState as LoopState,
         }).pipe(
           Effect.catchEager((error) =>
-            Effect.logWarning("failed to persist loop checkpoint", error),
+            Effect.logWarning("failed to persist loop checkpoint").pipe(
+              Effect.annotateLogs({ error: String(error) }),
+            ),
           ),
         )
       case "@machine.transition":
@@ -315,7 +323,9 @@ const makeCheckpointInspector = (params: {
           state: event.toState as LoopState,
         }).pipe(
           Effect.catchEager((error) =>
-            Effect.logWarning("failed to persist loop checkpoint", error),
+            Effect.logWarning("failed to persist loop checkpoint").pipe(
+              Effect.annotateLogs({ error: String(error) }),
+            ),
           ),
         )
       case "@machine.stop":
@@ -326,7 +336,9 @@ const makeCheckpointInspector = (params: {
           state: event.finalState as LoopState,
         }).pipe(
           Effect.catchEager((error) =>
-            Effect.logWarning("failed to persist loop checkpoint", error),
+            Effect.logWarning("failed to persist loop checkpoint").pipe(
+              Effect.annotateLogs({ error: String(error) }),
+            ),
           ),
         )
       default:
@@ -694,7 +706,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   }),
                 ).pipe(
                   Effect.catchEager((error) =>
-                    Effect.logWarning("failed to publish AgentSwitched", error),
+                    Effect.logWarning("failed to publish AgentSwitched").pipe(
+                      Effect.annotateLogs({ error: String(error) }),
+                    ),
                   ),
                 )
 
@@ -1427,7 +1441,9 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             )
             .pipe(
               Effect.catchEager((e) =>
-                Effect.logWarning("failed to publish MachineTaskSucceeded", e),
+                Effect.logWarning("failed to publish MachineTaskSucceeded").pipe(
+                  Effect.annotateLogs({ error: String(e) }),
+                ),
               ),
             )
         },
@@ -1449,7 +1465,11 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             }),
           )
           .pipe(
-            Effect.catchEager((e) => Effect.logWarning("failed to publish MachineTaskFailed", e)),
+            Effect.catchEager((e) =>
+              Effect.logWarning("failed to publish MachineTaskFailed").pipe(
+                Effect.annotateLogs({ error: String(e) }),
+              ),
+            ),
           )
       })
 
@@ -1701,7 +1721,9 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                   )
                   .pipe(
                     Effect.catchEager((e) =>
-                      Effect.logWarning("failed to publish ErrorOccurred event", e),
+                      Effect.logWarning("failed to publish ErrorOccurred event").pipe(
+                        Effect.annotateLogs({ error: String(e) }),
+                      ),
                     ),
                   ),
           ),

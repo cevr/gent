@@ -126,7 +126,10 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   // @effect-diagnostics-next-line strictEffectProvide:off
                   Effect.provide(spawnLayer),
                   Effect.catchDefect((defect) =>
-                    Effect.logWarning(`Actor init failed: ${defect}`).pipe(Effect.as(undefined)),
+                    Effect.logWarning("actor.init.failed").pipe(
+                      Effect.annotateLogs({ error: String(defect) }),
+                      Effect.as(undefined),
+                    ),
                   ),
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ) as any
@@ -155,7 +158,8 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   .handleEvent(event, ctx)
                   .pipe(
                     Effect.catchDefect((defect) =>
-                      Effect.logWarning(`Actor ${actor.id} handleEvent failed: ${defect}`).pipe(
+                      Effect.logWarning("actor.handleEvent.failed").pipe(
+                        Effect.annotateLogs({ actorId: actor.id, error: String(defect) }),
                         Effect.as(false),
                       ),
                     ),
@@ -227,9 +231,10 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                       projection.uiModelSchema as Schema.Any,
                     )(uiModel).pipe(
                       Effect.catchEager(() =>
-                        Effect.logWarning(
-                          `Extension ${actor.id} uiModel failed schema validation`,
-                        ).pipe(Effect.as(undefined)),
+                        Effect.logWarning("extension.uiModel.schemaValidation.failed").pipe(
+                          Effect.annotateLogs({ actorId: actor.id }),
+                          Effect.as(undefined),
+                        ),
                       ),
                     )
                     uiModel = validated

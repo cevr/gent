@@ -50,8 +50,6 @@ export {
   withRetry,
 } from "./retry.js"
 
-export { makeDevTracer, DevTracerLive, DevTracer, DEFAULT_LOG_FILE, clearLog } from "./telemetry"
-
 export { GentLogger, GentLoggerJson, GentLoggerPretty, GentLogLevel } from "./logger"
 
 export { GentTracerLive, clearTraceLogIfRoot, makeGentTracer, clearTraceLog } from "./tracer"
