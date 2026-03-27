@@ -253,7 +253,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   }
 
   const submitMessage = (text: string, mode: "queue" | "interject") => {
-    clientLog.info("composer.submit", { contentLength: text.length, mode })
+    clientLog.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
     cast(
       expandFileRefs(text, workspace.cwd).pipe(

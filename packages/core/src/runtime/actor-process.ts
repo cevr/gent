@@ -197,9 +197,6 @@ export const LocalActorTransportLive: Layer.Layer<
             createdAt: new Date(),
           })
 
-          yield* Effect.logInfo("actor.message.submitted").pipe(
-            Effect.annotateLogs({ sessionId: input.sessionId, branchId: input.branchId }),
-          )
           yield* agentLoop
             .submit(message, {
               bypass,
@@ -232,6 +229,9 @@ export const LocalActorTransportLive: Layer.Layer<
                 }).pipe(Effect.catchEager(() => Effect.void))
               }),
             )
+          yield* Effect.logInfo("actor.message.submitted").pipe(
+            Effect.annotateLogs({ sessionId: input.sessionId, branchId: input.branchId }),
+          )
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
         ),

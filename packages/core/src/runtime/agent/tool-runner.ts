@@ -59,23 +59,36 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               }
 
               // Run permission.check interceptor, falling back to base Permission service
-              const permResult =
-                options?.bypass === true
-                  ? ("allowed" as const)
-                  : yield* hooks
-                      .runInterceptor(
-                        "permission.check",
-                        { toolName: toolCall.toolName, input: toolCall.input },
-                        (input) => permission.check(input.toolName, input.input),
-                      )
-                      .pipe(
-                        Effect.catchEager((e) =>
-                          WideEvent.set({
-                            toolError: "permission_check_failed",
-                            errorMessage: String(e),
-                          }).pipe(Effect.as("denied" as const)),
-                        ),
-                      )
+              const permCheckResult = yield* Effect.gen(function* () {
+                if (options?.bypass === true) return { _tag: "allowed" as const }
+                const result = yield* hooks
+                  .runInterceptor(
+                    "permission.check",
+                    { toolName: toolCall.toolName, input: toolCall.input },
+                    (input) => permission.check(input.toolName, input.input),
+                  )
+                  .pipe(
+                    Effect.catchEager((e) =>
+                      WideEvent.set({
+                        toolError: "permission_check_failed",
+                        errorMessage: String(e),
+                      }).pipe(Effect.as("interceptor_failed" as const)),
+                    ),
+                  )
+                return { _tag: result }
+              })
+
+              if (permCheckResult._tag === "interceptor_failed") {
+                yield* Effect.logWarning("tool.permission.check.failed").pipe(
+                  Effect.annotateLogs({
+                    toolName: toolCall.toolName,
+                    toolCallId: toolCall.toolCallId,
+                  }),
+                )
+                return errorResult(toolCall, "Permission check failed")
+              }
+
+              const permResult = permCheckResult._tag
 
               if (permResult === "ask") {
                 const decision = yield* permissionHandler
