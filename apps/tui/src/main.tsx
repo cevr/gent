@@ -80,6 +80,15 @@ const main = Command.make(
   },
   ({ session, continue_, headless, debug, prompt, promptArg, bypass, agent }) =>
     Effect.gen(function* () {
+      // Force-exit safety net — registered first so it runs last (LIFO).
+      // render() holds event-loop refs (stdin, timers) that may survive
+      // renderer.destroy(), preventing natural process exit.
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          setTimeout(() => process.exit(0), 100)
+        }),
+      )
+
       const cwd = process.cwd()
       const scope = yield* Effect.scope
       const uiServices = (yield* Layer.buildWithScope(
