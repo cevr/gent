@@ -1,9 +1,12 @@
 /**
  * Plan extension — stateful actor using fromReducer.
  *
- * State: mode (normal/plan/executing) + todo items extracted from turn completions.
+ * State: mode (normal/plan/executing) + todo items + task tracking.
  * Derive: tool policy restrictions in plan mode, prompt context injection, UI model.
  * Intents: togglePlan, executePlan, refinePlan.
+ *
+ * Todo extraction: accumulates StreamChunk text in plan mode, extracts on TurnCompleted.
+ * Task tracking: maps TaskCreated → todo items, observes TaskCompleted/TaskFailed.
  */
 
 import { Effect, Schema } from "effect"
@@ -23,7 +26,7 @@ import { fromReducer } from "../runtime/extensions/from-reducer.js"
 export const PlanStatus = Schema.Literals(["normal", "plan", "executing"])
 export type PlanStatus = typeof PlanStatus.Type
 
-export const TodoStatus = Schema.Literals(["pending", "in-progress", "done"])
+export const TodoStatus = Schema.Literals(["pending", "in-progress", "done", "failed"])
 export type TodoStatus = typeof TodoStatus.Type
 
 export const TodoItem = Schema.Struct({
@@ -36,6 +39,10 @@ export type TodoItem = typeof TodoItem.Type
 export const PlanState = Schema.Struct({
   mode: PlanStatus,
   todos: Schema.Array(TodoItem),
+  /** Accumulated assistant text during plan mode turn — cleared on extraction */
+  pendingText: Schema.optional(Schema.String),
+  /** taskId → todo index mapping for execution tracking */
+  taskMap: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
 })
 export type PlanState = typeof PlanState.Type
 
@@ -82,9 +89,8 @@ export const extractTodos = (text: string): TodoItem[] => {
       continue
     }
 
-    // Blank line after plan section ends it for numbered lists
+    // Blank line after plan section — keep going
     if (inPlanSection && line.trim() === "") {
-      // Keep going — might have more items after blank lines
       continue
     }
 
@@ -151,6 +157,7 @@ Each item should be a concrete, actionable step with file paths where relevant.`
 const todoMark = (status: TodoStatus): string => {
   if (status === "done") return "x"
   if (status === "in-progress") return "~"
+  if (status === "failed") return "!"
   return " "
 }
 
@@ -204,6 +211,137 @@ const deriveProjection = (state: PlanState, _ctx: ExtensionDeriveContext): Exten
   }
 }
 
+// ── Reduce helpers ──
+
+const setTodoStatus = (
+  todos: ReadonlyArray<TodoItem>,
+  idx: number,
+  status: TodoStatus,
+): TodoItem[] => todos.map((t, i) => (i === idx ? { ...t, status } : t))
+
+const allComplete = (todos: ReadonlyArray<TodoItem>): boolean =>
+  todos.every((t) => t.status === "done" || t.status === "failed")
+
+const reducePlanMode = (state: PlanState, event: AgentEvent): ReduceResult<PlanState> => {
+  if (event._tag === "StreamChunk") {
+    return { state: { ...state, pendingText: (state.pendingText ?? "") + event.chunk } }
+  }
+
+  if (event._tag === "TurnCompleted") {
+    if (state.pendingText === undefined || state.pendingText === "") return { state }
+    const extracted = extractTodos(state.pendingText)
+    if (extracted.length === 0) return { state: { ...state, pendingText: undefined } }
+    return { state: { ...state, todos: extracted, pendingText: undefined } }
+  }
+
+  return { state }
+}
+
+const reduceExecutingTask = (
+  state: PlanState,
+  event: AgentEvent,
+): ReduceResult<PlanState> | undefined => {
+  if (event._tag === "TaskCreated") {
+    const matchIdx = state.todos.findIndex(
+      (t) =>
+        t.status === "pending" &&
+        (event.subject.includes(t.text) ||
+          t.text.includes(event.subject) ||
+          t.text.toLowerCase() === event.subject.toLowerCase()),
+    )
+    if (matchIdx === -1) return { state }
+    const taskMap = { ...(state.taskMap ?? {}), [event.taskId]: matchIdx }
+    return {
+      state: { ...state, todos: setTodoStatus(state.todos, matchIdx, "in-progress"), taskMap },
+    }
+  }
+
+  if (event._tag === "TaskCompleted") {
+    const todoIdx = state.taskMap?.[event.taskId]
+    if (todoIdx === undefined) return { state }
+    const updated = setTodoStatus(state.todos, todoIdx, "done")
+    return {
+      state: {
+        mode: allComplete(updated) ? "normal" : state.mode,
+        todos: updated,
+        taskMap: state.taskMap,
+      },
+    }
+  }
+
+  if (event._tag === "TaskFailed") {
+    const todoIdx = state.taskMap?.[event.taskId]
+    if (todoIdx === undefined) return { state }
+    return {
+      state: {
+        ...state,
+        todos: setTodoStatus(state.todos, todoIdx, "failed"),
+        taskMap: state.taskMap,
+      },
+    }
+  }
+
+  if (event._tag === "TaskUpdated") {
+    const todoIdx = state.taskMap?.[event.taskId]
+    if (todoIdx === undefined || event.status !== "in_progress") return { state }
+    return {
+      state: {
+        ...state,
+        todos: setTodoStatus(state.todos, todoIdx, "in-progress"),
+        taskMap: state.taskMap,
+      },
+    }
+  }
+
+  return undefined
+}
+
+const reduceExecutingHeuristic = (state: PlanState, event: AgentEvent): ReduceResult<PlanState> => {
+  if (event._tag === "StreamStarted") {
+    const pendingIdx = state.todos.findIndex((t) => t.status === "pending")
+    if (pendingIdx === -1) return { state }
+    return { state: { ...state, todos: setTodoStatus(state.todos, pendingIdx, "in-progress") } }
+  }
+
+  if (event._tag === "TurnCompleted") {
+    const hasInProgress = state.todos.some((t) => t.status === "in-progress")
+    if (!hasInProgress) return { state }
+    const updated = state.todos.map((t) =>
+      t.status === "in-progress" ? { ...t, status: "done" as const } : t,
+    )
+    return {
+      state: {
+        mode: allComplete(updated) ? "normal" : state.mode,
+        todos: updated,
+        taskMap: state.taskMap,
+      },
+    }
+  }
+
+  if (event._tag === "ToolCallSucceeded") {
+    if (event.toolName !== "edit" && event.toolName !== "write") return { state }
+    const inProgressIdx = state.todos.findIndex((t) => t.status === "in-progress")
+    if (inProgressIdx === -1) return { state }
+    let updated = setTodoStatus(state.todos, inProgressIdx, "done")
+    const nextPendingIdx = updated.findIndex((t) => t.status === "pending")
+    if (nextPendingIdx !== -1) {
+      updated = setTodoStatus(updated, nextPendingIdx, "in-progress")
+    }
+    return {
+      state: {
+        mode: allComplete(updated) ? "normal" : state.mode,
+        todos: updated,
+        taskMap: state.taskMap,
+      },
+    }
+  }
+
+  return { state }
+}
+
+const reduceExecutingMode = (state: PlanState, event: AgentEvent): ReduceResult<PlanState> =>
+  reduceExecutingTask(state, event) ?? reduceExecutingHeuristic(state, event)
+
 // ── Reduce ──
 
 const reduce = (
@@ -211,70 +349,8 @@ const reduce = (
   event: AgentEvent,
   _ctx: ExtensionReduceContext,
 ): ReduceResult<PlanState> => {
-  // In plan mode, extract todos from completed turns
-  if (state.mode === "plan" && event._tag === "TurnCompleted") {
-    // TurnCompleted doesn't carry text — todos are extracted from StreamChunk accumulation.
-    // This is a no-op here; the real extraction happens when the assistant message is received.
-    return { state }
-  }
-
-  // In executing mode, mark first pending todo as in-progress on stream start
-  if (state.mode === "executing" && event._tag === "StreamStarted") {
-    const pendingIdx = state.todos.findIndex((t) => t.status === "pending")
-    if (pendingIdx === -1) return { state }
-    return {
-      state: {
-        ...state,
-        todos: state.todos.map((t, i) => (i === pendingIdx ? { ...t, status: "in-progress" } : t)),
-      },
-    }
-  }
-
-  // In executing mode, mark in-progress todos as done on turn completion
-  if (state.mode === "executing" && event._tag === "TurnCompleted") {
-    const hasInProgress = state.todos.some((t) => t.status === "in-progress")
-    if (!hasInProgress) return { state }
-
-    const updatedTodos = state.todos.map((t) =>
-      t.status === "in-progress" ? { ...t, status: "done" as const } : t,
-    )
-    const allDone = updatedTodos.every((t) => t.status === "done")
-
-    return {
-      state: {
-        mode: allDone ? "normal" : state.mode,
-        todos: updatedTodos,
-      },
-    }
-  }
-
-  // In executing mode, mark in-progress as done on successful tool calls (heuristic)
-  if (state.mode === "executing" && event._tag === "ToolCallSucceeded") {
-    // Only mark progress on edit/write tools — concrete evidence of work done
-    if (event.toolName !== "edit" && event.toolName !== "write") return { state }
-
-    const inProgressIdx = state.todos.findIndex((t) => t.status === "in-progress")
-    if (inProgressIdx === -1) return { state }
-
-    const updatedTodos = state.todos.map((t, i) =>
-      i === inProgressIdx ? { ...t, status: "done" as const } : t,
-    )
-    const nextPendingIdx = updatedTodos.findIndex((t) => t.status === "pending")
-    // Auto-advance to next pending
-    const nextPending = nextPendingIdx !== -1 ? updatedTodos[nextPendingIdx] : undefined
-    if (nextPending !== undefined) {
-      updatedTodos[nextPendingIdx] = { ...nextPending, status: "in-progress" }
-    }
-
-    const allDone = updatedTodos.every((t) => t.status === "done")
-    return {
-      state: {
-        mode: allDone ? "normal" : state.mode,
-        todos: updatedTodos,
-      },
-    }
-  }
-
+  if (state.mode === "plan") return reducePlanMode(state, event)
+  if (state.mode === "executing") return reduceExecutingMode(state, event)
   return { state }
 }
 
@@ -284,19 +360,21 @@ const handleIntent = (state: PlanState, intent: PlanIntent): ReduceResult<PlanSt
   switch (intent._tag) {
     case "TogglePlan": {
       if (state.mode === "normal") {
-        return { state: { ...state, mode: "plan", todos: [] } }
+        return {
+          state: { ...state, mode: "plan", todos: [], pendingText: undefined, taskMap: undefined },
+        }
       }
       // Toggle off from any non-normal mode
-      return { state: { ...state, mode: "normal" } }
+      return { state: { ...state, mode: "normal", pendingText: undefined } }
     }
     case "ExecutePlan": {
       if (state.mode !== "plan" || state.todos.length === 0) return { state }
-      return { state: { ...state, mode: "executing" } }
+      return { state: { ...state, mode: "executing", pendingText: undefined, taskMap: {} } }
     }
     case "RefinePlan": {
       if (state.mode !== "plan") return { state }
       // Reset todos so the agent produces a fresh plan
-      return { state: { ...state, todos: [] } }
+      return { state: { ...state, todos: [], pendingText: undefined } }
     }
   }
 }

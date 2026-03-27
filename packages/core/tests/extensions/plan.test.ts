@@ -3,11 +3,16 @@ import { Effect, Layer } from "effect"
 import {
   EventStore,
   SessionStarted,
+  StreamChunk,
   StreamStarted,
+  TaskCompleted,
+  TaskCreated,
+  TaskFailed,
+  TaskUpdated,
   TurnCompleted,
   ToolCallSucceeded,
 } from "@gent/core/domain/event"
-import type { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import type { BranchId, SessionId, TaskId, ToolCallId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import {
   extractTodos,
@@ -445,6 +450,153 @@ describe("Plan pure reducer — executing behavior", () => {
     }
     const result = intent!(state, { _tag: "TogglePlan" })
     expect(result.state.mode).toBe("normal")
+  })
+})
+
+describe("Plan pure reducer — todo extraction", () => {
+  const { reduce, events } = createActorHarness(PlanActorConfig)
+
+  const streamChunk = (chunk: string) => new StreamChunk({ sessionId, branchId, chunk })
+
+  test("plan mode — StreamChunk accumulates pendingText", () => {
+    const state: PlanState = { mode: "plan", todos: [] }
+    const r1 = reduce(state, streamChunk("## Plan\n"))
+    expect(r1.state.pendingText).toBe("## Plan\n")
+    const r2 = reduce(r1.state, streamChunk("- [ ] First step\n"))
+    expect(r2.state.pendingText).toBe("## Plan\n- [ ] First step\n")
+  })
+
+  test("plan mode — TurnCompleted extracts todos from accumulated text", () => {
+    const state: PlanState = {
+      mode: "plan",
+      todos: [],
+      pendingText: "## Plan\n- [ ] Read files\n- [ ] Edit code\n- [x] Already done",
+    }
+    const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
+    expect(result.state.todos.length).toBe(3)
+    expect(result.state.todos[0]!.text).toBe("Read files")
+    expect(result.state.todos[0]!.status).toBe("pending")
+    expect(result.state.todos[2]!.status).toBe("done")
+    expect(result.state.pendingText).toBeUndefined()
+  })
+
+  test("plan mode — TurnCompleted with no pendingText → no-op", () => {
+    const state: PlanState = { mode: "plan", todos: [] }
+    const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
+    expect(result.state).toBe(state)
+  })
+
+  test("plan mode — TurnCompleted with non-plan text → clears pendingText, no todos", () => {
+    const state: PlanState = {
+      mode: "plan",
+      todos: [],
+      pendingText: "Just some regular text without any plan items.",
+    }
+    const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
+    expect(result.state.todos.length).toBe(0)
+    expect(result.state.pendingText).toBeUndefined()
+  })
+
+  test("normal mode — StreamChunk is no-op", () => {
+    const state: PlanState = { mode: "normal", todos: [] }
+    const result = reduce(state, streamChunk("## Plan\n- [ ] item\n"))
+    expect(result.state).toBe(state)
+  })
+})
+
+describe("Plan pure reducer — task integration", () => {
+  const { reduce } = createActorHarness(PlanActorConfig)
+
+  const taskCreated = (taskId: string, subject: string) =>
+    new TaskCreated({ sessionId, branchId, taskId: taskId as TaskId, subject })
+
+  const taskCompleted = (taskId: string) =>
+    new TaskCompleted({ sessionId, branchId, taskId: taskId as TaskId })
+
+  const taskFailed = (taskId: string) =>
+    new TaskFailed({ sessionId, branchId, taskId: taskId as TaskId })
+
+  const taskUpdated = (taskId: string, status: string) =>
+    new TaskUpdated({ sessionId, branchId, taskId: taskId as TaskId, status })
+
+  test("executing mode — TaskCreated maps to matching todo", () => {
+    const state: PlanState = {
+      mode: "executing",
+      todos: [
+        { id: 1, text: "Read files", status: "pending" },
+        { id: 2, text: "Edit code", status: "pending" },
+      ],
+      taskMap: {},
+    }
+    const result = reduce(state, taskCreated("t-1", "Read files"))
+    expect(result.state.taskMap?.["t-1"]).toBe(0)
+    expect(result.state.todos[0]!.status).toBe("in-progress")
+    expect(result.state.todos[1]!.status).toBe("pending")
+  })
+
+  test("executing mode — TaskCompleted marks matching todo done", () => {
+    const state: PlanState = {
+      mode: "executing",
+      todos: [
+        { id: 1, text: "Read files", status: "in-progress" },
+        { id: 2, text: "Edit code", status: "pending" },
+      ],
+      taskMap: { "t-1": 0 },
+    }
+    const result = reduce(state, taskCompleted("t-1"))
+    expect(result.state.todos[0]!.status).toBe("done")
+    expect(result.state.mode).toBe("executing") // still have pending
+  })
+
+  test("executing mode — all tasks done → normal", () => {
+    const state: PlanState = {
+      mode: "executing",
+      todos: [
+        { id: 1, text: "A", status: "done" },
+        { id: 2, text: "B", status: "in-progress" },
+      ],
+      taskMap: { "t-2": 1 },
+    }
+    const result = reduce(state, taskCompleted("t-2"))
+    expect(result.state.todos[1]!.status).toBe("done")
+    expect(result.state.mode).toBe("normal")
+  })
+
+  test("executing mode — TaskFailed marks matching todo failed", () => {
+    const state: PlanState = {
+      mode: "executing",
+      todos: [{ id: 1, text: "A", status: "in-progress" }],
+      taskMap: { "t-1": 0 },
+    }
+    const result = reduce(state, taskFailed("t-1"))
+    expect(result.state.todos[0]!.status).toBe("failed")
+    expect(result.state.mode).toBe("executing") // failed doesn't auto-complete
+  })
+
+  test("executing mode — TaskUpdated(in_progress) marks todo in-progress", () => {
+    const state: PlanState = {
+      mode: "executing",
+      todos: [{ id: 1, text: "A", status: "pending" }],
+      taskMap: { "t-1": 0 },
+    }
+    const result = reduce(state, taskUpdated("t-1", "in_progress"))
+    expect(result.state.todos[0]!.status).toBe("in-progress")
+  })
+
+  test("executing mode — unmapped taskId → no-op", () => {
+    const state: PlanState = {
+      mode: "executing",
+      todos: [{ id: 1, text: "A", status: "pending" }],
+      taskMap: {},
+    }
+    const result = reduce(state, taskCompleted("t-unknown"))
+    expect(result.state).toBe(state)
+  })
+
+  test("normal mode — task events are no-ops", () => {
+    const state: PlanState = { mode: "normal", todos: [] }
+    const result = reduce(state, taskCreated("t-1", "something"))
+    expect(result.state).toBe(state)
   })
 })
 
