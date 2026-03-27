@@ -48,6 +48,10 @@ bun run --cwd apps/tui dev sessions
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Use domain context factories from `wide-event-boundary.ts`.
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
+- **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
+- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
+- **Signal provider for lifecycle assertions** - Use `createSignalProvider(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `stream()` calls — multi-turn tests need multiple `emitAll()` rounds.
+- **DebugProvider({ delayMs })** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 
 ## Architecture
 
@@ -80,7 +84,8 @@ packages/core/src/       # Everything non-UI
   runtime/               # AgentLoop, ActorProcess, context-estimation, retry
   tools/                 # Tool implementations
   server/                # transport contract, commands, queries, handlers, startup wiring
-  test-utils/            # Mock layers, sequence recording
+  test-utils/            # Mock layers, sequence recording, in-process layer
+  debug/                 # Debug providers (DebugProvider, DebugFailingProvider, createSignalProvider)
 packages/sdk/            # Client wrappers
 apps/tui/                # @opentui/solid TUI
 apps/server/             # BunHttpServer
@@ -107,6 +112,8 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 | `packages/core/src/server/transport-contract.ts`   | shared client contract                              |
 | `packages/core/src/runtime/agent/agent-loop.ts`    | flat loop machine assembly                          |
 | `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
+| `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
+| `packages/core/src/debug/provider.ts`              | debug providers + `createSignalProvider`            |
 | `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation
