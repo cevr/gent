@@ -107,6 +107,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
               clientCtx.client.sendExtensionIntent(sid, extensionId, intent, epoch, bid),
             )
           },
+          getSnapshot: (extensionId) => {
+            const snap = snapshots().get(extensionId)
+            if (snap === undefined) return undefined
+            return { epoch: snap.epoch, model: snap.model }
+          },
         },
       )
       setResolved(result)

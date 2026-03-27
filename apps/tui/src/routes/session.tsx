@@ -62,6 +62,37 @@ export function Session(props: SessionProps) {
     } else if (conn?._tag === "connected" && conn.generation > 0) {
       items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
     }
+
+    // Auto mode indicator
+    const autoSnap = ext.snapshots().get("auto")
+    const autoModel = autoSnap?.model as
+      | { active?: boolean; phase?: string; iteration?: number; maxIterations?: number }
+      | undefined
+    if (autoModel?.active) {
+      const phase = autoModel.phase === "awaiting-counsel" ? "counsel" : "auto"
+      const iter =
+        autoModel.iteration !== undefined
+          ? ` ${autoModel.iteration}/${autoModel.maxIterations ?? "?"}`
+          : ""
+      items.push({
+        text: `${phase}${iter}`,
+        color: autoModel.phase === "awaiting-counsel" ? theme.warning : theme.info,
+      })
+    }
+
+    // Plan mode indicator
+    const planSnap = ext.snapshots().get("plan")
+    const planModel = planSnap?.model as
+      | { mode?: string; progress?: { total: number; done: number; inProgress: number } }
+      | undefined
+    if (planModel?.mode === "plan") {
+      items.push({ text: "plan", color: theme.primary })
+    } else if (planModel?.mode === "executing") {
+      const p = planModel.progress
+      const label = p ? `exec ${p.done}/${p.total}` : "exec"
+      items.push({ text: label, color: theme.primary })
+    }
+
     const c = client.cost()
     if (c > 0) items.push({ text: `$${c.toFixed(2)}`, color: theme.textMuted })
     return items

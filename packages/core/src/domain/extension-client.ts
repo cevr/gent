@@ -48,6 +48,8 @@ export interface ExtensionClientContext {
   readonly branchId?: string
   /** Dispatch a typed intent to a server-side extension actor (fire-and-forget) */
   readonly sendIntent: (extensionId: string, intent: unknown) => void
+  /** Read the current server-projected snapshot for an extension */
+  readonly getSnapshot: (extensionId: string) => { epoch: number; model: unknown } | undefined
 }
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */
