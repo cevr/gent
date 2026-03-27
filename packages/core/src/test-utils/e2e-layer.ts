@@ -9,6 +9,7 @@
  */
 
 import { Effect, Layer } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import {
   Agents,
   SubagentRunnerService,
@@ -33,6 +34,7 @@ import { resolveExtensions, ExtensionRegistry } from "../runtime/extensions/regi
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { EventStoreLive } from "../server/event-store.js"
 import { makeReducingEventStore } from "../server/dependencies.js"
@@ -72,10 +74,17 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     setup: Effect.runSync(ext.setup({ cwd: "/tmp", source: "test" })),
   }))
 
-  const resolvedExtensions: LoadedExtension[] = [
-    { manifest: { id: "test-agents" }, kind: "builtin", sourcePath: "test", setup: builtinSetup },
-    ...(config.extensions ?? defaultExtensions),
-  ]
+  const resolvedExtensions: LoadedExtension[] = config.extensions
+    ? [
+        {
+          manifest: { id: "test-agents" },
+          kind: "builtin",
+          sourcePath: "test",
+          setup: builtinSetup,
+        },
+        ...config.extensions,
+      ]
+    : [...defaultExtensions]
 
   const resolved = resolveExtensions(resolvedExtensions)
 
@@ -103,6 +112,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
 
   // Base services — everything that doesn't depend on reducing event store
   const baseDeps = Layer.mergeAll(
+    BunServices.layer,
     Storage.Memory(),
     config.providerLayer,
     extensionRegistryLive,
@@ -115,6 +125,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     Skills.Test(),
     ConfigService.Test(),
     ModelRegistry.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     subagentRunnerLayer,
     authStoreLive,
     authGuardLive,

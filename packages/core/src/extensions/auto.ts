@@ -340,30 +340,35 @@ const derive = (state: MachineState, _ctx: ExtensionDeriveContext): ExtensionPro
 // ── afterTransition ──
 
 const afterTransition = (
-  _before: MachineState,
+  before: MachineState,
   after: MachineState,
 ): ReadonlyArray<ExtensionEffect> => {
   // Note: fromMachine already persists on transition when persist: true.
   // No need to emit Persist effect here.
   const effects: ExtensionEffect[] = []
 
-  // → Working (kickoff or next iteration)
+  // → Working: only on genuine entry (not TurnTick which keeps Working → Working at same iteration)
   if (after._tag === "Working") {
-    if (after.iteration === 1) {
-      // Kickoff
-      effects.push({
-        _tag: "QueueFollowUp",
-        content: `Begin: ${after.goal}. Call \`auto_checkpoint\` when this iteration is done.`,
-        metadata: { extensionId: "auto", hidden: true },
-      })
-    } else {
-      // Next iteration
-      const hint = after.nextIdea ?? after.goal
-      effects.push({
-        _tag: "QueueFollowUp",
-        content: `Iteration ${after.iteration}/${after.maxIterations}. ${hint}. Review learnings. Call \`auto_checkpoint\` when done.`,
-        metadata: { extensionId: "auto", hidden: true },
-      })
+    const isNewEntry =
+      before._tag !== "Working" ||
+      (before._tag === "Working" && before.iteration !== after.iteration)
+    if (isNewEntry) {
+      if (after.iteration === 1) {
+        // Kickoff
+        effects.push({
+          _tag: "QueueFollowUp",
+          content: `Begin: ${after.goal}. Call \`auto_checkpoint\` when this iteration is done.`,
+          metadata: { extensionId: "auto", hidden: true },
+        })
+      } else {
+        // Next iteration
+        const hint = after.nextIdea ?? after.goal
+        effects.push({
+          _tag: "QueueFollowUp",
+          content: `Iteration ${after.iteration}/${after.maxIterations}. ${hint}. Review learnings. Call \`auto_checkpoint\` when done.`,
+          metadata: { extensionId: "auto", hidden: true },
+        })
+      }
     }
   }
 
