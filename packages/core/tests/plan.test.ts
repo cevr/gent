@@ -17,7 +17,7 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
   ]),
 )
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
-import { EventStore, ToolCallStarted, ToolCallSucceeded } from "@gent/core/domain/event"
+import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { ToolContext } from "@gent/core/domain/tool"
 
@@ -196,45 +196,13 @@ describe("Plan Tool", () => {
     )
   })
 
-  it.live("fix mode synthesizes an execution plan in batches and executes batch-by-batch", () => {
+  it.live("fix mode runs single plan+execute cycle", () => {
     const calls: string[] = []
 
     const runnerLayer = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           calls.push(params.prompt)
-          if (params.prompt.includes("Evaluate whether the implementation is complete")) {
-            const storage = yield* Storage
-            const sessionId = "eval-session" as SubagentResult & { _tag: "success" } extends {
-              sessionId: infer S
-            }
-              ? S
-              : never
-            yield* storage.appendEvent(
-              new ToolCallStarted({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "loop-eval-call",
-                toolName: "loop_evaluation",
-                input: { verdict: "done", summary: "complete" },
-              }),
-            )
-            yield* storage.appendEvent(
-              new ToolCallSucceeded({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "loop-eval-call",
-                toolName: "loop_evaluation",
-                summary: "complete",
-              }),
-            )
-            return {
-              _tag: "success" as const,
-              text: "evaluation complete",
-              sessionId,
-              agentName: params.agent.name,
-            } as SubagentResult & { _tag: "success" }
-          }
           if (
             params.prompt.includes(
               "Synthesize these two revised implementation plans into one execution plan organized into batches",
@@ -244,6 +212,14 @@ describe("Plan Tool", () => {
               _tag: "success" as const,
               text: "Batch 1: update auth\n- Files: src/auth.ts\n- Changes: add validation",
               sessionId: "synth-session",
+              agentName: params.agent.name,
+            } as SubagentResult & { _tag: "success" }
+          }
+          if (params.prompt.includes("Execute this implementation plan")) {
+            return {
+              _tag: "success" as const,
+              text: "Executed batch 1 successfully.",
+              sessionId: "exec-session",
               agentName: params.agent.name,
             } as SubagentResult & { _tag: "success" }
           }
@@ -268,7 +244,8 @@ describe("Plan Tool", () => {
 
     return PlanTool.execute({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
-        expect(result.reason).toBe("done")
+        // Single cycle: plan phases + execute (no evaluator loop)
+        expect(result.output).toBe("Executed batch 1 successfully.")
         expect(
           calls.some((prompt) =>
             prompt.includes("Organize the output into a small number of ordered batches"),
@@ -277,6 +254,12 @@ describe("Plan Tool", () => {
         expect(
           calls.some((prompt) => prompt.includes("Work through the plan batch by batch, in order")),
         ).toBe(true)
+        // No evaluator calls
+        expect(
+          calls.some((prompt) =>
+            prompt.includes("Evaluate whether the implementation is complete"),
+          ),
+        ).toBe(false)
       }),
       Effect.provide(layer),
     )

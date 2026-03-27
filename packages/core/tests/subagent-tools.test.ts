@@ -9,7 +9,7 @@ import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
-import { EventStore, ToolCallStarted, ToolCallSucceeded } from "@gent/core/domain/event"
+import { EventStore } from "@gent/core/domain/event"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
@@ -175,40 +175,12 @@ describe("CodeReviewTool", () => {
     )
   })
 
-  it.live("fix mode tells executor to work findings in batches", () => {
+  it.live("fix mode runs single review+execute cycle", () => {
     const prompts: string[] = []
     const runner = Layer.succeed(SubagentRunnerService, {
       run: (params) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           prompts.push(params.prompt)
-          if (params.prompt.includes("Evaluate whether the review findings have been addressed")) {
-            const storage = yield* Storage
-            const sessionId = "eval" as SessionId
-            yield* storage.appendEvent(
-              new ToolCallStarted({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "review-loop-eval-call",
-                toolName: "loop_evaluation",
-                input: { verdict: "done", summary: "complete" },
-              }),
-            )
-            yield* storage.appendEvent(
-              new ToolCallSucceeded({
-                sessionId,
-                branchId: "test-branch",
-                toolCallId: "review-loop-eval-call",
-                toolName: "loop_evaluation",
-                summary: "complete",
-              }),
-            )
-            return {
-              _tag: "success" as const,
-              text: "evaluation complete",
-              sessionId,
-              agentName: params.agent.name,
-            }
-          }
           if (params.prompt.includes("Synthesize these adversarial reviews")) {
             return {
               _tag: "success" as const,
@@ -221,6 +193,14 @@ describe("CodeReviewTool", () => {
                 },
               ]),
               sessionId: "synth" as SessionId,
+              agentName: params.agent.name,
+            }
+          }
+          if (params.prompt.includes("Fix the issues identified")) {
+            return {
+              _tag: "success" as const,
+              text: "Applied fixes.",
+              sessionId: "exec" as SessionId,
               agentName: params.agent.name,
             }
           }
@@ -238,10 +218,16 @@ describe("CodeReviewTool", () => {
       ctx,
     ).pipe(
       Effect.map((result) => {
-        expect(result.raw).toContain("[]")
+        expect(result.output).toBe("Applied fixes.")
         expect(
           prompts.some((prompt) => prompt.includes("Work through the findings in small batches")),
         ).toBe(true)
+        // No evaluator loop
+        expect(
+          prompts.some((prompt) =>
+            prompt.includes("Evaluate whether the review findings have been addressed"),
+          ),
+        ).toBe(false)
       }),
       Effect.provide(layer),
     )

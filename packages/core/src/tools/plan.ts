@@ -9,11 +9,8 @@ import {
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
-import { runLoop } from "../runtime/loop.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { Storage } from "../storage/sqlite-storage.js"
 import {
-  extractLoopEvaluation,
   requireText,
   runAdversarialPair,
   type WorkflowRunContext,
@@ -29,12 +26,7 @@ export const PlanParams = Schema.Struct({
   ),
   mode: Schema.optional(
     Schema.Literals(["plan-only", "fix"]).annotate({
-      description: "plan-only: produce and present a plan, fix: execute the synthesized plan",
-    }),
-  ),
-  maxIterations: Schema.optional(
-    Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 10 })).annotate({
-      description: "Max execution iterations in fix mode (default 3)",
+      description: "plan-only: produce and present a plan, fix: single-cycle plan + execute",
     }),
   ),
 })
@@ -127,20 +119,6 @@ const buildExecutePrompt = (plan: string) =>
     "Summarize what you changed, what batch you reached, and anything still incomplete.",
   ].join("\n")
 
-const buildEvaluatePrompt = (executionOutput: string) =>
-  [
-    "Evaluate whether the implementation is complete.",
-    "",
-    "## Execution Output",
-    executionOutput,
-    "",
-    "## Instructions",
-    "You MUST call the loop_evaluation tool.",
-    "- verdict: done when the work is complete",
-    "- verdict: continue when more iteration is needed",
-    "- summary: short explanation of what remains or why it is complete",
-  ].join("\n")
-
 const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   runner: SubagentRunner
   architect: AgentDefinition
@@ -226,7 +204,7 @@ export const PlanTool = defineTool({
   action: "delegate" as const,
   concurrency: "serial" as const,
   description:
-    "Create an adversarial implementation plan. Default mode presents the plan. Fix mode executes it iteratively.",
+    "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,
   execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
@@ -235,7 +213,6 @@ export const PlanTool = defineTool({
     const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "plan-only"
-    const maxIterations = params.maxIterations ?? 3
     const runnerContext: WorkflowRunContext = {
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
@@ -247,17 +224,18 @@ export const PlanTool = defineTool({
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = (yield* registry.getAgent(callerAgentName)) ?? Agents.cowork
 
-    if (mode === "plan-only") {
-      const synthesizedPlan = yield* runPlanningCycle({
-        runner,
-        architect,
-        runnerContext,
-        mode,
-        prompt: params.prompt,
-        context: params.context,
-        files: params.files,
-      })
+    // Adversarial planning cycle (always runs)
+    const synthesizedPlan = yield* runPlanningCycle({
+      runner,
+      architect,
+      runnerContext,
+      mode,
+      prompt: params.prompt,
+      context: params.context,
+      files: params.files,
+    })
 
+    if (mode === "plan-only") {
       const reviewResult = yield* presenter.review({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
@@ -267,6 +245,7 @@ export const PlanTool = defineTool({
       })
 
       return {
+        mode,
         decision: reviewResult.decision,
         plan:
           reviewResult.decision === "edit"
@@ -276,51 +255,14 @@ export const PlanTool = defineTool({
       }
     }
 
-    const storage = yield* Storage
-
-    const loopResult = yield* runLoop({
-      maxIterations,
-      body: (iteration, _previousOutput, evaluatorFeedback) =>
-        Effect.gen(function* () {
-          const synthesizedPlan = yield* runPlanningCycle({
-            runner,
-            architect,
-            runnerContext,
-            mode,
-            prompt: params.prompt,
-            context: params.context,
-            files: params.files,
-            evaluatorFeedback,
-          })
-
-          return yield* runner.run({
-            agent: executor,
-            prompt: buildExecutePrompt(synthesizedPlan),
-            ...runnerContext,
-          })
-        }),
-      evaluate: (iteration, bodyOutput) =>
-        Effect.gen(function* () {
-          const evalResult = yield* runner.run({
-            agent: architect,
-            prompt: buildEvaluatePrompt(bodyOutput),
-            ...runnerContext,
-            overrides: { tags: ["loop-evaluation"] },
-          })
-
-          if (evalResult._tag === "error") return { verdict: "done" as const }
-          const envelopes = yield* storage
-            .listEvents({ sessionId: evalResult.sessionId })
-            .pipe(Effect.catchEager(() => Effect.succeed([])))
-          return extractLoopEvaluation(envelopes, evalResult.text)
-        }),
+    // Fix mode: single cycle — plan + execute. Agent uses @gent/auto for iteration.
+    const execResult = yield* runner.run({
+      agent: executor,
+      prompt: buildExecutePrompt(synthesizedPlan),
+      ...runnerContext,
     })
+    const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 
-    return {
-      iterations: loopResult.iterations,
-      reason: loopResult.reason,
-      output: loopResult.output,
-      ...(loopResult.error !== undefined ? { error: loopResult.error } : {}),
-    }
+    return { mode, plan: synthesizedPlan, output: execOutput }
   }),
 })

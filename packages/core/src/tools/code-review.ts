@@ -8,11 +8,8 @@ import {
 } from "../domain/agent.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { runLoop } from "../runtime/loop.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { Storage } from "../storage/sqlite-storage.js"
 import {
-  extractLoopEvaluation,
   requireText,
   runCommand as runCommandBase,
   type WorkflowRunContext,
@@ -58,12 +55,7 @@ export const CodeReviewParams = Schema.Struct({
   ),
   mode: Schema.optional(
     Schema.Literals(["report", "fix"]).annotate({
-      description: "report: findings only, fix: apply fixes iteratively",
-    }),
-  ),
-  maxIterations: Schema.optional(
-    Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 10 })).annotate({
-      description: "Max fix iterations (default 3)",
+      description: "report: findings only, fix: single-cycle review + apply",
     }),
   ),
 })
@@ -188,23 +180,6 @@ const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?
     "Summarize what you changed, which findings are done, and what remains.",
   ].join("\n")
 
-const buildEvaluatePrompt = (executionOutput: string, comments: ReadonlyArray<ReviewComment>) =>
-  [
-    "Evaluate whether the review findings have been addressed.",
-    "",
-    "## Original Findings",
-    JSON.stringify(comments, null, 2),
-    "",
-    "## Execution Output",
-    executionOutput,
-    "",
-    "## Instructions",
-    "You MUST call the loop_evaluation tool.",
-    "- verdict: done when the findings are addressed",
-    "- verdict: continue when work remains",
-    "- summary: short explanation of remaining issues or confirmation",
-  ].join("\n")
-
 const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   runner: SubagentRunner
   reviewer: AgentDefinition
@@ -287,21 +262,20 @@ export const CodeReviewTool = defineTool({
   action: "delegate" as const,
   concurrency: "serial" as const,
   description:
-    "Run adversarial dual-model code review. Report mode returns findings. Fix mode applies fixes iteratively.",
+    "Run adversarial dual-model code review. Report mode returns findings. Fix mode runs one review+execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Adversarial dual-model code review",
   promptGuidelines: [
-    "report mode for read-only review, fix mode to auto-apply",
+    "report mode for read-only review, fix mode for single-cycle review+apply",
+    "For iterative review loops, start @gent/auto then call code_review each iteration",
     "Pass description to guide review focus",
   ],
   params: CodeReviewParams,
   execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
-    const storage = yield* Storage
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "report"
-    const maxIterations = params.maxIterations ?? 3
     const runnerContext: WorkflowRunContext = {
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
@@ -319,17 +293,19 @@ export const CodeReviewTool = defineTool({
       diffSpec: params.diff_spec,
     })
 
-    if (mode === "report") {
-      const report = yield* runReviewCycle({
-        runner,
-        reviewer,
-        runnerContext,
-        reviewInput,
-        description: params.description,
-      })
-      const summary = summarizeComments(report.comments)
+    // Adversarial review cycle (always runs)
+    const report = yield* runReviewCycle({
+      runner,
+      reviewer,
+      runnerContext,
+      reviewInput,
+      description: params.description,
+    })
+    const summary = summarizeComments(report.comments)
 
+    if (mode === "report") {
       return {
+        mode,
         comments: report.comments,
         summary,
         raw: report.raw,
@@ -337,71 +313,18 @@ export const CodeReviewTool = defineTool({
       }
     }
 
-    let latestComments: ReadonlyArray<ReviewComment> = []
-
-    const loopResult = yield* runLoop({
-      maxIterations,
-      body: (iteration, _previousOutput, evaluatorFeedback) =>
-        Effect.gen(function* () {
-          const reviewReport = yield* runReviewCycle({
-            runner,
-            reviewer,
-            runnerContext,
-            reviewInput:
-              evaluatorFeedback !== undefined && evaluatorFeedback !== ""
-                ? `${reviewInput}\n\n## Remaining Issues\n${evaluatorFeedback}`
-                : reviewInput,
-            description: params.description,
-          })
-          latestComments = reviewReport.comments
-
-          if (reviewReport.comments.length === 0) {
-            return {
-              _tag: "success" as const,
-              text: "[]",
-              sessionId: ctx.sessionId,
-              agentName: callerAgentName,
-            }
-          }
-
-          return yield* runner.run({
-            agent: executor,
-            prompt: buildExecutePrompt(reviewReport.comments, params.description),
-            ...runnerContext,
-          })
-        }),
-      evaluate: (iteration, bodyOutput) =>
-        Effect.gen(function* () {
-          if (latestComments.length === 0) {
-            return { verdict: "done" as const, feedback: "No findings remain." }
-          }
-
-          const evalResult = yield* runner.run({
-            agent: reviewer,
-            prompt: buildEvaluatePrompt(bodyOutput, latestComments),
-            ...runnerContext,
-            overrides: {
-              allowedActions: ["read"],
-              deniedTools: ["bash"],
-              tags: ["loop-evaluation"],
-            },
-          })
-
-          if (evalResult._tag === "error") return { verdict: "done" as const }
-          const envelopes = yield* storage
-            .listEvents({ sessionId: evalResult.sessionId })
-            .pipe(Effect.catchEager(() => Effect.succeed([])))
-          return extractLoopEvaluation(envelopes, evalResult.text)
-        }),
-    })
-
-    const summary = summarizeComments(latestComments)
-    return {
-      comments: latestComments,
-      summary,
-      raw: loopResult.output,
-      session: undefined,
-      ...(loopResult.error !== undefined ? { error: loopResult.error } : {}),
+    // Fix mode: single cycle — review + execute. Agent uses @gent/auto for iteration.
+    if (report.comments.length === 0) {
+      return { mode, comments: [], summary, raw: report.raw, output: "No findings to fix." }
     }
+
+    const execResult = yield* runner.run({
+      agent: executor,
+      prompt: buildExecutePrompt(report.comments, params.description),
+      ...runnerContext,
+    })
+    const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
+
+    return { mode, comments: report.comments, summary, raw: report.raw, output: execOutput }
   }),
 })
