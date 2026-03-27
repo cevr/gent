@@ -62,11 +62,20 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               const permResult =
                 options?.bypass === true
                   ? ("allowed" as const)
-                  : yield* hooks.runInterceptor(
-                      "permission.check",
-                      { toolName: toolCall.toolName, input: toolCall.input },
-                      (input) => permission.check(input.toolName, input.input),
-                    )
+                  : yield* hooks
+                      .runInterceptor(
+                        "permission.check",
+                        { toolName: toolCall.toolName, input: toolCall.input },
+                        (input) => permission.check(input.toolName, input.input),
+                      )
+                      .pipe(
+                        Effect.catchEager((e) =>
+                          WideEvent.set({
+                            toolError: "permission_check_failed",
+                            errorMessage: String(e),
+                          }).pipe(Effect.as("denied" as const)),
+                        ),
+                      )
 
               if (permResult === "ask") {
                 const decision = yield* permissionHandler
@@ -172,7 +181,14 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                   },
                   (input) => Effect.succeed(input.result),
                 )
-                .pipe(Effect.catchEager(() => Effect.succeed(executeResult.success)))
+                .pipe(
+                  Effect.catchEager((e) =>
+                    WideEvent.set({
+                      toolWarning: "result_enrichment_failed",
+                      errorMessage: String(e),
+                    }).pipe(Effect.as(executeResult.success)),
+                  ),
+                )
 
               return new ToolResultPart({
                 type: "tool-result",
