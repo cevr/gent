@@ -9,6 +9,7 @@
  */
 
 import { Effect, Layer } from "effect"
+import { tmpdir } from "node:os"
 import { BunServices } from "@effect/platform-bun"
 import {
   Agents,
@@ -41,6 +42,12 @@ import { makeReducingEventStore } from "../server/dependencies.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
+import { Test as MemoryVaultTest } from "../extensions/memory/vault.js"
+
+/** Test-safe layer overrides for extension setup.layer fields */
+const TEST_LAYER_OVERRIDES: Record<string, () => Layer.Layer<never>> = {
+  "@gent/memory": () => MemoryVaultTest(`${tmpdir()}/gent-e2e-${Date.now()}`) as Layer.Layer<never>,
+}
 
 export interface E2ELayerConfig {
   /** Provider layer — typically from createSequenceProvider */
@@ -49,6 +56,8 @@ export interface E2ELayerConfig {
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** SubagentRunner mock. Default: returns success with empty text */
   readonly subagentRunner?: SubagentRunner
+  /** Extra layers to merge (e.g., additional service overrides) */
+  readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
 /**
@@ -67,15 +76,17 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     tools: [] as const,
   }
 
-  // Exclude extensions that require services not available in test (e.g., MemoryVault)
-  const testSafeBuiltins = BuiltinExtensions.filter((ext) => ext.manifest.id !== "@gent/memory")
-
-  const defaultExtensions: ReadonlyArray<LoadedExtension> = testSafeBuiltins.map((ext) => ({
-    manifest: ext.manifest,
-    kind: "builtin" as const,
-    sourcePath: "builtin",
-    setup: Effect.runSync(ext.setup({ cwd: "/tmp", source: "test" })),
-  }))
+  // Load all builtins, patching setup.layer for extensions that need test overrides
+  const defaultExtensions: ReadonlyArray<LoadedExtension> = BuiltinExtensions.map((ext) => {
+    const setup = Effect.runSync(ext.setup({ cwd: "/tmp", source: "test" }))
+    const override = TEST_LAYER_OVERRIDES[ext.manifest.id]
+    return {
+      manifest: ext.manifest,
+      kind: "builtin" as const,
+      sourcePath: "builtin",
+      setup: override ? { ...setup, layer: override() } : setup,
+    }
+  })
 
   const resolvedExtensions: LoadedExtension[] = config.extensions
     ? [
@@ -90,6 +101,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     : [...defaultExtensions]
 
   const resolved = resolveExtensions(resolvedExtensions)
+
+  // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts)
+  const extensionLayers = resolvedExtensions
+    .filter((ext) => ext.setup.layer !== undefined)
+    .map((ext) => ext.setup.layer as Layer.Layer<never>)
 
   // Subagent runner
   const defaultRunner: SubagentRunner = {
@@ -133,6 +149,9 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     authStoreLive,
     authGuardLive,
     providerAuthLive,
+    // Extension-provided layers (e.g., MemoryVault) + caller extra layers
+    ...extensionLayers,
+    ...(config.extraLayers ?? []),
   )
 
   // Base event store (raw storage, provides BaseEventStore tag)

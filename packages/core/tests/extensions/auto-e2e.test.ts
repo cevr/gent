@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Fiber } from "effect"
+import { Effect, Fiber, Ref, Stream } from "effect"
 import {
   createSequenceProvider,
   toolCallStep,
@@ -9,7 +9,7 @@ import {
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { SessionStarted } from "@gent/core/domain/event"
+import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 
@@ -120,6 +120,55 @@ describe("Auto extension E2E", () => {
           expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
           expect(yield* controls.callCount).toBe(4)
           yield* controls.assertDone()
+        }),
+    ),
+  )
+
+  it.live("event-store assertions: ToolCallSucceeded events published", () =>
+    runE2ETest(
+      [
+        textStep("OK entering auto."),
+        toolCallStep("auto_checkpoint", {
+          status: "continue",
+          summary: "First pass",
+          learnings: "Found issues",
+          nextIdea: "Fix them",
+        }),
+        toolCallStep("counsel", { prompt: "Review iteration 1." }),
+        toolCallStep("auto_checkpoint", {
+          status: "complete",
+          summary: "All fixed",
+        }),
+      ],
+      (controls) =>
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const eventStore = yield* EventStore
+
+          // Subscribe to events before running
+          const envelopesRef = yield* Ref.make<EventEnvelope[]>([])
+          yield* Effect.forkChild(
+            eventStore.subscribe({ sessionId, branchId }).pipe(
+              Stream.runForEach((env) => Ref.update(envelopesRef, (current) => [...current, env])),
+              Effect.catchCause(() => Effect.void),
+            ),
+          )
+
+          yield* agentLoop.run(makeMessage("begin"))
+
+          const envelopes = yield* Ref.get(envelopesRef)
+          const toolSucceeded = envelopes.filter((e) => e.event._tag === "ToolCallSucceeded")
+
+          // Should have auto_checkpoint (x2) and counsel (x1)
+          const toolNames = toolSucceeded.map((e) => (e.event as { toolName: string }).toolName)
+          expect(toolNames.filter((n) => n === "auto_checkpoint").length).toBe(2)
+          expect(toolNames.filter((n) => n === "counsel").length).toBe(1)
+
+          // Also verify TurnCompleted events
+          const turnCompleted = envelopes.filter((e) => e.event._tag === "TurnCompleted")
+          expect(turnCompleted.length).toBe(4)
+
+          expect(yield* controls.callCount).toBe(4)
         }),
     ),
   )
