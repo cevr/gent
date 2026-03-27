@@ -1,4 +1,5 @@
 import { Cause, ServiceMap, Duration, Effect, Layer } from "effect"
+import { withWideEvent, WideEvent, subagentBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
   EventStore,
@@ -394,6 +395,8 @@ export const InProcessRunner: Layer.Layer<
         shared.createSubagentSession(params).pipe(
           Effect.flatMap(({ sessionId, branchId, bypass }) => {
             const run = Effect.gen(function* () {
+              yield* WideEvent.set({ childSessionId: sessionId })
+
               yield* shared.publishSubagentSpawned({
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
@@ -448,8 +451,14 @@ export const InProcessRunner: Layer.Layer<
                 sessionId,
                 agentName: params.agent.name,
               })
+
+              yield* WideEvent.set({
+                usage: result.usage,
+                toolCallCount: result.toolCalls?.length ?? 0,
+              })
+
               return result
-            })
+            }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
 
             return withSubagentFailureHandling(
               run,
@@ -494,6 +503,8 @@ export const SubprocessRunner: Layer.Layer<
         shared.createSubagentSession(params).pipe(
           Effect.flatMap(({ sessionId, branchId, bypass }) => {
             const run = Effect.gen(function* () {
+              yield* WideEvent.set({ childSessionId: sessionId })
+
               yield* shared.publishSubagentSpawned({
                 parentSessionId: params.parentSessionId,
                 parentBranchId: params.parentBranchId,
@@ -603,8 +614,14 @@ export const SubprocessRunner: Layer.Layer<
                 sessionId,
                 agentName: params.agent.name,
               })
+
+              yield* WideEvent.set({
+                usage: result.usage,
+                toolCallCount: result.toolCalls?.length ?? 0,
+              })
+
               return result
-            })
+            }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
 
             return withSubagentFailureHandling(
               run,
