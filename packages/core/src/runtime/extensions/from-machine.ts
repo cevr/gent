@@ -165,48 +165,49 @@ export const fromMachine = <
           }
         }).pipe(Effect.catchDefect(() => Effect.void))
 
+      // Dispatch event through actor, handle version + persist + afterTransition
+      const dispatch = (machineEvent: Event, branchId: BranchId | undefined) =>
+        Effect.gen(function* () {
+          const result = yield* ref.call(machineEvent).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed({
+                transitioned: false,
+                previousState: undefined,
+                newState: undefined,
+                lifecycleRan: false,
+                isFinal: false,
+                hasReply: false,
+                postponed: false,
+              }),
+            ),
+          )
+          if (!result.transitioned) return false
+          yield* Ref.update(versionRef, (v) => v + 1)
+          if (config.persist === true) {
+            yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
+          }
+          if (config.afterTransition !== undefined && result.previousState !== undefined) {
+            const effects = config.afterTransition(
+              result.previousState as State,
+              result.newState as State,
+            )
+            if (effects.length > 0) {
+              yield* runEffects(effects, branchId)
+            }
+          }
+          return true
+        })
+
       const actor: ExtensionActor = {
         id: config.id,
 
-        // Hydration happens before spawn via Machine.spawn({ hydrate })
         init: Effect.void,
 
         handleEvent: (event: AgentEvent, reduceCtx) =>
           Effect.gen(function* () {
             const mapped = config.mapEvent !== undefined ? config.mapEvent(event) : undefined
             if (mapped === undefined) return false
-
-            // Atomic: dispatch sends through queue and returns transition receipt
-            const result = yield* ref.call(mapped).pipe(
-              Effect.catchDefect(() =>
-                Effect.succeed({
-                  transitioned: false,
-                  previousState: undefined,
-                  newState: undefined,
-                  lifecycleRan: false,
-                  isFinal: false,
-                  hasReply: false,
-                  postponed: false,
-                }),
-              ),
-            )
-
-            if (result.transitioned) {
-              yield* Ref.update(versionRef, (v) => v + 1)
-              if (config.persist === true) {
-                yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
-              }
-              if (config.afterTransition !== undefined && result.previousState !== undefined) {
-                const effects = config.afterTransition(
-                  result.previousState as State,
-                  result.newState as State,
-                )
-                if (effects.length > 0) {
-                  yield* runEffects(effects, reduceCtx.branchId)
-                }
-              }
-            }
-            return result.transitioned
+            return yield* dispatch(mapped, reduceCtx.branchId)
           }),
 
         handleIntent: (() => {
@@ -220,38 +221,7 @@ export const fromMachine = <
                   intent,
                 ).pipe(Effect.orDie)
               }
-
-              const machineEvent = mapIntent(validated)
-              const result = yield* ref.call(machineEvent).pipe(
-                Effect.catchDefect(() =>
-                  Effect.succeed({
-                    transitioned: false,
-                    previousState: undefined,
-                    newState: undefined,
-                    lifecycleRan: false,
-                    isFinal: false,
-                    hasReply: false,
-                    postponed: false,
-                  }),
-                ),
-              )
-
-              if (result.transitioned) {
-                yield* Ref.update(versionRef, (v) => v + 1)
-                if (config.persist === true) {
-                  yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
-                }
-                if (config.afterTransition !== undefined && result.previousState !== undefined) {
-                  const effects = config.afterTransition(
-                    result.previousState as State,
-                    result.newState as State,
-                  )
-                  if (effects.length > 0) {
-                    yield* runEffects(effects, branchId)
-                  }
-                }
-              }
-              return result.transitioned
+              return yield* dispatch(mapIntent(validated), branchId)
             })
         })(),
 
