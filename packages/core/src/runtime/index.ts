@@ -54,7 +54,17 @@ export { GentLogger, GentLoggerJson, GentLoggerPretty, GentLogLevel } from "./lo
 
 export { GentTracerLive, clearTraceLogIfRoot, makeGentTracer, clearTraceLog } from "./tracer"
 
-export { WideEvent, TurnWideEvent, type WideEventService } from "./wide-event"
+export {
+  WideEvent,
+  withWideEvent,
+  WideEventLogger,
+  turnBoundary,
+  toolBoundary,
+  providerStreamBoundary,
+  rpcBoundary,
+  subagentBoundary,
+} from "./wide-event-boundary"
+export type { WideEventContext, WideEventEnvelope } from "./wide-event-boundary"
 
 export { formatSchemaError } from "./format-schema-error"
 
