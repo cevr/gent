@@ -278,14 +278,14 @@ describe("ExtensionRegistry", () => {
 
   test("tagInjections inject tools when tag matches", async () => {
     const readTool = makeTool("read", "read")
-    const signalTool = makeTool("loop_evaluation", "state")
+    const signalTool = makeTool("test_signal", "state")
     const agent = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
 
     const registry = await buildRegistry([
       makeExt("core", "builtin", { tools: [readTool] }),
       {
         ...makeExt("workflow", "builtin"),
-        setup: { tagInjections: [{ tag: "loop-evaluation", tools: [signalTool] }] },
+        setup: { tagInjections: [{ tag: "test-signal", tools: [signalTool] }] },
       },
     ])
 
@@ -293,13 +293,13 @@ describe("ExtensionRegistry", () => {
     const { tools: toolsWithout } = await Effect.runPromise(
       registry.resolveToolPolicy(agent, runCtx, []),
     )
-    expect(toolsWithout.map((t) => t.name)).not.toContain("loop_evaluation")
+    expect(toolsWithout.map((t) => t.name)).not.toContain("test_signal")
 
     // With tag — signal tool injected
     const { tools: toolsWith } = await Effect.runPromise(
-      registry.resolveToolPolicy(agent, { ...runCtx, tags: ["loop-evaluation"] }, []),
+      registry.resolveToolPolicy(agent, { ...runCtx, tags: ["test-signal"] }, []),
     )
-    expect(toolsWith.map((t) => t.name)).toContain("loop_evaluation")
+    expect(toolsWith.map((t) => t.name)).toContain("test_signal")
   })
 
   test("denied tools cannot be injected via tag or projection", async () => {

@@ -55,7 +55,7 @@ describe("BuiltinExtensions", () => {
       expect(allToolNames.has(name)).toBe(true)
     }
     // Delegate tools
-    for (const name of ["plan", "audit", "loop"]) {
+    for (const name of ["plan", "audit", "code_review"]) {
       expect(allToolNames.has(name)).toBe(true)
     }
   })
@@ -88,17 +88,5 @@ describe("BuiltinExtensions", () => {
     for (const agent of agents) {
       expect(agent.model).toBeDefined()
     }
-  })
-
-  test("loop_evaluation injected via tagInjections", async () => {
-    const results = await loadAll()
-    const allToolNames = new Set(results.flatMap((r) => (r.setup.tools ?? []).map((t) => t.name)))
-    // loop_evaluation should NOT be in the base tool set — it's tag-injected
-    expect(allToolNames.has("loop_evaluation")).toBe(false)
-    // But the tag injection should exist
-    const tagInjections = results.flatMap((r) => r.setup.tagInjections ?? [])
-    const loopTag = tagInjections.find((t) => t.tag === "loop-evaluation")
-    expect(loopTag).toBeDefined()
-    expect(loopTag?.tools.map((t) => t.name)).toContain("loop_evaluation")
   })
 })

@@ -20,17 +20,11 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 describe("createExtensionHarness", () => {
-  test("WorkflowToolsExtension provides tools and tag injections", () => {
+  test("WorkflowToolsExtension provides tools", () => {
     const harness = createExtensionHarness(WorkflowToolsExtension)
     expect(harness.tools.has("audit")).toBe(true)
-    expect(harness.tools.has("loop")).toBe(true)
     expect(harness.tools.has("plan")).toBe(true)
     expect(harness.spawnActor).toBeUndefined()
-    expect(harness.tagInjections).toBeDefined()
-    expect(harness.tagInjections!.length).toBeGreaterThan(0)
-    const loopTag = harness.tagInjections!.find((t) => t.tag === "loop-evaluation")
-    expect(loopTag).toBeDefined()
-    expect(loopTag!.tools.map((t) => t.name)).toContain("loop_evaluation")
   })
 
   test("SubagentToolsExtension provides delegate/handoff tools", () => {

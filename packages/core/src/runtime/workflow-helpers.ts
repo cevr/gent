@@ -6,9 +6,7 @@ import { Effect, Schema } from "effect"
 import type { ModelId } from "../domain/model.js"
 import { SubagentError } from "../domain/agent.js"
 import type { AgentDefinition, SubagentResult, SubagentRunner } from "../domain/agent.js"
-import type { EventEnvelope } from "../domain/event.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
-import type { LoopVerdict } from "../runtime/loop.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
 // ── Shell Command Runner ──
@@ -68,58 +66,6 @@ export const runAdversarialPair = (
     ] as const,
     { concurrency: 2 },
   )
-
-// ── Verdict Extraction ──
-
-export interface ExtractedLoopEvaluation {
-  readonly verdict: LoopVerdict
-  readonly feedback?: string
-}
-
-/**
- * Extract loop evaluation from subagent events.
- * Trusts only a successfully completed loop_evaluation tool call.
- */
-export const extractLoopEvaluation = (
-  envelopes: ReadonlyArray<EventEnvelope>,
-  _resultText: string,
-): ExtractedLoopEvaluation => {
-  // Primary: search for a successfully completed loop_evaluation tool call
-  const succeededCallIds = new Set<string>()
-  for (const envelope of envelopes) {
-    if (
-      (envelope.event._tag === "ToolCallSucceeded" ||
-        envelope.event._tag === "ToolCallCompleted") &&
-      envelope.event.toolName === "loop_evaluation"
-    ) {
-      succeededCallIds.add(envelope.event.toolCallId)
-    }
-  }
-  // Only trust input from tool calls that completed successfully
-  for (const envelope of envelopes) {
-    if (
-      envelope.event._tag === "ToolCallStarted" &&
-      envelope.event.toolName === "loop_evaluation" &&
-      envelope.event.input !== undefined &&
-      succeededCallIds.has(envelope.event.toolCallId)
-    ) {
-      const input = envelope.event.input as Record<string, unknown>
-      if (input["verdict"] === "done" || input["verdict"] === "continue") {
-        return {
-          verdict: input["verdict"],
-          feedback: typeof input["summary"] === "string" ? input["summary"] : undefined,
-        }
-      }
-    }
-  }
-
-  return { verdict: "continue" }
-}
-
-export const extractLoopVerdict = (
-  envelopes: ReadonlyArray<EventEnvelope>,
-  resultText: string,
-): LoopVerdict => extractLoopEvaluation(envelopes, resultText).verdict
 
 // ── Require Text ──
 

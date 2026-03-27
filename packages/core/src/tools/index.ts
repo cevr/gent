@@ -115,6 +115,5 @@ export { TaskGetTool, TaskGetParams } from "./task-get"
 export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
 
 // Delegate Tools
-export { LoopTool, LoopParams, LoopEvaluationTool } from "./loop"
 export { PlanTool, PlanParams } from "./plan"
 export { AuditTool, AuditParams } from "./audit"

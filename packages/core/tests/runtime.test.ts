@@ -264,19 +264,19 @@ describe("compileToolPolicy", () => {
 
   test("tag injection adds tools when tag matches", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
-    const extra = makeTool("loop_evaluation", "state")
-    const tagInjections = [{ tag: "loop-eval", tools: [extra] }]
-    const ctx = { ...emptyCtx, tags: ["loop-eval"] as ReadonlyArray<string> }
+    const extra = makeTool("test_signal", "state")
+    const tagInjections = [{ tag: "test-signal", tools: [extra] }]
+    const ctx = { ...emptyCtx, tags: ["test-signal"] as ReadonlyArray<string> }
     const { tools } = compileToolPolicy(allTools, agent, ctx, tagInjections, [])
-    expect(names(tools)).toContain("loop_evaluation")
+    expect(names(tools)).toContain("test_signal")
   })
 
   test("tag injection skipped when tag absent", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
-    const extra = makeTool("loop_evaluation", "state")
-    const tagInjections = [{ tag: "loop-eval", tools: [extra] }]
+    const extra = makeTool("test_signal", "state")
+    const tagInjections = [{ tag: "test-signal", tools: [extra] }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, tagInjections, [])
-    expect(names(tools)).not.toContain("loop_evaluation")
+    expect(names(tools)).not.toContain("test_signal")
   })
 
   test("extension projection include adds tools", () => {
