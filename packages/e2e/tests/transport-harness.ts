@@ -60,4 +60,4 @@ const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted"
 
 export const transportCases = makeTransportCases()
 export const slowTransportCases = makeTransportCases("debug-slow")
-export const queueTransportCases = [makeWorkerCase("debug-slow")]
+export const queueTransportCases = [makeDirectCase("debug-slow"), makeWorkerCase("debug-slow")]
