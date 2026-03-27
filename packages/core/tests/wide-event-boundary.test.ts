@@ -17,7 +17,8 @@ import {
   rpcBoundary,
   subagentBoundary,
 } from "../src/runtime/wide-event-boundary"
-import type { LogEvent } from "effect-wide-event"
+import type { LogEvent } from "../src/runtime/wide-event-boundary"
+import type { SessionId, BranchId, ToolCallId } from "../src/domain/ids"
 
 const captured = () => MutableRef.make<Array<LogEvent>>([])
 
@@ -31,7 +32,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* WideEvent.set({ model: "claude-4" }).pipe(
-          withWideEvent(turnBoundary("sess-1", "br-1", "cowork")),
+          withWideEvent(turnBoundary("sess-1" as SessionId, "br-1" as BranchId, "cowork")),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -52,7 +53,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* Effect.void.pipe(
-          withWideEvent(toolBoundary("bash", "tc-123")),
+          withWideEvent(toolBoundary("bash", "tc-123" as ToolCallId)),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -102,7 +103,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* WideEvent.set({ childSessionId: "child-1" }).pipe(
-          withWideEvent(subagentBoundary("researcher", "parent-1")),
+          withWideEvent(subagentBoundary("researcher", "parent-1" as SessionId)),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -122,7 +123,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* Effect.fail({ _tag: "AgentLoopError", message: "turn failed" }).pipe(
-          withWideEvent(turnBoundary("sess-1", "br-1", "cowork")),
+          withWideEvent(turnBoundary("sess-1" as SessionId, "br-1" as BranchId, "cowork")),
           Effect.catchIf(
             () => true,
             () => Effect.void,
@@ -146,10 +147,10 @@ describe("wide-event-boundary", () => {
           yield* WideEvent.set({ agent: "cowork" })
 
           yield* WideEvent.set({ toolResult: "ok" }).pipe(
-            withWideEvent(toolBoundary("read", "tc-1")),
+            withWideEvent(toolBoundary("read", "tc-1" as ToolCallId)),
           )
         }).pipe(
-          withWideEvent(turnBoundary("sess-1", "br-1", "cowork")),
+          withWideEvent(turnBoundary("sess-1" as SessionId, "br-1" as BranchId, "cowork")),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 

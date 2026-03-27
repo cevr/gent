@@ -64,7 +64,7 @@ export {
   rpcBoundary,
   subagentBoundary,
 } from "./wide-event-boundary"
-export type { WideEventContext, WideEventEnvelope } from "./wide-event-boundary"
+export type { WideEventContext, WideEventEnvelope, LogEvent } from "./wide-event-boundary"
 
 export { formatSchemaError } from "./format-schema-error"
 

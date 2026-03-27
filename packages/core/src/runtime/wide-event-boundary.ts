@@ -3,16 +3,22 @@
  * with gent-specific context factories.
  *
  * One structured event per boundary: turn, tool, provider stream, RPC, subagent.
+ *
+ * Envelope fields (sessionId, branchId, etc.) are pre-loaded into the boundary's
+ * accumulator. Internal code using WideEvent.set() should not overwrite these keys.
+ * The library's transport fields (service, status, durationMs, traceId) are always
+ * re-applied on final merge and cannot be overwritten.
  */
 
 export { WideEvent, withWideEvent, WideEventLogger } from "effect-wide-event"
-export type { WideEventContext, WideEventEnvelope } from "effect-wide-event"
+export type { WideEventContext, WideEventEnvelope, LogEvent } from "effect-wide-event"
 
 import type { WideEventContext } from "effect-wide-event"
+import type { SessionId, BranchId, ToolCallId } from "../domain/ids.js"
 
 export const turnBoundary = (
-  sessionId: string,
-  branchId: string,
+  sessionId: SessionId,
+  branchId: BranchId,
   agent: string,
 ): WideEventContext => ({
   service: "agent-loop",
@@ -21,7 +27,7 @@ export const turnBoundary = (
   envelope: { sessionId, branchId },
 })
 
-export const toolBoundary = (toolName: string, toolCallId: string): WideEventContext => ({
+export const toolBoundary = (toolName: string, toolCallId: ToolCallId): WideEventContext => ({
   service: "tool-runner",
   method: toolName,
   envelope: { toolCallId },
@@ -38,7 +44,10 @@ export const rpcBoundary = (rpcName: string): WideEventContext => ({
   method: rpcName,
 })
 
-export const subagentBoundary = (agentName: string, parentSessionId: string): WideEventContext => ({
+export const subagentBoundary = (
+  agentName: string,
+  parentSessionId: SessionId,
+): WideEventContext => ({
   service: "subagent",
   method: "run",
   actor: agentName,
