@@ -40,8 +40,6 @@ type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
 export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") => {
   const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
-  const authGuardLive = Layer.provide(AuthGuard.Live, authStoreLive)
-  const providerAuthLive = Layer.provide(ProviderAuth.Live, authStoreLive)
   const extensionRegistryLive = ExtensionRegistry.fromResolved(
     resolveExtensions([
       {
@@ -52,6 +50,10 @@ export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-script
       },
     ]),
   )
+
+  const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
+  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
+  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
 
   const providerLive = providerMode === "debug-slow" ? DebugSlowProvider : DebugProvider
 

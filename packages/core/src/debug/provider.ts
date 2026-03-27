@@ -1,4 +1,4 @@
-import { Duration, Effect, Layer, Stream } from "effect"
+import { Deferred, Duration, Effect, Layer, Queue, Stream } from "effect"
 import {
   FinishChunk,
   Provider,
@@ -121,3 +121,71 @@ export const DebugSlowProvider = Layer.succeed(Provider, {
   },
   generate: () => Effect.succeed("debug slow"),
 })
+
+// =============================================================================
+// Signal-based provider — test controls when chunks emit
+// =============================================================================
+
+export interface SignalProviderControls {
+  /** Emit the next queued chunk. Resolves when the chunk is consumed. */
+  readonly emitNext: () => Effect.Effect<void>
+  /** Emit all remaining chunks + finish. */
+  readonly emitAll: () => Effect.Effect<void>
+  /** Signal that the stream setup has started (provider.stream was called). */
+  readonly waitForStreamStart: Effect.Effect<void>
+}
+
+/**
+ * Creates a Provider layer where chunk emission is controlled by explicit signals.
+ *
+ * Usage:
+ * ```ts
+ * const { layer, controls } = createSignalProvider("hello world")
+ * // ... provide layer to test ...
+ * yield* controls.waitForStreamStart // stream is open, "thinking" state is visible
+ * yield* controls.emitNext()         // emit first text chunk
+ * yield* controls.emitAll()          // emit rest + finish
+ * ```
+ */
+export const createSignalProvider = (
+  reply: string,
+  options?: { inputTokens?: number; outputTokens?: number },
+) =>
+  Effect.gen(function* () {
+    const gate = yield* Queue.unbounded<null>()
+    const streamStarted = yield* Deferred.make<void>()
+
+    const chunks = reply
+      .split(/(?<=[.!?])\s+/)
+      .filter((chunk) => chunk.length > 0)
+      .map((text) => new TextChunk({ text: `${text} ` }))
+
+    const finishChunk = new FinishChunk({
+      finishReason: "stop",
+      usage: {
+        inputTokens: options?.inputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+        outputTokens: options?.outputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+      },
+    })
+
+    const allChunks = [...chunks, finishChunk]
+
+    const layer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(streamStarted, void 0)
+          return Stream.fromIterable(allChunks).pipe(
+            Stream.mapEffect((chunk) => Queue.take(gate).pipe(Effect.as(chunk))),
+          )
+        }),
+      generate: () => Effect.succeed(reply),
+    })
+
+    const controls: SignalProviderControls = {
+      emitNext: () => Queue.offer(gate, null).pipe(Effect.asVoid),
+      emitAll: () => Effect.forEach(allChunks, () => Queue.offer(gate, null).pipe(Effect.asVoid)),
+      waitForStreamStart: Deferred.await(streamStarted),
+    }
+
+    return { layer, controls }
+  })

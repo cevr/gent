@@ -54,7 +54,7 @@ function spawnWithDir(
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
 ): TestContext {
-  const tuiDir = path.resolve(import.meta.dir, "..")
+  const tuiDir = path.resolve(import.meta.dir, "../../../apps/tui")
   const mainPath = path.join(tuiDir, "src", "main.tsx")
   const preloadPath = path.join(
     tuiDir,
