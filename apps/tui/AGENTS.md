@@ -151,6 +151,7 @@ Builtins are individual `.client.ts` files in `src/extensions/builtins/`:
 | ------------------------------- | ------------------ | ------------------------ |
 | `builtins/tools.client.ts`      | `@gent/tools`      | Tool renderers           |
 | `builtins/plan.client.ts`       | `@gent/plan`       | Plan widget              |
+| `builtins/auto.client.ts`       | `@gent/auto`       | Auto loop progress       |
 | `builtins/tasks.client.ts`      | `@gent/tasks`      | Task widget              |
 | `builtins/connection.client.ts` | `@gent/connection` | Connection status widget |
 

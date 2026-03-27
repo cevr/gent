@@ -114,6 +114,8 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 | `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
 | `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
 | `packages/core/src/debug/provider.ts`              | debug providers + `createSignalProvider`            |
+| `packages/core/src/extensions/auto.ts`             | auto loop modality extension (fromMachine)          |
+| `packages/core/src/tools/auto-checkpoint.ts`       | signal tool for auto loop iteration                 |
 | `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation
