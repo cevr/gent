@@ -117,7 +117,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               )
 
               const entries: ActorEntry[] = []
-              for (const { spawn, projection } of spawnActors) {
+              for (const { extensionId, spawn, projection } of spawnActors) {
                 const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
                   sessionId,
                   branchId,
@@ -127,7 +127,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   Effect.provide(spawnLayer),
                   Effect.catchDefect((defect) =>
                     Effect.logWarning("actor.init.failed").pipe(
-                      Effect.annotateLogs({ error: String(defect) }),
+                      Effect.annotateLogs({ extensionId, error: String(defect) }),
                       Effect.as(undefined),
                     ),
                   ),

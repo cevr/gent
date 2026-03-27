@@ -224,7 +224,7 @@ export const LocalActorTransportLive: Layer.Layer<
                     }),
                   )
                   yield* Effect.logWarning("agent loop submission failed").pipe(
-                    Effect.annotateLogs({ error: String(cause) }),
+                    Effect.annotateLogs({ error: Cause.pretty(cause) }),
                   )
                 }).pipe(Effect.catchEager(() => Effect.void))
               }),
