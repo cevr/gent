@@ -552,7 +552,7 @@ export function useSessionController(props: {
     }
 
     if (event.ctrl === true && event.name === "c") {
-      handleQuitKey("ctrl+c")
+      exit()
       return true
     }
 
