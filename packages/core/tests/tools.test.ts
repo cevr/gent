@@ -43,7 +43,9 @@ const PlatformLayer = Layer.merge(BunServices.layer, RuntimePlatformLayer)
 
 describe("Tools", () => {
   describe("ReadTool", () => {
-    it.scopedLive("reads a file", () =>
+    const readTest = it.scopedLive.layer(PlatformLayer)
+
+    readTest("reads a file", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -52,19 +54,19 @@ describe("Tools", () => {
 
         const result = yield* ReadTool.execute({ path: testFile }, ctx)
         expect(result.content).toBe("1\tHello, World!")
-      }).pipe(Effect.provide(PlatformLayer)),
+      }),
     )
 
-    it.scopedLive("returns error for non-existent file", () =>
+    readTest("returns error for non-existent file", () =>
       Effect.gen(function* () {
         const result = yield* Effect.result(
           ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx),
         )
         expect(result._tag).toBe("Failure")
-      }).pipe(Effect.provide(PlatformLayer)),
+      }),
     )
 
-    it.scopedLive("returns error for directory", () =>
+    readTest("returns error for directory", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -74,7 +76,7 @@ describe("Tools", () => {
         if (result._tag === "Failure") {
           expect(result.failure.message).toContain("Cannot read directory")
         }
-      }).pipe(Effect.provide(PlatformLayer)),
+      }),
     )
   })
 

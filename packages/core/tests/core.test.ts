@@ -95,38 +95,37 @@ describe("Skills System", () => {
 })
 
 describe("Auth Store", () => {
-  it.live("AuthStore stores and retrieves keys", () => {
-    const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    return Effect.gen(function* () {
+  const authTest = it.live.layer(Layer.provide(AuthStore.Live, AuthStorage.Test()))
+
+  authTest("AuthStore stores and retrieves keys", () =>
+    Effect.gen(function* () {
       const auth = yield* AuthStore
       yield* auth.set("anthropic", new AuthApi({ type: "api", key: "test-key-123" }))
       const result = yield* auth.get("anthropic")
       expect(result?.type).toBe("api")
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("AuthStore deletes keys", () => {
-    const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    return Effect.gen(function* () {
+  authTest("AuthStore deletes keys", () =>
+    Effect.gen(function* () {
       const auth = yield* AuthStore
       yield* auth.set("openai", new AuthApi({ type: "api", key: "key" }))
       yield* auth.remove("openai")
       const result = yield* auth.get("openai")
       expect(result).toBeUndefined()
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("AuthStore lists providers", () => {
-    const layer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    return Effect.gen(function* () {
+  authTest("AuthStore lists providers", () =>
+    Effect.gen(function* () {
       const auth = yield* AuthStore
       yield* auth.set("anthropic", new AuthApi({ type: "api", key: "k1" }))
       yield* auth.set("openai", new AuthApi({ type: "api", key: "k2" }))
       const result = yield* auth.list()
       expect(result).toContain("anthropic")
       expect(result).toContain("openai")
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 })
 
 describe("Cost Calculation", () => {

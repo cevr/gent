@@ -4,7 +4,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
-const layer = Storage.Test()
+const test = it.live.layer(Storage.Test())
 
 // Fixture helpers
 
@@ -61,7 +61,7 @@ const addMessage = (
   })
 
 describe("searchMessages", () => {
-  it.live("finds message by keyword in text part content", () =>
+  test("finds message by keyword in text part content", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "implement the authentication flow")
@@ -70,10 +70,9 @@ describe("searchMessages", () => {
       const results = yield* storage.searchMessages("authentication")
       expect(results.length).toBeGreaterThan(0)
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("returns snippet with match context", () =>
+  test("returns snippet with match context", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "assistant", "the database migration is complete")
@@ -82,10 +81,9 @@ describe("searchMessages", () => {
       const results = yield* storage.searchMessages("migration")
       expect(results.length).toBeGreaterThan(0)
       expect(results[0]!.snippet).toBeDefined()
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("filters by dateAfter (recent messages only)", () =>
+  test("filters by dateAfter (recent messages only)", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
       const oldDate = new Date(Date.now() - 86400000 * 30)
@@ -99,10 +97,9 @@ describe("searchMessages", () => {
         dateAfter: Date.now() - 86400000,
       })
       expect(results.every((r) => r.createdAt > Date.now() - 86400000)).toBe(true)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("respects limit parameter", () =>
+  test("respects limit parameter", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
       for (let i = 0; i < 5; i++) {
@@ -112,18 +109,16 @@ describe("searchMessages", () => {
       const storage = yield* Storage
       const results = yield* storage.searchMessages("limitword", { limit: 2 })
       expect(results.length).toBeLessThanOrEqual(2)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("returns empty array for no matches", () =>
+  test("returns empty array for no matches", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const results = yield* storage.searchMessages("xyznonexistentkeyword999")
       expect(results).toEqual([])
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("joins session name in results", () =>
+  test("joins session name in results", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture({ sessionName: "My Test Session" })
       yield* addMessage(sessionId, branchId, "user", "unique namedtest content")
@@ -133,12 +128,11 @@ describe("searchMessages", () => {
       const match = results.find((r) => r.sessionId === sessionId)
       expect(match).toBeDefined()
       expect(match!.sessionName).toBe("My Test Session")
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 })
 
 describe("getSessionDetail", () => {
-  it.live("returns all branches with messages", () =>
+  test("returns all branches with messages", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const { sessionId, branchId } = yield* createFixture()
@@ -162,10 +156,9 @@ describe("getSessionDetail", () => {
       expect(tree.branches.length).toBe(2)
       expect(tree.branches[0]!.messages.length).toBe(2)
       expect(tree.branches[1]!.messages.length).toBe(1)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("returns messages in chronological order", () =>
+  test("returns messages in chronological order", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "first", new Date(1000))
@@ -177,20 +170,18 @@ describe("getSessionDetail", () => {
       const msgs = tree.branches[0]!.messages
       expect(msgs[0]!.parts[0]!.type === "text" && msgs[0]!.parts[0]!.text).toBe("first")
       expect(msgs[2]!.parts[0]!.type === "text" && msgs[2]!.parts[0]!.text).toBe("third")
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("errors on missing session", () =>
+  test("errors on missing session", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const result = yield* Effect.result(storage.getSessionDetail("nonexistent" as SessionId))
       expect(result._tag).toBe("Failure")
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 })
 
 describe("getChildSessions", () => {
-  it.live("returns direct children of a parent session", () =>
+  test("returns direct children of a parent session", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const parent = yield* createFixture({ sessionName: "parent" })
@@ -226,19 +217,17 @@ describe("getChildSessions", () => {
       expect(children[0]!.id).toBe(child1Id)
       expect(children[1]!.id).toBe(child2Id)
       expect(children[0]!.parentSessionId).toBe(parent.sessionId)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("returns empty array when no children", () =>
+  test("returns empty array when no children", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const parent = yield* createFixture()
       const children = yield* storage.getChildSessions(parent.sessionId)
       expect(children.length).toBe(0)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("does not return grandchildren", () =>
+  test("does not return grandchildren", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const parent = yield* createFixture({ sessionName: "root" })
@@ -271,12 +260,11 @@ describe("getChildSessions", () => {
       const children = yield* storage.getChildSessions(parent.sessionId)
       expect(children.length).toBe(1)
       expect(children[0]!.id).toBe(childId)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 })
 
 describe("getSessionAncestors", () => {
-  it.live("walks from child to root", () =>
+  test("walks from child to root", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const now = new Date()
@@ -313,16 +301,14 @@ describe("getSessionAncestors", () => {
       expect(ancestors[0]!.id).toBe(childId)
       expect(ancestors[1]!.id).toBe(parentId)
       expect(ancestors[2]!.id).toBe(rootId)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 
-  it.live("returns single session for root", () =>
+  test("returns single session for root", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const root = yield* createFixture({ sessionName: "lone-root" })
       const ancestors = yield* storage.getSessionAncestors(root.sessionId)
       expect(ancestors.length).toBe(1)
       expect(ancestors[0]!.id).toBe(root.sessionId)
-    }).pipe(Effect.provide(layer)),
-  )
+    }))
 })

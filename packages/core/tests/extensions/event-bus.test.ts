@@ -2,15 +2,16 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Ref } from "effect"
 import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 
+const test = it.live.layer(ExtensionEventBus.Live)
+
 describe("ExtensionEventBus", () => {
-  it.live("emit with no listeners is a no-op", () =>
+  test("emit with no listeners is a no-op", () =>
     Effect.gen(function* () {
       const bus = yield* ExtensionEventBus
       yield* bus.emit("test:channel", { value: 1 })
-    }).pipe(Effect.provide(ExtensionEventBus.Live)),
-  )
+    }))
 
-  it.live("on + emit delivers payload to handler", () =>
+  test("on + emit delivers payload to handler", () =>
     Effect.gen(function* () {
       const bus = yield* ExtensionEventBus
       const received = yield* Ref.make<unknown[]>([])
@@ -21,10 +22,9 @@ describe("ExtensionEventBus", () => {
 
       const result = yield* Ref.get(received)
       expect(result).toEqual([{ value: 42 }])
-    }).pipe(Effect.provide(ExtensionEventBus.Live)),
-  )
+    }))
 
-  it.live("multiple listeners on same channel all receive", () =>
+  test("multiple listeners on same channel all receive", () =>
     Effect.gen(function* () {
       const bus = yield* ExtensionEventBus
       const log = yield* Ref.make<string[]>([])
@@ -37,10 +37,9 @@ describe("ExtensionEventBus", () => {
       expect(result).toHaveLength(2)
       expect(result).toContain("a")
       expect(result).toContain("b")
-    }).pipe(Effect.provide(ExtensionEventBus.Live)),
-  )
+    }))
 
-  it.live("off removes handler", () =>
+  test("off removes handler", () =>
     Effect.gen(function* () {
       const bus = yield* ExtensionEventBus
       const count = yield* Ref.make(0)
@@ -53,10 +52,9 @@ describe("ExtensionEventBus", () => {
 
       const result = yield* Ref.get(count)
       expect(result).toBe(1)
-    }).pipe(Effect.provide(ExtensionEventBus.Live)),
-  )
+    }))
 
-  it.live("channels are isolated", () =>
+  test("channels are isolated", () =>
     Effect.gen(function* () {
       const bus = yield* ExtensionEventBus
       const log = yield* Ref.make<string[]>([])
@@ -67,10 +65,9 @@ describe("ExtensionEventBus", () => {
 
       const result = yield* Ref.get(log)
       expect(result).toEqual(["a"])
-    }).pipe(Effect.provide(ExtensionEventBus.Live)),
-  )
+    }))
 
-  it.live("handler errors are swallowed", () =>
+  test("handler errors are swallowed", () =>
     Effect.gen(function* () {
       const bus = yield* ExtensionEventBus
       const received = yield* Ref.make(false)
@@ -81,6 +78,5 @@ describe("ExtensionEventBus", () => {
 
       const result = yield* Ref.get(received)
       expect(result).toBe(true)
-    }).pipe(Effect.provide(ExtensionEventBus.Live)),
-  )
+    }))
 })

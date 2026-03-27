@@ -3,8 +3,10 @@ import { Effect, Ref, Layer } from "effect"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 
+const test = it.live.layer(ExtensionTurnControl.Test())
+
 describe("ExtensionTurnControl", () => {
-  it.live("Test layer queueFollowUp is a no-op", () =>
+  test("Test layer queueFollowUp is a no-op", () =>
     Effect.gen(function* () {
       const tc = yield* ExtensionTurnControl
       yield* tc.queueFollowUp({
@@ -12,10 +14,9 @@ describe("ExtensionTurnControl", () => {
         branchId: "b1" as BranchId,
         content: "follow up",
       })
-    }).pipe(Effect.provide(ExtensionTurnControl.Test())),
-  )
+    }))
 
-  it.live("Test layer interject is a no-op", () =>
+  test("Test layer interject is a no-op", () =>
     Effect.gen(function* () {
       const tc = yield* ExtensionTurnControl
       yield* tc.interject({
@@ -23,8 +24,7 @@ describe("ExtensionTurnControl", () => {
         branchId: "b1" as BranchId,
         content: "urgent",
       })
-    }).pipe(Effect.provide(ExtensionTurnControl.Test())),
-  )
+    }))
 
   it.live("custom test layer captures calls", () =>
     Effect.gen(function* () {

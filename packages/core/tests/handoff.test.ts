@@ -84,12 +84,11 @@ describe("HandoffHandler", () => {
   })
 
   describe("Live layer", () => {
-    const LiveLayer = Layer.provideMerge(
-      HandoffHandler.Live,
-      Layer.mergeAll(EventStore.Live, Storage.Memory()),
+    const liveTest = it.live.layer(
+      Layer.provideMerge(HandoffHandler.Live, Layer.mergeAll(EventStore.Live, Storage.Memory())),
     )
 
-    it.live("present blocks until respond, then returns decision", () =>
+    liveTest("present blocks until respond, then returns decision", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
 
@@ -110,10 +109,10 @@ describe("HandoffHandler", () => {
         yield* Effect.sleep("10 millis")
         const isDone = yield* Deferred.isDone(decisionDeferred)
         expect(isDone).toBe(false)
-      }).pipe(Effect.provide(LiveLayer)),
+      }),
     )
 
-    it.live("present/respond confirm flow returns entry with summary", () =>
+    liveTest("present/respond confirm flow returns entry with summary", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
         const eventStore = yield* EventStore
@@ -163,10 +162,10 @@ describe("HandoffHandler", () => {
         // The present Deferred should resolve
         const decision = yield* Deferred.await(decisionDeferred)
         expect(decision).toBe("confirm")
-      }).pipe(Effect.provide(LiveLayer)),
+      }),
     )
 
-    it.live("present/respond reject flow returns entry", () =>
+    liveTest("present/respond reject flow returns entry", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
         const eventStore = yield* EventStore
@@ -209,18 +208,18 @@ describe("HandoffHandler", () => {
 
         const decision = yield* Deferred.await(decisionDeferred)
         expect(decision).toBe("reject")
-      }).pipe(Effect.provide(LiveLayer)),
+      }),
     )
 
-    it.live("respond to unknown requestId returns undefined", () =>
+    liveTest("respond to unknown requestId returns undefined", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
         const result = yield* handler.respond("nonexistent", "confirm", "s" as SessionId)
         expect(result).toBeUndefined()
-      }).pipe(Effect.provide(LiveLayer)),
+      }),
     )
 
-    it.live("double respond returns undefined on second call", () =>
+    liveTest("double respond returns undefined on second call", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
         const eventStore = yield* EventStore
@@ -262,7 +261,7 @@ describe("HandoffHandler", () => {
         // Second respond returns undefined (already consumed)
         const second = yield* handler.respond(requestId, "reject")
         expect(second).toBeUndefined()
-      }).pipe(Effect.provide(LiveLayer)),
+      }),
     )
   })
 })

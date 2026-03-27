@@ -7,9 +7,11 @@ import { Effect } from "effect"
 import { Session } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
+const test = it.live.layer(Storage.Test())
+
 describe("Session bypass", () => {
   describe("Storage", () => {
-    it.live("createSession stores bypass=true by default", () =>
+    test("createSession stores bypass=true by default", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const session = new Session({
@@ -22,10 +24,9 @@ describe("Session bypass", () => {
         yield* storage.createSession(session)
         const result = yield* storage.getSession("test-session-1")
         expect(result?.bypass).toBe(true)
-      }).pipe(Effect.provide(Storage.Test())),
-    )
+      }))
 
-    it.live("createSession stores bypass=false when specified", () =>
+    test("createSession stores bypass=false when specified", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const session = new Session({
@@ -38,10 +39,9 @@ describe("Session bypass", () => {
         yield* storage.createSession(session)
         const result = yield* storage.getSession("test-session-2")
         expect(result?.bypass).toBe(false)
-      }).pipe(Effect.provide(Storage.Test())),
-    )
+      }))
 
-    it.live("updateSession can toggle bypass from true to false", () =>
+    test("updateSession can toggle bypass from true to false", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = new Date()
@@ -64,10 +64,9 @@ describe("Session bypass", () => {
 
         const result = yield* storage.getSession("test-session-3")
         expect(result?.bypass).toBe(false)
-      }).pipe(Effect.provide(Storage.Test())),
-    )
+      }))
 
-    it.live("updateSession can toggle bypass from false to true", () =>
+    test("updateSession can toggle bypass from false to true", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = new Date()
@@ -90,10 +89,9 @@ describe("Session bypass", () => {
 
         const result = yield* storage.getSession("test-session-4")
         expect(result?.bypass).toBe(true)
-      }).pipe(Effect.provide(Storage.Test())),
-    )
+      }))
 
-    it.live("bypass persists across session retrieval", () =>
+    test("bypass persists across session retrieval", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = new Date()
@@ -114,7 +112,6 @@ describe("Session bypass", () => {
 
         expect(first?.bypass).toBe(false)
         expect(second?.bypass).toBe(false)
-      }).pipe(Effect.provide(Storage.Test())),
-    )
+      }))
   })
 })
