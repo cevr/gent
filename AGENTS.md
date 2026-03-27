@@ -46,6 +46,8 @@ bun run --cwd apps/tui dev sessions
 - **No barrels** - `@gent/core` uses subpath exports. Import from specific files: `@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop`, etc.
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
+- **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Use domain context factories from `wide-event-boundary.ts`.
+- **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 
 ## Architecture
 
@@ -97,14 +99,15 @@ assertSequence(calls, [{ service: "Provider", method: "stream" }])
 
 ## Key Files
 
-| File                                             | Purpose                                        |
-| ------------------------------------------------ | ---------------------------------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`    | `decodeMessageParts` for JSON→Schema roundtrip |
-| `packages/core/src/test-utils/index.ts`          | `SequenceRecorder`, recording layers           |
-| `packages/core/src/server/dependencies.ts`       | startup wiring + dependency graph              |
-| `packages/core/src/server/transport-contract.ts` | shared client contract                         |
-| `packages/core/src/runtime/agent/agent-loop.ts`  | flat loop machine assembly                     |
-| `apps/tui/tsconfig.json`                         | `jsxImportSource: "@opentui/solid"` required   |
+| File                                               | Purpose                                             |
+| -------------------------------------------------- | --------------------------------------------------- |
+| `packages/core/src/storage/sqlite-storage.ts`      | `decodeMessageParts` for JSON→Schema roundtrip      |
+| `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
+| `packages/core/src/server/dependencies.ts`         | startup wiring + dependency graph                   |
+| `packages/core/src/server/transport-contract.ts`   | shared client contract                              |
+| `packages/core/src/runtime/agent/agent-loop.ts`    | flat loop machine assembly                          |
+| `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
+| `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation
 
