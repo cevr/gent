@@ -65,6 +65,7 @@ import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
 import { ToolRunner } from "./tool-runner"
 import {
   type ActiveStreamHandle,
+  emptyTurnMetrics,
   executeToolsPhase,
   finalizeTurnPhase,
   resolveTurnPhase,
@@ -613,6 +614,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const turnToolsRef = yield* Ref.make<ReadonlyArray<AnyToolDefinition>>([])
+            const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
             const checkpoint = Option.getOrUndefined(
               yield* Effect.option(storage.getAgentLoopCheckpoint({ sessionId, branchId })),
@@ -765,6 +767,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   yield* Ref.set(turnToolsRef, turnTools)
                 }
               }
+              // Reset turn metrics for this stream cycle
+              yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
+
               const collected = yield* streamTurnPhase({
                 messageId: state.message.id,
                 resolved: {
@@ -783,6 +788,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 sessionId,
                 branchId,
                 activeStream,
+                turnMetrics: turnMetricsRef,
               }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined)))
 
               if (collected.interrupted) {
@@ -837,6 +843,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 currentAgent: state.currentAgent ?? state.currentTurnAgent ?? "cowork",
                 extensionRegistry,
                 handoffHandler,
+                turnMetrics: turnMetricsRef,
               })
 
               const { queue, nextItem } = takeNextQueuedTurn(state.queue)

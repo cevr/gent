@@ -75,6 +75,23 @@ export type ActiveStreamHandle = {
   interruptedRef: Ref.Ref<boolean>
 }
 
+/** Mutable accumulator for per-turn wide event fields. */
+export type TurnMetrics = {
+  agent: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+  toolCallCount: number
+}
+
+export const emptyTurnMetrics = (): TurnMetrics => ({
+  agent: "cowork",
+  model: "",
+  inputTokens: 0,
+  outputTokens: 0,
+  toolCallCount: 0,
+})
+
 interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
   tools: ReadonlyArray<AnyToolDefinition>
@@ -497,6 +514,7 @@ export const streamTurnPhase = (params: {
   extensionRegistry: ExtensionRegistryService
   publishEvent: PublishEvent
   storage: StorageService
+  turnMetrics?: Ref.Ref<TurnMetrics>
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
@@ -599,6 +617,17 @@ export const streamTurnPhase = (params: {
         toolCallCount: collected.draft.toolCalls.length,
       }),
     )
+
+    if (params.turnMetrics !== undefined) {
+      yield* Ref.update(params.turnMetrics, (m) => ({
+        ...m,
+        agent: params.resolved.currentTurnAgent,
+        model: params.resolved.modelId,
+        inputTokens: m.inputTokens + (collected.draft.usage?.inputTokens ?? 0),
+        outputTokens: m.outputTokens + (collected.draft.usage?.outputTokens ?? 0),
+        toolCallCount: m.toolCallCount + collected.draft.toolCalls.length,
+      }))
+    }
 
     yield* persistAssistantTurn({
       storage: params.storage,
@@ -742,6 +771,7 @@ export const finalizeTurnPhase = (params: {
   currentAgent: AgentNameType
   extensionRegistry: ExtensionRegistryService
   handoffHandler: HandoffHandlerService
+  turnMetrics?: Ref.Ref<TurnMetrics>
 }) =>
   Effect.gen(function* () {
     const existingMessage = yield* params.storage.getMessage(params.messageId)
@@ -795,6 +825,27 @@ export const finalizeTurnPhase = (params: {
         interrupted: params.turnInterrupted,
       }),
     )
+
+    // Emit turn-level wide event with accumulated metrics
+    if (params.turnMetrics !== undefined) {
+      const metrics = yield* Ref.get(params.turnMetrics)
+      yield* Effect.logInfo("wide-event").pipe(
+        Effect.annotateLogs({
+          service: "agent-loop",
+          method: "turn",
+          actor: metrics.agent,
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          model: metrics.model,
+          inputTokens: metrics.inputTokens,
+          outputTokens: metrics.outputTokens,
+          toolCallCount: metrics.toolCallCount,
+          durationMs: Number(turnDurationMs),
+          interrupted: params.turnInterrupted,
+          status: params.turnInterrupted ? "interrupted" : "ok",
+        }),
+      )
+    }
 
     return nextHandoffSuppress
   })
