@@ -292,6 +292,32 @@ Key files:
 | `packages/core/src/extensions/memory/projection.ts`   | Prompt section + UI model     |
 | `packages/core/src/extensions/memory/index.ts`        | Extension registration        |
 
+## Observability
+
+Wide event boundaries (one structured log per unit of work) via `effect-wide-event`:
+
+| Boundary        | Service       | File                                                   |
+| --------------- | ------------- | ------------------------------------------------------ |
+| Agent turn      | `agent-loop`  | `runtime/agent/agent-loop-phases.ts` (TurnMetrics ref) |
+| Tool call       | `tool-runner` | `runtime/agent/tool-runner.ts`                         |
+| Provider stream | `provider`    | `runtime/agent/agent-loop-phases.ts`                   |
+| RPC request     | `rpc`         | `server/rpc-handlers.ts`                               |
+| Subagent run    | `subagent`    | `runtime/agent/subagent-runner.ts`                     |
+
+Logging conventions:
+
+- Structured annotations: `Effect.logInfo("noun.verb").pipe(Effect.annotateLogs({ key: value }))`
+- Never `Effect.logWarning("msg", error)` — always `.pipe(Effect.annotateLogs({ error: String(e) }))`
+- Tool-level errors captured via `WideEvent.set({ toolError: "..." })` (value-level, not effect failures)
+
+Log destinations:
+
+- `/tmp/gent.log` — server-side JSON (via `GentLogger`)
+- `/tmp/gent-client.log` — TUI-side JSON (via `clientLog`)
+- `/tmp/gent-trace.log` — span traces (via `GentTracerLive`)
+
+Request-ID correlation: TUI generates `crypto.randomUUID()` at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
+
 ## Non-Goals
 
 - No cluster/distribution roadmap in this document.
