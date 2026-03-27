@@ -6,13 +6,13 @@
 
 import type { ExtensionClientModule } from "@gent/core/domain/extension-client.js"
 import tools from "./tools.client"
-import planMode from "./plan-mode.client"
+import plan from "./plan.client"
 import tasks from "./tasks.client"
 import connection from "./connection.client"
 
 export const BUILTIN_CLIENT_EXTENSIONS: ReadonlyArray<ExtensionClientModule> = [
   tools,
-  planMode,
+  plan,
   tasks,
   connection,
 ]

@@ -1,9 +1,9 @@
 /**
- * Plan-mode extension — stateful actor using fromReducer.
+ * Plan extension — stateful actor using fromReducer.
  *
  * State: mode (normal/plan/executing) + todo items extracted from turn completions.
  * Derive: tool policy restrictions in plan mode, prompt context injection, UI model.
- * Intents: togglePlanMode, executePlan, refinePlan.
+ * Intents: togglePlan, executePlan, refinePlan.
  */
 
 import { Effect, Schema } from "effect"
@@ -20,8 +20,8 @@ import { fromReducer } from "../runtime/extensions/from-reducer.js"
 
 // ── State ──
 
-export const PlanModeStatus = Schema.Literals(["normal", "plan", "executing"])
-export type PlanModeStatus = typeof PlanModeStatus.Type
+export const PlanStatus = Schema.Literals(["normal", "plan", "executing"])
+export type PlanStatus = typeof PlanStatus.Type
 
 export const TodoStatus = Schema.Literals(["pending", "in-progress", "done"])
 export type TodoStatus = typeof TodoStatus.Type
@@ -33,29 +33,25 @@ export const TodoItem = Schema.Struct({
 })
 export type TodoItem = typeof TodoItem.Type
 
-export const PlanModeState = Schema.Struct({
-  mode: PlanModeStatus,
+export const PlanState = Schema.Struct({
+  mode: PlanStatus,
   todos: Schema.Array(TodoItem),
 })
-export type PlanModeState = typeof PlanModeState.Type
+export type PlanState = typeof PlanState.Type
 
 // ── Intents ──
 
-export const TogglePlanModeIntent = Schema.TaggedStruct("TogglePlanMode", {})
+export const TogglePlanIntent = Schema.TaggedStruct("TogglePlan", {})
 export const ExecutePlanIntent = Schema.TaggedStruct("ExecutePlan", {})
 export const RefinePlanIntent = Schema.TaggedStruct("RefinePlan", {})
 
-export const PlanModeIntent = Schema.Union([
-  TogglePlanModeIntent,
-  ExecutePlanIntent,
-  RefinePlanIntent,
-])
-export type PlanModeIntent = typeof PlanModeIntent.Type
+export const PlanIntent = Schema.Union([TogglePlanIntent, ExecutePlanIntent, RefinePlanIntent])
+export type PlanIntent = typeof PlanIntent.Type
 
 // ── UI Model ──
 
-export const PlanModeUiModel = Schema.Struct({
-  mode: PlanModeStatus,
+export const PlanUiModel = Schema.Struct({
+  mode: PlanStatus,
   todos: Schema.Array(TodoItem),
   progress: Schema.Struct({
     total: Schema.Number,
@@ -63,7 +59,7 @@ export const PlanModeUiModel = Schema.Struct({
     inProgress: Schema.Number,
   }),
 })
-export type PlanModeUiModel = typeof PlanModeUiModel.Type
+export type PlanUiModel = typeof PlanUiModel.Type
 
 // ── Todo extraction from assistant text ──
 
@@ -123,14 +119,14 @@ export const extractTodos = (text: string): TodoItem[] => {
   return todos
 }
 
-// ── Plan-mode restricted tools ──
+// ── Plan restricted tools ──
 
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "glob"] as const
+const PLAN_TOOLS = ["read", "bash", "grep", "glob"] as const
 
-// ── Prompt sections for plan mode ──
+// ── Prompt sections for plan ──
 
 const PLAN_RESTRICTIONS_SECTION: PromptSection = {
-  id: "plan-mode-restrictions",
+  id: "plan-restrictions",
   content: `## Plan Mode Active
 
 You are in **plan mode**. Your job is to analyze, plan, and organize — not execute.
@@ -162,7 +158,7 @@ const EXECUTING_PLAN_SECTION = (todos: ReadonlyArray<TodoItem>): PromptSection =
   const checklist = todos.map((t) => `- [${todoMark(t.status)}] ${t.text}`).join("\n")
 
   return {
-    id: "plan-mode-executing",
+    id: "plan-executing",
     content: `## Executing Plan
 
 Work through the remaining items in order:
@@ -176,17 +172,14 @@ Mark items complete as you finish them. Stay focused on the current item.`,
 
 // ── Derive ──
 
-const deriveProjection = (
-  state: PlanModeState,
-  _ctx: ExtensionDeriveContext,
-): ExtensionProjection => {
+const deriveProjection = (state: PlanState, _ctx: ExtensionDeriveContext): ExtensionProjection => {
   const progress = {
     total: state.todos.length,
     done: state.todos.filter((t) => t.status === "done").length,
     inProgress: state.todos.filter((t) => t.status === "in-progress").length,
   }
 
-  const uiModel: PlanModeUiModel = {
+  const uiModel: PlanUiModel = {
     mode: state.mode,
     todos: state.todos,
     progress,
@@ -198,7 +191,7 @@ const deriveProjection = (
 
   if (state.mode === "plan") {
     return {
-      toolPolicy: { overrideSet: [...PLAN_MODE_TOOLS] },
+      toolPolicy: { overrideSet: [...PLAN_TOOLS] },
       promptSections: [PLAN_RESTRICTIONS_SECTION],
       uiModel,
     }
@@ -214,10 +207,10 @@ const deriveProjection = (
 // ── Reduce ──
 
 const reduce = (
-  state: PlanModeState,
+  state: PlanState,
   event: AgentEvent,
   _ctx: ExtensionReduceContext,
-): ReduceResult<PlanModeState> => {
+): ReduceResult<PlanState> => {
   // In plan mode, extract todos from completed turns
   if (state.mode === "plan" && event._tag === "TurnCompleted") {
     // TurnCompleted doesn't carry text — todos are extracted from StreamChunk accumulation.
@@ -287,12 +280,9 @@ const reduce = (
 
 // ── Handle Intent ──
 
-const handleIntent = (
-  state: PlanModeState,
-  intent: PlanModeIntent,
-): ReduceResult<PlanModeState> => {
+const handleIntent = (state: PlanState, intent: PlanIntent): ReduceResult<PlanState> => {
   switch (intent._tag) {
-    case "TogglePlanMode": {
+    case "TogglePlan": {
       if (state.mode === "normal") {
         return { state: { ...state, mode: "plan", todos: [] } }
       }
@@ -314,33 +304,33 @@ const handleIntent = (
 // ── Actor ──
 
 /** Exported for pure test harness access */
-export const PlanModeActorConfig = {
-  id: "plan-mode" as const,
-  initial: { mode: "normal" as const, todos: [] as readonly never[] } satisfies PlanModeState,
+export const PlanActorConfig = {
+  id: "plan" as const,
+  initial: { mode: "normal" as const, todos: [] as readonly never[] } satisfies PlanState,
   reduce,
   derive: deriveProjection,
   handleIntent,
 }
 
-const { spawnActor: PlanModeSpawnActor, projection: PlanModeProjection } = fromReducer<
-  PlanModeState,
-  PlanModeIntent
+const { spawnActor: PlanSpawnActor, projection: PlanProjection } = fromReducer<
+  PlanState,
+  PlanIntent
 >({
-  ...PlanModeActorConfig,
-  stateSchema: PlanModeState,
-  intentSchema: PlanModeIntent,
-  uiModelSchema: PlanModeUiModel,
+  ...PlanActorConfig,
+  stateSchema: PlanState,
+  intentSchema: PlanIntent,
+  uiModelSchema: PlanUiModel,
 })
 
-export { PlanModeSpawnActor }
+export { PlanSpawnActor }
 
 // ── Extension ──
 
-export const PlanModeExtension = defineExtension({
-  manifest: { id: "@gent/plan-mode" },
+export const PlanExtension = defineExtension({
+  manifest: { id: "@gent/plan" },
   setup: () =>
     Effect.succeed({
-      spawnActor: PlanModeSpawnActor,
-      projection: PlanModeProjection,
+      spawnActor: PlanSpawnActor,
+      projection: PlanProjection,
     }),
 })

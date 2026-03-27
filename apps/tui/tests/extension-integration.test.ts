@@ -299,7 +299,7 @@ describe("disabled extensions", () => {
 
     // Other builtins should still be present
     const widgetIds = resolved.widgets.map((w) => w.id)
-    expect(widgetIds).toContain("plan-mode")
+    expect(widgetIds).toContain("plan")
 
     rmSync(emptyUser, { recursive: true, force: true })
     rmSync(emptyProject, { recursive: true, force: true })
@@ -339,13 +339,13 @@ describe("disabled extensions", () => {
       {
         userDir: emptyUser,
         projectDir: emptyProject,
-        disabled: ["@gent/plan-mode", "@gent/tasks"],
+        disabled: ["@gent/plan", "@gent/tasks"],
       },
       noopCtx,
     )
 
     const widgetIds = resolved.widgets.map((w) => w.id)
-    expect(widgetIds).not.toContain("plan-mode")
+    expect(widgetIds).not.toContain("plan")
     expect(widgetIds).not.toContain("tasks")
     // Connection widget should still be there
     expect(widgetIds).toContain("connection")

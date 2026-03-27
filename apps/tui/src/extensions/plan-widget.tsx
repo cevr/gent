@@ -1,7 +1,7 @@
 /**
- * Plan-mode widget — renders server-projected plan-mode state.
+ * Plan-mode widget — renders server-projected plan state.
  *
- * Shows mode indicator + todo checklist when plan-mode extension is active.
+ * Shows mode indicator + todo checklist when plan extension is active.
  * Placed in `above-input` slot so it's always visible during session interaction.
  */
 
@@ -11,9 +11,9 @@ import type { RGBA } from "@opentui/core"
 import { useExtensionUI } from "./context"
 import { useTheme } from "../theme/context"
 
-const EXTENSION_ID = "plan-mode"
+const EXTENSION_ID = "plan"
 
-const PlanModeUiModel = Schema.Struct({
+const PlanUiModel = Schema.Struct({
   mode: Schema.Literals(["normal", "plan", "executing"]),
   todos: Schema.Array(
     Schema.Struct({
@@ -28,20 +28,18 @@ const PlanModeUiModel = Schema.Struct({
     inProgress: Schema.Number,
   }),
 })
-type PlanModeUiModel = typeof PlanModeUiModel.Type
+type PlanUiModel = typeof PlanUiModel.Type
 
-const decodePlanMode = Schema.decodeUnknownOption(PlanModeUiModel)
+const decodePlan = Schema.decodeUnknownOption(PlanUiModel)
 
-export function PlanModeWidget() {
+export function PlanWidget() {
   const ext = useExtensionUI()
   const { theme } = useTheme()
 
-  const model = createMemo((): PlanModeUiModel | undefined => {
+  const model = createMemo((): PlanUiModel | undefined => {
     const snapshot = ext.snapshots().get(EXTENSION_ID)
     if (snapshot === undefined) return undefined
-    return decodePlanMode(snapshot.model).pipe((opt) =>
-      opt._tag === "Some" ? opt.value : undefined,
-    )
+    return decodePlan(snapshot.model).pipe((opt) => (opt._tag === "Some" ? opt.value : undefined))
   })
 
   const isActive = createMemo(() => {

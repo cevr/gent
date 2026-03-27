@@ -388,7 +388,7 @@ export function ClientProvider(props: ClientProviderProps) {
                 const status = rt.status === "idle" ? AgentStatus.idle() : AgentStatus.streaming()
                 setAgentStore({ agent: rt.agent, status })
 
-                // Hydrate extension UI snapshots for cold-start (plan-mode widget etc.)
+                // Hydrate extension UI snapshots for cold-start (plan widget etc.)
                 if (
                   snapshot.extensionSnapshots !== undefined &&
                   extensionSnapshotCb !== undefined

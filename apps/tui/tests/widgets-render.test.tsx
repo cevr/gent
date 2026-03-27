@@ -125,7 +125,7 @@ describe("TUI renderer surfaces", () => {
 })
 
 describe("uiModel schema validation", () => {
-  const PlanModeUiModel = Schema.Struct({
+  const PlanUiModel = Schema.Struct({
     mode: Schema.Literals(["normal", "plan", "executing"]),
     todos: Schema.Array(
       Schema.Struct({
@@ -140,9 +140,9 @@ describe("uiModel schema validation", () => {
       inProgress: Schema.Number,
     }),
   })
-  const decode = Schema.decodeUnknownOption(PlanModeUiModel)
+  const decode = Schema.decodeUnknownOption(PlanUiModel)
 
-  test("valid plan-mode snapshot decodes correctly", () => {
+  test("valid plan snapshot decodes correctly", () => {
     const valid = {
       mode: "plan",
       todos: [{ id: 1, text: "Do thing", status: "pending" }],

@@ -8,7 +8,7 @@ import { SessionToolsExtension } from "./session-tools.js"
 import { TaskToolsExtension } from "./task-tools.js"
 import { WorkflowToolsExtension } from "./workflow-tools.js"
 import { AgentsExtension } from "./agents.js"
-import { PlanModeExtension } from "./plan-mode.js"
+import { PlanExtension } from "./plan.js"
 import { ReviewLoopExtension } from "./review-loop.js"
 import { MemoryExtension } from "./memory/index.js"
 import { AnthropicExtension } from "./anthropic/index.js"
@@ -27,7 +27,7 @@ export {
   TaskToolsExtension,
   WorkflowToolsExtension,
   AgentsExtension,
-  PlanModeExtension,
+  PlanExtension,
   ReviewLoopExtension,
   MemoryExtension,
 }
@@ -42,7 +42,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   TaskToolsExtension,
   WorkflowToolsExtension,
   AgentsExtension,
-  PlanModeExtension,
+  PlanExtension,
   ReviewLoopExtension,
   MemoryExtension,
   AnthropicExtension,

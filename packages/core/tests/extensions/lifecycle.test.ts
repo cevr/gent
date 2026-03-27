@@ -2,7 +2,7 @@ import { describe, it, test, expect } from "effect-bun-test"
 import {
   WorkflowToolsExtension,
   SubagentToolsExtension,
-  PlanModeExtension,
+  PlanExtension,
 } from "@gent/core/extensions"
 import {
   createExtensionHarness,
@@ -41,8 +41,8 @@ describe("createExtensionHarness", () => {
     expect(harness.spawnActor).toBeUndefined()
   })
 
-  test("PlanModeExtension provides spawnActor", () => {
-    const harness = createExtensionHarness(PlanModeExtension)
+  test("PlanExtension provides spawnActor", () => {
+    const harness = createExtensionHarness(PlanExtension)
     expect(harness.spawnActor).toBeDefined()
   })
 })
@@ -165,8 +165,8 @@ describe("Actor lifecycle", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  test("PlanModeExtension harness exposes projection", () => {
-    const harness = createExtensionHarness(PlanModeExtension)
+  test("PlanExtension harness exposes projection", () => {
+    const harness = createExtensionHarness(PlanExtension)
     expect(harness.projection).toBeDefined()
     expect(harness.projection!.deriveTurn).toBeInstanceOf(Function)
     expect(harness.projection!.deriveUi).toBeInstanceOf(Function)

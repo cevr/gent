@@ -1,15 +1,15 @@
 import { defineClientExtension } from "@gent/core/domain/extension-client.js"
-import { PlanModeWidget } from "../plan-mode-widget"
+import { PlanWidget } from "../plan-widget"
 
 export default defineClientExtension({
-  id: "@gent/plan-mode",
+  id: "@gent/plan",
   setup: () => ({
     widgets: [
       {
-        id: "plan-mode",
+        id: "plan",
         slot: "above-input",
         priority: 10,
-        component: PlanModeWidget,
+        component: PlanWidget,
       },
     ],
   }),

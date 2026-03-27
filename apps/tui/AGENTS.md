@@ -150,7 +150,7 @@ Builtins are individual `.client.ts` files in `src/extensions/builtins/`:
 | File                            | Extension ID       | What                     |
 | ------------------------------- | ------------------ | ------------------------ |
 | `builtins/tools.client.ts`      | `@gent/tools`      | Tool renderers           |
-| `builtins/plan-mode.client.ts`  | `@gent/plan-mode`  | Plan mode widget         |
+| `builtins/plan.client.ts`       | `@gent/plan`       | Plan widget              |
 | `builtins/tasks.client.ts`      | `@gent/tasks`      | Task widget              |
 | `builtins/connection.client.ts` | `@gent/connection` | Connection status widget |
 
