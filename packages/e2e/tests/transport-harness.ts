@@ -25,11 +25,17 @@ import { AppServicesLive } from "@gent/core/server/index.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { AskUserHandler } from "@gent/core/tools/ask-user.js"
 import { Gent, type GentClient } from "@gent/sdk"
-import { createTempDirFixture, createWorkerEnv, startWorkerWithClient } from "./seam-fixture"
+import {
+  createTempDirFixture,
+  createWorkerEnv,
+  registerWorkerCleanup,
+  startWorkerWithClient,
+} from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-transport-worker-")
+registerWorkerCleanup()
 
 export interface TransportCase {
   readonly name: string

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
-import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { afterEach, describe, expect, test } from "bun:test"
+import { Duration, Effect } from "effect"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
@@ -13,9 +13,30 @@ import { startWorkerSupervisor } from "@gent/sdk/supervisor"
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-session-feed-")
 
+// ---------------------------------------------------------------------------
+// PID reaper for this test file (same pattern as seam-fixture)
+// ---------------------------------------------------------------------------
+
+const trackedPids = new Set<number>()
+
+afterEach(() => {
+  for (const pid of trackedPids) {
+    try {
+      process.kill(pid, 0)
+      process.kill(pid, "SIGTERM")
+    } catch {
+      // already dead
+    }
+  }
+  trackedPids.clear()
+})
+
 const startWorkerWithSupervisor = (options: Parameters<typeof startWorkerSupervisor>[0]) =>
   Effect.gen(function* () {
     const supervisor = yield* startWorkerSupervisor(options)
+    const pid = supervisor.pid()
+    if (pid !== null) trackedPids.add(pid)
+    yield* Effect.addFinalizer(() => supervisor.stop)
     const client = yield* Gent.connect({ url: supervisor.url })
     return { ...supervisor, client }
   })
@@ -115,10 +136,7 @@ describe("session feed boundary", () => {
           )
           expect(responseFrame).toContain("debug response")
           expect(responseFrame).toContain("idle")
-
-          yield* Effect.sync(() => destroyRenderSetup(setup))
-          yield* worker.stop
-        }),
+        }).pipe(Effect.timeout(Duration.seconds(40))),
       ),
     )
   }, 45_000)
@@ -181,10 +199,7 @@ describe("session feed boundary", () => {
 
           expect(frame).toContain("queue")
           expect(frame).toContain("[queued 1] queued follow-up")
-
-          yield* Effect.sync(() => destroyRenderSetup(setup))
-          yield* worker.stop
-        }),
+        }).pipe(Effect.timeout(Duration.seconds(15))),
       ),
     )
   }, 20_000)
@@ -239,10 +254,7 @@ describe("session feed boundary", () => {
 
           expect(frame).toContain("provider exploded")
           expect(frame).not.toContain("❯ provider exploded")
-
-          yield* Effect.sync(() => destroyRenderSetup(setup))
-          yield* worker.stop
-        }),
+        }).pipe(Effect.timeout(Duration.seconds(10))),
       ),
     )
   }, 15_000)
