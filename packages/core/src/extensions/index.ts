@@ -10,6 +10,7 @@ import { WorkflowToolsExtension } from "./workflow-tools.js"
 import { AgentsExtension } from "./agents.js"
 import { PlanExtension } from "./plan.js"
 import { ReviewLoopExtension } from "./review-loop.js"
+import { AutoExtension } from "./auto.js"
 import { MemoryExtension } from "./memory/index.js"
 import { AnthropicExtension } from "./anthropic/index.js"
 import { OpenAIExtension } from "./openai/index.js"
@@ -29,6 +30,7 @@ export {
   AgentsExtension,
   PlanExtension,
   ReviewLoopExtension,
+  AutoExtension,
   MemoryExtension,
 }
 
@@ -44,6 +46,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   AgentsExtension,
   PlanExtension,
   ReviewLoopExtension,
+  AutoExtension,
   MemoryExtension,
   AnthropicExtension,
   OpenAIExtension,
