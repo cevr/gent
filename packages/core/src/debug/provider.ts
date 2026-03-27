@@ -67,40 +67,42 @@ const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => 
   )
 }
 
-export const DebugProvider = Layer.effect(
-  Provider,
-  Effect.sync(() => {
-    const attempts = new Map<string, number>()
+export const DebugProvider = (options?: { delayMs?: number }) =>
+  Layer.effect(
+    Provider,
+    Effect.sync(() => {
+      const delayMs = options?.delayMs ?? 0
+      const attempts = new Map<string, number>()
 
-    const stream = (request: ProviderRequest) => {
-      const latestUserText = extractLatestUserText(request.messages)
-      const key = `${request.model}:${latestUserText}`
-      const seen = attempts.get(key) ?? 0
-      const retryBudget = retryBudgetFor(latestUserText)
+      const stream = (request: ProviderRequest) => {
+        const latestUserText = extractLatestUserText(request.messages)
+        const key = `${request.model}:${latestUserText}`
+        const seen = attempts.get(key) ?? 0
+        const retryBudget = retryBudgetFor(latestUserText)
 
-      if (seen < retryBudget) {
-        attempts.set(key, seen + 1)
-        return Effect.fail(
-          new ProviderError({
-            message: "Rate limit exceeded (429)",
-            model: request.model,
-          }),
-        )
+        if (seen < retryBudget) {
+          attempts.set(key, seen + 1)
+          return Effect.fail(
+            new ProviderError({
+              message: "Rate limit exceeded (429)",
+              model: request.model,
+            }),
+          )
+        }
+
+        attempts.delete(key)
+        const reply = buildReply(request, latestUserText)
+        return Effect.succeed(makeReplyStream(latestUserText, reply, delayMs))
       }
 
-      attempts.delete(key)
-      const reply = buildReply(request, latestUserText)
-      return Effect.succeed(makeReplyStream(latestUserText, reply))
-    }
+      const generate = (_request: GenerateRequest) => Effect.succeed("debug scenario")
 
-    const generate = (_request: GenerateRequest) => Effect.succeed("debug scenario")
-
-    return {
-      stream,
-      generate,
-    }
-  }),
-)
+      return {
+        stream,
+        generate,
+      }
+    }),
+  )
 
 export const DebugFailingProvider = Layer.succeed(Provider, {
   stream: (request) =>
@@ -111,15 +113,6 @@ export const DebugFailingProvider = Layer.succeed(Provider, {
       }),
     ),
   generate: () => Effect.succeed("debug failure"),
-})
-
-export const DebugSlowProvider = Layer.succeed(Provider, {
-  stream: (request) => {
-    const latestUserText = extractLatestUserText(request.messages)
-    const reply = buildReply(request, latestUserText)
-    return Effect.succeed(makeReplyStream(latestUserText, reply, 150))
-  },
-  generate: () => Effect.succeed("debug slow"),
 })
 
 // =============================================================================

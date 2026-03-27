@@ -15,7 +15,7 @@ import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/inte
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { Skills } from "../domain/skills.js"
-import { DebugFailingProvider, DebugProvider, DebugSlowProvider } from "../debug/provider.js"
+import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -254,9 +254,9 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.merge(authStoreLive, extensionRegistryLive),
   )
   let providerLive = Layer.provide(Provider.Live, providerFactoryLive)
-  if (providerMode === "debug-scripted") providerLive = DebugProvider
+  if (providerMode === "debug-scripted") providerLive = DebugProvider()
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
-  else if (providerMode === "debug-slow") providerLive = DebugSlowProvider
+  else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 150 })
 
   const extensionEventBusLive = ExtensionEventBus.Live
 

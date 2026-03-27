@@ -6,7 +6,7 @@ import { AuthStorage } from "@gent/core/domain/auth-storage.js"
 import { AuthStore } from "@gent/core/domain/auth-store.js"
 import { Permission } from "@gent/core/domain/permission.js"
 import { Skills } from "@gent/core/domain/skills.js"
-import { DebugProvider, DebugSlowProvider } from "@gent/core/debug/provider.js"
+import { DebugProvider } from "@gent/core/debug/provider.js"
 import {
   HandoffHandler,
   PermissionHandler,
@@ -61,7 +61,8 @@ export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-script
   const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
 
-  const providerLive = providerMode === "debug-slow" ? DebugSlowProvider : DebugProvider
+  const providerLive =
+    providerMode === "debug-slow" ? DebugProvider({ delayMs: 150 }) : DebugProvider()
 
   const baseDeps = Layer.mergeAll(
     Storage.Memory(),
