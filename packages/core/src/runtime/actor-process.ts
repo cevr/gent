@@ -396,14 +396,45 @@ export const LocalActorTransportLive: Layer.Layer<
           } satisfies ActorProcessState
         }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
-      getMetrics: () =>
-        Effect.succeed({
-          turns: 0,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
-          durationMs: 0,
-        } satisfies ActorProcessMetrics),
+      getMetrics: (input) =>
+        storage.listEvents({ sessionId: input.sessionId, branchId: input.branchId }).pipe(
+          Effect.map((envelopes) => {
+            let turns = 0
+            let tokens = 0
+            let toolCalls = 0
+            let retries = 0
+            let durationMs = 0
+            for (const { event } of envelopes) {
+              switch (event._tag) {
+                case "TurnCompleted":
+                  turns++
+                  durationMs += event.durationMs
+                  break
+                case "StreamEnded":
+                  if (event.usage !== undefined) {
+                    tokens += event.usage.inputTokens + event.usage.outputTokens
+                  }
+                  break
+                case "ToolCallStarted":
+                  toolCalls++
+                  break
+                case "ProviderRetrying":
+                  retries++
+                  break
+              }
+            }
+            return { turns, tokens, toolCalls, retries, durationMs } satisfies ActorProcessMetrics
+          }),
+          Effect.catchEager(() =>
+            Effect.succeed({
+              turns: 0,
+              tokens: 0,
+              toolCalls: 0,
+              retries: 0,
+              durationMs: 0,
+            } satisfies ActorProcessMetrics),
+          ),
+        ),
     })
   }),
 )

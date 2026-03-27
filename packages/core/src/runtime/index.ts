@@ -63,6 +63,8 @@ export {
   providerStreamBoundary,
   rpcBoundary,
   subagentBoundary,
+  ToolError,
+  ToolWarning,
 } from "./wide-event-boundary"
 export type { WideEventContext, WideEventEnvelope, LogEvent } from "./wide-event-boundary"
 

@@ -5,7 +5,13 @@ import { ToolResultPart } from "../../domain/message.js"
 import { Permission, type PermissionDecision } from "../../domain/permission.js"
 import { PermissionHandler } from "../../domain/interaction-handlers.js"
 import { formatSchemaError } from "../format-schema-error"
-import { withWideEvent, WideEvent, toolBoundary } from "../wide-event-boundary"
+import {
+  withWideEvent,
+  WideEvent,
+  toolBoundary,
+  ToolError,
+  ToolWarning,
+} from "../wide-event-boundary"
 
 export interface ToolRunnerService {
   readonly run: (
@@ -48,7 +54,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                 toolCall.toolName,
               )
               if (tool === undefined) {
-                yield* WideEvent.set({ toolError: "unknown" })
+                yield* WideEvent.set({ toolError: ToolError.Unknown })
                 yield* Effect.logInfo("tool.unknown").pipe(
                   Effect.annotateLogs({
                     toolName: toolCall.toolName,
@@ -70,7 +76,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                   .pipe(
                     Effect.catchEager((e) =>
                       WideEvent.set({
-                        toolError: "permission_check_failed",
+                        toolError: ToolError.PermissionCheckFailed,
                         errorMessage: String(e),
                       }).pipe(Effect.as("interceptor_failed" as const)),
                     ),
@@ -102,7 +108,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                   )
                   .pipe(Effect.catchEager(() => Effect.succeed<PermissionDecision>("deny")))
                 if (decision === "deny") {
-                  yield* WideEvent.set({ toolError: "permission_denied" })
+                  yield* WideEvent.set({ toolError: ToolError.PermissionDenied })
                   yield* Effect.logInfo("tool.permission.denied").pipe(
                     Effect.annotateLogs({
                       toolName: toolCall.toolName,
@@ -112,7 +118,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                   return errorResult(toolCall, "Permission denied")
                 }
               } else if (permResult === "denied") {
-                yield* WideEvent.set({ toolError: "permission_denied" })
+                yield* WideEvent.set({ toolError: ToolError.PermissionDenied })
                 yield* Effect.logInfo("tool.permission.denied").pipe(
                   Effect.annotateLogs({
                     toolName: toolCall.toolName,
@@ -138,7 +144,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                 const message = Schema.isSchemaError(failure)
                   ? formatSchemaError(toolCall.toolName, failure)
                   : `Invalid tool input: ${String(failure)}`
-                yield* WideEvent.set({ toolError: "schema_decode", errorMessage: message })
+                yield* WideEvent.set({ toolError: ToolError.SchemaDecode, errorMessage: message })
                 yield* Effect.logWarning("tool.schema.failed").pipe(
                   Effect.annotateLogs({
                     toolName: toolCall.toolName,
@@ -168,7 +174,10 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                 const message = Schema.isSchemaError(failure)
                   ? formatSchemaError(toolCall.toolName, failure)
                   : `Tool '${toolCall.toolName}' failed: ${String(failure)}`
-                yield* WideEvent.set({ toolError: "execution_failed", errorMessage: message })
+                yield* WideEvent.set({
+                  toolError: ToolError.ExecutionFailed,
+                  errorMessage: message,
+                })
                 yield* Effect.logWarning("tool.execute.failed").pipe(
                   Effect.annotateLogs({
                     toolName: toolCall.toolName,
@@ -197,7 +206,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                 .pipe(
                   Effect.catchEager((e) =>
                     WideEvent.set({
-                      toolWarning: "result_enrichment_failed",
+                      toolWarning: ToolWarning.ResultEnrichmentFailed,
                       errorMessage: String(e),
                     }).pipe(Effect.as(executeResult.success)),
                   ),

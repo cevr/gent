@@ -10,6 +10,8 @@
   "rules": {
     // Custom — use Config from effect, not direct env access
     "gent/no-direct-env": "error",
+    // Custom — no positional error args in Effect.log*
+    "gent/no-positional-log-error": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
 
