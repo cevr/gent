@@ -38,6 +38,8 @@ export const CreateSessionInput = Schema.Struct({
   initialPrompt: Schema.optional(Schema.String),
   /** Agent override for the initial prompt (turn-scoped, not persistent) */
   agentOverride: Schema.optional(Schema.String),
+  /** Client-generated request ID for end-to-end correlation */
+  requestId: Schema.optional(Schema.String),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
 export const CreateSessionPayload = CreateSessionInput
@@ -215,6 +217,8 @@ export const SendMessageInput = Schema.Struct({
   content: Schema.String,
   /** Per-run agent override — switches agent for this message only. Uses fresh ephemeral sessions to avoid state bleed. */
   agentOverride: Schema.optional(Schema.String),
+  /** Client-generated request ID for end-to-end correlation */
+  requestId: Schema.optional(Schema.String),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 export const SendMessagePayload = SendMessageInput

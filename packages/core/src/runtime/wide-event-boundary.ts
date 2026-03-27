@@ -39,9 +39,10 @@ export const providerStreamBoundary = (model: string): WideEventContext => ({
   envelope: { model },
 })
 
-export const rpcBoundary = (rpcName: string): WideEventContext => ({
+export const rpcBoundary = (rpcName: string, requestId?: string): WideEventContext => ({
   service: "rpc",
   method: rpcName,
+  ...(requestId !== undefined ? { requestId } : {}),
 })
 
 export const subagentBoundary = (

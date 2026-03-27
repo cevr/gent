@@ -53,10 +53,11 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             ...(input.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
             ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
             ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
           })
           .pipe(
             Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
-            withWideEvent(rpcBoundary("createSession")),
+            withWideEvent(rpcBoundary("createSession", input.requestId)),
           ),
 
       listSessions: () => queries.listSessions(),
@@ -124,17 +125,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           ...(name !== undefined ? { name } : {}),
         }),
 
-      sendMessage: ({ sessionId, branchId, content, agentOverride }) =>
+      sendMessage: ({ sessionId, branchId, content, agentOverride, requestId }) =>
         commands
           .sendMessage({
             sessionId,
             branchId,
             content,
             ...(agentOverride !== undefined ? { agentOverride } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-            withWideEvent(rpcBoundary("sendMessage")),
+            withWideEvent(rpcBoundary("sendMessage", requestId)),
           ),
 
       listMessages: ({ branchId }) => queries.listMessages(branchId),

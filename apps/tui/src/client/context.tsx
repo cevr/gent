@@ -481,13 +481,15 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       if (s === null) return
 
-      clientLog.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId })
+      const requestId = crypto.randomUUID()
+      clientLog.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
       cast(
         client
           .sendMessage({
             sessionId: s.sessionId,
             branchId: s.branchId,
             content,
+            requestId,
           })
           .pipe(
             Effect.tapError((err) =>
@@ -501,10 +503,11 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     createSession: (onCreated) => {
-      clientLog.info("createSession")
+      const requestId = crypto.randomUUID()
+      clientLog.info("createSession", { requestId })
       dispatchSession({ _tag: "CreateRequested" })
       cast(
-        client.createSession().pipe(
+        client.createSession({ requestId }).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               dispatchSession({
