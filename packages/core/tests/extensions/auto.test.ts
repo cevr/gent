@@ -429,9 +429,10 @@ describe("Auto pure reducer", () => {
   // ── Derive contracts ──
 
   describe("derive", () => {
-    test("Inactive — no prompt sections, active: false", () => {
+    test("Inactive — no prompt sections, active: false, excludes auto_checkpoint", () => {
       const projection = derive({ _tag: "Inactive" })
       expect(projection.promptSections).toBeUndefined()
+      expect(projection.toolPolicy?.exclude).toEqual(["auto_checkpoint"])
       const ui = projection.uiModel as AutoUiModel
       expect(ui.active).toBe(false)
       expect(ui.learningsCount).toBe(0)
@@ -461,6 +462,8 @@ describe("Auto pure reducer", () => {
       expect(section.content).toContain("auto_checkpoint")
       expect(section.content).toContain("check error handling")
       expect(section.content).toContain("found issues")
+      // auto_checkpoint should NOT be excluded when active
+      expect(projection.toolPolicy).toBeUndefined()
     })
 
     test("Working — ui model shows working phase", () => {

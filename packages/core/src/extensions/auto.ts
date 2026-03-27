@@ -304,7 +304,7 @@ const autoMachine = Machine.make({
 const derive = (state: MachineState, _ctx: ExtensionDeriveContext): ExtensionProjection => {
   if (state._tag === "Inactive") {
     const uiModel: AutoUiModel = { active: false, learningsCount: 0 }
-    return { uiModel }
+    return { toolPolicy: { exclude: [AUTO_CHECKPOINT_TOOL] }, uiModel }
   }
 
   if (state._tag === "Working") {
