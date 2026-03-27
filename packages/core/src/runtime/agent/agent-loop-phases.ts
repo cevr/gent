@@ -35,6 +35,7 @@ import { estimateContextPercent } from "../context-estimation"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { type ExtensionStateRuntimeService } from "../extensions/state-runtime.js"
 import { withRetry } from "../retry"
+import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
 import { type ToolRunnerService } from "./tool-runner"
 import { type AssistantDraft, type ResolvedTurn } from "./agent-loop.state.js"
 import {
@@ -544,46 +545,58 @@ export const streamTurnPhase = (params: {
       }),
     )
 
-    const streamEffect = yield* withRetry(
-      params.provider.stream({
-        model: params.resolved.modelId,
-        messages: [...params.resolved.messages],
-        tools: [...tools],
-        systemPrompt: params.resolved.systemPrompt,
-        abortSignal: params.activeStream.abortController.signal,
-        ...(params.resolved.temperature !== undefined
-          ? { temperature: params.resolved.temperature }
-          : {}),
-        ...(params.resolved.reasoning !== undefined
-          ? { reasoning: params.resolved.reasoning }
-          : {}),
-      }),
-      undefined,
-      {
-        onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-          params
-            .publishEvent(
-              new ProviderRetrying({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                attempt,
-                maxAttempts,
-                delayMs,
-                error: error.message,
-              }),
-            )
-            .pipe(Effect.orDie),
-      },
-    ).pipe(Effect.withSpan("AgentLoop.provider.stream"))
+    const collected = yield* Effect.gen(function* () {
+      const streamEffect = yield* withRetry(
+        params.provider.stream({
+          model: params.resolved.modelId,
+          messages: [...params.resolved.messages],
+          tools: [...tools],
+          systemPrompt: params.resolved.systemPrompt,
+          abortSignal: params.activeStream.abortController.signal,
+          ...(params.resolved.temperature !== undefined
+            ? { temperature: params.resolved.temperature }
+            : {}),
+          ...(params.resolved.reasoning !== undefined
+            ? { reasoning: params.resolved.reasoning }
+            : {}),
+        }),
+        undefined,
+        {
+          onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+            params
+              .publishEvent(
+                new ProviderRetrying({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  attempt,
+                  maxAttempts,
+                  delayMs,
+                  error: error.message,
+                }),
+              )
+              .pipe(Effect.orDie),
+        },
+      )
 
-    const collected = yield* collectStreamResponse({
-      streamEffect,
-      publishEvent: params.publishEvent,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      activeStream: params.activeStream,
-      persistAssistantText: persistAssistantTextLocal,
-    })
+      const result = yield* collectStreamResponse({
+        streamEffect,
+        publishEvent: params.publishEvent,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        activeStream: params.activeStream,
+        persistAssistantText: persistAssistantTextLocal,
+      })
+
+      yield* WideEvent.set({
+        inputTokens: result.draft.usage?.inputTokens ?? 0,
+        outputTokens: result.draft.usage?.outputTokens ?? 0,
+        toolCallCount: result.draft.toolCalls.length,
+        interrupted: result.interrupted,
+        streamFailed: result.streamFailed,
+      })
+
+      return result
+    }).pipe(withWideEvent(providerStreamBoundary(params.resolved.modelId)))
 
     if (collected.interrupted) {
       yield* params

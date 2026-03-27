@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-boundary"
 import { GentRpcs } from "./rpcs"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
@@ -41,23 +42,32 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
     return {
       createSession: (input) =>
-        commands.createSession({
-          ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-          ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
-          ...(input.parentSessionId !== undefined
-            ? { parentSessionId: input.parentSessionId }
-            : {}),
-          ...(input.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
-          ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
-          ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-        }),
+        commands
+          .createSession({
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
+            ...(input.parentSessionId !== undefined
+              ? { parentSessionId: input.parentSessionId }
+              : {}),
+            ...(input.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
+            ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
+            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+          })
+          .pipe(
+            Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
+            withWideEvent(rpcBoundary("createSession")),
+          ),
 
       listSessions: () => queries.listSessions(),
 
       getSession: ({ sessionId }) => queries.getSession(sessionId),
 
-      deleteSession: ({ sessionId }) => commands.deleteSession(sessionId),
+      deleteSession: ({ sessionId }) =>
+        commands.deleteSession(sessionId).pipe(
+          Effect.tap(() => WideEvent.set({ sessionId })),
+          withWideEvent(rpcBoundary("deleteSession")),
+        ),
 
       getChildSessions: ({ parentSessionId }) => queries.getChildSessions(parentSessionId),
 
@@ -115,12 +125,17 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       sendMessage: ({ sessionId, branchId, content, agentOverride }) =>
-        commands.sendMessage({
-          sessionId,
-          branchId,
-          content,
-          ...(agentOverride !== undefined ? { agentOverride } : {}),
-        }),
+        commands
+          .sendMessage({
+            sessionId,
+            branchId,
+            content,
+            ...(agentOverride !== undefined ? { agentOverride } : {}),
+          })
+          .pipe(
+            Effect.tap(() => WideEvent.set({ sessionId, branchId })),
+            withWideEvent(rpcBoundary("sendMessage")),
+          ),
 
       listMessages: ({ branchId }) => queries.listMessages(branchId),
 
