@@ -39,7 +39,7 @@ export const AuditParams = Schema.Struct({
   ),
   mode: Schema.optional(
     Schema.Literals(["fix", "report"]).annotate({
-      description: "report: findings only, fix: apply changes iteratively",
+      description: "report: findings only, fix: detect and apply changes (single cycle)",
     }),
   ),
 })
@@ -258,10 +258,11 @@ export const AuditTool = defineTool({
   action: "delegate" as const,
   concurrency: "serial" as const,
   description:
-    "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode executes them iteratively.",
+    "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode runs one detect-audit-synthesize-execute cycle. Use @gent/auto for iterative refinement.",
   promptSnippet: "Audit code with dual-model concern analysis",
   promptGuidelines: [
-    "Use report mode for read-only findings, fix mode for iterative resolution",
+    "Use report mode for read-only findings, fix mode for single-cycle detect+execute",
+    "For iterative audit loops, start @gent/auto then call audit each iteration",
     "Specify paths to scope the audit; defaults to git diff",
   ],
   params: AuditParams,
