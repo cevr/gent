@@ -1,29 +1,6 @@
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import * as path from "node:path"
-import { Agents } from "@gent/core/domain/agent.js"
-import { AuthGuard } from "@gent/core/domain/auth-guard.js"
-import { AuthStorage } from "@gent/core/domain/auth-storage.js"
-import { AuthStore } from "@gent/core/domain/auth-store.js"
-import { Permission } from "@gent/core/domain/permission.js"
-import { Skills } from "@gent/core/domain/skills.js"
-import { DebugProvider } from "@gent/core/debug/provider.js"
-import {
-  HandoffHandler,
-  PermissionHandler,
-  PromptHandler,
-} from "@gent/core/domain/interaction-handlers.js"
-import { ProviderAuth } from "@gent/core/providers/provider-auth.js"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.js"
-import { ToolRunner } from "@gent/core/runtime/agent/tool-runner.js"
-import { ConfigService } from "@gent/core/runtime/config-service.js"
-import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime.js"
-import { ModelRegistry } from "@gent/core/runtime/model-registry.js"
-import { LocalActorProcessLive } from "@gent/core/runtime/actor-process.js"
-import { EventStoreLive } from "@gent/core/server/event-store.js"
-import { AppServicesLive } from "@gent/core/server/index.js"
-import { Storage } from "@gent/core/storage/sqlite-storage.js"
-import { AskUserHandler } from "@gent/core/tools/ask-user.js"
+import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
 import { Gent, type GentClient } from "@gent/sdk"
 import {
   createTempDirFixture,
@@ -32,6 +9,10 @@ import {
   startWorkerWithClient,
 } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
+export {
+  baseLocalLayer,
+  baseLocalLayerWithProvider,
+} from "@gent/core/test-utils/in-process-layer.js"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-transport-worker-")
@@ -43,62 +24,6 @@ export interface TransportCase {
 }
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
-
-export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") => {
-  const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
-  const extensionRegistryLive = ExtensionRegistry.fromResolved(
-    resolveExtensions([
-      {
-        manifest: { id: "test-agents" },
-        kind: "builtin",
-        sourcePath: "test",
-        setup: { agents: Object.values(Agents), tools: [] },
-      },
-    ]),
-  )
-
-  const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
-  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
-  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
-
-  const providerLive =
-    providerMode === "debug-slow" ? DebugProvider({ delayMs: 150 }) : DebugProvider()
-
-  const baseDeps = Layer.mergeAll(
-    Storage.Memory(),
-    providerLive,
-    extensionRegistryLive,
-    ExtensionStateRuntime.Test(),
-    Permission.Test(),
-    PermissionHandler.Test(["allow"]),
-    PromptHandler.Test(["yes"]),
-    HandoffHandler.Test(["confirm"]),
-    AskUserHandler.Test([["yes"]]),
-    Skills.Test(),
-    ConfigService.Test(),
-    ModelRegistry.Test(),
-    ToolRunner.Test(),
-    authStoreLive,
-    authGuardLive,
-    providerAuthLive,
-  )
-
-  const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)
-
-  const agentLoopLive = Layer.provide(
-    AgentLoop.Live({ baseSections: [{ id: "base", content: "test system prompt", priority: 0 }] }),
-    Layer.merge(baseDeps, eventStoreLive),
-  )
-  const actorProcessLive = Layer.provide(
-    LocalActorProcessLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, agentLoopLive),
-  )
-
-  return Layer.provideMerge(
-    AppServicesLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, agentLoopLive, actorProcessLive),
-  )
-}
 
 const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
   name: "direct",
