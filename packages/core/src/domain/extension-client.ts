@@ -46,6 +46,8 @@ export interface ExtensionClientContext {
   readonly sessionId?: string
   /** Current branch ID (reactive — may be undefined before session is active) */
   readonly branchId?: string
+  /** Dispatch a typed intent to a server-side extension actor (fire-and-forget) */
+  readonly sendIntent: (extensionId: string, intent: unknown) => void
 }
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */

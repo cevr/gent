@@ -137,7 +137,12 @@ export const StartAutoIntent = Schema.TaggedStruct("StartAuto", {
 
 export const CancelAutoIntent = Schema.TaggedStruct("CancelAuto", {})
 
-export const AutoIntent = Schema.Union([StartAutoIntent, CancelAutoIntent])
+export const ToggleAutoIntent = Schema.TaggedStruct("ToggleAuto", {
+  goal: Schema.optional(Schema.String),
+  maxIterations: Schema.optional(Schema.Number),
+})
+
+export const AutoIntent = Schema.Union([StartAutoIntent, CancelAutoIntent, ToggleAutoIntent])
 export type AutoIntent = typeof AutoIntent.Type
 
 // ── UI Model ──
@@ -436,7 +441,7 @@ const mapEvent = (event: AgentEvent): MachineEvent | undefined => {
 
 // ── Map Intent → Machine Event ──
 
-const mapIntent = (intent: AutoIntent): MachineEvent => {
+const mapIntent = (intent: AutoIntent, state: MachineState): MachineEvent | undefined => {
   switch (intent._tag) {
     case "StartAuto":
       return MachineEvent.StartAuto({
@@ -444,6 +449,14 @@ const mapIntent = (intent: AutoIntent): MachineEvent => {
         maxIterations: intent.maxIterations,
       })
     case "CancelAuto":
+      return MachineEvent.CancelAuto
+    case "ToggleAuto":
+      if (state._tag === "Inactive") {
+        return MachineEvent.StartAuto({
+          goal: intent.goal ?? "Continue working autonomously",
+          maxIterations: intent.maxIterations,
+        })
+      }
       return MachineEvent.CancelAuto
   }
 }
@@ -585,6 +598,22 @@ export const AutoActorConfig = {
       }
       case "CancelAuto": {
         if (state._tag === "Inactive") return { state }
+        return { state: { _tag: "Inactive", reason: "cancelled" as const } }
+      }
+      case "ToggleAuto": {
+        if (state._tag === "Inactive") {
+          return {
+            state: {
+              _tag: "Working",
+              iteration: 1,
+              maxIterations: intent.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+              goal: intent.goal ?? "Continue working autonomously",
+              learnings: [],
+              metrics: [],
+              turnsSinceCheckpoint: 0,
+            },
+          }
+        }
         return { state: { _tag: "Inactive", reason: "cancelled" as const } }
       }
     }

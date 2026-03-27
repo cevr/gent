@@ -37,8 +37,8 @@ export interface FromMachineConfig<
   readonly built: BuiltMachine<State, Event, R>
   /** Map AgentEvent to machine event. Return undefined to skip. */
   readonly mapEvent?: (event: AgentEvent) => Event | undefined
-  /** Map intent to machine event for handleIntent support */
-  readonly mapIntent?: (intent: Intent) => Event
+  /** Map intent to machine event for handleIntent support. Receives current state for conditional mapping. Return undefined to skip. */
+  readonly mapIntent?: (intent: Intent, state: State) => Event | undefined
   /** Intent schema for validation */
   readonly intentSchema?: Schema.Schema<Intent>
   /** Full derive — turn + UI projection from one function */
@@ -221,7 +221,10 @@ export const fromMachine = <
                   intent,
                 ).pipe(Effect.orDie)
               }
-              return yield* dispatch(mapIntent(validated), branchId)
+              const currentState = (yield* ref.snapshot) as State
+              const mapped = mapIntent(validated, currentState)
+              if (mapped === undefined) return false
+              return yield* dispatch(mapped, branchId)
             })
         })(),
 

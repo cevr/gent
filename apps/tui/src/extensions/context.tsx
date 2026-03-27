@@ -97,6 +97,16 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           get branchId() {
             return clientCtx.session()?.branchId
           },
+          sendIntent: (extensionId, intent) => {
+            const sid = clientCtx.session()?.sessionId
+            const bid = clientCtx.session()?.branchId
+            if (sid === undefined) return
+            const snap = snapshots().get(extensionId)
+            const epoch = snap?.epoch ?? 0
+            clientCtx.client.runFork(
+              clientCtx.client.sendExtensionIntent(sid, extensionId, intent, epoch, bid),
+            )
+          },
         },
       )
       setResolved(result)
