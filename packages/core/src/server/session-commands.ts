@@ -159,6 +159,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
         yield* eventStore.publish(new SessionStarted({ sessionId, branchId }))
+        yield* Effect.logInfo("session.created").pipe(Effect.annotateLogs({ sessionId, branchId }))
 
         // Optional initial prompt — sends immediately after creation
         if (input.initialPrompt !== undefined && input.initialPrompt.length > 0) {
@@ -314,6 +315,9 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           content: input.content,
           ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
         })
+        yield* Effect.logInfo("session.messageSent").pipe(
+          Effect.annotateLogs({ sessionId: input.sessionId, branchId: input.branchId }),
+        )
       })
 
       return {
@@ -325,6 +329,9 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           extensionStateRuntime.terminateAll(sessionId).pipe(
             Effect.catchDefect(() => Effect.void),
             Effect.tap(() => storage.deleteSession(sessionId)),
+            Effect.tap(() =>
+              Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId })),
+            ),
           ),
         createBranch,
         switchBranch,

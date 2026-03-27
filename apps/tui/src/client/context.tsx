@@ -21,7 +21,6 @@ import {
 import { calculateCost, type Model } from "@gent/core/domain/model.js"
 import type { EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
-import { tuiError } from "../utils/unified-tracer"
 import { clientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
@@ -411,10 +410,9 @@ export function ClientProvider(props: ClientProviderProps) {
                   try {
                     processEvent(envelope)
                   } catch (err) {
-                    tuiError(
-                      "event processing error",
-                      err instanceof Error ? err.message : String(err),
-                    )
+                    clientLog.error("event.processing.error", {
+                      error: err instanceof Error ? err.message : String(err),
+                    })
                   }
                 }),
               )
@@ -536,7 +534,7 @@ export function ClientProvider(props: ClientProviderProps) {
           ),
           Effect.catchEager((err) =>
             Effect.sync(() => {
-              tuiError("createSession", err)
+              clientLog.error("createSession.failed", { error: String(err) })
               dispatchSession({ _tag: "CreateFailed" })
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }),

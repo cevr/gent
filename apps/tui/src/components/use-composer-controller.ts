@@ -18,7 +18,7 @@ import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { expandSkillMentions } from "../utils/skill-expansion"
 import { executeShell } from "../utils/shell"
-import { tuiEvent } from "../utils/unified-tracer"
+import { clientLog } from "../utils/client-logger"
 import type { AutocompleteState } from "./autocomplete-popup"
 import type {
   ComposerInteractionEvent,
@@ -210,7 +210,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     if (parsed === null) return false
 
     const [cmd, args] = parsed
-    tuiEvent("slash-command", { cmd, hasCustomHandler: props.onSlashCommand !== undefined })
+    clientLog.info("slash-command", { cmd, hasCustomHandler: props.onSlashCommand !== undefined })
     clearInput()
 
     const commandEffect =
@@ -253,6 +253,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   }
 
   const submitMessage = (text: string, mode: "queue" | "interject") => {
+    clientLog.info("composer.submit", { contentLength: text.length, mode })
     history.add(text)
     cast(
       expandFileRefs(text, workspace.cwd).pipe(

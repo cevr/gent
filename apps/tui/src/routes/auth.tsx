@@ -10,7 +10,7 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { GentClient } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
-import { tuiEvent, tuiError } from "../utils/unified-tracer"
+import { clientLog } from "../utils/client-logger"
 import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./auth-state"
 import { useScopedKeyboard } from "../keyboard/context"
 
@@ -54,19 +54,19 @@ export function Auth(props: AuthProps) {
   // ── Side effects ──
 
   const loadAuth = () => {
-    tuiEvent("auth:load-start")
+    clientLog.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
       Effect.all([props.client.listAuthProviders(), props.client.listAuthMethods()]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
-            tuiEvent("auth:load-complete", { providers: loadedProviders.length })
+            clientLog.info("auth:load-complete", { providers: loadedProviders.length })
             send({ _tag: "Loaded", providers: [...loadedProviders], methods: loadedMethods })
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
-            tuiError("auth:load", err)
+            clientLog.error("auth:load", { error: String(err) })
             send({ _tag: "LoadFailed", error: formatError(err) })
           }),
         ),
@@ -76,7 +76,7 @@ export function Auth(props: AuthProps) {
 
   const openAuthorization = (url: string) =>
     Effect.gen(function* () {
-      tuiEvent("auth:open-authorization", { url })
+      clientLog.info("auth:open-authorization", { url })
       const opener = yield* LinkOpener
       yield* opener.open(url)
     }).pipe(
@@ -142,7 +142,7 @@ export function Auth(props: AuthProps) {
     const provider = current.providers[current.providerIndex]
     const key = current.value.trim()
     if (provider === undefined || key.length === 0) return
-    tuiEvent("auth:submit-key", { provider: provider.provider })
+    clientLog.info("auth:submit-key", { provider: provider.provider })
     send({ _tag: "SubmitKeyStarted" })
 
     cast(
@@ -168,7 +168,7 @@ export function Auth(props: AuthProps) {
     const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
     const method = methods[current.methodIndex]
     if (provider === undefined || method === undefined) return
-    tuiEvent("auth:start-method", { provider: provider.provider, method: method.type })
+    clientLog.info("auth:start-method", { provider: provider.provider, method: method.type })
 
     if (method.type === "api") {
       send({ _tag: "StartKey" })
@@ -252,7 +252,7 @@ export function Auth(props: AuthProps) {
     if (current.phase === "waiting") return
     const provider = current.providers[current.providerIndex]
     if (provider === undefined) return
-    tuiEvent("auth:submit-oauth", {
+    clientLog.info("auth:submit-oauth", {
       provider: provider.provider,
       method: current.authorization.method,
     })

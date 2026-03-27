@@ -5,7 +5,7 @@
 import { Effect, Exit, Fiber, Cause } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "../atom-solid/result"
-import { tuiError } from "../utils/unified-tracer"
+import { clientLog } from "../utils/client-logger"
 import type { GentClient } from "@gent/sdk"
 
 export interface UseRuntimeReturn {
@@ -55,7 +55,7 @@ export function useRuntime(client: GentClient): UseRuntimeReturn {
     const fiber = client.runFork(effect)
     fiber.addObserver((exit) => {
       if (Exit.isFailure(exit)) {
-        tuiError("cast", Cause.pretty(exit.cause))
+        clientLog.error("cast.failed", { error: Cause.pretty(exit.cause) })
       }
     })
   }
