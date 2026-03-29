@@ -1,13 +1,9 @@
 import { Effect } from "effect"
+import * as net from "node:net"
 import * as path from "node:path"
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
-import {
-  createTempDirFixture,
-  createWorkerEnv,
-  registerWorkerCleanup,
-  startWorkerWithClient,
-} from "./seam-fixture"
+import { createTempDirFixture, createWorkerEnv } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
 export {
   baseLocalLayer,
@@ -16,7 +12,6 @@ export {
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-transport-worker-")
-registerWorkerCleanup()
 
 export interface TransportCase {
   readonly name: string
@@ -33,25 +28,163 @@ const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
     ),
 })
 
-const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => {
-  return {
-    name: "worker-http",
-    run: (assertion) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const root = makeTempDir()
-            const bundle = yield* startWorkerWithClient({
-              cwd: repoRoot,
-              startupTimeoutMs: 20_000,
-              env: createWorkerEnv(root, { providerMode }),
-            })
-            return yield* assertion(bundle)
-          }),
+// ---------------------------------------------------------------------------
+// Shared worker — one process per provider mode, reused across all tests.
+// Bypasses Effect supervisor to avoid scope lifecycle issues.
+// ---------------------------------------------------------------------------
+
+interface SharedWorker {
+  url: string
+  pid: number
+  proc: Bun.Subprocess
+}
+
+const sharedWorkers = new Map<string, Promise<SharedWorker>>()
+
+const findOpenPort = (): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (address === null || typeof address === "string") {
+        server.close(() => reject(new Error("failed to allocate port")))
+        return
+      }
+      const { port } = address
+      server.close((err) => (err ? reject(err) : resolve(port)))
+    })
+  })
+
+const resolveServerEntry = async () => {
+  const serverEntry = path.resolve(repoRoot, "apps/server/src/main.ts")
+  const bunPath = Bun.which("bun") ?? process.execPath
+  return { runtimePath: bunPath, serverEntryPath: serverEntry }
+}
+
+const startSharedWorker = async (providerMode: HarnessProviderMode): Promise<SharedWorker> => {
+  const port = await findOpenPort()
+  const root = makeTempDir()
+  const launch = await resolveServerEntry()
+  const env = {
+    ...Bun.env,
+    ...createWorkerEnv(root, { providerMode }),
+    GENT_PORT: String(port),
+    GENT_SERVER_MODE: "worker",
+    GENT_TRACE_ID: `shared-worker-${Bun.randomUUIDv7()}`,
+    GENT_PERSISTENCE_MODE: "memory",
+    GENT_DEBUG_MODE: "1",
+  }
+
+  const proc = Bun.spawn([launch.runtimePath, launch.serverEntryPath], {
+    cwd: repoRoot,
+    env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "inherit",
+  })
+
+  // Wait for GENT_WORKER_READY
+  await new Promise<void>((resolve, reject) => {
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let settled = false
+
+    const timeout = setTimeout(() => {
+      if (settled) return
+      settled = true
+      void reader.cancel()
+      try {
+        process.kill(proc.pid, "SIGTERM")
+      } catch {
+        /* */
+      }
+      reject(new Error(`shared worker did not start within 20s (port ${port})`))
+    }, 20_000)
+
+    void proc.exited.then(() => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      reject(new Error(`worker exited before ready (code ${proc.exitCode})`))
+    })
+
+    const readLoop = (): void => {
+      void reader
+        .read()
+        .then(({ done, value }) => {
+          if (settled) return
+          if (done) {
+            settled = true
+            clearTimeout(timeout)
+            reject(new Error("worker stdout closed before ready"))
+            return
+          }
+          buffer += decoder.decode(value, { stream: true })
+          if (buffer.includes("GENT_WORKER_READY")) {
+            settled = true
+            clearTimeout(timeout)
+            void reader.cancel().catch(() => undefined)
+            resolve()
+          } else {
+            readLoop()
+          }
+        })
+        .catch((err) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeout)
+          reject(err)
+        })
+    }
+    readLoop()
+  })
+
+  const url = `http://127.0.0.1:${port}/rpc`
+  return { url, pid: proc.pid, proc }
+}
+
+const getOrStartWorker = (providerMode: HarnessProviderMode): Promise<SharedWorker> => {
+  const existing = sharedWorkers.get(providerMode)
+  if (existing !== undefined) return existing
+  const promise = startSharedWorker(providerMode)
+  sharedWorkers.set(providerMode, promise)
+  return promise
+}
+
+// Kill all workers on exit
+const killAllWorkers = () => {
+  for (const [, promise] of sharedWorkers) {
+    promise
+      .then((w) => {
+        try {
+          process.kill(w.pid, "SIGTERM")
+        } catch {
+          /* */
+        }
+      })
+      .catch(() => undefined)
+  }
+  sharedWorkers.clear()
+}
+
+process.on("exit", killAllWorkers)
+
+const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
+  name: "worker-http",
+  run: async (assertion) => {
+    const worker = await getOrStartWorker(providerMode)
+    return Effect.runPromise(
+      Effect.scoped(
+        Gent.connect({ url: worker.url }).pipe(
+          Effect.mapError((e) => new Error(e.message)),
+          Effect.flatMap(assertion),
         ),
       ),
-  }
-}
+    )
+  },
+})
 
 const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted") => [
   makeDirectCase(providerMode),
