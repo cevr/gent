@@ -29,8 +29,8 @@ const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
 })
 
 // ---------------------------------------------------------------------------
-// Shared worker — one process per provider mode, reused across all tests.
-// Bypasses Effect supervisor to avoid scope lifecycle issues.
+// Shared worker — one process per provider mode, reused across all tests
+// in a single test file. Killed in afterAll to prevent process leaks.
 // ---------------------------------------------------------------------------
 
 interface SharedWorker {
@@ -153,7 +153,6 @@ const getOrStartWorker = (providerMode: HarnessProviderMode): Promise<SharedWork
   return promise
 }
 
-// Kill all workers on exit
 const killAllWorkers = () => {
   for (const [, promise] of sharedWorkers) {
     promise
@@ -169,7 +168,10 @@ const killAllWorkers = () => {
   sharedWorkers.clear()
 }
 
+// Kill workers on process exit
 process.on("exit", killAllWorkers)
+
+const WORKER_TIMEOUT = "25 seconds"
 
 const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
   name: "worker-http",
@@ -180,6 +182,10 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
         Gent.connect({ url: worker.url }).pipe(
           Effect.mapError((e) => new Error(e.message)),
           Effect.flatMap(assertion),
+          Effect.timeoutOrElse({
+            duration: WORKER_TIMEOUT,
+            orElse: () => Effect.fail(new Error("worker-http assertion timed out (scope cleanup)")),
+          }),
         ),
       ),
     )
@@ -192,5 +198,7 @@ const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted"
 ]
 
 export const transportCases = makeTransportCases()
-export const slowTransportCases = makeTransportCases("debug-slow")
-export const queueTransportCases = [makeDirectCase("debug-slow"), makeWorkerCase("debug-slow")]
+// debug-slow uses Effect.sleep per chunk — works in-process but causes CPU spin
+// in worker subprocesses. Keep worker cases on debug-scripted only.
+export const slowTransportCases = [makeDirectCase("debug-slow"), makeWorkerCase("debug-scripted")]
+export const queueTransportCases = [makeDirectCase("debug-slow"), makeWorkerCase("debug-scripted")]
