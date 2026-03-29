@@ -30,6 +30,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ClusterMemoryLive } from "@gent/core/runtime/cluster-layer"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { Agents } from "@gent/core/domain/agent"
 
 const testExtensionRegistryLayer = ExtensionRegistry.fromResolved(
@@ -107,6 +108,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
+      ExtensionStateRuntime.Test(),
     )
     const actorProcessLayer = makeActorProcessLayer(storageDeps, mode)
     const baseWithActorProcess = Layer.mergeAll(
@@ -224,6 +226,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
+      ExtensionStateRuntime.Test(),
     )
     const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
     const baseWithActorProcess = Layer.mergeAll(

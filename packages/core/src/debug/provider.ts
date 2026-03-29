@@ -77,26 +77,27 @@ export const DebugProvider = (options?: { delayMs?: number }) =>
       const delayMs = options?.delayMs ?? 0
       const attempts = new Map<string, number>()
 
-      const stream = (request: ProviderRequest) => {
-        const latestUserText = extractLatestUserText(request.messages)
-        const key = `${request.model}:${latestUserText}`
-        const seen = attempts.get(key) ?? 0
-        const retryBudget = retryBudgetFor(latestUserText)
+      const stream = (request: ProviderRequest) =>
+        Effect.suspend(() => {
+          const latestUserText = extractLatestUserText(request.messages)
+          const key = `${request.model}:${latestUserText}`
+          const seen = attempts.get(key) ?? 0
+          const retryBudget = retryBudgetFor(latestUserText)
 
-        if (seen < retryBudget) {
-          attempts.set(key, seen + 1)
-          return Effect.fail(
-            new ProviderError({
-              message: "Rate limit exceeded (429)",
-              model: request.model,
-            }),
-          )
-        }
+          if (seen < retryBudget) {
+            attempts.set(key, seen + 1)
+            return Effect.fail(
+              new ProviderError({
+                message: "Rate limit exceeded (429)",
+                model: request.model,
+              }),
+            )
+          }
 
-        attempts.delete(key)
-        const reply = buildReply(request, latestUserText)
-        return Effect.succeed(makeReplyStream(latestUserText, reply, delayMs))
-      }
+          attempts.delete(key)
+          const reply = buildReply(request, latestUserText)
+          return Effect.succeed(makeReplyStream(latestUserText, reply, delayMs))
+        })
 
       const generate = (_request: GenerateRequest) => Effect.succeed("debug scenario")
 
