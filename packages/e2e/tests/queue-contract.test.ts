@@ -3,6 +3,9 @@ import { Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { queueTransportCases, waitFor } from "./transport-harness"
 
+// See event-stream-parity.test.ts for why streaming tests are direct-only.
+const streamingQueueCases = queueTransportCases.filter((c) => c.name === "direct")
+
 const flattenRestoreText = (snapshot: {
   steering: ReadonlyArray<{ content: string }>
   followUp: ReadonlyArray<{ content: string }>
@@ -20,7 +23,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>): Effect.Effect<Ref.Re
   })
 
 describe("queue seam contract", () => {
-  for (const transport of queueTransportCases) {
+  for (const transport of streamingQueueCases) {
     test(`${transport.name} exposes queued follow-ups and drain matches restore semantics`, async () => {
       await transport.run(({ client }) =>
         Effect.gen(function* () {

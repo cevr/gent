@@ -116,9 +116,6 @@
       },
     },
   },
-  "patchedDependencies": {
-    "@effect/platform-bun@4.0.0-beta.42": "patches/@effect%2Fplatform-bun@4.0.0-beta.42.patch",
-  },
   "overrides": {
     "effect": "4.0.0-beta.42",
   },

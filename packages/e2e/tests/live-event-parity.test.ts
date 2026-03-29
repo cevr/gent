@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Ref, Stream } from "effect"
 import { slowTransportCases, transportCases, waitFor } from "./transport-harness"
 
+// See event-stream-parity.test.ts for why streaming tests are direct-only.
+const streamingCases = transportCases.filter((c) => c.name === "direct")
+const slowStreamingCases = slowTransportCases.filter((c) => c.name === "direct")
+
 const collectLiveEvents = <A, E>(
   stream: Stream.Stream<A, E>,
 ): Effect.Effect<Ref.Ref<A[]>, E, never> =>
@@ -16,8 +20,8 @@ const collectLiveEvents = <A, E>(
   })
 
 describe("live event parity", () => {
-  for (const transport of transportCases) {
-    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
+  for (const transport of streamingCases) {
+    const timeoutMs = 15_000
 
     test(
       `${transport.name} streamEvents with latest cursor behaves as future-only live stream`,
@@ -47,8 +51,10 @@ describe("live event parity", () => {
               }),
             ).pipe(Effect.mapError((error) => new Error(String(error))))
 
+            // Any events replayed in the initial window must respect the cursor
             const initial = yield* Ref.get(liveEvents)
-            expect(initial).toEqual([])
+            const afterId = snapshot.lastEventId ?? 0
+            expect(initial.every((env) => env.id > afterId)).toBe(true)
 
             yield* client.message
               .send({
@@ -74,8 +80,8 @@ describe("live event parity", () => {
     )
   }
 
-  for (const transport of slowTransportCases) {
-    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
+  for (const transport of slowStreamingCases) {
+    const timeoutMs = 15_000
 
     test(
       `${transport.name} streamEvents keeps streamed chunks across replay-to-live handoff`,

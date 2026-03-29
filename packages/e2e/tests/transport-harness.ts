@@ -175,7 +175,7 @@ const killAllWorkers = () => {
   sharedWorkers.clear()
 }
 
-// Kill workers when this test file finishes + on process exit as safety net
+// Kill workers when this bun test run finishes + on process exit as safety net
 afterAll(killAllWorkers)
 process.on("exit", killAllWorkers)
 
