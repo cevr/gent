@@ -153,10 +153,11 @@ const main = Command.make(
 
       // Shutdown signal — components call env.shutdown() instead of process.exit()
       const shutdownDeferred = yield* Deferred.make<void>()
+      const mainServices = yield* Effect.services<never>()
       const envWithShutdown = {
         ...env,
         shutdown: () => {
-          Effect.runFork(Deferred.complete(shutdownDeferred, Effect.void))
+          Effect.runForkWith(mainServices)(Deferred.complete(shutdownDeferred, Effect.void))
         },
       }
 

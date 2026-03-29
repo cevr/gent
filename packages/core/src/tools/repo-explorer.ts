@@ -120,14 +120,17 @@ export const RepoExplorerTool = defineTool({
     const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
+    const services = yield* Effect.services<never>()
+    const run = Effect.runPromiseWith(services)
+
     switch (params.action) {
       case "fetch": {
         yield* Effect.tryPromise({
           try: async () => {
-            await Effect.runPromise(fs.makeDirectory(path.dirname(cachePath), { recursive: true }))
+            await run(fs.makeDirectory(path.dirname(cachePath), { recursive: true }))
 
             if (parsed.type === "github") {
-              const exists = await Effect.runPromise(fs.exists(cachePath))
+              const exists = await run(fs.exists(cachePath))
               if (exists) {
                 if (params.update === true) {
                   await $`git -C ${cachePath} pull --ff-only`.quiet()
@@ -146,7 +149,7 @@ export const RepoExplorerTool = defineTool({
               // Use npm pack to download
               await $`npm pack ${parsed.name}${parsed.version !== undefined ? `@${parsed.version}` : ""} --pack-destination ${cachePath}`.quiet()
               // Extract
-              const tarballs = await Effect.runPromise(fs.readDirectory(cachePath))
+              const tarballs = await run(fs.readDirectory(cachePath))
               const tarball = tarballs.find((f) => f.endsWith(".tgz"))
               if (tarball !== undefined) {
                 await $`tar -xzf ${path.join(cachePath, tarball)} -C ${cachePath}`.quiet()

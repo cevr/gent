@@ -182,8 +182,9 @@ export const GentTracerLive: Layer.Layer<
     const fs = yield* FileSystem.FileSystem
     const traceFile = yield* fs.open(LOG_PATH, { flag: "a+" })
     const encoder = new TextEncoder()
+    const services = yield* Effect.services<never>()
     const writeLine = (line: string) => {
-      void Effect.runFork(Effect.ignore(traceFile.write(encoder.encode(line + "\n"))))
+      void Effect.runForkWith(services)(Effect.ignore(traceFile.write(encoder.encode(line + "\n"))))
     }
     return makeGentTracer(writeLine)
   }),

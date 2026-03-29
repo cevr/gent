@@ -108,10 +108,13 @@ export const LibrarianTool = defineTool({
       ),
     )
 
+    const services = yield* Effect.services<never>()
+    const run = Effect.runPromiseWith(services)
+
     if (!exists && parsed.type === "github") {
       yield* Effect.tryPromise({
         try: async () => {
-          await Effect.runPromise(fs.makeDirectory(path.dirname(cachePath), { recursive: true }))
+          await run(fs.makeDirectory(path.dirname(cachePath), { recursive: true }))
           const url = `https://github.com/${parsed.name}.git`
           const args = ["git", "clone", "--depth", "100"]
           if (parsed.version !== undefined) {

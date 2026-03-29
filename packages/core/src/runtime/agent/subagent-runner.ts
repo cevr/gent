@@ -429,7 +429,7 @@ export const InProcessRunner: Layer.Layer<
                   : runSubagent.pipe(
                       Effect.timeoutOrElse({
                         duration: Duration.millis(runnerConfig.timeoutMs),
-                        onTimeout: () =>
+                        orElse: () =>
                           Effect.fail(
                             new SubagentError({
                               message: `Subagent timed out after ${runnerConfig.timeoutMs}ms`,

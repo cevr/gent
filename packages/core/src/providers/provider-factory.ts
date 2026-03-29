@@ -76,6 +76,7 @@ function makeProviderFactory(): Effect.Effect<
           })
         }
         const [providerName, modelName] = parsed
+        const services = yield* Effect.services<never>()
 
         const extensionProvider = yield* extensionRegistry.getProvider(providerName)
         if (extensionProvider === undefined) {
@@ -98,7 +99,7 @@ function makeProviderFactory(): Effect.Effect<
             expires: authInfo.expires,
             accountId: authInfo.accountId,
             persist: (updated) =>
-              Effect.runPromise(
+              Effect.runPromiseWith(services)(
                 authStore
                   .set(
                     providerName,

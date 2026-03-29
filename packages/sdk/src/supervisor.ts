@@ -277,6 +277,7 @@ export const startWorkerSupervisor = (
 ): Effect.Effect<WorkerSupervisor, WorkerSupervisorError, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.gen(function* () {
+      const supervisorServices = yield* Effect.services<never>()
       const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
       const assignedPort = yield* Effect.promise(findOpenPort).pipe(
         Effect.mapError(
@@ -383,7 +384,7 @@ export const startWorkerSupervisor = (
           ? Math.min(BACKOFF_BASE_MS * 2 ** (restartTimestamps.length - 1), BACKOFF_MAX_MS)
           : 0
 
-        restartPromise = Effect.runPromise(
+        restartPromise = Effect.runPromiseWith(supervisorServices)(
           Effect.gen(function* () {
             yield* Effect.sleep(`${backoffMs} millis`)
             const proc = current
