@@ -1,0 +1,12 @@
+diff --git a/dist/BunHttpServer.js b/dist/BunHttpServer.js
+index 61ef40ff8d64e232a1a39f9d2421ab45b24c6567..75740fa291eba8f85001afdcf604e2a15cc3a95c 100644
+--- a/dist/BunHttpServer.js
++++ b/dist/BunHttpServer.js
+@@ -88,6 +88,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (options) {
+           const fiber = Fiber.runIn(Effect.runForkWith(ServiceMap.makeUnsafe(map))(httpEffect), scope);
+           request.signal.addEventListener("abort", () => {
+             fiber.interruptUnsafe(parent.id, Error.ClientAbort.annotation);
++            resolve(new Response(null, { status: 499 }));
+           }, {
+             once: true
+           });

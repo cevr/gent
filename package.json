@@ -62,5 +62,8 @@
     "@ai-sdk/mistral": "^3.0.27",
     "effect-bun-test": "0.3.0",
     "solid-js": "^1.9.11"
+  },
+  "patchedDependencies": {
+    "@effect/platform-bun@4.0.0-beta.42": "patches/@effect%2Fplatform-bun@4.0.0-beta.42.patch"
   }
 }
