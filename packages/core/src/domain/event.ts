@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
+import { Clock, ServiceMap, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
 import { BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
@@ -563,7 +563,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
       const envelope = new EventEnvelope({
         id: id as EventId,
         event,
-        createdAt: Date.now(),
+        createdAt: yield* Clock.currentTimeMillis,
         ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
       })
       yield* Ref.update(eventsRef, (events) => [...events, envelope])

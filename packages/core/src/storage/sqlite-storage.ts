@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect"
-import { ServiceMap, Effect, Layer, Schema, FileSystem, Path } from "effect"
+import { Clock, ServiceMap, Effect, Layer, Schema, FileSystem, Path } from "effect"
 import { Message, Session, Branch, MessagePart } from "../domain/message.js"
 import { TodoItem } from "../domain/todo.js"
 import { Task } from "../domain/task.js"
@@ -912,7 +912,7 @@ const makeStorage = Effect.gen(function* () {
           return yield* new StorageError({ message: "Event missing sessionId" })
         }
         const branchId = "branchId" in event ? (event.branchId as string | undefined) : undefined
-        const createdAt = Date.now()
+        const createdAt = yield* Clock.currentTimeMillis
         const traceId = options?.traceId
         const eventJson = yield* encodeEvent(event)
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at, trace_id) VALUES (${sessionId}, ${branchId ?? null}, ${event._tag}, ${eventJson}, ${createdAt}, ${traceId ?? null})`
@@ -1070,7 +1070,7 @@ const makeStorage = Effect.gen(function* () {
 
     updateTask: Effect.fn("Storage.updateTask")(
       function* (id, fields) {
-        const now = Date.now()
+        const now = yield* Clock.currentTimeMillis
         // Validate status if provided
         const VALID_STATUSES = new Set(["pending", "in_progress", "completed", "failed"])
         if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
@@ -1131,7 +1131,7 @@ const makeStorage = Effect.gen(function* () {
 
     claimTask: Effect.fn("Storage.claimTask")(
       function* (id) {
-        const now = Date.now()
+        const now = yield* Clock.currentTimeMillis
         // Compare-and-set: only update if currently pending
         yield* sql`UPDATE tasks SET status = 'in_progress', updated_at = ${now} WHERE id = ${id} AND status = 'pending'`
         // Re-read to see if we got it
@@ -1294,7 +1294,8 @@ const makeStorage = Effect.gen(function* () {
         stateJson: string
         version: number
       }) {
-        yield* sql`INSERT OR REPLACE INTO extension_state (session_id, extension_id, state_json, version, updated_at) VALUES (${params.sessionId}, ${params.extensionId}, ${params.stateJson}, ${params.version}, ${Date.now()})`
+        const updatedAt = yield* Clock.currentTimeMillis
+        yield* sql`INSERT OR REPLACE INTO extension_state (session_id, extension_id, state_json, version, updated_at) VALUES (${params.sessionId}, ${params.extensionId}, ${params.stateJson}, ${params.version}, ${updatedAt})`
       },
       Effect.mapError(mapError("Failed to save extension state")),
     ),

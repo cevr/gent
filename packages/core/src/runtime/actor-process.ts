@@ -1,7 +1,7 @@
 import type { Sharding } from "effect/unstable/cluster"
 import { Entity } from "effect/unstable/cluster"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
-import { Cause, ServiceMap, Effect, Layer, Schema, Semaphore } from "effect"
+import { Cause, Clock, ServiceMap, DateTime, Effect, Layer, Schema, Semaphore } from "effect"
 import { AgentName } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import {
@@ -194,7 +194,7 @@ export const LocalActorTransportLive: Layer.Layer<
             kind: "regular",
             role: "user",
             parts: [new TextPart({ type: "text", text: input.content })],
-            createdAt: new Date(),
+            createdAt: yield* DateTime.nowAsDate,
           })
 
           yield* agentLoop
@@ -253,7 +253,7 @@ export const LocalActorTransportLive: Layer.Layer<
             branchId: input.branchId,
             role: "tool",
             parts: [part],
-            createdAt: new Date(),
+            createdAt: yield* DateTime.nowAsDate,
           })
 
           yield* storage.createMessageIfAbsent(message)
@@ -311,7 +311,7 @@ export const LocalActorTransportLive: Layer.Layer<
                 text: `Tool ${input.toolName} completed. Review the result and continue.`,
               }),
             ],
-            createdAt: new Date(),
+            createdAt: yield* DateTime.nowAsDate,
           })
 
           yield* agentLoop.submit(followUpMessage, { bypass }).pipe(
@@ -673,20 +673,22 @@ const replayStoredCommand = (
   Effect.gen(function* () {
     const hasReceipt = yield* receiptExistsForRecord(storage, record)
     if (hasReceipt) {
+      const completedNow = yield* Clock.currentTimeMillis
       yield* markActorCommand(storage, record.commandId, {
         status: "completed",
-        updatedAt: Date.now(),
-        completedAt: Date.now(),
+        updatedAt: completedNow,
+        completedAt: completedNow,
         lastError: null,
       })
       return
     }
 
+    const runningNow = yield* Clock.currentTimeMillis
     yield* markActorCommand(storage, record.commandId, {
       status: "running",
       attempts: record.attempts + 1,
-      updatedAt: Date.now(),
-      startedAt: Date.now(),
+      updatedAt: runningNow,
+      startedAt: runningNow,
       lastError: null,
     })
 
@@ -727,10 +729,11 @@ const replayStoredCommand = (
     )
 
     if (exit._tag === "Success") {
+      const doneNow = yield* Clock.currentTimeMillis
       yield* markActorCommand(storage, record.commandId, {
         status: "completed",
-        updatedAt: Date.now(),
-        completedAt: Date.now(),
+        updatedAt: doneNow,
+        completedAt: doneNow,
         lastError: null,
       })
       return
@@ -739,7 +742,7 @@ const replayStoredCommand = (
     const message = Cause.pretty(exit.cause)
     yield* markActorCommand(storage, record.commandId, {
       status: "failed",
-      updatedAt: Date.now(),
+      updatedAt: yield* Clock.currentTimeMillis,
       lastError: message,
     })
     return yield* wrapError("actor command replay failed", exit.cause)
@@ -817,7 +820,7 @@ export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTran
             return yield* replayStoredCommand(transport, storage, existing)
           }
 
-          const now = Date.now()
+          const now = yield* Clock.currentTimeMillis
           yield* storeActorCommand(storage, {
             commandId: params.commandId,
             sessionId: params.sessionId,
@@ -830,20 +833,22 @@ export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTran
             updatedAt: now,
           })
 
+          const startNow = yield* Clock.currentTimeMillis
           yield* markActorCommand(storage, params.commandId, {
             status: "running",
             attempts: 1,
-            updatedAt: Date.now(),
-            startedAt: Date.now(),
+            updatedAt: startNow,
+            startedAt: startNow,
             lastError: null,
           })
 
           const exit = yield* Effect.exit(dispatch)
           if (exit._tag === "Success") {
+            const successNow = yield* Clock.currentTimeMillis
             yield* markActorCommand(storage, params.commandId, {
               status: "completed",
-              updatedAt: Date.now(),
-              completedAt: Date.now(),
+              updatedAt: successNow,
+              completedAt: successNow,
               lastError: null,
             })
             return
@@ -852,7 +857,7 @@ export const DurableActorProcessLive: Layer.Layer<ActorProcess, never, ActorTran
           const message = Cause.pretty(exit.cause)
           yield* markActorCommand(storage, params.commandId, {
             status: "failed",
-            updatedAt: Date.now(),
+            updatedAt: yield* Clock.currentTimeMillis,
             lastError: message,
           })
           return yield* wrapError("actor command failed", exit.cause)

@@ -125,7 +125,7 @@ const persistAssistantText = (params: {
       branchId: params.branchId,
       role: "assistant",
       parts,
-      createdAt: params.createdAt ?? new Date(),
+      createdAt: params.createdAt ?? (yield* DateTime.nowAsDate),
     })
 
     const existing = yield* params.storage.getMessage(message.id)
@@ -346,7 +346,7 @@ export const persistAssistantTurn = (params: {
       branchId: params.branchId,
       role: "assistant",
       parts: assistantParts,
-      createdAt: new Date(),
+      createdAt: yield* DateTime.nowAsDate,
     })
 
     const existing = yield* params.storage.getMessage(assistantMessage.id)
@@ -681,7 +681,7 @@ export const executeToolsPhase = (params: {
       branchId: params.branchId,
       role: "tool",
       parts: toolResults,
-      createdAt: new Date(),
+      createdAt: yield* DateTime.nowAsDate,
     })
     yield* params.storage.createMessageIfAbsent(toolResultMessage)
     yield* params
@@ -757,7 +757,7 @@ export const invokeToolPhase = (params: {
         branchId: params.branchId,
         role: "tool",
         parts: toolResults,
-        createdAt: new Date(),
+        createdAt: yield* DateTime.nowAsDate,
       }),
     )
     yield* params

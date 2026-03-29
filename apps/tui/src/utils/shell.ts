@@ -2,7 +2,7 @@
  * Shell execution utility with truncation and output saving
  */
 
-import { FileSystem, Effect } from "effect"
+import { DateTime, FileSystem, Effect } from "effect"
 import { homedir } from "os"
 import { joinPath } from "../platform/path-runtime"
 
@@ -79,11 +79,12 @@ const saveFullOutput = (output: string, command: string) =>
     const toolOutputDir = joinPath(homedir(), "tool-output")
     yield* fs.makeDirectory(toolOutputDir, { recursive: true })
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+    const now = yield* DateTime.nowAsDate
+    const timestamp = now.toISOString().replace(/[:.]/g, "-")
     const filename = `shell_${timestamp}.txt`
     const filepath = joinPath(toolOutputDir, filename)
 
-    const header = `# Command: ${command}\n# Timestamp: ${new Date().toISOString()}\n\n`
+    const header = `# Command: ${command}\n# Timestamp: ${now.toISOString()}\n\n`
     yield* fs.writeFileString(filepath, header + output)
 
     return filepath

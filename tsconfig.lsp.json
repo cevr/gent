@@ -34,12 +34,12 @@
           "unnecessaryFailYieldableError": "warning",
           "unnecessaryPipe": "warning",
           "unnecessaryPipeChain": "warning",
-          "globalDateInEffect": "suggestion",
-          "globalRandomInEffect": "suggestion",
-          "globalConsoleInEffect": "suggestion",
-          "globalTimersInEffect": "suggestion",
-          "globalErrorInEffectCatch": "suggestion",
-          "globalErrorInEffectFailure": "suggestion"
+          "globalDateInEffect": "warning",
+          "globalRandomInEffect": "warning",
+          "globalConsoleInEffect": "warning",
+          "globalTimersInEffect": "warning",
+          "globalErrorInEffectCatch": "warning",
+          "globalErrorInEffectFailure": "warning"
         },
         "keyPatterns": [
           {

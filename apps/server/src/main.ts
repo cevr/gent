@@ -209,10 +209,14 @@ const program = Effect.scoped(
     }
     yield* Layer.buildWithScope(HttpServerLive, scope)
 
+    // stdout messages parsed by supervisor — must stay as console.log
     if (config.isWorker) {
+      // @effect-diagnostics-next-line *:off
       console.log(`GENT_WORKER_READY ${baseUrl}`)
     } else {
+      // @effect-diagnostics-next-line *:off
       console.log(`Gent server ready on ${baseUrl}`)
+      // @effect-diagnostics-next-line *:off
       console.log(`Swagger UI: ${baseUrl}/docs`)
     }
 

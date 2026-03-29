@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, FiberSet, Layer } from "effect"
+import { ServiceMap, DateTime, Effect, FiberSet, Layer } from "effect"
 import {
   Task,
   TaskTransitionError,
@@ -213,7 +213,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
         create: (params) =>
           Effect.gen(function* () {
             const id = Bun.randomUUIDv7() as TaskId
-            const now = new Date()
+            const now = yield* DateTime.nowAsDate
             const task = new Task({
               id,
               sessionId: params.sessionId,

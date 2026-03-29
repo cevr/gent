@@ -1,4 +1,4 @@
-import { Cause, ServiceMap, Duration, Effect, Layer } from "effect"
+import { Cause, ServiceMap, DateTime, Duration, Effect, Layer } from "effect"
 import { withWideEvent, WideEvent, subagentBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -258,7 +258,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
 
       const sessionId = Bun.randomUUIDv7() as SessionId
       const branchId = Bun.randomUUIDv7() as BranchId
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const parentSession = yield* storage.getSession(params.parentSessionId)
       const bypass = parentSession?.bypass ?? true
 

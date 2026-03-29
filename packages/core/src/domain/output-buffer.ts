@@ -9,7 +9,7 @@
  * When truncated, saves full output to /tmp/gent-output/ and returns the path.
  */
 
-import { Effect, FileSystem, Path } from "effect"
+import { DateTime, Effect, FileSystem, Path } from "effect"
 
 const DEFAULT_HEAD_LINES = 50
 const DEFAULT_TAIL_LINES = 50
@@ -90,12 +90,13 @@ export const saveFullOutput = (output: string, label: string) =>
     const path = yield* Path.Path
     yield* fs.makeDirectory(OUTPUT_DIR, { recursive: true })
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+    const now = yield* DateTime.nowAsDate
+    const timestamp = now.toISOString().replace(/[:.]/g, "-")
     const safeName = label.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
     const filename = `${safeName}_${timestamp}.txt`
     const filepath = path.join(OUTPUT_DIR, filename)
 
-    const header = `# Label: ${label}\n# Timestamp: ${new Date().toISOString()}\n\n`
+    const header = `# Label: ${label}\n# Timestamp: ${now.toISOString()}\n\n`
     yield* fs.writeFileString(filepath, header + output)
 
     return filepath

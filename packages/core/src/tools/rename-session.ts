@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { EventStore, SessionNameUpdated } from "../domain/event.js"
@@ -34,7 +34,7 @@ export const RenameSessionTool = defineTool({
     if (session === undefined) return { renamed: false, reason: "session not found" }
     if (session.name === trimmed) return { renamed: false, reason: "name unchanged" }
 
-    const updated = new Session({ ...session, name: trimmed, updatedAt: new Date() })
+    const updated = new Session({ ...session, name: trimmed, updatedAt: yield* DateTime.nowAsDate })
     yield* storage.updateSession(updated)
     yield* eventStore.publish(new SessionNameUpdated({ sessionId: ctx.sessionId, name: trimmed }))
 

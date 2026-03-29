@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Ref, Stream } from "effect"
+import { Clock, ServiceMap, Effect, Layer, Ref, Stream } from "effect"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
   Provider,
@@ -49,6 +49,7 @@ export class SequenceRecorder extends ServiceMap.Service<
       const ref = yield* Ref.make<CallRecord[]>([])
       return {
         record: (call) =>
+          // @effect-diagnostics-next-line *:off
           Ref.update(ref, (calls) => [...calls, { ...call, timestamp: Date.now() }]),
         getCalls: () => Ref.get(ref),
         clear: () => Ref.set(ref, []),
@@ -103,11 +104,12 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
     return {
       publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
         nextId += 1
+        const createdAt = yield* Clock.currentTimeMillis
         events.push(
           new EventEnvelope({
             id: nextId as EventEnvelope["id"],
             event,
-            createdAt: Date.now(),
+            createdAt,
           }),
         )
         yield* recorder.record({

@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Clock, Effect, Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { AgentLoopState, type LoopState } from "./agent-loop.state.js"
 
@@ -38,6 +38,6 @@ export const buildLoopCheckpointRecord = (params: {
       version: AGENT_LOOP_CHECKPOINT_VERSION,
       stateTag: params.state._tag,
       stateJson,
-      updatedAt: Date.now(),
+      updatedAt: yield* Clock.currentTimeMillis,
     } satisfies AgentLoopCheckpointRecord
   })

@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { defineExtension } from "../../domain/extension.js"
 import type { ProviderAuthInfo, ProviderContribution } from "../../domain/extension.js"
@@ -33,7 +33,7 @@ const loadCredentialsEffect = (
   authInfo?: ProviderAuthInfo,
 ): Effect.Effect<ClaudeCredentials | null> =>
   Effect.gen(function* () {
-    const now = Date.now()
+    const now = yield* Clock.currentTimeMillis
 
     // Check cache
     if (
@@ -142,7 +142,7 @@ export const AnthropicExtension = defineExtension({
             Effect.gen(function* () {
               if (ctx.methodIndex !== 0) return undefined
               let creds = yield* readClaudeCodeCredentials()
-              if (creds.expiresAt < Date.now() + 60_000) {
+              if (creds.expiresAt < (yield* Clock.currentTimeMillis) + 60_000) {
                 yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
                 creds = yield* readClaudeCodeCredentials()
               }

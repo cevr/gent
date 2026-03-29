@@ -208,6 +208,7 @@ const sessions = Command.make("sessions", {}, () =>
 
     yield* Console.log("Sessions:")
     for (const s of allSessions) {
+      // @effect-diagnostics-next-line *:off
       const date = new Date(s.updatedAt).toISOString()
       yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
     }

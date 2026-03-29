@@ -12,7 +12,7 @@
  * clients re-present dialogs.
  */
 
-import { Deferred, Effect } from "effect"
+import { Clock, Deferred, Effect } from "effect"
 import type { EventStoreError } from "./event"
 import type { BranchId, SessionId } from "./ids"
 
@@ -109,7 +109,7 @@ export const makeInteractionService = <TParams, TDecision>(
           branchId: ctx.branchId,
           paramsJson,
           status: "pending",
-          createdAt: Date.now(),
+          createdAt: yield* Clock.currentTimeMillis,
         })
       }
 

@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { Clock, ServiceMap, DateTime, Effect, Layer, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { TodoStatus, TodoPriority, TodoItem } from "../domain/todo.js"
 
@@ -98,11 +98,12 @@ export const TodoWriteTool = defineTool({
   params: TodoWriteParams,
   execute: Effect.fn("TodoWriteTool.execute")(function* (params) {
     const handler = yield* TodoHandler
-    const now = new Date()
+    const now = yield* DateTime.nowAsDate
+    const nowMs = yield* Clock.currentTimeMillis
     const todos = params.todos.map(
       (t, i) =>
         new TodoItem({
-          id: `todo-${Date.now()}-${i}`,
+          id: `todo-${nowMs}-${i}`,
           content: t.content,
           status: t.status,
           priority: t.priority,

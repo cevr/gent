@@ -1,4 +1,4 @@
-import { Effect, Schema, type Scope } from "effect"
+import { Clock, Effect, Schema, type Scope } from "effect"
 import * as net from "node:net"
 import { pathToFileURL } from "node:url"
 
@@ -343,7 +343,7 @@ export const startWorkerSupervisor = (
 
         restartCount += 1
         const isCrash = input !== undefined
-        const now = Date.now()
+        const now = yield* Clock.currentTimeMillis
 
         // Only track crash-triggered restarts for loop detection (not manual)
         if (isCrash) {

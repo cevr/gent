@@ -1,6 +1,7 @@
 import {
   Cause,
   ServiceMap,
+  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -1237,7 +1238,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     kind: "interjection",
                     role: "user",
                     parts: [new TextPart({ type: "text", text: command.message })],
-                    createdAt: new Date(),
+                    createdAt: yield* DateTime.nowAsDate,
                   })
                   const item: QueuedTurnItem = {
                     message: interjectMessage,
@@ -1535,7 +1536,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             branchId: input.branchId,
             role: "user",
             parts: [new TextPart({ type: "text", text: input.prompt })],
-            createdAt: new Date(),
+            createdAt: yield* DateTime.nowAsDate,
           })
 
           yield* storage.createMessage(userMessage)
@@ -1642,7 +1643,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
               branchId: input.branchId,
               role: "assistant",
               parts: assistantParts,
-              createdAt: new Date(),
+              createdAt: yield* DateTime.nowAsDate,
             })
 
             yield* storage.createMessage(assistantMessage)
@@ -1709,7 +1710,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                 branchId: input.branchId,
                 role: "tool",
                 parts: toolResults,
-                createdAt: new Date(),
+                createdAt: yield* DateTime.nowAsDate,
               })
               yield* storage.createMessage(toolResultMessage)
               messages.push(toolResultMessage)

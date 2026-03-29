@@ -5,7 +5,7 @@
  * without reaching into the loop internals directly.
  */
 
-import { ServiceMap, Effect, Layer } from "effect"
+import { ServiceMap, DateTime, Effect, Layer } from "effect"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { Message, type MessageMetadata, TextPart } from "../../domain/message.js"
 import { AgentLoop } from "../agent/agent-loop.js"
@@ -50,7 +50,7 @@ export class ExtensionTurnControl extends ServiceMap.Service<
             kind: "regular",
             role: "user",
             parts: [new TextPart({ type: "text", text: input.content })],
-            createdAt: new Date(),
+            createdAt: yield* DateTime.nowAsDate,
             metadata: input.metadata,
           })
           yield* agentLoop.followUp(message).pipe(Effect.catchEager(() => Effect.void))

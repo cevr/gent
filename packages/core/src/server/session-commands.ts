@@ -1,4 +1,4 @@
-import { Effect, Layer, ServiceMap, Stream } from "effect"
+import { DateTime, Effect, Layer, ServiceMap, Stream } from "effect"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
@@ -103,7 +103,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
               text: `Summarize this branch concisely. Focus on decisions, open questions, and current state. Keep it short and actionable.\n\nBranch conversation (recent):\n${conversation}`,
             }),
           ],
-          createdAt: new Date(),
+          createdAt: yield* DateTime.nowAsDate,
         })
 
         const streamEffect = yield* provider.stream({
@@ -136,7 +136,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         }
 
         const branchId = Bun.randomUUIDv7() as BranchId
-        const now = new Date()
+        const now = yield* DateTime.nowAsDate
         const name = input.name ?? "New Chat"
         const bypass = input.bypass ?? true
         const session = new Session({
@@ -187,7 +187,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           id: Bun.randomUUIDv7() as BranchId,
           sessionId: input.sessionId,
           name: input.name,
-          createdAt: new Date(),
+          createdAt: yield* DateTime.nowAsDate,
         })
         yield* storage.createBranch(branch)
         yield* eventStore.publish(
@@ -240,7 +240,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
             new Session({
               ...session,
               activeBranchId: input.toBranchId,
-              updatedAt: new Date(),
+              updatedAt: yield* DateTime.nowAsDate,
             }),
           )
         }
@@ -277,7 +277,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           parentBranchId: input.fromBranchId,
           parentMessageId: input.atMessageId,
           name: input.name,
-          createdAt: new Date(),
+          createdAt: yield* DateTime.nowAsDate,
         })
         yield* storage.createBranch(branch)
 
@@ -363,7 +363,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
             new Session({
               ...session,
               bypass: input.bypass,
-              updatedAt: new Date(),
+              updatedAt: yield* DateTime.nowAsDate,
             }),
           )
           yield* eventStore.publish(
@@ -381,7 +381,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
               new Session({
                 ...session,
                 reasoningLevel: input.reasoningLevel,
-                updatedAt: new Date(),
+                updatedAt: yield* DateTime.nowAsDate,
               }),
             )
             yield* eventStore.publish(

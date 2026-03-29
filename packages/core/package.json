@@ -25,7 +25,7 @@
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/mistral": "catalog:",
     "@ai-sdk/openai": "catalog:",
-    "@aws-sdk/credential-providers": "^3.1014.0",
+    "@aws-sdk/credential-providers": "^3.1019.0",
     "@types/turndown": "^5.0.6",
     "ai": "catalog:",
     "effect-machine": "catalog:",

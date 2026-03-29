@@ -1,4 +1,4 @@
-import { Effect, Ref, Schema } from "effect"
+import { Clock, DateTime, Effect, Ref, Schema } from "effect"
 import {
   AgentSwitched,
   EventStore,
@@ -54,6 +54,7 @@ const createParentTurnMessages = (
   searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
 ) => {
+  // @effect-diagnostics-next-line *:off
   const now = new Date()
 
   const assistant = new Message({
@@ -182,7 +183,7 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
       role: "user",
       kind: "regular",
       parts: [makeText(`Run debug inspection cycle ${iteration}.`)],
-      createdAt: new Date(),
+      createdAt: yield* DateTime.nowAsDate,
     })
 
     yield* storage.createMessage(user)
@@ -201,7 +202,7 @@ const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
     const storage = yield* Storage
     const sessionId = Bun.randomUUIDv7() as SessionId
     const branchId = Bun.randomUUIDv7() as BranchId
-    const now = new Date()
+    const now = yield* DateTime.nowAsDate
 
     yield* storage.createSession(
       new Session({
@@ -366,7 +367,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     const readSessionToolCallId = asToolCallId(`dbg-live-read-session-${iteration}`)
     const agent = iteration % 2 === 0 ? "deepwork" : "cowork"
     const previousAgent = iteration % 2 === 0 ? "cowork" : "deepwork"
-    const startedAt = Date.now()
+    const startedAt = yield* Clock.currentTimeMillis
 
     yield* eventStore.publish(
       new AgentSwitched({
@@ -550,7 +551,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       new TurnCompleted({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        durationMs: Date.now() - startedAt,
+        durationMs: (yield* Clock.currentTimeMillis) - startedAt,
       }),
     )
     yield* persistDebugTurn(
