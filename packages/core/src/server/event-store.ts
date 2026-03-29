@@ -67,6 +67,15 @@ export const EventStoreLive: Layer.Layer<EventStore | BaseEventStore, never, Sto
               }),
             ),
           ),
+
+        removeSession: (sessionId) =>
+          Effect.gen(function* () {
+            const ps = sessions.get(sessionId)
+            if (ps !== undefined) {
+              sessions.delete(sessionId)
+              yield* PubSub.shutdown(ps)
+            }
+          }),
       }
 
       return Layer.merge(Layer.succeed(EventStore, service), Layer.succeed(BaseEventStore, service))

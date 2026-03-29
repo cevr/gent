@@ -338,6 +338,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         deleteSession: (sessionId) =>
           extensionStateRuntime.terminateAll(sessionId).pipe(
             Effect.catchDefect(() => Effect.void),
+            Effect.tap(() => eventStore.removeSession(sessionId)),
             Effect.tap(() => storage.deleteSession(sessionId)),
             Effect.tap(() =>
               Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId })),

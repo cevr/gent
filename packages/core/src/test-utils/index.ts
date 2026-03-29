@@ -124,6 +124,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
             (env) => matchesEventFilter(env, sessionId, branchId) && env.id > (after ?? 0),
           ),
         ),
+      removeSession: () => Effect.void,
     }
   }),
 )

@@ -512,6 +512,8 @@ export interface EventStoreService {
     branchId?: BranchId
     after?: EventId
   }) => Stream.Stream<EventEnvelope, EventStoreError>
+  /** Remove session PubSub, shutting down any active subscribers. */
+  readonly removeSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
@@ -610,6 +612,15 @@ const makeMemoryEventStore = Effect.gen(function* () {
           }),
         ),
       ),
+
+    removeSession: (sessionId) =>
+      Effect.gen(function* () {
+        const ps = sessions.get(sessionId)
+        if (ps !== undefined) {
+          sessions.delete(sessionId)
+          yield* PubSub.shutdown(ps)
+        }
+      }),
   }
   return service
 })
@@ -631,6 +642,7 @@ export class EventStore extends ServiceMap.Service<EventStore, EventStoreService
     const noop: EventStoreService = {
       publish: () => Effect.void,
       subscribe: (_params) => Stream.empty,
+      removeSession: () => Effect.void,
     }
     return Layer.merge(Layer.succeed(EventStore, noop), Layer.succeed(BaseEventStore, noop))
   }

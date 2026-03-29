@@ -199,6 +199,7 @@ export const makeReducingEventStore = Layer.effect(
           }),
         ),
       subscribe: base.subscribe,
+      removeSession: base.removeSession,
     }
   }),
 )
