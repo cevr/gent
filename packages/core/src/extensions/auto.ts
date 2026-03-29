@@ -302,7 +302,6 @@ const autoMachine = Machine.make({
   .on(MachineState.AwaitingCounsel, MachineEvent.CancelAuto, () =>
     MachineState.Inactive({ reason: "cancelled" }),
   )
-  .build()
 
 // ── Derive ──
 

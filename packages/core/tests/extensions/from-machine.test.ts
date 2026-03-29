@@ -40,7 +40,6 @@ const counterMachine = Machine.make({
     CounterState.Counting({ count: state.count + 1 }),
   )
   .on(CounterState.Counting, CounterEvent.Reset, () => CounterState.Idle)
-  .build()
 
 describe("fromMachine", () => {
   it.live("handleEvent returns true on state change, false when unchanged", () => {

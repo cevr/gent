@@ -1,5 +1,5 @@
 /**
- * fromMachine — wraps an effect-machine BuiltMachine into an ExtensionActor.
+ * fromMachine — wraps an effect-machine Machine into an ExtensionActor.
  *
  * Parity with fromReducer: handleEvent, handleIntent, persistence,
  * version tracking via Ref, projection externalization.
@@ -9,7 +9,7 @@
  */
 
 import { Effect, Ref, Schema } from "effect"
-import { Machine, type BuiltMachine } from "effect-machine"
+import { Machine } from "effect-machine"
 import type { AgentEvent } from "../../domain/event.js"
 import type {
   ExtensionActor,
@@ -34,7 +34,8 @@ export interface FromMachineConfig<
   /** Actor/extension id */
   readonly id: string
   /** The built machine to wrap */
-  readonly built: BuiltMachine<State, Event, R>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly built: Machine.Machine<State, Event, R, any, any, any, any>
   /** Map AgentEvent to machine event. Return undefined to skip. */
   readonly mapEvent?: (event: AgentEvent) => Event | undefined
   /** Map intent to machine event for handleIntent support. Receives current state for conditional mapping. Return undefined to skip. */
@@ -61,7 +62,7 @@ export interface FromMachineResult {
 }
 
 /**
- * Create a SpawnActor factory + projection config from an effect-machine BuiltMachine.
+ * Create a SpawnActor factory + projection config from an effect-machine Machine.
  */
 export const fromMachine = <
   State extends { readonly _tag: string },

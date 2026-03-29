@@ -1101,7 +1101,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   onFailure: () => AgentLoopEvent.PhaseFailed,
                 },
               )
-              .build()
 
             const loopActor = yield* Machine.spawn(
               loopMachine,
@@ -1419,7 +1418,6 @@ const makeAgentMachine = (run: (input: AgentRunInput) => Effect.Effect<void, Sub
     })
     .final(AgentActorState.Completed)
     .final(AgentActorState.Failed)
-    .build()
 
 export interface AgentActorService {
   readonly run: (input: AgentRunInput) => Effect.Effect<void, SubagentError>
