@@ -1,9 +1,12 @@
 import { Effect } from "effect"
+import { afterAll } from "bun:test"
+import * as fs from "node:fs"
 import * as net from "node:net"
+import * as os from "node:os"
 import * as path from "node:path"
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
-import { createTempDirFixture, createWorkerEnv } from "./seam-fixture"
+import { createWorkerEnv } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
 export {
   baseLocalLayer,
@@ -11,7 +14,6 @@ export {
 } from "@gent/core/test-utils/in-process-layer.js"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
-const makeTempDir = createTempDirFixture("gent-transport-worker-")
 
 export interface TransportCase {
   readonly name: string
@@ -37,6 +39,7 @@ interface SharedWorker {
   url: string
   pid: number
   proc: Bun.Subprocess
+  root: string
 }
 
 const sharedWorkers = new Map<string, Promise<SharedWorker>>()
@@ -64,7 +67,7 @@ const resolveServerEntry = async () => {
 
 const startSharedWorker = async (providerMode: HarnessProviderMode): Promise<SharedWorker> => {
   const port = await findOpenPort()
-  const root = makeTempDir()
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gent-shared-worker-"))
   const launch = await resolveServerEntry()
   const env = {
     ...Bun.env,
@@ -73,7 +76,6 @@ const startSharedWorker = async (providerMode: HarnessProviderMode): Promise<Sha
     GENT_SERVER_MODE: "worker",
     GENT_TRACE_ID: `shared-worker-${Bun.randomUUIDv7()}`,
     GENT_PERSISTENCE_MODE: "memory",
-    GENT_DEBUG_MODE: "1",
   }
 
   const proc = Bun.spawn([launch.runtimePath, launch.serverEntryPath], {
@@ -142,7 +144,7 @@ const startSharedWorker = async (providerMode: HarnessProviderMode): Promise<Sha
   })
 
   const url = `http://127.0.0.1:${port}/rpc`
-  return { url, pid: proc.pid, proc }
+  return { url, pid: proc.pid, proc, root }
 }
 
 const getOrStartWorker = (providerMode: HarnessProviderMode): Promise<SharedWorker> => {
@@ -162,13 +164,19 @@ const killAllWorkers = () => {
         } catch {
           /* */
         }
+        try {
+          fs.rmSync(w.root, { recursive: true, force: true })
+        } catch {
+          /* */
+        }
       })
       .catch(() => undefined)
   }
   sharedWorkers.clear()
 }
 
-// Kill workers on process exit
+// Kill workers when this test file finishes + on process exit as safety net
+afterAll(killAllWorkers)
 process.on("exit", killAllWorkers)
 
 const WORKER_TIMEOUT = "25 seconds"
