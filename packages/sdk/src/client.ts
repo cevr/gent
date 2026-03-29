@@ -2,7 +2,7 @@ import { Effect, Layer } from "effect"
 import type { Fiber, ServiceMap, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { Socket } from "effect/unstable/socket"
 import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import {
@@ -262,32 +262,17 @@ const supervisorLifecycle = (supervisor: WorkerSupervisor): GentLifecycle => ({
 })
 
 // ---------------------------------------------------------------------------
-// HTTP transport (internal)
+// WebSocket transport (internal)
 // ---------------------------------------------------------------------------
 
-interface HttpTransportConfig {
-  url: string
-  headers?: Record<string, string>
-}
+const toWsUrl = (httpUrl: string): string => httpUrl.replace(/^http(s?):\/\//, "ws$1://")
 
-const HttpTransport = (config: HttpTransportConfig): Layer.Layer<RpcClient.Protocol> => {
-  const headers = config.headers
-  const clientLayer =
-    headers !== undefined
-      ? Layer.effect(
-          HttpClient.HttpClient,
-          Effect.gen(function* () {
-            const client = yield* HttpClient.HttpClient
-            return client.pipe(HttpClient.mapRequest(HttpClientRequest.setHeaders(headers)))
-          }),
-        ).pipe(Layer.provide(FetchHttpClient.layer))
-      : FetchHttpClient.layer
-
-  return RpcClient.layerProtocolHttp({ url: config.url }).pipe(
-    Layer.provide(RpcSerialization.layerNdjson),
-    Layer.provide(clientLayer),
+const WsTransport = (url: string): Layer.Layer<RpcClient.Protocol> =>
+  RpcClient.layerProtocolSocket().pipe(
+    Layer.provide(Socket.layerWebSocket(toWsUrl(url))),
+    Layer.provide(Socket.layerWebSocketConstructorGlobal),
+    Layer.provide(RpcSerialization.layerJson),
   )
-}
 
 // ---------------------------------------------------------------------------
 // RPC client assembly (internal)
@@ -314,7 +299,6 @@ export interface GentSpawnOptions {
 
 export interface GentConnectOptions {
   readonly url: string
-  readonly headers?: Record<string, string>
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -336,7 +320,7 @@ export const Gent = {
         Effect.mapError((e) => new GentConnectionError({ message: e.message })),
       )
       const scope = yield* Effect.scope
-      const transport = yield* Layer.buildWithScope(HttpTransport({ url: supervisor.url }), scope)
+      const transport = yield* Layer.buildWithScope(WsTransport(supervisor.url), scope)
       const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
       const services = yield* Effect.services<never>()
       return {
@@ -354,10 +338,7 @@ export const Gent = {
   ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope
-      const transport = yield* Layer.buildWithScope(
-        HttpTransport({ url: options.url, headers: options.headers }),
-        scope,
-      )
+      const transport = yield* Layer.buildWithScope(WsTransport(options.url), scope)
       const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
       const services = yield* Effect.services<never>()
       return {

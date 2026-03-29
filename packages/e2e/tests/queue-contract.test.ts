@@ -3,10 +3,6 @@ import { Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { queueTransportCases, waitFor } from "./transport-harness"
 
-// Bun does not fire request.signal abort for streaming HTTP responses.
-// Streaming tests only run on the direct transport until Bun fixes this.
-const streamingQueueCases = queueTransportCases.filter((c) => c.name === "direct")
-
 const flattenRestoreText = (snapshot: {
   steering: ReadonlyArray<{ content: string }>
   followUp: ReadonlyArray<{ content: string }>
@@ -24,7 +20,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>): Effect.Effect<Ref.Re
   })
 
 describe("queue seam contract", () => {
-  for (const transport of streamingQueueCases) {
+  for (const transport of queueTransportCases) {
     test(`${transport.name} exposes queued follow-ups and drain matches restore semantics`, async () => {
       await transport.run(({ client }) =>
         Effect.gen(function* () {

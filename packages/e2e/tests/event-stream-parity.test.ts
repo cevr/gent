@@ -3,12 +3,6 @@ import { Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import { transportCases, waitFor } from "./transport-harness"
 
-// Bun does not fire request.signal abort for streaming HTTP responses,
-// so server-side streaming fibers are never interrupted on client disconnect.
-// This causes 100% CPU spin on the shared worker after streaming tests complete.
-// Until Bun fixes this, streaming tests only run on the direct transport.
-const streamingCases = transportCases.filter((c) => c.name === "direct")
-
 const startCollecting = (
   client: {
     session: {
@@ -61,7 +55,7 @@ const waitForTaggedEvent = (
   )
 
 describe("event stream parity", () => {
-  for (const transport of streamingCases) {
+  for (const transport of transportCases) {
     const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(

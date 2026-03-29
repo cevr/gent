@@ -2,12 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Ref, Stream } from "effect"
 import { slowTransportCases, transportCases, waitFor } from "./transport-harness"
 
-// Bun does not fire request.signal abort for streaming HTTP responses,
-// so server-side streaming fibers are never interrupted on client disconnect.
-// Until Bun fixes this, streaming tests only run on the direct transport.
-const streamingCases = transportCases.filter((c) => c.name === "direct")
-const slowStreamingCases = slowTransportCases.filter((c) => c.name === "direct")
-
 const collectLiveEvents = <A, E>(
   stream: Stream.Stream<A, E>,
 ): Effect.Effect<Ref.Ref<A[]>, E, never> =>
@@ -22,8 +16,8 @@ const collectLiveEvents = <A, E>(
   })
 
 describe("live event parity", () => {
-  for (const transport of streamingCases) {
-    const timeoutMs = 15_000
+  for (const transport of transportCases) {
+    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(
       `${transport.name} streamEvents with latest cursor behaves as future-only live stream`,
@@ -80,8 +74,8 @@ describe("live event parity", () => {
     )
   }
 
-  for (const transport of slowStreamingCases) {
-    const timeoutMs = 15_000
+  for (const transport of slowTransportCases) {
+    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(
       `${transport.name} streamEvents keeps streamed chunks across replay-to-live handoff`,

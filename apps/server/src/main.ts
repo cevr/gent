@@ -153,13 +153,12 @@ const program = Effect.scoped(
     const coreServices = ServiceMap.merge(depsServices, appServices)
     const coreServicesLive = Layer.succeedServices(coreServices)
 
-    // RPC-over-HTTP routes with ndjson for streaming
+    // RPC-over-WebSocket route (defaults to WS when protocol is omitted)
     const RpcRoutes = RpcServer.layerHttp({
       group: GentRpcs,
       path: "/rpc",
-      protocol: "http",
     }).pipe(
-      Layer.provide(RpcSerialization.layerNdjson),
+      Layer.provide(RpcSerialization.layerJson),
       Layer.provide(RpcHandlersLive),
       Layer.provide(coreServicesLive),
     )
