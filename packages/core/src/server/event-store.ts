@@ -1,6 +1,7 @@
 import { Effect, Layer, PubSub, Stream } from "effect"
-import { BaseEventStore, EventStore, EventStoreError, matchesEventFilter } from "../domain/event.js"
+import { BaseEventStore, EventStore, EventStoreError, getEventSessionId } from "../domain/event.js"
 import type { EventEnvelope, EventStoreService } from "../domain/event.js"
+import type { SessionId, BranchId } from "../domain/ids.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
 
 const toEventStoreError =
@@ -8,11 +9,29 @@ const toEventStoreError =
   (error: StorageError): EventStoreError =>
     new EventStoreError({ message, cause: error })
 
+const getOrCreateSessionPubSub = (
+  sessions: Map<SessionId, PubSub.PubSub<EventEnvelope>>,
+  sessionId: SessionId,
+): PubSub.PubSub<EventEnvelope> => {
+  const existing = sessions.get(sessionId)
+  if (existing !== undefined) return existing
+  const ps = Effect.runSync(PubSub.unbounded<EventEnvelope>())
+  sessions.set(sessionId, ps)
+  return ps
+}
+
+const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
+  if (branchId === undefined) return true
+  const eventBranchId =
+    "branchId" in env.event ? (env.event.branchId as BranchId | undefined) : undefined
+  return eventBranchId === branchId || eventBranchId === undefined
+}
+
 export const EventStoreLive: Layer.Layer<EventStore | BaseEventStore, never, Storage> =
   Layer.unwrap(
     Effect.gen(function* () {
       const storage = yield* Storage
-      const pubsub = yield* PubSub.unbounded<EventEnvelope>()
+      const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
 
       const service: EventStoreService = {
         publish: Effect.fn("EventStore.publish")(function* (event) {
@@ -23,7 +42,10 @@ export const EventStoreLive: Layer.Layer<EventStore | BaseEventStore, never, Sto
           const envelope = yield* storage
             .appendEvent(event, traceId !== undefined ? { traceId } : undefined)
             .pipe(Effect.mapError(toEventStoreError("Failed to append event")))
-          yield* PubSub.publish(pubsub, envelope)
+          const eventSessionId = getEventSessionId(event)
+          if (eventSessionId !== undefined) {
+            yield* PubSub.publish(getOrCreateSessionPubSub(sessions, eventSessionId), envelope)
+          }
         }),
 
         subscribe: ({ sessionId, branchId, after }) =>
@@ -31,15 +53,14 @@ export const EventStoreLive: Layer.Layer<EventStore | BaseEventStore, never, Sto
             Stream.unwrap(
               Effect.gen(function* () {
                 const afterId = after ?? 0
-                const subscription = yield* PubSub.subscribe(pubsub)
+                const ps = getOrCreateSessionPubSub(sessions, sessionId)
+                const subscription = yield* PubSub.subscribe(ps)
                 const initial = yield* storage
                   .listEvents({ sessionId, branchId, afterId })
                   .pipe(Effect.mapError(toEventStoreError("Failed to load buffered events")))
                 const maxId = initial[initial.length - 1]?.id ?? afterId
                 const live = Stream.fromSubscription(subscription).pipe(
-                  Stream.filter(
-                    (env) => env.id > maxId && matchesEventFilter(env, sessionId, branchId),
-                  ),
+                  Stream.filter((env) => env.id > maxId && matchesBranchFilter(env, branchId)),
                 )
 
                 return Stream.concat(Stream.fromIterable(initial), live)

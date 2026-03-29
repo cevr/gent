@@ -532,6 +532,11 @@ export const matchesEventFilter = (
 ): boolean => {
   const eventSessionId = getEventSessionId(env.event)
   if (eventSessionId === undefined || eventSessionId !== sessionId) return false
+  return matchesBranchFilter(env, branchId)
+}
+
+/** Branch-only filter — use when session is already known to match. */
+const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
   if (branchId === undefined) return true
   const eventBranchId =
     "branchId" in env.event ? (env.event.branchId as BranchId | undefined) : undefined
@@ -549,8 +554,19 @@ export class BaseEventStore extends ServiceMap.Service<BaseEventStore, EventStor
   "@gent/core/src/domain/event/BaseEventStore",
 ) {}
 
+const getOrCreateSessionPubSub = (
+  sessions: Map<SessionId, PubSub.PubSub<EventEnvelope>>,
+  sessionId: SessionId,
+): PubSub.PubSub<EventEnvelope> => {
+  const existing = sessions.get(sessionId)
+  if (existing !== undefined) return existing
+  const ps = Effect.runSync(PubSub.unbounded<EventEnvelope>())
+  sessions.set(sessionId, ps)
+  return ps
+}
+
 const makeMemoryEventStore = Effect.gen(function* () {
-  const pubsub = yield* PubSub.unbounded<EventEnvelope>()
+  const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
   const eventsRef = yield* Ref.make<EventEnvelope[]>([])
   const idRef = yield* Ref.make(0)
 
@@ -567,7 +583,10 @@ const makeMemoryEventStore = Effect.gen(function* () {
         ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
       })
       yield* Ref.update(eventsRef, (events) => [...events, envelope])
-      yield* PubSub.publish(pubsub, envelope)
+      const eventSessionId = getEventSessionId(event)
+      if (eventSessionId !== undefined) {
+        yield* PubSub.publish(getOrCreateSessionPubSub(sessions, eventSessionId), envelope)
+      }
     }),
 
     subscribe: ({ sessionId, branchId, after }) =>
@@ -575,7 +594,8 @@ const makeMemoryEventStore = Effect.gen(function* () {
         Stream.unwrap(
           Effect.gen(function* () {
             const afterId = after ?? (0 as EventId)
-            const subscription = yield* PubSub.subscribe(pubsub)
+            const ps = getOrCreateSessionPubSub(sessions, sessionId)
+            const subscription = yield* PubSub.subscribe(ps)
             const latestId = yield* Ref.get(idRef)
             const buffered = (yield* Ref.get(eventsRef)).filter(
               (env) =>
@@ -584,9 +604,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
                 matchesEventFilter(env, sessionId, branchId),
             )
             const live = Stream.fromSubscription(subscription).pipe(
-              Stream.filter(
-                (env) => env.id > latestId && matchesEventFilter(env, sessionId, branchId),
-              ),
+              Stream.filter((env) => env.id > latestId && matchesBranchFilter(env, branchId)),
             )
             return Stream.concat(Stream.fromIterable(buffered), live)
           }),
