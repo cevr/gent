@@ -22,24 +22,24 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>): Effect.Effect<Ref.Re
 describe("queue seam contract", () => {
   for (const transport of queueTransportCases) {
     test(`${transport.name} exposes queued follow-ups and drain matches restore semantics`, async () => {
-      await transport.run((client) =>
+      await transport.run(({ client }) =>
         Effect.gen(function* () {
-          const created = yield* client
-            .createSession({
+          const created = yield* client.session
+            .create({
               cwd: process.cwd(),
               bypass: true,
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
           const runtime = yield* collectRuntime(
-            client.watchRuntime({
+            client.session.watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
           ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* client
-            .sendMessage({
+          yield* client.message
+            .send({
               sessionId: created.sessionId,
               branchId: created.branchId,
               content: "first turn",
@@ -52,16 +52,16 @@ describe("queue seam contract", () => {
             10_000,
           )
 
-          yield* client
-            .sendMessage({
+          yield* client.message
+            .send({
               sessionId: created.sessionId,
               branchId: created.branchId,
               content: "queued a",
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* client
-            .sendMessage({
+          yield* client.message
+            .send({
               sessionId: created.sessionId,
               branchId: created.branchId,
               content: "queued b",
@@ -69,8 +69,8 @@ describe("queue seam contract", () => {
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
           const queued = yield* waitFor(
-            client
-              .getQueuedMessages({
+            client.queue
+              .get({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
@@ -82,8 +82,8 @@ describe("queue seam contract", () => {
           expect(queued.steering).toEqual([])
           expect(flattenRestoreText(queued)).toBe("queued a\nqueued b")
 
-          const drained = yield* client
-            .drainQueuedMessages({
+          const drained = yield* client.queue
+            .drain({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
@@ -92,8 +92,8 @@ describe("queue seam contract", () => {
           expect(flattenRestoreText(drained)).toBe("queued a\nqueued b")
 
           const afterDrain = yield* waitFor(
-            client
-              .getQueuedMessages({
+            client.queue
+              .get({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
@@ -109,24 +109,24 @@ describe("queue seam contract", () => {
     }, 20_000)
 
     test(`${transport.name} runs steer before queued follow-up`, async () => {
-      await transport.run((client) =>
+      await transport.run(({ client }) =>
         Effect.gen(function* () {
-          const created = yield* client
-            .createSession({
+          const created = yield* client.session
+            .create({
               cwd: process.cwd(),
               bypass: true,
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
           const runtime = yield* collectRuntime(
-            client.watchRuntime({
+            client.session.watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
           ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* client
-            .sendMessage({
+          yield* client.message
+            .send({
               sessionId: created.sessionId,
               branchId: created.branchId,
               content: "first turn",
@@ -139,26 +139,28 @@ describe("queue seam contract", () => {
             10_000,
           )
 
-          yield* client
-            .sendMessage({
+          yield* client.message
+            .send({
               sessionId: created.sessionId,
               branchId: created.branchId,
               content: "queued follow-up",
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* client
-            .steer({
-              _tag: "Interject",
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              message: "urgent steer",
+          yield* client.steer
+            .command({
+              command: {
+                _tag: "Interject",
+                sessionId: created.sessionId,
+                branchId: created.branchId,
+                message: "urgent steer",
+              },
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
           const queued = yield* waitFor(
-            client
-              .getQueuedMessages({
+            client.queue
+              .get({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
@@ -173,8 +175,8 @@ describe("queue seam contract", () => {
           expect(queued.followUp[0]?.content).toContain("queued follow-up")
 
           const messages = yield* waitFor(
-            client
-              .listMessages(created.branchId)
+            client.message
+              .list({ branchId: created.branchId })
               .pipe(Effect.mapError((error) => new Error(String(error)))),
             (items) => {
               const userTexts = items
@@ -197,8 +199,8 @@ describe("queue seam contract", () => {
           expect(userTexts).toEqual(["first turn", "urgent steer", "queued follow-up"])
 
           const settledQueue = yield* waitFor(
-            client
-              .getQueuedMessages({
+            client.queue
+              .get({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })

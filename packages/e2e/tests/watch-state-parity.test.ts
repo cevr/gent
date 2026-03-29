@@ -23,14 +23,14 @@ describe("runtime watch parity", () => {
     test(
       `${transport.name} watchRuntime emits current runtime and later updates`,
       async () => {
-        await transport.run((client) =>
+        await transport.run(({ client }) =>
           Effect.gen(function* () {
-            const created = yield* client
-              .createSession({ cwd: process.cwd(), bypass: true })
+            const created = yield* client.session
+              .create({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const runtime = yield* collectSnapshots(
-              client.watchRuntime({
+              client.session.watchRuntime({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               }),
@@ -41,8 +41,8 @@ describe("runtime watch parity", () => {
             expect(initial[0]?.queue.followUp).toEqual([])
             expect(initial[0]?.queue.steering).toEqual([])
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: `watch-runtime ${transport.name}`,
@@ -58,8 +58,8 @@ describe("runtime watch parity", () => {
             expect(updated.some((state) => state.status !== "idle")).toBe(true)
 
             const persisted = yield* waitFor(
-              client
-                .getSessionSnapshot({
+              client.session
+                .getSnapshot({
                   sessionId: created.sessionId,
                   branchId: created.branchId,
                 })
@@ -93,21 +93,21 @@ describe("runtime watch parity", () => {
     test(
       `${transport.name} watchRuntime emits queued follow-up snapshots`,
       async () => {
-        await transport.run((client) =>
+        await transport.run(({ client }) =>
           Effect.gen(function* () {
-            const created = yield* client
-              .createSession({ cwd: process.cwd(), bypass: true })
+            const created = yield* client.session
+              .create({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const runtime = yield* collectSnapshots(
-              client.watchRuntime({
+              client.session.watchRuntime({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               }),
             ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: "first turn",
@@ -120,8 +120,8 @@ describe("runtime watch parity", () => {
               timeoutMs,
             )
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: "queued follow-up",

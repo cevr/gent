@@ -22,25 +22,25 @@ describe("live event parity", () => {
     test(
       `${transport.name} streamEvents with latest cursor behaves as future-only live stream`,
       async () => {
-        await transport.run((client) =>
+        await transport.run(({ client }) =>
           Effect.gen(function* () {
-            const created = yield* client
-              .createSession({ cwd: process.cwd(), bypass: true })
+            const created = yield* client.session
+              .create({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            yield* client
-              .createBranch(created.sessionId, "before-live")
+            yield* client.branch
+              .create({ sessionId: created.sessionId, name: "before-live" })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const snapshot = yield* client
-              .getSessionSnapshot({
+            const snapshot = yield* client.session
+              .getSnapshot({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const liveEvents = yield* collectLiveEvents(
-              client.streamEvents({
+              client.session.events({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 after: snapshot.lastEventId ?? undefined,
@@ -50,8 +50,8 @@ describe("live event parity", () => {
             const initial = yield* Ref.get(liveEvents)
             expect(initial).toEqual([])
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: "after-live",
@@ -80,29 +80,29 @@ describe("live event parity", () => {
     test(
       `${transport.name} streamEvents keeps streamed chunks across replay-to-live handoff`,
       async () => {
-        await transport.run((client) =>
+        await transport.run(({ client }) =>
           Effect.gen(function* () {
-            const created = yield* client
-              .createSession({ cwd: process.cwd(), bypass: true })
+            const created = yield* client.session
+              .create({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const snapshot = yield* client
-              .getSessionSnapshot({
+            const snapshot = yield* client.session
+              .getSnapshot({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
               })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const liveEvents = yield* collectLiveEvents(
-              client.streamEvents({
+              client.session.events({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 after: snapshot.lastEventId ?? undefined,
               }),
             ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: "after-live-chunks",

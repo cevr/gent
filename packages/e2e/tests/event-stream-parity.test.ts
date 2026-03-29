@@ -5,17 +5,19 @@ import { transportCases, waitFor } from "./transport-harness"
 
 const startCollecting = (
   client: {
-    streamEvents: (input: {
-      sessionId: string
-      branchId?: string
-      after?: number
-    }) => Stream.Stream<EventEnvelope, unknown>
+    session: {
+      events: (input: {
+        sessionId: string
+        branchId?: string
+        after?: number
+      }) => Stream.Stream<EventEnvelope, unknown>
+    }
   },
   input: { sessionId: string; branchId?: string; after?: number },
 ) =>
   Effect.gen(function* () {
     const events = yield* Ref.make<EventEnvelope[]>([])
-    const fiber = yield* client.streamEvents(input).pipe(
+    const fiber = yield* client.session.events(input).pipe(
       Stream.runForEach((envelope) => Ref.update(events, (current) => [...current, envelope])),
       Effect.forkScoped,
     )
@@ -25,12 +27,14 @@ const startCollecting = (
 
 const waitForAssistantTurn = (
   client: {
-    listMessages: (branchId: string) => Effect.Effect<readonly { role: string }[], unknown>
+    message: {
+      list: (input: { branchId: string }) => Effect.Effect<readonly { role: string }[], unknown>
+    }
   },
   branchId: string,
 ) =>
   waitFor(
-    client.listMessages(branchId).pipe(Effect.mapError((error) => new Error(String(error)))),
+    client.message.list({ branchId }).pipe(Effect.mapError((error) => new Error(String(error)))),
     (messages) => messages.some((message) => message.role === "assistant"),
   )
 
@@ -57,14 +61,14 @@ describe("event stream parity", () => {
     test(
       `${transport.name} replays buffered events for a completed turn`,
       async () => {
-        await transport.run((client) =>
+        await transport.run(({ client }) =>
           Effect.gen(function* () {
-            const created = yield* client
-              .createSession({ cwd: process.cwd(), bypass: true })
+            const created = yield* client.session
+              .create({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: "ad",
@@ -92,24 +96,24 @@ describe("event stream parity", () => {
     test(
       `${transport.name} live stream continues after turn completion`,
       async () => {
-        await transport.run((client) =>
+        await transport.run(({ client }) =>
           Effect.gen(function* () {
-            const created = yield* client
-              .createSession({ cwd: process.cwd(), bypass: true })
+            const created = yield* client.session
+              .create({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const live = yield* startCollecting(client, {
               sessionId: created.sessionId,
             })
 
-            yield* client
-              .createBranch(created.sessionId, "stream-ready-branch")
+            yield* client.branch
+              .create({ sessionId: created.sessionId, name: "stream-ready-branch" })
               .pipe(Effect.mapError((error) => new Error(String(error))))
             const ready = yield* waitForTaggedEvent(live.events, "BranchCreated")
             const readyId = ready[ready.length - 1]?.id
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: "be",
@@ -123,8 +127,8 @@ describe("event stream parity", () => {
 
             // Batch 2 is stream parity, not actor command timing.
             // Use a session event outside the turn loop to prove the stream stays alive.
-            yield* client
-              .createBranch(created.sessionId, "stream-live-branch")
+            yield* client.branch
+              .create({ sessionId: created.sessionId, name: "stream-live-branch" })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const combined = yield* waitFor(
@@ -154,24 +158,24 @@ describe("event stream parity", () => {
     test(
       `${transport.name} honors the after cursor`,
       async () => {
-        await transport.run((client) =>
+        await transport.run(({ client }) =>
           Effect.gen(function* () {
-            const created = yield* client
-              .createSession({ cwd: process.cwd(), bypass: true })
+            const created = yield* client.session
+              .create({ cwd: process.cwd(), bypass: true })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const firstLive = yield* startCollecting(client, {
               sessionId: created.sessionId,
             })
 
-            yield* client
-              .createBranch(created.sessionId, "stream-after-ready")
+            yield* client.branch
+              .create({ sessionId: created.sessionId, name: "stream-after-ready" })
               .pipe(Effect.mapError((error) => new Error(String(error))))
             const ready = yield* waitForTaggedEvent(firstLive.events, "BranchCreated")
             const readyId = ready[ready.length - 1]?.id
 
-            yield* client
-              .sendMessage({
+            yield* client.message
+              .send({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
                 content: "dg",
@@ -195,8 +199,8 @@ describe("event stream parity", () => {
               ),
             ).toBe(true)
 
-            yield* client
-              .createBranch(created.sessionId, "stream-after-branch")
+            yield* client.branch
+              .create({ sessionId: created.sessionId, name: "stream-after-branch" })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const liveOnly = yield* waitFor(Ref.get(afterEvents.events), (current) =>

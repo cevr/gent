@@ -61,15 +61,15 @@ describe("worker supervisor", () => {
 
           expect(worker.getState()._tag).toBe("running")
 
-          const initial = yield* worker.client.listSessions()
+          const initial = yield* worker.client.session.list()
           expect(initial).toEqual([])
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
 
-          const sessions = yield* worker.client.listSessions()
+          const sessions = yield* worker.client.session.list()
           expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)
         }),
       ),
@@ -88,7 +88,7 @@ describe("worker supervisor", () => {
           })
           const originalUrl = worker.url
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
@@ -100,7 +100,7 @@ describe("worker supervisor", () => {
           expect(state._tag).toBe("running")
           if (state._tag === "running") expect(state.restartCount).toBe(1)
 
-          const sessions = yield* worker.client.listSessions()
+          const sessions = yield* worker.client.session.list()
           expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)
         }),
       ),
@@ -118,7 +118,7 @@ describe("worker supervisor", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
@@ -131,7 +131,7 @@ describe("worker supervisor", () => {
 
           expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
 
-          const sessions = yield* worker.client.listSessions()
+          const sessions = yield* worker.client.session.list()
           expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)
         }),
       ),
@@ -149,7 +149,7 @@ describe("worker supervisor", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
@@ -162,7 +162,7 @@ describe("worker supervisor", () => {
 
           const states = yield* Deferred.make<string>()
 
-          yield* worker.client
+          yield* worker.client.session
             .watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
@@ -204,14 +204,14 @@ describe("worker supervisor", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
 
           const update = yield* Deferred.make<number>()
 
-          yield* worker.client
+          yield* worker.client.session
             .watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
@@ -227,7 +227,7 @@ describe("worker supervisor", () => {
 
           yield* Effect.sleep("11 seconds")
 
-          yield* worker.client.sendMessage({
+          yield* worker.client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "hello after idle",
@@ -259,7 +259,7 @@ describe("worker supervisor", () => {
             mode: "debug",
           })
 
-          const sessions = yield* worker.client.listSessions()
+          const sessions = yield* worker.client.session.list()
           const debugSession = sessions.find((session) => session.name === "debug scenario")
 
           expect(sessions.length).toBeGreaterThanOrEqual(1)
@@ -267,7 +267,7 @@ describe("worker supervisor", () => {
           expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
 
           const state = yield* waitFor(
-            worker.client.getSessionSnapshot({
+            worker.client.session.getSnapshot({
               sessionId: debugSession!.id,
               branchId: debugSession!.branchId!,
             }),
@@ -294,9 +294,9 @@ describe("worker supervisor", () => {
             env: createWorkerEnv(root),
           })
 
-          yield* worker.client.setAuthKey("anthropic", "test-anthropic-key")
+          yield* worker.client.auth.setKey({ provider: "anthropic", key: "test-anthropic-key" })
 
-          const beforeRestart = yield* waitFor(worker.client.listAuthProviders(), (providers) =>
+          const beforeRestart = yield* waitFor(worker.client.auth.listProviders(), (providers) =>
             providers.some((provider) => provider.provider === "anthropic" && provider.hasKey),
           )
           expect(beforeRestart.find((provider) => provider.provider === "anthropic")).toMatchObject(
@@ -306,7 +306,7 @@ describe("worker supervisor", () => {
           yield* worker.restart
 
           const afterRestart = yield* waitFor(
-            worker.client.listAuthProviders(),
+            worker.client.auth.listProviders(),
             (providers) =>
               providers.some((provider) => provider.provider === "anthropic" && provider.hasKey),
             10_000,
@@ -332,19 +332,19 @@ describe("worker supervisor", () => {
             env: createWorkerEnv(root, { providerMode: "debug-slow" }),
           })
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
 
-          yield* worker.client.sendMessage({
+          yield* worker.client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "first turn",
           })
 
           yield* waitFor(
-            worker.client.getQueuedMessages({
+            worker.client.queue.get({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
@@ -353,21 +353,23 @@ describe("worker supervisor", () => {
             "first turn acceptance before restart setup",
           )
 
-          yield* worker.client.sendMessage({
+          yield* worker.client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "queued follow-up",
           })
 
-          yield* worker.client.steer({
-            _tag: "Interject",
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-            message: "urgent steer",
+          yield* worker.client.steer.command({
+            command: {
+              _tag: "Interject",
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+              message: "urgent steer",
+            },
           })
 
           const queuedBeforeRestart = yield* waitFor(
-            worker.client.getQueuedMessages({
+            worker.client.queue.get({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
@@ -388,7 +390,7 @@ describe("worker supervisor", () => {
           yield* Effect.promise(() => waitForRunning(worker, 1))
 
           const messages = yield* waitFor(
-            worker.client.listMessages(created.branchId),
+            worker.client.message.list({ branchId: created.branchId }),
             (items) => {
               const userTexts = items
                 .filter((message) => message.role === "user")
@@ -411,7 +413,7 @@ describe("worker supervisor", () => {
           expect(userTexts).toEqual(["first turn", "urgent steer", "queued follow-up"])
 
           const settledQueue = yield* waitFor(
-            worker.client.getQueuedMessages({
+            worker.client.queue.get({
               sessionId: created.sessionId,
               branchId: created.branchId,
             }),
@@ -438,15 +440,15 @@ describe("worker supervisor", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
 
           const firstLiveEvent = yield* Deferred.make<string>()
 
-          yield* worker.client
-            .streamEvents({
+          yield* worker.client.session
+            .events({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
@@ -459,7 +461,7 @@ describe("worker supervisor", () => {
               Effect.forkScoped,
             )
 
-          yield* worker.client.sendMessage({
+          yield* worker.client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "hello",
@@ -493,22 +495,22 @@ describe("worker supervisor", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
           })
 
           yield* worker.restart
 
-          const snapshot = yield* worker.client.getSessionSnapshot({
+          const snapshot = yield* worker.client.session.getSnapshot({
             sessionId: created.sessionId,
             branchId: created.branchId,
           })
 
           const firstLiveEvent = yield* Deferred.make<string>()
 
-          yield* worker.client
-            .streamEvents({
+          yield* worker.client.session
+            .events({
               sessionId: created.sessionId,
               after: snapshot.lastEventId ?? undefined,
             })
@@ -521,7 +523,10 @@ describe("worker supervisor", () => {
               Effect.forkScoped,
             )
 
-          yield* worker.client.createBranch(created.sessionId, "after-restart-live")
+          yield* worker.client.branch.create({
+            sessionId: created.sessionId,
+            name: "after-restart-live",
+          })
 
           const tag = yield* Deferred.await(firstLiveEvent).pipe(
             Effect.timeoutOption("5 seconds"),
@@ -600,7 +605,7 @@ describe("worker supervisor", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const created = yield* worker.client.createSession({
+          const created = yield* worker.client.session.create({
             cwd: repoRoot,
             bypass: true,
             initialPrompt: "hello",
@@ -608,7 +613,7 @@ describe("worker supervisor", () => {
 
           // Wait for the session to have at least one message
           yield* waitFor(
-            worker.client.listMessages(created.branchId),
+            worker.client.message.list({ branchId: created.branchId }),
             (messages) => messages.length > 0,
             10_000,
           )
