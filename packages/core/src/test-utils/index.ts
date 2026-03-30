@@ -150,13 +150,15 @@ export const RecordingAskUserHandler = (
           const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
           return { _tag: "answered" as const, answers: [responses[idx] ?? [""]] }
         }),
-        respond: Effect.fn("RecordingAskUserHandler.respond")(function* (requestId, answers) {
-          yield* recorder.record({
-            service: "AskUserHandler",
-            method: "respond",
-            args: { requestId, answers },
-          })
-        }),
+        respond: Effect.fn("RecordingAskUserHandler.respond")(
+          function* (requestId, answers, cancelled) {
+            yield* recorder.record({
+              service: "AskUserHandler",
+              method: "respond",
+              args: { requestId, answers, cancelled },
+            })
+          },
+        ),
         rehydrate: () => Effect.void,
       }
     }),

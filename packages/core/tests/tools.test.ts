@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, FileSystem, Layer } from "effect"
+import { Effect, Fiber, FileSystem, Layer, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "@gent/core/tools/read"
 import { GlobTool } from "@gent/core/tools/glob"
@@ -9,9 +9,11 @@ import { AskUserTool, AskUserHandler } from "@gent/core/tools/ask-user"
 import { PromptTool } from "@gent/core/tools/prompt"
 import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
+import { EventStore } from "@gent/core/domain/event"
 import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const TestExtRegistry = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -158,6 +160,77 @@ describe("Todo Tools", () => {
       expect(readResult.todos[1]?.priority).toBe("high")
     }).pipe(Effect.provide(layer))
   })
+})
+
+describe("AskUser Handler (integration)", () => {
+  const deps = Layer.merge(EventStore.Memory, Storage.Test())
+  const handlerLayer = AskUserHandler.Live.pipe(Layer.provideMerge(deps))
+
+  it.scopedLive("respond with cancelled resolves askMany as cancelled", () =>
+    Effect.gen(function* () {
+      const handler = yield* AskUserHandler
+      const eventStore = yield* EventStore
+
+      // Subscribe to events to capture the requestId
+      const events: Array<{ requestId: string }> = []
+      const subscription = eventStore.subscribe({ sessionId: "test-session" as never }).pipe(
+        Stream.tap((env) => {
+          if (env.event._tag === "QuestionsAsked") {
+            events.push({ requestId: env.event.requestId })
+          }
+          return Effect.void
+        }),
+        Stream.runDrain,
+      )
+      yield* Effect.forkScoped(subscription)
+
+      // Start askMany in a fiber — it blocks on the deferred
+      const askFiber = yield* Effect.forkScoped(handler.askMany([{ question: "Continue?" }], ctx))
+
+      // Wait for event to be published
+      yield* Effect.sleep("50 millis")
+      expect(events.length).toBe(1)
+
+      // Respond with cancelled
+      yield* handler.respond(events[0]!.requestId, [], true)
+
+      // askMany should resolve as cancelled
+      const decision = yield* Fiber.join(askFiber)
+      expect(decision._tag).toBe("cancelled")
+    }).pipe(Effect.provide(handlerLayer)),
+  )
+
+  it.scopedLive("respond with answers resolves askMany as answered", () =>
+    Effect.gen(function* () {
+      const handler = yield* AskUserHandler
+      const eventStore = yield* EventStore
+
+      const events: Array<{ requestId: string }> = []
+      const subscription = eventStore.subscribe({ sessionId: "test-session" as never }).pipe(
+        Stream.tap((env) => {
+          if (env.event._tag === "QuestionsAsked") {
+            events.push({ requestId: env.event.requestId })
+          }
+          return Effect.void
+        }),
+        Stream.runDrain,
+      )
+      yield* Effect.forkScoped(subscription)
+
+      const askFiber = yield* Effect.forkScoped(handler.askMany([{ question: "Continue?" }], ctx))
+
+      yield* Effect.sleep("50 millis")
+      expect(events.length).toBe(1)
+
+      yield* handler.respond(events[0]!.requestId, [["Yes"]])
+
+      const decision = yield* Fiber.join(askFiber)
+      expect(decision._tag).toBe("answered")
+      if (decision._tag === "answered") {
+        expect(decision.answers).toEqual([["Yes"]])
+      }
+    }).pipe(Effect.provide(handlerLayer)),
+  )
 })
 
 describe("AskUser Tool", () => {

@@ -5,6 +5,7 @@ import {
   type EventStoreError,
   QuestionsAsked,
   type Question,
+  type InteractionResolutionByTag,
   QuestionSchema,
   QuestionOptionSchema,
 } from "../domain/event.js"
@@ -50,11 +51,9 @@ export const AskUserResult = Schema.Struct({
   }),
 })
 
-// AskUser decision — discriminated so execute can tell cancelled from answered
+// AskUser decision — alias to shared interaction resolution type
 
-export type AskUserDecision =
-  | { readonly _tag: "answered"; readonly answers: ReadonlyArray<ReadonlyArray<string>> }
-  | { readonly _tag: "cancelled" }
+export type AskUserDecision = InteractionResolutionByTag["QuestionsAsked"]
 
 // AskUser Handler Service
 
