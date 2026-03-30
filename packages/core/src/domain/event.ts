@@ -397,6 +397,50 @@ export class ExtensionUiSnapshot extends Schema.TaggedClass<ExtensionUiSnapshot>
   },
 ) {}
 
+// ============================================================================
+// Interaction types — shared between server and client
+// ============================================================================
+
+/** Event tags that represent interactive prompts requiring user response */
+export type InteractionEventTag =
+  | "QuestionsAsked"
+  | "PermissionRequested"
+  | "PromptPresented"
+  | "HandoffPresented"
+
+/** Active interaction — raw event discriminated union for interaction rendering */
+export type ActiveInteraction =
+  | (typeof QuestionsAsked.Type & { readonly _tag: "QuestionsAsked" })
+  | (typeof PermissionRequested.Type & { readonly _tag: "PermissionRequested" })
+  | (typeof PromptPresented.Type & { readonly _tag: "PromptPresented" })
+  | (typeof HandoffPresented.Type & { readonly _tag: "HandoffPresented" })
+
+/** Concrete resolution payloads per interaction tag */
+export type InteractionResolutionByTag = {
+  readonly QuestionsAsked:
+    | { readonly _tag: "answered"; readonly answers: ReadonlyArray<ReadonlyArray<string>> }
+    | { readonly _tag: "cancelled" }
+  readonly PermissionRequested:
+    | { readonly _tag: "allow"; readonly persist: boolean }
+    | { readonly _tag: "deny"; readonly persist: boolean }
+  readonly PromptPresented:
+    | { readonly _tag: "yes" }
+    | { readonly _tag: "no"; readonly reason?: string }
+    | { readonly _tag: "edit" }
+  readonly HandoffPresented:
+    | { readonly _tag: "confirm" }
+    | { readonly _tag: "reject"; readonly reason?: string }
+}
+
+/** Resolution payload for a specific interaction tag */
+export type InteractionResolution<T extends InteractionEventTag> = InteractionResolutionByTag[T]
+
+/** Extract the active interaction for a specific tag */
+export type ActiveInteractionOf<T extends InteractionEventTag> = Extract<
+  ActiveInteraction,
+  { readonly _tag: T }
+>
+
 export const AgentEvent = Schema.Union([
   SessionStarted,
   MessageReceived,

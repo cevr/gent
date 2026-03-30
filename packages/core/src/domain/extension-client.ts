@@ -4,8 +4,24 @@
 // The TUI discovers *.client.{tsx,ts,js,mjs} files from extension directories,
 // imports them, and resolves contributions with scope precedence (project > user > builtin).
 
+import type { InteractionEventTag, ActiveInteractionOf, InteractionResolution } from "./event"
+
 /** Widget placement slots in the session view */
 export type WidgetSlot = "above-messages" | "below-messages" | "above-input" | "below-input"
+
+/** Props passed to an interaction renderer component */
+export interface InteractionRendererProps<T extends InteractionEventTag = InteractionEventTag> {
+  readonly event: ActiveInteractionOf<T>
+  readonly resolve: (result: InteractionResolution<T>) => void
+}
+
+/** Props passed to a custom composer surface component */
+export interface ComposerSurfaceProps {
+  readonly draft: string
+  readonly setDraft: (text: string) => void
+  readonly submit: () => void
+  readonly focused: boolean
+}
 
 /** What a TUI extension contributes after setup */
 export interface ExtensionClientSetup<TComponent = unknown> {
@@ -36,6 +52,15 @@ export interface ExtensionClientSetup<TComponent = unknown> {
     readonly id: string
     readonly component: TComponent // receives { open, onClose } props
   }>
+  /** Interaction renderers — take over composer during interactive prompts */
+  readonly interactionRenderers?: ReadonlyArray<{
+    /** Which interaction event tags this renderer handles */
+    readonly eventTags: ReadonlyArray<InteractionEventTag>
+    /** Component receives InteractionRendererProps<Tag> */
+    readonly component: TComponent
+  }>
+  /** Custom composer surface — replaces the default textarea */
+  readonly composerSurface?: TComponent
 }
 
 /** Runtime API provided to extensions during setup */
