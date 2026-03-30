@@ -66,17 +66,22 @@ const autoHandoffImpl = (
 
     if (input.interrupted) return
 
-    // Read cooldown from actor state
+    // Read cooldown + epoch from actor state
     const stateRuntime = yield* ExtensionStateRuntime
-    const actorState = yield* stateRuntime.getUiSnapshots(input.sessionId, input.branchId).pipe(
-      Effect.map((snapshots) => {
-        const snap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
-        return (snap?.model as CooldownState | undefined)?.cooldown ?? 0
-      }),
-      Effect.catchEager(() => Effect.succeed(0)),
-    )
+    const { cooldown, epoch } = yield* stateRuntime
+      .getUiSnapshots(input.sessionId, input.branchId)
+      .pipe(
+        Effect.map((snapshots) => {
+          const snap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
+          return {
+            cooldown: (snap?.model as CooldownState | undefined)?.cooldown ?? 0,
+            epoch: snap?.epoch ?? 0,
+          }
+        }),
+        Effect.catchEager(() => Effect.succeed({ cooldown: 0, epoch: 0 })),
+      )
 
-    if (actorState > 0) return // Cooldown active — actor handles decrement via TurnCompleted
+    if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
     const storage = yield* Storage
     const registry = yield* ExtensionRegistry
@@ -108,9 +113,9 @@ const autoHandoffImpl = (
       .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
 
     if (decision === "reject") {
-      // Set cooldown via actor intent — will be cleaned up when session terminates
+      // Set cooldown via actor intent — epoch ensures non-stale write
       yield* stateRuntime
-        .handleIntent(input.sessionId, EXTENSION_ID, { _tag: "Suppress", count: 5 }, 0)
+        .handleIntent(input.sessionId, EXTENSION_ID, { _tag: "Suppress", count: 5 }, epoch)
         .pipe(Effect.catchEager(() => Effect.void))
     }
   }).pipe(Effect.catchEager(() => Effect.void))
