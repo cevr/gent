@@ -229,7 +229,6 @@ describe("AgentLoop recovery", () => {
         {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
-          handoffSuppress: 0,
         },
         { message, bypass: true },
       )
@@ -286,7 +285,6 @@ describe("AgentLoop recovery", () => {
         {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
-          handoffSuppress: 0,
         },
         { message, bypass: true },
       )
@@ -354,7 +352,6 @@ describe("AgentLoop recovery", () => {
         {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
-          handoffSuppress: 0,
         },
         { message, bypass: true },
       )
@@ -440,7 +437,6 @@ describe("AgentLoop recovery", () => {
             bypass: true,
           }),
           currentAgent: "cowork",
-          handoffSuppress: 0,
         },
         { message, bypass: true },
       )
@@ -526,7 +522,6 @@ describe("AgentLoop recovery", () => {
         {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
-          handoffSuppress: 0,
         },
         { message, bypass: true },
       )
@@ -587,7 +582,6 @@ describe("AgentLoop recovery", () => {
         {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
-          handoffSuppress: 0,
         },
         { message, bypass: true },
       )
