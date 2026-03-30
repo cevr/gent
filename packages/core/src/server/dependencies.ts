@@ -400,6 +400,25 @@ export const createDependencies = (config: DependenciesConfig) => {
     allDeps,
   )
 
+  // Wake checkpointed agent loops on startup so in-flight turns resume
+  // without waiting for a client to open the session.
+  const checkpointWakeLive = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const agentLoop = yield* AgentLoop
+      const checkpoints = yield* storage
+        .listAgentLoopCheckpoints()
+        .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+      if (checkpoints.length === 0) return
+      for (const cp of checkpoints) {
+        yield* agentLoop
+          .isRunning({ sessionId: cp.sessionId, branchId: cp.branchId })
+          .pipe(Effect.catchEager(() => Effect.succeed(false)))
+      }
+      yield* Effect.log(`Woke ${checkpoints.length} checkpointed agent loop(s)`)
+    }),
+  ).pipe(Layer.provide(Layer.merge(allDeps, agentRuntimeLive)))
+
   const taskServiceLive = Layer.provide(TaskService.Live, Layer.merge(allDeps, agentRuntimeLive))
   const turnControlLive = Layer.provide(
     ExtensionTurnControl.Live,
@@ -408,5 +427,10 @@ export const createDependencies = (config: DependenciesConfig) => {
   const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, taskServiceLive, turnControlLive)
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
-  return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)
+  return Layer.mergeAll(
+    allWithRuntime,
+    actorProcessLive,
+    interactionRecoveryLive,
+    checkpointWakeLive,
+  )
 }
