@@ -18,8 +18,6 @@ export {
   InterruptPayload,
   ActorProcessState,
   ActorProcessMetrics,
-  ActorTransport,
-  LocalActorTransportLive,
   LocalActorProcessLive,
 } from "./actor-process"
 
