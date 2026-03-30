@@ -9,7 +9,6 @@ import {
 } from "@gent/core/domain/extension-client.js"
 import { PermissionRenderer } from "../../components/interaction-renderers/permission"
 import { PromptRenderer } from "../../components/interaction-renderers/prompt"
-import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
 
 export default defineClientExtension({
@@ -18,7 +17,6 @@ export default defineClientExtension({
     interactionRenderers: [
       defineInteractionRenderer("PermissionRequested", PermissionRenderer),
       defineInteractionRenderer("PromptPresented", PromptRenderer),
-      defineInteractionRenderer("HandoffPresented", HandoffRenderer),
       defineInteractionRenderer("QuestionsAsked", AskUserRenderer),
     ],
   }),

@@ -1,18 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import { defineAgent } from "@gent/core/domain/agent"
-import {
-  EventStore,
-  HandoffConfirmed,
-  HandoffPresented,
-  type EventEnvelope,
-} from "@gent/core/domain/event"
+import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
 import { finalizeTurnPhase } from "@gent/core/runtime/agent/agent-loop-phases"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import type { HandoffHandlerService } from "@gent/core/domain/interaction-handlers"
 
 const tinyAgent = defineAgent({
   name: "tiny",
@@ -27,7 +21,7 @@ const TestLayer = Layer.mergeAll(
   ExtensionRegistry.fromResolved(
     resolveExtensions([
       {
-        manifest: { id: "test-handoff-agent" },
+        manifest: { id: "test-agent" },
         kind: "builtin",
         sourcePath: "test",
         setup: { agents: [tinyAgent] },
@@ -37,14 +31,14 @@ const TestLayer = Layer.mergeAll(
 )
 
 describe("finalizeTurnPhase", () => {
-  it.live("publishes TurnCompleted after handoff confirmation", () =>
+  it.live("publishes TurnCompleted and updates message duration", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
       const eventStore = yield* EventStore
       const extensionRegistry = yield* ExtensionRegistry
 
-      const sessionId = "s-handoff" as SessionId
-      const branchId = "b-handoff" as BranchId
+      const sessionId = "s-finalize" as SessionId
+      const branchId = "b-finalize" as BranchId
       const messageId = "m-assistant" as MessageId
 
       yield* storage.createSession(
@@ -65,21 +59,11 @@ describe("finalizeTurnPhase", () => {
       )
       yield* storage.createMessage(
         new Message({
-          id: "m-user" as MessageId,
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [new TextPart({ type: "text", text: "x".repeat(700_000) })],
-          createdAt: new Date(),
-        }),
-      )
-      yield* storage.createMessage(
-        new Message({
           id: messageId,
           sessionId,
           branchId,
           role: "assistant",
-          parts: [new TextPart({ type: "text", text: "" })],
+          parts: [new TextPart({ type: "text", text: "response" })],
           createdAt: new Date(),
         }),
       )
@@ -99,33 +83,7 @@ describe("finalizeTurnPhase", () => {
         ),
       )
 
-      const handoffHandler: HandoffHandlerService = {
-        present: Effect.fn("TestHandoffHandler.present")(function* (params) {
-          const requestId = "handoff-req-1"
-          yield* eventStore.publish(
-            new HandoffPresented({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-              summary: params.summary,
-              ...(params.reason !== undefined ? { reason: params.reason } : {}),
-            }),
-          )
-          yield* eventStore.publish(
-            new HandoffConfirmed({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-            }),
-          )
-          return "confirm" as const
-        }),
-        peek: () => Effect.succeed(undefined),
-        claim: () => Effect.succeed(undefined),
-        respond: () => Effect.succeed(undefined),
-      }
-
-      const nextSuppress = yield* finalizeTurnPhase({
+      yield* finalizeTurnPhase({
         storage,
         publishEvent: (event) => eventStore.publish(event).pipe(Effect.orDie),
         sessionId,
@@ -133,23 +91,19 @@ describe("finalizeTurnPhase", () => {
         startedAtMs: Date.now() - 100,
         messageId,
         turnInterrupted: false,
-        handoffSuppress: 0,
         currentAgent: "tiny",
         extensionRegistry,
-        handoffHandler,
       })
-
-      expect(nextSuppress).toBe(0)
 
       yield* Deferred.await(turnCompletedDeferred)
       yield* Fiber.interrupt(subscriptionFiber)
 
       const tags = (yield* Ref.get(envelopesRef)).map((envelope) => envelope.event._tag)
-      expect(tags).toContain("HandoffPresented")
-      expect(tags).toContain("HandoffConfirmed")
       expect(tags).toContain("TurnCompleted")
-      expect(tags.indexOf("HandoffPresented")).toBeLessThan(tags.indexOf("HandoffConfirmed"))
-      expect(tags.indexOf("HandoffConfirmed")).toBeLessThan(tags.indexOf("TurnCompleted"))
+
+      // Verify message duration was updated
+      const msg = yield* storage.getMessage(messageId)
+      expect(msg?.turnDurationMs).toBeGreaterThan(0)
     }).pipe(Effect.provide(TestLayer)),
   )
 })

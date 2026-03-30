@@ -17,6 +17,7 @@ import { BedrockExtension } from "./bedrock/index.js"
 import { GoogleExtension } from "./google/index.js"
 import { MistralExtension } from "./mistral/index.js"
 import { InteractionHandlersExtension } from "./interaction-handlers.js"
+import { HandoffExtension } from "./handoff.js"
 
 export {
   FsToolsExtension,
@@ -32,10 +33,12 @@ export {
   AutoExtension,
   MemoryExtension,
   InteractionHandlersExtension,
+  HandoffExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   InteractionHandlersExtension,
+  HandoffExtension,
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,

@@ -157,7 +157,6 @@ export const countQueuedFollowUps = (queue: LoopQueueState) => queue.followUp.le
 const LoopStateBaseFields = {
   queue: LoopQueueState,
   currentAgent: Schema.optional(AgentName),
-  handoffSuppress: Schema.Number,
 }
 
 const ActiveTurnFields = {
@@ -235,7 +234,6 @@ export const AgentLoopEvent = Event({
   FinalizeFinished: {
     queue: LoopQueueState,
     nextItem: Schema.optional(QueuedTurnItemSchema),
-    handoffSuppress: Schema.Number,
   },
   PhaseFailed: {},
 })
@@ -260,26 +258,22 @@ export type LoopRuntimeState = {
 export const buildIdleState = (params?: {
   queue?: LoopQueueState
   currentAgent?: AgentNameType
-  handoffSuppress?: number
 }): IdleState =>
   AgentLoopState.Idle({
     queue: params?.queue ?? emptyLoopQueueState(),
     currentAgent: params?.currentAgent,
-    handoffSuppress: params?.handoffSuppress ?? 0,
   })
 
 export const buildResolvingState = (
   base: {
     queue: LoopQueueState
     currentAgent?: AgentNameType
-    handoffSuppress: number
   },
   item: QueuedTurnItem,
 ): ResolvingState =>
   AgentLoopState.Resolving({
     queue: base.queue,
     currentAgent: base.currentAgent,
-    handoffSuppress: base.handoffSuppress,
     message: item.message,
     bypass: item.bypass,
     startedAtMs: Date.now(),

@@ -1,7 +1,6 @@
 import { Effect } from "effect"
 import { defineExtension } from "../domain/extension.js"
 import { DelegateTool } from "../tools/delegate.js"
-import { HandoffTool } from "../tools/handoff.js"
 import { FinderTool } from "../tools/finder.js"
 import { LibrarianTool } from "../tools/librarian.js"
 import { CounselTool } from "../tools/counsel.js"
@@ -15,7 +14,6 @@ export const SubagentToolsExtension = defineExtension({
     Effect.succeed({
       tools: [
         DelegateTool,
-        HandoffTool,
         FinderTool,
         LibrarianTool,
         CounselTool,

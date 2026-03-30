@@ -11,6 +11,7 @@ import auto from "./auto.client"
 import tasks from "./tasks.client"
 import connection from "./connection.client"
 import interactions from "./interactions.client"
+import handoff from "./handoff.client"
 
 export const BUILTIN_CLIENT_EXTENSIONS: ReadonlyArray<ExtensionClientModule> = [
   tools,
@@ -19,4 +20,5 @@ export const BUILTIN_CLIENT_EXTENSIONS: ReadonlyArray<ExtensionClientModule> = [
   tasks,
   connection,
   interactions,
+  handoff,
 ]

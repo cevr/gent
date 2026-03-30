@@ -55,7 +55,6 @@ import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/mes
 import { SessionId, BranchId, type MessageId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolAction, type ToolContext } from "../../domain/tool.js"
 import type { PromptSection } from "../../server/system-prompt.js"
-import { HandoffHandler } from "../../domain/interaction-handlers.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
 import { Provider, type FinishChunk } from "../../providers/provider.js"
@@ -347,7 +346,6 @@ const makeRecoveryDecision = (params: {
             {
               queue,
               currentAgent: state.currentAgent ?? params.currentAgent,
-              handoffSuppress: state.handoffSuppress,
             },
             nextItem,
           ),
@@ -488,13 +486,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
   }): Layer.Layer<
     AgentLoop,
     never,
-    | Storage
-    | Provider
-    | ExtensionRegistry
-    | ExtensionStateRuntime
-    | EventStore
-    | HandoffHandler
-    | ToolRunner
+    Storage | Provider | ExtensionRegistry | ExtensionStateRuntime | EventStore | ToolRunner
   > =>
     Layer.effect(
       AgentLoop,
@@ -504,7 +496,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const extensionRegistry = yield* ExtensionRegistry
         const extensionStateRuntime = yield* ExtensionStateRuntime
         const eventStore = yield* EventStore
-        const handoffHandler = yield* HandoffHandler
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const loopsSemaphore = yield* Semaphore.make(1)
@@ -709,7 +700,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runFinalizingState = Effect.fn("AgentLoop.runFinalizingState")(function* (
               state: FinalizingState,
             ) {
-              const nextHandoffSuppress = yield* finalizeTurnPhase({
+              yield* finalizeTurnPhase({
                 storage,
                 publishEvent: publishEventOrDie,
                 sessionId,
@@ -718,10 +709,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 messageId: state.message.id,
                 turnInterrupted: state.turnInterrupted,
                 streamFailed: state.streamFailed,
-                handoffSuppress: state.handoffSuppress,
                 currentAgent: state.currentAgent ?? state.currentTurnAgent ?? "cowork",
                 extensionRegistry,
-                handoffHandler,
                 turnMetrics: turnMetricsRef,
               })
 
@@ -729,7 +718,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               return AgentLoopEvent.FinalizeFinished({
                 queue,
                 nextItem,
-                handoffSuppress: nextHandoffSuppress,
               })
             })
 
@@ -890,21 +878,18 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       {
                         queue: event.queue,
                         currentAgent: state.currentAgent,
-                        handoffSuppress: event.handoffSuppress,
                       },
                       event.nextItem,
                     )
                   : buildIdleState({
                       queue: event.queue,
                       currentAgent: state.currentAgent,
-                      handoffSuppress: event.handoffSuppress,
                     }),
               )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.PhaseFailed, ({ state }) =>
                 buildIdleState({
                   queue: state.queue,
                   currentAgent: state.currentAgent,
-                  handoffSuppress: state.handoffSuppress,
                 }),
               )
               .task(

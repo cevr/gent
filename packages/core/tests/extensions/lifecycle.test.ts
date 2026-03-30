@@ -26,10 +26,10 @@ describe("createExtensionHarness", () => {
     expect(harness.spawnActor).toBeUndefined()
   })
 
-  test("SubagentToolsExtension provides delegate/handoff tools", () => {
+  test("SubagentToolsExtension provides delegate tools (handoff in @gent/handoff)", () => {
     const harness = createExtensionHarness(SubagentToolsExtension)
     expect(harness.tools.has("delegate")).toBe(true)
-    expect(harness.tools.has("handoff")).toBe(true)
+    expect(harness.tools.has("handoff")).toBe(false)
     expect(harness.tools.has("code_review")).toBe(true)
     expect(harness.spawnActor).toBeUndefined()
   })

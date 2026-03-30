@@ -1,7 +1,6 @@
 import { DateTime, Deferred, Effect, Ref, Stream, type Semaphore } from "effect"
 import {
   type AgentDefinition,
-  DEFAULT_MODEL_ID,
   resolveAgentModel,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
@@ -20,7 +19,6 @@ import {
   TurnCompleted,
 } from "../../domain/event.js"
 import { type BranchId, type MessageId, type SessionId, type ToolCallId } from "../../domain/ids.js"
-import { type HandoffHandlerService } from "../../domain/interaction-handlers.js"
 import { Message, ReasoningPart, TextPart, ToolCallPart } from "../../domain/message.js"
 import {
   type ProviderError,
@@ -31,7 +29,6 @@ import { type StorageError, type StorageService } from "../../storage/sqlite-sto
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { PromptSection } from "../../server/system-prompt.js"
-import { estimateContextPercent } from "../context-estimation"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { type ExtensionStateRuntimeService } from "../extensions/state-runtime.js"
 import { withRetry } from "../retry"
@@ -51,21 +48,6 @@ const formatStreamErrorMessage = (streamError: unknown) => {
     return String((streamError as Record<string, unknown>)["message"])
   }
   return String(streamError)
-}
-
-const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
-  const recentText = messages
-    .slice(-20)
-    .map((m) => {
-      const text = m.parts
-        .filter((p): p is typeof TextPart.Type => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
-      return text !== "" ? `${m.role}: ${text}` : ""
-    })
-    .filter((line) => line.length > 0)
-    .join("\n\n")
-  return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
 type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never>
@@ -434,47 +416,6 @@ const executeToolCalls = (params: {
     { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
   )
 
-const runAutoHandoffIfNeeded = (params: {
-  turnInterrupted: boolean
-  handoffSuppress: number
-  storage: StorageService
-  branchId: BranchId
-  currentAgent: AgentNameType
-  extensionRegistry: ExtensionRegistryService
-  sessionId: SessionId
-  handoffHandler: HandoffHandlerService
-}) =>
-  Effect.gen(function* () {
-    if (params.turnInterrupted) return params.handoffSuppress
-    if (params.handoffSuppress > 0) return params.handoffSuppress - 1
-
-    const allMessages = yield* params.storage.listMessages(params.branchId)
-    const currentAgentDef = yield* params.extensionRegistry.getAgent(params.currentAgent)
-    const coworkDef = yield* params.extensionRegistry.getAgent("cowork")
-    const agentForModel = currentAgentDef ?? coworkDef
-    const modelId =
-      agentForModel !== undefined ? resolveAgentModel(agentForModel) : DEFAULT_MODEL_ID
-    const contextPercent = estimateContextPercent(allMessages, modelId)
-    if (contextPercent < DEFAULTS.handoffThresholdPercent) return params.handoffSuppress
-
-    yield* Effect.logInfo("auto-handoff.threshold").pipe(
-      Effect.annotateLogs({
-        contextPercent,
-        threshold: DEFAULTS.handoffThresholdPercent,
-      }),
-    )
-    const decision = yield* params.handoffHandler
-      .present({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        summary: summarizeRecentMessages(allMessages),
-        reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
-      })
-      .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
-
-    return decision === "reject" ? 5 : params.handoffSuppress
-  })
-
 export const resolveTurnPhase = (params: {
   message: Message
   agentOverride?: AgentNameType
@@ -790,32 +731,18 @@ export const finalizeTurnPhase = (params: {
   messageId: MessageId
   turnInterrupted: boolean
   streamFailed?: boolean
-  handoffSuppress: number
   currentAgent: AgentNameType
   extensionRegistry: ExtensionRegistryService
-  handoffHandler: HandoffHandlerService
   turnMetrics?: Ref.Ref<TurnMetrics>
 }) =>
   Effect.gen(function* () {
     const existingMessage = yield* params.storage.getMessage(params.messageId)
-    if (existingMessage?.turnDurationMs !== undefined) {
-      return params.handoffSuppress
-    }
+    if (existingMessage?.turnDurationMs !== undefined) return
 
     const turnEndTime = yield* DateTime.now
     const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
     yield* params.storage.updateMessageTurnDuration(params.messageId, turnDurationMs)
-    const nextHandoffSuppress = yield* runAutoHandoffIfNeeded({
-      turnInterrupted: params.turnInterrupted,
-      handoffSuppress: params.handoffSuppress,
-      storage: params.storage,
-      branchId: params.branchId,
-      currentAgent: params.currentAgent,
-      extensionRegistry: params.extensionRegistry,
-      sessionId: params.sessionId,
-      handoffHandler: params.handoffHandler,
-    })
     yield* params
       .publishEvent(
         new TurnCompleted({
@@ -872,6 +799,4 @@ export const finalizeTurnPhase = (params: {
         }),
       )
     }
-
-    return nextHandoffSuppress
   })
