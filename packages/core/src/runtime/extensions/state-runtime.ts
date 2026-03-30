@@ -184,7 +184,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
 
           handleIntent: (sessionId, extensionId, intent, epoch, branchId) =>
             Effect.gen(function* () {
-              const entries = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
+              const entries = yield* getOrSpawnActors(sessionId, branchId)
               const entry = entries.find((a) => a.actor.id === extensionId)
               if (entry?.actor.handleIntent !== undefined) {
                 // Epoch validation: reject stale intents
