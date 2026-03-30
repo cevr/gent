@@ -9,7 +9,7 @@
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Effect, Fiber, Stream } from "effect"
-import type { AgentEvent } from "@gent/core/domain/event.js"
+import type { ActiveInteraction, AgentEvent } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import {
   extractText,
@@ -30,15 +30,9 @@ import type { ClientContextValue } from "../client/context"
 // ── Types ──
 
 export interface SessionFeedCallbacks {
-  onComposerEvent: (event: ComposerFeedEvent) => void
+  onInteraction: (interaction: ActiveInteraction) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
 }
-
-export type ComposerFeedEvent =
-  | { _tag: "QuestionsAsked"; event: AgentEvent & { _tag: "QuestionsAsked" } }
-  | { _tag: "PermissionRequested"; event: AgentEvent & { _tag: "PermissionRequested" } }
-  | { _tag: "PromptPresented"; event: AgentEvent & { _tag: "PromptPresented" } }
-  | { _tag: "HandoffPresented"; event: AgentEvent & { _tag: "HandoffPresented" } }
 
 type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCallFailed" }>
 
@@ -181,16 +175,13 @@ const handleToolCallResult = (
   })
 }
 
-const toComposerFeedEvent = (event: AgentEvent): ComposerFeedEvent | undefined => {
+const toActiveInteraction = (event: AgentEvent): ActiveInteraction | undefined => {
   switch (event._tag) {
     case "QuestionsAsked":
-      return { _tag: "QuestionsAsked", event }
     case "PermissionRequested":
-      return { _tag: "PermissionRequested", event }
     case "PromptPresented":
-      return { _tag: "PromptPresented", event }
     case "HandoffPresented":
-      return { _tag: "HandoffPresented", event }
+      return event as ActiveInteraction
     default:
       return undefined
   }
@@ -334,9 +325,9 @@ export function useSessionFeed(
     // Drop events if identity changed
     if (currentKey !== key) return
 
-    const composerEvent = toComposerFeedEvent(event)
-    if (composerEvent !== undefined) {
-      callbacks.onComposerEvent(composerEvent)
+    const interaction = toActiveInteraction(event)
+    if (interaction !== undefined) {
+      callbacks.onInteraction(interaction)
       return
     }
 

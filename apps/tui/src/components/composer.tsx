@@ -1,12 +1,14 @@
 /**
- * Unified composer with autocomplete, prompt mode, and submit flows.
+ * Unified composer with autocomplete, interaction renderers, and submit flows.
  */
 
 import { createContext, Show, useContext, type Accessor, type JSX } from "solid-js"
+import type { ActiveInteraction, InteractionEventTag } from "@gent/core/domain/event.js"
 import { useTheme } from "../theme/index"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
 import { ComposerPrompt } from "./composer-prompt"
 import { useComposerController, type ComposerControllerProps } from "./use-composer-controller"
+import { useExtensionUI } from "../extensions/context"
 
 interface ComposerContextValue {
   autocomplete: Accessor<AutocompleteState | null>
@@ -23,6 +25,7 @@ export interface ComposerProps extends ComposerControllerProps {
 export function Composer(props: ComposerProps) {
   const { theme } = useTheme()
   const controller = useComposerController(props)
+  const ext = useExtensionUI()
 
   const contextValue: ComposerContextValue = {
     autocomplete: controller.autocomplete,
@@ -30,17 +33,45 @@ export function Composer(props: ComposerProps) {
     handleAutocompleteClose: controller.handleAutocompleteClose,
   }
 
+  const activeInteraction = (): ActiveInteraction | undefined =>
+    props.composerState?._tag === "interaction" ? props.composerState.interaction : undefined
+
+  const interactionRenderer = () => {
+    const interaction = activeInteraction()
+    if (interaction === undefined) return undefined
+    return ext.interactionRenderers().get(interaction._tag)
+  }
+
   return (
     <ComposerContext.Provider value={contextValue}>
       {props.children}
 
-      <Show when={controller.currentQuestion()} keyed>
-        {(question) => (
-          <ComposerPrompt question={question} onSubmit={controller.handlePromptSubmit} />
-        )}
+      <Show when={activeInteraction()} keyed>
+        {(interaction) => {
+          const Renderer = interactionRenderer()
+          if (Renderer !== undefined) {
+            return Renderer({
+              event: interaction,
+              resolve: (result: unknown) => {
+                controller.resolveInteraction(
+                  interaction._tag as InteractionEventTag,
+                  result as never,
+                )
+              },
+            })
+          }
+          // Fallback: adapted ComposerPrompt (temporary bridge until Batch 8)
+          return (
+            <ComposerPrompt
+              interaction={interaction}
+              onResolve={(tag, result) => controller.resolveInteraction(tag, result)}
+              onCancel={() => controller.cancelInteraction()}
+            />
+          )
+        }}
       </Show>
 
-      <Show when={controller.mode() !== "prompt"}>
+      <Show when={controller.mode() !== "interaction"}>
         <box flexShrink={0} flexDirection="row">
           <text style={{ fg: controller.mode() === "shell" ? theme.warning : theme.primary }}>
             {controller.promptSymbol()}

@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
+import type { ActiveInteraction, InteractionResolutionByTag } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
@@ -8,7 +9,12 @@ import {
   transitionComposerInteraction,
   type ComposerInteractionEvent,
 } from "../components/composer-interaction-state"
-import { transition, type ComposerEvent, ComposerState } from "../components/composer-state"
+import {
+  transition,
+  type ComposerEffect,
+  type ComposerEvent,
+  ComposerState,
+} from "../components/composer-state"
 import { useClient } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/index"
@@ -70,7 +76,7 @@ export interface SessionController {
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void, UiError>
   onRestoreQueue: () => void
-  onComposerEvent: (event: ComposerEvent) => void
+  dispatchComposer: (event: ComposerEvent) => void
   closeOverlay: () => void
   onSessionTreeSelect: (sessionId: SessionId) => void
   onForkSelect: (messageId: MessageId) => void
@@ -81,32 +87,6 @@ const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
 
 const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) =>
   state._tag === "tree" ? state.tree : null
-
-const pickPermissionDecision = (
-  answers: readonly (readonly string[])[],
-): { decision: "allow" | "deny"; persist: boolean } => {
-  const selections = answers.flat().map((value) => value.trim().toLowerCase())
-  if (selections.includes("always allow")) return { decision: "allow", persist: true }
-  if (selections.includes("always deny")) return { decision: "deny", persist: true }
-  if (selections.includes("allow")) return { decision: "allow", persist: false }
-  if (selections.includes("deny")) return { decision: "deny", persist: false }
-  return { decision: "deny", persist: false }
-}
-
-const pickPromptDecision = (
-  answers: readonly (readonly string[])[],
-): { decision: "yes" | "no" | "edit"; content?: string } => {
-  const selections = answers.flat().map((value) => value.trim())
-  const normalized = selections.map((value) => value.toLowerCase())
-  if (normalized.includes("yes")) return { decision: "yes" }
-  if (normalized.includes("edit")) return { decision: "edit" }
-  if (normalized.includes("no")) return { decision: "no" }
-  const content = selections[0]
-  return {
-    decision: "no",
-    ...(content !== undefined && content.length > 0 ? { content } : {}),
-  }
-}
 
 export function useSessionController(props: {
   sessionId: SessionId
@@ -163,90 +143,96 @@ export function useSessionController(props: {
     () => dispatchSessionUi({ _tag: "CloseOverlay" }),
   )
 
-  const handleComposerEffect = (effect: ReturnType<typeof transition>["effect"]) => {
+  const handleComposerEffect = (effect: ComposerEffect | undefined) => {
     if (effect === undefined) return
-    switch (effect._tag) {
-      case "RespondPrompt":
-        if (effect.kind === "questions") {
-          cast(
-            client.client.interaction
-              .respondQuestions({
-                requestId: effect.requestId,
-                answers: [...effect.answers.map((a: readonly string[]) => [...a])],
-              })
-              .pipe(
-                Effect.tapError((error) =>
-                  Effect.sync(() => {
-                    client.setError(formatError(error))
-                  }),
-                ),
-              ),
-          )
-          return
-        }
+    const { interaction, result } = effect
+    const requestId = interaction.requestId
+    const rpcError = (error: UiError) =>
+      Effect.sync(() => {
+        client.setError(formatError(error))
+      })
 
-        if (effect.kind === "permission") {
-          const { decision, persist } = pickPermissionDecision(effect.answers)
-          cast(
-            client.client.interaction
-              .respondPermission({ requestId: effect.requestId, decision, persist })
-              .pipe(
-                Effect.tapError((error) =>
-                  Effect.sync(() => {
-                    client.setError(formatError(error))
-                  }),
-                ),
-              ),
-          )
-          return
-        }
-
-        if (effect.kind === "handoff") {
-          const { decision } = pickPromptDecision(effect.answers)
-          const handoffDecision = decision === "yes" ? "confirm" : "reject"
-          cast(
-            Effect.gen(function* () {
-              const result = yield* client.client.interaction.respondHandoff({
-                requestId: effect.requestId,
-                decision: handoffDecision,
-              })
-              if (result.childSessionId === undefined || result.childBranchId === undefined) return
-              client.switchSession(result.childSessionId, result.childBranchId, "Handoff")
-            }).pipe(
-              Effect.catchEager((error: unknown) =>
-                Effect.sync(() => {
-                  client.setError(
-                    typeof error === "object" && error !== null
-                      ? formatError(error as UiError)
-                      : String(error),
-                  )
-                }),
-              ),
-            ),
-          )
-          return
-        }
-
-        const { decision, content } = pickPromptDecision(effect.answers)
+    switch (interaction._tag) {
+      case "QuestionsAsked": {
+        const r = result as InteractionResolutionByTag["QuestionsAsked"]
         cast(
           client.client.interaction
-            .respondPrompt({ requestId: effect.requestId, decision, content })
-            .pipe(
-              Effect.tapError((error) =>
-                Effect.sync(() => {
-                  client.setError(formatError(error))
-                }),
-              ),
-            ),
+            .respondQuestions({
+              requestId,
+              answers:
+                r._tag === "cancelled" ? [] : [...r.answers.map((a: readonly string[]) => [...a])],
+              cancelled: r._tag === "cancelled" ? true : undefined,
+            })
+            .pipe(Effect.tapError(rpcError)),
         )
         return
+      }
+      case "PermissionRequested": {
+        const r = result as InteractionResolutionByTag["PermissionRequested"]
+        cast(
+          client.client.interaction
+            .respondPermission({ requestId, decision: r._tag, persist: r.persist })
+            .pipe(Effect.tapError(rpcError)),
+        )
+        return
+      }
+      case "HandoffPresented": {
+        const r = result as InteractionResolutionByTag["HandoffPresented"]
+        cast(
+          Effect.gen(function* () {
+            const handoffResult = yield* client.client.interaction.respondHandoff({
+              requestId,
+              decision: r._tag,
+              ...(r._tag === "reject" && r.reason !== undefined ? { reason: r.reason } : {}),
+            })
+            if (
+              handoffResult.childSessionId === undefined ||
+              handoffResult.childBranchId === undefined
+            )
+              return
+            client.switchSession(
+              handoffResult.childSessionId,
+              handoffResult.childBranchId,
+              "Handoff",
+            )
+          }).pipe(
+            Effect.catchEager((error: unknown) =>
+              Effect.sync(() => {
+                client.setError(
+                  typeof error === "object" && error !== null
+                    ? formatError(error as UiError)
+                    : String(error),
+                )
+              }),
+            ),
+          ),
+        )
+        return
+      }
+      case "PromptPresented": {
+        const r = result as InteractionResolutionByTag["PromptPresented"]
+        cast(
+          client.client.interaction
+            .respondPrompt({
+              requestId,
+              decision: r._tag,
+              ...(r._tag === "no" && r.reason !== undefined ? { content: r.reason } : {}),
+            })
+            .pipe(Effect.tapError(rpcError)),
+        )
+        return
+      }
     }
   }
 
-  const onComposerEvent = (event: ComposerEvent) => {
+  const dispatchComposer = (event: ComposerEvent) => {
     const result = transition(composerState(), event)
     setComposerState(result.state)
     handleComposerEffect(result.effect)
+  }
+
+  const onInteraction = (interaction: ActiveInteraction) => {
+    dispatchComposer({ _tag: "EnterInteraction", interaction })
   }
 
   const onComposerInteraction = (event: ComposerInteractionEvent) => {
@@ -259,7 +245,7 @@ export function useSessionController(props: {
     client,
     cast,
     {
-      onComposerEvent,
+      onInteraction,
       onBranchSwitch: (sessionId, branchId) => {
         router.navigateToSession(sessionId, branchId)
       },
@@ -610,7 +596,7 @@ export function useSessionController(props: {
     onSubmit,
     onSlashCommand,
     onRestoreQueue,
-    onComposerEvent,
+    dispatchComposer,
     closeOverlay: () => dispatchSessionUi({ _tag: "CloseOverlay" }),
     onSessionTreeSelect,
     onForkSelect,

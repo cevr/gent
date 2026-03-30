@@ -2,7 +2,6 @@ import { createEffect, onCleanup, onMount, type Accessor } from "solid-js"
 import { Effect } from "effect"
 import type { TextareaRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
-import type { Question } from "@gent/core/domain/event.js"
 import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
 import { useEnv } from "../env/context"
@@ -25,6 +24,7 @@ import type {
   ComposerInteractionState,
 } from "./composer-interaction-state"
 import type { ComposerEvent, ComposerState } from "./composer-state"
+import type { InteractionEventTag, InteractionResolutionByTag } from "@gent/core/domain/event.js"
 
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
@@ -73,13 +73,12 @@ export interface ComposerControllerProps {
   interactionState: ComposerInteractionState
   onInteractionEvent: (event: ComposerInteractionEvent) => void
   composerState?: ComposerState
-  onComposerEvent?: (event: ComposerEvent) => void
+  dispatchComposer?: (event: ComposerEvent) => void
 }
 
 export interface ComposerController {
   readonly autocomplete: Accessor<AutocompleteState | null>
-  readonly currentQuestion: Accessor<Question | null>
-  readonly mode: Accessor<"editing" | "shell" | "prompt">
+  readonly mode: Accessor<"editing" | "shell" | "interaction">
   readonly promptSymbol: Accessor<string>
   readonly inputFocused: Accessor<boolean>
   readonly attachTextarea: (renderable: TextareaRenderable | null) => void
@@ -91,7 +90,11 @@ export interface ComposerController {
     super?: boolean
     preventDefault: () => void
   }) => void
-  readonly handlePromptSubmit: (selections: readonly string[]) => void
+  readonly resolveInteraction: (
+    tag: InteractionEventTag,
+    result: InteractionResolutionByTag[InteractionEventTag],
+  ) => void
+  readonly cancelInteraction: () => void
   readonly handleAutocompleteSelect: (value: string) => void
   readonly handleAutocompleteClose: () => void
 }
@@ -111,8 +114,8 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   let submitMode: "queue" | "interject" = "queue"
 
   const autocomplete = () => props.interactionState.autocomplete
-  const effectiveMode = (): "editing" | "shell" | "prompt" =>
-    props.composerState?._tag === "prompt" ? "prompt" : props.interactionState.mode
+  const effectiveMode = (): "editing" | "shell" | "interaction" =>
+    props.composerState?._tag === "interaction" ? "interaction" : props.interactionState.mode
 
   const clearInput = () => {
     if (inputRef !== null) inputRef.setText("")
@@ -470,7 +473,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
-    if (props.suspended === true || effectiveMode() === "prompt") {
+    if (props.suspended === true || effectiveMode() === "interaction") {
       event.preventDefault()
       return
     }
@@ -504,14 +507,10 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
 
   return {
     autocomplete,
-    currentQuestion: () => {
-      if (props.composerState?._tag !== "prompt") return null
-      return props.composerState.prompt.questions[props.composerState.prompt.currentIndex] ?? null
-    },
     mode: effectiveMode,
     promptSymbol: () => (effectiveMode() === "shell" ? "$ " : "❯ "),
     inputFocused: () =>
-      !command.paletteOpen() && props.suspended !== true && effectiveMode() !== "prompt",
+      !command.paletteOpen() && props.suspended !== true && effectiveMode() !== "interaction",
     attachTextarea: (renderable) => {
       inputRef = renderable
       if (renderable !== null) {
@@ -519,8 +518,14 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
       }
     },
     handleTextareaKeyDown,
-    handlePromptSubmit: (selections) => {
-      props.onComposerEvent?.({ _tag: "SubmitAnswer", selections })
+    resolveInteraction: (
+      tag: InteractionEventTag,
+      result: InteractionResolutionByTag[InteractionEventTag],
+    ) => {
+      props.dispatchComposer?.({ _tag: "ResolveInteraction", tag, result })
+    },
+    cancelInteraction: () => {
+      props.dispatchComposer?.({ _tag: "CancelInteraction" })
     },
     handleAutocompleteSelect,
     handleAutocompleteClose,

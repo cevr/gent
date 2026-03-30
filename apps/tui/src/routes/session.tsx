@@ -172,7 +172,7 @@ export function Session(props: SessionProps) {
           interactionState={controller.interactionState()}
           onInteractionEvent={controller.onComposerInteraction}
           composerState={controller.composerState()}
-          onComposerEvent={controller.onComposerEvent}
+          dispatchComposer={controller.dispatchComposer}
         >
           <Composer.Autocomplete />
         </Composer>

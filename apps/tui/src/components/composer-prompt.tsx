@@ -1,29 +1,154 @@
+/**
+ * Fallback interaction renderer — temporary bridge until Batch 8 replaces
+ * this with per-tag builtin extension renderers.
+ *
+ * Converts raw ActiveInteraction events back to Question-shaped options
+ * for the existing option-list UI.
+ */
+
 import { createSignal, Show, For } from "solid-js"
 import { SyntaxStyle } from "@opentui/core"
-import type { Question } from "@gent/core/domain/event.js"
+import type {
+  ActiveInteraction,
+  InteractionEventTag,
+  InteractionResolutionByTag,
+  Question,
+} from "@gent/core/domain/event.js"
 import { useTheme } from "../theme/index"
 import { useScopedKeyboard } from "../keyboard/context"
 
 const markdownSyntaxStyle = SyntaxStyle.create()
 
 interface ComposerPromptProps {
-  question: Question
-  onSubmit: (selections: readonly string[]) => void
+  interaction: ActiveInteraction
+  onResolve: (
+    tag: InteractionEventTag,
+    result: InteractionResolutionByTag[InteractionEventTag],
+  ) => void
+  onCancel: () => void
+}
+
+// Convert interaction events to the Question shape for rendering
+
+function interactionToQuestion(interaction: ActiveInteraction): Question {
+  switch (interaction._tag) {
+    case "QuestionsAsked":
+      // For multi-question, just show the first one (old behavior)
+      return interaction.questions[0] ?? { question: "" }
+    case "PermissionRequested": {
+      const summary = summarizeInput(interaction.input)
+      const question =
+        summary.length > 0
+          ? `Allow ${interaction.toolName} (${summary})?`
+          : `Allow ${interaction.toolName}?`
+      return {
+        question,
+        header: "Permission",
+        options: [
+          { label: "Allow" },
+          { label: "Always Allow" },
+          { label: "Deny" },
+          { label: "Always Deny" },
+        ],
+        multiple: false,
+      }
+    }
+    case "PromptPresented": {
+      const title =
+        interaction.title ??
+        (interaction.path !== undefined ? `Review: ${interaction.path}` : "Review")
+      const options =
+        interaction.mode === "review"
+          ? [{ label: "Yes" }, { label: "No" }, { label: "Edit" }]
+          : [{ label: "Yes" }, { label: "No" }]
+      return {
+        question: title,
+        header: "Prompt",
+        ...(interaction.content !== undefined && interaction.content.length > 0
+          ? { markdown: interaction.content }
+          : {}),
+        options,
+        multiple: false,
+      }
+    }
+    case "HandoffPresented": {
+      const reason =
+        interaction.reason !== undefined && interaction.reason.length > 0
+          ? ` (${interaction.reason})`
+          : ""
+      const summary =
+        interaction.summary.length > 200
+          ? interaction.summary.slice(0, 200) + "..."
+          : interaction.summary
+      return {
+        question: `Handoff to new session?${reason}`,
+        header: "Handoff",
+        markdown: summary,
+        options: [{ label: "Yes" }, { label: "No" }],
+        multiple: false,
+      }
+    }
+  }
+}
+
+function selectionsToResolution(
+  interaction: ActiveInteraction,
+  selections: readonly string[],
+): { tag: InteractionEventTag; result: InteractionResolutionByTag[InteractionEventTag] } {
+  switch (interaction._tag) {
+    case "QuestionsAsked":
+      return {
+        tag: "QuestionsAsked",
+        result: { _tag: "answered", answers: [selections] },
+      }
+    case "PermissionRequested": {
+      const sel = selections[0]?.toLowerCase() ?? "deny"
+      if (sel === "always allow")
+        return { tag: "PermissionRequested", result: { _tag: "allow", persist: true } }
+      if (sel === "always deny")
+        return { tag: "PermissionRequested", result: { _tag: "deny", persist: true } }
+      if (sel === "allow")
+        return { tag: "PermissionRequested", result: { _tag: "allow", persist: false } }
+      return { tag: "PermissionRequested", result: { _tag: "deny", persist: false } }
+    }
+    case "PromptPresented": {
+      const sel = selections[0]?.toLowerCase() ?? "no"
+      if (sel === "yes") return { tag: "PromptPresented", result: { _tag: "yes" } }
+      if (sel === "edit") return { tag: "PromptPresented", result: { _tag: "edit" } }
+      return { tag: "PromptPresented", result: { _tag: "no" } }
+    }
+    case "HandoffPresented": {
+      const sel = selections[0]?.toLowerCase() ?? "no"
+      if (sel === "yes") return { tag: "HandoffPresented", result: { _tag: "confirm" } }
+      return { tag: "HandoffPresented", result: { _tag: "reject" } }
+    }
+  }
+}
+
+function summarizeInput(input: unknown): string {
+  if (input === null || input === undefined) return ""
+  const raw = typeof input === "string" ? input : JSON.stringify(input)
+  return raw.length > 120 ? raw.slice(0, 120) + "..." : raw
 }
 
 export function ComposerPrompt(props: ComposerPromptProps) {
   const { theme } = useTheme()
+  const question = () => interactionToQuestion(props.interaction)
 
   const [selected, setSelected] = createSignal<Set<string>>(new Set())
   const [freeformText, setFreeformText] = createSignal("")
   const [focusIndex, setFocusIndex] = createSignal(0)
 
-  const options = () => props.question.options ?? []
+  const options = () => question().options ?? []
   const hasOptions = () => options().length > 0
-  const isMultiple = () => props.question.multiple === true
+  const isMultiple = () => question().multiple === true
   const focusableCount = () => options().length + 1
 
   useScopedKeyboard((e) => {
+    if (e.name === "escape") {
+      props.onCancel()
+      return true
+    }
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
       setFocusIndex((i) => (i - 1 + focusableCount()) % focusableCount())
       return true
@@ -70,7 +195,8 @@ export function ComposerPrompt(props: ComposerPromptProps) {
     if (selections.length === 0) {
       selections.push("Other")
     }
-    props.onSubmit(selections)
+    const { tag, result } = selectionsToResolution(props.interaction, selections)
+    props.onResolve(tag, result)
   }
 
   const isSelected = (label: string) => selected().has(label)
@@ -85,15 +211,15 @@ export function ComposerPrompt(props: ComposerPromptProps) {
 
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
-      <Show when={props.question.header !== undefined && props.question.header.length > 0}>
+      <Show when={question().header !== undefined && (question().header?.length ?? 0) > 0}>
         <text style={{ fg: theme.textMuted }}>
-          <b>{props.question.header}</b>
+          <b>{question().header}</b>
         </text>
       </Show>
 
-      <text style={{ fg: theme.text }}>{props.question.question}</text>
+      <text style={{ fg: theme.text }}>{question().question}</text>
 
-      <Show when={props.question.markdown} keyed>
+      <Show when={question().markdown} keyed>
         {(markdown) => (
           <box marginTop={1} paddingRight={1}>
             <markdown syntaxStyle={markdownSyntaxStyle} content={markdown} />
@@ -137,8 +263,8 @@ export function ComposerPrompt(props: ComposerPromptProps) {
 
       <text style={{ fg: theme.textMuted, marginTop: 1 }}>
         {isMultiple()
-          ? "↑↓ navigate • space select • enter submit"
-          : "↑↓ navigate • space/enter select"}
+          ? "↑↓ navigate • space select • enter submit • esc cancel"
+          : "↑↓ navigate • space/enter select • esc cancel"}
       </text>
     </box>
   )
