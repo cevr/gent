@@ -61,7 +61,23 @@ export function Composer(props: ComposerProps) {
         }}
       </Show>
 
-      <Show when={controller.mode() !== "interaction"}>
+      <Show when={controller.mode() !== "interaction" && ext.composerSurface()} keyed>
+        {(Surface) =>
+          Surface({
+            draft: props.interactionState.draft,
+            setDraft: (text: string) => props.onInteractionEvent({ _tag: "RestoreDraft", text }),
+            submit: () =>
+              controller.handleTextareaKeyDown({
+                name: "return",
+                preventDefault: () => {},
+              }),
+            focused: controller.inputFocused(),
+            mode: controller.mode() as "editing" | "shell",
+          })
+        }
+      </Show>
+
+      <Show when={controller.mode() !== "interaction" && ext.composerSurface() === undefined}>
         <box flexShrink={0} flexDirection="row">
           <text style={{ fg: controller.mode() === "shell" ? theme.warning : theme.primary }}>
             {controller.promptSymbol()}
