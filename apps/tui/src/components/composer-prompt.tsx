@@ -3,7 +3,8 @@
  * this with per-tag builtin extension renderers.
  *
  * Converts raw ActiveInteraction events back to Question-shaped options
- * for the existing option-list UI.
+ * for the existing option-list UI. Supports multi-question progression
+ * for QuestionsAsked interactions.
  */
 
 import { createSignal, Show, For } from "solid-js"
@@ -30,28 +31,29 @@ interface ComposerPromptProps {
 
 // Convert interaction events to the Question shape for rendering
 
-function interactionToQuestion(interaction: ActiveInteraction): Question {
+function interactionToQuestions(interaction: ActiveInteraction): readonly Question[] {
   switch (interaction._tag) {
     case "QuestionsAsked":
-      // For multi-question, just show the first one (old behavior)
-      return interaction.questions[0] ?? { question: "" }
+      return interaction.questions
     case "PermissionRequested": {
       const summary = summarizeInput(interaction.input)
       const question =
         summary.length > 0
           ? `Allow ${interaction.toolName} (${summary})?`
           : `Allow ${interaction.toolName}?`
-      return {
-        question,
-        header: "Permission",
-        options: [
-          { label: "Allow" },
-          { label: "Always Allow" },
-          { label: "Deny" },
-          { label: "Always Deny" },
-        ],
-        multiple: false,
-      }
+      return [
+        {
+          question,
+          header: "Permission",
+          options: [
+            { label: "Allow" },
+            { label: "Always Allow" },
+            { label: "Deny" },
+            { label: "Always Deny" },
+          ],
+          multiple: false,
+        },
+      ]
     }
     case "PromptPresented": {
       const title =
@@ -61,15 +63,17 @@ function interactionToQuestion(interaction: ActiveInteraction): Question {
         interaction.mode === "review"
           ? [{ label: "Yes" }, { label: "No" }, { label: "Edit" }]
           : [{ label: "Yes" }, { label: "No" }]
-      return {
-        question: title,
-        header: "Prompt",
-        ...(interaction.content !== undefined && interaction.content.length > 0
-          ? { markdown: interaction.content }
-          : {}),
-        options,
-        multiple: false,
-      }
+      return [
+        {
+          question: title,
+          header: "Prompt",
+          ...(interaction.content !== undefined && interaction.content.length > 0
+            ? { markdown: interaction.content }
+            : {}),
+          options,
+          multiple: false,
+        },
+      ]
     }
     case "HandoffPresented": {
       const reason =
@@ -80,48 +84,69 @@ function interactionToQuestion(interaction: ActiveInteraction): Question {
         interaction.summary.length > 200
           ? interaction.summary.slice(0, 200) + "..."
           : interaction.summary
-      return {
-        question: `Handoff to new session?${reason}`,
-        header: "Handoff",
-        markdown: summary,
-        options: [{ label: "Yes" }, { label: "No" }],
-        multiple: false,
-      }
+      return [
+        {
+          question: `Handoff to new session?${reason}`,
+          header: "Handoff",
+          markdown: summary,
+          options: [{ label: "Yes" }, { label: "No" }],
+          multiple: false,
+        },
+      ]
     }
   }
 }
 
-function selectionsToResolution(
+type Resolution = {
+  tag: InteractionEventTag
+  result: InteractionResolutionByTag[InteractionEventTag]
+}
+
+function resolvePermission(answers: readonly (readonly string[])[]): Resolution {
+  const sel = answers[0]?.[0]?.toLowerCase() ?? "deny"
+  if (sel === "always allow")
+    return { tag: "PermissionRequested", result: { _tag: "allow", persist: true } }
+  if (sel === "always deny")
+    return { tag: "PermissionRequested", result: { _tag: "deny", persist: true } }
+  if (sel === "allow")
+    return { tag: "PermissionRequested", result: { _tag: "allow", persist: false } }
+  return { tag: "PermissionRequested", result: { _tag: "deny", persist: false } }
+}
+
+function resolvePrompt(answers: readonly (readonly string[])[]): Resolution {
+  const sel = answers[0]?.[0]?.toLowerCase() ?? "no"
+  if (sel === "yes") return { tag: "PromptPresented", result: { _tag: "yes" } }
+  if (sel === "edit") return { tag: "PromptPresented", result: { _tag: "edit" } }
+  const freeform = answers[0]?.find((s) => !["yes", "no", "edit"].includes(s.toLowerCase()))
+  return {
+    tag: "PromptPresented",
+    result: { _tag: "no", ...(freeform !== undefined ? { reason: freeform } : {}) },
+  }
+}
+
+function resolveHandoff(answers: readonly (readonly string[])[]): Resolution {
+  const sel = answers[0]?.[0]?.toLowerCase() ?? "no"
+  if (sel === "yes") return { tag: "HandoffPresented", result: { _tag: "confirm" } }
+  const freeform = answers[0]?.find((s) => !["yes", "no"].includes(s.toLowerCase()))
+  return {
+    tag: "HandoffPresented",
+    result: { _tag: "reject", ...(freeform !== undefined ? { reason: freeform } : {}) },
+  }
+}
+
+function answersToResolution(
   interaction: ActiveInteraction,
-  selections: readonly string[],
-): { tag: InteractionEventTag; result: InteractionResolutionByTag[InteractionEventTag] } {
+  allAnswers: readonly (readonly string[])[],
+): Resolution {
   switch (interaction._tag) {
     case "QuestionsAsked":
-      return {
-        tag: "QuestionsAsked",
-        result: { _tag: "answered", answers: [selections] },
-      }
-    case "PermissionRequested": {
-      const sel = selections[0]?.toLowerCase() ?? "deny"
-      if (sel === "always allow")
-        return { tag: "PermissionRequested", result: { _tag: "allow", persist: true } }
-      if (sel === "always deny")
-        return { tag: "PermissionRequested", result: { _tag: "deny", persist: true } }
-      if (sel === "allow")
-        return { tag: "PermissionRequested", result: { _tag: "allow", persist: false } }
-      return { tag: "PermissionRequested", result: { _tag: "deny", persist: false } }
-    }
-    case "PromptPresented": {
-      const sel = selections[0]?.toLowerCase() ?? "no"
-      if (sel === "yes") return { tag: "PromptPresented", result: { _tag: "yes" } }
-      if (sel === "edit") return { tag: "PromptPresented", result: { _tag: "edit" } }
-      return { tag: "PromptPresented", result: { _tag: "no" } }
-    }
-    case "HandoffPresented": {
-      const sel = selections[0]?.toLowerCase() ?? "no"
-      if (sel === "yes") return { tag: "HandoffPresented", result: { _tag: "confirm" } }
-      return { tag: "HandoffPresented", result: { _tag: "reject" } }
-    }
+      return { tag: "QuestionsAsked", result: { _tag: "answered", answers: allAnswers } }
+    case "PermissionRequested":
+      return resolvePermission(allAnswers)
+    case "PromptPresented":
+      return resolvePrompt(allAnswers)
+    case "HandoffPresented":
+      return resolveHandoff(allAnswers)
   }
 }
 
@@ -133,16 +158,31 @@ function summarizeInput(input: unknown): string {
 
 export function ComposerPrompt(props: ComposerPromptProps) {
   const { theme } = useTheme()
-  const question = () => interactionToQuestion(props.interaction)
+  const questions = () => interactionToQuestions(props.interaction)
+
+  // Multi-question state
+  const [questionIndex, setQuestionIndex] = createSignal(0)
+  const [accumulatedAnswers, setAccumulatedAnswers] = createSignal<readonly (readonly string[])[]>(
+    [],
+  )
+
+  const currentQuestion = () => questions()[questionIndex()] ?? { question: "" }
+  const totalQuestions = () => questions().length
 
   const [selected, setSelected] = createSignal<Set<string>>(new Set())
   const [freeformText, setFreeformText] = createSignal("")
   const [focusIndex, setFocusIndex] = createSignal(0)
 
-  const options = () => question().options ?? []
+  const options = () => currentQuestion().options ?? []
   const hasOptions = () => options().length > 0
-  const isMultiple = () => question().multiple === true
+  const isMultiple = () => currentQuestion().multiple === true
   const focusableCount = () => options().length + 1
+
+  const resetQuestionState = () => {
+    setSelected(new Set<string>())
+    setFreeformText("")
+    setFocusIndex(0)
+  }
 
   useScopedKeyboard((e) => {
     if (e.name === "escape") {
@@ -195,8 +235,20 @@ export function ComposerPrompt(props: ComposerPromptProps) {
     if (selections.length === 0) {
       selections.push("Other")
     }
-    const { tag, result } = selectionsToResolution(props.interaction, selections)
-    props.onResolve(tag, result)
+
+    const nextAnswers = [...accumulatedAnswers(), selections]
+    const nextIndex = questionIndex() + 1
+
+    if (nextIndex >= totalQuestions()) {
+      // All questions answered — resolve
+      const { tag, result } = answersToResolution(props.interaction, nextAnswers)
+      props.onResolve(tag, result)
+    } else {
+      // Advance to next question
+      setAccumulatedAnswers(nextAnswers)
+      setQuestionIndex(nextIndex)
+      resetQuestionState()
+    }
   }
 
   const isSelected = (label: string) => selected().has(label)
@@ -211,15 +263,20 @@ export function ComposerPrompt(props: ComposerPromptProps) {
 
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
-      <Show when={question().header !== undefined && (question().header?.length ?? 0) > 0}>
+      <Show
+        when={currentQuestion().header !== undefined && (currentQuestion().header?.length ?? 0) > 0}
+      >
         <text style={{ fg: theme.textMuted }}>
-          <b>{question().header}</b>
+          <b>
+            {currentQuestion().header}
+            {totalQuestions() > 1 ? ` (${questionIndex() + 1}/${totalQuestions()})` : ""}
+          </b>
         </text>
       </Show>
 
-      <text style={{ fg: theme.text }}>{question().question}</text>
+      <text style={{ fg: theme.text }}>{currentQuestion().question}</text>
 
-      <Show when={question().markdown} keyed>
+      <Show when={currentQuestion().markdown} keyed>
         {(markdown) => (
           <box marginTop={1} paddingRight={1}>
             <markdown syntaxStyle={markdownSyntaxStyle} content={markdown} />
