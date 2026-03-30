@@ -964,7 +964,13 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       yield* storage.deleteAgentLoopCheckpoint({ sessionId, branchId })
                       return Option.none<LoopState>()
                     }
-                    return yield* Effect.option(decodeLoopCheckpointState(record.stateJson))
+                    const decoded = yield* Effect.option(
+                      decodeLoopCheckpointState(record.stateJson),
+                    )
+                    if (Option.isNone(decoded)) {
+                      yield* storage.deleteAgentLoopCheckpoint({ sessionId, branchId })
+                    }
+                    return decoded
                   }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
                 save: (state) =>
                   Effect.gen(function* () {
