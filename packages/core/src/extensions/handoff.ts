@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { defineExtension, defineInterceptor } from "../domain/extension.js"
 import type { TurnAfterInput } from "../domain/extension.js"
 import type { Message } from "../domain/message.js"
@@ -6,14 +6,40 @@ import { HandoffHandler } from "../domain/interaction-handlers.js"
 import { HandoffTool } from "../tools/handoff.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
 import { estimateContextPercent } from "../runtime/context-estimation.js"
 import { DEFAULTS } from "../domain/defaults.js"
+import { fromReducer } from "../runtime/extensions/from-reducer.js"
 
-/** Cooldown counter per session:branch — suppresses auto-handoff for N turns after rejection */
-const cooldowns = new Map<string, number>()
+// Cooldown state — per session, managed by actor lifecycle
+interface CooldownState {
+  readonly cooldown: number
+}
 
-const cooldownKey = (sessionId: string, branchId: string) => `${sessionId}:${branchId}`
+const CooldownIntent = Schema.TaggedStruct("Suppress", { count: Schema.Number })
+type CooldownIntent = typeof CooldownIntent.Type
+
+const EXTENSION_ID = "@gent/handoff"
+
+const { spawnActor: CooldownActor } = fromReducer<CooldownState, CooldownIntent>({
+  id: EXTENSION_ID,
+  initial: { cooldown: 0 },
+  intentSchema: CooldownIntent,
+  reduce: (state, event) => {
+    // Decrement cooldown on each completed turn
+    if (event._tag === "TurnCompleted" && state.cooldown > 0) {
+      return { state: { cooldown: state.cooldown - 1 } }
+    }
+    return { state }
+  },
+  handleIntent: (state, intent) => {
+    if (intent._tag === "Suppress") {
+      return { state: { cooldown: intent.count } }
+    }
+    return { state }
+  },
+})
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   const recentText = messages
@@ -30,7 +56,7 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
-// Auto-handoff interceptor — runs in agent loop scope where Storage/Registry/HandoffHandler are available
+// Auto-handoff interceptor — runs in agent loop scope where services are ambient
 const autoHandoffImpl = (
   input: TurnAfterInput,
   next: (input: TurnAfterInput) => Effect.Effect<void>,
@@ -40,12 +66,17 @@ const autoHandoffImpl = (
 
     if (input.interrupted) return
 
-    const key = cooldownKey(input.sessionId, input.branchId)
-    const suppress = cooldowns.get(key) ?? 0
-    if (suppress > 0) {
-      cooldowns.set(key, suppress - 1)
-      return
-    }
+    // Read cooldown from actor state
+    const stateRuntime = yield* ExtensionStateRuntime
+    const actorState = yield* stateRuntime.getUiSnapshots(input.sessionId, input.branchId).pipe(
+      Effect.map((snapshots) => {
+        const snap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
+        return (snap?.model as CooldownState | undefined)?.cooldown ?? 0
+      }),
+      Effect.catchEager(() => Effect.succeed(0)),
+    )
+
+    if (actorState > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
     const storage = yield* Storage
     const registry = yield* ExtensionRegistry
@@ -77,7 +108,10 @@ const autoHandoffImpl = (
       .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
 
     if (decision === "reject") {
-      cooldowns.set(key, 5)
+      // Set cooldown via actor intent — will be cleaned up when session terminates
+      yield* stateRuntime
+        .handleIntent(input.sessionId, EXTENSION_ID, { _tag: "Suppress", count: 5 }, 0)
+        .pipe(Effect.catchEager(() => Effect.void))
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
@@ -91,11 +125,13 @@ const autoHandoffInterceptor = defineInterceptor(
 )
 
 export const HandoffExtension = defineExtension({
-  manifest: { id: "@gent/handoff" },
+  manifest: { id: EXTENSION_ID },
   setup: () =>
     Effect.succeed({
       tools: [HandoffTool],
       interactionHandlers: [{ type: "handoff" as const, layer: HandoffHandler.Live }],
       hooks: { interceptors: [autoHandoffInterceptor] },
+      spawnActor: CooldownActor,
+      projection: { deriveUi: (state: unknown) => state },
     }),
 })
