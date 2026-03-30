@@ -89,7 +89,7 @@ describe("Composer renderer", () => {
 
     const frame = renderFrame(setup)
     expect(frame).toContain("Commands")
-    expect(frame).toContain("/agent")
     expect(frame).toContain("/clear")
+    expect(frame).toContain("/sessions")
   })
 })

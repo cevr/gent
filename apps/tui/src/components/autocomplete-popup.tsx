@@ -37,7 +37,6 @@ interface SlashCommand {
 }
 
 const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
-  { id: "agent", label: "/agent", description: "Switch agent" },
   { id: "clear", label: "/clear", description: "Clear messages" },
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },
   { id: "branch", label: "/branch", description: "Create new branch" },
