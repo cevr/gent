@@ -431,6 +431,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         const agentActorLive = AgentActor.Live
         const subagentRunnerConfigLive = SubagentRunnerConfig.Live({
           systemPrompt,
+          baseSections,
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
             : {}),

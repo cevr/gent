@@ -72,6 +72,7 @@ import {
   resolveTurnPhase,
   streamTurnPhase,
 } from "./agent-loop-phases.js"
+import { SubagentRunnerConfig } from "./subagent-runner.js"
 import {
   AGENT_LOOP_CHECKPOINT_VERSION,
   buildLoopCheckpointRecord,
@@ -1413,8 +1414,13 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
               [],
             )
 
-          // Build tool-aware prompt from the base system prompt string
-          const baseSections: Array<PromptSection> = [
+          // Use structured sections from SubagentRunnerConfig when available,
+          // falling back to wrapping the flat systemPrompt string
+          const runnerConfigOpt = yield* Effect.serviceOption(SubagentRunnerConfig)
+          const structuredSections = Option.isSome(runnerConfigOpt)
+            ? runnerConfigOpt.value.baseSections
+            : undefined
+          const baseSections: ReadonlyArray<PromptSection> = structuredSections ?? [
             { id: "base", content: input.systemPrompt, priority: 0 },
           ]
           const turnPrompt = buildTurnPrompt(baseSections, effectiveAgent, tools, extensionSections)

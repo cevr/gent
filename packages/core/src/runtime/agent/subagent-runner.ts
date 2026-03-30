@@ -1,4 +1,5 @@
 import { Cause, ServiceMap, DateTime, Duration, Effect, Layer } from "effect"
+import type { PromptSection } from "../../domain/prompt.js"
 import { withWideEvent, WideEvent, subagentBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -90,6 +91,7 @@ export class SubagentRunnerConfig extends ServiceMap.Service<
     readonly subprocessBinaryPath?: string
     readonly dbPath?: string
     readonly systemPrompt: string
+    readonly baseSections?: ReadonlyArray<PromptSection>
     readonly timeoutMs?: number
   }
 >()("@gent/core/src/runtime/agent/subagent-runner/SubagentRunnerConfig") {
@@ -97,12 +99,14 @@ export class SubagentRunnerConfig extends ServiceMap.Service<
     subprocessBinaryPath?: string
     dbPath?: string
     systemPrompt: string
+    baseSections?: ReadonlyArray<PromptSection>
     timeoutMs?: number
   }) =>
     Layer.succeed(SubagentRunnerConfig, {
       subprocessBinaryPath: config.subprocessBinaryPath,
       dbPath: config.dbPath,
       systemPrompt: config.systemPrompt,
+      baseSections: config.baseSections,
       timeoutMs: config.timeoutMs,
     })
 }
