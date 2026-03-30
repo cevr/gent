@@ -267,6 +267,13 @@ export function useSessionFeed(
                 if (currentKey !== key) return
                 client.setConnectionIssue(null)
                 setStore("messages", buildMessages(snapshot.messages))
+                // Hydrate pending interaction from snapshot (reconnect scenario)
+                if (snapshot.activeInteraction !== undefined) {
+                  const event = snapshot.activeInteraction.event as ActiveInteraction | undefined
+                  if (event !== undefined) {
+                    callbacks.onInteraction(event)
+                  }
+                }
               })
 
               const eventStream = client.client.session.events({

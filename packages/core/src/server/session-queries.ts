@@ -172,6 +172,23 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
             Effect.catchEager(() => Effect.succeed([] as const)),
           )
 
+        // Active interaction — find pending request for this session+branch
+        const activeInteraction = yield* storage.listPendingInteractionRequests().pipe(
+          Effect.map((requests) => {
+            const match = requests.find(
+              (r) => r.sessionId === input.sessionId && r.branchId === input.branchId,
+            )
+            if (match === undefined) return undefined
+            return {
+              requestId: match.requestId,
+              tag: match.type,
+              event: JSON.parse(match.paramsJson) as unknown,
+            }
+          }),
+          Effect.option,
+          Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
+        )
+
         return {
           sessionId: input.sessionId,
           branchId: input.branchId,
@@ -183,6 +200,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           activeBranchId: session.activeBranchId,
           runtime,
           extensionSnapshots: extensionSnapshots.length > 0 ? [...extensionSnapshots] : undefined,
+          activeInteraction,
         }
       })
 

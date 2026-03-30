@@ -223,6 +223,13 @@ export const ExtensionSnapshotInfo = Schema.Struct({
 })
 export type ExtensionSnapshotInfo = typeof ExtensionSnapshotInfo.Type
 
+export const ActiveInteractionSnapshot = Schema.Struct({
+  requestId: Schema.String,
+  tag: Schema.String,
+  event: Schema.Unknown,
+})
+export type ActiveInteractionSnapshot = typeof ActiveInteractionSnapshot.Type
+
 export const SessionSnapshot = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
@@ -236,6 +243,8 @@ export const SessionSnapshot = Schema.Struct({
   runtime: Schema.suspend(() => SessionRuntime),
   /** Extension UI snapshots for cold-start hydration */
   extensionSnapshots: Schema.optional(Schema.Array(ExtensionSnapshotInfo)),
+  /** Pending interaction request, if any — for reconnect hydration */
+  activeInteraction: Schema.optional(ActiveInteractionSnapshot),
 })
 export type SessionSnapshot = typeof SessionSnapshot.Type
 
