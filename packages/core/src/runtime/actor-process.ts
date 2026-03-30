@@ -143,7 +143,7 @@ export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessS
     })
 }
 
-export class ActorTransport extends ServiceMap.Service<ActorTransport, ActorProcessService>()(
+class ActorTransport extends ServiceMap.Service<ActorTransport, ActorProcessService>()(
   "@gent/core/src/runtime/actor-process/ActorTransport",
 ) {}
 
@@ -160,7 +160,7 @@ const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
 const followUpMessageIdForCommand = (commandId: ActorCommandId) =>
   `${commandId}:follow-up` as MessageId
 
-export const LocalActorTransportLive: Layer.Layer<
+const LocalActorTransportLive: Layer.Layer<
   ActorTransport,
   never,
   AgentLoop | Storage | EventStore | ToolRunner | ExtensionRegistry
