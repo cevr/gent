@@ -1,6 +1,7 @@
 import { Effect, Schema, FileSystem } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { Agents, AgentDefinition, SubagentRunnerService } from "../domain/agent.js"
+import { AgentDefinition, SubagentRunnerService } from "../domain/agent.js"
+import { requireAgent } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Counsel Tool Error
@@ -48,8 +49,9 @@ export const CounselTool = defineTool({
     const platform = yield* RuntimePlatform
 
     // Always spawn deepwork (GPT) as the adversarial reviewer — read-only, no mutations
+    const deepwork = yield* requireAgent("deepwork")
     const reviewer = new AgentDefinition({
-      ...Agents.deepwork,
+      ...deepwork,
       kind: "subagent",
       allowedActions: ["read"],
       deniedTools: ["bash"],

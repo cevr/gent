@@ -64,7 +64,7 @@ const runtimePlatformLayer = RuntimePlatform.Test({
   platform: "test",
 })
 
-const platformLayer = Layer.merge(BunServices.layer, runtimePlatformLayer)
+const platformLayer = Layer.mergeAll(BunServices.layer, runtimePlatformLayer, TestExtRegistry)
 
 const workflowTestLayer = Layer.mergeAll(TestExtRegistry, EventStore.Test(), Storage.Test())
 

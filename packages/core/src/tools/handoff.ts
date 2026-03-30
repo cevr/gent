@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { SubagentRunnerService, Agents } from "../domain/agent.js"
+import { SubagentRunnerService } from "../domain/agent.js"
+import { requireAgent } from "../runtime/extensions/registry.js"
 import { HandoffHandler } from "../domain/interaction-handlers.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
@@ -48,7 +49,7 @@ export const HandoffTool = defineTool({
     let summary = params.context
     if (params.context.length > 2000) {
       const summarizeResult = yield* runner.run({
-        agent: Agents.summarizer,
+        agent: yield* requireAgent("summarizer"),
         prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,

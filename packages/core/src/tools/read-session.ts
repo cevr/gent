@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { Agents, SubagentRunnerService } from "../domain/agent.js"
+import { SubagentRunnerService } from "../domain/agent.js"
+import { requireAgent } from "../runtime/extensions/registry.js"
 import { headTailChars } from "../domain/output-buffer.js"
 import type { Message, MessagePart, Branch } from "../domain/message.js"
 import type { SessionId } from "../domain/ids.js"
@@ -142,7 +143,7 @@ export const ReadSessionTool = defineTool({
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
 
       const result = yield* runner.run({
-        agent: Agents.summarizer,
+        agent: yield* requireAgent("summarizer"),
         prompt,
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,

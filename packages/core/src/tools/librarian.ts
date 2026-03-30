@@ -1,6 +1,7 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { Agents, SubagentRunnerService } from "../domain/agent.js"
+import { SubagentRunnerService } from "../domain/agent.js"
+import { requireAgent } from "../runtime/extensions/registry.js"
 import { $ } from "bun"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
@@ -145,8 +146,9 @@ Question: ${params.question}
 
 Use read, grep, and glob tools to explore the code at ${cachePath} and answer the question. Cite specific file paths and line numbers.`
 
+    const agent = yield* requireAgent("librarian")
     const result = yield* runner.run({
-      agent: Agents.librarian,
+      agent,
       prompt,
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,

@@ -297,6 +297,21 @@ export class ExtensionRegistry extends ServiceMap.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
+/** Resolve a required agent from the registry. Fails with a clear error if not found. */
+export const requireAgent = (name: string) =>
+  Effect.gen(function* () {
+    const registry = yield* ExtensionRegistry
+    const agent = yield* registry.getAgent(name)
+    if (agent === undefined) {
+      return yield* Effect.die(
+        new Error(
+          `Required agent "${name}" not found in ExtensionRegistry. Is @gent/agents disabled?`,
+        ),
+      )
+    }
+    return agent
+  })
+
 // Tool filtering — pure helper for agent tool visibility
 
 const filterToolsForAgent = (

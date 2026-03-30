@@ -1,7 +1,7 @@
 import { DateTime, Deferred, Effect, Ref, Stream, type Semaphore } from "effect"
 import {
   type AgentDefinition,
-  Agents,
+  DEFAULT_MODEL_ID,
   resolveAgentModel,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
@@ -450,7 +450,10 @@ const runAutoHandoffIfNeeded = (params: {
 
     const allMessages = yield* params.storage.listMessages(params.branchId)
     const currentAgentDef = yield* params.extensionRegistry.getAgent(params.currentAgent)
-    const modelId = resolveAgentModel(currentAgentDef ?? Agents.cowork)
+    const coworkDef = yield* params.extensionRegistry.getAgent("cowork")
+    const agentForModel = currentAgentDef ?? coworkDef
+    const modelId =
+      agentForModel !== undefined ? resolveAgentModel(agentForModel) : DEFAULT_MODEL_ID
     const contextPercent = estimateContextPercent(allMessages, modelId)
     if (contextPercent < DEFAULTS.handoffThresholdPercent) return params.handoffSuppress
 

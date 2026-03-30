@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import {
-  Agents,
   getDualModelPair,
   SubagentRunnerService,
   type AgentDefinition,
@@ -8,7 +7,7 @@ import {
 } from "../domain/agent.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { requireAgent, ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { requireText, runCommand, type WorkflowRunContext } from "../runtime/workflow-helpers.js"
 
@@ -185,8 +184,10 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   prompt?: string
   maxConcerns: number
   evaluatorFeedback?: string
+  cowork?: AgentDefinition
+  deepwork?: AgentDefinition
 }) {
-  const [primaryModel, reviewerModel] = getDualModelPair()
+  const [primaryModel, reviewerModel] = getDualModelPair(params.cowork, params.deepwork)
   const auditOverrides = {
     allowedActions: ["read"] as const,
     deniedTools: ["bash"] as const,
@@ -282,10 +283,12 @@ export const AuditTool = defineTool({
       cwd: platform.cwd,
     }
 
-    const architect = (yield* registry.getAgent("architect")) ?? Agents.architect
-    const auditor = (yield* registry.getAgent("auditor")) ?? Agents.auditor
+    const architect = yield* requireAgent("architect")
+    const auditor = yield* requireAgent("auditor")
     const callerAgentName = ctx.agentName ?? "cowork"
-    const executor = (yield* registry.getAgent(callerAgentName)) ?? Agents.cowork
+    const executor = yield* requireAgent(callerAgentName)
+    const cowork = yield* registry.getAgent("cowork")
+    const deepwork = yield* registry.getAgent("deepwork")
 
     // Detect → adversarial audit → synthesize (always runs)
     const report = yield* runAuditCycle({
@@ -296,6 +299,8 @@ export const AuditTool = defineTool({
       paths,
       prompt: params.prompt,
       maxConcerns,
+      cowork,
+      deepwork,
     })
 
     if (mode === "report") {

@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { Agents, SubagentRunnerService } from "../domain/agent.js"
+import { SubagentRunnerService } from "../domain/agent.js"
+import { requireAgent } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Finder Tool Error
@@ -32,8 +33,9 @@ export const FinderTool = defineTool({
     const runner = yield* SubagentRunnerService
     const platform = yield* RuntimePlatform
 
+    const agent = yield* requireAgent("finder")
     const result = yield* runner.run({
-      agent: Agents.finder,
+      agent,
       prompt: params.query,
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,

@@ -330,11 +330,17 @@ describe("compileToolPolicy", () => {
 })
 
 describe("AgentExecutionOverrides", () => {
-  test("getDualModelPair returns primary and reviewer models", () => {
-    const [a, b] = getDualModelPair()
+  test("getDualModelPair returns primary and reviewer models from provided agents", () => {
+    const [a, b] = getDualModelPair(Agents.cowork, Agents.deepwork)
     expect(a).toBe(resolveAgentModel(Agents.cowork))
     expect(b).toBe(resolveAgentModel(Agents.deepwork))
     expect(a).not.toBe(b)
+  })
+
+  test("getDualModelPair falls back to builtin agents when undefined", () => {
+    const [a, b] = getDualModelPair(undefined, undefined)
+    expect(a).toBe(resolveAgentModel(Agents.cowork))
+    expect(b).toBe(resolveAgentModel(Agents.deepwork))
   })
 
   test("auditor agent exists and is a subagent", () => {
