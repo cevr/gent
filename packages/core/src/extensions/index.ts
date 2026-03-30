@@ -16,6 +16,7 @@ import { OpenAIExtension } from "./openai/index.js"
 import { BedrockExtension } from "./bedrock/index.js"
 import { GoogleExtension } from "./google/index.js"
 import { MistralExtension } from "./mistral/index.js"
+import { InteractionHandlersExtension } from "./interaction-handlers.js"
 
 export {
   FsToolsExtension,
@@ -30,9 +31,11 @@ export {
   PlanExtension,
   AutoExtension,
   MemoryExtension,
+  InteractionHandlersExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
+  InteractionHandlersExtension,
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,

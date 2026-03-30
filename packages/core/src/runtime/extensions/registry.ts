@@ -2,6 +2,8 @@ import { ServiceMap, Effect, Layer } from "effect"
 import type { AgentDefinition } from "../../domain/agent.js"
 import type {
   ExtensionKind,
+  InteractionHandlerContribution,
+  InteractionHandlerType,
   TurnProjection,
   LoadedExtension,
   ProviderAuthInfo,
@@ -24,6 +26,7 @@ export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly providers: ReadonlyMap<string, ProviderContribution>
+  readonly interactionHandlers: ReadonlyMap<string, InteractionHandlerContribution>
   readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -83,6 +86,13 @@ export const resolveExtensions = (
     "provider",
   )
 
+  const interactionHandlers = compileContributions(
+    sorted,
+    (s) => s.interactionHandlers,
+    (h) => h.type,
+    "interaction handler",
+  )
+
   const tagInjections: TagInjection[] = []
   for (const ext of sorted) {
     for (const injection of ext.setup.tagInjections ?? []) {
@@ -92,7 +102,7 @@ export const resolveExtensions = (
 
   const hooks = compileHooks(sorted)
 
-  return { tools, agents, providers, tagInjections, hooks, extensions: sorted }
+  return { tools, agents, providers, interactionHandlers, tagInjections, hooks, extensions: sorted }
 }
 
 // ToolPolicy compiler — unified tool filtering + prompt section collection
@@ -225,6 +235,11 @@ export interface ExtensionRegistryService {
     resolveAuth?: (providerId: string) => Effect.Effect<ProviderAuthInfo | undefined>,
   ) => Effect.Effect<ReadonlyArray<unknown>>
 
+  // Interaction handlers
+  readonly getInteractionHandler: (
+    type: InteractionHandlerType,
+  ) => Effect.Effect<InteractionHandlerContribution | undefined>
+
   // Hooks
   readonly hooks: CompiledHookMap
 }
@@ -271,6 +286,7 @@ export class ExtensionRegistry extends ServiceMap.Service<
         Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "primary")),
       listSubagents: () =>
         Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "subagent")),
+      getInteractionHandler: (type) => Effect.succeed(resolved.interactionHandlers.get(type)),
       hooks: resolved.hooks,
     })
 

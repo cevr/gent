@@ -322,27 +322,32 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
   const baseWithPermission = Layer.merge(baseServicesLive, permissionLive)
 
+  // Interaction handler layers — resolved from extension contributions with builtin fallback.
+  // Extension-contributed layers override builtins via scope precedence.
   const askUserHandlerLive = Layer.provide(AskUserHandler.Live, baseWithPermission)
   const permissionHandlerLive = Layer.provide(PermissionHandler.Live, baseWithPermission)
-  const toolRunnerLive = Layer.provide(
-    ToolRunner.Live,
-    Layer.merge(baseWithPermission, permissionHandlerLive),
-  )
   const promptHandlerLive = Layer.provide(PromptHandler.Live, baseWithPermission)
+  const handoffHandlerLive = Layer.provide(HandoffHandler.Live, baseWithPermission)
+  const interactionHandlersLive = Layer.mergeAll(
+    askUserHandlerLive,
+    permissionHandlerLive,
+    promptHandlerLive,
+    handoffHandlerLive,
+  )
   const promptPresenterLive = Layer.provide(
     PromptPresenter.Live,
-    Layer.merge(promptHandlerLive, baseWithPermission),
+    Layer.merge(interactionHandlersLive, baseWithPermission),
   )
-  const handoffHandlerLive = Layer.provide(HandoffHandler.Live, baseWithPermission)
+  const toolRunnerLive = Layer.provide(
+    ToolRunner.Live,
+    Layer.merge(baseWithPermission, interactionHandlersLive),
+  )
 
   const allDeps = Layer.mergeAll(
     baseWithPermission,
-    askUserHandlerLive,
-    permissionHandlerLive,
+    interactionHandlersLive,
     toolRunnerLive,
-    promptHandlerLive,
     promptPresenterLive,
-    handoffHandlerLive,
   )
 
   // Recover pending interaction requests from storage.

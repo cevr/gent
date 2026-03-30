@@ -311,6 +311,16 @@ export interface ProviderAuthorizationResult {
   readonly instructions?: string
 }
 
+// Interaction Handler Contributions
+
+export type InteractionHandlerType = "permission" | "prompt" | "handoff" | "ask-user"
+
+export interface InteractionHandlerContribution {
+  readonly type: InteractionHandlerType
+  /** Handler layer — requires EventStore | Storage. Materialized by dependencies.ts at the right point in the chain. */
+  readonly layer: Layer.Any
+}
+
 // Extension Setup — what an extension provides
 
 export interface ExtensionSetup {
@@ -326,6 +336,8 @@ export interface ExtensionSetup {
   readonly tagInjections?: ReadonlyArray<TagInjection>
   /** Provider contributions — register AI provider implementations */
   readonly providers?: ReadonlyArray<ProviderContribution>
+  /** Interaction handler implementations — replaces default handlers when provided */
+  readonly interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
   /** Cleanup effect — runs as scope finalizer during graceful shutdown. */
