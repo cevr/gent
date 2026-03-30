@@ -10,10 +10,6 @@ export class SessionStarted extends Schema.TaggedClass<SessionStarted>()("Sessio
   branchId: BranchId,
 }) {}
 
-export class SessionEnded extends Schema.TaggedClass<SessionEnded>()("SessionEnded", {
-  sessionId: SessionId,
-}) {}
-
 export class MessageReceived extends Schema.TaggedClass<MessageReceived>()("MessageReceived", {
   sessionId: SessionId,
   branchId: BranchId,
@@ -91,20 +87,6 @@ export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("Tool
   toolName: Schema.String,
   input: Schema.optional(Schema.Unknown),
 }) {}
-
-/** @deprecated Use ToolCallSucceeded or ToolCallFailed instead */
-export class ToolCallCompleted extends Schema.TaggedClass<ToolCallCompleted>()(
-  "ToolCallCompleted",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    isError: Schema.Boolean,
-    summary: Schema.optional(Schema.String),
-    output: Schema.optional(Schema.String),
-  },
-) {}
 
 export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
   "ToolCallSucceeded",
@@ -264,11 +246,6 @@ export class MachineTaskFailed extends Schema.TaggedClass<MachineTaskFailed>()(
   },
 ) {}
 
-export class TodoUpdated extends Schema.TaggedClass<TodoUpdated>()("TodoUpdated", {
-  sessionId: SessionId,
-  branchId: BranchId,
-}) {}
-
 export const QuestionOptionSchema = Schema.Struct({
   label: Schema.String,
   description: Schema.optional(Schema.String),
@@ -290,16 +267,6 @@ export class QuestionsAsked extends Schema.TaggedClass<QuestionsAsked>()("Questi
   requestId: Schema.String,
   questions: Schema.Array(QuestionSchema),
 }) {}
-
-export class QuestionsAnswered extends Schema.TaggedClass<QuestionsAnswered>()(
-  "QuestionsAnswered",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    requestId: Schema.String,
-    answers: Schema.Array(Schema.Array(Schema.String)),
-  },
-) {}
 
 export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()(
   "SessionNameUpdated",
@@ -352,17 +319,6 @@ export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("Suba
   toolCallId: Schema.optional(ToolCallId),
   branchId: Schema.optional(BranchId),
 }) {}
-
-/** @deprecated Use SubagentSucceeded or SubagentFailed instead */
-export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
-  "SubagentCompleted",
-  {
-    parentSessionId: SessionId,
-    childSessionId: SessionId,
-    agentName: Schema.String,
-    success: Schema.Boolean,
-  },
-) {}
 
 export class SubagentSucceeded extends Schema.TaggedClass<SubagentSucceeded>()(
   "SubagentSucceeded",
@@ -443,7 +399,6 @@ export class ExtensionUiSnapshot extends Schema.TaggedClass<ExtensionUiSnapshot>
 
 export const AgentEvent = Schema.Union([
   SessionStarted,
-  SessionEnded,
   MessageReceived,
   StreamStarted,
   StreamChunk,
@@ -451,7 +406,6 @@ export const AgentEvent = Schema.Union([
   TurnCompleted,
   TurnRecoveryApplied,
   ToolCallStarted,
-  ToolCallCompleted,
   ToolCallSucceeded,
   ToolCallFailed,
   PermissionRequested,
@@ -467,9 +421,7 @@ export const AgentEvent = Schema.Union([
   MachineInspected,
   MachineTaskSucceeded,
   MachineTaskFailed,
-  TodoUpdated,
   QuestionsAsked,
-  QuestionsAnswered,
   SessionNameUpdated,
   SessionSettingsUpdated,
   BranchCreated,
@@ -477,7 +429,6 @@ export const AgentEvent = Schema.Union([
   BranchSummarized,
   AgentSwitched,
   SubagentSpawned,
-  SubagentCompleted,
   SubagentSucceeded,
   SubagentFailed,
   TaskCreated,

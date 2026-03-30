@@ -71,9 +71,6 @@ const applyChildMetadataEnvelope = (state: ChildMetadataAccumulator, env: EventE
     case "ToolCallSucceeded":
       appendFinishedToolCall(state, env.event.toolCallId, env.event.toolName, false)
       return
-    case "ToolCallCompleted":
-      appendFinishedToolCall(state, env.event.toolCallId, env.event.toolName, env.event.isError)
-      return
     case "ToolCallFailed":
       appendFinishedToolCall(state, env.event.toolCallId, env.event.toolName, true)
       return

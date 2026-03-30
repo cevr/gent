@@ -40,10 +40,7 @@ export type ComposerFeedEvent =
   | { _tag: "PromptPresented"; event: AgentEvent & { _tag: "PromptPresented" } }
   | { _tag: "HandoffPresented"; event: AgentEvent & { _tag: "HandoffPresented" } }
 
-type ToolResultEvent = Extract<
-  AgentEvent,
-  { _tag: "ToolCallCompleted" | "ToolCallSucceeded" | "ToolCallFailed" }
->
+type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCallFailed" }>
 
 export interface SessionFeed {
   items: () => SessionItem[]
@@ -171,9 +168,7 @@ const handleToolCallResult = (
   setActiveTool: (value: string | undefined) => string | undefined,
   toolEvent: ToolResultEvent,
 ) => {
-  const isError =
-    toolEvent._tag === "ToolCallFailed" ||
-    (toolEvent._tag === "ToolCallCompleted" && toolEvent.isError)
+  const isError = toolEvent._tag === "ToolCallFailed"
 
   setActiveTool(undefined)
   updateLatestToolCall(setStore, (message) => {
@@ -202,9 +197,7 @@ const toComposerFeedEvent = (event: AgentEvent): ComposerFeedEvent | undefined =
 }
 
 const isToolResultEvent = (event: AgentEvent): event is ToolResultEvent =>
-  event._tag === "ToolCallCompleted" ||
-  event._tag === "ToolCallSucceeded" ||
-  event._tag === "ToolCallFailed"
+  event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed"
 
 // ── Hook ──
 

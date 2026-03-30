@@ -29,11 +29,6 @@ export const runHeadless = (
             case "ToolCallStarted":
               process.stdout.write(`\n[tool: ${event.toolName}]\n`)
               break
-            case "ToolCallCompleted":
-              process.stdout.write(
-                `[tool done: ${event.toolName}${event.isError ? " (error)" : ""}]\n`,
-              )
-              break
             case "ToolCallSucceeded":
               process.stdout.write(`[tool done: ${event.toolName}]\n`)
               break
