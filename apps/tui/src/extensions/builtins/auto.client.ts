@@ -24,7 +24,7 @@ export default defineClientExtension({
         id: "auto.toggle",
         title: "Toggle Auto Mode",
         category: "Auto",
-        keybind: "ctrl+shift+a",
+        keybind: "shift+tab",
         slash: "auto",
         onSelect: () => {
           // If auto is active → cancel. If inactive → open goal input overlay.

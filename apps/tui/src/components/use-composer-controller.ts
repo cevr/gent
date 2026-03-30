@@ -436,6 +436,17 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   useScopedKeyboard((event) => {
     if (props.suspended === true) return false
 
+    // Shift+Tab toggles auto mode (opens goal overlay when inactive, cancels when active)
+    const isShiftTab =
+      (event.name === "tab" && event.shift === true) ||
+      event.name === "backtab" ||
+      event.sequence === "\x1b[Z" ||
+      event.sequence === "\x1b[1;2Z"
+    if (isShiftTab) {
+      command.trigger("auto.toggle")
+      return true
+    }
+
     if (handleExternalEditorKey(event)) return true
 
     if ((event.meta === true || event.super === true) && event.name === "up") {
