@@ -38,7 +38,6 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
-import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
@@ -313,7 +312,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     EventStore.Test(),
     ExtensionRegistry.fromResolved(resolveExtensions(allExtensions)),
     ExtensionStateRuntime.fromExtensions(allExtensions),
-    ExtensionEventBus.Test(),
     ExtensionTurnControl.Test(),
     subagentRunnerLayer,
     PromptPresenter.Test(),

@@ -31,7 +31,6 @@ import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -248,8 +247,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
   else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 150 })
 
-  const extensionEventBusLive = ExtensionEventBus.Live
-
   // ReducingEventStore wraps BaseEventStore with extension reduce.
   // It requires BaseEventStore + ExtensionStateRuntime (from extensionRegistryLive).
   const reducingEventStoreLive = Layer.provide(
@@ -273,7 +270,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     fileLockServiceLive,
     providerFactoryLive,
     providerLive,
-    extensionEventBusLive,
   )
 
   const permissionLive = Layer.provide(

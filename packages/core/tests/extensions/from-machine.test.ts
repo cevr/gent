@@ -5,7 +5,6 @@ import { SessionStarted, TurnCompleted, EventStore } from "@gent/core/domain/eve
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import { fromMachine } from "@gent/core/runtime/extensions/from-machine"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { LoadedExtension } from "@gent/core/domain/extension"
@@ -13,7 +12,7 @@ import type { LoadedExtension } from "@gent/core/domain/extension"
 const sessionId = "machine-session" as SessionId
 const branchId = "machine-branch" as BranchId
 
-const testLayer = Layer.mergeAll(ExtensionTurnControl.Test(), ExtensionEventBus.Test())
+const testLayer = ExtensionTurnControl.Test()
 
 // ── Test machine: simple counter with Idle/Counting states ──
 
@@ -257,7 +256,6 @@ describe("fromMachine", () => {
       ExtensionStateRuntime.Live([ext]),
       EventStore.Memory,
       ExtensionTurnControl.Test(),
-      ExtensionEventBus.Test(),
       Storage.Test(),
     )
 

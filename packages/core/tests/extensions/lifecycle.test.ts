@@ -14,7 +14,6 @@ import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -45,15 +44,11 @@ describe("createToolTestLayer", () => {
   it.live("provides all required services", () =>
     Effect.gen(function* () {
       const registry = yield* ExtensionRegistry
-      const bus = yield* ExtensionEventBus
       const tc = yield* ExtensionTurnControl
 
       // Registry provides agents
       const cowork = yield* registry.getAgent("cowork")
       expect(cowork).toBeDefined()
-
-      // EventBus works
-      yield* bus.emit("test:ch", { data: 1 })
 
       // TurnControl works (no-op in test)
       yield* tc.queueFollowUp({
@@ -101,7 +96,6 @@ const makeLifecycleLayer = (extensions: LoadedExtension[]) =>
     ExtensionStateRuntime.Live(extensions),
     EventStore.Memory,
     ExtensionTurnControl.Test(),
-    ExtensionEventBus.Test(),
     Storage.Test(),
   )
 

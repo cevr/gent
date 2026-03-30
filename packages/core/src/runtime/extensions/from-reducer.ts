@@ -20,11 +20,8 @@ import type {
 } from "../../domain/extension.js"
 import type { SessionId, BranchId } from "../../domain/ids.js"
 import { Storage } from "../../storage/sqlite-storage.js"
-import type { ExtensionEventBusService } from "./event-bus.js"
-import { ExtensionEventBus } from "./event-bus.js"
-import type { ExtensionTurnControlService } from "./turn-control.js"
 import { ExtensionTurnControl } from "./turn-control.js"
-import { buildProjectionConfig } from "./extension-actor-shared.js"
+import { buildProjectionConfig, interpretEffects } from "./extension-actor-shared.js"
 
 export interface FromReducerConfig<State, Intent = void> {
   readonly id: string
@@ -55,50 +52,6 @@ export interface FromReducerConfig<State, Intent = void> {
   }) => Effect.Effect<void>
 }
 
-const interpretEffects = (
-  effects: ReadonlyArray<ExtensionEffect>,
-  sessionId: SessionId,
-  branchId: BranchId | undefined,
-  turnControl: ExtensionTurnControlService,
-  eventBus: ExtensionEventBusService,
-  persistFn?: () => Effect.Effect<void>,
-): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    for (const effect of effects) {
-      switch (effect._tag) {
-        case "QueueFollowUp":
-          if (branchId !== undefined) {
-            yield* turnControl
-              .queueFollowUp({
-                sessionId,
-                branchId,
-                content: effect.content,
-                metadata: effect.metadata,
-              })
-              .pipe(Effect.catchDefect(() => Effect.void))
-          }
-          break
-        case "Interject":
-          if (branchId !== undefined) {
-            yield* turnControl
-              .interject({ sessionId, branchId, content: effect.content })
-              .pipe(Effect.catchDefect(() => Effect.void))
-          }
-          break
-        case "EmitEvent":
-          yield* eventBus
-            .emit(effect.channel, effect.payload)
-            .pipe(Effect.catchDefect(() => Effect.void))
-          break
-        case "Persist":
-          if (persistFn !== undefined) {
-            yield* persistFn().pipe(Effect.catchDefect(() => Effect.void))
-          }
-          break
-      }
-    }
-  })
-
 export interface FromReducerResult {
   readonly spawnActor: SpawnActor
   readonly projection?: ExtensionProjectionConfig
@@ -107,7 +60,7 @@ export interface FromReducerResult {
 /**
  * Create a SpawnActor factory + projection config from a pure reducer config.
  *
- * Services (ExtensionTurnControl, ExtensionEventBus) are acquired at spawn
+ * Services (ExtensionTurnControl) are acquired at spawn
  * time and closed over — the returned actor's methods have no service requirements.
  */
 export const fromReducer = <State, Intent = void>(
@@ -116,7 +69,6 @@ export const fromReducer = <State, Intent = void>(
   const spawnActor: SpawnActor = (ctx) =>
     Effect.gen(function* () {
       const turnControl = yield* ExtensionTurnControl
-      const eventBus = yield* ExtensionEventBus
       const storage = yield* Effect.serviceOption(Storage)
       const stateRef = yield* Ref.make<State>(config.initial)
       const versionRef = yield* Ref.make(0)
@@ -148,7 +100,6 @@ export const fromReducer = <State, Intent = void>(
           ctx.sessionId,
           branchId,
           turnControl,
-          eventBus,
           config.persist === true ? persistState : undefined,
         ).pipe(Effect.catchDefect(() => Effect.void))
 

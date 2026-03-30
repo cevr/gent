@@ -23,7 +23,6 @@ import {
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const sessionId = "pm-session" as SessionId
@@ -41,7 +40,6 @@ const makeLayer = () =>
     ExtensionStateRuntime.Live([planExtension]),
     EventStore.Memory,
     ExtensionTurnControl.Test(),
-    ExtensionEventBus.Test(),
     Storage.Test(),
   )
 

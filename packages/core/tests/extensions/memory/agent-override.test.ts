@@ -21,7 +21,6 @@ import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { Provider } from "@gent/core/providers/provider"
 
 const testExtensions = resolveExtensions([
@@ -67,7 +66,6 @@ const makeTestLayer = (logs: {
     ExtensionRegistry.fromResolved(testExtensions),
     ExtensionStateRuntime.Live([]),
     ExtensionTurnControl.Test(),
-    ExtensionEventBus.Test(),
     ToolRunner.Test(),
   )
   const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)

@@ -1,20 +1,20 @@
 /**
  * Shared logic for fromMachine and fromReducer extension actors.
  *
- * Extracts the projection config builder — the largest pure duplicate
- * between the two files (~30 identical lines). Effect-based helpers
- * (persist, load, interpretEffects) stay inline because they close
- * over service instances whose types don't compose cleanly across
- * standalone function boundaries in Effect v4.
+ * Extracts buildProjectionConfig and interpretEffects — the two
+ * largest shared pieces between the two actor constructors.
  */
 
-import type { Schema } from "effect"
+import { Effect, type Schema } from "effect"
 import type {
   ExtensionDeriveContext,
+  ExtensionEffect,
   ExtensionProjection,
   ExtensionProjectionConfig,
 } from "../../domain/extension.js"
+import type { BranchId, SessionId } from "../../domain/ids.js"
 import { AgentDefinition, type AgentName as AgentNameType } from "../../domain/agent.js"
+import type { ExtensionTurnControlService } from "./turn-control.js"
 
 /**
  * Build ExtensionProjectionConfig from derive/deriveUi config.
@@ -52,3 +52,46 @@ export const buildProjectionConfig = <State>(config: {
 
   return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }
 }
+
+/**
+ * Interpret extension effects — shared by fromReducer and fromMachine.
+ * Each effect is wrapped in catchDefect to prevent one bad effect from
+ * crashing the actor.
+ */
+export const interpretEffects = (
+  effects: ReadonlyArray<ExtensionEffect>,
+  sessionId: SessionId,
+  branchId: BranchId | undefined,
+  turnControl: ExtensionTurnControlService,
+  persistFn?: () => Effect.Effect<void>,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    for (const effect of effects) {
+      switch (effect._tag) {
+        case "QueueFollowUp":
+          if (branchId !== undefined) {
+            yield* turnControl
+              .queueFollowUp({
+                sessionId,
+                branchId,
+                content: effect.content,
+                metadata: effect.metadata,
+              })
+              .pipe(Effect.catchDefect(() => Effect.void))
+          }
+          break
+        case "Interject":
+          if (branchId !== undefined) {
+            yield* turnControl
+              .interject({ sessionId, branchId, content: effect.content })
+              .pipe(Effect.catchDefect(() => Effect.void))
+          }
+          break
+        case "Persist":
+          if (persistFn !== undefined) {
+            yield* persistFn().pipe(Effect.catchDefect(() => Effect.void))
+          }
+          break
+      }
+    }
+  })

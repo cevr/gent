@@ -11,7 +11,6 @@ import type {
   TurnProjection,
 } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
-import { ExtensionEventBus } from "./event-bus.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 
 // Errors
@@ -104,17 +103,10 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               // Yield services lazily — they're available at call time (reduce),
               // not at layer-build time. Provide them to spawn calls.
               const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
-              const eventBus = yield* Effect.serviceOption(ExtensionEventBus)
-              const spawnLayer = Layer.mergeAll(
-                ...[
-                  turnControl._tag === "Some"
-                    ? Layer.succeed(ExtensionTurnControl, turnControl.value)
-                    : ExtensionTurnControl.Test(),
-                  eventBus._tag === "Some"
-                    ? Layer.succeed(ExtensionEventBus, eventBus.value)
-                    : ExtensionEventBus.Test(),
-                ],
-              )
+              const spawnLayer =
+                turnControl._tag === "Some"
+                  ? Layer.succeed(ExtensionTurnControl, turnControl.value)
+                  : ExtensionTurnControl.Test()
 
               const entries: ActorEntry[] = []
               for (const { extensionId, spawn, projection } of spawnActors) {

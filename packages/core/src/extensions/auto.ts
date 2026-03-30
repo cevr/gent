@@ -385,21 +385,7 @@ const afterTransition = (
     })
   }
 
-  // → Inactive with reason: emit completed event only for completed/abandoned
-  if (after._tag === "Inactive" && after.reason !== undefined) {
-    if (after.reason === "completed" || after.reason === "abandoned") {
-      effects.push({
-        _tag: "EmitEvent",
-        channel: "auto:completed",
-        payload: {
-          reason: after.reason,
-          learnings: after.finalLearnings ?? [],
-          metrics: after.finalMetrics ?? [],
-        },
-      })
-    }
-    // cancelled/wedged: no event, just persist (handled by fromMachine)
-  }
+  // cancelled/wedged/completed/abandoned: persist handled by fromMachine
 
   return effects
 }

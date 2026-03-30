@@ -12,7 +12,6 @@ import type { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 
@@ -142,11 +141,7 @@ const makeLayer = (extensions: LoadedExtension[]) => {
   const published = Effect.runSync(Ref.make<AgentEvent[]>([]))
   const stateRuntimeLayer = ExtensionStateRuntime.Live(extensions)
   const baseLayer = EventStore.Memory
-  const servicesLayer = Layer.mergeAll(
-    ExtensionTurnControl.Test(),
-    ExtensionEventBus.Test(),
-    Storage.Test(),
-  )
+  const servicesLayer = Layer.mergeAll(ExtensionTurnControl.Test(), Storage.Test())
   const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer)
   const reducingLayer = Layer.provide(makeTestReducingStore(published), combinedBase)
   const fullLayer = Layer.mergeAll(combinedBase, reducingLayer)

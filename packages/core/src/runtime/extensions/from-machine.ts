@@ -20,10 +20,9 @@ import type {
   SpawnActor,
 } from "../../domain/extension.js"
 import type { BranchId } from "../../domain/ids.js"
-import { ExtensionEventBus } from "./event-bus.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
-import { buildProjectionConfig } from "./extension-actor-shared.js"
+import { buildProjectionConfig, interpretEffects } from "./extension-actor-shared.js"
 
 export interface FromMachineConfig<
   State extends { readonly _tag: string },
@@ -75,7 +74,6 @@ export const fromMachine = <
   const spawnActor: SpawnActor = (ctx) =>
     Effect.gen(function* () {
       const turnControl = yield* ExtensionTurnControl
-      const eventBus = yield* ExtensionEventBus
       const storage = yield* Effect.serviceOption(Storage)
       const versionRef = yield* Ref.make(0)
 
@@ -130,41 +128,13 @@ export const fromMachine = <
         effects: ReadonlyArray<ExtensionEffect>,
         branchId: BranchId | undefined,
       ): Effect.Effect<void> =>
-        Effect.gen(function* () {
-          for (const effect of effects) {
-            switch (effect._tag) {
-              case "QueueFollowUp":
-                if (branchId !== undefined) {
-                  yield* turnControl
-                    .queueFollowUp({
-                      sessionId: ctx.sessionId,
-                      branchId,
-                      content: effect.content,
-                      metadata: effect.metadata,
-                    })
-                    .pipe(Effect.catchDefect(() => Effect.void))
-                }
-                break
-              case "Interject":
-                if (branchId !== undefined) {
-                  yield* turnControl
-                    .interject({ sessionId: ctx.sessionId, branchId, content: effect.content })
-                    .pipe(Effect.catchDefect(() => Effect.void))
-                }
-                break
-              case "EmitEvent":
-                yield* eventBus
-                  .emit(effect.channel, effect.payload)
-                  .pipe(Effect.catchDefect(() => Effect.void))
-                break
-              case "Persist":
-                if (config.persist === true) {
-                  yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
-                }
-                break
-            }
-          }
-        }).pipe(Effect.catchDefect(() => Effect.void))
+        interpretEffects(
+          effects,
+          ctx.sessionId,
+          branchId,
+          turnControl,
+          config.persist === true ? persistState : undefined,
+        ).pipe(Effect.catchDefect(() => Effect.void))
 
       // Dispatch event through actor, handle version + persist + afterTransition
       const dispatch = (machineEvent: Event, branchId: BranchId | undefined) =>

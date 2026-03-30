@@ -170,7 +170,6 @@ export type ExtensionEffect =
       readonly metadata?: MessageMetadata
     }
   | { readonly _tag: "Interject"; readonly content: string }
-  | { readonly _tag: "EmitEvent"; readonly channel: string; readonly payload: unknown }
   | { readonly _tag: "Persist" }
 
 /** Result of a reduce or handleIntent call — always object form */

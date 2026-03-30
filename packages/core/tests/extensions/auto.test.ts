@@ -1,5 +1,5 @@
 import { describe, it, test, expect } from "effect-bun-test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer } from "effect"
 import {
   EventStore,
   SessionStarted,
@@ -17,7 +17,6 @@ import {
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 // ── Pure reducer tests ──
@@ -540,7 +539,6 @@ const makeLayer = () =>
     ExtensionStateRuntime.Live([autoExtension]),
     EventStore.Memory,
     ExtensionTurnControl.Test(),
-    ExtensionEventBus.Test(),
     Storage.Test(),
   )
 
@@ -800,120 +798,6 @@ describe("Auto runtime integration", () => {
       const pm = projections.find((p) => p.extensionId === "auto")
       const section = pm!.projection.promptSections![0]!
       expect(section.content).toContain("SQL injection in user service")
-    }).pipe(Effect.provide(makeLayer())),
-  )
-
-  // ── Counsel finding tests: termination reason + event emission ──
-
-  it.live("complete emits auto:completed with final learnings", () =>
-    Effect.gen(function* () {
-      const eventBus = yield* ExtensionEventBus
-      const emittedRef = yield* Ref.make<ReadonlyArray<{ channel: string; payload: unknown }>>([])
-      yield* eventBus.on("auto:completed", (payload) =>
-        Ref.update(emittedRef, (events) => [...events, { channel: "auto:completed", payload }]),
-      )
-
-      const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 3 })
-
-      yield* runtime.reduce(
-        checkpointSignal({
-          status: "complete",
-          summary: "all done",
-          learnings: "final insight",
-          metrics: { coverage: 95 },
-        }),
-        { sessionId, branchId },
-      )
-
-      const emitted = yield* Ref.get(emittedRef)
-      expect(emitted.length).toBe(1)
-      const payload = emitted[0]!.payload as {
-        reason: string
-        learnings: ReadonlyArray<{ iteration: number; content: string }>
-        metrics: ReadonlyArray<{ iteration: number; values: Record<string, number> }>
-      }
-      expect(payload.reason).toBe("completed")
-      expect(payload.learnings.length).toBe(1)
-      expect(payload.learnings[0]!.content).toBe("final insight")
-      expect(payload.metrics.length).toBe(1)
-      expect(payload.metrics[0]!.values).toEqual({ coverage: 95 })
-    }).pipe(Effect.provide(makeLayer())),
-  )
-
-  it.live("cancel does NOT emit auto:completed", () =>
-    Effect.gen(function* () {
-      const eventBus = yield* ExtensionEventBus
-      const emittedRef = yield* Ref.make(0)
-      yield* eventBus.on("auto:completed", () => Ref.update(emittedRef, (n) => n + 1))
-
-      const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test" })
-      yield* sendIntent(runtime, { _tag: "CancelAuto" })
-
-      const count = yield* Ref.get(emittedRef)
-      expect(count).toBe(0)
-    }).pipe(Effect.provide(makeLayer())),
-  )
-
-  it.live("wedge does NOT emit auto:completed", () =>
-    Effect.gen(function* () {
-      const eventBus = yield* ExtensionEventBus
-      const emittedRef = yield* Ref.make(0)
-      yield* eventBus.on("auto:completed", () => Ref.update(emittedRef, (n) => n + 1))
-
-      const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test" })
-
-      // Trigger wedge (5 turns without checkpoint)
-      for (let i = 0; i < 5; i++) {
-        yield* runtime.reduce(turnCompleted(), { sessionId, branchId })
-      }
-
-      const count = yield* Ref.get(emittedRef)
-      expect(count).toBe(0)
-    }).pipe(Effect.provide(makeLayer())),
-  )
-
-  it.live("abandon emits auto:completed with reason 'abandoned'", () =>
-    Effect.gen(function* () {
-      const eventBus = yield* ExtensionEventBus
-      const emittedRef = yield* Ref.make<ReadonlyArray<unknown>>([])
-      yield* eventBus.on("auto:completed", (payload) =>
-        Ref.update(emittedRef, (events) => [...events, payload]),
-      )
-
-      const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test" })
-
-      yield* runtime.reduce(checkpointSignal({ status: "abandon", summary: "not feasible" }), {
-        sessionId,
-        branchId,
-      })
-
-      const emitted = yield* Ref.get(emittedRef)
-      expect(emitted.length).toBe(1)
-      expect((emitted[0] as { reason: string }).reason).toBe("abandoned")
     }).pipe(Effect.provide(makeLayer())),
   )
 })

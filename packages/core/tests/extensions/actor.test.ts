@@ -10,12 +10,11 @@ import type {
 import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 
 const sessionId = "test-session" as SessionId
 const branchId = "test-branch" as BranchId
 
-const testLayer = Layer.mergeAll(ExtensionTurnControl.Test(), ExtensionEventBus.Test())
+const testLayer = ExtensionTurnControl.Test()
 
 describe("fromReducer", () => {
   it.live("handleEvent advances state and increments version", () => {
@@ -68,47 +67,6 @@ describe("fromReducer", () => {
     }).pipe(Effect.provide(testLayer))
   })
 
-  it.live("EmitEvent effect dispatches to event bus", () =>
-    Effect.gen(function* () {
-      const emitted = yield* Ref.make<string[]>([])
-
-      const { spawnActor: spawn } = fromReducer<{ active: boolean }>({
-        id: "effector",
-        initial: { active: false },
-        reduce: (state, event): ReduceResult<{ active: boolean }> => {
-          if (event._tag === "TurnCompleted") {
-            return {
-              state: { active: true },
-              effects: [{ _tag: "EmitEvent", channel: "test:done", payload: { ok: true } }],
-            }
-          }
-          return { state }
-        },
-      })
-
-      const busLayer = Layer.succeed(ExtensionEventBus, {
-        emit: (channel: string, _payload: unknown) =>
-          Ref.update(emitted, (arr) => [...arr, channel]),
-        on: () => Effect.void,
-        off: () => Effect.void,
-      })
-
-      yield* Effect.gen(function* () {
-        const actor = yield* spawn({ sessionId, branchId })
-        yield* actor.handleEvent(new TurnCompleted({ sessionId, branchId, durationMs: 100 }), {
-          sessionId,
-          branchId,
-        })
-
-        const snap = yield* actor.getState
-        expect(snap.state).toEqual({ active: true })
-
-        const channels = yield* Ref.get(emitted)
-        expect(channels).toContain("test:done")
-      }).pipe(Effect.provide(Layer.merge(ExtensionTurnControl.Test(), busLayer)))
-    }),
-  )
-
   it.live("effects use current branch context, not spawn-time branch", () =>
     Effect.gen(function* () {
       const followUps = yield* Ref.make<string[]>([])
@@ -150,7 +108,7 @@ describe("fromReducer", () => {
         expect(branches).toEqual([eventBranch])
         // Must NOT contain spawn-time branch A
         expect(branches).not.toContain(spawnBranch)
-      }).pipe(Effect.provide(Layer.merge(turnControlLayer, ExtensionEventBus.Test())))
+      }).pipe(Effect.provide(turnControlLayer))
     }),
   )
 
@@ -188,7 +146,7 @@ describe("fromReducer", () => {
 
         const branches = yield* Ref.get(followUps)
         expect(branches).toEqual([intentBranch])
-      }).pipe(Effect.provide(Layer.merge(turnControlLayer, ExtensionEventBus.Test())))
+      }).pipe(Effect.provide(turnControlLayer))
     }),
   )
 
