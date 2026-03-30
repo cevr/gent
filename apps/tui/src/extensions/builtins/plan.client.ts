@@ -4,6 +4,25 @@ import { PlanWidget } from "../plan-widget"
 export default defineClientExtension({
   id: "@gent/plan",
   setup: (ctx) => ({
+    borderLabels: [
+      {
+        position: "top-left" as const,
+        priority: 30,
+        produce: () => {
+          const snap = ctx.getSnapshot("plan")
+          const model = snap?.model as
+            | { mode?: string; progress?: { total: number; done: number; inProgress: number } }
+            | undefined
+          if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
+          if (model?.mode === "executing") {
+            const p = model.progress
+            const label = p ? `exec ${p.done}/${p.total}` : "exec"
+            return [{ text: label, color: "primary" }]
+          }
+          return []
+        },
+      },
+    ],
     widgets: [
       {
         id: "plan",

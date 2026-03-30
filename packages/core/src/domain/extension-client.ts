@@ -85,6 +85,12 @@ export interface ExtensionClientSetup<TComponent = unknown> {
   readonly interactionRenderers?: ReadonlyArray<AnyInteractionRendererContribution>
   /** Custom composer surface — replaces the default textarea */
   readonly composerSurface?: TComponent
+  /** Border label producers — called each render to contribute labels to the session border */
+  readonly borderLabels?: ReadonlyArray<{
+    readonly position: "top-left" | "top-right"
+    readonly priority?: number
+    readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
+  }>
 }
 
 /** Runtime API provided to extensions during setup */

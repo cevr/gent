@@ -12,7 +12,7 @@ import type { JSX as _JSX } from "@opentui/solid"
 import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
-import type { ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
+import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
 import { loadTuiExtensions } from "./loader"
 import { useWorkspace } from "../workspace/index"
 import { useClient } from "../client/context"
@@ -53,6 +53,7 @@ export interface ExtensionUIContextValue {
   readonly overlays: Accessor<Map<string, SolidComponent>>
   readonly interactionRenderers: Accessor<Map<InteractionEventTag, SolidComponent>>
   readonly composerSurface: Accessor<SolidComponent | undefined>
+  readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
@@ -73,6 +74,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   overlays: new Map(),
   interactionRenderers: new Map(),
   composerSurface: undefined,
+  borderLabels: [],
 }
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
@@ -167,6 +169,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         overlays: () => resolved().overlays,
         interactionRenderers: () => resolved().interactionRenderers,
         composerSurface: () => resolved().composerSurface,
+        borderLabels: () => resolved().borderLabels,
         loading,
         setOverlayDispatch,
         snapshots,

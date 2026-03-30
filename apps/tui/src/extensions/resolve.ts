@@ -38,6 +38,12 @@ export interface ResolvedWidget {
   readonly component: SolidComponent
 }
 
+export interface ResolvedBorderLabel {
+  readonly position: "top-left" | "top-right"
+  readonly priority: number
+  readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
+}
+
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
@@ -45,6 +51,7 @@ export interface ResolvedTuiExtensions {
   readonly overlays: Map<string, SolidComponent>
   readonly interactionRenderers: Map<InteractionEventTag, SolidComponent>
   readonly composerSurface: SolidComponent | undefined
+  readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
 }
 
 interface ScopeEntry {
@@ -230,6 +237,19 @@ export const resolveTuiExtensions = (
     return a.id.localeCompare(b.id)
   })
 
+  // Border labels: collect all, sort by priority
+  const borderLabels: ResolvedBorderLabel[] = []
+  for (const ext of sorted) {
+    for (const entry of ext.setup.borderLabels ?? []) {
+      borderLabels.push({
+        position: entry.position,
+        priority: entry.priority ?? 100,
+        produce: entry.produce as () => ReadonlyArray<{ text: string; color: unknown }>,
+      })
+    }
+  }
+  borderLabels.sort((a, b) => a.priority - b.priority)
+
   return {
     renderers: resolveRenderers(sorted),
     widgets: resolveWidgets(sorted),
@@ -237,5 +257,6 @@ export const resolveTuiExtensions = (
     overlays: resolveOverlays(sorted),
     interactionRenderers: resolveInteractionRenderers(sorted),
     composerSurface: resolveComposerSurface(sorted),
+    borderLabels,
   }
 }

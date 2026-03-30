@@ -54,8 +54,25 @@ export function Session(props: SessionProps) {
     return theme.border
   }
 
+  // Map semantic color names from extensions to resolved theme colors
+  const resolveColor = (color: unknown) => {
+    if (typeof color === "string") {
+      const colorMap: Record<string, unknown> = {
+        warning: theme.warning,
+        info: theme.info,
+        primary: theme.primary,
+        text: theme.text,
+        textMuted: theme.textMuted,
+      }
+      return (colorMap[color] ?? theme.text) as typeof theme.text
+    }
+    return color as typeof theme.text
+  }
+
   const topLeftLabels = (): BorderLabelItem[] => {
     const items: BorderLabelItem[] = []
+
+    // Core chrome: connection/restart status
     const conn = client.connectionState()
     if (client.isReconnecting()) {
       items.push({ text: "reconnecting", color: theme.warning })
@@ -63,36 +80,16 @@ export function Session(props: SessionProps) {
       items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
     }
 
-    // Auto mode indicator
-    const autoSnap = ext.snapshots().get("auto")
-    const autoModel = autoSnap?.model as
-      | { active?: boolean; phase?: string; iteration?: number; maxIterations?: number }
-      | undefined
-    if (autoModel?.active) {
-      const phase = autoModel.phase === "awaiting-counsel" ? "counsel" : "auto"
-      const iter =
-        autoModel.iteration !== undefined
-          ? ` ${autoModel.iteration}/${autoModel.maxIterations ?? "?"}`
-          : ""
-      items.push({
-        text: `${phase}${iter}`,
-        color: autoModel.phase === "awaiting-counsel" ? theme.warning : theme.info,
-      })
+    // Extension-contributed labels
+    for (const label of ext.borderLabels()) {
+      if (label.position === "top-left") {
+        for (const item of label.produce()) {
+          items.push({ text: item.text, color: resolveColor(item.color) })
+        }
+      }
     }
 
-    // Plan mode indicator
-    const planSnap = ext.snapshots().get("plan")
-    const planModel = planSnap?.model as
-      | { mode?: string; progress?: { total: number; done: number; inProgress: number } }
-      | undefined
-    if (planModel?.mode === "plan") {
-      items.push({ text: "plan", color: theme.primary })
-    } else if (planModel?.mode === "executing") {
-      const p = planModel.progress
-      const label = p ? `exec ${p.done}/${p.total}` : "exec"
-      items.push({ text: label, color: theme.primary })
-    }
-
+    // Core chrome: cost
     const c = client.cost()
     if (c > 0) items.push({ text: `$${c.toFixed(2)}`, color: theme.textMuted })
     return items

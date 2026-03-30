@@ -4,6 +4,28 @@ import { AutoGoalOverlay } from "../auto-goal-overlay"
 export default defineClientExtension({
   id: "@gent/auto",
   setup: (ctx) => ({
+    borderLabels: [
+      {
+        position: "top-left" as const,
+        priority: 20,
+        produce: () => {
+          const snap = ctx.getSnapshot("auto")
+          const model = snap?.model as
+            | { active?: boolean; phase?: string; iteration?: number; maxIterations?: number }
+            | undefined
+          if (!model?.active) return []
+          const phase = model.phase === "awaiting-counsel" ? "counsel" : "auto"
+          const iter =
+            model.iteration !== undefined ? ` ${model.iteration}/${model.maxIterations ?? "?"}` : ""
+          return [
+            {
+              text: `${phase}${iter}`,
+              color: model.phase === "awaiting-counsel" ? "warning" : "info",
+            },
+          ]
+        },
+      },
+    ],
     overlays: [
       {
         id: "auto-goal",
