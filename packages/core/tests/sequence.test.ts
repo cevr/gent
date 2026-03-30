@@ -93,8 +93,10 @@ describe("Sequence Recording", () => {
         const response1 = yield* handler.askMany([{ question: "Continue?" }], testCtx)
         const response2 = yield* handler.askMany([{ question: "Sure?" }], testCtx)
 
-        expect(response1[0]).toEqual(["yes"])
-        expect(response2[0]).toEqual(["no"])
+        expect(response1._tag).toBe("answered")
+        if (response1._tag === "answered") expect(response1.answers[0]).toEqual(["yes"])
+        expect(response2._tag).toBe("answered")
+        if (response2._tag === "answered") expect(response2.answers[0]).toEqual(["no"])
 
         const calls = yield* recorder.getCalls()
         const askCalls = calls.filter((c) => c.service === "AskUserHandler")

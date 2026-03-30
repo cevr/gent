@@ -1,6 +1,13 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { defineTool, type ToolContext } from "../domain/tool.js"
-import { EventStore, type EventStoreError, QuestionsAsked, type Question } from "../domain/event.js"
+import {
+  EventStore,
+  type EventStoreError,
+  QuestionsAsked,
+  type Question,
+  QuestionSchema,
+  QuestionOptionSchema,
+} from "../domain/event.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
 import {
   makeInteractionService,
@@ -9,38 +16,25 @@ import {
 } from "../domain/interaction-request.js"
 import { Storage } from "../storage/sqlite-storage.js"
 
-// Question option schema
+// AskUser Params — canonical questions[] input
+// Reuses QuestionSchema from event.ts with tool-specific length constraints.
 
-const QuestionOption = Schema.Struct({
-  label: Schema.String.annotate({ description: "Short display text for the option" }),
-  description: Schema.optional(
-    Schema.String.annotate({ description: "Explanation of what this option means" }),
-  ),
-})
-
-// Question input schema
-
-const QuestionInput = Schema.Struct({
-  question: Schema.String.annotate({ description: "The question to ask" }),
+const AskUserQuestionSchema = Schema.Struct({
+  ...QuestionSchema.fields,
   header: Schema.optional(
     Schema.String.check(Schema.isMaxLength(30)).annotate({
       description: "Short label for the question (max 30 chars)",
     }),
   ),
   options: Schema.optional(
-    Schema.Array(QuestionOption)
+    Schema.Array(QuestionOptionSchema)
       .check(Schema.isMaxLength(4))
       .annotate({ description: "Options for user to choose from" }),
   ),
-  multiple: Schema.optional(
-    Schema.Boolean.annotate({ description: "Allow selecting multiple options" }),
-  ),
 })
 
-// AskUser Params — canonical questions[] input
-
 export const AskUserParams = Schema.Struct({
-  questions: Schema.Array(QuestionInput)
+  questions: Schema.Array(AskUserQuestionSchema)
     .check(Schema.isMinLength(1), Schema.isMaxLength(5))
     .annotate({ description: "1-5 questions to ask the user" }),
 })
@@ -51,7 +45,16 @@ export const AskUserResult = Schema.Struct({
   answers: Schema.Array(Schema.Array(Schema.String)).annotate({
     description: "Selected labels for each question",
   }),
+  cancelled: Schema.optional(Schema.Boolean).annotate({
+    description: "True when the user cancelled the interaction",
+  }),
 })
+
+// AskUser decision — discriminated so execute can tell cancelled from answered
+
+export type AskUserDecision =
+  | { readonly _tag: "answered"; readonly answers: ReadonlyArray<ReadonlyArray<string>> }
+  | { readonly _tag: "cancelled" }
 
 // AskUser Handler Service
 
@@ -65,10 +68,11 @@ export interface AskUserHandlerService {
   readonly askMany: (
     questions: ReadonlyArray<Question>,
     ctx: ToolContext,
-  ) => Effect.Effect<ReadonlyArray<ReadonlyArray<string>>, EventStoreError>
+  ) => Effect.Effect<AskUserDecision, EventStoreError>
   readonly respond: (
     requestId: string,
     answers: ReadonlyArray<ReadonlyArray<string>>,
+    cancelled?: boolean,
   ) => Effect.Effect<void, EventStoreError>
   readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
@@ -92,10 +96,7 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
           storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
       }
 
-      const interaction = makeInteractionService<
-        AskUserParams_,
-        ReadonlyArray<ReadonlyArray<string>>
-      >({
+      const interaction = makeInteractionService<AskUserParams_, AskUserDecision>({
         type: "ask-user",
         onPresent: (requestId, params) =>
           eventStore.publish(
@@ -122,8 +123,13 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
             branchId: ctx.branchId,
           })
         }),
-        respond: (requestId, answers) =>
-          interaction.respond(requestId, answers).pipe(Effect.asVoid),
+        respond: (requestId, answers, cancelled) =>
+          interaction
+            .respond(
+              requestId,
+              cancelled === true ? { _tag: "cancelled" } : { _tag: "answered", answers },
+            )
+            .pipe(Effect.asVoid),
         rehydrate: (record) =>
           interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as AskUserParams_),
       }
@@ -134,13 +140,21 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
     let callIndex = 0
     return Layer.succeed(AskUserHandler, {
       askMany: (questions, _ctx) =>
-        Effect.succeed(
-          questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
-        ).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
-      respond: (_requestId, _answers) => Effect.void,
+        Effect.succeed<AskUserDecision>({
+          _tag: "answered",
+          answers: questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
+        }).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
+      respond: () => Effect.void,
       rehydrate: () => Effect.void,
     })
   }
+
+  static TestCancelled = (): Layer.Layer<AskUserHandler> =>
+    Layer.succeed(AskUserHandler, {
+      askMany: () => Effect.succeed<AskUserDecision>({ _tag: "cancelled" }),
+      respond: () => Effect.void,
+      rehydrate: () => Effect.void,
+    })
 }
 
 // AskUser Tool
@@ -155,7 +169,10 @@ export const AskUserTool = defineTool({
   params: AskUserParams,
   execute: Effect.fn("AskUserTool.execute")(function* (params, ctx) {
     const handler = yield* AskUserHandler
-    const answers = yield* handler.askMany(params.questions, ctx)
-    return { answers }
+    const decision = yield* handler.askMany(params.questions, ctx)
+    if (decision._tag === "cancelled") {
+      return { answers: [], cancelled: true }
+    }
+    return { answers: decision.answers }
   }),
 })

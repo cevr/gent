@@ -295,6 +295,7 @@ export type WatchRuntimeInput = typeof WatchRuntimeInput.Type
 export const RespondQuestionsInput = Schema.Struct({
   requestId: Schema.String,
   answers: Schema.Array(Schema.Array(Schema.String)),
+  cancelled: Schema.optional(Schema.Boolean),
 })
 export type RespondQuestionsInput = typeof RespondQuestionsInput.Type
 

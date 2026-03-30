@@ -128,7 +128,7 @@ export const BashTool = defineTool({
     const risk = classify(command)
     if (risk.level !== "safe") {
       const handler = yield* AskUserHandler
-      const answers = yield* handler.askMany(
+      const decision = yield* handler.askMany(
         [
           {
             question: `This command is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\nAllow execution?`,
@@ -141,8 +141,7 @@ export const BashTool = defineTool({
         ],
         ctx,
       )
-      const answer = answers[0]?.[0] ?? ""
-      if (answer !== "Allow") {
+      if (decision._tag === "cancelled" || decision.answers[0]?.[0] !== "Allow") {
         return {
           stdout: `Command blocked: ${risk.reason}`,
           stderr: "",

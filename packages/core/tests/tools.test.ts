@@ -195,6 +195,29 @@ describe("AskUser Tool", () => {
         expect(result.answers.length).toBe(2)
         expect(result.answers[0]).toEqual(["Option A"])
         expect(result.answers[1]).toEqual(["Option B", "Option C"])
+        expect(result.cancelled).toBeUndefined()
+      }),
+      Effect.provide(layer),
+    )
+  })
+
+  it.live("cancel returns cancelled flag with empty answers", () => {
+    const layer = Layer.merge(AskUserHandler.TestCancelled(), PlatformLayer)
+
+    return AskUserTool.execute(
+      {
+        questions: [
+          {
+            question: "Which approach?",
+            options: [{ label: "A" }, { label: "B" }],
+          },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.cancelled).toBe(true)
+        expect(result.answers).toEqual([])
       }),
       Effect.provide(layer),
     )

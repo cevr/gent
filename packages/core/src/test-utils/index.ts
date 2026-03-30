@@ -148,7 +148,7 @@ export const RecordingAskUserHandler = (
             args: { questions, ctx },
           })
           const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
-          return [responses[idx] ?? [""]]
+          return { _tag: "answered" as const, answers: [responses[idx] ?? [""]] }
         }),
         respond: Effect.fn("RecordingAskUserHandler.respond")(function* (requestId, answers) {
           yield* recorder.record({

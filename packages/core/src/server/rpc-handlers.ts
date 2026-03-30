@@ -174,8 +174,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "queue.get": ({ sessionId, branchId }) => queries.getQueuedMessages({ sessionId, branchId }),
 
       // -- interaction --
-      "interaction.respondQuestions": ({ requestId, answers }) =>
-        askUserHandler.respond(requestId, answers),
+      "interaction.respondQuestions": ({ requestId, answers, cancelled }) =>
+        askUserHandler.respond(requestId, answers, cancelled),
 
       "interaction.respondPermission": ({ requestId, decision, persist }) =>
         interactions.respondPermission({ requestId, decision, persist }),
