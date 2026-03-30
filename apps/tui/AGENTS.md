@@ -113,12 +113,12 @@ Priority: headless → session → continue → prompt → home
 
 Special prefixes at input start trigger different modes:
 
-| Prefix | Behavior                                        |
-| ------ | ----------------------------------------------- |
-| `!`    | Shell mode - prompt changes to `$`, ESC exits   |
-| `$`    | Skills popup (scans ~/.claude/skills, etc.)     |
-| `@`    | File finder popup, supports `@file.ts#10-20`    |
-| `/`    | Command popup (/agent, /clear, /sessions, etc.) |
+| Prefix | Behavior                                       |
+| ------ | ---------------------------------------------- |
+| `!`    | Shell mode - prompt changes to `$`, ESC exits  |
+| `$`    | Skills popup (scans ~/.claude/skills, etc.)    |
+| `@`    | File finder popup, supports `@file.ts#10-20`   |
+| `/`    | Command popup (/auto, /clear, /sessions, etc.) |
 
 ### Shell Mode
 
@@ -135,7 +135,7 @@ Special prefixes at input start trigger different modes:
 
 | Command     | Action                   |
 | ----------- | ------------------------ |
-| `/agent`    | Switch agent             |
+| `/auto`     | Toggle auto mode         |
 | `/clear`    | Clear messages           |
 | `/sessions` | Open sessions picker     |
 | `/branch`   | Create new branch        |

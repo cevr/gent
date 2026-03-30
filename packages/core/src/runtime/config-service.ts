@@ -6,6 +6,7 @@ import { RuntimePlatform } from "./runtime-platform.js"
 
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   permissions: Schema.optional(Schema.Array(PermissionRule)),
+  disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
 // ConfigService
@@ -53,7 +54,14 @@ export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServi
 
       const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
         const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
-        return new UserConfig({ permissions: permissions.length > 0 ? permissions : undefined })
+        const disabledExtensions = [
+          ...(user.disabledExtensions ?? []),
+          ...(project.disabledExtensions ?? []),
+        ]
+        return new UserConfig({
+          permissions: permissions.length > 0 ? permissions : undefined,
+          disabledExtensions: disabledExtensions.length > 0 ? disabledExtensions : undefined,
+        })
       }
 
       const ensureUserConfig = Effect.gen(function* () {
@@ -123,6 +131,7 @@ export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServi
           const current = yield* Ref.get(userConfigRef)
           const updated = new UserConfig({
             permissions: partial.permissions ?? current.permissions,
+            disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
           })
           yield* Ref.set(userConfigRef, updated)
           yield* saveUserConfig(updated)
@@ -213,7 +222,14 @@ export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServi
 
     const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
       const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
-      return new UserConfig({ permissions: permissions.length > 0 ? permissions : undefined })
+      const disabledExtensions = [
+        ...(user.disabledExtensions ?? []),
+        ...(project.disabledExtensions ?? []),
+      ]
+      return new UserConfig({
+        permissions: permissions.length > 0 ? permissions : undefined,
+        disabledExtensions: disabledExtensions.length > 0 ? disabledExtensions : undefined,
+      })
     }
 
     return Layer.succeed(ConfigService, {
@@ -229,6 +245,7 @@ export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServi
           (current) =>
             new UserConfig({
               permissions: partial.permissions ?? current.permissions,
+              disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
             }),
         ),
       getPermissionRules: () =>

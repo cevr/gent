@@ -137,4 +137,55 @@ describe("ConfigService", () => {
       ),
     )
   })
+
+  describe("disabledExtensions", () => {
+    it.live("get returns undefined disabledExtensions initially", () =>
+      ConfigService.use((cfg) => cfg.get()).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => expect(result.disabledExtensions).toBeUndefined()),
+        ),
+        Effect.provide(ConfigService.Test()),
+      ),
+    )
+
+    it.live("get returns initial disabledExtensions when provided", () => {
+      const initial = new UserConfig({
+        disabledExtensions: ["@gent/task-tools", "@gent/auto"],
+      })
+      return ConfigService.use((cfg) => cfg.get()).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            expect(result.disabledExtensions?.length).toBe(2)
+            expect(result.disabledExtensions).toContain("@gent/task-tools")
+            expect(result.disabledExtensions).toContain("@gent/auto")
+          }),
+        ),
+        Effect.provide(ConfigService.Test(initial)),
+      )
+    })
+
+    it.live("set updates disabledExtensions", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        yield* cfg.set({ disabledExtensions: ["@gent/memory"] })
+        const result = yield* cfg.get()
+        expect(result.disabledExtensions?.length).toBe(1)
+        expect(result.disabledExtensions?.[0]).toBe("@gent/memory")
+      }).pipe(Effect.provide(ConfigService.Test())),
+    )
+
+    it.live("set preserves disabledExtensions when updating permissions", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        yield* cfg.set({ disabledExtensions: ["@gent/task-tools"] })
+        yield* cfg.set({
+          permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
+        })
+        const result = yield* cfg.get()
+        expect(result.disabledExtensions?.length).toBe(1)
+        expect(result.disabledExtensions?.[0]).toBe("@gent/task-tools")
+        expect(result.permissions?.length).toBe(1)
+      }).pipe(Effect.provide(ConfigService.Test())),
+    )
+  })
 })

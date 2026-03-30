@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:integration": "bun test tests/"
+    "test:integration": "bun test tests/core-boundary.test.ts tests/event-stream-parity.test.ts tests/live-event-parity.test.ts tests/queue-contract.test.ts tests/tui-boundary.test.ts tests/watch-state-parity.test.ts",
+    "test:e2e": "bun test tests/"
   },
   "dependencies": {
     "@gent/core": "workspace:*",

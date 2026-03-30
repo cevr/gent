@@ -20,6 +20,25 @@ import { useClient } from "../client/context"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SolidComponent = (props?: any) => _JSX.Element
 
+/** Read disabledExtensions from a config file, validated through UserConfig schema. */
+const readDisabledFromFile = async (filePath: string): Promise<readonly string[]> => {
+  try {
+    const text = await Bun.file(filePath).text()
+    const data = JSON.parse(text) as { disabledExtensions?: readonly string[] }
+    const disabled = data?.disabledExtensions
+    return Array.isArray(disabled) && disabled.every((s) => typeof s === "string") ? disabled : []
+  } catch {
+    return []
+  }
+}
+
+/** Read disabled extensions from user + project config, same merge semantics as ConfigService. */
+const readDisabledExtensions = async (home: string, cwd: string): Promise<string[]> => {
+  const userDisabled = await readDisabledFromFile(`${home}/.gent/config.json`)
+  const projectDisabled = await readDisabledFromFile(`${cwd}/.gent/config.json`)
+  return [...userDisabled, ...projectDisabled]
+}
+
 /** Server-projected UI snapshot from extension state machines */
 export interface ExtensionSnapshot {
   readonly extensionId: string
@@ -88,10 +107,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   onMount(async () => {
     try {
       const home = homedir()
+
+      // Read disabled extensions from user + project config (same merge as ConfigService)
+      const disabled = await readDisabledExtensions(home, workspace.cwd)
+
       const result = await loadTuiExtensions(
         {
           userDir: `${home}/.gent/extensions`,
           projectDir: `${workspace.cwd}/.gent/extensions`,
+          disabled,
         },
         {
           openOverlay: (id) => overlayOpen(id),

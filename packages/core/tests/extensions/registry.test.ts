@@ -154,6 +154,65 @@ describe("resolveExtensions", () => {
   })
 })
 
+describe("resolveExtensions — disabled filtering", () => {
+  test("disabled extensions are excluded when filtered before resolve", () => {
+    const disabledSet = new Set(["@gent/task-tools"])
+    const extensions = [
+      makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
+      makeExt("@gent/task-tools", "builtin", { tools: [makeTool("add_todo")] }),
+    ]
+    const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
+    const resolved = resolveExtensions(enabled)
+
+    expect(resolved.tools.has("read")).toBe(true)
+    expect(resolved.tools.has("add_todo")).toBe(false)
+    expect(resolved.extensions.length).toBe(1)
+  })
+
+  test("disabled extensions agents are excluded", () => {
+    const disabledSet = new Set(["@gent/agents"])
+    const extensions = [
+      makeExt("@gent/agents", "builtin", { agents: [makeAgent("cowork", "primary")] }),
+      makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
+    ]
+    const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
+    const resolved = resolveExtensions(enabled)
+
+    expect(resolved.agents.size).toBe(0)
+    expect(resolved.tools.has("read")).toBe(true)
+  })
+
+  test("disabled extensions providers are excluded", () => {
+    const disabledSet = new Set(["@gent/openai"])
+    const extensions = [
+      makeExt("@gent/anthropic", "builtin", { providers: [makeProvider("anthropic")] }),
+      makeExt("@gent/openai", "builtin", { providers: [makeProvider("openai")] }),
+    ]
+    const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
+    const resolved = resolveExtensions(enabled)
+
+    expect(resolved.providers.has("anthropic")).toBe(true)
+    expect(resolved.providers.has("openai")).toBe(false)
+  })
+
+  test("multiple disabled extensions are all excluded", () => {
+    const disabledSet = new Set(["@gent/task-tools", "@gent/agents", "@gent/openai"])
+    const extensions = [
+      makeExt("@gent/task-tools", "builtin", { tools: [makeTool("add_todo")] }),
+      makeExt("@gent/agents", "builtin", { agents: [makeAgent("cowork", "primary")] }),
+      makeExt("@gent/openai", "builtin", { providers: [makeProvider("openai")] }),
+      makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
+    ]
+    const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
+    const resolved = resolveExtensions(enabled)
+
+    expect(resolved.tools.size).toBe(1)
+    expect(resolved.tools.has("read")).toBe(true)
+    expect(resolved.agents.size).toBe(0)
+    expect(resolved.providers.size).toBe(0)
+  })
+})
+
 describe("ExtensionRegistry", () => {
   const buildRegistry = (extensions: LoadedExtension[]) => {
     const resolved = resolveExtensions(extensions)
