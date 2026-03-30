@@ -24,11 +24,20 @@ export interface ComposerSurfaceProps {
   readonly mode: "editing" | "shell"
 }
 
+/** Base interaction renderer contribution — erased tag for heterogeneous arrays */
+export interface AnyInteractionRendererContribution {
+  readonly eventTag: InteractionEventTag
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly component: (props: any) => unknown
+}
+
 /**
  * Type-safe interaction renderer contribution.
  * Links event tag to component props at compile time.
  */
-export interface InteractionRendererContribution<T extends InteractionEventTag> {
+export interface InteractionRendererContribution<
+  T extends InteractionEventTag,
+> extends AnyInteractionRendererContribution {
   readonly eventTag: T
   readonly component: (props: InteractionRendererProps<T>) => unknown
 }
@@ -70,9 +79,7 @@ export interface ExtensionClientSetup<TComponent = unknown> {
   }>
   /** Interaction renderers — take over composer during interactive prompts.
    *  Use defineInteractionRenderer() for type-safe tag–component coupling. */
-  readonly interactionRenderers?: ReadonlyArray<
-    InteractionRendererContribution<InteractionEventTag>
-  >
+  readonly interactionRenderers?: ReadonlyArray<AnyInteractionRendererContribution>
   /** Custom composer surface — replaces the default textarea */
   readonly composerSurface?: TComponent
 }

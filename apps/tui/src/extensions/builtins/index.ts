@@ -10,6 +10,7 @@ import plan from "./plan.client"
 import auto from "./auto.client"
 import tasks from "./tasks.client"
 import connection from "./connection.client"
+import interactions from "./interactions.client"
 
 export const BUILTIN_CLIENT_EXTENSIONS: ReadonlyArray<ExtensionClientModule> = [
   tools,
@@ -17,4 +18,5 @@ export const BUILTIN_CLIENT_EXTENSIONS: ReadonlyArray<ExtensionClientModule> = [
   auto,
   tasks,
   connection,
+  interactions,
 ]

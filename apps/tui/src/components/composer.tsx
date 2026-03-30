@@ -6,7 +6,6 @@ import { createContext, Show, useContext, type Accessor, type JSX } from "solid-
 import type { ActiveInteraction, InteractionEventTag } from "@gent/core/domain/event.js"
 import { useTheme } from "../theme/index"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
-import { ComposerPrompt } from "./composer-prompt"
 import { useComposerController, type ComposerControllerProps } from "./use-composer-controller"
 import { useExtensionUI } from "../extensions/context"
 
@@ -49,25 +48,16 @@ export function Composer(props: ComposerProps) {
       <Show when={activeInteraction()} keyed>
         {(interaction) => {
           const Renderer = interactionRenderer()
-          if (Renderer !== undefined) {
-            return Renderer({
-              event: interaction,
-              resolve: (result: unknown) => {
-                controller.resolveInteraction(
-                  interaction._tag as InteractionEventTag,
-                  result as never,
-                )
-              },
-            })
-          }
-          // Fallback: adapted ComposerPrompt (temporary bridge until Batch 8)
-          return (
-            <ComposerPrompt
-              interaction={interaction}
-              onResolve={(tag, result) => controller.resolveInteraction(tag, result)}
-              onCancel={() => controller.cancelInteraction()}
-            />
-          )
+          if (Renderer === undefined) return null
+          return Renderer({
+            event: interaction,
+            resolve: (result: unknown) => {
+              controller.resolveInteraction(
+                interaction._tag as InteractionEventTag,
+                result as never,
+              )
+            },
+          })
         }}
       </Show>
 
