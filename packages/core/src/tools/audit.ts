@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   Agents,
-  getAdversarialModels,
+  getDualModelPair,
   SubagentRunnerService,
   type AgentDefinition,
   type SubagentRunner,
@@ -123,16 +123,16 @@ Include file paths in every finding.`
 const buildSynthesisPrompt = (
   notes: ReadonlyArray<{
     concern: AuditConcern
-    cowork: string
-    deepwork: string
+    primary: string
+    reviewer: string
   }>,
   userPrompt?: string,
 ) => {
   const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
   const notesBlock = notes
     .map(
-      ({ concern, cowork, deepwork }) =>
-        `## Concern: ${concern.name}\n${concern.description}\n\n### Cowork\n${cowork}\n\n### Deepwork\n${deepwork}`,
+      ({ concern, primary, reviewer }) =>
+        `## Concern: ${concern.name}\n${concern.description}\n\n### Primary\n${primary}\n\n### Reviewer\n${reviewer}`,
     )
     .join("\n\n---\n\n")
 
@@ -186,7 +186,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   maxConcerns: number
   evaluatorFeedback?: string
 }) {
-  const [coworkModel, deepworkModel] = getAdversarialModels()
+  const [primaryModel, reviewerModel] = getDualModelPair()
   const auditOverrides = {
     allowedActions: ["read"] as const,
     deniedTools: ["bash"] as const,
@@ -201,7 +201,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
       params.evaluatorFeedback,
     ),
     ...params.runnerContext,
-    overrides: { ...auditOverrides, modelId: coworkModel },
+    overrides: { ...auditOverrides, modelId: primaryModel },
   })
   const detectText = yield* requireText(detectResult, "audit-detect")
   const concerns = parseConcerns(detectText, params.maxConcerns)
@@ -215,19 +215,19 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     (concern) =>
       Effect.gen(function* () {
         const prompt = buildConcernAuditPrompt(concern, params.paths, params.prompt)
-        const [coworkResult, deepworkResult] = yield* Effect.all(
+        const [primaryResult, reviewerResult] = yield* Effect.all(
           [
             params.runner.run({
               agent: params.auditor,
               prompt,
               ...params.runnerContext,
-              overrides: { ...auditOverrides, modelId: coworkModel },
+              overrides: { ...auditOverrides, modelId: primaryModel },
             }),
             params.runner.run({
               agent: params.auditor,
               prompt,
               ...params.runnerContext,
-              overrides: { ...auditOverrides, modelId: deepworkModel },
+              overrides: { ...auditOverrides, modelId: reviewerModel },
             }),
           ] as const,
           { concurrency: 2 },
@@ -235,8 +235,8 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
 
         return {
           concern,
-          cowork: yield* requireText(coworkResult, `${concern.name}-cowork`),
-          deepwork: yield* requireText(deepworkResult, `${concern.name}-deepwork`),
+          primary: yield* requireText(primaryResult, `${concern.name}-primary`),
+          reviewer: yield* requireText(reviewerResult, `${concern.name}-reviewer`),
         }
       }),
     { concurrency: 4 },
@@ -246,7 +246,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     agent: params.architect,
     prompt: buildSynthesisPrompt(pairedNotes, params.prompt),
     ...params.runnerContext,
-    overrides: { ...auditOverrides, modelId: coworkModel },
+    overrides: { ...auditOverrides, modelId: primaryModel },
   })
   const raw = yield* requireText(synthesisResult, "audit-synthesize")
   const findings = parseFindings(raw)

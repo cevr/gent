@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   Agents,
-  getAdversarialModels,
+  getDualModelPair,
   SubagentRunnerService,
   type AgentDefinition,
   type SubagentRunner,
@@ -187,7 +187,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   reviewInput: string
   description?: string
 }) {
-  const [modelA, modelB] = getAdversarialModels()
+  const [modelA, modelB] = getDualModelPair()
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
   const reviewOverrides = {
     allowedActions: ["read"] as const,

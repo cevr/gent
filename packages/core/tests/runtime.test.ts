@@ -28,7 +28,7 @@ import { Message, TextPart, Session, Branch, ToolResultPart } from "@gent/core/d
 import {
   Agents,
   AgentDefinition,
-  getAdversarialModels,
+  getDualModelPair,
   resolveAgentModel,
   SubagentRunnerService,
   SubagentError,
@@ -330,8 +330,8 @@ describe("compileToolPolicy", () => {
 })
 
 describe("AgentExecutionOverrides", () => {
-  test("getAdversarialModels returns cowork and deepwork models", () => {
-    const [a, b] = getAdversarialModels()
+  test("getDualModelPair returns primary and reviewer models", () => {
+    const [a, b] = getDualModelPair()
     expect(a).toBe(resolveAgentModel(Agents.cowork))
     expect(b).toBe(resolveAgentModel(Agents.deepwork))
     expect(a).not.toBe(b)

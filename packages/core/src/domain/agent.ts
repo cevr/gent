@@ -234,12 +234,15 @@ export const DEFAULT_MODEL_ID = "openai/gpt-5.4-mini" as ModelId
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
-/** Derive adversarial model pair from the two primary agents */
-export const getAdversarialModels = (): [ModelId, ModelId] => {
-  const coworkModel = Agents.cowork.model ?? DEFAULT_MODEL_ID
-  const deepworkModel = Agents.deepwork.model ?? DEFAULT_MODEL_ID
-  return [coworkModel, deepworkModel]
+/** Derive primary + reviewer model pair for dual-model workflows */
+export const getDualModelPair = (): [ModelId, ModelId] => {
+  const primaryModel = Agents.cowork.model ?? DEFAULT_MODEL_ID
+  const reviewerModel = Agents.deepwork.model ?? DEFAULT_MODEL_ID
+  return [primaryModel, reviewerModel]
 }
+
+/** @deprecated Use getDualModelPair */
+export const getAdversarialModels = getDualModelPair
 
 // Agent Execution Overrides — per-run overrides for subagent dispatch
 

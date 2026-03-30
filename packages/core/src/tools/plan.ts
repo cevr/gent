@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   Agents,
-  getAdversarialModels,
+  getDualModelPair,
   SubagentRunnerService,
   type SubagentRunner,
   type AgentDefinition,
@@ -129,7 +129,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   files?: ReadonlyArray<string>
   evaluatorFeedback?: string
 }) {
-  const [modelA, modelB] = getAdversarialModels()
+  const [modelA, modelB] = getDualModelPair()
 
   const planPrompt = buildPlanPrompt(
     params.prompt,
