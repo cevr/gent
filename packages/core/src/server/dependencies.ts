@@ -2,7 +2,7 @@ import { Effect, FileSystem, Layer, Path, Schema, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
-import type { LoadedExtension } from "../domain/extension.js"
+import type { InteractionHandlerType, LoadedExtension } from "../domain/extension.js"
 import {
   BaseEventStore,
   EventStore,
@@ -328,12 +328,47 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
   const baseWithPermission = Layer.merge(baseServicesLive, permissionLive)
 
-  // Interaction handler layers — resolved from extension contributions with builtin fallback.
-  // Extension-contributed layers override builtins via scope precedence.
-  const askUserHandlerLive = Layer.provide(AskUserHandler.Live, baseWithPermission)
-  const permissionHandlerLive = Layer.provide(PermissionHandler.Live, baseWithPermission)
-  const promptHandlerLive = Layer.provide(PromptHandler.Live, baseWithPermission)
-  const handoffHandlerLive = Layer.provide(HandoffHandler.Live, baseWithPermission)
+  // Interaction handler layers — resolved from extension registry with builtin fallback.
+  // Extension-contributed layers override builtins via scope precedence (project > user > builtin).
+  // Uses Layer.unwrap (same pattern as Permission.Live above) to defer layer selection to runtime.
+  const resolveHandler = (type: InteractionHandlerType) =>
+    Effect.gen(function* () {
+      const registry = yield* ExtensionRegistry
+      const h = yield* registry.getInteractionHandler(type)
+      return h?.layer
+    })
+  const askUserHandlerLive = Layer.provide(
+    Layer.unwrap(
+      resolveHandler("ask-user").pipe(
+        Effect.map((h) => (h ?? AskUserHandler.Live) as typeof AskUserHandler.Live),
+      ),
+    ),
+    baseWithPermission,
+  )
+  const permissionHandlerLive = Layer.provide(
+    Layer.unwrap(
+      resolveHandler("permission").pipe(
+        Effect.map((h) => (h ?? PermissionHandler.Live) as typeof PermissionHandler.Live),
+      ),
+    ),
+    baseWithPermission,
+  )
+  const promptHandlerLive = Layer.provide(
+    Layer.unwrap(
+      resolveHandler("prompt").pipe(
+        Effect.map((h) => (h ?? PromptHandler.Live) as typeof PromptHandler.Live),
+      ),
+    ),
+    baseWithPermission,
+  )
+  const handoffHandlerLive = Layer.provide(
+    Layer.unwrap(
+      resolveHandler("handoff").pipe(
+        Effect.map((h) => (h ?? HandoffHandler.Live) as typeof HandoffHandler.Live),
+      ),
+    ),
+    baseWithPermission,
+  )
   const interactionHandlersLive = Layer.mergeAll(
     askUserHandlerLive,
     permissionHandlerLive,
