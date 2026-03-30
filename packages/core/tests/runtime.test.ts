@@ -28,7 +28,6 @@ import { Message, TextPart, Session, Branch, ToolResultPart } from "@gent/core/d
 import {
   Agents,
   AgentDefinition,
-  getDualModelPair,
   resolveAgentModel,
   SubagentRunnerService,
   SubagentError,
@@ -330,17 +329,23 @@ describe("compileToolPolicy", () => {
 })
 
 describe("AgentExecutionOverrides", () => {
-  test("getDualModelPair returns primary and reviewer models from provided agents", () => {
-    const [a, b] = getDualModelPair(Agents.cowork, Agents.deepwork)
-    expect(a).toBe(resolveAgentModel(Agents.cowork))
-    expect(b).toBe(resolveAgentModel(Agents.deepwork))
-    expect(a).not.toBe(b)
-  })
-
-  test("getDualModelPair falls back to builtin agents when undefined", () => {
-    const [a, b] = getDualModelPair(undefined, undefined)
-    expect(a).toBe(resolveAgentModel(Agents.cowork))
-    expect(b).toBe(resolveAgentModel(Agents.deepwork))
+  test("resolveDualModelPair returns cowork/deepwork models from registry", () => {
+    const registry = resolveExtensions([
+      {
+        manifest: { id: "agents" },
+        kind: "builtin",
+        sourcePath: "test",
+        setup: { agents: Object.values(Agents) },
+      },
+    ])
+    const impl = ExtensionRegistry.fromResolved(registry)
+    return Effect.gen(function* () {
+      const reg = yield* ExtensionRegistry
+      const [a, b] = yield* reg.resolveDualModelPair()
+      expect(a).toBe(resolveAgentModel(Agents.cowork))
+      expect(b).toBe(resolveAgentModel(Agents.deepwork))
+      expect(a).not.toBe(b)
+    }).pipe(Effect.provide(impl), Effect.runPromise)
   })
 
   test("auditor agent exists and is a subagent", () => {

@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import {
-  getDualModelPair,
   SubagentRunnerService,
   type SubagentRunner,
   type AgentDefinition,
@@ -127,10 +126,9 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   context?: string
   files?: ReadonlyArray<string>
   evaluatorFeedback?: string
-  cowork?: AgentDefinition
-  deepwork?: AgentDefinition
 }) {
-  const [modelA, modelB] = getDualModelPair(params.cowork, params.deepwork)
+  const registry = yield* ExtensionRegistry
+  const [modelA, modelB] = yield* registry.resolveDualModelPair()
 
   const planPrompt = buildPlanPrompt(
     params.prompt,
@@ -210,7 +208,6 @@ export const PlanTool = defineTool({
   execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
     const presenter = yield* PromptPresenter
-    const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "plan-only"
@@ -224,8 +221,6 @@ export const PlanTool = defineTool({
     const architect = yield* requireAgent("architect")
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = yield* requireAgent(callerAgentName)
-    const cowork = yield* registry.getAgent("cowork")
-    const deepwork = yield* registry.getAgent("deepwork")
 
     // Adversarial planning cycle (always runs)
     const synthesizedPlan = yield* runPlanningCycle({
@@ -236,8 +231,6 @@ export const PlanTool = defineTool({
       prompt: params.prompt,
       context: params.context,
       files: params.files,
-      cowork,
-      deepwork,
     })
 
     if (mode === "plan-only") {

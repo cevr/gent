@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import {
-  getDualModelPair,
   SubagentRunnerService,
   type AgentDefinition,
   type SubagentRunner,
@@ -184,10 +183,9 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   prompt?: string
   maxConcerns: number
   evaluatorFeedback?: string
-  cowork?: AgentDefinition
-  deepwork?: AgentDefinition
 }) {
-  const [primaryModel, reviewerModel] = getDualModelPair(params.cowork, params.deepwork)
+  const registry = yield* ExtensionRegistry
+  const [primaryModel, reviewerModel] = yield* registry.resolveDualModelPair()
   const auditOverrides = {
     allowedActions: ["read"] as const,
     deniedTools: ["bash"] as const,
@@ -270,7 +268,6 @@ export const AuditTool = defineTool({
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
     const presenter = yield* PromptPresenter
-    const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "report"
@@ -287,8 +284,6 @@ export const AuditTool = defineTool({
     const auditor = yield* requireAgent("auditor")
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = yield* requireAgent(callerAgentName)
-    const cowork = yield* registry.getAgent("cowork")
-    const deepwork = yield* registry.getAgent("deepwork")
 
     // Detect → adversarial audit → synthesize (always runs)
     const report = yield* runAuditCycle({
@@ -299,8 +294,6 @@ export const AuditTool = defineTool({
       paths,
       prompt: params.prompt,
       maxConcerns,
-      cowork,
-      deepwork,
     })
 
     if (mode === "report") {

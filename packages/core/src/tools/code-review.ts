@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import {
-  getDualModelPair,
   SubagentRunnerService,
   type AgentDefinition,
   type SubagentRunner,
@@ -185,10 +184,9 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   runnerContext: WorkflowRunContext
   reviewInput: string
   description?: string
-  cowork?: AgentDefinition
-  deepwork?: AgentDefinition
 }) {
-  const [modelA, modelB] = getDualModelPair(params.cowork, params.deepwork)
+  const registry = yield* ExtensionRegistry
+  const [modelA, modelB] = yield* registry.resolveDualModelPair()
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
   const reviewOverrides = {
     allowedActions: ["read"] as const,
@@ -273,7 +271,6 @@ export const CodeReviewTool = defineTool({
   params: CodeReviewParams,
   execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* SubagentRunnerService
-    const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "report"
@@ -287,8 +284,6 @@ export const CodeReviewTool = defineTool({
     const reviewer = yield* requireAgent("reviewer")
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = yield* requireAgent(callerAgentName)
-    const cowork = yield* registry.getAgent("cowork")
-    const deepwork = yield* registry.getAgent("deepwork")
 
     const reviewInput = yield* resolveReviewInput({
       content: params.content,
@@ -303,8 +298,6 @@ export const CodeReviewTool = defineTool({
       runnerContext,
       reviewInput,
       description: params.description,
-      cowork,
-      deepwork,
     })
     const summary = summarizeComments(report.comments)
 
