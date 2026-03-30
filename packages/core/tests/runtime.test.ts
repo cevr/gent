@@ -343,9 +343,13 @@ describe("AgentExecutionOverrides", () => {
     expect(Agents.auditor.name).toBe("auditor")
   })
 
-  test("primary agents can delegate to auditor", () => {
+  test("cowork can delegate to auditor", () => {
     expect(Agents.cowork.canDelegateToAgents).toContain("auditor")
-    expect(Agents.deepwork.canDelegateToAgents).toContain("auditor")
+  })
+
+  test("deepwork is hidden primary (reviewer only)", () => {
+    expect(Agents.deepwork.kind).toBe("primary")
+    expect(Agents.deepwork.hidden).toBe(true)
   })
 
   test("auditor has read + bash tools", () => {

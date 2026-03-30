@@ -192,18 +192,19 @@ describe("ExtensionRegistry", () => {
     expect(agent?.name).toBe("explore")
   })
 
-  test("listPrimaryAgents filters correctly", async () => {
+  test("listPrimaryAgents includes hidden primary agents", async () => {
     const primary = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
     const sub = makeAgent("explore", "subagent")
-    const hidden = new AgentDefinition({ name: "title" as never, kind: "primary", hidden: true })
+    const hidden = new AgentDefinition({ name: "deepwork" as never, kind: "primary", hidden: true })
 
     const registry = await buildRegistry([
       makeExt("a", "builtin", { agents: [primary, sub, hidden] }),
     ])
 
     const primaryAgents = await Effect.runPromise(registry.listPrimaryAgents())
-    expect(primaryAgents.length).toBe(1)
-    expect(primaryAgents[0]?.name).toBe("cowork")
+    expect(primaryAgents.length).toBe(2)
+    expect(primaryAgents.map((a) => a.name)).toContain("cowork")
+    expect(primaryAgents.map((a) => a.name)).toContain("deepwork")
   })
 
   test("listSubagents filters correctly", async () => {

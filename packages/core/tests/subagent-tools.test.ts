@@ -327,7 +327,7 @@ describe("Session refs in subagent output", () => {
 })
 
 describe("CounselTool", () => {
-  it.live("routes to opposite agent (cowork → deepwork)", () => {
+  it.live("always routes to deepwork reviewer", () => {
     let capturedAgent = ""
     const capturingRunner = Layer.succeed(SubagentRunnerService, {
       run: (params) => {
@@ -348,30 +348,6 @@ describe("CounselTool", () => {
         expect(result.review).toContain("review from deepwork")
         expect(result.review).toContain("session://counsel-session")
         expect(result.reviewer).toBe("deepwork")
-      }),
-      Effect.provide(layer),
-    )
-  })
-
-  it.live("routes to opposite agent (deepwork → cowork)", () => {
-    let capturedAgent = ""
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        capturedAgent = params.agent.name
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "review from cowork",
-          sessionId: "counsel-session" as SessionId,
-          agentName: params.agent.name,
-        })
-      },
-    })
-    const layer = Layer.mergeAll(capturingRunner, platformLayer)
-    const deepworkCtx: ToolContext = { ...ctx, agentName: "deepwork" }
-    return CounselTool.execute({ prompt: "check for bugs" }, deepworkCtx).pipe(
-      Effect.map((result) => {
-        expect(capturedAgent).toBe("cowork")
-        expect(result.reviewer).toBe("cowork")
       }),
       Effect.provide(layer),
     )
@@ -469,12 +445,25 @@ describe("CounselTool", () => {
     )
   })
 
-  it.live("rejects non-primary agent caller", () => {
-    const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
+  it.live("works from any agent (always routes to deepwork)", () => {
+    let capturedAgent = ""
+    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+      run: (params) => {
+        capturedAgent = params.agent.name
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "review result",
+          sessionId: "session" as SessionId,
+          agentName: params.agent.name,
+        })
+      },
+    })
+    const layer = Layer.mergeAll(capturingRunner, platformLayer)
     const explorerCtx: ToolContext = { ...ctx, agentName: "explore" }
     return CounselTool.execute({ prompt: "review" }, explorerCtx).pipe(
       Effect.map((result) => {
-        expect(result.error).toContain("requires a primary agent")
+        expect(capturedAgent).toBe("deepwork")
+        expect(result.reviewer).toBe("deepwork")
       }),
       Effect.provide(layer),
     )

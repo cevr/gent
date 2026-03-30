@@ -14,7 +14,7 @@ export class CounselError extends Schema.TaggedErrorClass<CounselError>()("Couns
 
 export const CounselParams = Schema.Struct({
   prompt: Schema.String.annotate({
-    description: "The question or review request for the opposite-vendor model",
+    description: "The question or review request for the GPT reviewer",
   }),
   content: Schema.optional(
     Schema.String.annotate({
@@ -40,22 +40,16 @@ export const CounselTool = defineTool({
   action: "delegate",
   concurrency: "serial",
   description:
-    "Get an adversarial peer review from the opposite vendor model. If you're running on Anthropic (cowork), counsel runs on OpenAI (deepwork), and vice versa. Use for architecture reviews, bug hunts, or second opinions.",
+    "Get an adversarial peer review from the GPT reviewer model. Spawns a read-only OpenAI subagent for architecture reviews, bug hunts, or second opinions.",
   params: CounselParams,
   execute: Effect.fn("CounselTool.execute")(function* (params, ctx) {
     const runner = yield* SubagentRunnerService
     const fs = yield* FileSystem.FileSystem
     const platform = yield* RuntimePlatform
 
-    // Resolve opposite agent with read-only tool restriction
-    const current = ctx.agentName ?? "cowork"
-    if (current !== "cowork" && current !== "deepwork") {
-      return { error: `Counsel requires a primary agent (cowork/deepwork), got: ${current}` }
-    }
-    const base = current === "cowork" ? Agents.deepwork : Agents.cowork
-    // Spawn with restricted tools — counsel is read-only, no mutations
-    const opposite = new AgentDefinition({
-      ...base,
+    // Always spawn deepwork (GPT) as the adversarial reviewer — read-only, no mutations
+    const reviewer = new AgentDefinition({
+      ...Agents.deepwork,
       kind: "subagent",
       allowedActions: ["read"],
       deniedTools: ["bash"],
@@ -81,7 +75,7 @@ export const CounselTool = defineTool({
     const contextStr = params.context !== undefined ? `\n\nContext: ${params.context}` : ""
 
     // Build adversarial prompt
-    const adversarialPrompt = `You are reviewing work done by ${current === "cowork" ? "Anthropic Claude" : "OpenAI Codex"}. Your job is to be a rigorous, adversarial peer reviewer.
+    const adversarialPrompt = `You are reviewing work done by Anthropic Claude. Your job is to be a rigorous, adversarial peer reviewer.
 
 Review request: ${params.prompt}${contextStr}${contentStr}${fileContext}
 
@@ -93,7 +87,7 @@ Instructions:
 - Be direct and evidence-based. Back claims with file paths and reasoning.`
 
     const result = yield* runner.run({
-      agent: opposite,
+      agent: reviewer,
       prompt: adversarialPrompt,
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
@@ -109,7 +103,7 @@ Instructions:
 
     return {
       review: `${result.text}\n\nFull session: session://${result.sessionId}`,
-      reviewer: opposite.name,
+      reviewer: reviewer.name,
       metadata: {
         sessionId: result.sessionId,
         agentName: result.agentName,

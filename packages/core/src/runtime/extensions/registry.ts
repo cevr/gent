@@ -268,9 +268,7 @@ export class ExtensionRegistry extends ServiceMap.Service<
           return catalog
         }),
       listPrimaryAgents: () =>
-        Effect.succeed(
-          [...resolved.agents.values()].filter((a) => a.kind === "primary" && a.hidden !== true),
-        ),
+        Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "primary")),
       listSubagents: () =>
         Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "subagent")),
       hooks: resolved.hooks,
