@@ -9,6 +9,7 @@ import {
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { TaskService } from "../runtime/task-service.js"
+import type { Task } from "../domain/task.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
@@ -98,14 +99,19 @@ export const DelegateTool = defineTool({
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const task = yield* taskService.create({
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
-        subject: params.description ?? params.task ?? "background task",
-        agentType: resolved.agent.name,
-        prompt: params.task,
-        cwd: platform.cwd,
-      })
+      const task = yield* taskService
+        .create({
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          subject: params.description ?? params.task ?? "background task",
+          agentType: resolved.agent.name,
+          prompt: params.task,
+          cwd: platform.cwd,
+        })
+        .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
+      if (task === undefined) {
+        return { error: "Background tasks unavailable — task-tools extension is disabled" }
+      }
       const result = yield* taskService.run(task.id)
       return { taskId: result.taskId, status: result.status }
     })
@@ -121,14 +127,19 @@ export const DelegateTool = defineTool({
       for (const item of tasks) {
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
-        const task = yield* taskService.create({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          subject: summarizeTaskSubject(item.task),
-          agentType: resolved.agent.name,
-          prompt: item.task,
-          cwd: platform.cwd,
-        })
+        const task = yield* taskService
+          .create({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            subject: summarizeTaskSubject(item.task),
+            agentType: resolved.agent.name,
+            prompt: item.task,
+            cwd: platform.cwd,
+          })
+          .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
+        if (task === undefined) {
+          return { error: "Background tasks unavailable — task-tools extension is disabled" }
+        }
         yield* taskService.run(task.id)
         taskIds.push(task.id)
       }

@@ -9,7 +9,7 @@ import { Clock, ServiceMap, Effect, Layer, Schema } from "effect"
 import { Task } from "../domain/task.js"
 import type { SessionId, BranchId, TaskId } from "../domain/ids.js"
 import { SqlClient } from "effect/unstable/sql"
-import { StorageError } from "./sqlite-storage.js"
+import { Storage, StorageError } from "./sqlite-storage.js"
 
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
@@ -84,9 +84,11 @@ export interface TaskStorageService {
 export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageService>()(
   "@gent/core/src/storage/task-storage/TaskStorage",
 ) {
-  static Live: Layer.Layer<TaskStorage, never, SqlClient.SqlClient> = Layer.effect(
+  /** Requires Storage to ensure DDL (CREATE TABLE tasks/task_deps) has been initialized */
+  static Live: Layer.Layer<TaskStorage, never, SqlClient.SqlClient | Storage> = Layer.effect(
     TaskStorage,
     Effect.gen(function* () {
+      yield* Storage // ensures schema initialization has completed
       const sql = yield* SqlClient.SqlClient
 
       return {
