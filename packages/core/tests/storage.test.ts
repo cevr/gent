@@ -1,10 +1,12 @@
 import { describe, it, expect } from "effect-bun-test"
 import { test } from "bun:test"
 import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import { TodoItem } from "@gent/core/domain/todo"
-import { AgentSwitched } from "@gent/core/domain/event"
+import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
+import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import { messageToInfo } from "@gent/core/server/session-utils"
 
 describe("Storage", () => {
@@ -691,5 +693,65 @@ describe("Storage", () => {
       const info = messageToInfo(message)
       expect(info.metadata).toBeUndefined()
     })
+  })
+
+  describe("Event backward compatibility", () => {
+    const layer = Storage.TestWithSql()
+
+    it.live("listEvents skips events with unknown _tag instead of crashing", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        const sessionId = "compat-session" as SessionId
+        const branchId = "compat-branch" as BranchId
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            name: "compat",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+
+        yield* storage.appendEvent(new SessionStarted({ sessionId, branchId }))
+
+        // Simulate old DB row with a deleted event type
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'ToolCallCompleted', ${JSON.stringify({ _tag: "ToolCallCompleted", sessionId, branchId, toolCallId: "tc-1", toolName: "bash" })}, ${Date.now()})`
+
+        yield* storage.appendEvent(new SessionStarted({ sessionId, branchId }))
+
+        const events = yield* storage.listEvents({ sessionId, branchId })
+        expect(events.length).toBe(2)
+        expect(events.every((e) => e.event._tag === "SessionStarted")).toBe(true)
+      }).pipe(Effect.provide(layer)),
+    )
+
+    it.live("getLatestEvent returns undefined for undecodable events", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        const sessionId = "compat-latest" as SessionId
+        const branchId = "compat-latest-b" as BranchId
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            name: "compat-latest",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentCompleted', ${JSON.stringify({ _tag: "SubagentCompleted", sessionId, branchId })}, ${Date.now()})`
+
+        const latest = yield* storage.getLatestEvent({
+          sessionId,
+          branchId,
+          tags: ["SubagentCompleted"],
+        })
+        expect(latest).toBeUndefined()
+      }).pipe(Effect.provide(layer)),
+    )
   })
 })

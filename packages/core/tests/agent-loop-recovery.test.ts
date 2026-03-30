@@ -576,4 +576,65 @@ describe("AgentLoop recovery", () => {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test("startup checkpoint wake: isRunning triggers restore for all checkpointed sessions", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-wake-"))
+    const dbPath = path.join(dir, "data.db")
+
+    try {
+      const { session, branch, message } = createSessionState()
+      const resolving = buildResolvingState(
+        {
+          queue: emptyLoopQueueState(),
+          currentAgent: "cowork",
+          handoffSuppress: 0,
+        },
+        { message, bypass: true },
+      )
+
+      // Seed checkpoint
+      await Effect.runPromise(
+        seedCheckpoint({ state: resolving }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
+      )
+
+      // Simulate startup wake: list checkpoints → isRunning for each
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const agentLoop = yield* AgentLoop
+
+          // Verify checkpoint exists
+          const checkpoints = yield* storage.listAgentLoopCheckpoints()
+          expect(checkpoints.length).toBe(1)
+          expect(checkpoints[0]!.sessionId).toBe(session.id)
+
+          // Wake via isRunning (same as startup sweep in dependencies.ts)
+          yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
+
+          // Wait for turn to complete
+          const completed = yield* waitFor(
+            storage.getLatestEventTag({
+              sessionId: session.id,
+              branchId: branch.id,
+              tags: ["TurnCompleted"],
+            }),
+            (value) => value === "TurnCompleted",
+          )
+          expect(completed).toBe("TurnCompleted")
+
+          // Checkpoint should be cleaned up after idle
+          const remaining = yield* waitFor(
+            storage.getAgentLoopCheckpoint({
+              sessionId: session.id,
+              branchId: branch.id,
+            }),
+            (value) => value === undefined,
+          )
+          expect(remaining).toBeUndefined()
+        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

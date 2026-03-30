@@ -1410,4 +1410,10 @@ export class Storage extends ServiceMap.Service<Storage, StorageService>()(
     )
 
   static Test = (): Layer.Layer<Storage> => Storage.Memory()
+
+  /** Test layer that also exposes SqlClient for raw SQL in tests */
+  static TestWithSql = (): Layer.Layer<Storage | SqlClient.SqlClient> =>
+    Layer.effect(Storage, makeStorage).pipe(
+      Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
+    )
 }
