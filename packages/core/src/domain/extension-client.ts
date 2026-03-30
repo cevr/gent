@@ -21,7 +21,23 @@ export interface ComposerSurfaceProps {
   readonly setDraft: (text: string) => void
   readonly submit: () => void
   readonly focused: boolean
+  readonly mode: "editing" | "shell"
 }
+
+/**
+ * Type-safe interaction renderer contribution.
+ * Links event tag to component props at compile time.
+ */
+export interface InteractionRendererContribution<T extends InteractionEventTag> {
+  readonly eventTag: T
+  readonly component: (props: InteractionRendererProps<T>) => unknown
+}
+
+/** Factory that enforces tag–component type coupling */
+export const defineInteractionRenderer = <T extends InteractionEventTag>(
+  eventTag: T,
+  component: (props: InteractionRendererProps<T>) => unknown,
+): InteractionRendererContribution<T> => ({ eventTag, component })
 
 /** What a TUI extension contributes after setup */
 export interface ExtensionClientSetup<TComponent = unknown> {
@@ -52,13 +68,11 @@ export interface ExtensionClientSetup<TComponent = unknown> {
     readonly id: string
     readonly component: TComponent // receives { open, onClose } props
   }>
-  /** Interaction renderers — take over composer during interactive prompts */
-  readonly interactionRenderers?: ReadonlyArray<{
-    /** Which interaction event tags this renderer handles */
-    readonly eventTags: ReadonlyArray<InteractionEventTag>
-    /** Component receives InteractionRendererProps<Tag> */
-    readonly component: TComponent
-  }>
+  /** Interaction renderers — take over composer during interactive prompts.
+   *  Use defineInteractionRenderer() for type-safe tag–component coupling. */
+  readonly interactionRenderers?: ReadonlyArray<
+    InteractionRendererContribution<InteractionEventTag>
+  >
   /** Custom composer surface — replaces the default textarea */
   readonly composerSurface?: TComponent
 }

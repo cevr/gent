@@ -189,11 +189,9 @@ const resolveInteractionRenderers = (
 
   for (const ext of sorted) {
     for (const entry of ext.setup.interactionRenderers ?? []) {
-      for (const tag of entry.eventTags) {
-        checkCollision(scopes.get(tag), ext, "interaction renderer", tag)
-        renderers.set(tag, entry.component as SolidComponent)
-        scopes.set(tag, { kind: ext.kind, source: ext.filePath })
-      }
+      checkCollision(scopes.get(entry.eventTag), ext, "interaction renderer", entry.eventTag)
+      renderers.set(entry.eventTag, entry.component as SolidComponent)
+      scopes.set(entry.eventTag, { kind: ext.kind, source: ext.filePath })
     }
   }
 
