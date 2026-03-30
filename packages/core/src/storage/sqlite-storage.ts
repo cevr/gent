@@ -4,11 +4,10 @@ import { Message, Session, Branch, MessagePart } from "../domain/message.js"
 import { TodoItem } from "../domain/todo.js"
 import { Task } from "../domain/task.js"
 import { AgentEvent, EventEnvelope, getEventSessionId } from "../domain/event.js"
-import type { ActorCommandId, SessionId, BranchId, MessageId, TaskId } from "../domain/ids.js"
+import type { SessionId, BranchId, MessageId, TaskId } from "../domain/ids.js"
 import type { ReasoningEffort } from "../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
-import type { ActorCommandStatus, ActorInboxRecord } from "../runtime/actor-inbox.schema.js"
 import type { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
 import type {
   InteractionRequestRecord,
@@ -201,28 +200,6 @@ export interface StorageService {
     extensionId: string
   }) => Effect.Effect<{ stateJson: string; version: number } | undefined, StorageError>
 
-  // Durable actor inbox
-  readonly createActorInboxRecord: (
-    record: ActorInboxRecord,
-  ) => Effect.Effect<ActorInboxRecord, StorageError>
-  readonly getActorInboxRecord: (
-    commandId: ActorCommandId,
-  ) => Effect.Effect<ActorInboxRecord | undefined, StorageError>
-  readonly listActorInboxRecordsByStatus: (
-    statuses: ReadonlyArray<ActorCommandStatus>,
-  ) => Effect.Effect<ReadonlyArray<ActorInboxRecord>, StorageError>
-  readonly updateActorInboxRecord: (
-    commandId: ActorCommandId,
-    fields: Partial<{
-      status: ActorCommandStatus
-      attempts: number
-      updatedAt: number
-      startedAt: number | null
-      completedAt: number | null
-      lastError: string | null
-    }>,
-  ) => Effect.Effect<ActorInboxRecord | undefined, StorageError>
-
   // Durable loop checkpoints
   readonly upsertAgentLoopCheckpoint: (
     record: AgentLoopCheckpointRecord,
@@ -298,21 +275,6 @@ interface EventRow {
   event_json: string
   created_at: number
   trace_id: string | null
-}
-
-interface ActorInboxRow {
-  command_id: ActorCommandId
-  session_id: SessionId
-  branch_id: BranchId
-  command_kind: string
-  payload_json: string
-  status: string
-  attempts: number
-  created_at: number
-  updated_at: number
-  started_at: number | null
-  completed_at: number | null
-  last_error: string | null
 }
 
 interface AgentLoopCheckpointRow {
@@ -395,21 +357,6 @@ const safeJsonParse = (s: string): unknown => {
     return undefined
   }
 }
-
-const actorInboxRecordFromRow = (row: ActorInboxRow): ActorInboxRecord => ({
-  commandId: row.command_id,
-  sessionId: row.session_id,
-  branchId: row.branch_id,
-  kind: row.command_kind as ActorInboxRecord["kind"],
-  payloadJson: row.payload_json,
-  status: row.status as ActorInboxRecord["status"],
-  attempts: row.attempts,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-  ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
-  ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
-  ...(row.last_error !== null ? { lastError: row.last_error } : {}),
-})
 
 const agentLoopCheckpointFromRow = (row: AgentLoopCheckpointRow): AgentLoopCheckpointRecord => ({
   sessionId: row.session_id,
@@ -1311,73 +1258,6 @@ const makeStorage = Effect.gen(function* () {
         return { stateJson: row.state_json, version: row.version }
       },
       Effect.mapError(mapError("Failed to load extension state")),
-    ),
-
-    createActorInboxRecord: Effect.fn("Storage.createActorInboxRecord")(
-      function* (record) {
-        yield* sql`INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error) VALUES (${record.commandId}, ${record.sessionId}, ${record.branchId}, ${record.kind}, ${record.payloadJson}, ${record.status}, ${record.attempts}, ${record.createdAt}, ${record.updatedAt}, ${record.startedAt ?? null}, ${record.completedAt ?? null}, ${record.lastError ?? null})`
-        return record
-      },
-      Effect.mapError(mapError("Failed to create actor inbox record")),
-    ),
-
-    getActorInboxRecord: Effect.fn("Storage.getActorInboxRecord")(
-      function* (commandId) {
-        const rows =
-          yield* sql<ActorInboxRow>`SELECT command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error FROM actor_inbox WHERE command_id = ${commandId}`
-        const row = rows[0]
-        return row === undefined ? undefined : actorInboxRecordFromRow(row)
-      },
-      Effect.mapError(mapError("Failed to get actor inbox record")),
-    ),
-
-    listActorInboxRecordsByStatus: Effect.fn("Storage.listActorInboxRecordsByStatus")(
-      function* (statuses) {
-        if (statuses.length === 0) return []
-        const rows =
-          yield* sql<ActorInboxRow>`SELECT command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error FROM actor_inbox WHERE status IN ${sql.in(statuses)} ORDER BY created_at ASC`
-        return rows.map(actorInboxRecordFromRow)
-      },
-      Effect.mapError(mapError("Failed to list actor inbox records")),
-    ),
-
-    updateActorInboxRecord: Effect.fn("Storage.updateActorInboxRecord")(
-      function* (commandId, fields) {
-        const current =
-          yield* sql<ActorInboxRow>`SELECT command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at, started_at, completed_at, last_error FROM actor_inbox WHERE command_id = ${commandId}`
-        const row = current[0]
-        if (row === undefined) return undefined
-        const next = {
-          commandId: row.command_id,
-          sessionId: row.session_id,
-          branchId: row.branch_id,
-          kind: row.command_kind,
-          payloadJson: row.payload_json,
-          status: fields.status ?? row.status,
-          attempts: fields.attempts ?? row.attempts,
-          createdAt: row.created_at,
-          updatedAt: fields.updatedAt ?? row.updated_at,
-          startedAt: fields.startedAt === undefined ? row.started_at : fields.startedAt,
-          completedAt: fields.completedAt === undefined ? row.completed_at : fields.completedAt,
-          lastError: fields.lastError === undefined ? row.last_error : fields.lastError,
-        }
-        yield* sql`UPDATE actor_inbox SET status = ${next.status}, attempts = ${next.attempts}, updated_at = ${next.updatedAt}, started_at = ${next.startedAt}, completed_at = ${next.completedAt}, last_error = ${next.lastError} WHERE command_id = ${commandId}`
-        return {
-          commandId: next.commandId,
-          sessionId: next.sessionId,
-          branchId: next.branchId,
-          kind: next.kind as ActorInboxRecord["kind"],
-          payloadJson: next.payloadJson,
-          status: next.status as ActorInboxRecord["status"],
-          attempts: next.attempts,
-          createdAt: next.createdAt,
-          updatedAt: next.updatedAt,
-          ...(next.startedAt !== null ? { startedAt: next.startedAt } : {}),
-          ...(next.completedAt !== null ? { completedAt: next.completedAt } : {}),
-          ...(next.lastError !== null ? { lastError: next.lastError } : {}),
-        } satisfies ActorInboxRecord
-      },
-      Effect.mapError(mapError("Failed to update actor inbox record")),
     ),
 
     upsertAgentLoopCheckpoint: Effect.fn("Storage.upsertAgentLoopCheckpoint")(
