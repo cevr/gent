@@ -66,11 +66,14 @@ export interface ExtensionClientSetup<TComponent = unknown> {
   readonly commands?: ReadonlyArray<{
     readonly id: string
     readonly title: string
+    readonly description?: string
     readonly category?: string
     readonly keybind?: string
-    /** Slash command trigger (without the /). When set, /name invokes onSelect. */
+    /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
     readonly slash?: string
     readonly onSelect: () => void
+    /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
+    readonly onSlash?: (args: string) => void
   }>
   /** Full-screen overlay panels */
   readonly overlays?: ReadonlyArray<{
@@ -96,6 +99,8 @@ export interface ExtensionClientContext {
   readonly sendIntent: (extensionId: string, intent: unknown) => void
   /** Read the current server-projected snapshot for an extension */
   readonly getSnapshot: (extensionId: string) => { epoch: number; model: unknown } | undefined
+  /** Send a user message to the active session */
+  readonly sendMessage: (content: string) => void
 }
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */

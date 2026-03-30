@@ -36,20 +36,18 @@ interface SlashCommand {
   description: string
 }
 
-const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
+/** Session/chrome commands — always available, not feature-specific */
+const SESSION_SLASH_COMMANDS: SlashCommand[] = [
   { id: "clear", label: "/clear", description: "Clear messages" },
+  { id: "new", label: "/new", description: "Start new session" },
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },
   { id: "branch", label: "/branch", description: "Create new branch" },
   { id: "tree", label: "/tree", description: "Browse branch tree" },
   { id: "fork", label: "/fork", description: "Fork from a message" },
   { id: "bypass", label: "/bypass", description: "Toggle permission bypass" },
+  { id: "think", label: "/think", description: "Set reasoning level" },
   { id: "permissions", label: "/permissions", description: "View/edit permission rules" },
   { id: "auth", label: "/auth", description: "Manage API keys" },
-  { id: "handoff", label: "/handoff", description: "Distill context into new session" },
-  { id: "counsel", label: "/counsel", description: "Opposite-vendor peer review" },
-  { id: "loop", label: "/loop", description: "Iterate until condition met" },
-  { id: "plan", label: "/plan", description: "Adversarial dual-model planning" },
-  { id: "audit", label: "/audit", description: "Detect, audit, fix code issues" },
 ]
 
 export interface AutocompletePopupProps {
@@ -69,12 +67,12 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
-  // Merge builtin + extension slash commands. Builtins win on name collision.
+  // Merge session commands + extension-contributed slash commands. Session wins on collision.
   const slashCommands = createMemo((): SlashCommand[] => {
-    const builtinIds = new Set(BUILTIN_SLASH_COMMANDS.map((c) => c.id.toLowerCase()))
+    const sessionIds = new Set(SESSION_SLASH_COMMANDS.map((c) => c.id.toLowerCase()))
     const extCommands: SlashCommand[] = []
     for (const c of extensionUI.commands()) {
-      if (c.slash !== undefined && !builtinIds.has(c.slash.toLowerCase())) {
+      if (c.slash !== undefined && !sessionIds.has(c.slash.toLowerCase())) {
         extCommands.push({
           id: c.slash,
           label: `/${c.slash}`,
@@ -82,7 +80,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         })
       }
     }
-    return [...BUILTIN_SLASH_COMMANDS, ...extCommands]
+    return [...SESSION_SLASH_COMMANDS, ...extCommands]
   })
 
   // Memoize filtered items to avoid recomputation on each access

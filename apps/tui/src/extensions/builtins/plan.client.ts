@@ -22,6 +22,17 @@ export default defineClientExtension({
         onSelect: () => {
           ctx.sendIntent("plan", { _tag: "TogglePlan" })
         },
+        onSlash: (args) => {
+          if (args.trim().length > 0) {
+            // /plan <prompt> → tool invocation
+            ctx.sendMessage(
+              `Use the plan tool to create an implementation plan for: ${args.trim()}`,
+            )
+          } else {
+            // /plan → toggle plan mode (same as palette)
+            ctx.sendIntent("plan", { _tag: "TogglePlan" })
+          }
+        },
       },
       {
         id: "plan.execute",
@@ -38,6 +49,23 @@ export default defineClientExtension({
         onSelect: () => {
           ctx.sendIntent("plan", { _tag: "RefinePlan" })
         },
+      },
+      {
+        id: "plan.audit",
+        title: "Audit",
+        description: "Detect, audit, fix code issues",
+        category: "Workflow",
+        slash: "audit",
+        onSelect: () =>
+          ctx.sendMessage(
+            "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes.",
+          ),
+        onSlash: (args) =>
+          ctx.sendMessage(
+            args.trim().length > 0
+              ? `Use the audit tool to audit: ${args.trim()}`
+              : "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes.",
+          ),
       },
     ],
   }),

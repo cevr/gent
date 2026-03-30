@@ -404,10 +404,11 @@ export function useSessionController(props: {
 
   // Build extension slash commands from resolved commands
   const extensionSlashCommands = createMemo(() => {
-    const result: Array<{ slash: string; onSelect: () => void }> = []
+    const result: Array<{ slash: string; onSelect: () => void; onSlash?: (args: string) => void }> =
+      []
     for (const c of ext.commands()) {
       if (c.slash !== undefined) {
-        result.push({ slash: c.slash, onSelect: c.onSelect })
+        result.push({ slash: c.slash, onSelect: c.onSelect, onSlash: c.onSlash })
       }
     }
     return result
@@ -431,7 +432,6 @@ export function useSessionController(props: {
         setReasoningLevel: (level) => client.updateSessionReasoningLevel(level),
         openPermissions: () => router.navigateToPermissions(),
         openAuth: () => router.navigateToAuth(),
-        sendMessage: (content: string) => client.sendMessage(content),
         newSession: () =>
           client.client.session
             .create({

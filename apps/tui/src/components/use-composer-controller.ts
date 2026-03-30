@@ -230,7 +230,6 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
             setReasoningLevel: () => Effect.fail(ClientError("Think not available here")),
             openPermissions: () => {},
             openAuth: () => {},
-            sendMessage: (content: string) => client.sendMessage(content),
             newSession: () => Effect.fail(ClientError("New session not available here")),
           }).pipe(
             Effect.tap((result) =>

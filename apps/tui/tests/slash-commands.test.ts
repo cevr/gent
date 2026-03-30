@@ -91,13 +91,13 @@ describe("executeSlashCommand", () => {
       toggleBypass: Effect.sync(() => {
         calls.toggleBypass++
       }),
+      setReasoningLevel: () => Effect.void,
       openPermissions: () => {
         calls.openPermissions++
       },
       openAuth: () => {
         calls.openAuth++
       },
-      sendMessage: () => {},
       newSession: () =>
         Effect.sync(() => {
           calls.newSession++
@@ -202,34 +202,6 @@ describe("executeSlashCommand", () => {
     })
   })
 
-  it.live("/counsel sends counsel message", () => {
-    let sentMessage = ""
-    const { ctx } = createMockContext()
-    ctx.sendMessage = (msg) => {
-      sentMessage = msg
-    }
-    return executeSlashCommand("counsel", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(sentMessage).toContain("counsel tool")
-      }),
-    )
-  })
-
-  it.live("/counsel with args passes prompt", () => {
-    let sentMessage = ""
-    const { ctx } = createMockContext()
-    ctx.sendMessage = (msg) => {
-      sentMessage = msg
-    }
-    return executeSlashCommand("counsel", "review auth module", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(sentMessage).toContain("review auth module")
-      }),
-    )
-  })
-
   it.live("handles async errors gracefully", () => {
     const ctx: SlashCommandContext = {
       openPalette: () => {},
@@ -239,9 +211,9 @@ describe("executeSlashCommand", () => {
       openTree: () => {},
       openFork: () => {},
       toggleBypass: Effect.void,
+      setReasoningLevel: () => Effect.void,
       openPermissions: () => {},
       openAuth: () => {},
-      sendMessage: () => {},
       newSession: () => Effect.void,
     }
 
@@ -269,6 +241,47 @@ describe("executeSlashCommand", () => {
       Effect.map((result) => {
         expect(result.handled).toBe(true)
         expect(called).toBe(true)
+      }),
+    )
+  })
+
+  it.live("extension slash command receives args via onSlash", () => {
+    const { ctx } = createMockContext()
+    let receivedArgs = ""
+    const extCommands: ExtensionSlashCommand[] = [
+      {
+        slash: "myext",
+        onSelect: () => {},
+        onSlash: (args) => {
+          receivedArgs = args
+        },
+      },
+    ]
+
+    return executeSlashCommand("myext", "some args here", ctx, extCommands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(receivedArgs).toBe("some args here")
+      }),
+    )
+  })
+
+  it.live("extension slash command falls back to onSelect when no onSlash", () => {
+    const { ctx } = createMockContext()
+    let selectCalled = false
+    const extCommands: ExtensionSlashCommand[] = [
+      {
+        slash: "myext",
+        onSelect: () => {
+          selectCalled = true
+        },
+      },
+    ]
+
+    return executeSlashCommand("myext", "ignored args", ctx, extCommands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(selectCalled).toBe(true)
       }),
     )
   })

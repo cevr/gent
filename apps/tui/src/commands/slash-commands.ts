@@ -19,7 +19,6 @@ export interface SlashCommandContext {
   setReasoningLevel: (level: ReasoningEffort | undefined) => Effect.Effect<void, UiError>
   openPermissions: () => void
   openAuth: () => void
-  sendMessage: (content: string) => void
   newSession: () => Effect.Effect<void, UiError>
 }
 
@@ -44,16 +43,22 @@ const runCommandEffect = (
 export interface ExtensionSlashCommand {
   readonly slash: string
   readonly onSelect: () => void
+  readonly onSlash?: (args: string) => void
 }
 
 const tryExtensionCommand = (
   cmd: string,
+  args: string,
   extensionCommands: ReadonlyArray<ExtensionSlashCommand> | undefined,
 ): Effect.Effect<SlashCommandResult, UiError> => {
   const extCmd = extensionCommands?.find((c) => c.slash.toLowerCase() === cmd.toLowerCase())
   if (extCmd !== undefined) {
     return Effect.sync(() => {
-      extCmd.onSelect()
+      if (extCmd.onSlash !== undefined) {
+        extCmd.onSlash(args)
+      } else {
+        extCmd.onSelect()
+      }
       return { handled: true }
     })
   }
@@ -126,68 +131,8 @@ export const executeSlashCommand = (
         return { handled: true }
       })
 
-    case "handoff":
-      return Effect.sync(() => {
-        ctx.sendMessage(
-          "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
-        )
-        return { handled: true }
-      })
-
-    case "counsel":
-      return Effect.sync(() => {
-        const prompt = _args.trim()
-        if (prompt.length === 0) {
-          ctx.sendMessage(
-            "Use the counsel tool to get a peer review from the opposite vendor model. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
-          )
-        } else {
-          ctx.sendMessage(`Use the counsel tool with this prompt: ${prompt}`)
-        }
-        return { handled: true }
-      })
-
-    case "loop":
-      return Effect.sync(() => {
-        const prompt = _args.trim()
-        if (prompt.length === 0) {
-          ctx.sendMessage(
-            "Use the loop tool to iterate on the current task until complete or a condition is met.",
-          )
-        } else {
-          ctx.sendMessage(`Use the loop tool: ${prompt}`)
-        }
-        return { handled: true }
-      })
-
-    case "plan":
-      return Effect.sync(() => {
-        const prompt = _args.trim()
-        if (prompt.length === 0) {
-          ctx.sendMessage(
-            "Use the plan tool to create an implementation plan for the current task using adversarial dual-model planning.",
-          )
-        } else {
-          ctx.sendMessage(`Use the plan tool to create an implementation plan for: ${prompt}`)
-        }
-        return { handled: true }
-      })
-
-    case "audit":
-      return Effect.sync(() => {
-        const prompt = _args.trim()
-        if (prompt.length === 0) {
-          ctx.sendMessage(
-            "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes.",
-          )
-        } else {
-          ctx.sendMessage(`Use the audit tool to audit: ${prompt}`)
-        }
-        return { handled: true }
-      })
-
     default:
-      return tryExtensionCommand(cmd, extensionCommands)
+      return tryExtensionCommand(cmd, _args, extensionCommands)
   }
 }
 

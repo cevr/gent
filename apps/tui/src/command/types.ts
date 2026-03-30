@@ -4,9 +4,11 @@ export interface Command {
   description?: string
   category?: string
   keybind?: string
-  /** Slash command trigger (without the /). When set, /name invokes onSelect. */
+  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
   slash?: string
   onSelect: () => void
+  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
+  onSlash?: (args: string) => void
 }
 
 export interface Keybind {

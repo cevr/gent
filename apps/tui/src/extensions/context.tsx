@@ -147,6 +147,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             if (snap === undefined) return undefined
             return { epoch: snap.epoch, model: snap.model }
           },
+          sendMessage: (content) => clientCtx.sendMessage(content),
         },
       )
       setResolved(result)
