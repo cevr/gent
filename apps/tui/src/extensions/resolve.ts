@@ -6,6 +6,7 @@
  */
 
 import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
+import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import type { JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
@@ -42,6 +43,8 @@ export interface ResolvedTuiExtensions {
   readonly widgets: ReadonlyArray<ResolvedWidget>
   readonly commands: ReadonlyArray<Command>
   readonly overlays: Map<string, SolidComponent>
+  readonly interactionRenderers: Map<InteractionEventTag, SolidComponent>
+  readonly composerSurface: SolidComponent | undefined
 }
 
 interface ScopeEntry {
@@ -178,6 +181,43 @@ const resolveOverlays = (
   return overlays
 }
 
+const resolveInteractionRenderers = (
+  sorted: ReadonlyArray<LoadedTuiExtension>,
+): Map<InteractionEventTag, SolidComponent> => {
+  const renderers = new Map<InteractionEventTag, SolidComponent>()
+  const scopes = new Map<InteractionEventTag, ScopeEntry>()
+
+  for (const ext of sorted) {
+    for (const entry of ext.setup.interactionRenderers ?? []) {
+      for (const tag of entry.eventTags) {
+        checkCollision(scopes.get(tag), ext, "interaction renderer", tag)
+        renderers.set(tag, entry.component as SolidComponent)
+        scopes.set(tag, { kind: ext.kind, source: ext.filePath })
+      }
+    }
+  }
+
+  return renderers
+}
+
+const resolveComposerSurface = (
+  sorted: ReadonlyArray<LoadedTuiExtension>,
+): SolidComponent | undefined => {
+  let winner: SolidComponent | undefined
+  let winnerScope: ScopeEntry | undefined
+
+  for (const ext of sorted) {
+    if (ext.setup.composerSurface === undefined) continue
+    if (winnerScope !== undefined) {
+      checkCollision(winnerScope, ext, "composer surface", "composerSurface")
+    }
+    winner = ext.setup.composerSurface as SolidComponent
+    winnerScope = { kind: ext.kind, source: ext.filePath }
+  }
+
+  return winner
+}
+
 /**
  * Resolve all TUI extension contributions with scope precedence.
  * Higher scope wins for same key. Same-scope collisions throw.
@@ -197,5 +237,7 @@ export const resolveTuiExtensions = (
     widgets: resolveWidgets(sorted),
     commands: resolveCommands(sorted),
     overlays: resolveOverlays(sorted),
+    interactionRenderers: resolveInteractionRenderers(sorted),
+    composerSurface: resolveComposerSurface(sorted),
   }
 }

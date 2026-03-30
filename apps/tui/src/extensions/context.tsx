@@ -9,6 +9,7 @@ import { createContext, useContext, createSignal, onMount, type Accessor, type J
 // @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os"
 import type { JSX as _JSX } from "@opentui/solid"
+import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 import type { ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
@@ -31,6 +32,8 @@ export interface ExtensionUIContextValue {
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   readonly commands: Accessor<ReadonlyArray<Command>>
   readonly overlays: Accessor<Map<string, SolidComponent>>
+  readonly interactionRenderers: Accessor<Map<InteractionEventTag, SolidComponent>>
+  readonly composerSurface: Accessor<SolidComponent | undefined>
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
@@ -49,6 +52,8 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   widgets: [],
   commands: [],
   overlays: new Map(),
+  interactionRenderers: new Map(),
+  composerSurface: undefined,
 }
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
@@ -135,6 +140,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         widgets: () => resolved().widgets,
         commands: () => resolved().commands,
         overlays: () => resolved().overlays,
+        interactionRenderers: () => resolved().interactionRenderers,
+        composerSurface: () => resolved().composerSurface,
         loading,
         setOverlayDispatch,
         snapshots,
