@@ -155,6 +155,7 @@ const resolveTurnContext = (params: {
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
+  interactive?: boolean
 }): Effect.Effect<ResolvedTurnContext | undefined, StorageError> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? "cowork"
@@ -197,7 +198,12 @@ const resolveTurnContext = (params: {
     const { tools, promptSections: extensionSections } =
       yield* params.extensionRegistry.resolveToolPolicy(
         agent,
-        { sessionId: params.sessionId, branchId: params.branchId, agentName: currentAgent },
+        {
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          agentName: currentAgent,
+          interactive: params.interactive,
+        },
         extensionProjections,
       )
 

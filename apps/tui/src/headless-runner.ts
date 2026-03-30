@@ -51,6 +51,20 @@ export const runHeadless = (
                 .respondHandoff({ requestId: event.requestId, decision: "confirm" })
                 .pipe(Effect.catchEager(() => Effect.void))
               break
+            case "QuestionsAsked":
+              process.stderr.write(`\n[ask_user: auto-cancelling in headless mode]\n`)
+              yield* client.interaction
+                .respondQuestions({ requestId: event.requestId, answers: [], cancelled: true })
+                .pipe(Effect.catchEager(() => Effect.void))
+              break
+            case "PermissionRequested":
+              process.stderr.write(
+                `\n[permission: auto-denying ${event.toolName} in headless mode]\n`,
+              )
+              yield* client.interaction
+                .respondPermission({ requestId: event.requestId, decision: "deny" })
+                .pipe(Effect.catchEager(() => Effect.void))
+              break
             case "HandoffConfirmed":
             case "HandoffRejected":
               break

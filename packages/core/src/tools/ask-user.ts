@@ -170,6 +170,7 @@ export const AskUserTool = defineTool({
   name: "ask_user",
   action: "interact",
   concurrency: "serial",
+  interactive: true,
   description:
     "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",
   promptSnippet: "Ask the user questions with optional predefined options",

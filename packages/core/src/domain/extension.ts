@@ -45,6 +45,9 @@ export interface RunContext {
   readonly agentName?: AgentName
   readonly parentToolCallId?: ToolCallId
   readonly tags?: ReadonlyArray<string>
+  /** Whether this is an interactive session (human at the terminal).
+   *  False for headless mode and subagent contexts. */
+  readonly interactive?: boolean
 }
 
 // Interceptor type

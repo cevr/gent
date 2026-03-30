@@ -27,6 +27,9 @@ export interface ToolDefinition<
   readonly promptSnippet?: string
   /** Behavioral guidelines injected into system prompt when this tool is active */
   readonly promptGuidelines?: ReadonlyArray<string>
+  /** If true, tool requires an interactive session (human at the terminal).
+   *  Filtered out in headless mode and subagent contexts. */
+  readonly interactive?: boolean
   readonly params: Params
   readonly execute: (
     params: Schema.Schema.Type<Params>,

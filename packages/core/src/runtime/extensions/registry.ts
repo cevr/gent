@@ -180,7 +180,12 @@ export const compileToolPolicy = (
   // 4. Re-apply agent deny list — extensions can't escape denials
   tools = applyDenyFilter(tools, agent)
 
-  // 5. Collect extension-contributed prompt sections
+  // 5. Filter interactive tools in non-interactive contexts (headless, subagent)
+  if (runContext.interactive === false) {
+    tools = tools.filter((t) => t.interactive !== true)
+  }
+
+  // 6. Collect extension-contributed prompt sections
   const promptSections: PromptSection[] = []
   for (const projection of extensionProjections) {
     if (projection.promptSections !== undefined) {
