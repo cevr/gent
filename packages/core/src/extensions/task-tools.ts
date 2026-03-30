@@ -4,11 +4,13 @@ import { TaskCreateTool } from "../tools/task-create.js"
 import { TaskListTool } from "../tools/task-list.js"
 import { TaskGetTool } from "../tools/task-get.js"
 import { TaskUpdateTool } from "../tools/task-update.js"
+import { TaskStorage } from "../storage/task-storage.js"
 
 export const TaskToolsExtension = defineExtension({
   manifest: { id: "@gent/task-tools" },
   setup: () =>
     Effect.succeed({
       tools: [TaskCreateTool, TaskListTool, TaskGetTool, TaskUpdateTool],
+      layer: TaskStorage.Live,
     }),
 })

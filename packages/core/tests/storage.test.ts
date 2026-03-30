@@ -4,7 +4,7 @@ import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
-import { TodoItem } from "@gent/core/domain/todo"
+
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import { messageToInfo } from "@gent/core/server/session-utils"
@@ -492,80 +492,6 @@ describe("Storage", () => {
         const messages = yield* storage.listMessages("order-branch")
         expect(messages[0]?.id).toBe("a")
         expect(messages[1]?.id).toBe("b")
-      }).pipe(Effect.provide(Storage.Test())),
-    )
-  })
-
-  describe("Todos", () => {
-    it.live("listTodos returns empty for new branch", () =>
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const todos = yield* storage.listTodos("nonexistent")
-        expect(todos.length).toBe(0)
-      }).pipe(Effect.provide(Storage.Test())),
-    )
-
-    it.live("replaceTodos stores and retrieves todos", () =>
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const now = new Date()
-
-        const todos = [
-          new TodoItem({
-            id: "t1",
-            content: "Task 1",
-            status: "pending",
-            priority: "high",
-            createdAt: now,
-            updatedAt: now,
-          }),
-          new TodoItem({
-            id: "t2",
-            content: "Task 2",
-            status: "in_progress",
-            createdAt: now,
-            updatedAt: now,
-          }),
-        ]
-
-        yield* storage.replaceTodos("test-branch", todos)
-        const retrieved = yield* storage.listTodos("test-branch")
-
-        expect(retrieved.length).toBe(2)
-        expect(retrieved[0]?.content).toBe("Task 1")
-        expect(retrieved[0]?.priority).toBe("high")
-        expect(retrieved[1]?.status).toBe("in_progress")
-      }).pipe(Effect.provide(Storage.Test())),
-    )
-
-    it.live("replaceTodos replaces existing todos", () =>
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const now = new Date()
-
-        yield* storage.replaceTodos("branch", [
-          new TodoItem({
-            id: "old",
-            content: "Old",
-            status: "pending",
-            createdAt: now,
-            updatedAt: now,
-          }),
-        ])
-
-        yield* storage.replaceTodos("branch", [
-          new TodoItem({
-            id: "new",
-            content: "New",
-            status: "completed",
-            createdAt: now,
-            updatedAt: now,
-          }),
-        ])
-
-        const todos = yield* storage.listTodos("branch")
-        expect(todos.length).toBe(1)
-        expect(todos[0]?.content).toBe("New")
       }).pipe(Effect.provide(Storage.Test())),
     )
   })

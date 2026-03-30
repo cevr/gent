@@ -17,7 +17,7 @@ import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 import type { TaskId, SessionId, BranchId } from "../domain/ids.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { TaskStorage } from "../storage/task-storage.js"
 
 // TaskService
 
@@ -64,14 +64,29 @@ export interface TaskServiceApi {
 export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>()(
   "@gent/core/src/runtime/task-service/TaskService",
 ) {
+  /** No-op TaskService returned when @gent/task-tools is disabled (TaskStorage absent) */
+  private static readonly Noop: TaskServiceApi = {
+    create: () => Effect.die("TaskStorage not available — @gent/task-tools is disabled"),
+    get: () => Effect.void as Effect.Effect<Task | undefined>,
+    list: () => Effect.succeed([] as ReadonlyArray<Task>),
+    update: () => Effect.void as Effect.Effect<Task | undefined>,
+    remove: () => Effect.void,
+    run: (id) => Effect.succeed({ taskId: id, status: "not_found" }),
+    addDep: () => Effect.void,
+    removeDep: () => Effect.void,
+    getDeps: () => Effect.succeed([]),
+  }
+
   static Live: Layer.Layer<
     TaskService,
     never,
-    Storage | EventStore | SubagentRunnerService | ExtensionRegistry | RuntimePlatform
+    EventStore | SubagentRunnerService | ExtensionRegistry | RuntimePlatform
   > = Layer.effect(
     TaskService,
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const storageOpt = yield* Effect.serviceOption(TaskStorage)
+      if (storageOpt._tag === "None") return TaskService.Noop
+      const storage = storageOpt.value
       const eventStore = yield* EventStore
       const runner = yield* SubagentRunnerService
       const extensionRegistry = yield* ExtensionRegistry

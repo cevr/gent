@@ -1,10 +1,8 @@
 import type { PlatformError } from "effect"
 import { Clock, ServiceMap, Effect, Layer, Schema, FileSystem, Path } from "effect"
 import { Message, Session, Branch, MessagePart } from "../domain/message.js"
-import { TodoItem } from "../domain/todo.js"
-import { Task } from "../domain/task.js"
 import { AgentEvent, EventEnvelope, getEventSessionId } from "../domain/event.js"
-import type { SessionId, BranchId, MessageId, TaskId } from "../domain/ids.js"
+import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import type { ReasoningEffort } from "../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
@@ -18,7 +16,6 @@ import type {
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
 const decodeMessageParts = Schema.decodeUnknownEffect(MessagePartsJson)
 const encodeMessageParts = Schema.encodeEffect(MessagePartsJson)
-const decodeTodoItem = Schema.decodeUnknownEffect(TodoItem)
 const EventJson = Schema.fromJsonString(AgentEvent)
 const decodeEvent = Schema.decodeUnknownEffect(EventJson)
 const encodeEvent = Schema.encodeEffect(EventJson)
@@ -100,37 +97,6 @@ export interface StorageService {
     tags: ReadonlyArray<string>
   }) => Effect.Effect<AgentEvent | undefined, StorageError>
 
-  // Todos
-  readonly listTodos: (branchId: BranchId) => Effect.Effect<ReadonlyArray<TodoItem>, StorageError>
-  readonly replaceTodos: (
-    branchId: BranchId,
-    todos: ReadonlyArray<TodoItem>,
-  ) => Effect.Effect<void, StorageError>
-
-  // Tasks
-  readonly createTask: (task: Task) => Effect.Effect<Task, StorageError>
-  readonly getTask: (id: TaskId) => Effect.Effect<Task | undefined, StorageError>
-  readonly listTasks: (
-    sessionId: SessionId,
-    branchId?: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Task>, StorageError>
-  readonly updateTask: (
-    id: TaskId,
-    fields: Partial<{
-      status: string
-      description: string | null
-      owner: string | null
-      metadata: unknown | null
-    }>,
-  ) => Effect.Effect<Task | undefined, StorageError>
-  readonly deleteTask: (id: TaskId) => Effect.Effect<void, StorageError>
-  /** Atomically claim a pending task → in_progress. Returns the task if claimed, undefined if already non-pending. */
-  readonly claimTask: (id: TaskId) => Effect.Effect<Task | undefined, StorageError>
-  readonly addTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
-  readonly removeTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
-  readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
-  readonly getTaskDependents: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
-
   // Session tree
   readonly getChildSessions: (
     parentSessionId: SessionId,
@@ -171,22 +137,6 @@ export interface StorageService {
     }>,
     StorageError
   >
-
-  // Dream queries (for memory extension background consolidation)
-  readonly getRecentSessions: (since: Date) => Effect.Effect<
-    ReadonlyArray<{
-      id: SessionId
-      name: string | null
-      cwd: string | null
-      createdAt: Date
-      updatedAt: Date
-    }>,
-    StorageError
-  >
-  readonly getSessionMessages: (
-    sessionId: SessionId,
-    options?: { since?: Date; roles?: ReadonlyArray<string> },
-  ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
 
   // Extension state persistence
   readonly saveExtensionState: (params: {
@@ -366,39 +316,6 @@ const agentLoopCheckpointFromRow = (row: AgentLoopCheckpointRow): AgentLoopCheck
   stateJson: row.state_json,
   updatedAt: row.updated_at,
 })
-
-interface TaskRow {
-  id: TaskId
-  session_id: SessionId
-  branch_id: BranchId
-  subject: string
-  description: string | null
-  status: string
-  owner: string | null
-  agent_type: string | null
-  prompt: string | null
-  cwd: string | null
-  metadata: string | null
-  created_at: number
-  updated_at: number
-}
-
-const taskFromRow = (row: TaskRow) =>
-  new Task({
-    id: row.id,
-    sessionId: row.session_id,
-    branchId: row.branch_id,
-    subject: row.subject,
-    description: row.description ?? undefined,
-    status: row.status as Task["status"],
-    owner: (row.owner ?? undefined) as SessionId | undefined,
-    agentType: (row.agent_type ?? undefined) as Task["agentType"],
-    prompt: row.prompt ?? undefined,
-    cwd: row.cwd ?? undefined,
-    metadata: row.metadata !== null ? safeJsonParse(row.metadata) : undefined,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
-  })
 
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -941,194 +858,6 @@ const makeStorage = Effect.gen(function* () {
       Effect.mapError(mapError("Failed to get latest event")),
     ),
 
-    // Todos
-    listTodos: Effect.fn("Storage.listTodos")(
-      function* (branchId) {
-        const rows = yield* sql<{
-          id: string
-          content: string
-          status: string
-          priority: string | null
-          created_at: number
-          updated_at: number
-        }>`SELECT id, content, status, priority, created_at, updated_at FROM todos WHERE branch_id = ${branchId} ORDER BY created_at ASC`
-        return yield* Effect.forEach(rows, (row) =>
-          decodeTodoItem({
-            id: row.id,
-            content: row.content,
-            status: row.status,
-            priority: row.priority ?? undefined,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          }),
-        )
-      },
-      Effect.mapError(mapError("Failed to list todos")),
-    ),
-
-    replaceTodos: (branchId, todos) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`DELETE FROM todos WHERE branch_id = ${branchId}`
-            for (const todo of todos) {
-              yield* sql`INSERT INTO todos (id, branch_id, content, status, priority, created_at, updated_at) VALUES (${todo.id}, ${branchId}, ${todo.content}, ${todo.status}, ${todo.priority ?? null}, ${todo.createdAt.getTime()}, ${todo.updatedAt.getTime()})`
-            }
-          }),
-        )
-        .pipe(
-          Effect.mapError(mapError("Failed to replace todos")),
-          Effect.withSpan("Storage.replaceTodos"),
-        ),
-    // Tasks
-    createTask: Effect.fn("Storage.createTask")(
-      function* (task) {
-        const meta =
-          task.metadata === undefined
-            ? null
-            : yield* Effect.try({
-                try: () => encodeMetadataJson(task.metadata),
-                catch: () =>
-                  new StorageError({ message: "Task metadata is not JSON-serializable" }),
-              })
-        yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
-        return task
-      },
-      Effect.mapError(mapError("Failed to create task")),
-    ),
-
-    getTask: Effect.fn("Storage.getTask")(
-      function* (id) {
-        const rows =
-          yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-        const row = rows[0]
-        if (row === undefined) return undefined
-        return taskFromRow(row)
-      },
-      Effect.mapError(mapError("Failed to get task")),
-    ),
-
-    listTasks: Effect.fn("Storage.listTasks")(
-      function* (sessionId, branchId) {
-        const rows =
-          branchId !== undefined
-            ? yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} AND branch_id = ${branchId} ORDER BY created_at ASC`
-            : yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} ORDER BY created_at ASC`
-        return rows.map(taskFromRow)
-      },
-      Effect.mapError(mapError("Failed to list tasks")),
-    ),
-
-    updateTask: Effect.fn("Storage.updateTask")(
-      function* (id, fields) {
-        const now = yield* Clock.currentTimeMillis
-        // Validate status if provided
-        const VALID_STATUSES = new Set(["pending", "in_progress", "completed", "failed"])
-        if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
-          return yield* new StorageError({
-            message: `Invalid task status: ${fields.status}`,
-          })
-        }
-
-        // Build parameterized update
-        const sets: string[] = ["updated_at = ?"]
-        const params: (string | number | null)[] = [now]
-
-        if (fields.status !== undefined) {
-          sets.push("status = ?")
-          params.push(fields.status)
-        }
-        if ("description" in fields) {
-          sets.push("description = ?")
-          params.push(fields.description ?? null)
-        }
-        if ("owner" in fields) {
-          sets.push("owner = ?")
-          params.push(fields.owner ?? null)
-        }
-        if ("metadata" in fields) {
-          sets.push("metadata = ?")
-          if (fields.metadata === null || fields.metadata === undefined) {
-            params.push(null)
-          } else {
-            params.push(
-              yield* Effect.try({
-                try: () => encodeMetadataJson(fields.metadata),
-                catch: () => new StorageError({ message: "Metadata is not JSON-serializable" }),
-              }),
-            )
-          }
-        }
-
-        params.push(id)
-        yield* sql.unsafe(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, params)
-
-        const rows =
-          yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-        const row = rows[0]
-        if (row === undefined) return undefined
-        return taskFromRow(row)
-      },
-      Effect.mapError(mapError("Failed to update task")),
-    ),
-
-    deleteTask: Effect.fn("Storage.deleteTask")(
-      function* (id) {
-        yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
-        yield* sql`DELETE FROM tasks WHERE id = ${id}`
-      },
-      Effect.mapError(mapError("Failed to delete task")),
-    ),
-
-    claimTask: Effect.fn("Storage.claimTask")(
-      function* (id) {
-        const now = yield* Clock.currentTimeMillis
-        // Compare-and-set: only update if currently pending
-        yield* sql`UPDATE tasks SET status = 'in_progress', updated_at = ${now} WHERE id = ${id} AND status = 'pending'`
-        // Re-read to see if we got it
-        const rows =
-          yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-        const row = rows[0]
-        if (row === undefined || row.status !== "in_progress") return undefined
-        return taskFromRow(row)
-      },
-      Effect.mapError(mapError("Failed to claim task")),
-    ),
-
-    addTaskDep: (taskId, blockedById) =>
-      sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`.pipe(
-        Effect.asVoid,
-        Effect.mapError(mapError("Failed to add task dep")),
-        Effect.withSpan("Storage.addTaskDep"),
-      ),
-
-    removeTaskDep: (taskId, blockedById) =>
-      sql`DELETE FROM task_deps WHERE task_id = ${taskId} AND blocked_by_id = ${blockedById}`.pipe(
-        Effect.asVoid,
-        Effect.mapError(mapError("Failed to remove task dep")),
-        Effect.withSpan("Storage.removeTaskDep"),
-      ),
-
-    getTaskDeps: Effect.fn("Storage.getTaskDeps")(
-      function* (taskId) {
-        const rows = yield* sql<{
-          blocked_by_id: TaskId
-        }>`SELECT blocked_by_id FROM task_deps WHERE task_id = ${taskId}`
-        return rows.map((r) => r.blocked_by_id)
-      },
-      Effect.mapError(mapError("Failed to get task deps")),
-    ),
-
-    getTaskDependents: Effect.fn("Storage.getTaskDependents")(
-      function* (taskId) {
-        const rows = yield* sql<{
-          task_id: TaskId
-        }>`SELECT task_id FROM task_deps WHERE blocked_by_id = ${taskId}`
-        return rows.map((r) => r.task_id)
-      },
-      Effect.mapError(mapError("Failed to get task dependents")),
-    ),
-
     // Session tree
 
     getChildSessions: Effect.fn("Storage.getChildSessions")(
@@ -1330,60 +1059,6 @@ const makeStorage = Effect.gen(function* () {
       },
       Effect.mapError(mapError("Failed to delete pending interaction requests")),
     ),
-
-    // Dream queries
-    getRecentSessions: Effect.fn("Storage.getRecentSessions")(
-      function* (since) {
-        const sinceTs = since.getTime()
-        const rows =
-          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE updated_at > ${sinceTs} ORDER BY updated_at DESC`
-        return rows.map((row) => ({
-          id: row.id,
-          name: row.name,
-          cwd: row.cwd,
-          createdAt: new Date(row.created_at),
-          updatedAt: new Date(row.updated_at),
-        }))
-      },
-      Effect.mapError(mapError("Failed to get recent sessions")),
-    ),
-
-    getSessionMessages: Effect.fn("Storage.getSessionMessages")(
-      function* (sessionId, options) {
-        const since = options?.since
-        const roles = options?.roles
-
-        // Get all branch IDs for this session
-        const branchRows = yield* sql<{
-          id: BranchId
-        }>`SELECT id FROM branches WHERE session_id = ${sessionId}`
-        if (branchRows.length === 0) return []
-
-        // Build message query across all branches
-        const branchIds = branchRows.map((r) => r.id)
-        const placeholders = branchIds.map(() => "?").join(",")
-        let query = `SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id IN (${placeholders})`
-        const params: unknown[] = [...branchIds]
-
-        if (since !== undefined) {
-          query += ` AND created_at > ?`
-          params.push(since.getTime())
-        }
-        if (roles !== undefined && roles.length > 0) {
-          const rolePlaceholders = roles.map(() => "?").join(",")
-          query += ` AND role IN (${rolePlaceholders})`
-          params.push(...roles)
-        }
-
-        query += ` ORDER BY created_at ASC, id ASC`
-
-        const rows = yield* sql.unsafe<MessageRow>(query, params)
-        return yield* Effect.forEach(rows, (row) =>
-          Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
-        )
-      },
-      Effect.mapError(mapError("Failed to get session messages")),
-    ),
   } satisfies StorageService
 })
 
@@ -1404,9 +1079,34 @@ export class Storage extends ServiceMap.Service<Storage, StorageService>()(
       }),
     ).pipe(Layer.provide(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
 
+  /** Live layer that also exposes SqlClient (for extension layers that need SQL access) */
+  static LiveWithSql = (
+    dbPath: string,
+  ): Layer.Layer<
+    Storage | SqlClient.SqlClient,
+    PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path
+  > =>
+    Layer.effect(
+      Storage,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dir = path.dirname(dbPath)
+        yield* fs.makeDirectory(dir, { recursive: true })
+        return yield* makeStorage
+      }),
+    ).pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
+
   static Memory = (): Layer.Layer<Storage> =>
     Layer.effect(Storage, makeStorage).pipe(
       Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
+    )
+
+  /** Memory layer that also exposes SqlClient (for extension layers that need SQL access) */
+  static MemoryWithSql = (): Layer.Layer<Storage | SqlClient.SqlClient> =>
+    Layer.effect(Storage, makeStorage).pipe(
+      Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
     )
 
   static Test = (): Layer.Layer<Storage> => Storage.Memory()

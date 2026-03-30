@@ -1,14 +1,22 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { TaskStorage } from "@gent/core/storage/task-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
 import type { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"
 
-const test = it.live.layer(Storage.Test())
+// Single in-memory db: TestWithSql exposes both Storage and SqlClient.
+// TaskStorage.Live consumes SqlClient, so we provide TestWithSql to it.
+const baseLayer = Storage.TestWithSql()
+const taskStorageLayer = Layer.provide(TaskStorage.Live, baseLayer)
+const testLayer = Layer.merge(baseLayer, taskStorageLayer)
+
+const test = it.live.layer(testLayer)
 
 const setup = Effect.gen(function* () {
   const storage = yield* Storage
+  const taskStorage = yield* TaskStorage
   const now = new Date()
   const session = new Session({
     id: "s1" as SessionId,
@@ -23,7 +31,7 @@ const setup = Effect.gen(function* () {
   })
   yield* storage.createSession(session)
   yield* storage.createBranch(branch)
-  return { storage, session, branch }
+  return { storage: taskStorage, session, branch }
 })
 
 const makeTask = (id: string, overrides?: Partial<ConstructorParameters<typeof Task>[0]>) => {
@@ -160,7 +168,6 @@ describe("Task Dependencies", () => {
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
       yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
-      // Deleting t2 (the task with the dep) removes the dep row
       yield* storage.deleteTask("t2" as TaskId)
       const dependents = yield* storage.getTaskDependents("t1" as TaskId)
       expect(dependents.length).toBe(0)

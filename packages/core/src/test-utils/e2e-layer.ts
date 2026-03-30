@@ -102,10 +102,15 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
 
   const resolved = resolveExtensions(resolvedExtensions)
 
-  // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts)
-  const extensionLayers = resolvedExtensions
+  // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts).
+  // Extension layers may require SqlClient (e.g. TaskStorage.Live), so provide it via storageLayer.
+  const storageLayer = Storage.MemoryWithSql()
+  const extensionLayers: Layer.Layer<never>[] = resolvedExtensions
     .filter((ext) => ext.setup.layer !== undefined)
-    .map((ext) => ext.setup.layer as Layer.Layer<never>)
+    .map(
+      (ext) =>
+        Layer.provide(ext.setup.layer as Layer.Layer<never>, storageLayer) as Layer.Layer<never>,
+    )
 
   // Subagent runner
   const defaultRunner: SubagentRunner = {
@@ -132,7 +137,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   // Base services — everything that doesn't depend on reducing event store
   const baseDeps = Layer.mergeAll(
     BunServices.layer,
-    Storage.Memory(),
+    storageLayer,
     config.providerLayer,
     extensionRegistryLive,
     ExtensionStateRuntime.Live(resolvedExtensions),

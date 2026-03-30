@@ -1,9 +1,10 @@
-import { Effect, Layer, ServiceMap } from "effect"
+import { Effect, Layer, Option, ServiceMap } from "effect"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import type { Task } from "../domain/task.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import { TaskStorage } from "../storage/task-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
@@ -216,7 +217,15 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
         listMessages: (branchId) =>
           storage.listMessages(branchId).pipe(Effect.map((xs) => xs.map(messageToInfo))),
         listTasks: (sessionId, branchId) =>
-          storage.listTasks(sessionId, branchId).pipe(Effect.withSpan("SessionQueries.listTasks")),
+          Effect.serviceOption(TaskStorage).pipe(
+            Effect.flatMap((opt) =>
+              Option.match(opt, {
+                onNone: () => Effect.succeed([] as ReadonlyArray<Task>),
+                onSome: (ts) => ts.listTasks(sessionId, branchId).pipe(Effect.orDie),
+              }),
+            ),
+            Effect.withSpan("SessionQueries.listTasks"),
+          ),
         getQueuedMessages: ({ sessionId, branchId }) =>
           actorProcess
             .getQueuedMessages({ sessionId, branchId })

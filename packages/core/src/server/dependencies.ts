@@ -242,7 +242,9 @@ export const createDependencies = (config: DependenciesConfig) => {
   const providerMode = config.providerMode ?? "live"
 
   const storageLive =
-    persistenceMode === "memory" ? Storage.Memory() : Storage.Live(config.dbPath ?? ".gent/data.db")
+    persistenceMode === "memory"
+      ? Storage.MemoryWithSql()
+      : Storage.LiveWithSql(config.dbPath ?? ".gent/data.db")
   // Base event store: raw storage-backed publisher (provides both BaseEventStore and EventStore initially)
   const baseEventStoreLive =
     persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, storageLive)
@@ -261,7 +263,8 @@ export const createDependencies = (config: DependenciesConfig) => {
     claudeSkillsDir: `${config.home}/.claude/skills`,
     extraDirs: config.skillsDirs,
   })
-  const extensionRegistryLive = makeExtensionLayers(config)
+  // Extension registry needs storageLive for SqlClient (extension layers like TaskStorage.Live need it)
+  const extensionRegistryLive = Layer.provide(makeExtensionLayers(config), storageLive)
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,
     Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),

@@ -14,6 +14,7 @@ import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { TaskStorage } from "@gent/core/storage/task-storage"
 import { TaskService } from "@gent/core/runtime/task-service"
 
 const platformLayer = Layer.merge(
@@ -48,8 +49,11 @@ const TestExtRegistry = ExtensionRegistry.fromResolved(
     },
   ]),
 )
+const storageWithSql = Storage.TestWithSql()
+const taskStorageLayer = Layer.provide(TaskStorage.Live, storageWithSql)
 const baseDeps = Layer.mergeAll(
-  Storage.Test(),
+  storageWithSql,
+  taskStorageLayer,
   EventStore.Memory,
   TestExtRegistry,
   mockRunnerSuccess,
