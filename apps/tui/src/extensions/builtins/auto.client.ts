@@ -1,18 +1,9 @@
 import { defineClientExtension } from "@gent/core/domain/extension-client.js"
-import { AutoWidget } from "../auto-widget"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
 
 export default defineClientExtension({
   id: "@gent/auto",
   setup: (ctx) => ({
-    widgets: [
-      {
-        id: "auto",
-        slot: "above-input",
-        priority: 5,
-        component: AutoWidget,
-      },
-    ],
     overlays: [
       {
         id: "auto-goal",
