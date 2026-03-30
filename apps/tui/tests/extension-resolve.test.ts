@@ -269,13 +269,132 @@ describe("resolveTuiExtensions", () => {
     })
   })
 
+  describe("interaction renderers", () => {
+    test("resolves by event tag", () => {
+      const ext = makeExt("builtins", "builtin", {
+        interactionRenderers: [
+          { eventTag: "QuestionsAsked", component: () => "questions" },
+          { eventTag: "PermissionRequested", component: () => "permission" },
+        ],
+      })
+      const { interactionRenderers } = resolveTuiExtensions([ext])
+      expect(interactionRenderers.get("QuestionsAsked")!()).toBe("questions")
+      expect(interactionRenderers.get("PermissionRequested")!()).toBe("permission")
+    })
+
+    test("user overrides builtin for same tag", () => {
+      const builtin = makeExt("builtins", "builtin", {
+        interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "builtin-q" }],
+      })
+      const user = makeExt("custom", "user", {
+        interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "user-q" }],
+      })
+      const { interactionRenderers } = resolveTuiExtensions([builtin, user])
+      expect(interactionRenderers.get("QuestionsAsked")!()).toBe("user-q")
+    })
+
+    test("project overrides user for same tag", () => {
+      const user = makeExt("user-ext", "user", {
+        interactionRenderers: [{ eventTag: "PermissionRequested", component: () => "user-p" }],
+      })
+      const project = makeExt("proj-ext", "project", {
+        interactionRenderers: [{ eventTag: "PermissionRequested", component: () => "proj-p" }],
+      })
+      const { interactionRenderers } = resolveTuiExtensions([user, project])
+      expect(interactionRenderers.get("PermissionRequested")!()).toBe("proj-p")
+    })
+
+    test("same-scope collision throws", () => {
+      const ext1: LoadedTuiExtension = {
+        id: "a",
+        kind: "user",
+        filePath: "/test/a",
+        setup: {
+          interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "a" }],
+        },
+      }
+      const ext2: LoadedTuiExtension = {
+        id: "b",
+        kind: "user",
+        filePath: "/test/b",
+        setup: {
+          interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "b" }],
+        },
+      }
+      expect(() => resolveTuiExtensions([ext1, ext2])).toThrow(
+        "Same-scope TUI interaction renderer collision",
+      )
+    })
+
+    test("different tags from different extensions resolve independently", () => {
+      const ext1 = makeExt("ext1", "builtin", {
+        interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "q" }],
+      })
+      const ext2 = makeExt("ext2", "builtin", {
+        interactionRenderers: [{ eventTag: "HandoffPresented", component: () => "h" }],
+      })
+      const { interactionRenderers } = resolveTuiExtensions([ext1, ext2])
+      expect(interactionRenderers.size).toBe(2)
+    })
+  })
+
+  describe("composer surface", () => {
+    test("resolves single composer surface", () => {
+      const ext = makeExt("ext", "user", {
+        composerSurface: () => "custom-composer",
+      })
+      const { composerSurface } = resolveTuiExtensions([ext])
+      expect(composerSurface!()).toBe("custom-composer")
+    })
+
+    test("higher scope wins", () => {
+      const user = makeExt("user-ext", "user", {
+        composerSurface: () => "user-composer",
+      })
+      const project = makeExt("proj-ext", "project", {
+        composerSurface: () => "proj-composer",
+      })
+      const { composerSurface } = resolveTuiExtensions([user, project])
+      expect(composerSurface!()).toBe("proj-composer")
+    })
+
+    test("same-scope collision throws", () => {
+      const ext1: LoadedTuiExtension = {
+        id: "a",
+        kind: "user",
+        filePath: "/test/a",
+        setup: { composerSurface: () => "a" },
+      }
+      const ext2: LoadedTuiExtension = {
+        id: "b",
+        kind: "user",
+        filePath: "/test/b",
+        setup: { composerSurface: () => "b" },
+      }
+      expect(() => resolveTuiExtensions([ext1, ext2])).toThrow(
+        "Same-scope TUI composer surface collision",
+      )
+    })
+
+    test("undefined when no extension provides one", () => {
+      const ext = makeExt("ext", "user", {
+        tools: [{ toolNames: ["read"], component: () => "read" }],
+      })
+      const { composerSurface } = resolveTuiExtensions([ext])
+      expect(composerSurface).toBeUndefined()
+    })
+  })
+
   describe("empty", () => {
     test("empty input returns empty results", () => {
-      const { renderers, widgets, commands, overlays } = resolveTuiExtensions([])
+      const { renderers, widgets, commands, overlays, interactionRenderers, composerSurface } =
+        resolveTuiExtensions([])
       expect(renderers.size).toBe(0)
       expect(widgets.length).toBe(0)
       expect(commands.length).toBe(0)
       expect(overlays.size).toBe(0)
+      expect(interactionRenderers.size).toBe(0)
+      expect(composerSurface).toBeUndefined()
     })
   })
 })

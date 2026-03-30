@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Layer, Stream } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Layer, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "@gent/core/tools/read"
 import { GlobTool } from "@gent/core/tools/glob"
@@ -171,12 +171,12 @@ describe("AskUser Handler (integration)", () => {
       const handler = yield* AskUserHandler
       const eventStore = yield* EventStore
 
-      // Subscribe to events to capture the requestId
-      const events: Array<{ requestId: string }> = []
+      // Latch: deterministic wait for QuestionsAsked event
+      const latch = yield* Deferred.make<string>()
       const subscription = eventStore.subscribe({ sessionId: "test-session" as never }).pipe(
         Stream.tap((env) => {
           if (env.event._tag === "QuestionsAsked") {
-            events.push({ requestId: env.event.requestId })
+            return Deferred.succeed(latch, env.event.requestId)
           }
           return Effect.void
         }),
@@ -187,14 +187,10 @@ describe("AskUser Handler (integration)", () => {
       // Start askMany in a fiber — it blocks on the deferred
       const askFiber = yield* Effect.forkScoped(handler.askMany([{ question: "Continue?" }], ctx))
 
-      // Wait for event to be published
-      yield* Effect.sleep("50 millis")
-      expect(events.length).toBe(1)
+      // Wait for event deterministically, then respond
+      const requestId = yield* Deferred.await(latch)
+      yield* handler.respond(requestId, [], true)
 
-      // Respond with cancelled
-      yield* handler.respond(events[0]!.requestId, [], true)
-
-      // askMany should resolve as cancelled
       const decision = yield* Fiber.join(askFiber)
       expect(decision._tag).toBe("cancelled")
     }).pipe(Effect.provide(handlerLayer)),
@@ -205,11 +201,11 @@ describe("AskUser Handler (integration)", () => {
       const handler = yield* AskUserHandler
       const eventStore = yield* EventStore
 
-      const events: Array<{ requestId: string }> = []
+      const latch = yield* Deferred.make<string>()
       const subscription = eventStore.subscribe({ sessionId: "test-session" as never }).pipe(
         Stream.tap((env) => {
           if (env.event._tag === "QuestionsAsked") {
-            events.push({ requestId: env.event.requestId })
+            return Deferred.succeed(latch, env.event.requestId)
           }
           return Effect.void
         }),
@@ -219,10 +215,8 @@ describe("AskUser Handler (integration)", () => {
 
       const askFiber = yield* Effect.forkScoped(handler.askMany([{ question: "Continue?" }], ctx))
 
-      yield* Effect.sleep("50 millis")
-      expect(events.length).toBe(1)
-
-      yield* handler.respond(events[0]!.requestId, [["Yes"]])
+      const requestId = yield* Deferred.await(latch)
+      yield* handler.respond(requestId, [["Yes"]])
 
       const decision = yield* Fiber.join(askFiber)
       expect(decision._tag).toBe("answered")
