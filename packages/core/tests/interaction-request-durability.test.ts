@@ -148,6 +148,68 @@ describe("Interaction Request Durability", () => {
     )
   })
 
+  test("double respond is idempotent — second call is a no-op", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const interaction = makeInteractionService<
+          { sessionId: SessionId; branchId: BranchId },
+          string
+        >({
+          type: "permission",
+          onPresent: () => Effect.void,
+          onRespond: () => Effect.void,
+        })
+
+        // Fork present — blocks on deferred
+        const resultDeferred = yield* Deferred.make<string>()
+        yield* Effect.forkDetach(
+          interaction
+            .present({ sessionId: "s-dr" as SessionId, branchId: "b-dr" as BranchId })
+            .pipe(Effect.flatMap((d) => Deferred.succeed(resultDeferred, d))),
+        )
+        yield* Effect.sleep("10 millis")
+
+        // Get the requestId from pending map
+        const entries = [...interaction.pending.entries()]
+        expect(entries.length).toBe(1)
+        const requestId = entries[0]![0]
+
+        // First respond — should succeed
+        const first = yield* interaction.respond(requestId, "allow")
+        expect(first).toBeDefined()
+
+        // Second respond — should be no-op
+        const second = yield* interaction.respond(requestId, "deny")
+        expect(second).toBeUndefined()
+
+        // The deferred should have resolved with the first decision
+        const result = yield* Deferred.await(resultDeferred)
+        expect(result).toBe("allow")
+      }),
+    )
+  })
+
+  test("claim is atomic — second claim returns undefined", () => {
+    const interaction = makeInteractionService<{ value: string }, string>({
+      type: "permission",
+      onPresent: () => Effect.void,
+      onRespond: () => Effect.void,
+    })
+
+    // Manually insert a pending entry for testing
+    const deferred = Effect.runSync(Deferred.make<string>())
+    interaction.pending.set("req-claim", { deferred, params: { value: "test" } })
+
+    // First claim succeeds
+    const first = interaction.claim("req-claim")
+    expect(first).toBeDefined()
+    expect(first!.params.value).toBe("test")
+
+    // Second claim returns undefined
+    const second = interaction.claim("req-claim")
+    expect(second).toBeUndefined()
+  })
+
   test("autoResolve skips storage persistence", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

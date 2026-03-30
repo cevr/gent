@@ -50,6 +50,8 @@ export interface InteractionService<TParams, TDecision> {
     decision: TDecision,
     extra?: string,
   ) => Effect.Effect<TParams | undefined, EventStoreError>
+  /** Atomic claim — returns entry only on first call, subsequent calls get undefined */
+  readonly claim: (requestId: string) => PendingEntry<TParams, TDecision> | undefined
   readonly peek: (requestId: string) => TParams | undefined
   readonly pending: Map<string, PendingEntry<TParams, TDecision>>
   /** Rehydrate a persisted request — creates deferred, adds to pending map, re-publishes event */
@@ -120,15 +122,24 @@ export const makeInteractionService = <TParams, TDecision>(
       return decision
     }),
 
+    claim: (requestId: string) => {
+      const entry = pending.get(requestId)
+      if (entry === undefined) return undefined
+      // Atomic: delete immediately so second caller gets undefined
+      pending.delete(requestId)
+      return entry
+    },
+
     respond: Effect.fn("InteractionService.respond")(function* (
       requestId: string,
       decision: TDecision,
       extra?: string,
     ) {
+      // Single-winner: claim atomically, second respond is a no-op
       const entry = pending.get(requestId)
       if (entry === undefined) return undefined
-
       pending.delete(requestId)
+
       // Unblock the caller first — event publish failure must not hang the tool
       yield* Deferred.succeed(entry.deferred, decision)
 
