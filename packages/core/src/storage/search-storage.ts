@@ -1,0 +1,79 @@
+import { ServiceMap, Effect, Layer } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+import { StorageError } from "./sqlite-storage.js"
+
+const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
+
+export interface SearchResult {
+  readonly sessionId: string
+  readonly sessionName: string | null
+  readonly branchId: string
+  readonly snippet: string
+  readonly createdAt: number
+}
+
+export interface SearchStorageService {
+  readonly searchMessages: (
+    query: string,
+    options?: {
+      sessionId?: string
+      dateAfter?: number
+      dateBefore?: number
+      limit?: number
+    },
+  ) => Effect.Effect<ReadonlyArray<SearchResult>, StorageError>
+}
+
+export class SearchStorage extends ServiceMap.Service<SearchStorage, SearchStorageService>()(
+  "@gent/core/storage/SearchStorage",
+) {
+  static Live: Layer.Layer<SearchStorage, never, SqlClient.SqlClient> = Layer.effect(
+    SearchStorage,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+
+      return {
+        searchMessages: Effect.fn("SearchStorage.searchMessages")(
+          function* (query, options) {
+            const limit = options?.limit ?? 20
+            const sessionFilter = options?.sessionId
+            const dateAfter = options?.dateAfter
+            const dateBefore = options?.dateBefore
+
+            const ftsQuery = query.replace(/['"]/g, "")
+
+            let whereExtra = ""
+            if (sessionFilter !== undefined) {
+              whereExtra += ` AND m.session_id = '${sessionFilter.replace(/'/g, "''")}'`
+            }
+            if (dateAfter !== undefined) {
+              whereExtra += ` AND m.created_at > ${dateAfter}`
+            }
+            if (dateBefore !== undefined) {
+              whereExtra += ` AND m.created_at < ${dateBefore}`
+            }
+
+            const rows = yield* sql.unsafe<{
+              session_id: string
+              session_name: string | null
+              branch_id: string
+              snippet_text: string
+              created_at: number
+            }>(
+              `SELECT m.session_id, s.name as session_name, m.branch_id, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet_text, m.created_at FROM messages_fts fts JOIN messages m ON m.id = fts.message_id JOIN sessions s ON s.id = m.session_id WHERE messages_fts MATCH '${ftsQuery.replace(/'/g, "''")}'${whereExtra} ORDER BY m.created_at DESC LIMIT ${limit}`,
+            )
+
+            return rows.map((row) => ({
+              sessionId: row.session_id,
+              sessionName: row.session_name,
+              branchId: row.branch_id,
+              snippet: row.snippet_text,
+              createdAt: row.created_at,
+            }))
+          },
+          Effect.mapError(mapError("Failed to search messages")),
+        ),
+      }
+    }),
+  )
+}

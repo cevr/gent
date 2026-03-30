@@ -11,6 +11,7 @@ import type { Message } from "@gent/core/domain/message"
 import type { AgentName } from "@gent/core/domain/agent"
 import { Agents } from "@gent/core/domain/agent"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import { AppServicesLive } from "@gent/core/server/index"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { LocalActorProcessLive } from "@gent/core/runtime/actor-process"
@@ -59,8 +60,10 @@ const makeTestLayer = (logs: {
       }),
   })
 
+  const storageLayer = Storage.TestWithSql()
   const storageDeps = Layer.mergeAll(
-    Storage.Test(),
+    storageLayer,
+    Layer.provide(InteractionStorage.Live, storageLayer),
     EventStore.Test(),
     agentLoopLayer,
     ExtensionRegistry.fromResolved(testExtensions),

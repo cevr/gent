@@ -16,7 +16,7 @@ import {
   type InteractionRequestRecord,
   type InteractionStorageConfig,
 } from "../domain/interaction-request.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
 
 // AskUser Params — canonical questions[] input
 // Reuses QuestionSchema from event.ts with tool-specific length constraints.
@@ -80,20 +80,20 @@ export interface AskUserHandlerService {
 export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
   "@gent/core/src/tools/ask-user/AskUserHandler",
 ) {
-  static Live: Layer.Layer<AskUserHandler, never, EventStore | Storage> = Layer.effect(
+  static Live: Layer.Layer<AskUserHandler, never, EventStore | InteractionStorage> = Layer.effect(
     AskUserHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
-      const storage = yield* Storage
+      const interactionStore = yield* InteractionStorage
 
       const storageCallbacks: InteractionStorageConfig = {
         persist: (record) =>
-          storage.persistInteractionRequest(record).pipe(
+          interactionStore.persist(record).pipe(
             Effect.asVoid,
             Effect.catchEager(() => Effect.void),
           ),
         resolve: (requestId) =>
-          storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+          interactionStore.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
       }
 
       const interaction = makeInteractionService<AskUserParams_, AskUserDecision>({

@@ -5,6 +5,7 @@ import type { Task } from "../domain/task.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { TaskStorage } from "../storage/task-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
@@ -53,6 +54,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
     SessionQueries,
     Effect.gen(function* () {
       const storage = yield* Storage
+      const interactionStore = yield* InteractionStorage
       const actorProcess = yield* ActorProcess
       const extensionStateRuntime = yield* ExtensionStateRuntime
 
@@ -174,7 +176,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           )
 
         // Active interaction — find pending request for this session+branch
-        const activeInteraction = yield* storage.listPendingInteractionRequests().pipe(
+        const activeInteraction = yield* interactionStore.listPending().pipe(
           Effect.map((requests) => {
             const match = requests.find(
               (r) => r.sessionId === input.sessionId && r.branchId === input.branchId,

@@ -26,6 +26,9 @@ import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { EventStoreLive } from "../server/event-store.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import { CheckpointStorage } from "../storage/checkpoint-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
+import { SearchStorage } from "../storage/search-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
@@ -53,8 +56,12 @@ const sharedInfra = () => {
 const buildLayer = (providerLive: Layer.Layer<Provider>) => {
   const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra()
 
+  const storageLayer = Storage.MemoryWithSql()
   const baseDeps = Layer.mergeAll(
-    Storage.Memory(),
+    storageLayer,
+    Layer.provide(CheckpointStorage.Live, storageLayer),
+    Layer.provide(InteractionStorage.Live, storageLayer),
+    Layer.provide(SearchStorage.Live, storageLayer),
     providerLive,
     extensionRegistryLive,
     ExtensionStateRuntime.Test(),

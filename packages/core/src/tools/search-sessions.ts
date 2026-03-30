@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SearchStorage } from "../storage/search-storage.js"
 
 // Search Sessions Error
 
@@ -72,7 +72,7 @@ export const SearchSessionsTool = defineTool({
     "Search past session content by keyword, file path, or date range. Returns session summaries with match excerpts.",
   params: SearchSessionsParams,
   execute: Effect.fn("SearchSessionsTool.execute")(function* (params) {
-    const storage = yield* Storage
+    const searchStore = yield* SearchStorage
 
     if (params.query === undefined && params.file === undefined) {
       return yield* new SearchSessionsError({
@@ -94,7 +94,7 @@ export const SearchSessionsTool = defineTool({
       }
     }
 
-    const results = yield* storage.searchMessages(searchQuery, {
+    const results = yield* searchStore.searchMessages(searchQuery, {
       dateAfter,
       limit: params.limit ?? 20,
     })

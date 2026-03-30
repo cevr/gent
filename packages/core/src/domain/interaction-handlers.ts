@@ -22,7 +22,7 @@ import {
   type InteractionStorageConfig,
   type InteractionRequestRecord,
 } from "./interaction-request"
-import { Storage } from "../storage/sqlite-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
 
 // ============================================================================
 // Permission Handler
@@ -52,56 +52,57 @@ export class PermissionHandler extends ServiceMap.Service<
   PermissionHandler,
   PermissionHandlerService
 >()("@gent/core/src/domain/interaction-handlers/PermissionHandler") {
-  static Live: Layer.Layer<PermissionHandler, never, EventStore | Storage> = Layer.effect(
-    PermissionHandler,
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      const storageCallbacks = yield* makeStorageCallbacks
+  static Live: Layer.Layer<PermissionHandler, never, EventStore | InteractionStorage> =
+    Layer.effect(
+      PermissionHandler,
+      Effect.gen(function* () {
+        const eventStore = yield* EventStore
+        const storageCallbacks = yield* makeStorageCallbacks
 
-      const interaction = makeInteractionService<PermissionParams, PermissionDecision>({
-        type: "permission",
-        onPresent: (requestId, params) =>
-          eventStore.publish(
-            new PermissionRequested({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
+        const interaction = makeInteractionService<PermissionParams, PermissionDecision>({
+          type: "permission",
+          onPresent: (requestId, params) =>
+            eventStore.publish(
+              new PermissionRequested({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+                toolCallId: params.toolCallId,
+                toolName: params.toolName,
+                ...(params.input !== undefined ? { input: params.input } : {}),
+              }),
+            ),
+          onRespond: (requestId, params) =>
+            eventStore.publish(
+              new InteractionDismissed({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+              }),
+            ),
+          getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+          storage: storageCallbacks,
+        })
+
+        return {
+          request: Effect.fn("PermissionHandler.request")(function* (params, ctx) {
+            return yield* interaction.present({
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
               toolCallId: params.toolCallId,
               toolName: params.toolName,
-              ...(params.input !== undefined ? { input: params.input } : {}),
-            }),
-          ),
-        onRespond: (requestId, params) =>
-          eventStore.publish(
-            new InteractionDismissed({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-            }),
-          ),
-        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
-        storage: storageCallbacks,
-      })
-
-      return {
-        request: Effect.fn("PermissionHandler.request")(function* (params, ctx) {
-          return yield* interaction.present({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            toolCallId: params.toolCallId,
-            toolName: params.toolName,
-            input: params.input,
-          })
-        }),
-        respond: (requestId, decision) => interaction.respond(requestId, decision),
-        rehydrate: (record) =>
-          interaction.rehydrate(
-            record.requestId,
-            JSON.parse(record.paramsJson) as PermissionParams,
-          ),
-      }
-    }),
-  )
+              input: params.input,
+            })
+          }),
+          respond: (requestId, decision) => interaction.respond(requestId, decision),
+          rehydrate: (record) =>
+            interaction.rehydrate(
+              record.requestId,
+              JSON.parse(record.paramsJson) as PermissionParams,
+            ),
+        }
+      }),
+    )
 
   static Test = (
     decisions: ReadonlyArray<PermissionDecision> = ["allow"],
@@ -141,7 +142,7 @@ export interface PromptHandlerService {
 export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandlerService>()(
   "@gent/core/src/domain/interaction-handlers/PromptHandler",
 ) {
-  static Live: Layer.Layer<PromptHandler, never, EventStore | Storage> = Layer.effect(
+  static Live: Layer.Layer<PromptHandler, never, EventStore | InteractionStorage> = Layer.effect(
     PromptHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
@@ -260,7 +261,7 @@ export interface HandoffHandlerService {
 export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHandlerService>()(
   "@gent/core/src/domain/interaction-handlers/HandoffHandler",
 ) {
-  static Live: Layer.Layer<HandoffHandler, never, EventStore | Storage> = Layer.effect(
+  static Live: Layer.Layer<HandoffHandler, never, EventStore | InteractionStorage> = Layer.effect(
     HandoffHandler,
     Effect.gen(function* () {
       const eventStore = yield* EventStore
@@ -360,17 +361,16 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
 // Shared storage callback factory
 // ============================================================================
 
-const makeStorageCallbacks: Effect.Effect<InteractionStorageConfig, never, Storage> = Effect.gen(
-  function* () {
-    const storage = yield* Storage
+const makeStorageCallbacks: Effect.Effect<InteractionStorageConfig, never, InteractionStorage> =
+  Effect.gen(function* () {
+    const interactionStore = yield* InteractionStorage
     return {
       persist: (record) =>
-        storage.persistInteractionRequest(record).pipe(
+        interactionStore.persist(record).pipe(
           Effect.asVoid,
           Effect.catchEager(() => Effect.void),
         ),
       resolve: (requestId) =>
-        storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+        interactionStore.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
     }
-  },
-)
+  })

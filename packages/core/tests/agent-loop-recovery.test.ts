@@ -32,6 +32,7 @@ import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensi
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { EventStoreLive } from "@gent/core/server/event-store"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 
 const systemPrompt = "System prompt"
@@ -112,10 +113,11 @@ const makeRecoveryLayer = (params: {
   toolRunnerCalls?: Ref.Ref<number>
   tools?: ReadonlyArray<typeof idempotentTestTool | typeof nonIdempotentTestTool>
 }) => {
-  const storageLayer = Storage.Live(params.dbPath).pipe(
+  const storageLayer = Storage.LiveWithSql(params.dbPath).pipe(
     Layer.provide(BunFileSystem.layer),
     Layer.provide(BunServices.layer),
   )
+  const checkpointStorageLayer = Layer.provide(CheckpointStorage.Live, storageLayer)
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
   const extensionLayer = ExtensionRegistry.fromResolved(
     resolveExtensions([
@@ -163,6 +165,7 @@ const makeRecoveryLayer = (params: {
 
   const base = Layer.mergeAll(
     storageLayer,
+    checkpointStorageLayer,
     eventStoreLayer,
     extensionLayer,
     ExtensionStateRuntime.Test(),

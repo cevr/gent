@@ -57,6 +57,7 @@ import { type AnyToolDefinition, type ToolAction, type ToolContext } from "../..
 import type { PromptSection } from "../../server/system-prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
+import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import { Provider, type FinishChunk } from "../../providers/provider.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withRetry } from "../retry"
@@ -486,12 +487,19 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
   }): Layer.Layer<
     AgentLoop,
     never,
-    Storage | Provider | ExtensionRegistry | ExtensionStateRuntime | EventStore | ToolRunner
+    | Storage
+    | CheckpointStorage
+    | Provider
+    | ExtensionRegistry
+    | ExtensionStateRuntime
+    | EventStore
+    | ToolRunner
   > =>
     Layer.effect(
       AgentLoop,
       Effect.gen(function* () {
         const storage = yield* Storage
+        const checkpointStorage = yield* CheckpointStorage
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const extensionStateRuntime = yield* ExtensionStateRuntime
@@ -946,27 +954,27 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               persist: {
                 load: () =>
                   Effect.gen(function* () {
-                    const record = yield* storage.getAgentLoopCheckpoint({ sessionId, branchId })
+                    const record = yield* checkpointStorage.get({ sessionId, branchId })
                     if (record === undefined) return Option.none<LoopState>()
                     if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
-                      yield* storage.deleteAgentLoopCheckpoint({ sessionId, branchId })
+                      yield* checkpointStorage.remove({ sessionId, branchId })
                       return Option.none<LoopState>()
                     }
                     const decoded = yield* Effect.option(
                       decodeLoopCheckpointState(record.stateJson),
                     )
                     if (Option.isNone(decoded)) {
-                      yield* storage.deleteAgentLoopCheckpoint({ sessionId, branchId })
+                      yield* checkpointStorage.remove({ sessionId, branchId })
                     }
                     return decoded
                   }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
                 save: (state) =>
                   Effect.gen(function* () {
                     if (!shouldRetainLoopCheckpoint(state)) {
-                      yield* storage.deleteAgentLoopCheckpoint({ sessionId, branchId })
+                      yield* checkpointStorage.remove({ sessionId, branchId })
                       return
                     }
-                    yield* storage.upsertAgentLoopCheckpoint(
+                    yield* checkpointStorage.upsert(
                       yield* buildLoopCheckpointRecord({ sessionId, branchId, state }),
                     )
                   }).pipe(
@@ -1037,7 +1045,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           if (existing !== undefined) return existing
 
           const checkpoint = Option.getOrUndefined(
-            yield* Effect.option(storage.getAgentLoopCheckpoint({ sessionId, branchId })),
+            yield* Effect.option(checkpointStorage.get({ sessionId, branchId })),
           )
           if (checkpoint === undefined) return undefined
 

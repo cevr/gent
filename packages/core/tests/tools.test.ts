@@ -14,6 +14,7 @@ import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 
 const TestExtRegistry = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -163,7 +164,12 @@ describe("Todo Tools", () => {
 })
 
 describe("AskUser Handler (integration)", () => {
-  const deps = Layer.merge(EventStore.Memory, Storage.Test())
+  const storageLayer = Storage.TestWithSql()
+  const deps = Layer.mergeAll(
+    EventStore.Memory,
+    storageLayer,
+    Layer.provide(InteractionStorage.Live, storageLayer),
+  )
   const handlerLayer = AskUserHandler.Live.pipe(Layer.provideMerge(deps))
 
   it.scopedLive("respond with cancelled resolves askMany as cancelled", () =>

@@ -39,6 +39,7 @@ import { Permission } from "@gent/core/domain/permission"
 import { PermissionHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 
@@ -608,7 +609,10 @@ describe("AgentLoop actor model", () => {
 
   const makeLayer = (providerLayer: Layer.Layer<Provider>) => {
     const deps = Layer.mergeAll(
-      Storage.Test(),
+      (() => {
+        const s = Storage.TestWithSql()
+        return Layer.mergeAll(s, Layer.provide(CheckpointStorage.Live, s))
+      })(),
       providerLayer,
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
@@ -623,8 +627,10 @@ describe("AgentLoop actor model", () => {
   const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const storageLayer = Storage.TestWithSql()
     const deps = Layer.mergeAll(
-      Storage.Test(),
+      storageLayer,
+      Layer.provide(CheckpointStorage.Live, storageLayer),
       providerLayer,
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
@@ -726,10 +732,12 @@ describe("AgentLoop actor model", () => {
       }),
     )
 
-    const slowStorage = Layer.provide(delayedStorage, Storage.Test())
+    const baseStorageLayer = Storage.TestWithSql()
+    const slowStorage = Layer.provide(delayedStorage, baseStorageLayer)
 
     const deps = Layer.mergeAll(
       slowStorage,
+      Layer.provide(CheckpointStorage.Live, baseStorageLayer),
       providerLayer,
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),

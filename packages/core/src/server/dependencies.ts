@@ -37,6 +37,9 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { TaskService } from "../runtime/task-service.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import { CheckpointStorage } from "../storage/checkpoint-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
+import { SearchStorage } from "../storage/search-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildBasePromptSections, compileSystemPrompt } from "./system-prompt.js"
@@ -298,9 +301,16 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.merge(baseEventStoreLive, extensionRegistryLive),
   )
 
+  const checkpointStorageLive = Layer.provide(CheckpointStorage.Live, storageLive)
+  const interactionStorageLive = Layer.provide(InteractionStorage.Live, storageLive)
+  const searchStorageLive = Layer.provide(SearchStorage.Live, storageLive)
+
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,
     storageLive,
+    checkpointStorageLive,
+    interactionStorageLive,
+    searchStorageLive,
     baseEventStoreLive,
     reducingEventStoreLive,
     authStorageLive,
@@ -398,13 +408,13 @@ export const createDependencies = (config: DependenciesConfig) => {
   const interactionRecoveryLive = Layer.effect(
     InteractionRecoveryTag,
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const interactionStore = yield* InteractionStorage
       const permissionHandler = yield* PermissionHandler
       const promptHandler = yield* PromptHandler
       const handoffHandler = yield* HandoffHandler
       const askUserHandler = yield* AskUserHandler
 
-      const pending = yield* storage.listPendingInteractionRequests()
+      const pending = yield* interactionStore.listPending()
       if (pending.length === 0) return { recovered: 0 }
 
       const handlers: Record<
@@ -498,10 +508,10 @@ export const createDependencies = (config: DependenciesConfig) => {
   // without waiting for a client to open the session.
   const checkpointWakeLive = Layer.effectDiscard(
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const checkpointStore = yield* CheckpointStorage
       const agentLoop = yield* AgentLoop
-      const checkpoints = yield* storage
-        .listAgentLoopCheckpoints()
+      const checkpoints = yield* checkpointStore
+        .list()
         .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
       if (checkpoints.length === 0) return
       for (const cp of checkpoints) {

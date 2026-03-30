@@ -41,6 +41,9 @@ import { EventStoreLive } from "../server/event-store.js"
 import { makeReducingEventStore } from "../server/dependencies.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import { CheckpointStorage } from "../storage/checkpoint-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
+import { SearchStorage } from "../storage/search-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { Test as MemoryVaultTest } from "../extensions/memory/vault.js"
 
@@ -134,10 +137,18 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
 
+  // Focused storage services (share same SqlClient from storageLayer)
+  const checkpointStorageLive = Layer.provide(CheckpointStorage.Live, storageLayer)
+  const interactionStorageLive = Layer.provide(InteractionStorage.Live, storageLayer)
+  const searchStorageLive = Layer.provide(SearchStorage.Live, storageLayer)
+
   // Base services — everything that doesn't depend on reducing event store
   const baseDeps = Layer.mergeAll(
     BunServices.layer,
     storageLayer,
+    checkpointStorageLive,
+    interactionStorageLive,
+    searchStorageLive,
     config.providerLayer,
     extensionRegistryLive,
     ExtensionStateRuntime.Live(resolvedExtensions),
