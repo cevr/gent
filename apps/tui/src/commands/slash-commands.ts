@@ -1,7 +1,7 @@
 /**
  * Slash command handlers
  *
- * Commands: /agent, /clear, /new, /sessions, /branch, /tree, /fork, /bypass, /handoff
+ * Commands: /clear, /new, /sessions, /branch, /tree, /fork, /bypass, /handoff
  */
 
 import { Effect } from "effect"
@@ -70,12 +70,6 @@ export const executeSlashCommand = (
   extensionCommands?: ReadonlyArray<ExtensionSlashCommand>,
 ): Effect.Effect<SlashCommandResult, UiError> => {
   switch (cmd.toLowerCase()) {
-    case "agent":
-      return Effect.sync(() => {
-        ctx.openPalette()
-        return { handled: true }
-      })
-
     case "clear":
       return runCommandEffect(ctx.newSession())
 

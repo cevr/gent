@@ -100,7 +100,6 @@ export function Session(props: SessionProps) {
 
   const topRightLabels = (): BorderLabelItem[] =>
     buildTopRightLabels(
-      client.agent(),
       client.session()?.reasoningLevel,
       client.latestInputTokens(),
       client.modelInfo()?.contextLength,

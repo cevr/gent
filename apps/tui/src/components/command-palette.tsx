@@ -2,7 +2,6 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
-import { Agents } from "@gent/core/domain/agent.js"
 import { useClient } from "../client/index"
 import type { SessionInfo } from "../client"
 import { useCommand } from "../command/index"
@@ -90,8 +89,6 @@ const levelTitle = (level: CommandPaletteLevel): string => {
       return "Sessions"
     case "theme":
       return "Theme"
-    case "agent":
-      return "Agent"
   }
 }
 
@@ -175,22 +172,6 @@ export function CommandPalette() {
         },
       },
     ]
-  }
-
-  const agentItems = (): readonly MenuItem[] => {
-    const current = client.agent()
-    const agents = Object.values(Agents).filter(
-      (agent) => agent.kind === "primary" && !agent.hidden,
-    )
-    return agents.map((agent) => ({
-      id: `agent.${agent.name}`,
-      title: agent.name === current ? `${agent.name} •` : agent.name,
-      description: agent.description ?? undefined,
-      onSelect: () => {
-        client.steer({ _tag: "SwitchAgent", agent: agent.name })
-        closePalette()
-      },
-    }))
   }
 
   const sessionItems = (): readonly MenuItem[] => {
@@ -288,17 +269,6 @@ export function CommandPalette() {
         }),
     },
     {
-      id: "agent",
-      title: "Agent",
-      description: "Switch agent mode",
-      category: "config",
-      onSelect: () =>
-        dispatch({
-          _tag: "ActivateSelection",
-          outcome: { _tag: "PushLevel", level: "agent" },
-        }),
-    },
-    {
       id: "bypass",
       title: bypassLabel(),
       description: "Toggle permission bypass for this session",
@@ -350,8 +320,6 @@ export function CommandPalette() {
         return sessionItems()
       case "theme":
         return themeItems()
-      case "agent":
-        return agentItems()
     }
   })
 

@@ -10,7 +10,6 @@ interface ThemeColors {
 }
 
 export function buildTopRightLabels(
-  agentName: string,
   reasoningLevel: string | undefined,
   tokens: number,
   contextLength: number | undefined,
@@ -33,8 +32,6 @@ export function buildTopRightLabels(
   if (options?.debugMode === true) {
     items.push({ text: "debug", color: theme.warning })
   }
-
-  items.push({ text: agentName, color: theme.textMuted })
 
   if (reasoningLevel !== undefined) {
     items.push({ text: reasoningLevel, color: theme.info })

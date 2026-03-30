@@ -1,6 +1,6 @@
 import type { SessionInfo } from "../client"
 
-export type CommandPaletteLevel = "root" | "sessions" | "theme" | "agent"
+export type CommandPaletteLevel = "root" | "sessions" | "theme"
 
 export type CommandPaletteSessionsState =
   | { readonly _tag: "idle" }

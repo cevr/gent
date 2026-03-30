@@ -162,7 +162,9 @@ const resolveStoredAgent = (params: {
         ? latestAgentEvent.toAgent
         : undefined
 
-    return Schema.is(AgentName)(raw) ? raw : "cowork"
+    const agent = Schema.is(AgentName)(raw) ? raw : "cowork"
+    // Normalize: deepwork is no longer user-selectable, fall back to cowork
+    return agent === "deepwork" ? "cowork" : agent
   })
 
 const applyAgentOverrides = (agent: AgentDefinition, input: AgentRunInput): AgentDefinition => {

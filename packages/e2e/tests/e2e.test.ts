@@ -19,7 +19,7 @@ const TEST_TIMEOUT = 30_000
 const ENTER = "\r"
 const ESC = "\x1b"
 const CTRL_C = "\x03"
-const SHIFT_TAB = "\x1b[Z"
+const _SHIFT_TAB = "\x1b[Z"
 const UP = "\x1b[A"
 const DOWN = "\x1b[B"
 
@@ -147,17 +147,6 @@ describe("E2E: Basics", () => {
       testContext = await seedAndSpawn()
       await testContext.pty.waitFor("❯", { timeout: 10_000 })
       expect(stripAnsi(testContext.output)).toContain("❯")
-    },
-    TEST_TIMEOUT,
-  )
-
-  test(
-    "shift+tab toggles agent cowork → deepwork",
-    async () => {
-      testContext = await seedAndSpawn()
-      await testContext.pty.waitFor("cowork", { timeout: 10_000 })
-      testContext.pty.write(SHIFT_TAB)
-      await testContext.pty.waitFor("deepwork", { timeout: 5_000 })
     },
     TEST_TIMEOUT,
   )

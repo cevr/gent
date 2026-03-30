@@ -107,17 +107,6 @@ describe("executeSlashCommand", () => {
     return { ctx, calls }
   }
 
-  it.live("/agent opens palette", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("agent", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(result.error).toBeUndefined()
-        expect(calls.openPalette).toBe(1)
-      }),
-    )
-  })
-
   it.live("/clear starts a new session", () => {
     const { ctx, calls } = createMockContext()
     return executeSlashCommand("clear", "", ctx).pipe(
@@ -205,8 +194,8 @@ describe("executeSlashCommand", () => {
     const { ctx: ctx1, calls: calls1 } = createMockContext()
     const { ctx: ctx2, calls: calls2 } = createMockContext()
     return Effect.gen(function* () {
-      yield* executeSlashCommand("AGENT", "", ctx1)
-      expect(calls1.openPalette).toBe(1)
+      yield* executeSlashCommand("NEW", "", ctx1)
+      expect(calls1.newSession).toBe(1)
 
       yield* executeSlashCommand("Clear", "", ctx2)
       expect(calls2.newSession).toBe(1)
@@ -289,17 +278,17 @@ describe("executeSlashCommand", () => {
     let extCalled = false
     const extCommands: ExtensionSlashCommand[] = [
       {
-        slash: "agent",
+        slash: "clear",
         onSelect: () => {
           extCalled = true
         },
       },
     ]
 
-    return executeSlashCommand("agent", "", ctx, extCommands).pipe(
+    return executeSlashCommand("clear", "", ctx, extCommands).pipe(
       Effect.map((result) => {
         expect(result.handled).toBe(true)
-        expect(calls.openPalette).toBe(1)
+        expect(calls.newSession).toBe(1)
         expect(extCalled).toBe(false)
       }),
     )

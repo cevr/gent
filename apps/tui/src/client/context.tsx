@@ -208,7 +208,6 @@ export function ClientProvider(props: ClientProviderProps) {
     status: AgentStatus.idle(),
     cost: 0,
   })
-  const [preferredAgent, setPreferredAgent] = createSignal<AgentName>(defaultAgent)
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
   const [connectionState, setConnectionState] = createSignal<ConnectionState | undefined>(
     runtime.lifecycle.getState(),
@@ -314,7 +313,6 @@ export function ClientProvider(props: ClientProviderProps) {
         const lifecycle = reduceAgentLifecycle(event)
         if (lifecycle.preferredAgent !== undefined) {
           if (Schema.is(AgentNameSchema)(lifecycle.preferredAgent)) {
-            setPreferredAgent(lifecycle.preferredAgent)
             setAgentStore({ agent: lifecycle.preferredAgent })
           } else {
             setAgentStore({ agent: defaultAgent })
@@ -526,20 +524,6 @@ export function ClientProvider(props: ClientProviderProps) {
                   reasoningLevel: undefined,
                 },
               })
-              const preferred = preferredAgent()
-              if (preferred !== defaultAgent) {
-                setAgentStore({ agent: preferred })
-                cast(
-                  client.steer.command({
-                    command: {
-                      _tag: "SwitchAgent",
-                      sessionId: result.sessionId,
-                      branchId: result.branchId,
-                      agent: preferred,
-                    },
-                  }),
-                )
-              }
               onCreated?.(result.sessionId as SessionId, result.branchId as BranchId)
             }),
           ),
@@ -568,7 +552,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       dispatchSession({ _tag: "Clear" })
-      setAgentStore({ agent: preferredAgent(), status: AgentStatus.idle(), cost: 0 })
+      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
     },
@@ -664,9 +648,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
     // Fire-and-forget steering
     steer: (command) => {
-      if (command._tag === "SwitchAgent") {
-        setPreferredAgent(command.agent)
-      }
       const s = session()
       if (s === null) {
         if (command._tag === "SwitchAgent") {
