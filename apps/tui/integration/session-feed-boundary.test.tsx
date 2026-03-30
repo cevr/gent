@@ -60,15 +60,16 @@ describe("session feed boundary", () => {
           const { layer: signalLayer, controls } = yield* createSignalProvider(
             "cowork debug response. Latest user message: queued. This turn is flowing through the real agent loop with a scripted provider.",
           )
-          const client = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
+          const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
 
-          const created = yield* client.createSession({ cwd: repoRoot, bypass: true })
+          const created = yield* client.session.create({ cwd: repoRoot, bypass: true })
 
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
               () => <Session sessionId={created.sessionId} branchId={created.branchId} />,
               {
                 client,
+                runtime,
                 initialSession: makeSessionState(created),
                 initialRoute: Route.session(created.sessionId, created.branchId),
                 cwd: repoRoot,
@@ -82,7 +83,7 @@ describe("session feed boundary", () => {
           // Allow feed to subscribe
           yield* Effect.sleep("200 millis")
 
-          yield* client.sendMessage({
+          yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "queued",
@@ -115,15 +116,16 @@ describe("session feed boundary", () => {
           const { layer: signalLayer, controls } = yield* createSignalProvider(
             "cowork debug response. First turn complete.",
           )
-          const client = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
+          const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
 
-          const created = yield* client.createSession({ cwd: repoRoot, bypass: true })
+          const created = yield* client.session.create({ cwd: repoRoot, bypass: true })
 
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
               () => <Session sessionId={created.sessionId} branchId={created.branchId} />,
               {
                 client,
+                runtime,
                 initialSession: makeSessionState(created),
                 initialRoute: Route.session(created.sessionId, created.branchId),
                 cwd: repoRoot,
@@ -138,7 +140,7 @@ describe("session feed boundary", () => {
           yield* Effect.sleep("200 millis")
 
           // Send first message — will be gated by signal provider
-          yield* client.sendMessage({
+          yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "first",
@@ -148,7 +150,7 @@ describe("session feed boundary", () => {
           yield* controls.waitForStreamStart
 
           // Send second message while first is still streaming (gated)
-          yield* client.sendMessage({
+          yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "queued follow-up",
@@ -184,15 +186,18 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* Gent.test(baseLocalLayerWithProvider(DebugFailingProvider))
+          const { client, runtime } = yield* Gent.test(
+            baseLocalLayerWithProvider(DebugFailingProvider),
+          )
 
-          const created = yield* client.createSession({ cwd: repoRoot, bypass: true })
+          const created = yield* client.session.create({ cwd: repoRoot, bypass: true })
 
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
               () => <Session sessionId={created.sessionId} branchId={created.branchId} />,
               {
                 client,
+                runtime,
                 initialSession: makeSessionState(created),
                 initialRoute: Route.session(created.sessionId, created.branchId),
                 cwd: repoRoot,
@@ -206,7 +211,7 @@ describe("session feed boundary", () => {
           // Allow feed to subscribe
           yield* Effect.sleep("200 millis")
 
-          yield* client.sendMessage({
+          yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "boom",

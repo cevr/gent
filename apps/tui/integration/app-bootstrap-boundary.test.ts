@@ -12,14 +12,14 @@ describe("app bootstrap boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* Gent.test(baseLocalLayer())
+          const { client } = yield* Gent.test(baseLocalLayer())
 
-          const first = yield* client.createSession({ cwd: repoRoot, bypass: true })
+          const first = yield* client.session.create({ cwd: repoRoot, bypass: true })
           yield* Effect.sleep("5 millis")
-          const second = yield* client.createSession({ cwd: repoRoot, bypass: false })
+          const second = yield* client.session.create({ cwd: repoRoot, bypass: false })
 
           const state = yield* resolveInitialState({
-            client: client,
+            client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,
@@ -42,10 +42,10 @@ describe("app bootstrap boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* Gent.test(baseLocalLayer())
+          const { client } = yield* Gent.test(baseLocalLayer())
 
           const state = yield* resolveInitialState({
-            client: client,
+            client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,
