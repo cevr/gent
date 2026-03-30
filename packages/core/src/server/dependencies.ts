@@ -26,14 +26,8 @@ import {
   SubagentRunnerConfig,
   SubprocessRunner,
 } from "../runtime/agent/subagent-runner.js"
-import { ClusterSingleLive, type ClusterStorage } from "../runtime/cluster-layer.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
-import {
-  ClusterActorTransportLive,
-  DurableActorProcessLive,
-  LocalActorProcessLive,
-  SessionActorEntityLocalLive,
-} from "../runtime/actor-process.js"
+import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
@@ -42,7 +36,6 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { SqliteClientLive } from "../runtime/sql-client.js"
 import { TaskService } from "../runtime/task-service.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -69,9 +62,6 @@ export interface DependenciesConfig {
   skillsDirs?: ReadonlyArray<string>
   persistenceMode?: "disk" | "memory"
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
-  actorRuntime?: "local" | "cluster"
-  clusterDbPath?: string
-  clusterStorage?: ClusterStorage
 }
 
 const loadBuiltinExtensions = (cwd: string): LoadedExtension[] =>
@@ -213,7 +203,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const persistenceMode = config.persistenceMode ?? "disk"
   const providerMode = config.providerMode ?? "live"
-  const actorRuntime = config.actorRuntime ?? "local"
 
   const storageLive =
     persistenceMode === "memory" ? Storage.Memory() : Storage.Live(config.dbPath ?? ".gent/data.db")
@@ -421,32 +410,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.merge(allDeps, agentRuntimeLive),
   )
   const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, taskServiceLive, turnControlLive)
-
-  if (actorRuntime === "cluster") {
-    const clusterSqliteLive = SqliteClientLive({
-      filename:
-        config.clusterDbPath ?? (persistenceMode === "memory" ? ":memory:" : ".gent/cluster.db"),
-    })
-    const clusterRuntimeLive = ClusterSingleLive({
-      runnerStorage: config.clusterStorage ?? (persistenceMode === "memory" ? "memory" : "sql"),
-    }).pipe(Layer.provide(clusterSqliteLive))
-    const entityLive = SessionActorEntityLocalLive.pipe(
-      Layer.provide(allWithRuntime),
-      Layer.provideMerge(clusterRuntimeLive),
-    )
-    const clusterSupportLive = Layer.merge(clusterRuntimeLive, entityLive)
-    const actorTransportLive = Layer.provide(ClusterActorTransportLive, clusterSupportLive)
-    const actorProcessLive = Layer.provide(
-      DurableActorProcessLive,
-      Layer.merge(allWithRuntime, actorTransportLive),
-    )
-    return Layer.mergeAll(
-      allWithRuntime,
-      clusterSupportLive,
-      actorProcessLive,
-      interactionRecoveryLive,
-    )
-  }
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
   return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)

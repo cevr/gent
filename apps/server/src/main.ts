@@ -134,10 +134,6 @@ const program = Effect.scoped(
       authKeyPath: config.authKeyPath,
       persistenceMode: config.persistenceMode,
       providerMode: config.providerMode,
-      actorRuntime: "cluster" as const,
-      clusterDbPath:
-        config.persistenceMode === "memory" ? ":memory:" : joinPath(config.dataDir, "cluster.db"),
-      clusterStorage: config.persistenceMode === "memory" ? ("memory" as const) : ("sql" as const),
     }).pipe(
       Layer.provide(PlatformLayer),
       Layer.provide(GentLogger),

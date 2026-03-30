@@ -12,7 +12,6 @@ export {
 export {
   ActorProcess,
   ActorProcessError,
-  ActorProcessRpcs,
   ActorTarget,
   SendUserMessagePayload,
   SendToolResultPayload,
@@ -20,14 +19,8 @@ export {
   ActorProcessState,
   ActorProcessMetrics,
   ActorTransport,
-  DurableActorProcessLive,
   LocalActorTransportLive,
   LocalActorProcessLive,
-  SessionActorEntity,
-  SessionActorEntityLive,
-  SessionActorEntityLocalLive,
-  ClusterActorTransportLive,
-  ClusterActorProcessLive,
 } from "./actor-process"
 
 export {
@@ -79,15 +72,6 @@ export {
   type ChildSessionChange,
   make as makeChildSessionTracker,
 } from "./child-session-tracker"
-
-export {
-  ClusterMemoryLive,
-  ClusterSingleLive,
-  ClusterHttpServerLive,
-  ClusterHttpClientLive,
-  ClusterHttpClientOnlyLive,
-  type ClusterStorage,
-} from "./cluster-layer"
 
 export {
   SqlClientLive,
