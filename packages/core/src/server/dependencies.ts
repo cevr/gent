@@ -405,7 +405,11 @@ export const createDependencies = (config: DependenciesConfig) => {
         const customInstructions = yield* configService.loadInstructions(config.cwd)
         const availableSkills = yield* skills.list()
         const isGitRepo = yield* fs.exists(path.join(config.cwd, ".git"))
-        const baseSections = buildBasePromptSections({
+        const registry = yield* ExtensionRegistry
+        const extensionSections = yield* registry.listPromptSections()
+
+        // Merge base + extension-contributed sections. Extension sections shadow base by id.
+        const coreSections = buildBasePromptSections({
           cwd: config.cwd,
           platform: config.platform,
           shell: config.shell,
@@ -414,6 +418,11 @@ export const createDependencies = (config: DependenciesConfig) => {
           customInstructions,
           skills: availableSkills,
         })
+        const sectionMap = new Map(coreSections.map((s) => [s.id, s]))
+        for (const s of extensionSections) {
+          sectionMap.set(s.id, s)
+        }
+        const baseSections = [...sectionMap.values()]
         const systemPrompt = compileSystemPrompt(baseSections)
 
         const agentActorLive = AgentActor.Live

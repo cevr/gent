@@ -338,6 +338,8 @@ export interface ExtensionSetup {
   readonly providers?: ReadonlyArray<ProviderContribution>
   /** Interaction handler implementations — replaces default handlers when provided */
   readonly interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
+  /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
+  readonly promptSections?: ReadonlyArray<PromptSection>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
   /** Cleanup effect — runs as scope finalizer during graceful shutdown. */

@@ -27,6 +27,7 @@ export interface ResolvedExtensions {
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly providers: ReadonlyMap<string, ProviderContribution>
   readonly interactionHandlers: ReadonlyMap<string, InteractionHandlerContribution>
+  readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -93,6 +94,14 @@ export const resolveExtensions = (
     "interaction handler",
   )
 
+  // Prompt sections: last scope wins by section id
+  const promptSectionsMap = compileContributions(
+    sorted,
+    (s) => s.promptSections,
+    (p) => p.id,
+    "prompt section",
+  )
+
   const tagInjections: TagInjection[] = []
   for (const ext of sorted) {
     for (const injection of ext.setup.tagInjections ?? []) {
@@ -102,7 +111,16 @@ export const resolveExtensions = (
 
   const hooks = compileHooks(sorted)
 
-  return { tools, agents, providers, interactionHandlers, tagInjections, hooks, extensions: sorted }
+  return {
+    tools,
+    agents,
+    providers,
+    interactionHandlers,
+    promptSections: promptSectionsMap,
+    tagInjections,
+    hooks,
+    extensions: sorted,
+  }
 }
 
 // ToolPolicy compiler — unified tool filtering + prompt section collection
@@ -235,6 +253,9 @@ export interface ExtensionRegistryService {
     resolveAuth?: (providerId: string) => Effect.Effect<ProviderAuthInfo | undefined>,
   ) => Effect.Effect<ReadonlyArray<unknown>>
 
+  // Prompt sections
+  readonly listPromptSections: () => Effect.Effect<ReadonlyArray<PromptSection>>
+
   // Interaction handlers
   readonly getInteractionHandler: (
     type: InteractionHandlerType,
@@ -286,6 +307,7 @@ export class ExtensionRegistry extends ServiceMap.Service<
         Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "primary")),
       listSubagents: () =>
         Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "subagent")),
+      listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
       getInteractionHandler: (type) => Effect.succeed(resolved.interactionHandlers.get(type)),
       hooks: resolved.hooks,
     })
