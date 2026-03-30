@@ -31,6 +31,7 @@ import type { ClientContextValue } from "../client/context"
 
 export interface SessionFeedCallbacks {
   onInteraction: (interaction: ActiveInteraction) => void
+  onInteractionDismissed: (requestId: string) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
 }
 
@@ -331,6 +332,11 @@ export function useSessionFeed(
   const processEvent = (event: AgentEvent, branch: BranchId, key: string) => {
     // Drop events if identity changed
     if (currentKey !== key) return
+
+    if (event._tag === "InteractionDismissed") {
+      callbacks.onInteractionDismissed(event.requestId)
+      return
+    }
 
     const interaction = toActiveInteraction(event)
     if (interaction !== undefined) {

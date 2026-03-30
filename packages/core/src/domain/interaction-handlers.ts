@@ -1,6 +1,7 @@
 import { ServiceMap, Effect, Layer } from "effect"
 import {
   EventStore,
+  InteractionDismissed,
   PermissionRequested,
   type EventStoreError,
   PromptConfirmed,
@@ -70,7 +71,14 @@ export class PermissionHandler extends ServiceMap.Service<
               ...(params.input !== undefined ? { input: params.input } : {}),
             }),
           ),
-        onRespond: () => Effect.void,
+        onRespond: (requestId, params) =>
+          eventStore.publish(
+            new InteractionDismissed({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              requestId,
+            }),
+          ),
         getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
         storage: storageCallbacks,
       })
@@ -156,35 +164,48 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
             }),
           ),
         onRespond: (requestId, params, decision, content) => {
-          if (decision === "yes") {
-            return eventStore.publish(
-              new PromptConfirmed({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                requestId,
-                ...(params.path !== undefined ? { path: params.path } : {}),
-              }),
-            )
-          }
-          if (decision === "edit") {
-            return eventStore.publish(
-              new PromptEdited({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                requestId,
-                ...(params.path !== undefined ? { path: params.path } : {}),
-              }),
-            )
-          }
-          return eventStore.publish(
-            new PromptRejected({
+          const dismissed = eventStore.publish(
+            new InteractionDismissed({
               sessionId: params.sessionId,
               branchId: params.branchId,
               requestId,
-              ...(params.path !== undefined ? { path: params.path } : {}),
-              ...(content !== undefined ? { reason: content } : {}),
             }),
           )
+          if (decision === "yes") {
+            return eventStore
+              .publish(
+                new PromptConfirmed({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  requestId,
+                  ...(params.path !== undefined ? { path: params.path } : {}),
+                }),
+              )
+              .pipe(Effect.andThen(dismissed))
+          }
+          if (decision === "edit") {
+            return eventStore
+              .publish(
+                new PromptEdited({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  requestId,
+                  ...(params.path !== undefined ? { path: params.path } : {}),
+                }),
+              )
+              .pipe(Effect.andThen(dismissed))
+          }
+          return eventStore
+            .publish(
+              new PromptRejected({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+                ...(params.path !== undefined ? { path: params.path } : {}),
+                ...(content !== undefined ? { reason: content } : {}),
+              }),
+            )
+            .pipe(Effect.andThen(dismissed))
         },
         getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
         storage: storageCallbacks,
@@ -259,24 +280,35 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
             }),
           ),
         onRespond: (requestId, params, decision, extra) => {
-          if (decision === "confirm") {
-            return eventStore.publish(
-              new HandoffConfirmed({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                requestId,
-                ...(extra !== undefined ? { childSessionId: extra as SessionId } : {}),
-              }),
-            )
-          }
-          return eventStore.publish(
-            new HandoffRejected({
+          const dismissed = eventStore.publish(
+            new InteractionDismissed({
               sessionId: params.sessionId,
               branchId: params.branchId,
               requestId,
-              ...(extra !== undefined ? { reason: extra } : {}),
             }),
           )
+          if (decision === "confirm") {
+            return eventStore
+              .publish(
+                new HandoffConfirmed({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  requestId,
+                  ...(extra !== undefined ? { childSessionId: extra as SessionId } : {}),
+                }),
+              )
+              .pipe(Effect.andThen(dismissed))
+          }
+          return eventStore
+            .publish(
+              new HandoffRejected({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+                ...(extra !== undefined ? { reason: extra } : {}),
+              }),
+            )
+            .pipe(Effect.andThen(dismissed))
         },
         getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
         storage: storageCallbacks,

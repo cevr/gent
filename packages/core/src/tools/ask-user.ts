@@ -3,6 +3,7 @@ import { defineTool, type ToolContext } from "../domain/tool.js"
 import {
   EventStore,
   type EventStoreError,
+  InteractionDismissed,
   QuestionsAsked,
   type Question,
   type InteractionResolutionByTag,
@@ -106,7 +107,14 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
               questions: [...params.questions],
             }),
           ),
-        onRespond: () => Effect.void,
+        onRespond: (requestId, params) =>
+          eventStore.publish(
+            new InteractionDismissed({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              requestId,
+            }),
+          ),
         getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
         storage: storageCallbacks,
       })

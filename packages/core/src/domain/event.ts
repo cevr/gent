@@ -441,6 +441,15 @@ export type ActiveInteractionOf<T extends InteractionEventTag> = Extract<
   { readonly _tag: T }
 >
 
+export class InteractionDismissed extends Schema.TaggedClass<InteractionDismissed>()(
+  "InteractionDismissed",
+  {
+    sessionId: SessionId,
+    branchId: BranchId,
+    requestId: Schema.String,
+  },
+) {}
+
 export const AgentEvent = Schema.Union([
   SessionStarted,
   MessageReceived,
@@ -482,6 +491,7 @@ export const AgentEvent = Schema.Union([
   TaskDeleted,
   AgentRestarted,
   ExtensionUiSnapshot,
+  InteractionDismissed,
 ])
 export type AgentEvent = typeof AgentEvent.Type
 

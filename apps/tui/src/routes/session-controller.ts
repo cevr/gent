@@ -246,6 +246,9 @@ export function useSessionController(props: {
     cast,
     {
       onInteraction,
+      onInteractionDismissed: (requestId) => {
+        dispatchComposer({ _tag: "DismissInteraction", requestId })
+      },
       onBranchSwitch: (sessionId, branchId) => {
         router.navigateToSession(sessionId, branchId)
       },
