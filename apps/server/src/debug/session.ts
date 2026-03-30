@@ -7,9 +7,9 @@ import {
   TextPart,
   ToolCallPart,
   ToolResultPart,
-} from "../domain/message.js"
-import { Storage } from "../storage/sqlite-storage.js"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
+} from "@gent/core/domain/message.js"
+import { Storage } from "@gent/core/storage/sqlite-storage.js"
+import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
 import { startDebugScenario } from "./scenario.js"
 
 export interface DebugSessionInfo {

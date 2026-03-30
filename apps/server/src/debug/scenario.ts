@@ -12,7 +12,7 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
-} from "../domain/event.js"
+} from "@gent/core/domain/event.js"
 import {
   Branch,
   Message,
@@ -21,10 +21,10 @@ import {
   TextPart,
   ToolCallPart,
   ToolResultPart,
-} from "../domain/message.js"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
-import { Storage } from "../storage/sqlite-storage.js"
-import { TaskService } from "../runtime/task-service.js"
+} from "@gent/core/domain/message.js"
+import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
+import { Storage } from "@gent/core/storage/sqlite-storage.js"
+import { TaskService } from "@gent/core/runtime/task-service.js"
 
 export interface DebugScenarioParams {
   sessionId: SessionId
