@@ -882,18 +882,21 @@ const makeStorage = Effect.gen(function* () {
           branchId !== undefined
             ? yield* sql<EventRow>`SELECT id, event_json, created_at, trace_id FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND id > ${sinceId} ORDER BY id ASC`
             : yield* sql<EventRow>`SELECT id, event_json, created_at, trace_id FROM events WHERE session_id = ${sessionId} AND id > ${sinceId} ORDER BY id ASC`
-        return yield* Effect.forEach(rows, (row) =>
-          Effect.map(
-            decodeEvent(row.event_json),
-            (event) =>
+        const envelopes: EventEnvelope[] = []
+        for (const row of rows) {
+          const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
+          if (decoded._tag === "Some") {
+            envelopes.push(
               new EventEnvelope({
                 id: row.id as EventEnvelope["id"],
-                event,
+                event: decoded.value,
                 createdAt: row.created_at,
                 ...(row.trace_id !== null ? { traceId: row.trace_id } : {}),
               }),
-          ),
-        )
+            )
+          }
+        }
+        return envelopes
       },
       Effect.mapError(mapError("Failed to list events")),
     ),
@@ -932,7 +935,8 @@ const makeStorage = Effect.gen(function* () {
         }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
         const row = rows[0]
         if (row === undefined) return undefined
-        return yield* decodeEvent(row.event_json)
+        const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
+        return decoded._tag === "Some" ? decoded.value : undefined
       },
       Effect.mapError(mapError("Failed to get latest event")),
     ),
