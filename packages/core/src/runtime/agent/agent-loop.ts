@@ -77,7 +77,6 @@ import {
   buildLoopCheckpointRecord,
   decodeLoopCheckpointState,
   shouldRetainLoopCheckpoint,
-  type AgentLoopCheckpointRecord,
 } from "./agent-loop.checkpoint.js"
 import {
   AgentLoopEvent,
@@ -278,76 +277,6 @@ const makePublishingInspector = (params: {
     ),
   )
 
-const persistLoopCheckpoint = (params: {
-  storage: StorageService
-  sessionId: SessionId
-  branchId: BranchId
-  state: LoopState
-}) =>
-  Effect.gen(function* () {
-    if (!shouldRetainLoopCheckpoint(params.state)) {
-      yield* params.storage.deleteAgentLoopCheckpoint({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-      })
-      return
-    }
-
-    const record = yield* buildLoopCheckpointRecord(params)
-    yield* params.storage.upsertAgentLoopCheckpoint(record)
-  })
-
-const makeCheckpointInspector = (params: {
-  storage: StorageService
-  sessionId: SessionId
-  branchId: BranchId
-}) =>
-  makeInspectorEffect<{ readonly _tag: string }, { readonly _tag: string }>((event) => {
-    switch (event.type) {
-      case "@machine.spawn":
-        return persistLoopCheckpoint({
-          storage: params.storage,
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          state: event.initialState as LoopState,
-        }).pipe(
-          Effect.catchEager((error) =>
-            Effect.logWarning("failed to persist loop checkpoint").pipe(
-              Effect.annotateLogs({ error: String(error) }),
-            ),
-          ),
-        )
-      case "@machine.transition":
-        return persistLoopCheckpoint({
-          storage: params.storage,
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          state: event.toState as LoopState,
-        }).pipe(
-          Effect.catchEager((error) =>
-            Effect.logWarning("failed to persist loop checkpoint").pipe(
-              Effect.annotateLogs({ error: String(error) }),
-            ),
-          ),
-        )
-      case "@machine.stop":
-        return persistLoopCheckpoint({
-          storage: params.storage,
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          state: event.finalState as LoopState,
-        }).pipe(
-          Effect.catchEager((error) =>
-            Effect.logWarning("failed to persist loop checkpoint").pipe(
-              Effect.annotateLogs({ error: String(error) }),
-            ),
-          ),
-        )
-      default:
-        return Effect.void
-    }
-  })
-
 type LoopRecoveryDecision = {
   state: LoopState
   recovery?: {
@@ -365,37 +294,53 @@ type LoopRecoveryDecision = {
   }
 }
 
-const restoreCheckpointState = (params: {
-  checkpoint: AgentLoopCheckpointRecord
+/** Recovery decision for persist.onRestore — takes decoded state, returns adjusted state or None. */
+const makeRecoveryDecision = (params: {
+  state: LoopState
   storage: StorageService
   extensionRegistry: ExtensionRegistryService
   currentAgent: AgentNameType
-}): Effect.Effect<LoopRecoveryDecision | undefined, StorageError> =>
+  publishEvent: (event: AgentEvent) => Effect.Effect<void, never>
+  sessionId: SessionId
+  branchId: BranchId
+}): Effect.Effect<Option.Option<LoopState>, StorageError> =>
   Effect.gen(function* () {
-    if (params.checkpoint.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
-      yield* params.storage.deleteAgentLoopCheckpoint({
-        sessionId: params.checkpoint.sessionId,
-        branchId: params.checkpoint.branchId,
-      })
-      return undefined
-    }
+    const state = params.state
 
-    const state = Option.getOrUndefined(
-      yield* Effect.option(decodeLoopCheckpointState(params.checkpoint.stateJson)),
-    )
-    if (state === undefined) {
-      yield* params.storage.deleteAgentLoopCheckpoint({
-        sessionId: params.checkpoint.sessionId,
-        branchId: params.checkpoint.branchId,
-      })
-      return undefined
-    }
+    const publishRecovery = (recovery: LoopRecoveryDecision["recovery"]) =>
+      recovery === undefined
+        ? Effect.void
+        : Effect.gen(function* () {
+            yield* params
+              .publishEvent(
+                new TurnRecoveryApplied({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  phase: recovery.phase,
+                  action: recovery.action,
+                  ...(recovery.detail !== undefined ? { detail: recovery.detail } : {}),
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+            if (recovery.action === "abort-non-idempotent-tools") {
+              yield* params
+                .publishEvent(
+                  new ErrorOccurred({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    error: recovery.detail ?? "Skipped ambiguous tool replay after crash",
+                  }),
+                )
+                .pipe(Effect.catchEager(() => Effect.void))
+            }
+          })
 
     if (state._tag === "Idle") {
       const { queue, nextItem } = takeNextQueuedTurn(state.queue)
       if (nextItem !== undefined) {
-        return {
-          state: buildResolvingState(
+        yield* publishRecovery({ phase: "Idle", action: "resume-queued-turn" })
+        return Option.some(
+          buildResolvingState(
             {
               queue,
               currentAgent: state.currentAgent ?? params.currentAgent,
@@ -403,28 +348,18 @@ const restoreCheckpointState = (params: {
             },
             nextItem,
           ),
-          recovery: {
-            phase: "Idle",
-            action: "resume-queued-turn",
-          },
-        }
+        )
       }
-      return {
-        state:
-          state.currentAgent === undefined
-            ? updateCurrentAgentOnState(state, params.currentAgent)
-            : state,
-      }
+      return Option.some(
+        state.currentAgent === undefined
+          ? updateCurrentAgentOnState(state, params.currentAgent)
+          : state,
+      )
     }
 
     if (state._tag === "Resolving") {
-      return {
-        state,
-        recovery: {
-          phase: "Resolving",
-          action: "replay-resolving",
-        },
-      }
+      yield* publishRecovery({ phase: "Resolving", action: "replay-resolving" })
+      return Option.some(state)
     }
 
     if (state._tag === "Streaming") {
@@ -433,33 +368,24 @@ const restoreCheckpointState = (params: {
       )
       if (assistantMessage !== undefined) {
         const draft = assistantDraftFromMessage(assistantMessage)
-        return {
-          state:
-            draft.toolCalls.length === 0
-              ? toFinalizingState({
-                  state,
-                  currentTurnAgent: state.currentTurnAgent,
-                  streamFailed: false,
-                  turnInterrupted: state.turnInterrupted,
-                })
-              : toExecutingToolsState({
-                  state,
-                  currentTurnAgent: state.currentTurnAgent,
-                  draft,
-                }),
-          recovery: {
-            phase: "Streaming",
-            action: "reuse-persisted-assistant",
-          },
-        }
+        yield* publishRecovery({ phase: "Streaming", action: "reuse-persisted-assistant" })
+        return Option.some(
+          draft.toolCalls.length === 0
+            ? toFinalizingState({
+                state,
+                currentTurnAgent: state.currentTurnAgent,
+                streamFailed: false,
+                turnInterrupted: state.turnInterrupted,
+              })
+            : toExecutingToolsState({
+                state,
+                currentTurnAgent: state.currentTurnAgent,
+                draft,
+              }),
+        )
       }
-      return {
-        state,
-        recovery: {
-          phase: "Streaming",
-          action: "replay-streaming",
-        },
-      }
+      yield* publishRecovery({ phase: "Streaming", action: "replay-streaming" })
+      return Option.some(state)
     }
 
     if (state._tag === "ExecutingTools") {
@@ -467,19 +393,16 @@ const restoreCheckpointState = (params: {
         toolResultMessageIdForTurn(state.message.id),
       )
       if (toolResultMessage !== undefined) {
-        return {
-          state: toFinalizingState({
+        yield* publishRecovery({ phase: "ExecutingTools", action: "reuse-persisted-tool-results" })
+        return Option.some(
+          toFinalizingState({
             state,
             currentTurnAgent: state.currentTurnAgent,
             usage: state.draft.usage,
             streamFailed: false,
             turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
           }),
-          recovery: {
-            phase: "ExecutingTools",
-            action: "reuse-persisted-tool-results",
-          },
-        }
+        )
       }
 
       const canReplay = yield* Effect.forEach(
@@ -492,38 +415,28 @@ const restoreCheckpointState = (params: {
       ).pipe(Effect.map((results) => results.every(Boolean)))
 
       if (canReplay) {
-        return {
-          state,
-          recovery: {
-            phase: "ExecutingTools",
-            action: "replay-idempotent-tools",
-          },
-        }
+        yield* publishRecovery({ phase: "ExecutingTools", action: "replay-idempotent-tools" })
+        return Option.some(state)
       }
 
-      return {
-        state: toFinalizingState({
+      yield* publishRecovery({
+        phase: "ExecutingTools",
+        action: "abort-non-idempotent-tools",
+        detail: "Skipped replay for non-idempotent tool calls after crash",
+      })
+      return Option.some(
+        toFinalizingState({
           state,
           currentTurnAgent: state.currentTurnAgent,
           usage: state.draft.usage,
           streamFailed: true,
           turnInterrupted: true,
         }),
-        recovery: {
-          phase: "ExecutingTools",
-          action: "abort-non-idempotent-tools",
-          detail: "Skipped replay for non-idempotent tool calls after crash",
-        },
-      }
+      )
     }
 
-    return {
-      state,
-      recovery: {
-        phase: "Finalizing",
-        action: "replay-finalizing",
-      },
-    }
+    yield* publishRecovery({ phase: "Finalizing", action: "replay-finalizing" })
+    return Option.some(state)
   })
 
 // Agent Loop Service
@@ -617,57 +530,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const turnToolsRef = yield* Ref.make<ReadonlyArray<AnyToolDefinition>>([])
             const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
-            const checkpoint = Option.getOrUndefined(
-              yield* Effect.option(storage.getAgentLoopCheckpoint({ sessionId, branchId })),
-            )
-            const restored = Option.getOrUndefined(
-              yield* checkpoint === undefined
-                ? Effect.succeed(Option.none<LoopRecoveryDecision>())
-                : Effect.option(
-                    restoreCheckpointState({
-                      checkpoint,
-                      storage,
-                      extensionRegistry,
-                      currentAgent,
-                    }),
-                  ),
-            )
-            const initialState = restored?.state ?? buildIdleState({ currentAgent })
-            const inspector = combineInspectors(
-              makePublishingInspector({
-                publishEvent: publishEventOrDie,
-                sessionId,
-                branchId,
-              }),
-              makeCheckpointInspector({
-                storage,
-                sessionId,
-                branchId,
-              }),
-            )
-
-            if (restored?.recovery !== undefined) {
-              yield* publishEventOrDie(
-                new TurnRecoveryApplied({
-                  sessionId,
-                  branchId,
-                  phase: restored.recovery.phase,
-                  action: restored.recovery.action,
-                  ...(restored.recovery.detail !== undefined
-                    ? { detail: restored.recovery.detail }
-                    : {}),
-                }),
-              )
-              if (restored.recovery.action === "abort-non-idempotent-tools") {
-                yield* publishEventOrDie(
-                  new ErrorOccurred({
-                    sessionId,
-                    branchId,
-                    error: restored.recovery.detail ?? "Skipped ambiguous tool replay after crash",
-                  }),
-                )
-              }
-            }
+            const inspector = makePublishingInspector({
+              publishEvent: publishEventOrDie,
+              sessionId,
+              branchId,
+            })
 
             function switchAgentOnState(
               state: IdleState,
@@ -866,7 +733,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const loopMachine = Machine.make({
               state: AgentLoopState,
               event: AgentLoopEvent,
-              initial: initialState,
+              initial: buildIdleState({ currentAgent }),
             })
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
                 buildResolvingState(state, event.item),
@@ -1086,10 +953,47 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 { name: "finalize", onFailure: () => AgentLoopEvent.PhaseFailed },
               )
 
-            const loopActor = yield* Machine.spawn(
-              loopMachine,
-              `agent-loop:${sessionId}:${branchId}`,
-            ).pipe(
+            const loopActor = yield* Machine.spawn(loopMachine, {
+              id: `agent-loop:${sessionId}:${branchId}`,
+              persist: {
+                load: () =>
+                  Effect.gen(function* () {
+                    const record = yield* storage.getAgentLoopCheckpoint({ sessionId, branchId })
+                    if (record === undefined) return Option.none<LoopState>()
+                    if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
+                      yield* storage.deleteAgentLoopCheckpoint({ sessionId, branchId })
+                      return Option.none<LoopState>()
+                    }
+                    return yield* Effect.option(decodeLoopCheckpointState(record.stateJson))
+                  }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
+                save: (state) =>
+                  Effect.gen(function* () {
+                    if (!shouldRetainLoopCheckpoint(state)) {
+                      yield* storage.deleteAgentLoopCheckpoint({ sessionId, branchId })
+                      return
+                    }
+                    yield* storage.upsertAgentLoopCheckpoint(
+                      yield* buildLoopCheckpointRecord({ sessionId, branchId, state }),
+                    )
+                  }).pipe(
+                    Effect.catchEager((error) =>
+                      Effect.logWarning("checkpoint.save failed").pipe(
+                        Effect.annotateLogs({ error: String(error) }),
+                      ),
+                    ),
+                  ),
+                onRestore: (persisted) =>
+                  makeRecoveryDecision({
+                    state: persisted,
+                    storage,
+                    extensionRegistry,
+                    currentAgent,
+                    publishEvent: publishEventOrDie,
+                    sessionId,
+                    branchId,
+                  }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
+              },
+            }).pipe(
               Effect.provideService(InspectorService, inspector),
               Effect.provideService(Scope.Scope, loopScope),
             )
