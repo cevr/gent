@@ -365,8 +365,8 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     const codeReviewToolCallId = asToolCallId(`dbg-live-code-review-${iteration}`)
     const searchSessionsToolCallId = asToolCallId(`dbg-live-search-sessions-${iteration}`)
     const readSessionToolCallId = asToolCallId(`dbg-live-read-session-${iteration}`)
-    const agent = iteration % 2 === 0 ? "deepwork" : "cowork"
-    const previousAgent = iteration % 2 === 0 ? "cowork" : "deepwork"
+    const agent = "cowork"
+    const previousAgent = "cowork"
     const startedAt = yield* Clock.currentTimeMillis
 
     yield* eventStore.publish(
