@@ -48,7 +48,17 @@ export function Composer(props: ComposerProps) {
       <Show when={activeInteraction()} keyed>
         {(interaction) => {
           const Renderer = interactionRenderer()
-          if (Renderer === undefined) return null
+          if (Renderer === undefined) {
+            // Graceful degradation: cancel interaction so the tool doesn't hang
+            controller.cancelInteraction()
+            return (
+              <box paddingLeft={1} paddingTop={1}>
+                <text style={{ fg: theme.warning }}>
+                  No renderer for {interaction._tag} — interaction cancelled
+                </text>
+              </box>
+            )
+          }
           return Renderer({
             event: interaction,
             resolve: (result: unknown) => {

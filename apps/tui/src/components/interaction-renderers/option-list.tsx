@@ -72,6 +72,14 @@ export function OptionList(props: OptionListProps): JSX.Element {
     }
 
     if (e.name === "return") {
+      // Single-select: Enter on a focused option selects + submits it
+      if (!isMultiple() && focusIndex() < options().length) {
+        const opt = options()[focusIndex()]
+        if (opt !== undefined && selected().size === 0) {
+          props.onSubmit([opt.label])
+          return true
+        }
+      }
       submitAnswer()
       return true
     }
@@ -83,6 +91,12 @@ export function OptionList(props: OptionListProps): JSX.Element {
     const freeform = freeformText().trim()
     if (freeform.length > 0) {
       selections.push(freeform)
+    }
+    if (selections.length === 0 && focusIndex() < options().length) {
+      const opt = options()[focusIndex()]
+      if (opt !== undefined) {
+        selections.push(opt.label)
+      }
     }
     if (selections.length === 0) {
       selections.push("Other")

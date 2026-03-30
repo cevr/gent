@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { createSignal } from "solid-js"
+import { createSignal, Show } from "solid-js"
 import type { InteractionRendererProps } from "@gent/core/domain/extension-client.js"
 import { OptionList } from "./option-list"
 
@@ -26,18 +26,21 @@ export function AskUserRenderer(props: InteractionRendererProps<"QuestionsAsked"
     }
   }
 
-  const q = () => current()
-
+  // Key on questionIndex to force OptionList remount (resets selected/freeform/focus)
   return (
-    <OptionList
-      header={q()?.header}
-      question={q()?.question ?? ""}
-      markdown={q()?.markdown}
-      options={q()?.options}
-      multiple={q()?.multiple}
-      progress={total() > 1 ? `(${questionIndex() + 1}/${total()})` : undefined}
-      onSubmit={handleSubmit}
-      onCancel={() => props.resolve({ _tag: "cancelled" })}
-    />
+    <Show when={current()} keyed>
+      {(q) => (
+        <OptionList
+          header={q.header}
+          question={q.question}
+          markdown={q.markdown}
+          options={q.options}
+          multiple={q.multiple}
+          progress={total() > 1 ? `(${questionIndex() + 1}/${total()})` : undefined}
+          onSubmit={handleSubmit}
+          onCancel={() => props.resolve({ _tag: "cancelled" })}
+        />
+      )}
+    </Show>
   )
 }
