@@ -80,6 +80,12 @@ export const OpenAIExtension = defineExtension({
       const openaiProvider: ProviderContribution = {
         id: "openai",
         name: "OpenAI",
+        buildOptions: (_modelId, reasoning, existing) => {
+          if (reasoning === undefined || reasoning === "none") return existing
+          const existingRec = existing as Record<string, unknown> | undefined
+          const existingOpenai = existingRec?.["openai"] as Record<string, unknown> | undefined
+          return { ...existingRec, openai: { ...existingOpenai, reasoningEffort: reasoning } }
+        },
         resolveModel: (modelName, authInfo) => {
           // Stored OAuth — handle inline with token refresh
           if (authInfo?.type === "oauth") {

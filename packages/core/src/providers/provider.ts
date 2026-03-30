@@ -13,6 +13,7 @@ import {
   type ToolResultPart as AIToolResultPart,
 } from "ai"
 import { ProviderFactory } from "./provider-factory"
+import { ExtensionRegistry } from "../runtime/extensions/registry"
 
 type StreamTextResult = ReturnType<typeof streamText>
 type FullStreamPart = StreamTextResult extends { fullStream: AsyncIterable<infer A> } ? A : never
@@ -88,56 +89,42 @@ export interface ProviderService {
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
 
-// Maps gent reasoning level to Anthropic effort (Anthropic caps at "high").
-const ANTHROPIC_EFFORT: Record<string, string> = {
-  minimal: "low",
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "high",
-}
-
-function buildProviderOptions(
+/** Resolve provider-specific options from extension-contributed buildOptions */
+const resolveProviderOptions = (
+  registry: {
+    getProvider: (id: string) => Effect.Effect<
+      | {
+          buildOptions?: (
+            modelId: string,
+            reasoning: string | undefined,
+            existing: unknown,
+          ) => unknown
+        }
+      | undefined
+    >
+  },
   modelId: string,
   reasoning: ProviderRequest["reasoning"],
   existing: ProviderOptions | undefined,
-): ProviderOptions | undefined {
+): Effect.Effect<ProviderOptions | undefined> => {
   const providerId = modelId.indexOf("/") > 0 ? modelId.slice(0, modelId.indexOf("/")) : undefined
-  const existingRec = existing as Record<string, unknown> | undefined
-
-  if (providerId === "anthropic") {
-    const existingAnthropic = existingRec?.["anthropic"] as Record<string, unknown> | undefined
-    const anthropicOpts: Record<string, unknown> = {
-      ...existingAnthropic,
-      cacheControl: { type: "ephemeral" },
-    }
-    if (reasoning !== undefined && reasoning !== "none") {
-      anthropicOpts["thinking"] = { type: "adaptive" }
-      const effort = ANTHROPIC_EFFORT[reasoning]
-      if (effort !== undefined) anthropicOpts["effort"] = effort
-    }
-    return { ...existingRec, anthropic: anthropicOpts } as ProviderOptions
-  }
-
-  if (providerId === "openai" && reasoning !== undefined && reasoning !== "none") {
-    // OpenAI reads `reasoningEffort` directly — same levels as gent's ReasoningEffort
-    const existingOpenai = existingRec?.["openai"] as Record<string, unknown> | undefined
-    return {
-      ...existingRec,
-      openai: { ...existingOpenai, reasoningEffort: reasoning },
-    } as ProviderOptions
-  }
-
-  return existing
+  if (providerId === undefined) return Effect.succeed(existing)
+  return registry.getProvider(providerId).pipe(
+    Effect.map((provider) => {
+      if (provider?.buildOptions === undefined) return existing
+      return provider.buildOptions(modelId, reasoning, existing) as ProviderOptions
+    }),
+  )
 }
 
 export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
   "@gent/core/src/providers/provider",
 ) {
-  static Live: Layer.Layer<Provider, never, ProviderFactory> = Layer.effect(
+  static Live: Layer.Layer<Provider, never, ProviderFactory | ExtensionRegistry> = Layer.effect(
     Provider,
     Effect.gen(function* () {
       const factory = yield* ProviderFactory
+      const registry = yield* ExtensionRegistry
 
       return {
         stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
@@ -163,7 +150,8 @@ export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
           if (request.abortSignal !== undefined) {
             opts.abortSignal = request.abortSignal
           }
-          opts.providerOptions = buildProviderOptions(
+          opts.providerOptions = yield* resolveProviderOptions(
+            registry,
             request.model,
             request.reasoning,
             request.providerOptions,

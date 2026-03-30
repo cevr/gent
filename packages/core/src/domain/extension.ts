@@ -247,6 +247,13 @@ export interface ProviderContribution {
   ) => ReadonlyArray<unknown>
   /** Auth configuration — methods + authorize/callback handlers */
   readonly auth?: ProviderAuthContribution
+  /** Build provider-specific options for the AI SDK. Called during stream/generate setup.
+   *  Receives the model ID, reasoning level, and existing options — returns merged options. */
+  readonly buildOptions?: (
+    modelId: string,
+    reasoning: string | undefined,
+    existing: unknown,
+  ) => unknown
 }
 
 /** Auth info passed to resolveModel — mirrors AuthStore entries */

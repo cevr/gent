@@ -111,9 +111,34 @@ export const AnthropicExtension = defineExtension({
       // Credential cache owned by this extension closure
       const credentialCache: CredentialCache = { creds: null, at: 0 }
 
+      // Maps gent reasoning level to Anthropic effort (Anthropic caps at "high")
+      const ANTHROPIC_EFFORT: Record<string, string> = {
+        minimal: "low",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "high",
+      }
+
       const anthropicProvider: ProviderContribution = {
         id: "anthropic",
         name: "Anthropic",
+        buildOptions: (_modelId, reasoning, existing) => {
+          const existingRec = existing as Record<string, unknown> | undefined
+          const existingAnthropic = existingRec?.["anthropic"] as
+            | Record<string, unknown>
+            | undefined
+          const anthropicOpts: Record<string, unknown> = {
+            ...existingAnthropic,
+            cacheControl: { type: "ephemeral" },
+          }
+          if (reasoning !== undefined && reasoning !== "none") {
+            anthropicOpts["thinking"] = { type: "adaptive" }
+            const effort = ANTHROPIC_EFFORT[reasoning]
+            if (effort !== undefined) anthropicOpts["effort"] = effort
+          }
+          return { ...existingRec, anthropic: anthropicOpts }
+        },
         resolveModel: (modelName, authInfo) => {
           // Precedence: stored API key > env API key > keychain/OAuth
           const storedApiKey =

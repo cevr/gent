@@ -280,7 +280,10 @@ export const createDependencies = (config: DependenciesConfig) => {
     ProviderFactory.Live,
     Layer.merge(authStoreLive, extensionRegistryLive),
   )
-  let providerLive = Layer.provide(Provider.Live, providerFactoryLive)
+  let providerLive = Layer.provide(
+    Provider.Live,
+    Layer.merge(providerFactoryLive, extensionRegistryLive),
+  )
   if (providerMode === "debug-scripted") providerLive = DebugProvider()
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
   else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 150 })
