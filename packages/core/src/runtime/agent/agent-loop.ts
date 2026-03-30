@@ -1047,11 +1047,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
                     ),
                   ),
-                {
-                  name: "resolve",
-                  onSuccess: (event) => event,
-                  onFailure: () => AgentLoopEvent.PhaseFailed,
-                },
+                { name: "resolve", onFailure: () => AgentLoopEvent.PhaseFailed },
               )
               .task(
                 AgentLoopState.Streaming,
@@ -1063,11 +1059,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
                     ),
                   ),
-                {
-                  name: "stream",
-                  onSuccess: (event) => event,
-                  onFailure: () => AgentLoopEvent.PhaseFailed,
-                },
+                { name: "stream", onFailure: () => AgentLoopEvent.PhaseFailed },
               )
               .task(
                 AgentLoopState.ExecutingTools,
@@ -1079,11 +1071,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
                     ),
                   ),
-                {
-                  name: "tools",
-                  onSuccess: (event) => event,
-                  onFailure: () => AgentLoopEvent.PhaseFailed,
-                },
+                { name: "tools", onFailure: () => AgentLoopEvent.PhaseFailed },
               )
               .task(
                 AgentLoopState.Finalizing,
@@ -1095,11 +1083,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                       publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
                     ),
                   ),
-                {
-                  name: "finalize",
-                  onSuccess: (event) => event,
-                  onFailure: () => AgentLoopEvent.PhaseFailed,
-                },
+                { name: "finalize", onFailure: () => AgentLoopEvent.PhaseFailed },
               )
 
             const loopActor = yield* Machine.spawn(

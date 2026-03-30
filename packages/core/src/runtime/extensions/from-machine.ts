@@ -35,7 +35,7 @@ export interface FromMachineConfig<
   readonly id: string
   /** The built machine to wrap */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly built: Machine.Machine<State, Event, R, any, any, any, any>
+  readonly built: Machine.Machine<State, Event, R, any, any, any>
   /** Map AgentEvent to machine event. Return undefined to skip. */
   readonly mapEvent?: (event: AgentEvent) => Event | undefined
   /** Map intent to machine event for handleIntent support. Receives current state for conditional mapping. Return undefined to skip. */
