@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test"
-import { Deferred, Effect } from "effect"
+import { Deferred, Effect, Layer } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import {
   makeInteractionService,
   type InteractionRequestRecord,
@@ -13,21 +14,24 @@ import type { SessionId, BranchId } from "@gent/core/domain/ids"
 // ============================================================================
 
 describe("Interaction Request Durability", () => {
-  const storageLive = Storage.Memory()
+  const storageLayer = Storage.MemoryWithSql()
+  const storageLive = Layer.mergeAll(
+    storageLayer,
+    Layer.provide(InteractionStorage.Live, storageLayer),
+  )
 
   test("present persists request to storage", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const is = yield* InteractionStorage
 
         const storageCallbacks: InteractionStorageConfig = {
           persist: (record) =>
-            storage.persistInteractionRequest(record).pipe(
+            is.persist(record).pipe(
               Effect.asVoid,
               Effect.catchEager(() => Effect.void),
             ),
-          resolve: (requestId) =>
-            storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+          resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
 
         interface TestParams {
@@ -60,7 +64,7 @@ describe("Interaction Request Durability", () => {
         yield* Effect.sleep("10 millis")
 
         // Verify persisted
-        const pending = yield* storage.listPendingInteractionRequests()
+        const pending = yield* is.listPending()
         expect(pending.length).toBe(1)
         expect(pending[0]!.type).toBe("permission")
         expect(pending[0]!.sessionId).toBe("s1")
@@ -75,7 +79,7 @@ describe("Interaction Request Durability", () => {
         expect(result).toBe("allow")
 
         // Verify resolved in storage
-        const afterResolve = yield* storage.listPendingInteractionRequests()
+        const afterResolve = yield* is.listPending()
         expect(afterResolve.length).toBe(0)
       }).pipe(Effect.provide(storageLive)),
     )
@@ -84,7 +88,7 @@ describe("Interaction Request Durability", () => {
   test("respond marks request as resolved in storage", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const is = yield* InteractionStorage
 
         // Manually insert a pending record
         const record: InteractionRequestRecord = {
@@ -96,17 +100,17 @@ describe("Interaction Request Durability", () => {
           status: "pending",
           createdAt: Date.now(),
         }
-        yield* storage.persistInteractionRequest(record)
+        yield* is.persist(record)
 
         // Verify it's pending
-        const before = yield* storage.listPendingInteractionRequests()
+        const before = yield* is.listPending()
         expect(before.some((r) => r.requestId === "req-manual-1")).toBe(true)
 
         // Resolve it
-        yield* storage.resolveInteractionRequest("req-manual-1")
+        yield* is.resolve("req-manual-1")
 
         // Verify it's no longer pending
-        const after = yield* storage.listPendingInteractionRequests()
+        const after = yield* is.listPending()
         expect(after.some((r) => r.requestId === "req-manual-1")).toBe(false)
       }).pipe(Effect.provide(storageLive)),
     )
@@ -115,10 +119,10 @@ describe("Interaction Request Durability", () => {
   test("deletePendingInteractionRequests clears by session+branch", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const is = yield* InteractionStorage
 
         // Insert requests for two different branches
-        yield* storage.persistInteractionRequest({
+        yield* is.persist({
           requestId: "req-del-1",
           type: "permission",
           sessionId: "s3" as SessionId,
@@ -127,7 +131,7 @@ describe("Interaction Request Durability", () => {
           status: "pending",
           createdAt: Date.now(),
         })
-        yield* storage.persistInteractionRequest({
+        yield* is.persist({
           requestId: "req-del-2",
           type: "handoff",
           sessionId: "s3" as SessionId,
@@ -138,10 +142,10 @@ describe("Interaction Request Durability", () => {
         })
 
         // Delete only b3
-        yield* storage.deletePendingInteractionRequests("s3" as SessionId, "b3" as BranchId)
+        yield* is.deletePending("s3" as SessionId, "b3" as BranchId)
 
         // Only b4 should remain
-        const remaining = yield* storage.listPendingInteractionRequests()
+        const remaining = yield* is.listPending()
         expect(remaining.filter((r) => r.sessionId === "s3").length).toBe(1)
         expect(remaining[0]!.branchId).toBe("b4")
       }).pipe(Effect.provide(storageLive)),
@@ -213,16 +217,15 @@ describe("Interaction Request Durability", () => {
   test("autoResolve skips storage persistence", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const storage = yield* Storage
+        const is = yield* InteractionStorage
 
         const storageCallbacks: InteractionStorageConfig = {
           persist: (record) =>
-            storage.persistInteractionRequest(record).pipe(
+            is.persist(record).pipe(
               Effect.asVoid,
               Effect.catchEager(() => Effect.void),
             ),
-          resolve: (requestId) =>
-            storage.resolveInteractionRequest(requestId).pipe(Effect.catchEager(() => Effect.void)),
+          resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
 
         interface TestParams {
@@ -246,7 +249,7 @@ describe("Interaction Request Durability", () => {
         })
         expect(result).toBe("auto-yes")
 
-        const pending = yield* storage.listPendingInteractionRequests()
+        const pending = yield* is.listPending()
         expect(pending.filter((r) => r.sessionId === "s4").length).toBe(0)
       }).pipe(Effect.provide(storageLive)),
     )

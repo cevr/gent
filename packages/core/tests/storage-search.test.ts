@@ -1,10 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SearchStorage } from "@gent/core/storage/search-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
-const test = it.live.layer(Storage.Test())
+const storageLayer = Storage.TestWithSql()
+const test = it.live.layer(
+  Layer.mergeAll(storageLayer, Layer.provide(SearchStorage.Live, storageLayer)),
+)
 
 // Fixture helpers
 
@@ -66,8 +70,8 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "implement the authentication flow")
 
-      const storage = yield* Storage
-      const results = yield* storage.searchMessages("authentication")
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("authentication")
       expect(results.length).toBeGreaterThan(0)
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
     }))
@@ -77,8 +81,8 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "assistant", "the database migration is complete")
 
-      const storage = yield* Storage
-      const results = yield* storage.searchMessages("migration")
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("migration")
       expect(results.length).toBeGreaterThan(0)
       expect(results[0]!.snippet).toBeDefined()
     }))
@@ -92,8 +96,8 @@ describe("searchMessages", () => {
       yield* addMessage(sessionId, branchId, "user", "old unique searchterm alpha", oldDate)
       yield* addMessage(sessionId, branchId, "user", "new unique searchterm beta", recentDate)
 
-      const storage = yield* Storage
-      const results = yield* storage.searchMessages("searchterm", {
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("searchterm", {
         dateAfter: Date.now() - 86400000,
       })
       expect(results.every((r) => r.createdAt > Date.now() - 86400000)).toBe(true)
@@ -106,15 +110,15 @@ describe("searchMessages", () => {
         yield* addMessage(sessionId, branchId, "user", `limitword item ${i}`)
       }
 
-      const storage = yield* Storage
-      const results = yield* storage.searchMessages("limitword", { limit: 2 })
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("limitword", { limit: 2 })
       expect(results.length).toBeLessThanOrEqual(2)
     }))
 
   test("returns empty array for no matches", () =>
     Effect.gen(function* () {
-      const storage = yield* Storage
-      const results = yield* storage.searchMessages("xyznonexistentkeyword999")
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("xyznonexistentkeyword999")
       expect(results).toEqual([])
     }))
 
@@ -123,8 +127,8 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture({ sessionName: "My Test Session" })
       yield* addMessage(sessionId, branchId, "user", "unique namedtest content")
 
-      const storage = yield* Storage
-      const results = yield* storage.searchMessages("namedtest")
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("namedtest")
       const match = results.find((r) => r.sessionId === sessionId)
       expect(match).toBeDefined()
       expect(match!.sessionName).toBe("My Test Session")

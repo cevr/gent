@@ -726,8 +726,6 @@ describe("AgentLoop actor model", () => {
         return {
           ...storage,
           getLatestEvent: (input) => storage.getLatestEvent(input).pipe(Effect.delay("25 millis")),
-          getAgentLoopCheckpoint: (input) =>
-            storage.getAgentLoopCheckpoint(input).pipe(Effect.delay("25 millis")),
         }
       }),
     )

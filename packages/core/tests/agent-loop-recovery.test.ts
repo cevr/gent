@@ -203,6 +203,7 @@ const seedCheckpoint = (params: {
 }) =>
   Effect.gen(function* () {
     const storage = yield* Storage
+    const cs = yield* CheckpointStorage
     const { session, branch, message } = createSessionState()
 
     yield* storage.createSession(session)
@@ -216,7 +217,7 @@ const seedCheckpoint = (params: {
         branchId: branch.id,
         state: params.state,
       }))
-    yield* storage.upsertAgentLoopCheckpoint(record)
+    yield* cs.upsert(record)
 
     return { session, branch, message }
   })
@@ -244,6 +245,7 @@ describe("AgentLoop recovery", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           const storage = yield* Storage
+          const cs = yield* CheckpointStorage
 
           yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
 
@@ -260,7 +262,7 @@ describe("AgentLoop recovery", () => {
             (value) => value === "TurnRecoveryApplied",
           )
           const checkpoint = yield* waitFor(
-            storage.getAgentLoopCheckpoint({
+            cs.get({
               sessionId: session.id,
               branchId: branch.id,
             }),
@@ -317,11 +319,12 @@ describe("AgentLoop recovery", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           const storage = yield* Storage
+          const cs = yield* CheckpointStorage
 
           yield* agentLoop.getQueue({ sessionId: session.id, branchId: branch.id })
 
           const checkpoint = yield* waitFor(
-            storage.getAgentLoopCheckpoint({ sessionId: session.id, branchId: branch.id }),
+            cs.get({ sessionId: session.id, branchId: branch.id }),
             (value) => value === undefined,
           )
           const recoveryTag = yield* waitFor(
@@ -399,12 +402,12 @@ describe("AgentLoop recovery", () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
+          const cs = yield* CheckpointStorage
 
           yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
 
           const checkpoint = yield* waitFor(
-            storage.getAgentLoopCheckpoint({ sessionId: session.id, branchId: branch.id }),
+            cs.get({ sessionId: session.id, branchId: branch.id }),
             (value) => value === undefined,
           )
           const callCount = yield* Ref.get(toolRunnerCalls)
@@ -547,6 +550,7 @@ describe("AgentLoop recovery", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           const storage = yield* Storage
+          const cs = yield* CheckpointStorage
 
           yield* agentLoop.getQueue({ sessionId: session.id, branchId: branch.id })
 
@@ -559,7 +563,7 @@ describe("AgentLoop recovery", () => {
             (value) => value === "TurnCompleted",
           )
           const checkpoint = yield* waitFor(
-            storage.getAgentLoopCheckpoint({
+            cs.get({
               sessionId: session.id,
               branchId: branch.id,
             }),
@@ -598,10 +602,11 @@ describe("AgentLoop recovery", () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           const storage = yield* Storage
+          const cs = yield* CheckpointStorage
           const agentLoop = yield* AgentLoop
 
           // Verify checkpoint exists
-          const checkpoints = yield* storage.listAgentLoopCheckpoints()
+          const checkpoints = yield* cs.list()
           expect(checkpoints.length).toBe(1)
           expect(checkpoints[0]!.sessionId).toBe(session.id)
 
@@ -621,7 +626,7 @@ describe("AgentLoop recovery", () => {
 
           // Checkpoint should be cleaned up after idle
           const remaining = yield* waitFor(
-            storage.getAgentLoopCheckpoint({
+            cs.get({
               sessionId: session.id,
               branchId: branch.id,
             }),
