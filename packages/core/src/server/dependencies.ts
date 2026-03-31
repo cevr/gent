@@ -266,17 +266,12 @@ export const createDependencies = (config: DependenciesConfig) => {
     ModelRegistry.Live,
     Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),
   )
-  const authGuardLive = Layer.provide(
-    AuthGuard.Live,
-    Layer.merge(authStoreLive, extensionRegistryLive),
-  )
-  const providerAuthLive = Layer.provide(
-    ProviderAuth.Live,
-    Layer.merge(authStoreLive, extensionRegistryLive),
-  )
+  const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
+  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
+  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
-  let providerLive = Layer.provide(Provider.Live, Layer.merge(authStoreLive, extensionRegistryLive))
+  let providerLive = Layer.provide(Provider.Live, authDeps)
   if (providerMode === "debug-scripted") providerLive = DebugProvider()
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
   else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 150 })
@@ -318,51 +313,25 @@ export const createDependencies = (config: DependenciesConfig) => {
   const baseWithPermission = Layer.merge(baseServicesLive, permissionLive)
 
   // Interaction handler layers — resolved from extension registry with builtin fallback.
-  // Extension-contributed layers override builtins via scope precedence (project > user > builtin).
-  // Uses Layer.unwrap (same pattern as Permission.Live above) to defer layer selection to runtime.
-  const resolveHandler = (type: InteractionHandlerType) =>
-    Effect.gen(function* () {
-      const registry = yield* ExtensionRegistry
-      const h = yield* registry.getInteractionHandler(type)
-      return h?.layer
-    })
-  const askUserHandlerLive = Layer.provide(
-    Layer.unwrap(
-      resolveHandler("ask-user").pipe(
-        Effect.map((h) => (h ?? AskUserHandler.Live) as typeof AskUserHandler.Live),
+  const resolveHandlerLayer = <A, R>(
+    type: InteractionHandlerType,
+    fallback: Layer.Layer<A, never, R>,
+  ) =>
+    Layer.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const registry = yield* ExtensionRegistry
+          const h = yield* registry.getInteractionHandler(type)
+          return (h?.layer ?? fallback) as Layer.Layer<A, never, R>
+        }),
       ),
-    ),
-    baseWithPermission,
-  )
-  const permissionHandlerLive = Layer.provide(
-    Layer.unwrap(
-      resolveHandler("permission").pipe(
-        Effect.map((h) => (h ?? PermissionHandler.Live) as typeof PermissionHandler.Live),
-      ),
-    ),
-    baseWithPermission,
-  )
-  const promptHandlerLive = Layer.provide(
-    Layer.unwrap(
-      resolveHandler("prompt").pipe(
-        Effect.map((h) => (h ?? PromptHandler.Live) as typeof PromptHandler.Live),
-      ),
-    ),
-    baseWithPermission,
-  )
-  const handoffHandlerLive = Layer.provide(
-    Layer.unwrap(
-      resolveHandler("handoff").pipe(
-        Effect.map((h) => (h ?? HandoffHandler.Live) as typeof HandoffHandler.Live),
-      ),
-    ),
-    baseWithPermission,
-  )
+      baseWithPermission,
+    )
   const interactionHandlersLive = Layer.mergeAll(
-    askUserHandlerLive,
-    permissionHandlerLive,
-    promptHandlerLive,
-    handoffHandlerLive,
+    resolveHandlerLayer("ask-user", AskUserHandler.Live),
+    resolveHandlerLayer("permission", PermissionHandler.Live),
+    resolveHandlerLayer("prompt", PromptHandler.Live),
+    resolveHandlerLayer("handoff", HandoffHandler.Live),
   )
   const promptPresenterLive = Layer.provide(
     PromptPresenter.Live,
