@@ -6,14 +6,12 @@ import { type WorkerLifecycleState, WorkerSupervisorInternal } from "@gent/sdk/s
 import {
   createTempDirFixture,
   createWorkerEnv,
-  registerWorkerCleanup,
   startWorkerWithSupervisor,
   waitFor,
 } from "./seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-worker-")
-registerWorkerCleanup()
 
 const waitForRunning = async (
   worker: {

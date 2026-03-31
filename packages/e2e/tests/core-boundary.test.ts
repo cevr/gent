@@ -7,7 +7,7 @@ import {
   PromptHandler,
   HandoffHandler,
 } from "@gent/core/domain/interaction-handlers"
-import type { SessionId } from "@gent/core/domain/ids"
+import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
@@ -76,7 +76,7 @@ describe("SessionCommands → ActorProcess integration", () => {
 
     const eventStoreLayer = EventStore.Test()
     const storageDeps = Layer.mergeAll(
-      Storage.Test(),
+      Storage.TestWithSql(),
       eventStoreLayer,
       agentLoopLayer,
       testExtensionRegistryLayer,
@@ -171,7 +171,7 @@ describe("SessionCommands → ActorProcess integration", () => {
 
     const eventStoreLayer = EventStore.Test()
     const storageDeps = Layer.mergeAll(
-      Storage.Test(),
+      Storage.TestWithSql(),
       eventStoreLayer,
       agentLoopLayer,
       testExtensionRegistryLayer,
@@ -233,7 +233,7 @@ describe("SessionCommands → ActorProcess integration", () => {
     })
 
     const storageDeps = Layer.mergeAll(
-      Storage.Test(),
+      Storage.TestWithSql(),
       EventStore.Test(),
       agentLoopLayer,
       testExtensionRegistryLayer,
