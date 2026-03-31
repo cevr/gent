@@ -1,3 +1,4 @@
+import { Effect } from "effect"
 import type {
   ExtensionHooks,
   ExtensionInterceptorDescriptor,
@@ -59,7 +60,15 @@ const composeInterceptors = <K extends keyof ExtensionInterceptorMap>(
       input: InterceptorInput<K>,
       next: (input: InterceptorInput<K>) => InterceptorOutput<K>,
     ) => InterceptorOutput<K>
-    next = (input) => run(input, previous)
+    next = (input) =>
+      Effect.suspend(() => run(input, previous) as Effect.Effect<unknown>).pipe(
+        Effect.catchDefect((defect) =>
+          Effect.logWarning("extension.interceptor.defect").pipe(
+            Effect.annotateLogs({ defect: String(defect) }),
+            Effect.andThen(previous(input)),
+          ),
+        ),
+      ) as InterceptorOutput<K>
   }
   return next
 }

@@ -331,4 +331,52 @@ describe("compileHooks", () => {
         )
     })
   })
+
+  describe("defect resilience", () => {
+    it.live("defecting interceptor falls through to base", () => {
+      const ext = makeExt("crashy", "user", {
+        interceptors: [
+          defineInterceptor("prompt.system", () => {
+            throw new Error("interceptor blew up")
+          }),
+        ],
+      })
+      const compiled = compileHooks([ext])
+      return compiled
+        .runInterceptor("prompt.system", { basePrompt: "safe", agent: Agents.cowork }, (input) =>
+          Effect.succeed(input.basePrompt),
+        )
+        .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("safe"))))
+    })
+
+    it.live("defecting interceptor in chain skips to previous next", () => {
+      const good = makeExt("good", "builtin", {
+        interceptors: [
+          defineInterceptor(
+            "prompt.system",
+            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
+              next(input).pipe(Effect.map((r) => r + " [good]")),
+          ),
+        ],
+      })
+      const bad = makeExt("bad", "user", {
+        interceptors: [
+          defineInterceptor("prompt.system", () => {
+            throw new Error("boom")
+          }),
+        ],
+      })
+      const compiled = compileHooks([good, bad])
+      return compiled
+        .runInterceptor("prompt.system", { basePrompt: "hello", agent: Agents.cowork }, (input) =>
+          Effect.succeed(input.basePrompt),
+        )
+        .pipe(
+          Effect.tap((result) =>
+            // bad defected, so falls through to good's chain which appends [good]
+            Effect.sync(() => expect(result).toBe("hello [good]")),
+          ),
+        )
+    })
+  })
 })
