@@ -116,7 +116,6 @@ Core orchestration lives in:
 - `packages/core/src/runtime/agent/agent-loop.ts`
 - `packages/core/src/runtime/agent/agent-loop.state.ts`
 - `packages/core/src/runtime/agent/agent-loop.utils.ts`
-- `packages/core/src/runtime/agent/agent-loop-phases.ts`
 
 Shape:
 
@@ -296,13 +295,13 @@ Key files:
 
 Wide event boundaries (one structured log per unit of work) via `effect-wide-event`:
 
-| Boundary        | Service       | File                                                   |
-| --------------- | ------------- | ------------------------------------------------------ |
-| Agent turn      | `agent-loop`  | `runtime/agent/agent-loop-phases.ts` (TurnMetrics ref) |
-| Tool call       | `tool-runner` | `runtime/agent/tool-runner.ts`                         |
-| Provider stream | `provider`    | `runtime/agent/agent-loop-phases.ts`                   |
-| RPC request     | `rpc`         | `server/rpc-handlers.ts`                               |
-| Subagent run    | `subagent`    | `runtime/agent/subagent-runner.ts`                     |
+| Boundary        | Service       | File                                            |
+| --------------- | ------------- | ----------------------------------------------- |
+| Agent turn      | `agent-loop`  | `runtime/agent/agent-loop.ts` (TurnMetrics ref) |
+| Tool call       | `tool-runner` | `runtime/agent/tool-runner.ts`                  |
+| Provider stream | `provider`    | `runtime/agent/agent-loop.ts`                   |
+| RPC request     | `rpc`         | `server/rpc-handlers.ts`                        |
+| Subagent run    | `subagent`    | `runtime/agent/subagent-runner.ts`              |
 
 Logging conventions:
 

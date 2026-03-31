@@ -4,7 +4,7 @@ import { defineAgent } from "@gent/core/domain/agent"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
-import { finalizeTurnPhase } from "@gent/core/runtime/agent/agent-loop-phases"
+import { finalizeTurnPhase } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 

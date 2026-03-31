@@ -12,7 +12,7 @@ import { ActorCommandId, BranchId, SessionId, ToolCallId, type MessageId } from 
 import { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { invokeToolPhase } from "./agent/agent-loop-phases"
+import { invokeToolPhase } from "./agent/agent-loop"
 import { ToolRunner } from "./agent/tool-runner"
 import { AgentLoop, type SteerCommand } from "./agent"
 import { ExtensionRegistry } from "./extensions/registry.js"
