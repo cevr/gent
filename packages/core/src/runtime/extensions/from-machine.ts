@@ -134,28 +134,43 @@ export const fromMachine = <
           branchId,
           turnControl,
           config.persist === true ? persistState : undefined,
-        ).pipe(Effect.catchDefect(() => Effect.void))
+        ).pipe(
+          Effect.catchDefect((defect) =>
+            Effect.logWarning("extension effect interpretation defect").pipe(
+              Effect.annotateLogs({ extensionId: config.id, defect: String(defect) }),
+            ),
+          ),
+        )
 
       // Dispatch event through actor, handle version + persist + afterTransition
       const dispatch = (machineEvent: Event, branchId: BranchId | undefined) =>
         Effect.gen(function* () {
           const result = yield* ref.call(machineEvent).pipe(
-            Effect.catchDefect(() =>
-              Effect.succeed({
-                transitioned: false,
-                previousState: undefined,
-                newState: undefined,
-                lifecycleRan: false,
-                isFinal: false,
-                hasReply: false,
-                postponed: false,
-              }),
+            Effect.catchDefect((defect) =>
+              Effect.logWarning("machine transition defect").pipe(
+                Effect.annotateLogs({ extensionId: config.id, defect: String(defect) }),
+                Effect.as({
+                  transitioned: false,
+                  previousState: undefined,
+                  newState: undefined,
+                  lifecycleRan: false,
+                  isFinal: false,
+                  hasReply: false,
+                  postponed: false,
+                }),
+              ),
             ),
           )
           if (!result.transitioned) return false
           yield* Ref.update(versionRef, (v) => v + 1)
           if (config.persist === true) {
-            yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
+            yield* persistState().pipe(
+              Effect.catchDefect((defect) =>
+                Effect.logWarning("extension persist defect").pipe(
+                  Effect.annotateLogs({ extensionId: config.id, defect: String(defect) }),
+                ),
+              ),
+            )
           }
           if (config.afterTransition !== undefined && result.previousState !== undefined) {
             const effects = config.afterTransition(

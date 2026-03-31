@@ -1,5 +1,6 @@
 import { describe, it, test, expect } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Logger, Schema } from "effect"
+import { CurrentLogAnnotations } from "effect/References"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import { SessionStarted, TurnCompleted, EventStore } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -282,5 +283,60 @@ describe("fromMachine", () => {
       expect(counter!.epoch).toBe(7)
       expect(counter!.model).toEqual({ tag: "Counting" })
     }).pipe(Effect.provide(layer))
+  })
+
+  it.live("transition defect is logged as warning, not silently swallowed", () => {
+    // Machine where the Explode transition throws a defect
+    const BombState = MState({ Armed: {}, Disarmed: {} })
+    const BombEvent = MEvent({ Explode: {} })
+
+    const bombMachine = Machine.make({
+      state: BombState,
+      event: BombEvent,
+      initial: BombState.Armed,
+    }).on(BombState.Armed, BombEvent.Explode, () => {
+      throw new Error("boom")
+    })
+
+    const { spawnActor: spawn } = fromMachine({
+      id: "bomb",
+      built: bombMachine,
+      mapEvent: (event) => {
+        if (event._tag === "SessionStarted") return BombEvent.Explode
+        return undefined
+      },
+    })
+
+    // Mutable array — Logger.make callback is synchronous, no Effect needed
+    const captured: Array<{ message: string; annotations: Record<string, unknown> }> = []
+
+    const captureLogger = Logger.make(({ logLevel, message, fiber }) => {
+      if (logLevel !== "Warn") return
+      const msg = typeof message === "string" ? message : String(message)
+      const annotations = fiber.getRef(CurrentLogAnnotations) as Record<string, unknown>
+      captured.push({ message: msg, annotations })
+    })
+
+    const logLayer = Logger.layer([captureLogger])
+
+    return Effect.gen(function* () {
+      const actor = yield* spawn({ sessionId, branchId })
+      yield* actor.init
+
+      const changed = yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+
+      // Defect caught → returns false (no transition)
+      expect(changed).toBe(false)
+
+      // But the warning was logged, not silently swallowed
+      const defectLog = captured.find((e) => e.message === "machine transition defect")
+      expect(defectLog).toBeDefined()
+      expect(defectLog!.annotations).toMatchObject({ extensionId: "bomb" })
+      // Defect string should contain "boom"
+      expect(String(defectLog!.annotations.defect)).toContain("boom")
+    }).pipe(Effect.provide(Layer.mergeAll(testLayer, logLayer)))
   })
 })

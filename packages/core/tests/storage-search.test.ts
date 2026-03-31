@@ -1,7 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
+import { test as bunTest } from "bun:test"
 import { Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { SearchStorage } from "@gent/core/storage/search-storage"
+import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
@@ -130,6 +131,90 @@ describe("searchMessages", () => {
       expect(match).toBeDefined()
       expect(match!.sessionName).toBe("My Test Session")
     }))
+
+  test("handles trailing FTS5 operator without SQL error", () =>
+    Effect.gen(function* () {
+      const { sessionId, branchId } = yield* createFixture()
+      yield* addMessage(sessionId, branchId, "user", "hello world operator test")
+
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("hello OR")
+      expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
+    }))
+
+  test("handles query with embedded FTS5 operators", () =>
+    Effect.gen(function* () {
+      const { sessionId, branchId } = yield* createFixture()
+      yield* addMessage(sessionId, branchId, "user", "cats dogs animals")
+
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("cats AND OR NOT dogs")
+      expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
+    }))
+
+  test("handles query with quotes and special characters", () =>
+    Effect.gen(function* () {
+      const { sessionId, branchId } = yield* createFixture()
+      yield* addMessage(sessionId, branchId, "user", "special punctuation test here")
+
+      const searchStore = yield* SearchStorage
+      // Quotes, asterisks, and other FTS5 syntax chars should be stripped safely
+      const results = yield* searchStore.searchMessages('"special" test*')
+      expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
+    }))
+
+  test("returns empty array for query that is only operators", () =>
+    Effect.gen(function* () {
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("OR AND NOT")
+      expect(results).toEqual([])
+    }))
+
+  test("returns empty array for empty query", () =>
+    Effect.gen(function* () {
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("")
+      expect(results).toEqual([])
+    }))
+})
+
+describe("sanitizeFts5Query", () => {
+  bunTest("wraps plain keywords in double quotes", () => {
+    expect(sanitizeFts5Query("hello world")).toBe('"hello" "world"')
+  })
+
+  bunTest("strips FTS5 operators", () => {
+    expect(sanitizeFts5Query("hello OR world")).toBe('"hello" "world"')
+    expect(sanitizeFts5Query("NOT bad")).toBe('"bad"')
+    expect(sanitizeFts5Query("a AND b")).toBe('"a" "b"')
+    expect(sanitizeFts5Query("NEAR something")).toBe('"something"')
+  })
+
+  bunTest("strips operators case-insensitively", () => {
+    expect(sanitizeFts5Query("hello or world")).toBe('"hello" "world"')
+    expect(sanitizeFts5Query("not bad")).toBe('"bad"')
+  })
+
+  bunTest("removes special FTS5 characters", () => {
+    expect(sanitizeFts5Query('hello* "world" test^')).toBe('"hello" "world" "test"')
+    expect(sanitizeFts5Query("(group) col:umn")).toBe('"group" "col" "umn"')
+  })
+
+  bunTest("returns empty string for only operators", () => {
+    expect(sanitizeFts5Query("OR AND NOT")).toBe("")
+  })
+
+  bunTest("returns empty string for empty input", () => {
+    expect(sanitizeFts5Query("")).toBe("")
+  })
+
+  bunTest("handles trailing operator", () => {
+    expect(sanitizeFts5Query("hello OR")).toBe('"hello"')
+  })
+
+  bunTest("handles punctuation-heavy input", () => {
+    expect(sanitizeFts5Query("it's a +test- {thing}")).toBe('"it" "s" "a" "test" "thing"')
+  })
 })
 
 describe("getSessionDetail", () => {

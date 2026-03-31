@@ -22,8 +22,8 @@ apps/
 packages/
 ├── core/
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
-│   ├── storage/   # SQLite persistence
-│   ├── providers/ # Model/provider/auth adapters
+│   ├── storage/   # SQLite persistence (focused services: Storage, CheckpointStorage, InteractionStorage, SearchStorage)
+│   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
 │   ├── runtime/   # actor-process, agent-loop, task/runtime services
 │   ├── tools/     # tool definitions + handlers
 │   ├── extensions/# builtin extensions
@@ -120,11 +120,12 @@ Core orchestration lives in:
 Shape:
 
 - `ActorProcess` is the single command entry for session/branch actor work.
-- `AgentLoop` is a flat machine-owned control plane.
+- `AgentLoop` is a flat machine-owned control plane (turn phases inlined, state uses union-level derive).
 - production actor routing is cluster-backed inside the worker process
 - queue ownership is structural
-- turn phases are explicit
+- turn phases are explicit (resolve → stream → execute-tools → finalize)
 - machine inspection events are published as diagnostics
+- `SubagentRunnerConfig` is a plain interface passed to `InProcessRunner`/`SubprocessRunner`, not a service
 
 Do not rebuild business logic from inspection events. They are receipts, not inputs.
 
