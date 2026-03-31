@@ -41,7 +41,7 @@ const buildProviderLayer = (extensions: LoadedExtension[]) => {
   return Layer.provide(Provider.Live, Layer.merge(authLayer, registryLayer))
 }
 
-describe("ProviderFactory extension dispatch", () => {
+describe("Provider model resolution", () => {
   test("resolves model through extension-registered provider", async () => {
     const layer = buildProviderLayer([makeExt("test-ext", [makeProvider("custom")])])
     const result = await Effect.runPromiseExit(
