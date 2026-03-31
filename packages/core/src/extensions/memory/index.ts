@@ -8,11 +8,10 @@
  */
 
 import { Effect, Ref } from "effect"
-import { defineExtension } from "../../domain/extension.js"
-import type { ExtensionSetup, ReduceResult } from "../../domain/extension.js"
-import { fromReducer } from "../../runtime/extensions/from-reducer.js"
+import type { ReduceResult } from "../../domain/extension.js"
 import type { SessionId } from "../../domain/ids.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
+import { extension, fromReducer } from "../api.js"
 import {
   type MemoryState,
   type SessionMemory,
@@ -80,10 +79,7 @@ export const MemoryActorConfig = {
   handleIntent,
 }
 
-const { spawnActor: MemorySpawnActor, projection: MemoryProjection } = fromReducer<
-  MemoryState,
-  MemoryIntent
->({
+const memoryActor = fromReducer<MemoryState, MemoryIntent>({
   ...MemoryActorConfig,
   intentSchema: MemoryIntent,
   // onInit runs in ambient runtime where MemoryVault is provided via setup.layer
@@ -110,18 +106,15 @@ const { spawnActor: MemorySpawnActor, projection: MemoryProjection } = fromReduc
 
 // ── Extension ──
 
-export const MemoryExtension = defineExtension({
-  manifest: { id: "@gent/memory" },
-  setup: () => {
-    const setup: ExtensionSetup = {
-      tools: [...MemoryTools] as ReadonlyArray<AnyToolDefinition>,
-      agents: [...MemoryAgents],
-      spawnActor: MemorySpawnActor,
-      projection: MemoryProjection,
-      layer: MemoryVaultLive(),
-      onStartup: registerDreamJobs,
-      onShutdown: removeDreamJobs,
-    }
-    return Effect.succeed(setup)
-  },
+export const MemoryExtension = extension("@gent/memory", (ext) => {
+  for (const tool of MemoryTools as ReadonlyArray<AnyToolDefinition>) {
+    ext.tool(tool)
+  }
+  for (const agent of MemoryAgents) {
+    ext.agent(agent)
+  }
+  ext.actor(memoryActor)
+  ext.layer(MemoryVaultLive())
+  ext.onStartupEffect(registerDreamJobs)
+  ext.onShutdownEffect(removeDreamJobs)
 })

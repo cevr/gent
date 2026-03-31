@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineExtension, defineInterceptor } from "../domain/extension.js"
+import { defineInterceptor } from "../domain/extension.js"
 import type { TurnAfterInput } from "../domain/extension.js"
 import type { Message } from "../domain/message.js"
 import { HandoffHandler } from "../domain/interaction-handlers.js"
@@ -10,7 +10,7 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
 import { estimateContextPercent } from "../runtime/context-estimation.js"
 import { DEFAULTS } from "../domain/defaults.js"
-import { fromReducer } from "../runtime/extensions/from-reducer.js"
+import { extension, fromReducer } from "./api.js"
 
 // Cooldown state — per session, managed by actor lifecycle
 interface CooldownState {
@@ -22,7 +22,7 @@ type CooldownIntent = typeof CooldownIntent.Type
 
 const EXTENSION_ID = "@gent/handoff"
 
-const { spawnActor: CooldownActor } = fromReducer<CooldownState, CooldownIntent>({
+const cooldownActor = fromReducer<CooldownState, CooldownIntent>({
   id: EXTENSION_ID,
   initial: { cooldown: 0 },
   intentSchema: CooldownIntent,
@@ -39,6 +39,7 @@ const { spawnActor: CooldownActor } = fromReducer<CooldownState, CooldownIntent>
     }
     return { state }
   },
+  deriveUi: (state: CooldownState) => state,
 })
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
@@ -129,14 +130,9 @@ const autoHandoffInterceptor = defineInterceptor(
   ) => Effect.Effect<void>,
 )
 
-export const HandoffExtension = defineExtension({
-  manifest: { id: EXTENSION_ID },
-  setup: () =>
-    Effect.succeed({
-      tools: [HandoffTool],
-      interactionHandlers: [{ type: "handoff" as const, layer: HandoffHandler.Live }],
-      hooks: { interceptors: [autoHandoffInterceptor] },
-      spawnActor: CooldownActor,
-      projection: { deriveUi: (state: unknown) => state },
-    }),
+export const HandoffExtension = extension(EXTENSION_ID, (ext) => {
+  ext.tool(HandoffTool)
+  ext.interactionHandler({ type: "handoff" as const, layer: HandoffHandler.Live })
+  ext.interceptor(autoHandoffInterceptor)
+  ext.actor(cooldownActor)
 })

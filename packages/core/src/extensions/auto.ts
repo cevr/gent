@@ -13,9 +13,8 @@
  * Uses effect-machine for state transitions, fromMachine for actor wrapping.
  */
 
-import { Effect, Schema } from "effect"
+import { Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
-import { defineExtension } from "../domain/extension.js"
 import type {
   ExtensionDeriveContext,
   ExtensionEffect,
@@ -23,7 +22,7 @@ import type {
 } from "../domain/extension.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { fromMachine } from "../runtime/extensions/from-machine.js"
+import { extension, fromMachine } from "./api.js"
 import { AutoCheckpointTool } from "../tools/auto-checkpoint.js"
 
 // ── Constants ──
@@ -582,11 +581,7 @@ export const AutoActorConfig = {
 
 // ── Actor (effect-machine based) ──
 
-const { spawnActor: AutoSpawnActor, projection: AutoProjection } = fromMachine<
-  MachineState,
-  MachineEvent,
-  AutoIntent
->({
+const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent>({
   id: "auto",
   built: autoMachine,
   mapEvent,
@@ -599,16 +594,11 @@ const { spawnActor: AutoSpawnActor, projection: AutoProjection } = fromMachine<
   afterTransition,
 })
 
-export { AutoSpawnActor }
+export const AutoSpawnActor = autoActor.spawnActor
 
 // ── Extension ──
 
-export const AutoExtension = defineExtension({
-  manifest: { id: "@gent/auto" },
-  setup: () =>
-    Effect.succeed({
-      spawnActor: AutoSpawnActor,
-      projection: AutoProjection,
-      tools: [AutoCheckpointTool],
-    }),
+export const AutoExtension = extension("@gent/auto", (ext) => {
+  ext.actor(autoActor)
+  ext.tool(AutoCheckpointTool)
 })

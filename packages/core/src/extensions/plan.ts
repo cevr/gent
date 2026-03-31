@@ -9,8 +9,7 @@
  * Task tracking: maps TaskCreated → todo items, observes TaskCompleted/TaskFailed.
  */
 
-import { Effect, Schema } from "effect"
-import { defineExtension } from "../domain/extension.js"
+import { Schema } from "effect"
 import type {
   ExtensionDeriveContext,
   ExtensionProjection,
@@ -19,7 +18,7 @@ import type {
 } from "../domain/extension.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { fromReducer } from "../runtime/extensions/from-reducer.js"
+import { extension, fromReducer } from "./api.js"
 
 // ── State ──
 
@@ -390,25 +389,17 @@ export const PlanActorConfig = {
   handleIntent,
 }
 
-const { spawnActor: PlanSpawnActor, projection: PlanProjection } = fromReducer<
-  PlanState,
-  PlanIntent
->({
+const planActor = fromReducer<PlanState, PlanIntent>({
   ...PlanActorConfig,
   stateSchema: PlanState,
   intentSchema: PlanIntent,
   uiModelSchema: PlanUiModel,
 })
 
-export { PlanSpawnActor }
+export const PlanSpawnActor = planActor.spawnActor
 
 // ── Extension ──
 
-export const PlanExtension = defineExtension({
-  manifest: { id: "@gent/plan" },
-  setup: () =>
-    Effect.succeed({
-      spawnActor: PlanSpawnActor,
-      projection: PlanProjection,
-    }),
+export const PlanExtension = extension("@gent/plan", (ext) => {
+  ext.actor(planActor)
 })
