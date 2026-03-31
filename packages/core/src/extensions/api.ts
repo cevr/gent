@@ -432,7 +432,7 @@ export const extension = (
         },
 
         agent: (def) => {
-          if (AgentDefinitionBrand in def) {
+          if (AgentDefinitionBrand in def || "_tag" in def) {
             agents.push(def as AgentDefinition)
           } else {
             agents.push(convertSimpleAgent(def as SimpleAgentDef))
