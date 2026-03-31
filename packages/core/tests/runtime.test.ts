@@ -14,7 +14,7 @@ import {
   resolveExtensions,
 } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { InProcessRunner, SubagentRunnerConfig } from "@gent/core/runtime/agent/subagent-runner"
+import { InProcessRunner } from "@gent/core/runtime/agent/subagent-runner"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
 import {
@@ -379,7 +379,6 @@ describe("AgentExecutionOverrides", () => {
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
-      SubagentRunnerConfig.Live({ systemPrompt: "test" }),
       Layer.succeed(AgentActor, {
         run: (input) => {
           capturedInput = input as unknown as Record<string, unknown>
@@ -390,7 +389,7 @@ describe("AgentExecutionOverrides", () => {
       recorderLayer,
       eventStoreLayer,
     )
-    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({ systemPrompt: "test" }).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
@@ -436,9 +435,6 @@ describe("Subagent Runner", () => {
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
-      SubagentRunnerConfig.Live({
-        systemPrompt: "",
-      }),
       Layer.succeed(AgentActor, {
         run: () => Effect.void,
       }),
@@ -446,7 +442,7 @@ describe("Subagent Runner", () => {
       recorderLayer,
       eventStoreLayer,
     )
-    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({ systemPrompt: "" }).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
@@ -494,9 +490,6 @@ describe("Subagent Runner", () => {
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
-      SubagentRunnerConfig.Live({
-        systemPrompt: "",
-      }),
       Layer.succeed(AgentActor, {
         run: () => Effect.fail(new SubagentError({ message: "permanent failure" })),
       }),
@@ -504,7 +497,7 @@ describe("Subagent Runner", () => {
       recorderLayer,
       eventStoreLayer,
     )
-    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({ systemPrompt: "" }).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
@@ -546,16 +539,14 @@ describe("Subagent Runner", () => {
   test("fails with timeout", async () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
-      SubagentRunnerConfig.Live({
-        systemPrompt: "",
-        timeoutMs: 5,
-      }),
       Layer.succeed(AgentActor, {
         run: () => Effect.sleep("50 millis"),
       }),
       EventStore.Test(),
     )
-    const runnerLayer = InProcessRunner.pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({ systemPrompt: "", timeoutMs: 5 }).pipe(
+      Layer.provide(deps),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
@@ -1178,7 +1169,7 @@ describe("AgentActor", () => {
       toolDeps,
       toolRunnerLayer,
     )
-    const actorLayer = AgentActor.Live.pipe(Layer.provide(deps))
+    const actorLayer = AgentActor.Live().pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, actorLayer)
 
     await Effect.runPromise(
@@ -1371,7 +1362,7 @@ describe("Tool concurrency", () => {
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const actorDeps = Layer.mergeAll(deps, toolRunnerLayer)
-    const actorLayer = AgentActor.Live.pipe(Layer.provide(actorDeps))
+    const actorLayer = AgentActor.Live().pipe(Layer.provide(actorDeps))
     const layer = Layer.mergeAll(actorDeps, actorLayer)
 
     await Effect.runPromise(

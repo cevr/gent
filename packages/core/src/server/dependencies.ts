@@ -21,11 +21,7 @@ import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ProviderFactory } from "../providers/provider-factory.js"
 import { AgentActor, AgentLoop } from "../runtime/agent/agent-loop.js"
-import {
-  InProcessRunner,
-  SubagentRunnerConfig,
-  SubprocessRunner,
-} from "../runtime/agent/subagent-runner.js"
+import { InProcessRunner, SubprocessRunner } from "../runtime/agent/subagent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService, UserConfig } from "../runtime/config-service.js"
@@ -468,29 +464,21 @@ export const createDependencies = (config: DependenciesConfig) => {
         const baseSections = [...sectionMap.values()]
         const systemPrompt = compileSystemPrompt(baseSections)
 
-        const agentActorLive = AgentActor.Live
-        const subagentRunnerConfigLive = SubagentRunnerConfig.Live({
+        const runnerConfig = {
           systemPrompt,
           baseSections,
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
             : {}),
           ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
-        })
+        }
+        const agentActorLive = AgentActor.Live({ baseSections })
         const subagentRunnerLive =
           config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
-            ? SubprocessRunner.pipe(Layer.provideMerge(subagentRunnerConfigLive))
-            : InProcessRunner.pipe(
-                Layer.provideMerge(agentActorLive),
-                Layer.provideMerge(subagentRunnerConfigLive),
-              )
+            ? SubprocessRunner(runnerConfig)
+            : InProcessRunner(runnerConfig).pipe(Layer.provideMerge(agentActorLive))
 
-        return Layer.mergeAll(
-          AgentLoop.Live({ baseSections }),
-          agentActorLive,
-          subagentRunnerConfigLive,
-          subagentRunnerLive,
-        )
+        return Layer.mergeAll(AgentLoop.Live({ baseSections }), agentActorLive, subagentRunnerLive)
       }),
     ),
     allDeps,

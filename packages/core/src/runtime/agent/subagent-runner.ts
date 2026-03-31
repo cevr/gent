@@ -1,4 +1,4 @@
-import { Cause, ServiceMap, DateTime, Duration, Effect, Layer } from "effect"
+import { Cause, DateTime, Duration, Effect, Layer } from "effect"
 import type { PromptSection } from "../../domain/prompt.js"
 import { withWideEvent, WideEvent, subagentBoundary } from "../wide-event-boundary"
 import {
@@ -85,30 +85,12 @@ const finalizeChildMetadata = (state: ChildMetadataAccumulator): ChildMetadata =
   ...(state.toolCalls.length > 0 ? { toolCalls: state.toolCalls } : {}),
 })
 
-export class SubagentRunnerConfig extends ServiceMap.Service<
-  SubagentRunnerConfig,
-  {
-    readonly subprocessBinaryPath?: string
-    readonly dbPath?: string
-    readonly systemPrompt: string
-    readonly baseSections?: ReadonlyArray<PromptSection>
-    readonly timeoutMs?: number
-  }
->()("@gent/core/src/runtime/agent/subagent-runner/SubagentRunnerConfig") {
-  static Live = (config: {
-    subprocessBinaryPath?: string
-    dbPath?: string
-    systemPrompt: string
-    baseSections?: ReadonlyArray<PromptSection>
-    timeoutMs?: number
-  }) =>
-    Layer.succeed(SubagentRunnerConfig, {
-      subprocessBinaryPath: config.subprocessBinaryPath,
-      dbPath: config.dbPath,
-      systemPrompt: config.systemPrompt,
-      baseSections: config.baseSections,
-      timeoutMs: config.timeoutMs,
-    })
+export interface SubagentRunnerConfig {
+  readonly subprocessBinaryPath?: string
+  readonly dbPath?: string
+  readonly systemPrompt: string
+  readonly baseSections?: ReadonlyArray<PromptSection>
+  readonly timeoutMs?: number
 }
 
 const latestAssistantText = (messages: ReadonlyArray<Message>) => {
@@ -365,226 +347,85 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
   }
 }
 
-export const InProcessRunner: Layer.Layer<
-  SubagentRunnerService,
-  never,
-  Storage | EventStore | AgentActor | SubagentRunnerConfig
-> = Layer.effect(
-  SubagentRunnerService,
-  Effect.gen(function* () {
-    const storage = yield* Storage
-    const eventStore = yield* EventStore
-    const actor = yield* AgentActor
-    const runnerConfig = yield* SubagentRunnerConfig
-    const shared = makeSharedRunnerHelpers(storage, eventStore)
-    const publishAgentSwitch = (params: {
-      sessionId: SessionId
-      branchId: BranchId
-      agentName: string
-    }) =>
-      eventStore.publish(
-        new AgentSwitched({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          fromAgent: "cowork",
-          toAgent: params.agentName,
-        }),
-      )
-
-    return {
-      run: (params) =>
-        shared.createSubagentSession(params).pipe(
-          Effect.flatMap(({ sessionId, branchId, bypass }) => {
-            const run = Effect.gen(function* () {
-              yield* WideEvent.set({ childSessionId: sessionId })
-
-              yield* shared.publishSubagentSpawned({
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId: params.toolCallId,
-                sessionId,
-                agentName: params.agent.name,
-                prompt: params.prompt,
-              })
-              yield* publishAgentSwitch({
-                sessionId,
-                branchId,
-                agentName: params.agent.name,
-              })
-
-              const runSubagent = actor.run({
-                sessionId,
-                branchId,
-                agentName: params.agent.name,
-                prompt: params.prompt,
-                systemPrompt: runnerConfig.systemPrompt,
-                bypass,
-                ...buildRunInputOverrides(params.overrides),
-              })
-
-              // No actor-level retry — replays non-idempotent tool calls.
-              // Provider-level retry stays in runtime/src/retry.ts (transient, same process).
-              const runWithTimeout =
-                runnerConfig.timeoutMs === undefined
-                  ? runSubagent
-                  : runSubagent.pipe(
-                      Effect.timeoutOrElse({
-                        duration: Duration.millis(runnerConfig.timeoutMs),
-                        orElse: () =>
-                          Effect.fail(
-                            new SubagentError({
-                              message: `Subagent timed out after ${runnerConfig.timeoutMs}ms`,
-                            }),
-                          ),
-                      }),
-                    )
-
-              yield* runWithTimeout
-              const result = yield* shared.loadSubagentSuccessData(
-                branchId,
-                sessionId,
-                params.agent.name,
-              )
-              yield* shared.publishSubagentSucceeded({
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId: params.toolCallId,
-                sessionId,
-                agentName: params.agent.name,
-              })
-
-              yield* WideEvent.set({
-                usage: result.usage,
-                toolCallCount: result.toolCalls?.length ?? 0,
-              })
-
-              return result
-            }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
-
-            return withSubagentFailureHandling(
-              run,
-              {
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId: params.toolCallId,
-                sessionId,
-                agentName: params.agent.name,
-                spanName: "SubagentRunner.inProcess",
-              },
-              shared.publishSubagentFailed,
-            )
+export const InProcessRunner = (
+  runnerConfig: SubagentRunnerConfig,
+): Layer.Layer<SubagentRunnerService, never, Storage | EventStore | AgentActor> =>
+  Layer.effect(
+    SubagentRunnerService,
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const eventStore = yield* EventStore
+      const actor = yield* AgentActor
+      const shared = makeSharedRunnerHelpers(storage, eventStore)
+      const publishAgentSwitch = (params: {
+        sessionId: SessionId
+        branchId: BranchId
+        agentName: string
+      }) =>
+        eventStore.publish(
+          new AgentSwitched({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            fromAgent: "cowork",
+            toAgent: params.agentName,
           }),
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-            return Effect.succeed({
-              _tag: "error" as const,
-              error: Cause.pretty(cause),
-              agentName: params.agent.name,
-            })
-          }),
-        ),
-    }
-  }),
-)
+        )
 
-export const SubprocessRunner: Layer.Layer<
-  SubagentRunnerService,
-  never,
-  Storage | EventStore | SubagentRunnerConfig
-> = Layer.effect(
-  SubagentRunnerService,
-  Effect.gen(function* () {
-    const storage = yield* Storage
-    const eventStore = yield* EventStore
-    const config = yield* SubagentRunnerConfig
-    const shared = makeSharedRunnerHelpers(storage, eventStore)
+      return {
+        run: (params) =>
+          shared.createSubagentSession(params).pipe(
+            Effect.flatMap(({ sessionId, branchId, bypass }) => {
+              const run = Effect.gen(function* () {
+                yield* WideEvent.set({ childSessionId: sessionId })
 
-    return {
-      run: (params) =>
-        shared.createSubagentSession(params).pipe(
-          Effect.flatMap(({ sessionId, branchId, bypass }) => {
-            const run = Effect.gen(function* () {
-              yield* WideEvent.set({ childSessionId: sessionId })
+                yield* shared.publishSubagentSpawned({
+                  parentSessionId: params.parentSessionId,
+                  parentBranchId: params.parentBranchId,
+                  toolCallId: params.toolCallId,
+                  sessionId,
+                  agentName: params.agent.name,
+                  prompt: params.prompt,
+                })
+                yield* publishAgentSwitch({
+                  sessionId,
+                  branchId,
+                  agentName: params.agent.name,
+                })
 
-              yield* shared.publishSubagentSpawned({
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId: params.toolCallId,
-                sessionId,
-                agentName: params.agent.name,
-                prompt: params.prompt,
-              })
+                const runSubagent = actor.run({
+                  sessionId,
+                  branchId,
+                  agentName: params.agent.name,
+                  prompt: params.prompt,
+                  systemPrompt: runnerConfig.systemPrompt,
+                  bypass,
+                  ...buildRunInputOverrides(params.overrides),
+                })
 
-              // Capture trace context for subprocess propagation
-              const currentSpan = yield* Effect.currentParentSpan.pipe(
-                Effect.orElseSucceed(() => undefined),
-              )
+                // No actor-level retry — replays non-idempotent tool calls.
+                // Provider-level retry stays in runtime/src/retry.ts (transient, same process).
+                const runWithTimeout =
+                  runnerConfig.timeoutMs === undefined
+                    ? runSubagent
+                    : runSubagent.pipe(
+                        Effect.timeoutOrElse({
+                          duration: Duration.millis(runnerConfig.timeoutMs),
+                          orElse: () =>
+                            Effect.fail(
+                              new SubagentError({
+                                message: `Subagent timed out after ${runnerConfig.timeoutMs}ms`,
+                              }),
+                            ),
+                        }),
+                      )
 
-              const binary = config.subprocessBinaryPath ?? "gent"
-              const args = [
-                binary,
-                "--headless",
-                "--session",
-                sessionId,
-                ...(bypass ? [] : ["--no-bypass"]),
-                params.prompt,
-              ]
-
-              const killSubprocess = (proc: Bun.Subprocess) => {
-                try {
-                  // Kill process group (negative PID) to clean up descendants
-                  process.kill(-proc.pid, "SIGTERM")
-                } catch {
-                  try {
-                    proc.kill()
-                  } catch {
-                    // already dead
-                  }
-                }
-              }
-
-              const [exitCode, stderrText] = yield* Effect.acquireUseRelease(
-                Effect.sync(() =>
-                  Bun.spawn({
-                    cmd: args,
-                    cwd: params.cwd,
-                    stdout: "pipe",
-                    stderr: "pipe",
-                    env: {
-                      ...Bun.env,
-                      ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
-                      ...(currentSpan !== undefined
-                        ? {
-                            GENT_TRACE_ID: currentSpan.traceId,
-                            GENT_PARENT_SPAN_ID: currentSpan.spanId,
-                          }
-                        : {}),
-                    },
-                  }),
-                ),
-                (proc) =>
-                  Effect.tryPromise({
-                    try: async () => {
-                      const stdoutPromise =
-                        proc.stdout !== null
-                          ? new Response(proc.stdout).text().catch(() => "")
-                          : Promise.resolve("")
-                      const stderrPromise =
-                        proc.stderr !== null
-                          ? new Response(proc.stderr).text().catch(() => "")
-                          : Promise.resolve("")
-                      const code = await proc.exited
-                      await stdoutPromise
-                      const err = await stderrPromise
-                      return [code, err] as const
-                    },
-                    catch: () => [1, "Subprocess failed"] as const,
-                  }),
-                (proc) => Effect.sync(() => killSubprocess(proc)),
-              )
-
-              if (exitCode !== 0) {
-                yield* shared.publishSubagentFailed({
+                yield* runWithTimeout
+                const result = yield* shared.loadSubagentSuccessData(
+                  branchId,
+                  sessionId,
+                  params.agent.name,
+                )
+                yield* shared.publishSubagentSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
@@ -592,60 +433,197 @@ export const SubprocessRunner: Layer.Layer<
                   agentName: params.agent.name,
                 })
 
-                return {
-                  _tag: "error" as const,
-                  error:
-                    stderrText.length > 0
-                      ? stderrText.trim()
-                      : `Subprocess exited with code ${exitCode}`,
+                yield* WideEvent.set({
+                  usage: result.usage,
+                  toolCallCount: result.toolCalls?.length ?? 0,
+                })
+
+                return result
+              }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
+
+              return withSubagentFailureHandling(
+                run,
+                {
+                  parentSessionId: params.parentSessionId,
+                  parentBranchId: params.parentBranchId,
+                  toolCallId: params.toolCallId,
                   sessionId,
                   agentName: params.agent.name,
-                }
-              }
-
-              const result = yield* shared.loadSubagentSuccessData(
-                branchId,
-                sessionId,
-                params.agent.name,
+                  spanName: "SubagentRunner.inProcess",
+                },
+                shared.publishSubagentFailed,
               )
-              yield* shared.publishSubagentSucceeded({
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId: params.toolCallId,
-                sessionId,
+            }),
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+              return Effect.succeed({
+                _tag: "error" as const,
+                error: Cause.pretty(cause),
                 agentName: params.agent.name,
               })
+            }),
+          ),
+      }
+    }),
+  )
 
-              yield* WideEvent.set({
-                usage: result.usage,
-                toolCallCount: result.toolCalls?.length ?? 0,
-              })
+export const SubprocessRunner = (
+  config: SubagentRunnerConfig,
+): Layer.Layer<SubagentRunnerService, never, Storage | EventStore> =>
+  Layer.effect(
+    SubagentRunnerService,
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const eventStore = yield* EventStore
+      const shared = makeSharedRunnerHelpers(storage, eventStore)
 
-              return result
-            }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
+      return {
+        run: (params) =>
+          shared.createSubagentSession(params).pipe(
+            Effect.flatMap(({ sessionId, branchId, bypass }) => {
+              const run = Effect.gen(function* () {
+                yield* WideEvent.set({ childSessionId: sessionId })
 
-            return withSubagentFailureHandling(
-              run,
-              {
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId: params.toolCallId,
-                sessionId,
+                yield* shared.publishSubagentSpawned({
+                  parentSessionId: params.parentSessionId,
+                  parentBranchId: params.parentBranchId,
+                  toolCallId: params.toolCallId,
+                  sessionId,
+                  agentName: params.agent.name,
+                  prompt: params.prompt,
+                })
+
+                // Capture trace context for subprocess propagation
+                const currentSpan = yield* Effect.currentParentSpan.pipe(
+                  Effect.orElseSucceed(() => undefined),
+                )
+
+                const binary = config.subprocessBinaryPath ?? "gent"
+                const args = [
+                  binary,
+                  "--headless",
+                  "--session",
+                  sessionId,
+                  ...(bypass ? [] : ["--no-bypass"]),
+                  params.prompt,
+                ]
+
+                const killSubprocess = (proc: Bun.Subprocess) => {
+                  try {
+                    // Kill process group (negative PID) to clean up descendants
+                    process.kill(-proc.pid, "SIGTERM")
+                  } catch {
+                    try {
+                      proc.kill()
+                    } catch {
+                      // already dead
+                    }
+                  }
+                }
+
+                const [exitCode, stderrText] = yield* Effect.acquireUseRelease(
+                  Effect.sync(() =>
+                    Bun.spawn({
+                      cmd: args,
+                      cwd: params.cwd,
+                      stdout: "pipe",
+                      stderr: "pipe",
+                      env: {
+                        ...Bun.env,
+                        ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
+                        ...(currentSpan !== undefined
+                          ? {
+                              GENT_TRACE_ID: currentSpan.traceId,
+                              GENT_PARENT_SPAN_ID: currentSpan.spanId,
+                            }
+                          : {}),
+                      },
+                    }),
+                  ),
+                  (proc) =>
+                    Effect.tryPromise({
+                      try: async () => {
+                        const stdoutPromise =
+                          proc.stdout !== null
+                            ? new Response(proc.stdout).text().catch(() => "")
+                            : Promise.resolve("")
+                        const stderrPromise =
+                          proc.stderr !== null
+                            ? new Response(proc.stderr).text().catch(() => "")
+                            : Promise.resolve("")
+                        const code = await proc.exited
+                        await stdoutPromise
+                        const err = await stderrPromise
+                        return [code, err] as const
+                      },
+                      catch: () => [1, "Subprocess failed"] as const,
+                    }),
+                  (proc) => Effect.sync(() => killSubprocess(proc)),
+                )
+
+                if (exitCode !== 0) {
+                  yield* shared.publishSubagentFailed({
+                    parentSessionId: params.parentSessionId,
+                    parentBranchId: params.parentBranchId,
+                    toolCallId: params.toolCallId,
+                    sessionId,
+                    agentName: params.agent.name,
+                  })
+
+                  return {
+                    _tag: "error" as const,
+                    error:
+                      stderrText.length > 0
+                        ? stderrText.trim()
+                        : `Subprocess exited with code ${exitCode}`,
+                    sessionId,
+                    agentName: params.agent.name,
+                  }
+                }
+
+                const result = yield* shared.loadSubagentSuccessData(
+                  branchId,
+                  sessionId,
+                  params.agent.name,
+                )
+                yield* shared.publishSubagentSucceeded({
+                  parentSessionId: params.parentSessionId,
+                  parentBranchId: params.parentBranchId,
+                  toolCallId: params.toolCallId,
+                  sessionId,
+                  agentName: params.agent.name,
+                })
+
+                yield* WideEvent.set({
+                  usage: result.usage,
+                  toolCallCount: result.toolCalls?.length ?? 0,
+                })
+
+                return result
+              }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
+
+              return withSubagentFailureHandling(
+                run,
+                {
+                  parentSessionId: params.parentSessionId,
+                  parentBranchId: params.parentBranchId,
+                  toolCallId: params.toolCallId,
+                  sessionId,
+                  agentName: params.agent.name,
+                  spanName: "SubagentRunner.subprocess",
+                },
+                shared.publishSubagentFailed,
+              )
+            }),
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+              return Effect.succeed({
+                _tag: "error" as const,
+                error: Cause.pretty(cause),
                 agentName: params.agent.name,
-                spanName: "SubagentRunner.subprocess",
-              },
-              shared.publishSubagentFailed,
-            )
-          }),
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-            return Effect.succeed({
-              _tag: "error" as const,
-              error: Cause.pretty(cause),
-              agentName: params.agent.name,
-            })
-          }),
-        ),
-    }
-  }),
-)
+              })
+            }),
+          ),
+      }
+    }),
+  )
