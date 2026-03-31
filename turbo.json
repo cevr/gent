@@ -42,6 +42,11 @@
       "outputs": [],
       "cache": false
     },
+    "test:e2e": {
+      "inputs": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "package.json"],
+      "outputs": [],
+      "cache": false
+    },
     "lint": {
       "inputs": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"],
       "outputs": []
