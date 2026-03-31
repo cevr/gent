@@ -5,7 +5,7 @@
  * largest shared pieces between the two actor constructors.
  */
 
-import { Effect, type Schema } from "effect"
+import { Effect, Schema } from "effect"
 import type {
   ExtensionDeriveContext,
   ExtensionEffect,
@@ -17,6 +17,19 @@ import { AgentDefinition, type AgentName as AgentNameType } from "../../domain/a
 import type { ExtensionTurnControlService } from "./turn-control.js"
 
 /**
+ * Typed persistence codec — wraps Schema.fromJsonString preserving the State type.
+ * Eliminates `as Schema.Any` + `as State` cast pairs in from-machine and from-reducer.
+ */
+export const makePersistCodec = <S>(schema: Schema.Schema<S>) => {
+  const jsonCodec = Schema.fromJsonString(schema as Schema.Any)
+  return {
+    decode: (json: string) =>
+      Schema.decodeUnknownEffect(jsonCodec)(json) as Effect.Effect<S, Schema.SchemaError>,
+    encode: (state: S) => Schema.encodeSync(jsonCodec)(state) as string,
+  }
+}
+
+/**
  * Build ExtensionProjectionConfig from derive/deriveUi config.
  * Identical between fromMachine and fromReducer — extracted to avoid
  * maintaining two copies of the sentinel + fallback logic.
@@ -24,7 +37,7 @@ import type { ExtensionTurnControlService } from "./turn-control.js"
 export const buildProjectionConfig = <State>(config: {
   derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
   deriveUi?: (state: State) => unknown
-  uiModelSchema?: Schema.Any
+  uiModelSchema?: Schema.Schema<unknown>
 }): ExtensionProjectionConfig | undefined => {
   const deriveFn = config.derive
   const deriveUiFn = config.deriveUi

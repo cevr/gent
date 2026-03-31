@@ -50,36 +50,7 @@ type AutoMetricEntry = typeof AutoMetricEntry.Type
 const TerminationReason = Schema.Literals(["completed", "abandoned", "cancelled", "wedged"])
 type TerminationReason = typeof TerminationReason.Type
 
-// Schema union for persistence/transport (non-machine branded)
-export const AutoState = Schema.Union([
-  Schema.TaggedStruct("Inactive", {
-    reason: Schema.optional(TerminationReason),
-    finalLearnings: Schema.optional(Schema.Array(AutoLearning)),
-    finalMetrics: Schema.optional(Schema.Array(AutoMetricEntry)),
-  }),
-  Schema.TaggedStruct("Working", {
-    iteration: Schema.Number,
-    maxIterations: Schema.Number,
-    goal: Schema.String,
-    learnings: Schema.Array(AutoLearning),
-    metrics: Schema.Array(AutoMetricEntry),
-    turnsSinceCheckpoint: Schema.Number,
-    lastSummary: Schema.optional(Schema.String),
-    nextIdea: Schema.optional(Schema.String),
-  }),
-  Schema.TaggedStruct("AwaitingCounsel", {
-    iteration: Schema.Number,
-    maxIterations: Schema.Number,
-    goal: Schema.String,
-    learnings: Schema.Array(AutoLearning),
-    metrics: Schema.Array(AutoMetricEntry),
-    lastSummary: Schema.optional(Schema.String),
-    nextIdea: Schema.optional(Schema.String),
-  }),
-])
-export type AutoState = typeof AutoState.Type
-
-// Machine-branded state
+// Machine-branded state (single source of truth)
 const MachineState = MState({
   Inactive: {
     reason: Schema.optional(TerminationReason),
@@ -107,6 +78,10 @@ const MachineState = MState({
   },
 })
 type MachineState = typeof MachineState.Type
+
+/** Unbranded state schema for persistence/transport. Derived from MachineState.plain. */
+export const AutoState = MachineState.plain
+export type AutoState = typeof AutoState.Type
 
 // ── Machine Events ──
 
@@ -618,7 +593,7 @@ const { spawnActor: AutoSpawnActor, projection: AutoProjection } = fromMachine<
   mapIntent,
   intentSchema: AutoIntent,
   derive,
-  stateSchema: AutoState as unknown as Schema.Schema<MachineState>,
+  stateSchema: MachineState.plain as Schema.Schema<MachineState>,
   uiModelSchema: AutoUiModel,
   persist: true,
   afterTransition,

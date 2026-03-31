@@ -21,7 +21,11 @@ import type {
 import type { SessionId, BranchId } from "../../domain/ids.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import { ExtensionTurnControl } from "./turn-control.js"
-import { buildProjectionConfig, interpretEffects } from "./extension-actor-shared.js"
+import {
+  buildProjectionConfig,
+  interpretEffects,
+  makePersistCodec,
+} from "./extension-actor-shared.js"
 
 export interface FromReducerConfig<State, Intent = void> {
   readonly id: string
@@ -73,14 +77,14 @@ export const fromReducer = <State, Intent = void>(
       const stateRef = yield* Ref.make<State>(config.initial)
       const versionRef = yield* Ref.make(0)
 
+      const codec =
+        config.stateSchema !== undefined ? makePersistCodec(config.stateSchema) : undefined
       const persistState = (): Effect.Effect<void> =>
         Effect.gen(function* () {
-          if (storage._tag !== "Some" || config.stateSchema === undefined) return
+          if (storage._tag !== "Some" || codec === undefined) return
           const state = yield* Ref.get(stateRef)
           const version = yield* Ref.get(versionRef)
-          const encoded = Schema.encodeSync(
-            Schema.fromJsonString(config.stateSchema as Schema.Any),
-          )(state)
+          const encoded = codec.encode(state)
           yield* storage.value
             .saveExtensionState({
               sessionId: ctx.sessionId,
@@ -108,22 +112,16 @@ export const fromReducer = <State, Intent = void>(
 
         // Hydrate persisted state on init
         init: Effect.gen(function* () {
-          if (
-            config.persist === true &&
-            storage._tag === "Some" &&
-            config.stateSchema !== undefined
-          ) {
+          if (config.persist === true && storage._tag === "Some" && codec !== undefined) {
             const loaded = yield* storage.value
               .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
               .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
             if (loaded !== undefined) {
-              const decoded = yield* Schema.decodeUnknownEffect(
-                Schema.fromJsonString(config.stateSchema as Schema.Any),
-              )(loaded.stateJson).pipe(
-                Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
-              )
+              const decoded = yield* codec
+                .decode(loaded.stateJson)
+                .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
               if (decoded !== undefined) {
-                yield* Ref.set(stateRef, decoded as State)
+                yield* Ref.set(stateRef, decoded)
                 yield* Ref.set(versionRef, loaded.version)
               }
             }
@@ -211,7 +209,7 @@ export const fromReducer = <State, Intent = void>(
   const projection = buildProjectionConfig<State>({
     derive: config.derive,
     deriveUi: config.deriveUi,
-    uiModelSchema: config.uiModelSchema as Schema.Any | undefined,
+    uiModelSchema: config.uiModelSchema,
   })
 
   return { spawnActor, projection }

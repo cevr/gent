@@ -22,7 +22,11 @@ import type {
 import type { BranchId } from "../../domain/ids.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
-import { buildProjectionConfig, interpretEffects } from "./extension-actor-shared.js"
+import {
+  buildProjectionConfig,
+  interpretEffects,
+  makePersistCodec,
+} from "./extension-actor-shared.js"
 
 export interface FromMachineConfig<
   State extends { readonly _tag: string },
@@ -80,18 +84,20 @@ export const fromMachine = <
       const spawnId = `${config.id}-${ctx.sessionId}`
 
       // Load persisted state before spawn so we can hydrate
+      const codec =
+        config.stateSchema !== undefined ? makePersistCodec(config.stateSchema) : undefined
       let hydratedState: State | undefined
       let initialVersion = 0
-      if (config.persist === true && storage._tag === "Some" && config.stateSchema !== undefined) {
+      if (config.persist === true && storage._tag === "Some" && codec !== undefined) {
         const loaded = yield* storage.value
           .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
           .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
         if (loaded !== undefined) {
-          const decoded = yield* Schema.decodeUnknownEffect(
-            Schema.fromJsonString(config.stateSchema as Schema.Any),
-          )(loaded.stateJson).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+          const decoded = yield* codec
+            .decode(loaded.stateJson)
+            .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
           if (decoded !== undefined) {
-            hydratedState = decoded as State
+            hydratedState = decoded
             initialVersion = loaded.version
           }
         }
@@ -108,12 +114,10 @@ export const fromMachine = <
       // Persistence: save state to storage
       const persistState = (): Effect.Effect<void> =>
         Effect.gen(function* () {
-          if (storage._tag !== "Some" || config.stateSchema === undefined) return
+          if (storage._tag !== "Some" || codec === undefined) return
           const state = yield* ref.snapshot
           const version = yield* Ref.get(versionRef)
-          const encoded = Schema.encodeSync(
-            Schema.fromJsonString(config.stateSchema as Schema.Any),
-          )(state)
+          const encoded = codec.encode(state as State)
           yield* storage.value
             .saveExtensionState({
               sessionId: ctx.sessionId,
@@ -145,23 +149,17 @@ export const fromMachine = <
       // Dispatch event through actor, handle version + persist + afterTransition
       const dispatch = (machineEvent: Event, branchId: BranchId | undefined) =>
         Effect.gen(function* () {
-          const result = yield* ref.call(machineEvent).pipe(
-            Effect.catchDefect((defect) =>
-              Effect.logWarning("machine transition defect").pipe(
-                Effect.annotateLogs({ extensionId: config.id, defect: String(defect) }),
-                Effect.as({
-                  transitioned: false,
-                  previousState: undefined,
-                  newState: undefined,
-                  lifecycleRan: false,
-                  isFinal: false,
-                  hasReply: false,
-                  postponed: false,
-                }),
+          const result = yield* ref
+            .call(machineEvent)
+            .pipe(
+              Effect.catchDefect((defect) =>
+                Effect.logWarning("machine transition defect").pipe(
+                  Effect.annotateLogs({ extensionId: config.id, defect: String(defect) }),
+                  Effect.as(undefined),
+                ),
               ),
-            ),
-          )
-          if (!result.transitioned) return false
+            )
+          if (result === undefined || !result.transitioned) return false
           yield* Ref.update(versionRef, (v) => v + 1)
           if (config.persist === true) {
             yield* persistState().pipe(
@@ -172,11 +170,8 @@ export const fromMachine = <
               ),
             )
           }
-          if (config.afterTransition !== undefined && result.previousState !== undefined) {
-            const effects = config.afterTransition(
-              result.previousState as State,
-              result.newState as State,
-            )
+          if (config.afterTransition !== undefined) {
+            const effects = config.afterTransition(result.previousState, result.newState)
             if (effects.length > 0) {
               yield* runEffects(effects, branchId)
             }
@@ -199,15 +194,17 @@ export const fromMachine = <
         handleIntent: (() => {
           const mapIntent = config.mapIntent
           if (mapIntent === undefined) return undefined
+          const intentDecoder =
+            config.intentSchema !== undefined
+              ? Schema.decodeUnknownEffect(config.intentSchema as Schema.Any)
+              : undefined
           return (intent: unknown, branchId?: BranchId) =>
             Effect.gen(function* () {
-              let validated: Intent = intent as Intent
-              if (config.intentSchema !== undefined) {
-                validated = yield* Schema.decodeUnknownEffect(config.intentSchema as Schema.Any)(
-                  intent,
-                ).pipe(Effect.orDie)
-              }
-              const currentState = (yield* ref.snapshot) as State
+              const validated: Intent =
+                intentDecoder !== undefined
+                  ? ((yield* intentDecoder(intent).pipe(Effect.orDie)) as Intent)
+                  : (intent as Intent)
+              const currentState = yield* ref.snapshot
               const mapped = mapIntent(validated, currentState)
               if (mapped === undefined) return false
               return yield* dispatch(mapped, branchId)
@@ -229,7 +226,7 @@ export const fromMachine = <
   const projection = buildProjectionConfig<State>({
     derive: config.derive,
     deriveUi: config.deriveUi,
-    uiModelSchema: config.uiModelSchema as Schema.Any | undefined,
+    uiModelSchema: config.uiModelSchema,
   })
 
   return { spawnActor, projection }
