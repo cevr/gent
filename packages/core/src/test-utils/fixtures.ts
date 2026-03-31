@@ -72,7 +72,7 @@ export const waitFor = <A>(
     if ((yield* Clock.currentTimeMillis) >= deadline) {
       return yield* Effect.fail(new Error(`timed out waiting for ${label}`))
     }
-    yield* Effect.sleep("100 millis")
+    yield* Effect.sleep("25 millis")
     return yield* loop
   })
   return loop

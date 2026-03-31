@@ -70,11 +70,12 @@ const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => 
   )
 }
 
-export const DebugProvider = (options?: { delayMs?: number }) =>
+export const DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
   Layer.effect(
     Provider,
     Effect.sync(() => {
       const delayMs = options?.delayMs ?? 0
+      const retries = options?.retries ?? delayMs === 0
       const attempts = new Map<string, number>()
 
       const stream = (request: ProviderRequest) =>
@@ -82,7 +83,7 @@ export const DebugProvider = (options?: { delayMs?: number }) =>
           const latestUserText = extractLatestUserText(request.messages)
           const key = `${request.model}:${latestUserText}`
           const seen = attempts.get(key) ?? 0
-          const retryBudget = retryBudgetFor(latestUserText)
+          const retryBudget = retries ? retryBudgetFor(latestUserText) : 0
 
           if (seen < retryBudget) {
             attempts.set(key, seen + 1)

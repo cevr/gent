@@ -91,7 +91,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
 
 /** Build a complete in-process test layer with a standard debug provider mode. */
 export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
-  buildLayer(providerMode === "debug-slow" ? DebugProvider({ delayMs: 150 }) : DebugProvider())
+  buildLayer(providerMode === "debug-slow" ? DebugProvider({ delayMs: 10 }) : DebugProvider())
 
 /** Build a complete in-process test layer with a custom provider layer (e.g. createSignalProvider). */
 export const baseLocalLayerWithProvider = (providerLayer: Layer.Layer<Provider>) =>

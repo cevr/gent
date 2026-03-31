@@ -272,7 +272,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   let providerLive = Layer.provide(Provider.Live, authDeps)
   if (providerMode === "debug-scripted") providerLive = DebugProvider()
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
-  else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 150 })
+  else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 10 })
 
   // ReducingEventStore wraps BaseEventStore with extension reduce.
   // It requires BaseEventStore + ExtensionStateRuntime (from extensionRegistryLive).
