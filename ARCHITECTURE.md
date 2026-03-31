@@ -201,7 +201,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 - `extension()` is the unified authoring API — all builtins and external extensions use it
 - Simple path: `ext.tool()`, `ext.on()`, `ext.state()` — no Effect knowledge needed
 - Full-power path: `ext.actor()`, `ext.interceptor()`, `ext.layer()`, `ext.provider()` — Effect-aware
-- `defineExtension()` is deprecated (internal use only in api.ts)
+- `defineExtension()` deleted — `extension()` is the only way to create extensions
 - `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
 - `ExtensionSetup.onStartup` — one-time startup effect (e.g., cron registration)
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`

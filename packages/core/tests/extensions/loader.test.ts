@@ -1,11 +1,11 @@
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import {
-  defineExtension,
   type LoadedExtension,
   type InteractionHandlerContribution,
   type ProviderContribution,
 } from "@gent/core/domain/extension"
+import { extension } from "@gent/core/extensions/api"
 import {
   validateExtensions,
   isClientFile,
@@ -215,11 +215,8 @@ describe("isClientFile", () => {
 })
 
 describe("isGentExtension shape check", () => {
-  test("defineExtension produces valid shape", () => {
-    const ext = defineExtension({
-      manifest: { id: "test-ext" },
-      setup: () => Effect.succeed({ tools: [] }),
-    })
+  test("extension() produces valid shape", () => {
+    const ext = extension("test-ext", () => {})
     expect(ext.manifest.id).toBe("test-ext")
     expect(typeof ext.setup).toBe("function")
   })

@@ -28,7 +28,6 @@
  */
 import { Effect, Layer, Schema, Data } from "effect"
 import {
-  defineExtension,
   defineInterceptor,
   ExtensionLoadError,
   type GentExtension,
@@ -403,221 +402,220 @@ export interface ExtensionContext {
 export const extension = (
   id: string,
   factory: (ext: ExtensionBuilder, ctx: ExtensionContext) => void | Promise<void>,
-): GentExtension =>
-  defineExtension({
-    manifest: { id },
-    setup: (ctx) =>
-      Effect.gen(function* () {
-        const tools: AnyToolDefinition[] = []
-        const agents: AgentDefinition[] = []
-        const promptSections: PromptSection[] = []
-        const interceptors: ExtensionInterceptorDescriptor[] = []
-        const startupFns: Array<() => void | Promise<void>> = []
-        const shutdownFns: Array<() => void | Promise<void>> = []
-        const startupEffects: Array<Effect.Effect<void>> = []
-        const shutdownEffects: Array<Effect.Effect<void>> = []
-        const providers: ProviderContribution[] = []
-        const interactionHandlers: InteractionHandlerContribution[] = []
-        const tagInjections: TagInjection[] = []
-        const layers: Layer.Any[] = []
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let stateConfig: SimpleStateConfig<any> | undefined
-        let actorResult: ActorResult | undefined
+): GentExtension => ({
+  manifest: { id },
+  setup: (ctx) =>
+    Effect.gen(function* () {
+      const tools: AnyToolDefinition[] = []
+      const agents: AgentDefinition[] = []
+      const promptSections: PromptSection[] = []
+      const interceptors: ExtensionInterceptorDescriptor[] = []
+      const startupFns: Array<() => void | Promise<void>> = []
+      const shutdownFns: Array<() => void | Promise<void>> = []
+      const startupEffects: Array<Effect.Effect<void>> = []
+      const shutdownEffects: Array<Effect.Effect<void>> = []
+      const providers: ProviderContribution[] = []
+      const interactionHandlers: InteractionHandlerContribution[] = []
+      const tagInjections: TagInjection[] = []
+      const layers: Layer.Any[] = []
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let stateConfig: SimpleStateConfig<any> | undefined
+      let actorResult: ActorResult | undefined
 
-        const builder: ExtensionBuilder = {
-          tool: (def) => {
-            if (isFullToolDef(def)) {
-              tools.push(def)
-            } else {
-              tools.push(convertSimpleTool(def as SimpleToolDef))
-            }
-          },
+      const builder: ExtensionBuilder = {
+        tool: (def) => {
+          if (isFullToolDef(def)) {
+            tools.push(def)
+          } else {
+            tools.push(convertSimpleTool(def as SimpleToolDef))
+          }
+        },
 
-          agent: (def) => {
-            if (AgentDefinitionBrand in def) {
-              agents.push(def as AgentDefinition)
-            } else {
-              agents.push(convertSimpleAgent(def as SimpleAgentDef))
-            }
-          },
+        agent: (def) => {
+          if (AgentDefinitionBrand in def) {
+            agents.push(def as AgentDefinition)
+          } else {
+            agents.push(convertSimpleAgent(def as SimpleAgentDef))
+          }
+        },
 
-          promptSection: (section) => promptSections.push(section),
+        promptSection: (section) => promptSections.push(section),
 
-          on: ((key: keyof SimpleHookHandlers, handler: SimpleHookHandlers[typeof key]) => {
-            if (key === "turn.after") {
-              interceptors.push(
-                defineInterceptor(
-                  key,
-                  wrapFireAndForgetHandler(handler as FireAndForgetHandler<TurnAfterInput>),
-                ),
-              )
-            } else {
-              interceptors.push(
-                defineInterceptor(
-                  key,
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  wrapTransformHandler(handler as TransformHandler<any, any>) as never,
-                ),
-              )
-            }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          }) as any,
-
-          state: (config) => {
-            if (stateConfig !== undefined || actorResult !== undefined) {
-              throw new Error(
-                `extension "${id}": state() and actor() are mutually exclusive, and each can only be called once`,
-              )
-            }
-            stateConfig = config
-          },
-
-          onStartup: (fn) => startupFns.push(fn),
-          onShutdown: (fn) => shutdownFns.push(fn),
-
-          // Full-power methods
-
-          interceptor: ((
-            ...args:
-              | [ExtensionInterceptorDescriptor]
-              | [ExtensionInterceptorKey, ExtensionInterceptorMap[ExtensionInterceptorKey]]
-          ) => {
-            if (args.length === 1) {
-              interceptors.push(args[0])
-            } else {
-              interceptors.push(defineInterceptor(args[0], args[1] as never))
-            }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          }) as any,
-
-          actor: (result) => {
-            if (actorResult !== undefined || stateConfig !== undefined) {
-              throw new Error(
-                `extension "${id}": actor() and state() are mutually exclusive, and each can only be called once`,
-              )
-            }
-            actorResult = result
-          },
-
-          layer: (l) => layers.push(l),
-          provider: (p) => providers.push(p),
-          interactionHandler: (h) => interactionHandlers.push(h),
-          tagInjection: (t) => tagInjections.push(t),
-          onStartupEffect: (e) => startupEffects.push(e),
-          onShutdownEffect: (e) => shutdownEffects.push(e),
-        }
-
-        // Run factory — sync factories stay sync (no Promise.resolve tick)
-        const factoryResult = Effect.try({
-          try: () => factory(builder, ctx),
-          catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
-        })
-        const result = yield* factoryResult
-        // If factory returned a Promise, await it
-        if (result !== undefined && typeof (result as Promise<void>).then === "function") {
-          yield* Effect.tryPromise({
-            try: () => result as Promise<void>,
-            catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
-          })
-        }
-
-        // Resolve actor from state() or actor()
-        let spawnActor: ExtensionSetup["spawnActor"]
-        let projection: ExtensionSetup["projection"]
-
-        if (stateConfig !== undefined) {
-          const sc = stateConfig
-          if (sc.persist !== undefined && sc.persist.schema === undefined) {
-            return yield* Effect.fail(
-              new ExtensionLoadError(
-                id,
-                `ext.state() persist requires a schema: { persist: { schema } }`,
+        on: ((key: keyof SimpleHookHandlers, handler: SimpleHookHandlers[typeof key]) => {
+          if (key === "turn.after") {
+            interceptors.push(
+              defineInterceptor(
+                key,
+                wrapFireAndForgetHandler(handler as FireAndForgetHandler<TurnAfterInput>),
+              ),
+            )
+          } else {
+            interceptors.push(
+              defineInterceptor(
+                key,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                wrapTransformHandler(handler as TransformHandler<any, any>) as never,
               ),
             )
           }
-          const reducerResult = fromReducer({
-            id,
-            initial: sc.initial,
-            reduce: (
-              state: unknown,
-              event: AgentEvent,
-              _ctx: ExtensionReduceContext,
-            ): ReduceResult<unknown> => {
-              const simpleType = mapEventType(event._tag)
-              if (simpleType === undefined) return { state }
-              const simpleEvent: SimpleEvent = { type: simpleType, _tag: event._tag, raw: event }
-              const result = sc.reduce(state as Readonly<typeof sc.initial>, simpleEvent)
-              return { state: result.state, effects: result.effects?.map(convertSimpleEffect) }
-            },
-            derive: (() => {
-              const deriveFn = sc.derive
-              if (deriveFn === undefined) return undefined
-              return (state: unknown, _deriveCtx: ExtensionDeriveContext): ExtensionProjection => {
-                const derived = deriveFn(state as Readonly<typeof sc.initial>)
-                return { promptSections: derived.promptSections, toolPolicy: derived.toolPolicy }
-              }
-            })(),
-            stateSchema: sc.persist?.schema,
-            persist: sc.persist !== undefined,
-          })
-          spawnActor = reducerResult.spawnActor
-          projection = reducerResult.projection
-        } else if (actorResult !== undefined) {
-          spawnActor = actorResult.spawnActor
-          projection = actorResult.projection
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+
+        state: (config) => {
+          if (stateConfig !== undefined || actorResult !== undefined) {
+            throw new Error(
+              `extension "${id}": state() and actor() are mutually exclusive, and each can only be called once`,
+            )
+          }
+          stateConfig = config
+        },
+
+        onStartup: (fn) => startupFns.push(fn),
+        onShutdown: (fn) => shutdownFns.push(fn),
+
+        // Full-power methods
+
+        interceptor: ((
+          ...args:
+            | [ExtensionInterceptorDescriptor]
+            | [ExtensionInterceptorKey, ExtensionInterceptorMap[ExtensionInterceptorKey]]
+        ) => {
+          if (args.length === 1) {
+            interceptors.push(args[0])
+          } else {
+            interceptors.push(defineInterceptor(args[0], args[1] as never))
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+
+        actor: (result) => {
+          if (actorResult !== undefined || stateConfig !== undefined) {
+            throw new Error(
+              `extension "${id}": actor() and state() are mutually exclusive, and each can only be called once`,
+            )
+          }
+          actorResult = result
+        },
+
+        layer: (l) => layers.push(l),
+        provider: (p) => providers.push(p),
+        interactionHandler: (h) => interactionHandlers.push(h),
+        tagInjection: (t) => tagInjections.push(t),
+        onStartupEffect: (e) => startupEffects.push(e),
+        onShutdownEffect: (e) => shutdownEffects.push(e),
+      }
+
+      // Run factory — sync factories stay sync (no Promise.resolve tick)
+      const factoryResult = Effect.try({
+        try: () => factory(builder, ctx),
+        catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
+      })
+      const result = yield* factoryResult
+      // If factory returned a Promise, await it
+      if (result !== undefined && typeof (result as Promise<void>).then === "function") {
+        yield* Effect.tryPromise({
+          try: () => result as Promise<void>,
+          catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
+        })
+      }
+
+      // Resolve actor from state() or actor()
+      let spawnActor: ExtensionSetup["spawnActor"]
+      let projection: ExtensionSetup["projection"]
+
+      if (stateConfig !== undefined) {
+        const sc = stateConfig
+        if (sc.persist !== undefined && sc.persist.schema === undefined) {
+          return yield* Effect.fail(
+            new ExtensionLoadError(
+              id,
+              `ext.state() persist requires a schema: { persist: { schema } }`,
+            ),
+          )
         }
+        const reducerResult = fromReducer({
+          id,
+          initial: sc.initial,
+          reduce: (
+            state: unknown,
+            event: AgentEvent,
+            _ctx: ExtensionReduceContext,
+          ): ReduceResult<unknown> => {
+            const simpleType = mapEventType(event._tag)
+            if (simpleType === undefined) return { state }
+            const simpleEvent: SimpleEvent = { type: simpleType, _tag: event._tag, raw: event }
+            const result = sc.reduce(state as Readonly<typeof sc.initial>, simpleEvent)
+            return { state: result.state, effects: result.effects?.map(convertSimpleEffect) }
+          },
+          derive: (() => {
+            const deriveFn = sc.derive
+            if (deriveFn === undefined) return undefined
+            return (state: unknown, _deriveCtx: ExtensionDeriveContext): ExtensionProjection => {
+              const derived = deriveFn(state as Readonly<typeof sc.initial>)
+              return { promptSections: derived.promptSections, toolPolicy: derived.toolPolicy }
+            }
+          })(),
+          stateSchema: sc.persist?.schema,
+          persist: sc.persist !== undefined,
+        })
+        spawnActor = reducerResult.spawnActor
+        projection = reducerResult.projection
+      } else if (actorResult !== undefined) {
+        spawnActor = actorResult.spawnActor
+        projection = actorResult.projection
+      }
 
-        // Merge layers — cast through Layer<never> to satisfy Layer.mergeAll variance
-        type NarrowLayer = Layer.Layer<never>
-        let mergedLayer: Layer.Any | undefined
-        if (layers.length === 1) {
-          mergedLayer = layers[0]
-        } else if (layers.length > 1) {
-          mergedLayer = Layer.mergeAll(...(layers as [NarrowLayer, NarrowLayer, ...NarrowLayer[]]))
-        }
+      // Merge layers — cast through Layer<never> to satisfy Layer.mergeAll variance
+      type NarrowLayer = Layer.Layer<never>
+      let mergedLayer: Layer.Any | undefined
+      if (layers.length === 1) {
+        mergedLayer = layers[0]
+      } else if (layers.length > 1) {
+        mergedLayer = Layer.mergeAll(...(layers as [NarrowLayer, NarrowLayer, ...NarrowLayer[]]))
+      }
 
-        // Merge startup effects (Promise fns + Effect values)
-        const allStartup: Effect.Effect<void>[] = [
-          ...startupFns.map((fn) =>
-            Effect.tryPromise({
-              try: () => Promise.resolve(fn()),
-              catch: (e) => new SimpleHookError({ message: `onStartup: ${String(e)}`, cause: e }),
-            }).pipe(Effect.orDie, Effect.asVoid),
-          ),
-          ...startupEffects,
-        ]
-        const onStartup =
-          allStartup.length > 0
-            ? Effect.all(allStartup, { discard: true }).pipe(Effect.asVoid)
-            : undefined
+      // Merge startup effects (Promise fns + Effect values)
+      const allStartup: Effect.Effect<void>[] = [
+        ...startupFns.map((fn) =>
+          Effect.tryPromise({
+            try: () => Promise.resolve(fn()),
+            catch: (e) => new SimpleHookError({ message: `onStartup: ${String(e)}`, cause: e }),
+          }).pipe(Effect.orDie, Effect.asVoid),
+        ),
+        ...startupEffects,
+      ]
+      const onStartup =
+        allStartup.length > 0
+          ? Effect.all(allStartup, { discard: true }).pipe(Effect.asVoid)
+          : undefined
 
-        const allShutdown: Effect.Effect<void>[] = [
-          ...shutdownFns.map((fn) =>
-            Effect.tryPromise({
-              try: () => Promise.resolve(fn()),
-              catch: (e) => new SimpleHookError({ message: `onShutdown: ${String(e)}`, cause: e }),
-            }).pipe(Effect.orDie, Effect.asVoid),
-          ),
-          ...shutdownEffects,
-        ]
-        const onShutdown =
-          allShutdown.length > 0
-            ? Effect.all(allShutdown, { discard: true }).pipe(Effect.asVoid)
-            : undefined
+      const allShutdown: Effect.Effect<void>[] = [
+        ...shutdownFns.map((fn) =>
+          Effect.tryPromise({
+            try: () => Promise.resolve(fn()),
+            catch: (e) => new SimpleHookError({ message: `onShutdown: ${String(e)}`, cause: e }),
+          }).pipe(Effect.orDie, Effect.asVoid),
+        ),
+        ...shutdownEffects,
+      ]
+      const onShutdown =
+        allShutdown.length > 0
+          ? Effect.all(allShutdown, { discard: true }).pipe(Effect.asVoid)
+          : undefined
 
-        return {
-          ...(tools.length > 0 ? { tools } : {}),
-          ...(agents.length > 0 ? { agents } : {}),
-          ...(promptSections.length > 0 ? { promptSections } : {}),
-          ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
-          ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
-          ...(providers.length > 0 ? { providers } : {}),
-          ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
-          ...(tagInjections.length > 0 ? { tagInjections } : {}),
-          spawnActor,
-          projection,
-          onStartup,
-          onShutdown,
-        } satisfies ExtensionSetup
-      }),
-  })
+      return {
+        ...(tools.length > 0 ? { tools } : {}),
+        ...(agents.length > 0 ? { agents } : {}),
+        ...(promptSections.length > 0 ? { promptSections } : {}),
+        ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
+        ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
+        ...(providers.length > 0 ? { providers } : {}),
+        ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
+        ...(tagInjections.length > 0 ? { tagInjections } : {}),
+        spawnActor,
+        projection,
+        onStartup,
+        onShutdown,
+      } satisfies ExtensionSetup
+    }),
+})
