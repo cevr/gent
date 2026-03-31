@@ -1,5 +1,4 @@
 import { Cause, DateTime, Duration, Effect, Layer } from "effect"
-import type { PromptSection } from "../../domain/prompt.js"
 import { withWideEvent, WideEvent, subagentBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -89,7 +88,6 @@ export interface SubagentRunnerConfig {
   readonly subprocessBinaryPath?: string
   readonly dbPath?: string
   readonly systemPrompt: string
-  readonly baseSections?: ReadonlyArray<PromptSection>
   readonly timeoutMs?: number
 }
 

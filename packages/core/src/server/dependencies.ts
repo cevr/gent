@@ -466,7 +466,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
         const runnerConfig = {
           systemPrompt,
-          baseSections,
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
             : {}),

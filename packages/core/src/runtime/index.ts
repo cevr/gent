@@ -3,7 +3,6 @@ export {
   AgentLoopError,
   SteerCommand,
   AgentActor,
-  type SubagentRunnerConfig,
   InProcessRunner,
   SubprocessRunner,
   ToolRunner,
