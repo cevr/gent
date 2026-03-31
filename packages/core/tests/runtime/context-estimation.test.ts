@@ -1,4 +1,4 @@
-import { describe, test, expect } from "effect-bun-test"
+import { describe, test, expect } from "bun:test"
 import {
   Message,
   TextPart,
@@ -11,6 +11,24 @@ import {
   estimateContextPercent,
   getContextWindow,
 } from "@gent/core/runtime/context-estimation"
+
+describe("Token Estimation", () => {
+  test("estimateTokens calculates token count", () => {
+    const messages = [
+      new Message({
+        id: "m1",
+        sessionId: "s",
+        branchId: "b",
+        role: "user",
+        parts: [new TextPart({ type: "text", text: "Hello world" })], // 11 chars
+        createdAt: new Date(),
+      }),
+    ]
+
+    const tokens = estimateTokens(messages)
+    expect(tokens).toBe(3) // ceil(11/4) = 3
+  })
+})
 
 // ============================================================================
 // estimateContextPercent / getContextWindow

@@ -1,0 +1,155 @@
+import { describe, test, expect } from "bun:test"
+import { Effect, Schema } from "effect"
+import { compileToolPolicy } from "@gent/core/runtime/extensions/registry"
+import { AgentDefinition } from "@gent/core/domain/agent"
+import { defineTool } from "@gent/core/domain/tool"
+import type { SessionId, BranchId } from "@gent/core/domain/ids"
+
+describe("compileToolPolicy", () => {
+  const makeTool = (
+    name: string,
+    action: "read" | "edit" | "exec" | "delegate" | "interact" | "network" | "state",
+  ) =>
+    defineTool({
+      name,
+      action,
+      concurrency: "parallel",
+      description: name,
+      params: Schema.Struct({}),
+      execute: () => Effect.succeed(null),
+    })
+
+  const allTools = [
+    makeTool("read", "read"),
+    makeTool("grep", "read"),
+    makeTool("glob", "read"),
+    makeTool("write", "edit"),
+    makeTool("edit", "edit"),
+    makeTool("bash", "exec"),
+    makeTool("delegate", "delegate"),
+    makeTool("ask_user", "interact"),
+    makeTool("webfetch", "network"),
+    makeTool("websearch", "network"),
+    makeTool("todo_read", "state"),
+  ]
+
+  const emptyCtx = { sessionId: "s" as SessionId, branchId: "b" as BranchId }
+
+  const names = (tools: ReadonlyArray<{ name: string }>) => tools.map((t) => t.name).sort()
+
+  test("no allow-list → all tools", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(names(allTools))
+  })
+
+  test("allowedActions filters by action", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedActions: ["read"] })
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["glob", "grep", "read"])
+  })
+
+  test("allowedActions + allowedTools unions", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read"],
+      allowedTools: ["bash"],
+    })
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["bash", "glob", "grep", "read"])
+  })
+
+  test("allowedTools: [] means no tools", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedTools: [] })
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(tools).toEqual([])
+  })
+
+  test("deniedTools removes from result", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read"],
+      deniedTools: ["grep"],
+    })
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["glob", "read"])
+  })
+
+  test("multiple actions", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read", "network"],
+    })
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
+    expect(names(tools)).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+  })
+
+  test("tag injection adds tools when tag matches", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const extra = makeTool("test_signal", "state")
+    const tagInjections = [{ tag: "test-signal", tools: [extra] }]
+    const ctx = { ...emptyCtx, tags: ["test-signal"] as ReadonlyArray<string> }
+    const { tools } = compileToolPolicy(allTools, agent, ctx, tagInjections, [])
+    expect(names(tools)).toContain("test_signal")
+  })
+
+  test("tag injection skipped when tag absent", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const extra = makeTool("test_signal", "state")
+    const tagInjections = [{ tag: "test-signal", tools: [extra] }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, tagInjections, [])
+    expect(names(tools)).not.toContain("test_signal")
+  })
+
+  test("extension projection include adds tools", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      allowedActions: ["read"],
+    })
+    const projections = [{ toolPolicy: { include: ["bash"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).toContain("bash")
+    expect(names(tools)).toContain("read")
+  })
+
+  test("extension projection exclude removes tools", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const projections = [{ toolPolicy: { exclude: ["bash", "write"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).not.toContain("bash")
+    expect(names(tools)).not.toContain("write")
+  })
+
+  test("extension projection overrideSet replaces tool list", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const projections = [{ toolPolicy: { overrideSet: ["read", "grep"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).toEqual(["grep", "read"])
+  })
+
+  test("denied tools cannot be re-added by extension projection", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      kind: "primary",
+      deniedTools: ["bash"],
+    })
+    const projections = [{ toolPolicy: { include: ["bash"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(names(tools)).not.toContain("bash")
+  })
+
+  test("extension prompt sections collected", () => {
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const projections = [
+      { promptSections: [{ id: "ext-a", content: "Section A", priority: 90 }] },
+      { promptSections: [{ id: "ext-b", content: "Section B", priority: 91 }] },
+    ]
+    const { promptSections } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
+    expect(promptSections).toHaveLength(2)
+    expect(promptSections.map((s) => s.id)).toEqual(["ext-a", "ext-b"])
+  })
+})

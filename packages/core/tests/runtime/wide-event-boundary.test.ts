@@ -16,9 +16,9 @@ import {
   providerStreamBoundary,
   rpcBoundary,
   subagentBoundary,
-} from "../src/runtime/wide-event-boundary"
-import type { LogEvent } from "../src/runtime/wide-event-boundary"
-import type { SessionId, BranchId, ToolCallId } from "../src/domain/ids"
+} from "../../src/runtime/wide-event-boundary"
+import type { LogEvent } from "../../src/runtime/wide-event-boundary"
+import type { SessionId, BranchId, ToolCallId } from "../../src/domain/ids"
 
 const captured = () => MutableRef.make<Array<LogEvent>>([])
 
