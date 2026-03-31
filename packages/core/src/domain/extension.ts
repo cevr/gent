@@ -365,6 +365,7 @@ export interface GentExtension {
 
 // Factory
 
+/** @deprecated Use `extension()` from `@gent/core/extensions/api` instead. Internal use only. */
 export const defineExtension = (ext: GentExtension): GentExtension => ext
 
 export const defineInterceptor = <K extends ExtensionInterceptorKey>(

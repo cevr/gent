@@ -2,7 +2,7 @@
 
 ## Overview
 
-Extensions add tools, agents, prompt sections, hooks, and stateful behaviors to gent. Use `extension` for the imperative API (no Effect/Schema knowledge required). Use `defineExtension` for internal/builtin extensions that need full Effect access.
+Extensions add tools, agents, prompt sections, hooks, and stateful behaviors to gent. `extension()` is the unified authoring API — it works for both simple external extensions (no Effect knowledge) and full-power builtins (Effect interceptors, actors, layers, providers). All gent builtins use this same API.
 
 ## Discovery
 
@@ -213,3 +213,90 @@ The framework validates all loaded extensions before creating the registry:
 - **Same-id prompt sections** from different extensions in same scope → fatal
 
 Cross-scope: higher scope wins silently (project overrides user overrides builtin).
+
+## Full-Power Methods
+
+The same `extension()` builder has additional methods for Effect-aware extensions. These are used by builtins and advanced authors.
+
+### ext.tool(fullToolDef) / ext.agent(agentDefinition)
+
+`tool()` and `agent()` are overloaded — they accept both simple defs (shown above) and full domain objects created via `defineTool()` / `defineAgent()`.
+
+### ext.interceptor(key, run)
+
+Register a raw Effect interceptor (bypassing the Promise-based `on()` wrapper):
+
+```ts
+import { extension, defineInterceptor } from "@gent/core/extensions/api"
+
+extension("my-ext", (ext) => {
+  ext.interceptor("prompt.system", (input, next) =>
+    next({ ...input, basePrompt: input.basePrompt + "\nExtra." }),
+  )
+})
+```
+
+### ext.actor(result)
+
+Register a stateful actor from `fromReducer()` or `fromMachine()`. Mutually exclusive with `ext.state()`.
+
+```ts
+import { extension, fromReducer } from "@gent/core/extensions/api"
+
+const myActor = fromReducer({
+  id: "my-actor",
+  initial: { count: 0 },
+  reduce: (state, event) => ({ state }),
+  derive: (state, ctx) => ({ promptSections: [...] }),
+})
+
+extension("my-ext", (ext) => {
+  ext.actor(myActor)
+})
+```
+
+### ext.layer(layer)
+
+Provide Effect service layers. Multiple calls merge:
+
+```ts
+ext.layer(MyStorage.Live)
+ext.layer(MyCache.Live) // merges with above
+```
+
+### ext.provider(provider)
+
+Register an AI model provider:
+
+```ts
+ext.provider({
+  id: "my-provider",
+  name: "My Provider",
+  resolveModel: (name, auth) => createModel(name, auth?.key),
+})
+```
+
+### ext.interactionHandler(handler)
+
+Register interaction handlers (permission, prompt, handoff, ask-user):
+
+```ts
+ext.interactionHandler({ type: "permission", layer: MyPermissionHandler.Live })
+```
+
+### ext.tagInjection(injection)
+
+Register tag-conditional tool injections:
+
+```ts
+ext.tagInjection({ tag: "debug", tools: [DebugTool] })
+```
+
+### ext.onStartupEffect(effect) / ext.onShutdownEffect(effect)
+
+Register Effect-based lifecycle hooks (composes with `onStartup()`/`onShutdown()`):
+
+```ts
+ext.onStartupEffect(registerCronJobs)
+ext.onShutdownEffect(removeCronJobs)
+```
