@@ -32,6 +32,9 @@ export const ToolAction = Schema.Literals([
   "state",
 ])
 
+/** Brand symbol for detecting full AgentDefinition vs SimpleAgentDef in overloaded APIs */
+export const AgentDefinitionBrand: unique symbol = Symbol.for("@gent/AgentDefinition")
+
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
   description: Schema.optional(Schema.String),
@@ -49,8 +52,15 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
 
-export const defineAgent = (input: AgentDefinitionInput): AgentDefinition =>
-  new AgentDefinition(input)
+export const defineAgent = (input: AgentDefinitionInput): AgentDefinition => {
+  const def = new AgentDefinition(input)
+  Object.defineProperty(def, AgentDefinitionBrand, {
+    value: true,
+    enumerable: false,
+    writable: false,
+  })
+  return def
+}
 
 // Prompts
 

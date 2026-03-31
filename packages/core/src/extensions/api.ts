@@ -60,7 +60,7 @@ import {
   type ToolContext,
   type AnyToolDefinition,
 } from "../domain/tool.js"
-import { type AgentDefinition, defineAgent } from "../domain/agent.js"
+import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PermissionResult } from "../domain/permission.js"
@@ -86,7 +86,7 @@ export {
   type ToolContext,
   type ToolAction,
 } from "../domain/tool.js"
-export { defineAgent, AgentDefinition } from "../domain/agent.js"
+export { defineAgent, AgentDefinition, AgentDefinitionBrand } from "../domain/agent.js"
 export {
   defineInterceptor,
   type ExtensionInterceptorDescriptor,
@@ -434,7 +434,7 @@ export const extension = (
           },
 
           agent: (def) => {
-            if ("_tag" in def) {
+            if (AgentDefinitionBrand in def) {
               agents.push(def as AgentDefinition)
             } else {
               agents.push(convertSimpleAgent(def as SimpleAgentDef))
