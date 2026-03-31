@@ -91,7 +91,12 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         userDir: userExtensionsDir,
         projectDir: projectExtensionsDir,
       }).pipe(
-        Effect.catchEager(() => Effect.succeed({ loaded: [] as const, skipped: [] as const })),
+        Effect.catchEager((error) =>
+          Effect.logWarning("extension.discovery.failed").pipe(
+            Effect.annotateLogs({ error: String(error) }),
+            Effect.as({ loaded: [] as const, skipped: [] as const }),
+          ),
+        ),
       )
 
       if (discovery.skipped.length > 0) {
