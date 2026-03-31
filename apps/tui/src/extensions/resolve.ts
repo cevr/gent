@@ -7,6 +7,7 @@
 
 import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
 import type { InteractionEventTag } from "@gent/core/domain/event.js"
+import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
@@ -15,13 +16,7 @@ import type { Command } from "../command/types"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SolidComponent = (props?: any) => JSX.Element
 
-export type ExtensionKind = "builtin" | "user" | "project"
-
-const SCOPE_PRECEDENCE: Record<ExtensionKind, number> = {
-  builtin: 0,
-  user: 1,
-  project: 2,
-}
+export type ExtensionKind = ExtensionScope
 
 export interface LoadedTuiExtension {
   readonly id: string

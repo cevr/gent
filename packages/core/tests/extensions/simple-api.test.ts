@@ -1,7 +1,10 @@
 import { describe, test, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { simpleExtension } from "@gent/core/extensions/api"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { Permission } from "@gent/core/domain/permission"
+import { PermissionHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("simpleExtension", () => {
@@ -134,5 +137,99 @@ describe("simpleExtension", () => {
     expect(setup.tools).toBeUndefined()
     expect(setup.agents).toBeUndefined()
     expect(setup.promptSections).toBeUndefined()
+  })
+})
+
+describe("simpleExtension through ToolRunner.run", () => {
+  const ext = simpleExtension("runner-test", (b) => {
+    b.tool({
+      name: "format",
+      description: "Formats a greeting",
+      parameters: {
+        name: { type: "string" },
+        count: { type: "number", optional: true },
+      },
+      execute: async (params) => {
+        const count = (params.count as number | undefined) ?? 1
+        return `Hello, ${params.name}! (x${String(count)})`
+      },
+    })
+  })
+
+  const setup = Effect.runSync(ext.setup({ cwd: "/tmp", source: "test" }))
+
+  const baseDeps = Layer.mergeAll(
+    ExtensionRegistry.fromResolved(
+      resolveExtensions([{ manifest: ext.manifest, kind: "user", sourcePath: "test", setup }]),
+    ),
+    Permission.Test(),
+    PermissionHandler.Test(["allow"]),
+  )
+  const runnerLayer = ToolRunner.Live.pipe(Layer.provide(baseDeps))
+  const layer = Layer.mergeAll(baseDeps, runnerLayer)
+
+  const ctx = {
+    sessionId: "s1" as SessionId,
+    branchId: "b1" as BranchId,
+    toolCallId: "tc1" as ToolCallId,
+  }
+
+  test("runs tool with required and optional params", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc1", toolName: "format", input: { name: "Ada", count: 3 } },
+          ctx,
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("json")
+    expect(result.output.value).toBe("Hello, Ada! (x3)")
+  })
+
+  test("runs tool with only required params (optional omitted)", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc2", toolName: "format", input: { name: "Grace" } },
+          ctx,
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("json")
+    expect(result.output.value).toBe("Hello, Grace! (x1)")
+  })
+
+  test("returns error on invalid params (wrong type)", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc3", toolName: "format", input: { name: 42 } },
+          ctx,
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("error-json")
+    const error = (result.output.value as { error?: string }).error ?? ""
+    expect(error).toContain("format")
+  })
+
+  test("returns error on missing required param", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run({ toolCallId: "tc4", toolName: "format", input: {} }, ctx)
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("error-json")
+    const error = (result.output.value as { error?: string }).error ?? ""
+    expect(error).toContain("format")
   })
 })

@@ -15,11 +15,7 @@ import type {
 import type { PromptSection } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { type CompiledHookMap, compileHooks } from "./hooks.js"
-
-// Scope precedence: project > user > builtin
-// Later scope wins for same-name tools/agents.
-
-const SCOPE_PRECEDENCE: Record<ExtensionKind, number> = { builtin: 0, user: 1, project: 2 }
+import { SCOPE_PRECEDENCE } from "./disabled.js"
 
 // Resolved snapshot — the immutable compiled state
 
