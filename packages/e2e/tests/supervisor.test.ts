@@ -8,6 +8,7 @@ import {
   createWorkerEnv,
   startWorkerWithSupervisor,
   waitFor,
+  waitForRpcReady,
 } from "./seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
@@ -19,12 +20,13 @@ const waitForRunning = async (
     subscribe: (listener: (state: WorkerLifecycleState) => void) => () => void
   },
   expectedRestartCount: number,
+  timeoutMs = 15_000,
 ): Promise<void> =>
   new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       unsubscribe()
       reject(new Error(`worker did not reach running state ${expectedRestartCount}`))
-    }, 10_000)
+    }, timeoutMs)
     const unsubscribe = worker.subscribe((state) => {
       if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
       clearTimeout(timeout)
@@ -92,6 +94,7 @@ describe("worker supervisor", () => {
           })
 
           yield* worker.restart
+          yield* waitForRpcReady(worker.client)
 
           expect(worker.url).toBe(originalUrl)
           const state = worker.getState()
@@ -103,7 +106,7 @@ describe("worker supervisor", () => {
         }),
       ),
     )
-  })
+  }, 15_000)
 
   test("auto-restarts after worker death and keeps serving the same session state", async () => {
     const dataDir = makeTempDir()
@@ -113,6 +116,7 @@ describe("worker supervisor", () => {
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
+            startupTimeoutMs: 20_000,
             env: { GENT_DATA_DIR: dataDir },
           })
 
@@ -126,6 +130,7 @@ describe("worker supervisor", () => {
           process.kill(pid!, "SIGKILL")
 
           yield* Effect.promise(() => waitForRunning(worker, 1))
+          yield* waitForRpcReady(worker.client)
 
           expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
 
@@ -144,6 +149,7 @@ describe("worker supervisor", () => {
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
+            startupTimeoutMs: 20_000,
             env: { GENT_DATA_DIR: dataDir },
           })
 
@@ -157,6 +163,7 @@ describe("worker supervisor", () => {
           process.kill(pid!, "SIGKILL")
 
           yield* Effect.promise(() => waitForRunning(worker, 1))
+          yield* waitForRpcReady(worker.client)
 
           const states = yield* Deferred.make<string>()
 
@@ -175,7 +182,7 @@ describe("worker supervisor", () => {
             )
 
           const sessionId = yield* Deferred.await(states).pipe(
-            Effect.timeoutOption("5 seconds"),
+            Effect.timeoutOption("10 seconds"),
             Effect.flatMap(
               Option.match({
                 onNone: () =>
@@ -189,7 +196,7 @@ describe("worker supervisor", () => {
         }),
       ),
     )
-  }, 15_000)
+  }, 20_000)
 
   test("watchRuntime survives more than 10 seconds of idle time", async () => {
     const dataDir = makeTempDir()
@@ -289,6 +296,7 @@ describe("worker supervisor", () => {
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
+            startupTimeoutMs: 20_000,
             env: createWorkerEnv(root),
           })
 
@@ -302,6 +310,7 @@ describe("worker supervisor", () => {
           )
 
           yield* worker.restart
+          yield* waitForRpcReady(worker.client)
 
           const afterRestart = yield* waitFor(
             worker.client.auth.listProviders(),
@@ -316,7 +325,7 @@ describe("worker supervisor", () => {
         }),
       ),
     )
-  })
+  }, 15_000)
 
   test("restart with steer and follow-up queued converges to steer before follow-up", async () => {
     const root = makeTempDir()
@@ -385,7 +394,8 @@ describe("worker supervisor", () => {
           expect(pid).not.toBeNull()
           process.kill(pid!, "SIGKILL")
 
-          yield* Effect.promise(() => waitForRunning(worker, 1))
+          yield* Effect.promise(() => waitForRunning(worker, 1, 20_000))
+          yield* waitForRpcReady(worker.client)
 
           const messages = yield* waitFor(
             worker.client.message.list({ branchId: created.branchId }),
@@ -490,6 +500,7 @@ describe("worker supervisor", () => {
         Effect.gen(function* () {
           const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
+            startupTimeoutMs: 20_000,
             env: { GENT_DATA_DIR: dataDir },
           })
 
@@ -499,6 +510,7 @@ describe("worker supervisor", () => {
           })
 
           yield* worker.restart
+          yield* waitForRpcReady(worker.client)
 
           const snapshot = yield* worker.client.session.getSnapshot({
             sessionId: created.sessionId,

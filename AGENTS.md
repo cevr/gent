@@ -93,6 +93,15 @@ apps/server/             # BunHttpServer
 
 ## Testing
 
+```bash
+bun run test              # unit/integration (~2s)
+bun run test:integration  # direct-transport seam tests (~2s)
+bun run test:e2e          # PTY + supervisor + worker-http (slow)
+bun run gate              # typecheck + lint + fmt + build + test
+```
+
+Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/tools/`, etc. One file per source owner, no god tests.
+
 ```typescript
 // Use createTestLayer for mocked services
 const layer = createTestLayer({ providerResponses: [...] })
