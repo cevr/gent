@@ -135,9 +135,10 @@ describe("searchMessages", () => {
   test("handles trailing FTS5 operator without SQL error", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
-      yield* addMessage(sessionId, branchId, "user", "hello world operator test")
+      yield* addMessage(sessionId, branchId, "user", "hello world or something")
 
       const searchStore = yield* SearchStorage
+      // "hello OR" → '"hello" "OR"' — matches because message contains "or"
       const results = yield* searchStore.searchMessages("hello OR")
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
     }))
@@ -145,10 +146,11 @@ describe("searchMessages", () => {
   test("handles query with embedded FTS5 operators", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()
-      yield* addMessage(sessionId, branchId, "user", "cats dogs animals")
+      yield* addMessage(sessionId, branchId, "user", "cats and dogs not animals")
 
       const searchStore = yield* SearchStorage
-      const results = yield* searchStore.searchMessages("cats AND OR NOT dogs")
+      // Operators treated as literal words — message contains "and", "not"
+      const results = yield* searchStore.searchMessages("cats AND NOT dogs")
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
     }))
 
@@ -183,16 +185,16 @@ describe("sanitizeFts5Query", () => {
     expect(sanitizeFts5Query("hello world")).toBe('"hello" "world"')
   })
 
-  bunTest("strips FTS5 operators", () => {
-    expect(sanitizeFts5Query("hello OR world")).toBe('"hello" "world"')
-    expect(sanitizeFts5Query("NOT bad")).toBe('"bad"')
-    expect(sanitizeFts5Query("a AND b")).toBe('"a" "b"')
-    expect(sanitizeFts5Query("NEAR something")).toBe('"something"')
+  bunTest("quotes FTS5 operators as literal terms", () => {
+    expect(sanitizeFts5Query("hello OR world")).toBe('"hello" "OR" "world"')
+    expect(sanitizeFts5Query("NOT bad")).toBe('"NOT" "bad"')
+    expect(sanitizeFts5Query("a AND b")).toBe('"a" "AND" "b"')
+    expect(sanitizeFts5Query("NEAR something")).toBe('"NEAR" "something"')
   })
 
-  bunTest("strips operators case-insensitively", () => {
-    expect(sanitizeFts5Query("hello or world")).toBe('"hello" "world"')
-    expect(sanitizeFts5Query("not bad")).toBe('"bad"')
+  bunTest("quotes operators case-insensitively as literals", () => {
+    expect(sanitizeFts5Query("hello or world")).toBe('"hello" "or" "world"')
+    expect(sanitizeFts5Query("not bad")).toBe('"not" "bad"')
   })
 
   bunTest("removes special FTS5 characters", () => {
@@ -200,16 +202,16 @@ describe("sanitizeFts5Query", () => {
     expect(sanitizeFts5Query("(group) col:umn")).toBe('"group" "col" "umn"')
   })
 
-  bunTest("returns empty string for only operators", () => {
-    expect(sanitizeFts5Query("OR AND NOT")).toBe("")
+  bunTest("quotes-only-operator input as literals", () => {
+    expect(sanitizeFts5Query("OR AND NOT")).toBe('"OR" "AND" "NOT"')
   })
 
   bunTest("returns empty string for empty input", () => {
     expect(sanitizeFts5Query("")).toBe("")
   })
 
-  bunTest("handles trailing operator", () => {
-    expect(sanitizeFts5Query("hello OR")).toBe('"hello"')
+  bunTest("handles trailing operator as literal", () => {
+    expect(sanitizeFts5Query("hello OR")).toBe('"hello" "OR"')
   })
 
   bunTest("handles punctuation-heavy input", () => {

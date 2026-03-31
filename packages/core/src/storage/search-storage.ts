@@ -4,19 +4,17 @@ import { StorageError } from "./sqlite-storage.js"
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
-const FTS5_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"])
-
 /**
  * Sanitize user input for safe FTS5 MATCH queries.
- * Strips FTS5 operators, removes special syntax chars, wraps each token in double quotes
- * so they're treated as literal terms.
+ * Removes special syntax chars and wraps each token in double quotes
+ * so they're treated as literal terms (quoting neutralizes FTS5 operators).
  */
 export const sanitizeFts5Query = (raw: string): string => {
   // Remove FTS5 special characters: *, ^, quotes, parentheses, colons, plus, minus, braces
   const cleaned = raw.replace(/[*^"'(){}:+-]/g, " ")
   return cleaned
     .split(/\s+/)
-    .filter((t) => t.length > 0 && !FTS5_OPERATORS.has(t.toUpperCase()))
+    .filter((t) => t.length > 0)
     .map((t) => `"${t}"`)
     .join(" ")
 }
