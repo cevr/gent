@@ -7,7 +7,7 @@ import {
   createOpenAIOAuthFetch,
   refreshOpenAIOauth,
   OPENAI_OAUTH_ALLOWED_MODELS,
-} from "../../providers/oauth/openai-oauth.js"
+} from "./oauth.js"
 import { AuthOauth } from "../../domain/auth-store.js"
 import { AuthMethod } from "../../domain/auth-method.js"
 

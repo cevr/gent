@@ -8,7 +8,7 @@ import {
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
   type AnthropicKeychainEnv,
-} from "../../providers/oauth/anthropic-keychain.js"
+} from "./oauth.js"
 import { AuthMethod } from "../../domain/auth-method.js"
 
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).

@@ -1,6 +1,6 @@
 import { Effect, Schedule, Schema } from "effect"
 import * as os from "node:os"
-import { ProviderAuthError } from "../provider-auth"
+import { ProviderAuthError } from "../../providers/provider-auth.js"
 
 // ── Claude Code Keychain Reader ──
 
