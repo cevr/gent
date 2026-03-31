@@ -194,6 +194,8 @@ Rules:
 - `onStartup` hooks run during dependency initialization (no service requirements)
 - `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
 
+For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
+
 ### Server Extensions
 
 - `GentExtension` — no Config generic (removed). Setup receives `{ cwd, source }`.
