@@ -140,32 +140,64 @@ export interface DiscoveredExtension {
   readonly sourcePath: string
 }
 
-/** Discover and load extensions from all configured directories. */
+export interface SkippedExtension {
+  readonly path: string
+  readonly kind: ExtensionKind
+  readonly error: string
+}
+
+export interface DiscoveryResult {
+  readonly loaded: ReadonlyArray<DiscoveredExtension>
+  readonly skipped: ReadonlyArray<SkippedExtension>
+}
+
+/** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
 export const discoverExtensions = (opts: {
   readonly userDir: string // ~/.gent/extensions
   readonly projectDir: string // .gent/extensions
 }): Effect.Effect<
-  ReadonlyArray<DiscoveredExtension>,
-  ExtensionLoadError | PlatformError.PlatformError,
+  DiscoveryResult,
+  PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const userPaths = yield* discoverDir(opts.userDir)
     const projectPaths = yield* discoverDir(opts.projectDir)
 
-    const results: DiscoveredExtension[] = []
+    const loaded: DiscoveredExtension[] = []
+    const skipped: SkippedExtension[] = []
 
     for (const filePath of userPaths) {
-      const ext = yield* loadExtensionFile(filePath)
-      results.push({ extension: ext, kind: "user", sourcePath: filePath })
+      const result = yield* loadExtensionFile(filePath).pipe(
+        Effect.map((ext) => ({ ok: true as const, ext })),
+        Effect.catchEager((error) => Effect.succeed({ ok: false as const, error: error.message })),
+      )
+      if (result.ok) {
+        loaded.push({ extension: result.ext, kind: "user", sourcePath: filePath })
+      } else {
+        skipped.push({ path: filePath, kind: "user", error: result.error })
+        yield* Effect.logWarning("extension.load.skipped").pipe(
+          Effect.annotateLogs({ path: filePath, kind: "user", error: result.error }),
+        )
+      }
     }
 
     for (const filePath of projectPaths) {
-      const ext = yield* loadExtensionFile(filePath)
-      results.push({ extension: ext, kind: "project", sourcePath: filePath })
+      const result = yield* loadExtensionFile(filePath).pipe(
+        Effect.map((ext) => ({ ok: true as const, ext })),
+        Effect.catchEager((error) => Effect.succeed({ ok: false as const, error: error.message })),
+      )
+      if (result.ok) {
+        loaded.push({ extension: result.ext, kind: "project", sourcePath: filePath })
+      } else {
+        skipped.push({ path: filePath, kind: "project", error: result.error })
+        yield* Effect.logWarning("extension.load.skipped").pipe(
+          Effect.annotateLogs({ path: filePath, kind: "project", error: result.error }),
+        )
+      }
     }
 
-    return results
+    return { loaded, skipped }
   }).pipe(Effect.withSpan("ExtensionLoader.discoverExtensions"))
 
 /** Run extension setup and produce LoadedExtension. Catches defects from malformed setup functions. */
@@ -200,6 +232,34 @@ export const setupExtension = (
     }
   }).pipe(Effect.withSpan("ExtensionLoader.setupExtension"))
 
+/** Check same-scope collision for a keyed contribution. Returns error or undefined. */
+const checkScopedCollision = <T>(
+  extensions: ReadonlyArray<LoadedExtension>,
+  extract: (setup: LoadedExtension["setup"]) => ReadonlyArray<T> | undefined,
+  getKey: (item: T) => string,
+  label: string,
+): ExtensionLoadError | undefined => {
+  const byScope = new Map<string, Map<string, string>>()
+  for (const ext of extensions) {
+    const items = extract(ext.setup) ?? []
+    const scope = ext.kind
+    const scopeMap = byScope.get(scope) ?? new Map<string, string>()
+    for (const item of items) {
+      const key = getKey(item)
+      const existing = scopeMap.get(key)
+      if (existing !== undefined && existing !== ext.manifest.id) {
+        return new ExtensionLoadError(
+          ext.manifest.id,
+          `Ambiguous ${label} "${key}" — provided by both "${existing}" and "${ext.manifest.id}" in scope "${scope}"`,
+        )
+      }
+      scopeMap.set(key, ext.manifest.id)
+    }
+    byScope.set(scope, scopeMap)
+  }
+  return undefined
+}
+
 /** Validate a set of loaded extensions for conflicts. */
 export const validateExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -208,8 +268,7 @@ export const validateExtensions = (
     // Check duplicate manifest ids within same scope
     const idsByScope = new Map<string, Set<string>>()
     for (const ext of extensions) {
-      const key = ext.kind
-      const ids = idsByScope.get(key) ?? new Set()
+      const ids = idsByScope.get(ext.kind) ?? new Set()
       if (ids.has(ext.manifest.id)) {
         return yield* Effect.fail(
           new ExtensionLoadError(
@@ -219,48 +278,43 @@ export const validateExtensions = (
         )
       }
       ids.add(ext.manifest.id)
-      idsByScope.set(key, ids)
+      idsByScope.set(ext.kind, ids)
     }
 
-    // Check same-name tool contributions within same scope
-    const toolsByScope = new Map<string, Map<string, string>>() // scope -> toolName -> extId
-    for (const ext of extensions) {
-      const tools = ext.setup.tools ?? []
-      const key = ext.kind
-      const scopeTools = toolsByScope.get(key) ?? new Map()
-      for (const tool of tools) {
-        const existing = scopeTools.get(tool.name)
-        if (existing !== undefined && existing !== ext.manifest.id) {
-          return yield* Effect.fail(
-            new ExtensionLoadError(
-              ext.manifest.id,
-              `Ambiguous tool "${tool.name}" — provided by both "${existing}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
-            ),
-          )
-        }
-        scopeTools.set(tool.name, ext.manifest.id)
-      }
-      toolsByScope.set(key, scopeTools)
-    }
-
-    // Check same-name agent contributions within same scope
-    const agentsByScope = new Map<string, Map<string, string>>()
-    for (const ext of extensions) {
-      const agents = ext.setup.agents ?? []
-      const key = ext.kind
-      const scopeAgents = agentsByScope.get(key) ?? new Map()
-      for (const agent of agents) {
-        const existing = scopeAgents.get(agent.name)
-        if (existing !== undefined && existing !== ext.manifest.id) {
-          return yield* Effect.fail(
-            new ExtensionLoadError(
-              ext.manifest.id,
-              `Ambiguous agent "${agent.name}" — provided by both "${existing}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
-            ),
-          )
-        }
-        scopeAgents.set(agent.name, ext.manifest.id)
-      }
-      agentsByScope.set(key, scopeAgents)
+    // Check keyed contributions — same key in same scope from different extensions is ambiguous
+    const checks = [
+      checkScopedCollision(
+        extensions,
+        (s) => s.tools,
+        (t) => t.name,
+        "tool",
+      ),
+      checkScopedCollision(
+        extensions,
+        (s) => s.agents,
+        (a) => a.name,
+        "agent",
+      ),
+      checkScopedCollision(
+        extensions,
+        (s) => s.providers,
+        (p) => p.id,
+        "provider",
+      ),
+      checkScopedCollision(
+        extensions,
+        (s) => s.interactionHandlers,
+        (h) => h.type,
+        "interaction handler",
+      ),
+      checkScopedCollision(
+        extensions,
+        (s) => s.promptSections,
+        (p) => p.id,
+        "prompt section",
+      ),
+    ]
+    for (const error of checks) {
+      if (error !== undefined) return yield* Effect.fail(error)
     }
   }).pipe(Effect.withSpan("ExtensionLoader.validateExtensions"))

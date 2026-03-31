@@ -24,7 +24,11 @@ import { InProcessRunner, SubprocessRunner } from "../runtime/agent/subagent-run
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
+import {
+  discoverExtensions,
+  setupExtension,
+  validateExtensions,
+} from "../runtime/extensions/loader.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
@@ -83,17 +87,28 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
 
       const userExtensionsDir = path.join(config.home, ".gent", "extensions")
       const projectExtensionsDir = path.join(config.cwd, ".gent", "extensions")
-      const discovered = yield* discoverExtensions({
+      const discovery = yield* discoverExtensions({
         userDir: userExtensionsDir,
         projectDir: projectExtensionsDir,
-      }).pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+      }).pipe(
+        Effect.catchEager(() => Effect.succeed({ loaded: [] as const, skipped: [] as const })),
+      )
+
+      if (discovery.skipped.length > 0) {
+        yield* Effect.logWarning("extension.discovery.summary").pipe(
+          Effect.annotateLogs({
+            loaded: String(discovery.loaded.length),
+            skipped: String(discovery.skipped.length),
+          }),
+        )
+      }
 
       const external: LoadedExtension[] = []
-      for (const discoveredExtension of discovered) {
+      for (const discoveredExtension of discovery.loaded) {
         if (disabledSet.has(discoveredExtension.extension.manifest.id)) continue
         const loaded = yield* setupExtension(discoveredExtension, config.cwd).pipe(
           Effect.catchEager((error) =>
-            Effect.logWarning("extension.load.failed").pipe(
+            Effect.logWarning("extension.setup.failed").pipe(
               Effect.annotateLogs({
                 extensionId: discoveredExtension.extension.manifest.id,
                 error: error.message,
@@ -109,6 +124,9 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         (ext) => !disabledSet.has(ext.manifest.id),
       )
       const allExtensions = [...builtins, ...external]
+
+      // Validate — same-scope collisions are fatal
+      yield* validateExtensions(allExtensions)
 
       // Run extension onStartup hooks (fire-and-forget, no service requirements)
       for (const ext of allExtensions) {
