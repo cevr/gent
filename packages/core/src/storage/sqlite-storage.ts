@@ -6,6 +6,9 @@ import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import type { ReasoningEffort } from "../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
+import { CheckpointStorage } from "./checkpoint-storage.js"
+import { InteractionStorage } from "./interaction-storage.js"
+import { SearchStorage } from "./search-storage.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
@@ -874,15 +877,15 @@ export class Storage extends ServiceMap.Service<Storage, StorageService>()(
       }),
     ).pipe(Layer.provide(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
 
-  /** Live layer that also exposes SqlClient (for extension layers that need SQL access) */
+  /** Live layer that also exposes SqlClient and focused storage services */
   static LiveWithSql = (
     dbPath: string,
   ): Layer.Layer<
-    Storage | SqlClient.SqlClient,
+    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage,
     PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
-  > =>
-    Layer.effect(
+  > => {
+    const base = Layer.effect(
       Storage,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -892,23 +895,38 @@ export class Storage extends ServiceMap.Service<Storage, StorageService>()(
         return yield* makeStorage
       }),
     ).pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
+    return Layer.mergeAll(
+      base,
+      Layer.provide(CheckpointStorage.Live, base),
+      Layer.provide(InteractionStorage.Live, base),
+      Layer.provide(SearchStorage.Live, base),
+    )
+  }
 
   static Memory = (): Layer.Layer<Storage> =>
     Layer.effect(Storage, makeStorage).pipe(
       Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
     )
 
-  /** Memory layer that also exposes SqlClient (for extension layers that need SQL access) */
-  static MemoryWithSql = (): Layer.Layer<Storage | SqlClient.SqlClient> =>
-    Layer.effect(Storage, makeStorage).pipe(
+  /** Memory layer that also exposes SqlClient and focused storage services */
+  static MemoryWithSql = (): Layer.Layer<
+    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage
+  > => {
+    const base = Layer.effect(Storage, makeStorage).pipe(
       Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
     )
+    return Layer.mergeAll(
+      base,
+      Layer.provide(CheckpointStorage.Live, base),
+      Layer.provide(InteractionStorage.Live, base),
+      Layer.provide(SearchStorage.Live, base),
+    )
+  }
 
   static Test = (): Layer.Layer<Storage> => Storage.Memory()
 
-  /** Test layer that also exposes SqlClient for raw SQL in tests */
-  static TestWithSql = (): Layer.Layer<Storage | SqlClient.SqlClient> =>
-    Layer.effect(Storage, makeStorage).pipe(
-      Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
-    )
+  /** Test layer that also exposes SqlClient and focused storage services */
+  static TestWithSql = (): Layer.Layer<
+    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage
+  > => Storage.MemoryWithSql()
 }

@@ -13,7 +13,6 @@ import {
 } from "@gent/core/domain/interaction-handlers"
 import type { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
 import { SessionQueries } from "@gent/core/server/session-queries"
@@ -176,10 +175,8 @@ describe("Session Snapshot", () => {
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
     })
-    const storageLayer = Storage.TestWithSql()
     const baseWithEventStore = Layer.mergeAll(
-      storageLayer,
-      Layer.provide(InteractionStorage.Live, storageLayer),
+      Storage.TestWithSql(),
       Provider.Test([]),
       eventStoreLayer,
       actorProcessLayer,
@@ -224,10 +221,8 @@ describe("Session Snapshot", () => {
 describe("Session Tree", () => {
   const makeTestLayer = () => {
     const eventStoreLayer = EventStore.Test()
-    const storageLayer = Storage.TestWithSql()
     const baseWithEventStore = Layer.mergeAll(
-      storageLayer,
-      Layer.provide(InteractionStorage.Live, storageLayer),
+      Storage.TestWithSql(),
       Provider.Test([]),
       eventStoreLayer,
       ActorProcess.Test(),

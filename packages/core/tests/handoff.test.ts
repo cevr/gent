@@ -17,7 +17,6 @@ import {
 } from "@gent/core/domain/message"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import {
   estimateTokens,
   estimateContextPercent,
@@ -86,17 +85,10 @@ describe("HandoffHandler", () => {
 
   describe("Live layer", () => {
     const liveTest = it.live.layer(
-      (() => {
-        const storageLayer = Storage.MemoryWithSql()
-        return Layer.provideMerge(
-          HandoffHandler.Live,
-          Layer.mergeAll(
-            EventStore.Live,
-            storageLayer,
-            Layer.provide(InteractionStorage.Live, storageLayer),
-          ),
-        )
-      })(),
+      Layer.provideMerge(
+        HandoffHandler.Live,
+        Layer.mergeAll(EventStore.Live, Storage.MemoryWithSql()),
+      ),
     )
 
     liveTest("present blocks until respond, then returns decision", () =>

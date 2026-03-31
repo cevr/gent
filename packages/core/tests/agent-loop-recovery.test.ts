@@ -117,7 +117,6 @@ const makeRecoveryLayer = (params: {
     Layer.provide(BunFileSystem.layer),
     Layer.provide(BunServices.layer),
   )
-  const checkpointStorageLayer = Layer.provide(CheckpointStorage.Live, storageLayer)
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
   const extensionLayer = ExtensionRegistry.fromResolved(
     resolveExtensions([
@@ -165,7 +164,6 @@ const makeRecoveryLayer = (params: {
 
   const base = Layer.mergeAll(
     storageLayer,
-    checkpointStorageLayer,
     eventStoreLayer,
     extensionLayer,
     ExtensionStateRuntime.Test(),

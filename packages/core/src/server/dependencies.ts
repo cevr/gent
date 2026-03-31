@@ -39,7 +39,6 @@ import { TaskService } from "../runtime/task-service.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import { SearchStorage } from "../storage/search-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildBasePromptSections, compileSystemPrompt } from "./system-prompt.js"
@@ -301,16 +300,9 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.merge(baseEventStoreLive, extensionRegistryLive),
   )
 
-  const checkpointStorageLive = Layer.provide(CheckpointStorage.Live, storageLive)
-  const interactionStorageLive = Layer.provide(InteractionStorage.Live, storageLive)
-  const searchStorageLive = Layer.provide(SearchStorage.Live, storageLive)
-
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,
     storageLive,
-    checkpointStorageLive,
-    interactionStorageLive,
-    searchStorageLive,
     baseEventStoreLive,
     reducingEventStoreLive,
     authStorageLive,
