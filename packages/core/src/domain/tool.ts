@@ -46,6 +46,9 @@ export interface ToolContext {
 
 // Tool Factory
 
+/** Brand symbol for detecting full ToolDefinition vs SimpleToolDef in overloaded APIs */
+export const ToolDefinitionBrand: unique symbol = Symbol.for("@gent/ToolDefinition")
+
 export const defineTool = <
   Name extends string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -55,7 +58,14 @@ export const defineTool = <
   Deps,
 >(
   definition: ToolDefinition<Name, Params, Result, Error, Deps>,
-): ToolDefinition<Name, Params, Result, Error, Deps> => definition
+): ToolDefinition<Name, Params, Result, Error, Deps> => {
+  Object.defineProperty(definition, ToolDefinitionBrand, {
+    value: true,
+    enumerable: false,
+    writable: false,
+  })
+  return definition
+}
 
 // Use any for variance - tools have varying params/result/error/deps types
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

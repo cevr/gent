@@ -403,3 +403,137 @@ describe("extension state", () => {
     expect(exit._tag).toBe("Failure")
   })
 })
+
+describe("extension full-power methods", () => {
+  test("ext.tool() passes through full AnyToolDefinition", async () => {
+    const { defineTool } = await import("@gent/core/domain/tool")
+    const { Schema } = await import("effect")
+    const fullTool = defineTool({
+      name: "full-tool",
+      action: "read" as const,
+      description: "A full tool",
+      params: Schema.Struct({ x: Schema.Number }),
+      execute: () => Effect.succeed(42),
+    })
+
+    const ext = extension("full-tool-test", (b) => {
+      b.tool(fullTool)
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.tools!.length).toBe(1)
+    expect(setup.tools![0]!.name).toBe("full-tool")
+  })
+
+  test("ext.agent() passes through full AgentDefinition", async () => {
+    const { AgentDefinition } = await import("@gent/core/domain/agent")
+    const fullAgent = new AgentDefinition({
+      name: "full-agent",
+      kind: "subagent",
+    })
+
+    const ext = extension("full-agent-test", (b) => {
+      b.agent(fullAgent)
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.agents!.length).toBe(1)
+    expect(setup.agents![0]!.name).toBe("full-agent")
+  })
+
+  test("ext.interceptor() registers raw Effect interceptor", async () => {
+    const ext = extension("interceptor-test", (b) => {
+      b.interceptor("prompt.system", (input, next) => next(input))
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.hooks!.interceptors!.length).toBe(1)
+    expect(setup.hooks!.interceptors![0]!.key).toBe("prompt.system")
+  })
+
+  test("ext.interceptor() accepts descriptor object", async () => {
+    const { defineInterceptor } = await import("@gent/core/domain/extension")
+    const desc = defineInterceptor("turn.after", (_input, next) => next(_input))
+
+    const ext = extension("descriptor-test", (b) => {
+      b.interceptor(desc)
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.hooks!.interceptors![0]!.key).toBe("turn.after")
+  })
+
+  test("ext.actor() wires spawnActor and projection", async () => {
+    const { fromReducer } = await import("@gent/core/runtime/extensions/from-reducer")
+    const actor = fromReducer({
+      id: "test-actor",
+      initial: { count: 0 },
+      reduce: (state: { count: number }) => ({ state }),
+    })
+
+    const ext = extension("actor-test", (b) => {
+      b.actor(actor)
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.spawnActor).toBeDefined()
+  })
+
+  test("ext.layer() registers a service layer", async () => {
+    const { Layer, ServiceMap } = await import("effect")
+    const TestService = ServiceMap.Service<{ value: string }>("TestService")
+    const testLayer = Layer.succeed(TestService, { value: "hello" })
+
+    const ext = extension("layer-test", (b) => {
+      b.layer(testLayer)
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.layer).toBeDefined()
+  })
+
+  test("ext.provider() registers a provider", async () => {
+    const ext = extension("provider-test", (b) => {
+      b.provider({ id: "test", name: "Test Provider", resolveModel: () => null })
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.providers!.length).toBe(1)
+    expect(setup.providers![0]!.id).toBe("test")
+  })
+
+  test("ext.interactionHandler() registers a handler", async () => {
+    const ext = extension("handler-test", (b) => {
+      b.interactionHandler({ type: "permission", layer: {} as never })
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(setup.interactionHandlers!.length).toBe(1)
+    expect(setup.interactionHandlers![0]!.type).toBe("permission")
+  })
+
+  test("ext.onStartupEffect() composes with onStartup()", async () => {
+    const order: number[] = []
+    const ext = extension("mixed-startup", (b) => {
+      b.onStartup(() => order.push(1))
+      b.onStartupEffect(Effect.sync(() => order.push(2)))
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    await Effect.runPromise(setup.onStartup!)
+    expect(order).toEqual([1, 2])
+  })
+
+  test("state() and actor() are mutually exclusive", async () => {
+    const { fromReducer } = await import("@gent/core/runtime/extensions/from-reducer")
+    const actor = fromReducer({ id: "x", initial: {}, reduce: (s: object) => ({ state: s }) })
+
+    const ext = extension("mutex-test", (b) => {
+      b.state({ initial: { a: 1 }, reduce: (s) => ({ state: s }) })
+      b.actor(actor)
+    })
+
+    const exit = await Effect.runPromiseExit(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(exit._tag).toBe("Failure")
+  })
+})

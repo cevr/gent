@@ -1,40 +1,32 @@
 /**
- * Imperative extension authoring API.
+ * Unified extension authoring API.
  *
- * No Effect or Schema knowledge required. Plain objects and async functions.
+ * One builder for both external authors (no Effect) and internal builtins (full power).
  *
  * @example
  * ```ts
  * import { extension } from "@gent/core/extensions/api"
  *
+ * // Simple path — no Effect knowledge needed
  * export default extension("my-ext", async (ext, ctx) => {
- *   ext.tool({
- *     name: "greet",
- *     description: "Say hello",
- *     parameters: { name: { type: "string" } },
- *     execute: async (params) => `Hello, ${params.name}!`,
- *   })
+ *   ext.tool({ name: "greet", description: "Say hello", execute: async (p) => `Hi ${p.name}!` })
+ *   ext.on("prompt.system", async (input, next) => (await next(input)) + "\nBe nice.")
+ *   ext.state({ initial: { n: 0 }, reduce: (s, e) => ({ state: s }) })
+ * })
  *
- *   ext.on("prompt.system", (input, next) => {
- *     return next({ ...input, basePrompt: input.basePrompt + "\nBe friendly." })
- *   })
- *
- *   ext.state({
- *     initial: { turns: 0 },
- *     reduce: (state, event) => {
- *       if (event.type === "turn-completed") return { state: { turns: state.turns + 1 } }
- *       return { state }
- *     },
- *     derive: (state) => ({
- *       promptSections: [{ id: "turn-count", content: `Turns: ${state.turns}`, priority: 50 }],
- *     }),
- *   })
+ * // Full-power path — same builder, Effect-aware
+ * export default extension("@gent/my-builtin", (ext) => {
+ *   ext.tool(MyFullToolDefinition)
+ *   ext.interceptor("prompt.system", (input, next) => next(input).pipe(Effect.map(...)))
+ *   ext.actor(fromReducer({ id: "...", initial: ..., reduce: ... }))
+ *   ext.layer(MyService.Live)
+ *   ext.provider(myProvider)
  * })
  * ```
  *
  * @module
  */
-import { Effect, Schema, Data } from "effect"
+import { Effect, Layer, Schema, Data } from "effect"
 import {
   defineExtension,
   defineInterceptor,
@@ -42,6 +34,8 @@ import {
   type GentExtension,
   type ExtensionSetup,
   type ExtensionInterceptorDescriptor,
+  type ExtensionInterceptorKey,
+  type ExtensionInterceptorMap,
   type SystemPromptInput,
   type ToolExecuteInput,
   type PermissionCheckInput,
@@ -50,22 +44,73 @@ import {
   type ToolResultInput,
   type ExtensionDeriveContext,
   type ExtensionProjection,
+  type ExtensionProjectionConfig,
   type ExtensionReduceContext,
   type ReduceResult,
   type ExtensionEffect,
+  type ProviderContribution,
+  type InteractionHandlerContribution,
+  type TagInjection,
+  type SpawnActor,
 } from "../domain/extension.js"
 import {
   defineTool,
+  ToolDefinitionBrand,
   type ToolAction,
   type ToolContext,
   type AnyToolDefinition,
 } from "../domain/tool.js"
-import { defineAgent, type AgentDefinition } from "../domain/agent.js"
+import { type AgentDefinition, defineAgent } from "../domain/agent.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PermissionResult } from "../domain/permission.js"
 import type { Message } from "../domain/message.js"
 import { fromReducer } from "../runtime/extensions/from-reducer.js"
+
+// ── Re-exports for full-power extension authors ──
+
+export {
+  fromReducer,
+  type FromReducerConfig,
+  type FromReducerResult,
+} from "../runtime/extensions/from-reducer.js"
+export {
+  fromMachine,
+  type FromMachineConfig,
+  type FromMachineResult,
+} from "../runtime/extensions/from-machine.js"
+export {
+  defineTool,
+  ToolDefinitionBrand,
+  type AnyToolDefinition,
+  type ToolContext,
+  type ToolAction,
+} from "../domain/tool.js"
+export { defineAgent, AgentDefinition } from "../domain/agent.js"
+export {
+  defineInterceptor,
+  type ExtensionInterceptorDescriptor,
+  type ExtensionInterceptorKey,
+  type ExtensionInterceptorMap,
+  type ProviderContribution,
+  type InteractionHandlerContribution,
+  type TagInjection,
+  type SpawnActor,
+  type ExtensionProjectionConfig,
+  type ExtensionEffect,
+  type ReduceResult,
+  type ExtensionReduceContext,
+  type ExtensionDeriveContext,
+  type ExtensionProjection,
+  type SystemPromptInput,
+  type ToolExecuteInput,
+  type PermissionCheckInput,
+  type ContextMessagesInput,
+  type TurnAfterInput,
+  type ToolResultInput,
+} from "../domain/extension.js"
+export type { PromptSection } from "../domain/prompt.js"
+export type { AgentEvent } from "../domain/event.js"
 
 // ── Simple Parameter Types ──
 
@@ -125,13 +170,10 @@ export type SimpleEventType =
 
 export interface SimpleEvent {
   readonly type: SimpleEventType
-  /** The raw AgentEvent _tag for advanced filtering */
   readonly _tag: string
-  /** The full raw event data */
   readonly raw: AgentEvent
 }
 
-/** Map AgentEvent._tag to SimpleEventType. Returns undefined for internal/diagnostic events. */
 const mapEventType = (tag: string): SimpleEventType | undefined => {
   switch (tag) {
     case "SessionStarted":
@@ -184,13 +226,9 @@ export interface SimpleEffect {
 
 // ── Hook Types for ext.on() ──
 
-/** Transform hook handler — receives input, calls next to continue chain */
 type TransformHandler<I, O> = (input: I, next: (input: I) => Promise<O>) => O | Promise<O>
-
-/** Fire-and-forget hook handler */
 type FireAndForgetHandler<I> = (input: I) => void | Promise<void>
 
-/** Hook handler type map — maps hook keys to their handler signatures */
 interface SimpleHookHandlers {
   readonly "prompt.system": TransformHandler<SystemPromptInput, string>
   readonly "tool.execute": TransformHandler<ToolExecuteInput, unknown>
@@ -200,31 +238,68 @@ interface SimpleHookHandlers {
   readonly "tool.result": TransformHandler<ToolResultInput, unknown>
 }
 
+// ── Actor Result (from fromReducer/fromMachine) ──
+
+export interface ActorResult {
+  readonly spawnActor: SpawnActor
+  readonly projection?: ExtensionProjectionConfig
+}
+
 // ── Extension Builder ──
 
 export interface ExtensionBuilder {
-  /** Register a tool with plain objects — no Schema or Effect needed. */
-  tool(def: SimpleToolDef): void
-  /** Register an agent definition. */
-  agent(def: SimpleAgentDef): void
+  // ── Simple path (no Effect) ──
+
+  /** Register a tool. Accepts SimpleToolDef or full AnyToolDefinition. */
+  tool(def: SimpleToolDef | AnyToolDefinition): void
+  /** Register an agent. Accepts SimpleAgentDef or full AgentDefinition. */
+  agent(def: SimpleAgentDef | AgentDefinition): void
   /** Add a static system prompt section. */
   promptSection(section: PromptSection): void
-  /** Register a hook interceptor. */
+  /** Register a hook using plain async handlers. */
   on<K extends keyof SimpleHookHandlers>(key: K, handler: SimpleHookHandlers[K]): void
-  /** Register a startup hook (runs during setup). Multiple calls compose in order. */
-  onStartup(fn: () => void | Promise<void>): void
-  /** Register a shutdown hook (runs on scope close). Multiple calls compose in order. */
-  onShutdown(fn: () => void | Promise<void>): void
-  /** Register stateful extension via reducer. One call per extension. */
+  /** Register stateful extension via simplified reducer. Mutually exclusive with actor(). */
   state<S>(config: SimpleStateConfig<S>): void
+  /** Register a startup hook. Multiple calls compose in order. */
+  onStartup(fn: () => void | Promise<void>): void
+  /** Register a shutdown hook. Multiple calls compose in order. */
+  onShutdown(fn: () => void | Promise<void>): void
+
+  // ── Full-power path (Effect-aware) ──
+
+  /** Register a raw Effect interceptor. */
+  interceptor(descriptor: ExtensionInterceptorDescriptor): void
+  interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
+  /** Register an actor from fromReducer() or fromMachine(). Mutually exclusive with state(). */
+  actor(result: ActorResult): void
+  /** Provide a service Layer. Multiple calls merge. */
+  layer(layer: Layer.Any): void
+  /** Register an AI model provider. */
+  provider(provider: ProviderContribution): void
+  /** Register an interaction handler. */
+  interactionHandler(handler: InteractionHandlerContribution): void
+  /** Register a tag-conditional tool injection. */
+  tagInjection(injection: TagInjection): void
+  /** Register an Effect-based startup hook. Composes with onStartup(). */
+  onStartupEffect(effect: Effect.Effect<void>): void
+  /** Register an Effect-based shutdown hook. Composes with onShutdown(). */
+  onShutdownEffect(effect: Effect.Effect<void>): void
 }
+
+// ── Internal Helpers ──
 
 class SimpleToolError extends Data.TaggedError("@gent/core/src/extensions/api/SimpleToolError")<{
   readonly message: string
   readonly cause?: unknown
 }> {}
 
-// ── Schema Conversion ──
+class SimpleHookError extends Data.TaggedError("@gent/core/src/extensions/api/SimpleHookError")<{
+  readonly message: string
+  readonly cause?: unknown
+}> {}
+
+const isFullToolDef = (def: SimpleToolDef | AnyToolDefinition): def is AnyToolDefinition =>
+  typeof def === "object" && def !== null && ToolDefinitionBrand in def
 
 const schemaTypeMap: Record<string, Schema.Schema<unknown>> = {
   string: Schema.String as Schema.Schema<unknown>,
@@ -238,7 +313,6 @@ const buildParamsSchema = (params?: SimpleParams): Schema.Decoder<any, never> =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return Schema.Struct({}) as unknown as Schema.Decoder<any, never>
   }
-
   const fields: Record<string, Schema.Schema<unknown>> = {}
   for (const [key, param] of Object.entries(params)) {
     const base = schemaTypeMap[param.type] ?? Schema.Unknown
@@ -248,9 +322,7 @@ const buildParamsSchema = (params?: SimpleParams): Schema.Decoder<any, never> =>
   return Schema.Struct(fields) as unknown as Schema.Decoder<any, never>
 }
 
-// ── Convert SimpleToolDef → AnyToolDefinition ──
-
-const convertTool = (def: SimpleToolDef): AnyToolDefinition =>
+const convertSimpleTool = (def: SimpleToolDef): AnyToolDefinition =>
   defineTool({
     name: def.name,
     action: def.action ?? "read",
@@ -268,9 +340,7 @@ const convertTool = (def: SimpleToolDef): AnyToolDefinition =>
       }),
   }) as AnyToolDefinition
 
-// ── Convert SimpleAgentDef → AgentDefinition ──
-
-const convertAgent = (def: SimpleAgentDef): AgentDefinition =>
+const convertSimpleAgent = (def: SimpleAgentDef): AgentDefinition =>
   defineAgent({
     name: def.name,
     kind: def.kind ?? "subagent",
@@ -282,13 +352,6 @@ const convertAgent = (def: SimpleAgentDef): AgentDefinition =>
     temperature: def.temperature,
     hidden: def.hidden,
   })
-
-// ── Wrap Promise handler into Effect interceptor ──
-
-class SimpleHookError extends Data.TaggedError("@gent/core/src/extensions/api/SimpleHookError")<{
-  readonly message: string
-  readonly cause?: unknown
-}> {}
 
 const wrapTransformHandler =
   <I, O>(
@@ -316,9 +379,7 @@ const wrapFireAndForgetHandler =
       }).pipe(Effect.orDie)
     })
 
-// ── Convert SimpleEffect to ExtensionEffect ──
-
-const convertEffect = (effect: SimpleEffect): ExtensionEffect => {
+const convertSimpleEffect = (effect: SimpleEffect): ExtensionEffect => {
   switch (effect.type) {
     case "queue-follow-up":
       return { _tag: "QueueFollowUp", content: effect.content }
@@ -328,24 +389,20 @@ const convertEffect = (effect: SimpleEffect): ExtensionEffect => {
 // ── Public API ──
 
 /** Setup context passed to the factory function. */
-export interface SimpleExtensionContext {
+export interface ExtensionContext {
   readonly cwd: string
   readonly source: string
 }
 
 /**
- * Create an extension using a simple imperative API.
- * No Effect or Schema knowledge required.
+ * Create an extension. One API for both simple and full-power extensions.
  *
  * Factory runs at setup time (not import time), receives setup context.
- *
- * @param id Extension identifier
- * @param factory Builder function — call methods on `ext` to register contributions
- * @returns A GentExtension compatible with the extension loader
+ * Sync factories work — async/Promise is optional.
  */
 export const extension = (
   id: string,
-  factory: (ext: ExtensionBuilder, ctx: SimpleExtensionContext) => void | Promise<void>,
+  factory: (ext: ExtensionBuilder, ctx: ExtensionContext) => void | Promise<void>,
 ): GentExtension =>
   defineExtension({
     manifest: { id },
@@ -357,12 +414,33 @@ export const extension = (
         const interceptors: ExtensionInterceptorDescriptor[] = []
         const startupFns: Array<() => void | Promise<void>> = []
         const shutdownFns: Array<() => void | Promise<void>> = []
+        const startupEffects: Array<Effect.Effect<void>> = []
+        const shutdownEffects: Array<Effect.Effect<void>> = []
+        const providers: ProviderContribution[] = []
+        const interactionHandlers: InteractionHandlerContribution[] = []
+        const tagInjections: TagInjection[] = []
+        const layers: Layer.Any[] = []
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let stateConfig: SimpleStateConfig<any> | undefined
+        let actorResult: ActorResult | undefined
 
         const builder: ExtensionBuilder = {
-          tool: (def) => tools.push(convertTool(def)),
-          agent: (def) => agents.push(convertAgent(def)),
+          tool: (def) => {
+            if (isFullToolDef(def)) {
+              tools.push(def)
+            } else {
+              tools.push(convertSimpleTool(def as SimpleToolDef))
+            }
+          },
+
+          agent: (def) => {
+            if ("_tag" in def) {
+              agents.push(def as AgentDefinition)
+            } else {
+              agents.push(convertSimpleAgent(def as SimpleAgentDef))
+            }
+          },
+
           promptSection: (section) => promptSections.push(section),
 
           on: ((key: keyof SimpleHookHandlers, handler: SimpleHookHandlers[typeof key]) => {
@@ -374,7 +452,6 @@ export const extension = (
                 ),
               )
             } else {
-              // All other hooks are transform hooks
               interceptors.push(
                 defineInterceptor(
                   key,
@@ -386,24 +463,57 @@ export const extension = (
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           }) as any,
 
-          onStartup: (fn) => startupFns.push(fn),
-          onShutdown: (fn) => shutdownFns.push(fn),
-
           state: (config) => {
-            if (stateConfig !== undefined) {
-              throw new Error(`extension "${id}": ext.state() can only be called once`)
+            if (stateConfig !== undefined || actorResult !== undefined) {
+              throw new Error(
+                `extension "${id}": state() and actor() are mutually exclusive, and each can only be called once`,
+              )
             }
             stateConfig = config
           },
+
+          onStartup: (fn) => startupFns.push(fn),
+          onShutdown: (fn) => shutdownFns.push(fn),
+
+          // Full-power methods
+
+          interceptor: ((
+            ...args:
+              | [ExtensionInterceptorDescriptor]
+              | [ExtensionInterceptorKey, ExtensionInterceptorMap[ExtensionInterceptorKey]]
+          ) => {
+            if (args.length === 1) {
+              interceptors.push(args[0])
+            } else {
+              interceptors.push(defineInterceptor(args[0], args[1] as never))
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+
+          actor: (result) => {
+            if (actorResult !== undefined || stateConfig !== undefined) {
+              throw new Error(
+                `extension "${id}": actor() and state() are mutually exclusive, and each can only be called once`,
+              )
+            }
+            actorResult = result
+          },
+
+          layer: (l) => layers.push(l),
+          provider: (p) => providers.push(p),
+          interactionHandler: (h) => interactionHandlers.push(h),
+          tagInjection: (t) => tagInjections.push(t),
+          onStartupEffect: (e) => startupEffects.push(e),
+          onShutdownEffect: (e) => shutdownEffects.push(e),
         }
 
-        // Run factory (async-capable)
+        // Run factory (async-capable, sync works too)
         yield* Effect.tryPromise({
           try: () => Promise.resolve(factory(builder, ctx)),
           catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
         })
 
-        // State config → fromReducer
+        // Resolve actor from state() or actor()
         let spawnActor: ExtensionSetup["spawnActor"]
         let projection: ExtensionSetup["projection"]
 
@@ -417,7 +527,6 @@ export const extension = (
               ),
             )
           }
-
           const reducerResult = fromReducer({
             id,
             initial: sc.initial,
@@ -430,59 +539,77 @@ export const extension = (
               if (simpleType === undefined) return { state }
               const simpleEvent: SimpleEvent = { type: simpleType, _tag: event._tag, raw: event }
               const result = sc.reduce(state as Readonly<typeof sc.initial>, simpleEvent)
-              return {
-                state: result.state,
-                effects: result.effects?.map(convertEffect),
-              }
+              return { state: result.state, effects: result.effects?.map(convertSimpleEffect) }
             },
             derive: (() => {
               const deriveFn = sc.derive
               if (deriveFn === undefined) return undefined
               return (state: unknown, _deriveCtx: ExtensionDeriveContext): ExtensionProjection => {
                 const derived = deriveFn(state as Readonly<typeof sc.initial>)
-                return {
-                  promptSections: derived.promptSections,
-                  toolPolicy: derived.toolPolicy,
-                }
+                return { promptSections: derived.promptSections, toolPolicy: derived.toolPolicy }
               }
             })(),
             stateSchema: sc.persist?.schema,
             persist: sc.persist !== undefined,
           })
-
           spawnActor = reducerResult.spawnActor
           projection = reducerResult.projection
+        } else if (actorResult !== undefined) {
+          spawnActor = actorResult.spawnActor
+          projection = actorResult.projection
         }
+
+        // Merge layers — cast through Layer<never> to satisfy Layer.mergeAll variance
+        type NarrowLayer = Layer.Layer<never>
+        let mergedLayer: Layer.Any | undefined
+        if (layers.length === 1) {
+          mergedLayer = layers[0]
+        } else if (layers.length > 1) {
+          mergedLayer = Layer.mergeAll(...(layers as [NarrowLayer, NarrowLayer, ...NarrowLayer[]]))
+        }
+
+        // Merge startup effects (Promise fns + Effect values)
+        const allStartup: Effect.Effect<void>[] = [
+          ...startupFns.map((fn) =>
+            Effect.tryPromise({
+              try: () => Promise.resolve(fn()),
+              catch: (e) => new SimpleHookError({ message: `onStartup: ${String(e)}`, cause: e }),
+            }).pipe(Effect.orDie, Effect.asVoid),
+          ),
+          ...startupEffects,
+        ]
+        const onStartup =
+          allStartup.length > 0
+            ? Effect.all(allStartup, { discard: true }).pipe(Effect.asVoid)
+            : undefined
+
+        const allShutdown: Effect.Effect<void>[] = [
+          ...shutdownFns.map((fn) =>
+            Effect.tryPromise({
+              try: () => Promise.resolve(fn()),
+              catch: (e) => new SimpleHookError({ message: `onShutdown: ${String(e)}`, cause: e }),
+            }).pipe(Effect.orDie, Effect.asVoid),
+          ),
+          ...shutdownEffects,
+        ]
+        const onShutdown =
+          allShutdown.length > 0
+            ? Effect.all(allShutdown, { discard: true }).pipe(Effect.asVoid)
+            : undefined
 
         return {
           ...(tools.length > 0 ? { tools } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(promptSections.length > 0 ? { promptSections } : {}),
           ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
-          ...(startupFns.length > 0
-            ? {
-                onStartup: Effect.forEach(startupFns, (fn) =>
-                  Effect.tryPromise({
-                    try: () => Promise.resolve(fn()),
-                    catch: (e) =>
-                      new SimpleHookError({ message: `onStartup: ${String(e)}`, cause: e }),
-                  }),
-                ).pipe(Effect.orDie, Effect.asVoid),
-              }
-            : {}),
-          ...(shutdownFns.length > 0
-            ? {
-                onShutdown: Effect.forEach(shutdownFns, (fn) =>
-                  Effect.tryPromise({
-                    try: () => Promise.resolve(fn()),
-                    catch: (e) =>
-                      new SimpleHookError({ message: `onShutdown: ${String(e)}`, cause: e }),
-                  }),
-                ).pipe(Effect.orDie, Effect.asVoid),
-              }
-            : {}),
+          ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
+          ...(providers.length > 0 ? { providers } : {}),
+          ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
+          ...(tagInjections.length > 0 ? { tagInjections } : {}),
           spawnActor,
           projection,
+          onStartup,
+          onShutdown,
         } satisfies ExtensionSetup
       }),
   })
