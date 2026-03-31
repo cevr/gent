@@ -388,4 +388,18 @@ describe("simpleExtension state", () => {
     const exit = await Effect.runPromiseExit(ext.setup({ cwd: "/tmp", source: "test" }))
     expect(exit._tag).toBe("Failure")
   })
+
+  test("ext.state() with persist but no schema fails at setup", async () => {
+    const ext = simpleExtension("bad-persist", (b) => {
+      b.state({
+        initial: { x: 1 },
+        reduce: (s) => ({ state: s }),
+        // @ts-expect-error — testing JS author passing malformed config
+        persist: {},
+      })
+    })
+
+    const exit = await Effect.runPromiseExit(ext.setup({ cwd: "/tmp", source: "test" }))
+    expect(exit._tag).toBe("Failure")
+  })
 })

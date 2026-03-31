@@ -409,6 +409,14 @@ export const simpleExtension = (
 
         if (stateConfig !== undefined) {
           const sc = stateConfig
+          if (sc.persist !== undefined && sc.persist.schema === undefined) {
+            return yield* Effect.fail(
+              new ExtensionLoadError(
+                id,
+                `ext.state() persist requires a schema: { persist: { schema } }`,
+              ),
+            )
+          }
 
           const reducerResult = fromReducer({
             id,
