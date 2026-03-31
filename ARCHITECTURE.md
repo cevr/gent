@@ -225,11 +225,47 @@ Use the smallest honest boundary:
 - TUI render/capture: OpenTUI renderer tests
 - runtime ordering/turn semantics: recording layers + runtime tests
 
-Important files:
+### Commands
 
-- `packages/core/src/test-utils/index.ts`
-- `tests/runtime.test.ts`
-- `apps/tui/tests/render-harness.tsx`
+| Command                    | Scope                                        | Target   |
+| -------------------------- | -------------------------------------------- | -------- |
+| `bun run test`             | core + tui + sdk unit/integration            | ~2s      |
+| `bun run test:integration` | tui integration + e2e direct-transport       | ~2s      |
+| `bun run test:e2e`         | PTY e2e + supervisor + worker-http transport | ~60-120s |
+| `bun run gate`             | typecheck + lint + fmt + build + test        | ~15s     |
+
+### Test structure
+
+`packages/core/tests/` mirrors `packages/core/src/`:
+
+```text
+tests/
+├── domain/        # auth-store, auth-guard, agent, event, message, skills, ...
+├── extensions/    # api, registry, compile-tool-policy, hooks, loader, memory/, ...
+├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
+├── runtime/       # agent-loop, actor-process, retry, subagent-runner, tool-runner, ...
+├── server/        # rpcs, session-queries, system-prompt
+├── storage/       # sqlite-storage, search-storage, task-storage, bypass
+├── tools/         # read, edit, bash, finder, code-review, counsel, delegate, ...
+├── debug/         # sequence-provider
+└── test-utils/    # sequence
+```
+
+One test file per source file. No god tests. Names match source owners.
+
+`packages/e2e/tests/` separates integration from e2e:
+
+- `test:integration` — direct-transport contract tests (in-process, no subprocess)
+- `test:e2e` — PTY TUI tests, supervisor lifecycle, worker-http transport
+
+### Important files
+
+- `packages/core/src/test-utils/index.ts` — `SequenceRecorder`, recording layers
+- `packages/core/src/test-utils/in-process-layer.ts` — `baseLocalLayer`
+- `packages/core/src/test-utils/e2e-layer.ts` — `createE2ELayer`
+- `packages/core/src/debug/provider.ts` — `DebugProvider`, `createSignalProvider`, `createSequenceProvider`
+- `apps/tui/tests/render-harness.tsx` — TUI render test harness
+- `packages/e2e/tests/transport-harness.ts` — shared worker + transport cases
 
 ## Memory Extension
 
