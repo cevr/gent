@@ -9,16 +9,27 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { loadTuiExtensions } from "../src/extensions/loader"
+import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ExtensionClientContext } from "@gent/core/domain/extension-client.js"
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 
 const TEST_DIR = join(import.meta.dir, ".tmp-ext-integration")
 const USER_DIR = join(TEST_DIR, "user")
 const PROJECT_DIR = join(TEST_DIR, "project")
+const BUILTIN_DIR = join(import.meta.dir, "../src/extensions/builtins")
 
 const noopCtx: ExtensionClientContext = {
   openOverlay: () => {},
   closeOverlay: () => {},
+  sendIntent: () => {},
+  getSnapshot: () => undefined,
+  sendMessage: () => {},
+  composerState: () => ({
+    draft: "",
+    mode: "editing",
+    inputFocused: false,
+    autocompleteOpen: false,
+  }),
 }
 
 /** Ctx that records openOverlay calls */
@@ -27,6 +38,15 @@ const createRecordingCtx = () => {
   const ctx: ExtensionClientContext = {
     openOverlay: (id) => calls.push(id),
     closeOverlay: () => calls.push("__close__"),
+    sendIntent: () => {},
+    getSnapshot: () => undefined,
+    sendMessage: () => {},
+    composerState: () => ({
+      draft: "",
+      mode: "editing",
+      inputFocused: false,
+      autocompleteOpen: false,
+    }),
   }
   return { ctx, calls }
 }
@@ -93,7 +113,7 @@ describe("loadTuiExtensions integration", () => {
     mkdirSync(emptyProject, { recursive: true })
 
     const resolved = await loadTuiExtensions(
-      { userDir: emptyUser, projectDir: emptyProject },
+      { builtinDir: BUILTIN_DIR, userDir: emptyUser, projectDir: emptyProject },
       noopCtx,
     )
 
@@ -119,7 +139,7 @@ describe("loadTuiExtensions integration", () => {
 
   test("loads user extension with tool renderer", async () => {
     const resolved = await loadTuiExtensions(
-      { userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
+      { builtinDir: BUILTIN_DIR, userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
       noopCtx,
     )
 
@@ -128,7 +148,7 @@ describe("loadTuiExtensions integration", () => {
 
   test("loads user extension with widget", async () => {
     const resolved = await loadTuiExtensions(
-      { userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
+      { builtinDir: BUILTIN_DIR, userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
       noopCtx,
     )
 
@@ -140,7 +160,7 @@ describe("loadTuiExtensions integration", () => {
 
   test("loads user extension with command", async () => {
     const resolved = await loadTuiExtensions(
-      { userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
+      { builtinDir: BUILTIN_DIR, userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
       noopCtx,
     )
 
@@ -152,7 +172,7 @@ describe("loadTuiExtensions integration", () => {
 
   test("loads user extension with overlay", async () => {
     const resolved = await loadTuiExtensions(
-      { userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
+      { builtinDir: BUILTIN_DIR, userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
       noopCtx,
     )
 
@@ -161,7 +181,7 @@ describe("loadTuiExtensions integration", () => {
 
   test("project extension overrides builtin tool renderer", async () => {
     const resolved = await loadTuiExtensions(
-      { userDir: join(TEST_DIR, "no-user"), projectDir: PROJECT_DIR },
+      { builtinDir: BUILTIN_DIR, userDir: join(TEST_DIR, "no-user"), projectDir: PROJECT_DIR },
       noopCtx,
     )
 
@@ -187,7 +207,7 @@ describe("loadTuiExtensions integration", () => {
     )
 
     const resolved = await loadTuiExtensions(
-      { userDir: userBashDir, projectDir: PROJECT_DIR },
+      { builtinDir: BUILTIN_DIR, userDir: userBashDir, projectDir: PROJECT_DIR },
       noopCtx,
     )
 
@@ -205,7 +225,7 @@ describe("loadTuiExtensions integration", () => {
     const { ctx, calls } = createRecordingCtx()
 
     const resolved = await loadTuiExtensions(
-      { userDir: ctxDir, projectDir: join(TEST_DIR, "no-project") },
+      { builtinDir: BUILTIN_DIR, userDir: ctxDir, projectDir: join(TEST_DIR, "no-project") },
       ctx,
     )
 
@@ -221,7 +241,7 @@ describe("loadTuiExtensions integration", () => {
 
   test("nonexistent directories are handled gracefully", async () => {
     const resolved = await loadTuiExtensions(
-      { userDir: "/nonexistent/a", projectDir: "/nonexistent/b" },
+      { builtinDir: BUILTIN_DIR, userDir: "/nonexistent/a", projectDir: "/nonexistent/b" },
       noopCtx,
     )
 
@@ -236,7 +256,7 @@ describe("loadTuiExtensions integration", () => {
     writeFileSync(join(badDir, "bad.client.ts"), "export default { not: 'an extension' }")
 
     const resolved = await loadTuiExtensions(
-      { userDir: badDir, projectDir: join(TEST_DIR, "no-project") },
+      { builtinDir: BUILTIN_DIR, userDir: badDir, projectDir: join(TEST_DIR, "no-project") },
       noopCtx,
     )
 
@@ -289,7 +309,12 @@ describe("disabled extensions", () => {
     mkdirSync(emptyProject, { recursive: true })
 
     const resolved = await loadTuiExtensions(
-      { userDir: emptyUser, projectDir: emptyProject, disabled: ["@gent/tools"] },
+      {
+        builtinDir: BUILTIN_DIR,
+        userDir: emptyUser,
+        projectDir: emptyProject,
+        disabled: ["@gent/tools"],
+      },
       noopCtx,
     )
 
@@ -319,7 +344,12 @@ describe("disabled extensions", () => {
 
     // Should not throw — setup() should never be called
     const resolved = await loadTuiExtensions(
-      { userDir: disabledDir, projectDir: join(TEST_DIR, "no-project"), disabled: ["@test/bomb"] },
+      {
+        builtinDir: BUILTIN_DIR,
+        userDir: disabledDir,
+        projectDir: join(TEST_DIR, "no-project"),
+        disabled: ["@test/bomb"],
+      },
       noopCtx,
     )
 
@@ -337,6 +367,7 @@ describe("disabled extensions", () => {
 
     const resolved = await loadTuiExtensions(
       {
+        builtinDir: BUILTIN_DIR,
         userDir: emptyUser,
         projectDir: emptyProject,
         disabled: ["@gent/plan", "@gent/tasks"],
@@ -378,7 +409,11 @@ describe("same-scope collision detection", () => {
 
     await expect(
       loadTuiExtensions(
-        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        {
+          builtinDir: BUILTIN_DIR,
+          userDir: collisionDir,
+          projectDir: join(TEST_DIR, "no-project"),
+        },
         noopCtx,
       ),
     ).rejects.toThrow("Same-scope TUI renderer collision")
@@ -406,7 +441,11 @@ describe("same-scope collision detection", () => {
 
     await expect(
       loadTuiExtensions(
-        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        {
+          builtinDir: BUILTIN_DIR,
+          userDir: collisionDir,
+          projectDir: join(TEST_DIR, "no-project"),
+        },
         noopCtx,
       ),
     ).rejects.toThrow("Same-scope TUI widget collision")
@@ -434,7 +473,11 @@ describe("same-scope collision detection", () => {
 
     await expect(
       loadTuiExtensions(
-        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        {
+          builtinDir: BUILTIN_DIR,
+          userDir: collisionDir,
+          projectDir: join(TEST_DIR, "no-project"),
+        },
         noopCtx,
       ),
     ).rejects.toThrow("Same-scope TUI command collision")
@@ -462,7 +505,11 @@ describe("same-scope collision detection", () => {
 
     await expect(
       loadTuiExtensions(
-        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        {
+          builtinDir: BUILTIN_DIR,
+          userDir: collisionDir,
+          projectDir: join(TEST_DIR, "no-project"),
+        },
         noopCtx,
       ),
     ).rejects.toThrow("Same-scope TUI keybind collision")
@@ -490,11 +537,127 @@ describe("same-scope collision detection", () => {
 
     await expect(
       loadTuiExtensions(
-        { userDir: collisionDir, projectDir: join(TEST_DIR, "no-project") },
+        {
+          builtinDir: BUILTIN_DIR,
+          userDir: collisionDir,
+          projectDir: join(TEST_DIR, "no-project"),
+        },
         noopCtx,
       ),
     ).rejects.toThrow("Same-scope TUI overlay collision")
 
     rmSync(collisionDir, { recursive: true, force: true })
+  })
+})
+
+describe("border label resolution", () => {
+  test("resolves bottom-left and bottom-right border labels", () => {
+    const extensions: LoadedTuiExtension[] = [
+      {
+        id: "@test/bottom-labels",
+        kind: "user",
+        filePath: "test:bottom-labels",
+        setup: {
+          borderLabels: [
+            {
+              position: "bottom-left",
+              priority: 10,
+              produce: () => [{ text: "tasks: 2", color: "info" }],
+            },
+            {
+              position: "bottom-right",
+              priority: 20,
+              produce: () => [{ text: "v1.0", color: "textMuted" }],
+            },
+          ],
+        },
+      },
+    ]
+
+    const resolved = resolveTuiExtensions(extensions)
+    const bottomLeft = resolved.borderLabels.filter((l) => l.position === "bottom-left")
+    const bottomRight = resolved.borderLabels.filter((l) => l.position === "bottom-right")
+
+    expect(bottomLeft.length).toBe(1)
+    expect(bottomLeft[0]!.produce()).toEqual([{ text: "tasks: 2", color: "info" }])
+
+    expect(bottomRight.length).toBe(1)
+    expect(bottomRight[0]!.produce()).toEqual([{ text: "v1.0", color: "textMuted" }])
+  })
+
+  test("sorts border labels by priority across positions", () => {
+    const extensions: LoadedTuiExtension[] = [
+      {
+        id: "@test/a",
+        kind: "user",
+        filePath: "test:a",
+        setup: {
+          borderLabels: [
+            { position: "bottom-left", priority: 200, produce: () => [{ text: "low", color: "" }] },
+            { position: "bottom-left", priority: 10, produce: () => [{ text: "high", color: "" }] },
+            { position: "top-left", priority: 50, produce: () => [{ text: "mid", color: "" }] },
+          ],
+        },
+      },
+    ]
+
+    const resolved = resolveTuiExtensions(extensions)
+    // Should be sorted: priority 10, 50, 200
+    expect(resolved.borderLabels.map((l) => l.priority)).toEqual([10, 50, 200])
+  })
+})
+
+describe("composerState contract", () => {
+  test("composerState is available on ExtensionClientContext", () => {
+    const state = noopCtx.composerState()
+    expect(state).toEqual({
+      draft: "",
+      mode: "editing",
+      inputFocused: false,
+      autocompleteOpen: false,
+    })
+  })
+
+  test("composerState is passed through to extension setup", async () => {
+    const composerDir = join(TEST_DIR, "composer-ext")
+    mkdirSync(composerDir, { recursive: true })
+    writeFileSync(
+      join(composerDir, "composer.client.ts"),
+      `export default {
+  id: "@test/composer-reader",
+  setup: (ctx) => {
+    // Extensions can read composerState during setup and store the getter
+    const getState = ctx.composerState
+    return {
+      commands: [{
+        id: "test-composer-state",
+        title: "Test",
+        onSelect: () => { getState() },
+      }],
+    }
+  },
+}`,
+    )
+
+    const customCtx: ExtensionClientContext = {
+      ...noopCtx,
+      composerState: () => ({
+        draft: "hello",
+        mode: "shell" as const,
+        inputFocused: true,
+        autocompleteOpen: true,
+      }),
+    }
+
+    // Should not throw — composerState is accessible during setup
+    const resolved = await loadTuiExtensions(
+      { builtinDir: BUILTIN_DIR, userDir: composerDir, projectDir: join(TEST_DIR, "no-project") },
+      customCtx,
+    )
+
+    const cmd = resolved.commands.find((c) => c.id === "test-composer-state")
+    expect(cmd).toBeDefined()
+
+    rmSync(composerDir, { recursive: true, force: true })
   })
 })

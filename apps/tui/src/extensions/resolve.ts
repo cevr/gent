@@ -28,13 +28,13 @@ export interface LoadedTuiExtension {
 
 export interface ResolvedWidget {
   readonly id: string
-  readonly slot: "above-messages" | "below-messages" | "above-input" | "below-input"
+  readonly slot: "below-messages" | "above-input" | "below-input"
   readonly priority: number
   readonly component: SolidComponent
 }
 
 export interface ResolvedBorderLabel {
-  readonly position: "top-left" | "top-right"
+  readonly position: "top-left" | "top-right" | "bottom-left" | "bottom-right"
   readonly priority: number
   readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
 }

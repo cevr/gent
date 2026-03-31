@@ -32,7 +32,10 @@ export function KeyboardScopeProvider(props: ParentProps) {
     for (const entry of stack) {
       if (entry.when?.() === false) continue
       const handled = entry.handler(event) === true
-      if (handled || entry.capture === true) return
+      if (handled || entry.capture === true) {
+        event.stopPropagation()
+        return
+      }
     }
   })
 

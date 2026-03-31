@@ -11,6 +11,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
 // @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os"
+import { join } from "node:path"
 import type { JSX as _JSX } from "@opentui/solid"
 import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
@@ -43,6 +44,15 @@ export interface ExtensionUIContextValue {
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
+  /** Wire composer state reactive getter from the session controller */
+  readonly setComposerStateProvider: (
+    provider: () => {
+      draft: string
+      mode: "editing" | "shell"
+      inputFocused: boolean
+      autocompleteOpen: boolean
+    },
+  ) => void
   /** Server-projected extension state snapshots, keyed by extensionId */
   readonly snapshots: Accessor<ReadonlyMap<string, ExtensionSnapshot>>
   /** Update a server-projected snapshot (called from event stream) */
@@ -88,6 +98,27 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     overlayClose = close
   }
 
+  // Mutable composer state provider — wired by session controller
+  let composerStateProvider:
+    | (() => {
+        draft: string
+        mode: "editing" | "shell"
+        inputFocused: boolean
+        autocompleteOpen: boolean
+      })
+    | undefined
+
+  const setComposerStateProvider = (
+    provider: () => {
+      draft: string
+      mode: "editing" | "shell"
+      inputFocused: boolean
+      autocompleteOpen: boolean
+    },
+  ) => {
+    composerStateProvider = provider
+  }
+
   // Wire extension snapshot events from client event stream
   const clientCtx = useClient()
   clientCtx.onExtensionSnapshot(updateSnapshot)
@@ -103,6 +134,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
 
       const result = await loadTuiExtensions(
         {
+          builtinDir: join(import.meta.dir, "builtins"),
           userDir: `${home}/.gent/extensions`,
           projectDir: `${workspace.cwd}/.gent/extensions`,
           disabled: [...disabledSet],
@@ -138,6 +170,17 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             return { epoch: snap.epoch, model: snap.model }
           },
           sendMessage: (content) => clientCtx.sendMessage(content),
+          composerState: () => {
+            if (composerStateProvider === undefined) {
+              return {
+                draft: "",
+                mode: "editing" as const,
+                inputFocused: false,
+                autocompleteOpen: false,
+              }
+            }
+            return composerStateProvider()
+          },
         },
       )
       setResolved(result)
@@ -160,6 +203,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         borderLabels: () => resolved().borderLabels,
         loading,
         setOverlayDispatch,
+        setComposerStateProvider,
         snapshots,
         updateSnapshot,
         sessionId: () => clientCtx.session()?.sessionId,

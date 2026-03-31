@@ -7,7 +7,7 @@
 import type { InteractionEventTag, ActiveInteractionOf, InteractionResolution } from "./event"
 
 /** Widget placement slots in the session view */
-export type WidgetSlot = "above-messages" | "below-messages" | "above-input" | "below-input"
+export type WidgetSlot = "below-messages" | "above-input" | "below-input"
 
 /** Props passed to an interaction renderer component */
 export interface InteractionRendererProps<T extends InteractionEventTag = InteractionEventTag> {
@@ -87,7 +87,7 @@ export interface ExtensionClientSetup<TComponent = unknown> {
   readonly composerSurface?: TComponent
   /** Border label producers — called each render to contribute labels to the session border */
   readonly borderLabels?: ReadonlyArray<{
-    readonly position: "top-left" | "top-right"
+    readonly position: "top-left" | "top-right" | "bottom-left" | "bottom-right"
     readonly priority?: number
     readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
   }>
@@ -107,6 +107,13 @@ export interface ExtensionClientContext {
   readonly getSnapshot: (extensionId: string) => { epoch: number; model: unknown } | undefined
   /** Send a user message to the active session */
   readonly sendMessage: (content: string) => void
+  /** Reactive composer state */
+  readonly composerState: () => {
+    readonly draft: string
+    readonly mode: "editing" | "shell"
+    readonly inputFocused: boolean
+    readonly autocompleteOpen: boolean
+  }
 }
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */

@@ -443,20 +443,37 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   // Wake checkpointed agent loops on startup so in-flight turns resume
   // without waiting for a client to open the session.
+  // Forked so it doesn't block GENT_WORKER_READY — loop restoration can
+  // take seconds when queued turns replay through the provider.
   const checkpointWakeLive = Layer.effectDiscard(
     Effect.gen(function* () {
       const checkpointStore = yield* CheckpointStorage
       const agentLoop = yield* AgentLoop
-      const checkpoints = yield* checkpointStore
-        .list()
-        .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-      if (checkpoints.length === 0) return
-      for (const cp of checkpoints) {
-        yield* agentLoop
-          .isRunning({ sessionId: cp.sessionId, branchId: cp.branchId })
-          .pipe(Effect.catchEager(() => Effect.succeed(false)))
-      }
-      yield* Effect.log(`Woke ${checkpoints.length} checkpointed agent loop(s)`)
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          const checkpoints = yield* checkpointStore
+            .list()
+            .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+          if (checkpoints.length === 0) return
+          yield* Effect.logInfo("checkpoint-wake.restoring").pipe(
+            Effect.annotateLogs({ count: checkpoints.length }),
+          )
+          for (const cp of checkpoints) {
+            yield* Effect.logInfo("checkpoint-wake.waking").pipe(
+              Effect.annotateLogs({ sessionId: cp.sessionId, branchId: cp.branchId }),
+            )
+            yield* agentLoop
+              .isRunning({ sessionId: cp.sessionId, branchId: cp.branchId })
+              .pipe(Effect.catchEager(() => Effect.succeed(false)))
+            yield* Effect.logInfo("checkpoint-wake.woke").pipe(
+              Effect.annotateLogs({ sessionId: cp.sessionId, branchId: cp.branchId }),
+            )
+          }
+          yield* Effect.logInfo("checkpoint-wake.done").pipe(
+            Effect.annotateLogs({ count: checkpoints.length }),
+          )
+        }),
+      )
     }),
   ).pipe(Layer.provide(Layer.merge(allDeps, agentRuntimeLive)))
 

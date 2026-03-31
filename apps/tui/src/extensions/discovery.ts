@@ -14,7 +14,7 @@ import { join } from "node:path"
 
 export interface DiscoveredTuiExtension {
   readonly filePath: string
-  readonly kind: "user" | "project"
+  readonly kind: "builtin" | "user" | "project"
 }
 
 /** Match *.client.{tsx,ts,js,jsx,mjs} */
@@ -26,7 +26,10 @@ const CLIENT_INDEX_PATTERN = /^client\.(?:[tj]sx?|mjs)$/
 const isClientFile = (entry: string): boolean =>
   CLIENT_FILE_PATTERN.test(entry) || CLIENT_INDEX_PATTERN.test(entry)
 
-const discoverDir = (dir: string, kind: "user" | "project"): DiscoveredTuiExtension[] => {
+const discoverDir = (
+  dir: string,
+  kind: DiscoveredTuiExtension["kind"],
+): DiscoveredTuiExtension[] => {
   if (!existsSync(dir)) return []
 
   const entries = readdirSync(dir)
@@ -65,11 +68,13 @@ const discoverDir = (dir: string, kind: "user" | "project"): DiscoveredTuiExtens
   return results.sort((a, b) => a.filePath.localeCompare(b.filePath))
 }
 
-/** Discover TUI extension files from user and project directories */
+/** Discover TUI extension files from builtin, user, and project directories */
 export const discoverTuiExtensions = (opts: {
+  readonly builtinDir?: string
   readonly userDir: string
   readonly projectDir: string
 }): ReadonlyArray<DiscoveredTuiExtension> => [
+  ...(opts.builtinDir !== undefined ? discoverDir(opts.builtinDir, "builtin") : []),
   ...discoverDir(opts.userDir, "user"),
   ...discoverDir(opts.projectDir, "project"),
 ]

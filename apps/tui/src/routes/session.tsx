@@ -117,12 +117,34 @@ export function Session(props: SessionProps) {
     if (a.phase !== "idle" && controller.elapsed() >= 1000) {
       items.push({ text: formatElapsed(controller.elapsed()), color: theme.textMuted })
     }
+
+    // Extension-contributed labels
+    for (const label of ext.borderLabels()) {
+      if (label.position === "bottom-left") {
+        for (const item of label.produce()) {
+          items.push({ text: item.text, color: resolveColor(item.color) })
+        }
+      }
+    }
+
     return items
   }
 
   const bottomRightLabels = (): BorderLabelItem[] => {
+    const items: BorderLabelItem[] = []
     const label = formatCwdGit(workspace.cwd, workspace.gitRoot(), workspace.gitStatus()?.branch)
-    return [{ text: label, color: theme.textMuted }]
+    items.push({ text: label, color: theme.textMuted })
+
+    // Extension-contributed labels
+    for (const bl of ext.borderLabels()) {
+      if (bl.position === "bottom-right") {
+        for (const item of bl.produce()) {
+          items.push({ text: item.text, color: resolveColor(item.color) })
+        }
+      }
+    }
+
+    return items
   }
 
   return (
@@ -130,7 +152,6 @@ export function Session(props: SessionProps) {
       {/* Messages */}
       <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
         <box flexDirection="column">
-          <ExtensionWidgets slot="above-messages" />
           <MessageList
             items={controller.items()}
             toolsExpanded={controller.toolsExpanded()}

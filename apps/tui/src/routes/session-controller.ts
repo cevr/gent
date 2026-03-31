@@ -143,6 +143,21 @@ export function useSessionController(props: {
     () => dispatchSessionUi({ _tag: "CloseOverlay" }),
   )
 
+  // Wire composer state for extensions — mirrors use-composer-controller's focus logic
+  ext.setComposerStateProvider(() => {
+    const is = interactionState()
+    return {
+      draft: is.draft,
+      mode: is.mode,
+      inputFocused:
+        composerState()._tag !== "interaction" &&
+        !command.paletteOpen() &&
+        !promptSearch.isOpen() &&
+        uiState().overlay._tag === "none",
+      autocompleteOpen: is.autocomplete !== null,
+    }
+  })
+
   const handleComposerEffect = (effect: ComposerEffect | undefined) => {
     if (effect === undefined) return
     const { interaction, result } = effect
