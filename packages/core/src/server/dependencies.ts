@@ -19,7 +19,6 @@ import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { ProviderFactory } from "../providers/provider-factory.js"
 import { AgentActor, AgentLoop } from "../runtime/agent/agent-loop.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/subagent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
@@ -277,14 +276,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
   const fileLockServiceLive = FileLockService.layer
 
-  const providerFactoryLive = Layer.provide(
-    ProviderFactory.Live,
-    Layer.merge(authStoreLive, extensionRegistryLive),
-  )
-  let providerLive = Layer.provide(
-    Provider.Live,
-    Layer.merge(providerFactoryLive, extensionRegistryLive),
-  )
+  let providerLive = Layer.provide(Provider.Live, Layer.merge(authStoreLive, extensionRegistryLive))
   if (providerMode === "debug-scripted") providerLive = DebugProvider()
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
   else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 150 })
@@ -310,7 +302,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     skillsLive,
     extensionRegistryLive,
     fileLockServiceLive,
-    providerFactoryLive,
     providerLive,
   )
 

@@ -2,18 +2,102 @@ import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId, type ToolCallId as ToolCallIdType } from "../domain/ids.js"
+import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
+import type { ProviderAuthInfo } from "../domain/extension.js"
 import {
   streamText,
   generateText,
   tool,
   jsonSchema,
+  type LanguageModel,
   type ToolSet,
   type ModelMessage,
   type ToolModelMessage,
   type ToolResultPart as AIToolResultPart,
 } from "ai"
-import { ProviderFactory } from "./provider-factory"
-import { ExtensionRegistry } from "../runtime/extensions/registry"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry"
+
+// Provider Info
+
+export class ProviderInfo extends Schema.Class<ProviderInfo>("ProviderInfo")({
+  id: Schema.String,
+  name: Schema.String,
+  isCustom: Schema.Boolean,
+}) {}
+
+const parseModelId = (modelId: string): [string, string] | undefined => {
+  const slash = modelId.indexOf("/")
+  if (slash <= 0 || slash === modelId.length - 1) return undefined
+  return [modelId.slice(0, slash), modelId.slice(slash + 1)]
+}
+
+const makeModelResolver = (
+  authStore: AuthStoreService,
+  extensionRegistry: ExtensionRegistryService,
+) => {
+  const resolveAuthFromStore = (providerName: string) =>
+    authStore
+      .get(providerName)
+      .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
+
+  return Effect.fn("Provider.resolveModel")(function* (modelId: string) {
+    const parsed = parseModelId(modelId)
+    if (parsed === undefined) {
+      return yield* new ProviderError({
+        message: "Invalid model id (expected provider/model)",
+        model: modelId,
+      })
+    }
+    const [providerName, modelName] = parsed
+    const services = yield* Effect.services<never>()
+
+    const extensionProvider = yield* extensionRegistry.getProvider(providerName)
+    if (extensionProvider === undefined) {
+      return yield* new ProviderError({
+        message: `Unknown provider: ${providerName}`,
+        model: modelId,
+      })
+    }
+
+    const authInfo = yield* resolveAuthFromStore(providerName)
+    let authParam: ProviderAuthInfo | undefined
+    if (authInfo?.type === "api") {
+      authParam = { type: "api", key: authInfo.key }
+    } else if (authInfo?.type === "oauth") {
+      authParam = {
+        type: "oauth",
+        access: authInfo.access,
+        refresh: authInfo.refresh,
+        expires: authInfo.expires,
+        accountId: authInfo.accountId,
+        persist: (updated) =>
+          Effect.runPromiseWith(services)(
+            authStore
+              .set(
+                providerName,
+                new AuthOauth({
+                  type: "oauth",
+                  access: updated.access,
+                  refresh: updated.refresh,
+                  expires: updated.expires,
+                  ...(updated.accountId !== undefined ? { accountId: updated.accountId } : {}),
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void)),
+          ),
+      }
+    }
+
+    return yield* Effect.try({
+      try: () => extensionProvider.resolveModel(modelName, authParam) as LanguageModel,
+      catch: (e) =>
+        new ProviderError({
+          message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
+          model: modelId,
+        }),
+    })
+  })
+}
 
 type StreamTextResult = ReturnType<typeof streamText>
 type FullStreamPart = StreamTextResult extends { fullStream: AsyncIterable<infer A> } ? A : never
@@ -120,15 +204,16 @@ const resolveProviderOptions = (
 export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
   "@gent/core/src/providers/provider",
 ) {
-  static Live: Layer.Layer<Provider, never, ProviderFactory | ExtensionRegistry> = Layer.effect(
+  static Live: Layer.Layer<Provider, never, AuthStore | ExtensionRegistry> = Layer.effect(
     Provider,
     Effect.gen(function* () {
-      const factory = yield* ProviderFactory
+      const authStore = yield* AuthStore
       const registry = yield* ExtensionRegistry
+      const getModel = makeModelResolver(authStore, registry)
 
       return {
         stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
-          const model = yield* factory.getModel(request.model)
+          const model = yield* getModel(request.model)
 
           const messages = convertMessages(request.messages)
           const tools = request.tools !== undefined ? convertTools(request.tools) : undefined
@@ -228,7 +313,7 @@ export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
         }),
 
         generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
-          const model = yield* factory.getModel(request.model)
+          const model = yield* getModel(request.model)
 
           const opts: Parameters<typeof generateText>[0] = {
             model,
