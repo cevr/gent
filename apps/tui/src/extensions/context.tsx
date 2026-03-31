@@ -6,6 +6,9 @@
  */
 
 import { createContext, useContext, createSignal, onMount, type Accessor, type JSX } from "solid-js"
+import { Layer, ManagedRuntime } from "effect"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
 // @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os"
 import type { JSX as _JSX } from "@opentui/solid"
@@ -20,24 +23,7 @@ import { useClient } from "../client/context"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SolidComponent = (props?: any) => _JSX.Element
 
-/** Read disabledExtensions from a config file, validated through UserConfig schema. */
-const readDisabledFromFile = async (filePath: string): Promise<readonly string[]> => {
-  try {
-    const text = await Bun.file(filePath).text()
-    const data = JSON.parse(text) as { disabledExtensions?: readonly string[] }
-    const disabled = data?.disabledExtensions
-    return Array.isArray(disabled) && disabled.every((s) => typeof s === "string") ? disabled : []
-  } catch {
-    return []
-  }
-}
-
-/** Read disabled extensions from user + project config, same merge semantics as ConfigService. */
-const readDisabledExtensions = async (home: string, cwd: string): Promise<string[]> => {
-  const userDisabled = await readDisabledFromFile(`${home}/.gent/config.json`)
-  const projectDisabled = await readDisabledFromFile(`${cwd}/.gent/config.json`)
-  return [...userDisabled, ...projectDisabled]
-}
+const disabledRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
 
 /** Server-projected UI snapshot from extension state machines */
 export interface ExtensionSnapshot {
@@ -110,14 +96,16 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     try {
       const home = homedir()
 
-      // Read disabled extensions from user + project config (same merge as ConfigService)
-      const disabled = await readDisabledExtensions(home, workspace.cwd)
+      // Read disabled extensions from user + project config (shared with server)
+      const disabledSet = await disabledRuntime.runPromise(
+        readDisabledExtensions({ home, cwd: workspace.cwd }),
+      )
 
       const result = await loadTuiExtensions(
         {
           userDir: `${home}/.gent/extensions`,
           projectDir: `${workspace.cwd}/.gent/extensions`,
-          disabled,
+          disabled: [...disabledSet],
         },
         {
           openOverlay: (id) => overlayOpen(id),

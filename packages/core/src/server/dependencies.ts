@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path, Schema, ServiceMap } from "effect"
+import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -23,7 +23,7 @@ import { AgentActor, AgentLoop } from "../runtime/agent/agent-loop.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/subagent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
-import { ConfigService, UserConfig } from "../runtime/config-service.js"
+import { ConfigService } from "../runtime/config-service.js"
 import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
@@ -69,42 +69,17 @@ const loadBuiltinExtensions = (cwd: string): LoadedExtension[] =>
     setup: Effect.runSync(extension.setup({ cwd, source: "builtin" })),
   }))
 
-/** Read disabledExtensions from a config file, validated through UserConfig schema. */
-const readDisabledFromFile = (filePath: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    return yield* fs.readFileString(filePath).pipe(
-      Effect.flatMap((content) =>
-        Effect.try({
-          try: () => JSON.parse(content) as unknown,
-          catch: () => ({}),
-        }),
-      ),
-      Effect.flatMap((data) => Schema.decodeUnknownEffect(UserConfig)(data)),
-      Effect.map((config) => config.disabledExtensions ?? []),
-      Effect.catchEager(() => Effect.succeed([] as string[])),
-    )
-  })
-
-const readDisabledExtensions = (config: DependenciesConfig) =>
-  Effect.gen(function* () {
-    const configDisabled = config.disabledExtensions ?? []
-    const path = yield* Path.Path
-
-    // Read both user and project config files — same merge semantics as ConfigService
-    const userConfigPath = path.join(config.home, ".gent", "config.json")
-    const projectConfigPath = path.join(config.cwd, ".gent", "config.json")
-    const userDisabled = yield* readDisabledFromFile(userConfigPath)
-    const projectDisabled = yield* readDisabledFromFile(projectConfigPath)
-
-    return new Set([...configDisabled, ...userDisabled, ...projectDisabled])
-  })
+import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
 
 const makeExtensionLayers = (config: DependenciesConfig) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const path = yield* Path.Path
-      const disabledSet = yield* readDisabledExtensions(config)
+      const disabledSet = yield* readDisabledExtensions({
+        home: config.home,
+        cwd: config.cwd,
+        extra: config.disabledExtensions,
+      })
 
       const userExtensionsDir = path.join(config.home, ".gent", "extensions")
       const projectExtensionsDir = path.join(config.cwd, ".gent", "extensions")
