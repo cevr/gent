@@ -282,86 +282,19 @@ export const buildResolvingState = (
     interruptAfterTools: false,
   })
 
-export function updateQueueOnState(state: IdleState, queue: LoopQueueState): IdleState
-export function updateQueueOnState(state: ResolvingState, queue: LoopQueueState): ResolvingState
-export function updateQueueOnState(state: StreamingState, queue: LoopQueueState): StreamingState
-export function updateQueueOnState(
-  state: ExecutingToolsState,
-  queue: LoopQueueState,
-): ExecutingToolsState
-export function updateQueueOnState(state: FinalizingState, queue: LoopQueueState): FinalizingState
-export function updateQueueOnState(state: LoopState, queue: LoopQueueState): LoopState
-export function updateQueueOnState(state: LoopState, queue: LoopQueueState): LoopState {
-  switch (state._tag) {
-    case "Idle":
-      return AgentLoopState.Idle.derive(state, { queue })
-    case "Resolving":
-      return AgentLoopState.Resolving.derive(state, { queue })
-    case "Streaming":
-      return AgentLoopState.Streaming.derive(state, { queue })
-    case "ExecutingTools":
-      return AgentLoopState.ExecutingTools.derive(state, { queue })
-    case "Finalizing":
-      return AgentLoopState.Finalizing.derive(state, { queue })
-  }
-}
+export const updateQueueOnState = <S extends LoopState>(state: S, queue: LoopQueueState): S =>
+  AgentLoopState.derive(state, { queue } as Partial<Omit<S, "_tag">>)
 
-export function updateCurrentAgentOnState(state: IdleState, currentAgent: AgentNameType): IdleState
-export function updateCurrentAgentOnState(
-  state: ResolvingState,
+export const updateCurrentAgentOnState = <S extends LoopState>(
+  state: S,
   currentAgent: AgentNameType,
-): ResolvingState
-export function updateCurrentAgentOnState(
-  state: StreamingState,
-  currentAgent: AgentNameType,
-): StreamingState
-export function updateCurrentAgentOnState(
-  state: ExecutingToolsState,
-  currentAgent: AgentNameType,
-): ExecutingToolsState
-export function updateCurrentAgentOnState(
-  state: FinalizingState,
-  currentAgent: AgentNameType,
-): FinalizingState
-export function updateCurrentAgentOnState(state: LoopState, currentAgent: AgentNameType): LoopState
-export function updateCurrentAgentOnState(
-  state: LoopState,
-  currentAgent: AgentNameType,
-): LoopState {
-  switch (state._tag) {
-    case "Idle":
-      return AgentLoopState.Idle.derive(state, { currentAgent })
-    case "Resolving":
-      return AgentLoopState.Resolving.derive(state, { currentAgent })
-    case "Streaming":
-      return AgentLoopState.Streaming.derive(state, { currentAgent })
-    case "ExecutingTools":
-      return AgentLoopState.ExecutingTools.derive(state, { currentAgent })
-    case "Finalizing":
-      return AgentLoopState.Finalizing.derive(state, { currentAgent })
-  }
-}
+): S => AgentLoopState.derive(state, { currentAgent } as Partial<Omit<S, "_tag">>)
 
 export const markInterruptAfterTools = (state: ExecutingToolsState): ExecutingToolsState =>
-  AgentLoopState.ExecutingTools.derive(state, { interruptAfterTools: true })
+  AgentLoopState.derive(state, { interruptAfterTools: true })
 
-export function markTurnInterrupted(state: ResolvingState): ResolvingState
-export function markTurnInterrupted(state: StreamingState): StreamingState
-export function markTurnInterrupted(state: ExecutingToolsState): ExecutingToolsState
-export function markTurnInterrupted(state: FinalizingState): FinalizingState
-export function markTurnInterrupted(state: ActiveLoopState): ActiveLoopState
-export function markTurnInterrupted(state: ActiveLoopState): ActiveLoopState {
-  switch (state._tag) {
-    case "Resolving":
-      return AgentLoopState.Resolving.derive(state, { turnInterrupted: true })
-    case "Streaming":
-      return AgentLoopState.Streaming.derive(state, { turnInterrupted: true })
-    case "ExecutingTools":
-      return AgentLoopState.ExecutingTools.derive(state, { turnInterrupted: true })
-    case "Finalizing":
-      return AgentLoopState.Finalizing.derive(state, { turnInterrupted: true })
-  }
-}
+export const markTurnInterrupted = <S extends ActiveLoopState>(state: S): S =>
+  AgentLoopState.derive(state, { turnInterrupted: true } as Partial<Omit<S, "_tag">>)
 
 export const toStreamingState = (params: {
   state: ResolvingState

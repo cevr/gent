@@ -104,7 +104,6 @@ import {
   type AssistantDraft,
   type ExecutingToolsState,
   type FinalizingState,
-  type IdleState,
   type LoopActor,
   type LoopRuntimeState,
   type LoopState,
@@ -1306,32 +1305,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               branchId,
             })
 
-            function switchAgentOnState(
-              state: IdleState,
+            const switchAgentOnState = <S extends LoopState>(
+              state: S,
               next: AgentNameType,
-            ): Effect.Effect<IdleState>
-            function switchAgentOnState(
-              state: ResolvingState,
-              next: AgentNameType,
-            ): Effect.Effect<ResolvingState>
-            function switchAgentOnState(
-              state: StreamingState,
-              next: AgentNameType,
-            ): Effect.Effect<StreamingState>
-            function switchAgentOnState(
-              state: ExecutingToolsState,
-              next: AgentNameType,
-            ): Effect.Effect<ExecutingToolsState>
-            function switchAgentOnState(
-              state: FinalizingState,
-              next: AgentNameType,
-            ): Effect.Effect<FinalizingState>
-            function switchAgentOnState(
-              state: LoopState,
-              next: AgentNameType,
-            ): Effect.Effect<LoopState>
-            function switchAgentOnState(state: LoopState, next: AgentNameType) {
-              return Effect.gen(function* () {
+            ): Effect.Effect<S> =>
+              Effect.gen(function* () {
                 const previous = state.currentAgent ?? "cowork"
                 if (previous === next) return state
                 const resolved = yield* extensionRegistry.getAgent(next)
@@ -1353,8 +1331,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 )
 
                 return updateCurrentAgentOnState(state, next)
-              }).pipe(Effect.orDie)
-            }
+              }).pipe(Effect.orDie) as Effect.Effect<S>
 
             const runResolvingState = Effect.fn("AgentLoop.runResolvingState")(function* (
               state: ResolvingState,
