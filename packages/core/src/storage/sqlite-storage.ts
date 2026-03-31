@@ -6,11 +6,6 @@ import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import type { ReasoningEffort } from "../domain/agent.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
-import type { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
-import type {
-  InteractionRequestRecord,
-  InteractionRequestStatus,
-} from "../domain/interaction-request.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
@@ -118,26 +113,6 @@ export interface StorageService {
     StorageError
   >
 
-  // Search
-  readonly searchMessages: (
-    query: string,
-    options?: {
-      sessionId?: string
-      dateAfter?: number
-      dateBefore?: number
-      limit?: number
-    },
-  ) => Effect.Effect<
-    ReadonlyArray<{
-      sessionId: string
-      sessionName: string | null
-      branchId: string
-      snippet: string
-      createdAt: number
-    }>,
-    StorageError
-  >
-
   // Extension state persistence
   readonly saveExtensionState: (params: {
     sessionId: SessionId
@@ -149,37 +124,6 @@ export interface StorageService {
     sessionId: SessionId
     extensionId: string
   }) => Effect.Effect<{ stateJson: string; version: number } | undefined, StorageError>
-
-  // Durable loop checkpoints
-  readonly upsertAgentLoopCheckpoint: (
-    record: AgentLoopCheckpointRecord,
-  ) => Effect.Effect<AgentLoopCheckpointRecord, StorageError>
-  readonly getAgentLoopCheckpoint: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<AgentLoopCheckpointRecord | undefined, StorageError>
-  readonly listAgentLoopCheckpoints: () => Effect.Effect<
-    ReadonlyArray<AgentLoopCheckpointRecord>,
-    StorageError
-  >
-  readonly deleteAgentLoopCheckpoint: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<void, StorageError>
-
-  // Durable interaction requests
-  readonly persistInteractionRequest: (
-    record: InteractionRequestRecord,
-  ) => Effect.Effect<InteractionRequestRecord, StorageError>
-  readonly resolveInteractionRequest: (requestId: string) => Effect.Effect<void, StorageError>
-  readonly listPendingInteractionRequests: () => Effect.Effect<
-    ReadonlyArray<InteractionRequestRecord>,
-    StorageError
-  >
-  readonly deletePendingInteractionRequests: (
-    sessionId: SessionId,
-    branchId: BranchId,
-  ) => Effect.Effect<void, StorageError>
 }
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
@@ -226,35 +170,6 @@ interface EventRow {
   created_at: number
   trace_id: string | null
 }
-
-interface AgentLoopCheckpointRow {
-  session_id: SessionId
-  branch_id: BranchId
-  version: number
-  state_tag: string
-  state_json: string
-  updated_at: number
-}
-
-interface InteractionRequestRow {
-  request_id: string
-  type: string
-  session_id: SessionId
-  branch_id: BranchId
-  params_json: string
-  status: string
-  created_at: number
-}
-
-const interactionRequestFromRow = (row: InteractionRequestRow): InteractionRequestRecord => ({
-  requestId: row.request_id,
-  type: row.type as InteractionRequestRecord["type"],
-  sessionId: row.session_id,
-  branchId: row.branch_id,
-  paramsJson: row.params_json,
-  status: row.status as InteractionRequestStatus,
-  createdAt: row.created_at,
-})
 
 const VALID_REASONING = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
 
@@ -307,15 +222,6 @@ const safeJsonParse = (s: string): unknown => {
     return undefined
   }
 }
-
-const agentLoopCheckpointFromRow = (row: AgentLoopCheckpointRow): AgentLoopCheckpointRecord => ({
-  sessionId: row.session_id,
-  branchId: row.branch_id,
-  version: row.version,
-  stateTag: row.state_tag,
-  stateJson: row.state_json,
-  updatedAt: row.updated_at,
-})
 
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -923,50 +829,6 @@ const makeStorage = Effect.gen(function* () {
       Effect.mapError(mapError("Failed to get session detail")),
     ),
 
-    // Search
-    searchMessages: Effect.fn("Storage.searchMessages")(
-      function* (query, options) {
-        const limit = options?.limit ?? 20
-        const sessionFilter = options?.sessionId
-        const dateAfter = options?.dateAfter
-        const dateBefore = options?.dateBefore
-
-        // Build FTS query — escape special chars for FTS5
-        const ftsQuery = query.replace(/['"]/g, "")
-
-        // Use raw SQL to build dynamic WHERE clauses
-        let whereExtra = ""
-        if (sessionFilter !== undefined) {
-          whereExtra += ` AND m.session_id = '${sessionFilter.replace(/'/g, "''")}'`
-        }
-        if (dateAfter !== undefined) {
-          whereExtra += ` AND m.created_at > ${dateAfter}`
-        }
-        if (dateBefore !== undefined) {
-          whereExtra += ` AND m.created_at < ${dateBefore}`
-        }
-
-        const rows = yield* sql.unsafe<{
-          session_id: string
-          session_name: string | null
-          branch_id: string
-          snippet_text: string
-          created_at: number
-        }>(
-          `SELECT m.session_id, s.name as session_name, m.branch_id, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet_text, m.created_at FROM messages_fts fts JOIN messages m ON m.id = fts.message_id JOIN sessions s ON s.id = m.session_id WHERE messages_fts MATCH '${ftsQuery.replace(/'/g, "''")}'${whereExtra} ORDER BY m.created_at DESC LIMIT ${limit}`,
-        )
-
-        return rows.map((row) => ({
-          sessionId: row.session_id,
-          sessionName: row.session_name,
-          branchId: row.branch_id,
-          snippet: row.snippet_text,
-          createdAt: row.created_at,
-        }))
-      },
-      Effect.mapError(mapError("Failed to search messages")),
-    ),
-
     saveExtensionState: Effect.fn("Storage.saveExtensionState")(
       function* (params: {
         sessionId: SessionId
@@ -991,73 +853,6 @@ const makeStorage = Effect.gen(function* () {
         return { stateJson: row.state_json, version: row.version }
       },
       Effect.mapError(mapError("Failed to load extension state")),
-    ),
-
-    upsertAgentLoopCheckpoint: Effect.fn("Storage.upsertAgentLoopCheckpoint")(
-      function* (record) {
-        yield* sql`INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (${record.sessionId}, ${record.branchId}, ${record.version}, ${record.stateTag}, ${record.stateJson}, ${record.updatedAt}) ON CONFLICT(session_id, branch_id) DO UPDATE SET version = excluded.version, state_tag = excluded.state_tag, state_json = excluded.state_json, updated_at = excluded.updated_at`
-        return record
-      },
-      Effect.mapError(mapError("Failed to upsert agent loop checkpoint")),
-    ),
-
-    getAgentLoopCheckpoint: Effect.fn("Storage.getAgentLoopCheckpoint")(
-      function* (input) {
-        const rows =
-          yield* sql<AgentLoopCheckpointRow>`SELECT session_id, branch_id, version, state_tag, state_json, updated_at FROM agent_loop_checkpoints WHERE session_id = ${input.sessionId} AND branch_id = ${input.branchId}`
-        const row = rows[0]
-        return row === undefined ? undefined : agentLoopCheckpointFromRow(row)
-      },
-      Effect.mapError(mapError("Failed to get agent loop checkpoint")),
-    ),
-
-    listAgentLoopCheckpoints: Effect.fn("Storage.listAgentLoopCheckpoints")(
-      function* () {
-        const rows =
-          yield* sql<AgentLoopCheckpointRow>`SELECT session_id, branch_id, version, state_tag, state_json, updated_at FROM agent_loop_checkpoints ORDER BY updated_at ASC`
-        return rows.map(agentLoopCheckpointFromRow)
-      },
-      Effect.mapError(mapError("Failed to list agent loop checkpoints")),
-    ),
-
-    deleteAgentLoopCheckpoint: Effect.fn("Storage.deleteAgentLoopCheckpoint")(
-      function* (input) {
-        yield* sql`DELETE FROM agent_loop_checkpoints WHERE session_id = ${input.sessionId} AND branch_id = ${input.branchId}`
-      },
-      Effect.mapError(mapError("Failed to delete agent loop checkpoint")),
-    ),
-
-    // Durable interaction requests
-
-    persistInteractionRequest: Effect.fn("Storage.persistInteractionRequest")(
-      function* (record) {
-        yield* sql`INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (${record.requestId}, ${record.type}, ${record.sessionId}, ${record.branchId}, ${record.paramsJson}, ${record.status}, ${record.createdAt})`
-        return record
-      },
-      Effect.mapError(mapError("Failed to persist interaction request")),
-    ),
-
-    resolveInteractionRequest: Effect.fn("Storage.resolveInteractionRequest")(
-      function* (requestId) {
-        yield* sql`UPDATE interaction_requests SET status = 'resolved' WHERE request_id = ${requestId}`
-      },
-      Effect.mapError(mapError("Failed to resolve interaction request")),
-    ),
-
-    listPendingInteractionRequests: Effect.fn("Storage.listPendingInteractionRequests")(
-      function* () {
-        const rows =
-          yield* sql<InteractionRequestRow>`SELECT request_id, type, session_id, branch_id, params_json, status, created_at FROM interaction_requests WHERE status = 'pending' ORDER BY created_at ASC`
-        return rows.map(interactionRequestFromRow)
-      },
-      Effect.mapError(mapError("Failed to list pending interaction requests")),
-    ),
-
-    deletePendingInteractionRequests: Effect.fn("Storage.deletePendingInteractionRequests")(
-      function* (sessionId, branchId) {
-        yield* sql`DELETE FROM interaction_requests WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND status = 'pending'`
-      },
-      Effect.mapError(mapError("Failed to delete pending interaction requests")),
     ),
   } satisfies StorageService
 })
