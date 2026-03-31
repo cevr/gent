@@ -1,16 +1,14 @@
-import { Effect } from "effect"
-import { defineExtension } from "../domain/extension.js"
+import { extension } from "./api.js"
 import { TaskCreateTool } from "../tools/task-create.js"
 import { TaskListTool } from "../tools/task-list.js"
 import { TaskGetTool } from "../tools/task-get.js"
 import { TaskUpdateTool } from "../tools/task-update.js"
 import { TaskStorage } from "../storage/task-storage.js"
 
-export const TaskToolsExtension = defineExtension({
-  manifest: { id: "@gent/task-tools" },
-  setup: () =>
-    Effect.succeed({
-      tools: [TaskCreateTool, TaskListTool, TaskGetTool, TaskUpdateTool],
-      layer: TaskStorage.Live,
-    }),
+export const TaskToolsExtension = extension("@gent/task-tools", (ext) => {
+  ext.tool(TaskCreateTool)
+  ext.tool(TaskListTool)
+  ext.tool(TaskGetTool)
+  ext.tool(TaskUpdateTool)
+  ext.layer(TaskStorage.Live)
 })

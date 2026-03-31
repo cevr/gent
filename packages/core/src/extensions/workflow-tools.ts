@@ -1,12 +1,8 @@
-import { Effect } from "effect"
-import { defineExtension } from "../domain/extension.js"
+import { extension } from "./api.js"
 import { PlanTool } from "../tools/plan.js"
 import { AuditTool } from "../tools/audit.js"
 
-export const WorkflowToolsExtension = defineExtension({
-  manifest: { id: "@gent/workflow-tools" },
-  setup: () =>
-    Effect.succeed({
-      tools: [PlanTool, AuditTool],
-    }),
+export const WorkflowToolsExtension = extension("@gent/workflow-tools", (ext) => {
+  ext.tool(PlanTool)
+  ext.tool(AuditTool)
 })

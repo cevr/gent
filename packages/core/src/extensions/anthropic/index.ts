@@ -1,6 +1,5 @@
 import { Clock, Effect } from "effect"
-import { createAnthropic } from "@ai-sdk/anthropic"
-import { defineExtension } from "../../domain/extension.js"
+import { extension } from "../api.js"
 import type { ProviderAuthInfo, ProviderContribution } from "../../domain/extension.js"
 import {
   createAnthropicKeychainFetch,
@@ -10,6 +9,7 @@ import {
   type AnthropicKeychainEnv,
 } from "./oauth.js"
 import { AuthMethod } from "../../domain/auth-method.js"
+import { createAnthropic } from "@ai-sdk/anthropic"
 
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).
 // Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
@@ -97,95 +97,89 @@ const loadCredentialsEffect = (
 const buildCredentialLoader = (cache: CredentialCache, authInfo?: ProviderAuthInfo) => () =>
   Effect.runPromise(loadCredentialsEffect(cache, authInfo))
 
-export const AnthropicExtension = defineExtension({
-  manifest: { id: "@gent/provider-anthropic" },
-  setup: () =>
-    Effect.sync(() => {
-      const env: AnthropicKeychainEnv = {
-        betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
-        cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
-        userAgent: readEnv("ANTHROPIC_USER_AGENT"),
+export const AnthropicExtension = extension("@gent/provider-anthropic", (ext) => {
+  const env: AnthropicKeychainEnv = {
+    betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
+    cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
+    userAgent: readEnv("ANTHROPIC_USER_AGENT"),
+  }
+  initAnthropicKeychainEnv(env)
+
+  // Credential cache owned by this extension closure
+  const credentialCache: CredentialCache = { creds: null, at: 0 }
+
+  // Maps gent reasoning level to Anthropic effort (Anthropic caps at "high")
+  const ANTHROPIC_EFFORT: Record<string, string> = {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "high",
+  }
+
+  const anthropicProvider: ProviderContribution = {
+    id: "anthropic",
+    name: "Anthropic",
+    buildOptions: (_modelId, reasoning, existing) => {
+      const existingRec = existing as Record<string, unknown> | undefined
+      const existingAnthropic = existingRec?.["anthropic"] as Record<string, unknown> | undefined
+      const anthropicOpts: Record<string, unknown> = {
+        ...existingAnthropic,
+        cacheControl: { type: "ephemeral" },
       }
-      initAnthropicKeychainEnv(env)
-
-      // Credential cache owned by this extension closure
-      const credentialCache: CredentialCache = { creds: null, at: 0 }
-
-      // Maps gent reasoning level to Anthropic effort (Anthropic caps at "high")
-      const ANTHROPIC_EFFORT: Record<string, string> = {
-        minimal: "low",
-        low: "low",
-        medium: "medium",
-        high: "high",
-        xhigh: "high",
+      if (reasoning !== undefined && reasoning !== "none") {
+        anthropicOpts["thinking"] = { type: "adaptive" }
+        const effort = ANTHROPIC_EFFORT[reasoning]
+        if (effort !== undefined) anthropicOpts["effort"] = effort
       }
+      return { ...existingRec, anthropic: anthropicOpts }
+    },
+    resolveModel: (modelName, authInfo) => {
+      // Precedence: stored API key > env API key > keychain/OAuth
+      const storedApiKey =
+        authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
+      const envApiKey = readEnv("ANTHROPIC_API_KEY")
+      const apiKey = storedApiKey ?? envApiKey
 
-      const anthropicProvider: ProviderContribution = {
-        id: "anthropic",
-        name: "Anthropic",
-        buildOptions: (_modelId, reasoning, existing) => {
-          const existingRec = existing as Record<string, unknown> | undefined
-          const existingAnthropic = existingRec?.["anthropic"] as
-            | Record<string, unknown>
-            | undefined
-          const anthropicOpts: Record<string, unknown> = {
-            ...existingAnthropic,
-            cacheControl: { type: "ephemeral" },
-          }
-          if (reasoning !== undefined && reasoning !== "none") {
-            anthropicOpts["thinking"] = { type: "adaptive" }
-            const effort = ANTHROPIC_EFFORT[reasoning]
-            if (effort !== undefined) anthropicOpts["effort"] = effort
-          }
-          return { ...existingRec, anthropic: anthropicOpts }
-        },
-        resolveModel: (modelName, authInfo) => {
-          // Precedence: stored API key > env API key > keychain/OAuth
-          const storedApiKey =
-            authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-          const envApiKey = readEnv("ANTHROPIC_API_KEY")
-          const apiKey = storedApiKey ?? envApiKey
-
-          if (apiKey !== undefined) {
-            return createAnthropic({ apiKey })(modelName)
-          }
-
-          // Fall back to keychain/OAuth with extension-owned credential cache
-          const loadCredentials = buildCredentialLoader(credentialCache, authInfo)
-          const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
-          return createAnthropic({
-            apiKey: "oauth-placeholder",
-            fetch: keychainFetch,
-          })(modelName)
-        },
-        auth: {
-          methods: [
-            new AuthMethod({ type: "oauth", label: "Claude Code" }),
-            new AuthMethod({ type: "api", label: "Manually enter API key" }),
-          ],
-          authorize: (ctx) =>
-            Effect.gen(function* () {
-              if (ctx.methodIndex !== 0) return undefined
-              let creds = yield* readClaudeCodeCredentials()
-              if (creds.expiresAt < (yield* Clock.currentTimeMillis) + 60_000) {
-                yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
-                creds = yield* readClaudeCodeCredentials()
-              }
-              // Persist keychain creds to AuthStore
-              yield* ctx.persist({
-                type: "oauth",
-                access: creds.accessToken,
-                refresh: creds.refreshToken,
-                expires: creds.expiresAt,
-              })
-              return {
-                url: "" as string,
-                method: "done" as const,
-              }
-            }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
-        },
+      if (apiKey !== undefined) {
+        return createAnthropic({ apiKey })(modelName)
       }
 
-      return { providers: [anthropicProvider] }
-    }),
+      // Fall back to keychain/OAuth with extension-owned credential cache
+      const loadCredentials = buildCredentialLoader(credentialCache, authInfo)
+      const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
+      return createAnthropic({
+        apiKey: "oauth-placeholder",
+        fetch: keychainFetch,
+      })(modelName)
+    },
+    auth: {
+      methods: [
+        new AuthMethod({ type: "oauth", label: "Claude Code" }),
+        new AuthMethod({ type: "api", label: "Manually enter API key" }),
+      ],
+      authorize: (ctx) =>
+        Effect.gen(function* () {
+          if (ctx.methodIndex !== 0) return undefined
+          let creds = yield* readClaudeCodeCredentials()
+          if (creds.expiresAt < (yield* Clock.currentTimeMillis) + 60_000) {
+            yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
+            creds = yield* readClaudeCodeCredentials()
+          }
+          // Persist keychain creds to AuthStore
+          yield* ctx.persist({
+            type: "oauth",
+            access: creds.accessToken,
+            refresh: creds.refreshToken,
+            expires: creds.expiresAt,
+          })
+          return {
+            url: "" as string,
+            method: "done" as const,
+          }
+        }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+    },
+  }
+
+  ext.provider(anthropicProvider)
 })

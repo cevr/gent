@@ -1,11 +1,6 @@
-import { Effect } from "effect"
-import { defineExtension } from "../domain/extension.js"
+import { extension } from "./api.js"
 import { BashTool } from "../tools/bash.js"
 
-export const ExecToolsExtension = defineExtension({
-  manifest: { id: "@gent/exec-tools" },
-  setup: () =>
-    Effect.succeed({
-      tools: [BashTool],
-    }),
+export const ExecToolsExtension = extension("@gent/exec-tools", (ext) => {
+  ext.tool(BashTool)
 })

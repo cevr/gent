@@ -507,11 +507,19 @@ export const extension = (
           onShutdownEffect: (e) => shutdownEffects.push(e),
         }
 
-        // Run factory (async-capable, sync works too)
-        yield* Effect.tryPromise({
-          try: () => Promise.resolve(factory(builder, ctx)),
+        // Run factory — sync factories stay sync (no Promise.resolve tick)
+        const factoryResult = Effect.try({
+          try: () => factory(builder, ctx),
           catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
         })
+        const result = yield* factoryResult
+        // If factory returned a Promise, await it
+        if (result !== undefined && typeof (result as Promise<void>).then === "function") {
+          yield* Effect.tryPromise({
+            try: () => result as Promise<void>,
+            catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
+          })
+        }
 
         // Resolve actor from state() or actor()
         let spawnActor: ExtensionSetup["spawnActor"]
