@@ -76,8 +76,10 @@ describe("AgentExecutionOverrides", () => {
             modelId: "custom/model" as ModelId,
             allowedActions: ["read", "edit"],
             allowedTools: ["bash", "grep"],
+            deniedTools: ["write"],
             reasoningEffort: "high",
             systemPromptAddendum: "Extra instructions",
+            tags: ["auto-loop"],
           },
         })
 
@@ -85,8 +87,10 @@ describe("AgentExecutionOverrides", () => {
         expect(capturedInput!.modelId).toBe("custom/model")
         expect(capturedInput!.overrideAllowedActions).toEqual(["read", "edit"])
         expect(capturedInput!.overrideAllowedTools).toEqual(["bash", "grep"])
+        expect(capturedInput!.overrideDeniedTools).toEqual(["write"])
         expect(capturedInput!.overrideReasoningEffort).toBe("high")
         expect(capturedInput!.overrideSystemPromptAddendum).toBe("Extra instructions")
+        expect(capturedInput!.tags).toEqual(["auto-loop"])
       }).pipe(Effect.provide(layer)),
     )
   })

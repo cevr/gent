@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Agents, resolveAgentModel } from "@gent/core/domain/agent"
 
-describe("AgentExecutionOverrides", () => {
+describe("Built-in Agent Definitions", () => {
   test("auditor agent exists and is a subagent", () => {
     expect(Agents.auditor).toBeDefined()
     expect(Agents.auditor.kind).toBe("subagent")

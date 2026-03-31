@@ -152,4 +152,37 @@ describe("compileToolPolicy", () => {
     expect(promptSections).toHaveLength(2)
     expect(promptSections.map((s) => s.id)).toEqual(["ext-a", "ext-b"])
   })
+
+  test("interactive tools filtered when context.interactive is false", () => {
+    const interactiveTool = defineTool({
+      name: "ask_user",
+      action: "interact",
+      interactive: true,
+      concurrency: "parallel",
+      description: "ask_user",
+      params: Schema.Struct({}),
+      execute: () => Effect.succeed(null),
+    })
+    const nonInteractiveTool = makeTool("read", "read")
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const ctx = { ...emptyCtx, interactive: false as const }
+    const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [], [])
+    expect(names(tools)).toEqual(["read"])
+    expect(names(tools)).not.toContain("ask_user")
+  })
+
+  test("interactive tools kept when context.interactive is not false", () => {
+    const interactiveTool = defineTool({
+      name: "ask_user",
+      action: "interact",
+      interactive: true,
+      concurrency: "parallel",
+      description: "ask_user",
+      params: Schema.Struct({}),
+      execute: () => Effect.succeed(null),
+    })
+    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [], [])
+    expect(names(tools)).toContain("ask_user")
+  })
 })

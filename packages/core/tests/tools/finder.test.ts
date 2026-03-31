@@ -32,6 +32,15 @@ const mockRunnerError = Layer.succeed(SubagentRunnerService, {
     }),
 })
 
+const mockRunnerErrorWithSession = Layer.succeed(SubagentRunnerService, {
+  run: () =>
+    Effect.succeed({
+      _tag: "error" as const,
+      error: "runner failed",
+      sessionId: "error-session" as SessionId,
+    }),
+})
+
 const TestExtRegistry = ExtensionRegistry.fromResolved(
   resolveExtensions([
     {
@@ -79,6 +88,28 @@ describe("FinderTool", () => {
     return FinderTool.execute({ query: "find something" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.response).toContain("\n\nFull session: session://child-session")
+      }),
+      Effect.provide(layer),
+    )
+  })
+
+  it.live("error path includes session ref when sessionId present", () => {
+    const layer = Layer.mergeAll(mockRunnerErrorWithSession, platformLayer)
+    return FinderTool.execute({ query: "find something" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.found).toBe(false)
+        expect(result.error).toContain("session://error-session")
+      }),
+      Effect.provide(layer),
+    )
+  })
+
+  it.live("error path omits session ref when sessionId absent", () => {
+    const layer = Layer.mergeAll(mockRunnerError, platformLayer)
+    return FinderTool.execute({ query: "find something" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.error).toBe("runner failed")
+        expect(result.error).not.toContain("session://")
       }),
       Effect.provide(layer),
     )

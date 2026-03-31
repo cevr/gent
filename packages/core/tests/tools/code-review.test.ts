@@ -1,7 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { FinderTool } from "@gent/core/tools/finder"
 import { CodeReviewTool } from "@gent/core/tools/code-review"
 import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
 import type { ToolContext } from "@gent/core/domain/tool"
@@ -16,23 +15,6 @@ const ctx: ToolContext = {
   branchId: "test-branch",
   toolCallId: "test-call",
 }
-
-const mockRunnerError = Layer.succeed(SubagentRunnerService, {
-  run: () =>
-    Effect.succeed({
-      _tag: "error" as const,
-      error: "runner failed",
-    }),
-})
-
-const mockRunnerErrorWithSession = Layer.succeed(SubagentRunnerService, {
-  run: () =>
-    Effect.succeed({
-      _tag: "error" as const,
-      error: "runner failed",
-      sessionId: "error-session" as SessionId,
-    }),
-})
 
 const TestExtRegistry = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -213,28 +195,6 @@ describe("CodeReviewTool", () => {
     return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.session).toBe("session://child")
-      }),
-      Effect.provide(layer),
-    )
-  })
-
-  it.live("error path includes session ref when sessionId present", () => {
-    const layer = Layer.mergeAll(mockRunnerErrorWithSession, platformLayer)
-    return FinderTool.execute({ query: "find something" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.found).toBe(false)
-        expect(result.error).toContain("session://error-session")
-      }),
-      Effect.provide(layer),
-    )
-  })
-
-  it.live("error path omits session ref when sessionId absent", () => {
-    const layer = Layer.mergeAll(mockRunnerError, platformLayer)
-    return FinderTool.execute({ query: "find something" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.error).toBe("runner failed")
-        expect(result.error).not.toContain("session://")
       }),
       Effect.provide(layer),
     )
