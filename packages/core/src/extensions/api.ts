@@ -5,9 +5,9 @@
  *
  * @example
  * ```ts
- * import { simpleExtension } from "@gent/core/extensions/api"
+ * import { extension } from "@gent/core/extensions/api"
  *
- * export default simpleExtension("my-ext", async (ext, ctx) => {
+ * export default extension("my-ext", async (ext, ctx) => {
  *   ext.tool({
  *     name: "greet",
  *     description: "Say hello",
@@ -343,7 +343,7 @@ export interface SimpleExtensionContext {
  * @param factory Builder function — call methods on `ext` to register contributions
  * @returns A GentExtension compatible with the extension loader
  */
-export const simpleExtension = (
+export const extension = (
   id: string,
   factory: (ext: ExtensionBuilder, ctx: SimpleExtensionContext) => void | Promise<void>,
 ): GentExtension =>
@@ -391,7 +391,7 @@ export const simpleExtension = (
 
           state: (config) => {
             if (stateConfig !== undefined) {
-              throw new Error(`simpleExtension "${id}": ext.state() can only be called once`)
+              throw new Error(`extension "${id}": ext.state() can only be called once`)
             }
             stateConfig = config
           },

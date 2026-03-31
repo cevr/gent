@@ -3,9 +3,9 @@
  *
  * Tracks turn count and injects it into the system prompt.
  */
-import { simpleExtension } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
 
-export default simpleExtension("turn-counter", (ext) => {
+export default extension("turn-counter", (ext) => {
   ext.state({
     initial: { turns: 0 },
     reduce: (state, event) => {

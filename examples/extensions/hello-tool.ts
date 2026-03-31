@@ -3,9 +3,9 @@
  *
  * Place in ~/.gent/extensions/ or .gent/extensions/
  */
-import { simpleExtension } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
 
-export default simpleExtension("hello-tool", (ext) => {
+export default extension("hello-tool", (ext) => {
   ext.tool({
     name: "hello",
     description: "Say hello to someone",

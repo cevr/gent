@@ -2,7 +2,7 @@
 
 ## Overview
 
-Extensions add tools, agents, prompt sections, hooks, and stateful behaviors to gent. Use `simpleExtension` for the imperative API (no Effect/Schema knowledge required). Use `defineExtension` for internal/builtin extensions that need full Effect access.
+Extensions add tools, agents, prompt sections, hooks, and stateful behaviors to gent. Use `extension` for the imperative API (no Effect/Schema knowledge required). Use `defineExtension` for internal/builtin extensions that need full Effect access.
 
 ## Discovery
 
@@ -34,12 +34,12 @@ Create `.gent/disabled-extensions.json`:
 
 Both `~/.gent/disabled-extensions.json` (user-level) and `.gent/disabled-extensions.json` (project-level) are merged.
 
-## simpleExtension API
+## extension API
 
 ```ts
-import { simpleExtension } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
 
-export default simpleExtension("my-ext", async (ext, ctx) => {
+export default extension("my-ext", async (ext, ctx) => {
   // ctx.cwd — project working directory
   // ctx.source — path to this extension file
 })

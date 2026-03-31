@@ -1,15 +1,15 @@
 import { describe, test, expect, beforeAll } from "bun:test"
 import { Effect, Layer } from "effect"
-import { simpleExtension } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Permission } from "@gent/core/domain/permission"
 import { PermissionHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
 
-describe("simpleExtension", () => {
+describe("extension", () => {
   test("creates a valid extension with tools", async () => {
-    const ext = simpleExtension("test-simple", (b) => {
+    const ext = extension("test-simple", (b) => {
       b.tool({
         name: "greet",
         description: "Say hello",
@@ -26,7 +26,7 @@ describe("simpleExtension", () => {
   })
 
   test("tool execute works with async function", async () => {
-    const ext = simpleExtension("test-async", (b) => {
+    const ext = extension("test-async", (b) => {
       b.tool({
         name: "add",
         description: "Add numbers",
@@ -51,7 +51,7 @@ describe("simpleExtension", () => {
   })
 
   test("tool execute works with sync function", async () => {
-    const ext = simpleExtension("test-sync", (b) => {
+    const ext = extension("test-sync", (b) => {
       b.tool({
         name: "echo",
         description: "Echo input",
@@ -75,7 +75,7 @@ describe("simpleExtension", () => {
   })
 
   test("registers prompt sections", async () => {
-    const ext = simpleExtension("test-sections", (b) => {
+    const ext = extension("test-sections", (b) => {
       b.promptSection({ id: "custom-rules", content: "Be nice.", priority: 50 })
     })
 
@@ -86,7 +86,7 @@ describe("simpleExtension", () => {
   })
 
   test("registers agents", async () => {
-    const ext = simpleExtension("test-agent", (b) => {
+    const ext = extension("test-agent", (b) => {
       b.agent({
         name: "helper",
         model: "test/model",
@@ -100,7 +100,7 @@ describe("simpleExtension", () => {
   })
 
   test("integrates with extension registry", async () => {
-    const ext = simpleExtension("registry-test", (b) => {
+    const ext = extension("registry-test", (b) => {
       b.tool({
         name: "my_tool",
         description: "test tool",
@@ -132,7 +132,7 @@ describe("simpleExtension", () => {
   })
 
   test("empty extension produces valid setup", async () => {
-    const ext = simpleExtension("empty", () => {})
+    const ext = extension("empty", () => {})
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
     expect(setup.tools).toBeUndefined()
     expect(setup.agents).toBeUndefined()
@@ -140,8 +140,8 @@ describe("simpleExtension", () => {
   })
 })
 
-describe("simpleExtension through ToolRunner.run", () => {
-  const ext = simpleExtension("runner-test", (b) => {
+describe("extension through ToolRunner.run", () => {
+  const ext = extension("runner-test", (b) => {
     b.tool({
       name: "format",
       description: "Formats a greeting",
@@ -238,9 +238,9 @@ describe("simpleExtension through ToolRunner.run", () => {
   })
 })
 
-describe("simpleExtension async factory", () => {
+describe("extension async factory", () => {
   test("supports async factory", async () => {
-    const ext = simpleExtension("async-factory", async (b) => {
+    const ext = extension("async-factory", async (b) => {
       await Promise.resolve()
       b.tool({ name: "delayed", description: "Added async", execute: async () => "ok" })
     })
@@ -253,7 +253,7 @@ describe("simpleExtension async factory", () => {
   test("receives setup context", async () => {
     let receivedCwd = ""
     let receivedSource = ""
-    const ext = simpleExtension("ctx-test", (_b, ctx) => {
+    const ext = extension("ctx-test", (_b, ctx) => {
       receivedCwd = ctx.cwd
       receivedSource = ctx.source
     })
@@ -264,7 +264,7 @@ describe("simpleExtension async factory", () => {
   })
 
   test("factory error maps to ExtensionLoadError", async () => {
-    const ext = simpleExtension("fail-factory", () => {
+    const ext = extension("fail-factory", () => {
       throw new Error("factory broke")
     })
 
@@ -273,9 +273,9 @@ describe("simpleExtension async factory", () => {
   })
 })
 
-describe("simpleExtension hooks", () => {
+describe("extension hooks", () => {
   test("ext.on registers interceptors", async () => {
-    const ext = simpleExtension("hook-test", (b) => {
+    const ext = extension("hook-test", (b) => {
       b.on("prompt.system", async (input, next) => {
         const result = await next(input)
         return result + "\n-- Added by extension"
@@ -289,7 +289,7 @@ describe("simpleExtension hooks", () => {
   })
 
   test("ext.on turn.after registers fire-and-forget hook", async () => {
-    const ext = simpleExtension("turn-after-test", (b) => {
+    const ext = extension("turn-after-test", (b) => {
       b.on("turn.after", async () => {
         // side effect
       })
@@ -300,10 +300,10 @@ describe("simpleExtension hooks", () => {
   })
 })
 
-describe("simpleExtension lifecycle", () => {
+describe("extension lifecycle", () => {
   test("onStartup runs at setup time", async () => {
     let started = false
-    const ext = simpleExtension("startup-test", (b) => {
+    const ext = extension("startup-test", (b) => {
       b.onStartup(() => {
         started = true
       })
@@ -318,7 +318,7 @@ describe("simpleExtension lifecycle", () => {
 
   test("multiple onStartup compose in order", async () => {
     const order: number[] = []
-    const ext = simpleExtension("multi-startup", (b) => {
+    const ext = extension("multi-startup", (b) => {
       b.onStartup(() => order.push(1))
       b.onStartup(() => order.push(2))
       b.onStartup(() => order.push(3))
@@ -331,7 +331,7 @@ describe("simpleExtension lifecycle", () => {
 
   test("onShutdown registers cleanup", async () => {
     let cleaned = false
-    const ext = simpleExtension("shutdown-test", (b) => {
+    const ext = extension("shutdown-test", (b) => {
       b.onShutdown(() => {
         cleaned = true
       })
@@ -344,9 +344,9 @@ describe("simpleExtension lifecycle", () => {
   })
 })
 
-describe("simpleExtension state", () => {
+describe("extension state", () => {
   test("ext.state() wires fromReducer", async () => {
-    const ext = simpleExtension("state-test", (b) => {
+    const ext = extension("state-test", (b) => {
       b.state({
         initial: { count: 0 },
         reduce: (state, event) => {
@@ -361,7 +361,7 @@ describe("simpleExtension state", () => {
   })
 
   test("ext.state() with derive produces projection", async () => {
-    const ext = simpleExtension("state-derive", (b) => {
+    const ext = extension("state-derive", (b) => {
       b.state({
         initial: { turns: 0 },
         reduce: (state, event) => {
@@ -380,7 +380,7 @@ describe("simpleExtension state", () => {
   })
 
   test("ext.state() throws on second call", async () => {
-    const ext = simpleExtension("double-state", (b) => {
+    const ext = extension("double-state", (b) => {
       b.state({ initial: { a: 1 }, reduce: (s) => ({ state: s }) })
       b.state({ initial: { b: 2 }, reduce: (s) => ({ state: s }) })
     })
@@ -390,7 +390,7 @@ describe("simpleExtension state", () => {
   })
 
   test("ext.state() with persist but no schema fails at setup", async () => {
-    const ext = simpleExtension("bad-persist", (b) => {
+    const ext = extension("bad-persist", (b) => {
       b.state({
         initial: { x: 1 },
         reduce: (s) => ({ state: s }),

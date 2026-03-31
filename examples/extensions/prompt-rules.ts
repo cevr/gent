@@ -1,9 +1,9 @@
 /**
  * Example: prompt.system hook that appends project-specific rules.
  */
-import { simpleExtension } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
 
-export default simpleExtension("prompt-rules", (ext) => {
+export default extension("prompt-rules", (ext) => {
   ext.on("prompt.system", async (input, next) => {
     const result = await next(input)
     return (

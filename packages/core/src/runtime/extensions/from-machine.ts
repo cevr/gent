@@ -51,7 +51,8 @@ export interface FromMachineConfig<
   readonly deriveUi?: (state: State) => unknown
   /** Schema for the uiModel returned by derive/deriveUi */
   readonly uiModelSchema?: Schema.Schema<unknown>
-  /** Schema for serializing/deserializing state to/from JSON */
+  /** Schema for serializing/deserializing state to/from JSON.
+   *  For machine-backed extensions, use MachineState.plain (phantom brand cast is safe). */
   readonly stateSchema?: Schema.Schema<State>
   /** If true, state is persisted on state change and hydrated on init */
   readonly persist?: boolean
