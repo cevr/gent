@@ -17,6 +17,7 @@ import { SessionCommands } from "./session-commands.js"
 import { SessionEvents } from "./session-events.js"
 import { SessionSubscriptions } from "./session-subscriptions.js"
 import { InteractionCommands } from "./interaction-commands.js"
+import { TaskService } from "../runtime/task-service.js"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -39,6 +40,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
     const extensionStateRuntime = yield* ExtensionStateRuntime
+    const taskService = yield* TaskService
 
     return {
       // -- session --
@@ -243,6 +245,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       // -- task --
       "task.list": ({ sessionId, branchId }) => queries.listTasks(sessionId, branchId),
+      "task.stop": ({ taskId }) =>
+        taskService.stop(taskId).pipe(Effect.map((task) => ({ task: task ?? undefined }))),
+      "task.output": ({ taskId }) =>
+        taskService
+          .getOutput(taskId)
+          .pipe(
+            Effect.map((result) =>
+              result !== undefined
+                ? { status: result.status, messageCount: result.messages.length }
+                : { status: "pending" as const, messageCount: 0 },
+            ),
+          ),
 
       // -- skill --
       "skill.list": () =>

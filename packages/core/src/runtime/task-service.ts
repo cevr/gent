@@ -1,4 +1,4 @@
-import { ServiceMap, DateTime, Effect, FiberSet, Layer } from "effect"
+import { ServiceMap, DateTime, Effect, Fiber, Layer, Ref } from "effect"
 import {
   Task,
   TaskTransitionError,
@@ -11,6 +11,7 @@ import {
   TaskUpdated,
   TaskCompleted,
   TaskFailed,
+  TaskStopped,
   TaskDeleted,
 } from "../domain/event.js"
 import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
@@ -18,6 +19,8 @@ import { ExtensionRegistry } from "./extensions/registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 import type { TaskId, SessionId, BranchId } from "../domain/ids.js"
 import { TaskStorage } from "../storage/task-storage.js"
+import { Storage } from "../storage/sqlite-storage.js"
+import type { Message } from "../domain/message.js"
 
 // TaskService
 
@@ -56,6 +59,16 @@ export interface TaskServiceApi {
     branchId?: BranchId
   }>
 
+  readonly stop: (id: TaskId) => Effect.Effect<Task | undefined>
+
+  readonly getOutput: (id: TaskId) => Effect.Effect<
+    | {
+        messages: ReadonlyArray<Message>
+        status: TaskStatus
+      }
+    | undefined
+  >
+
   readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
   readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
   readonly getDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>>
@@ -72,6 +85,11 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
     update: () => Effect.void as Effect.Effect<Task | undefined>,
     remove: () => Effect.void,
     run: (id) => Effect.succeed({ taskId: id, status: "not_found" }),
+    stop: () => Effect.void as Effect.Effect<Task | undefined>,
+    getOutput: () =>
+      Effect.void as Effect.Effect<
+        { messages: ReadonlyArray<Message>; status: TaskStatus } | undefined
+      >,
     addDep: () => Effect.void,
     removeDep: () => Effect.void,
     getDeps: () => Effect.succeed([]),
@@ -80,7 +98,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
   static Live: Layer.Layer<
     TaskService,
     never,
-    EventStore | SubagentRunnerService | ExtensionRegistry | RuntimePlatform
+    EventStore | SubagentRunnerService | ExtensionRegistry | RuntimePlatform | Storage
   > = Layer.effect(
     TaskService,
     Effect.gen(function* () {
@@ -91,7 +109,28 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
       const runner = yield* SubagentRunnerService
       const extensionRegistry = yield* ExtensionRegistry
       const platform = yield* RuntimePlatform
-      const taskFibers = yield* FiberSet.make<void>()
+      const mainStorage = yield* Storage
+      const fiberMap = yield* Ref.make(new Map<TaskId, Fiber.Fiber<void>>())
+
+      const forkTask = (taskId: TaskId, effect: Effect.Effect<void>) =>
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(
+            effect.pipe(
+              Effect.ensuring(
+                Ref.update(fiberMap, (m) => {
+                  const next = new Map(m)
+                  next.delete(taskId)
+                  return next
+                }),
+              ),
+            ),
+          )
+          yield* Ref.update(fiberMap, (m) => {
+            const next = new Map(m)
+            next.set(taskId, fiber)
+            return next
+          })
+        })
 
       const runTaskInternal: (taskId: TaskId, task: Task) => Effect.Effect<void> = (taskId, task) =>
         Effect.gen(function* () {
@@ -117,7 +156,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           const parentSessionId = task.sessionId
           const parentBranchId = task.branchId
 
-          // Run subagent
+          // Run subagent — store child sessionId in metadata for getOutput()
           const result = yield* runner.run({
             agent,
             prompt: task.prompt ?? task.subject,
@@ -126,9 +165,19 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             cwd: task.cwd ?? platform.cwd,
           })
 
+          // Guard: if stop() raced and already set terminal state, don't overwrite
+          const currentTask = yield* storage
+            .getTask(taskId)
+            .pipe(Effect.catchEager(() => Effect.void as Effect.Effect<Task | undefined>))
+          if (currentTask?.status === "stopped") return
+
           if (result._tag === "success") {
             yield* storage
-              .updateTask(taskId, { status: "completed", owner: result.sessionId })
+              .updateTask(taskId, {
+                status: "completed",
+                owner: result.sessionId,
+                metadata: { childSessionId: result.sessionId },
+              })
               .pipe(Effect.catchEager(() => Effect.void))
             yield* eventStore
               .publish(
@@ -161,22 +210,36 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
         }).pipe(
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
-              yield* storage
-                .updateTask(taskId, {
-                  status: "failed",
-                  metadata: { error: "interrupted by shutdown" },
-                })
-                .pipe(Effect.catchEager(() => Effect.void))
-              yield* eventStore
-                .publish(
-                  new TaskFailed({
-                    sessionId: task.sessionId,
-                    branchId: task.branchId,
-                    taskId,
-                    error: "interrupted by shutdown",
-                  }),
-                )
-                .pipe(Effect.catchEager(() => Effect.void))
+              // Determine if this was a user-initiated stop or a shutdown interrupt
+              const current = yield* storage
+                .getTask(taskId)
+                .pipe(Effect.catchEager(() => Effect.void as Effect.Effect<Task | undefined>))
+              const alreadyStopped = current?.status === "stopped"
+
+              if (!alreadyStopped) {
+                yield* storage
+                  .updateTask(taskId, { status: "stopped" })
+                  .pipe(Effect.catchEager(() => Effect.void))
+                yield* eventStore
+                  .publish(
+                    new TaskStopped({
+                      sessionId: task.sessionId,
+                      branchId: task.branchId,
+                      taskId,
+                    }),
+                  )
+                  .pipe(Effect.catchEager(() => Effect.void))
+              }
+
+              // Remove from fiber map
+              yield* Ref.update(fiberMap, (m) => {
+                const next = new Map(m)
+                next.delete(taskId)
+                return next
+              })
+
+              // Unblock dependents (stopped is terminal like failed)
+              yield* checkAndRunDependents(taskId).pipe(Effect.catchEager(() => Effect.void))
             }),
           ),
           Effect.catchEager(() => Effect.void),
@@ -199,7 +262,11 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 .getTask(blockerId)
                 .pipe(
                   Effect.map(
-                    (t) => t === undefined || t.status === "completed" || t.status === "failed",
+                    (t) =>
+                      t === undefined ||
+                      t.status === "completed" ||
+                      t.status === "failed" ||
+                      t.status === "stopped",
                   ),
                 ),
             )
@@ -219,7 +286,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                   }),
                 )
                 .pipe(Effect.catchEager(() => Effect.void))
-              yield* FiberSet.run(taskFibers)(runTaskInternal(depTaskId, depTask))
+              yield* forkTask(depTaskId, runTaskInternal(depTaskId, depTask))
             }
           }
         }).pipe(Effect.catchEager(() => Effect.void))
@@ -362,8 +429,68 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
               )
               .pipe(Effect.catchEager(() => Effect.void))
 
-            yield* FiberSet.run(taskFibers)(runTaskInternal(id, claimed))
+            yield* forkTask(id, runTaskInternal(id, claimed))
             return { taskId: id, status: "running" }
+          }),
+
+        stop: (id) =>
+          Effect.gen(function* () {
+            const task = yield* storage.getTask(id).pipe(Effect.orDie)
+            if (task === undefined) return undefined
+            if (task.status !== "in_progress" && task.status !== "pending") return task
+
+            // Set stopped in storage first (so onInterrupt sees it)
+            const updated = yield* storage.updateTask(id, { status: "stopped" }).pipe(Effect.orDie)
+
+            yield* eventStore
+              .publish(
+                new TaskStopped({
+                  sessionId: task.sessionId,
+                  branchId: task.branchId,
+                  taskId: id,
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+
+            // Interrupt fiber if running
+            const fibers = yield* Ref.get(fiberMap)
+            const fiber = fibers.get(id)
+            if (fiber !== undefined) {
+              yield* Fiber.interrupt(fiber).pipe(Effect.catchEager(() => Effect.void))
+            }
+
+            // Unblock dependents
+            yield* checkAndRunDependents(id).pipe(Effect.catchEager(() => Effect.void))
+
+            return updated
+          }),
+
+        getOutput: (id) =>
+          Effect.gen(function* () {
+            const task = yield* storage.getTask(id).pipe(Effect.orDie)
+            if (task === undefined) return undefined
+
+            // Child session stored in metadata.childSessionId or fallback to task.owner
+            const meta = task.metadata as { childSessionId?: string } | undefined
+            const childSessionId = (meta?.childSessionId ?? task.owner) as SessionId | undefined
+            if (childSessionId === undefined) {
+              return { messages: [] as ReadonlyArray<Message>, status: task.status }
+            }
+
+            const branches = yield* mainStorage
+              .listBranches(childSessionId)
+              .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+
+            const branch = branches[0]
+            if (branch === undefined) {
+              return { messages: [] as ReadonlyArray<Message>, status: task.status }
+            }
+
+            const messages = yield* mainStorage
+              .listMessages(branch.id)
+              .pipe(Effect.catchEager(() => Effect.succeed([] as ReadonlyArray<Message>)))
+
+            return { messages, status: task.status }
           }),
 
         addDep: (taskId, blockedById) => storage.addTaskDep(taskId, blockedById).pipe(Effect.orDie),

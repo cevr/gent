@@ -5,15 +5,22 @@ import { DateFromNumber } from "./message"
 
 // Task Status
 
-export const TaskStatus = Schema.Literals(["pending", "in_progress", "completed", "failed"])
+export const TaskStatus = Schema.Literals([
+  "pending",
+  "in_progress",
+  "completed",
+  "failed",
+  "stopped",
+])
 export type TaskStatus = typeof TaskStatus.Type
 
 /** Legal task status transitions */
 const VALID_TRANSITIONS: ReadonlyMap<TaskStatus, ReadonlySet<TaskStatus>> = new Map([
-  ["pending", new Set<TaskStatus>(["in_progress", "failed"])],
-  ["in_progress", new Set<TaskStatus>(["completed", "failed"])],
+  ["pending", new Set<TaskStatus>(["in_progress", "failed", "stopped"])],
+  ["in_progress", new Set<TaskStatus>(["completed", "failed", "stopped"])],
   ["completed", new Set<TaskStatus>()],
   ["failed", new Set<TaskStatus>()],
+  ["stopped", new Set<TaskStatus>()],
 ])
 
 /** Returns true if the transition from → to is legal */

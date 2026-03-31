@@ -369,6 +369,12 @@ export class TaskFailed extends Schema.TaggedClass<TaskFailed>()("TaskFailed", {
   error: Schema.optional(Schema.String),
 }) {}
 
+export class TaskStopped extends Schema.TaggedClass<TaskStopped>()("TaskStopped", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  taskId: TaskId,
+}) {}
+
 export class TaskDeleted extends Schema.TaggedClass<TaskDeleted>()("TaskDeleted", {
   sessionId: SessionId,
   branchId: BranchId,
@@ -488,6 +494,7 @@ export const AgentEvent = Schema.Union([
   TaskUpdated,
   TaskCompleted,
   TaskFailed,
+  TaskStopped,
   TaskDeleted,
   AgentRestarted,
   ExtensionUiSnapshot,

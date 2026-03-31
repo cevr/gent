@@ -133,7 +133,13 @@ export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageServ
         updateTask: Effect.fn("TaskStorage.updateTask")(
           function* (id, fields) {
             const now = yield* Clock.currentTimeMillis
-            const VALID_STATUSES = new Set(["pending", "in_progress", "completed", "failed"])
+            const VALID_STATUSES = new Set([
+              "pending",
+              "in_progress",
+              "completed",
+              "failed",
+              "stopped",
+            ])
             if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
               return yield* new StorageError({
                 message: `Invalid task status: ${fields.status}`,

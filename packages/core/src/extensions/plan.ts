@@ -268,7 +268,7 @@ const reduceExecutingTask = (
     }
   }
 
-  if (event._tag === "TaskFailed") {
+  if (event._tag === "TaskFailed" || event._tag === "TaskStopped") {
     const todoIdx = state.taskMap?.[event.taskId]
     if (todoIdx === undefined) return { state }
     return {

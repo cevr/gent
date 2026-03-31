@@ -302,6 +302,8 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     update: () => Effect.succeed(undefined),
     remove: () => Effect.void,
     run: () => Effect.succeed({ taskId: "t-0" as never, status: "pending" }),
+    stop: () => Effect.succeed(undefined),
+    getOutput: () => Effect.succeed(undefined),
     addDep: () => Effect.void,
     removeDep: () => Effect.void,
     getDeps: () => Effect.succeed([]),
