@@ -1,9 +1,9 @@
 /**
  * TUI extension loader — discover → import → resolve pipeline.
  *
- * Builtins go through the same discover → import path as user/project extensions.
- * Pass `builtinDir` pointing at the builtins/ directory so they are discovered
- * via filesystem scan rather than a handwritten barrel.
+ * Builtins are passed as pre-imported modules (static imports at the call site)
+ * so Bun's bundler includes them in compiled binaries. User/project extensions
+ * are discovered via filesystem scan and dynamic import().
  */
 
 import type {
@@ -46,13 +46,13 @@ const importExtension = async (
 /**
  * Load all TUI extensions: discover files, import modules, resolve with scope precedence.
  *
- * @param opts.builtinDir — path to builtin client extensions directory
+ * @param opts.builtins — pre-imported builtin modules (static imports for bundler reachability)
  * @param opts.disabled — extension ids to skip (applies to builtins and discovered alike).
  *   Discovered extensions are imported to read their id, but setup() is skipped when disabled.
  */
 export const loadTuiExtensions = async (
   opts: {
-    readonly builtinDir?: string
+    readonly builtins?: ReadonlyArray<ExtensionClientModule>
     readonly userDir: string
     readonly projectDir: string
     readonly disabled?: ReadonlyArray<string>
@@ -62,18 +62,28 @@ export const loadTuiExtensions = async (
   const disabledSet = new Set(opts.disabled ?? [])
   const discovered = discoverTuiExtensions(opts)
 
-  // Import modules first, then filter by disabled before calling setup()
+  // Import user/project modules, then filter by disabled before calling setup()
   const imported = await Promise.all(discovered.map((entry) => importExtension(entry)))
   const enabled = imported
     .filter((r): r is ImportedExtension => r !== undefined)
     .filter((r) => !disabledSet.has(r.module.id))
 
-  const loaded: LoadedTuiExtension[] = enabled.map((ext) => ({
+  // Builtins: pre-imported, just filter disabled and call setup()
+  const builtinLoaded: LoadedTuiExtension[] = (opts.builtins ?? [])
+    .filter((ext) => !disabledSet.has(ext.id))
+    .map((ext) => ({
+      id: ext.id,
+      kind: "builtin" as const,
+      filePath: `builtin:${ext.id}`,
+      setup: ext.setup(ctx),
+    }))
+
+  const externalLoaded: LoadedTuiExtension[] = enabled.map((ext) => ({
     id: ext.module.id,
     kind: ext.kind,
     filePath: ext.filePath,
     setup: ext.module.setup(ctx),
   }))
 
-  return resolveTuiExtensions(loaded)
+  return resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
 }

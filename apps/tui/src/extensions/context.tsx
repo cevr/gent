@@ -11,8 +11,15 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
 // @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os"
-import { join } from "node:path"
 import type { JSX as _JSX } from "@opentui/solid"
+// Static builtin imports — Bun's bundler needs these reachable for compiled binary
+import builtinTools from "./builtins/tools.client"
+import builtinPlan from "./builtins/plan.client"
+import builtinAuto from "./builtins/auto.client"
+import builtinTasks from "./builtins/tasks.client"
+import builtinConnection from "./builtins/connection.client"
+import builtinInteractions from "./builtins/interactions.client"
+import builtinHandoff from "./builtins/handoff.client"
 import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
@@ -134,7 +141,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
 
       const result = await loadTuiExtensions(
         {
-          builtinDir: join(import.meta.dir, "builtins"),
+          builtins: [
+            builtinTools,
+            builtinPlan,
+            builtinAuto,
+            builtinTasks,
+            builtinConnection,
+            builtinInteractions,
+            builtinHandoff,
+          ],
           userDir: `${home}/.gent/extensions`,
           projectDir: `${workspace.cwd}/.gent/extensions`,
           disabled: [...disabledSet],
