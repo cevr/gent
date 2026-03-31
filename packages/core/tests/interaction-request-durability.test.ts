@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import {
@@ -14,11 +14,7 @@ import type { SessionId, BranchId } from "@gent/core/domain/ids"
 // ============================================================================
 
 describe("Interaction Request Durability", () => {
-  const storageLayer = Storage.MemoryWithSql()
-  const storageLive = Layer.mergeAll(
-    storageLayer,
-    Layer.provide(InteractionStorage.Live, storageLayer),
-  )
+  const storageLive = Storage.MemoryWithSql()
 
   test("present persists request to storage", async () => {
     await Effect.runPromise(

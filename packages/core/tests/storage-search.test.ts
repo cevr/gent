@@ -1,14 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SearchStorage } from "@gent/core/storage/search-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
-const storageLayer = Storage.TestWithSql()
-const test = it.live.layer(
-  Layer.mergeAll(storageLayer, Layer.provide(SearchStorage.Live, storageLayer)),
-)
+const test = it.live.layer(Storage.TestWithSql())
 
 // Fixture helpers
 
