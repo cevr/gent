@@ -288,6 +288,39 @@ One test file per source file. No god tests. Names match source owners.
 - `apps/tui/tests/render-harness.tsx` — TUI render test harness
 - `packages/e2e/tests/transport-harness.ts` — shared worker + transport cases
 
+## Auto Loop Extension
+
+`@gent/auto` — iterative workflow driver via effect-machine.
+
+State: `Inactive | Working | AwaitingCounsel`. Signal tool: `auto_checkpoint`. Gate: counsel review between iterations. Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
+
+### JSONL Persistence
+
+`AutoJournal` writes append-only `.gent/auto/<goal-slug>.jsonl` relative to cwd. `active.json` pointer tracks which journal to resume. Row types: `config`, `checkpoint`, `counsel`.
+
+Cross-session replay via `onInit`: child sessions verify ancestry includes `active.sessionId`. Fail-closed for legacy pointers without `sessionId`. Root sessions never replay.
+
+### Handoff Ownership
+
+`@gent/auto` and `@gent/handoff` are cleanly separated:
+
+- Auto detects context fill → queues follow-up telling model to call `handoff` tool
+- Handoff extension owns presentation, cooldown, and user interaction
+- Handoff extension skips when auto is active (guard on auto actor snapshot)
+
+### Task Service
+
+`TaskService` correlates child sessions via synthetic `toolCallId` (`task:<taskId>`). The `SubagentSpawned` event filter matches on `toolCallId`, preventing concurrent tasks from stealing each other's child session.
+
+`task.output` RPC returns `MessageSummary[]` (role + 200-char excerpt) alongside `messageCount`.
+
+### Test Utilities
+
+- `withTinyContextWindow(effect)` — patches `MODEL_CONTEXT_WINDOWS` to 5k tokens for threshold tests
+- `trackingHandoffHandler()` — returns `{ layer, presentCalled: Ref<boolean> }` for handoff assertions
+
+Both exported from `@gent/core/test-utils/e2e-layer`.
+
 ## Memory Extension
 
 Builtin extension (`@gent/memory`). Persistent memory across sessions via flat `.md` files.

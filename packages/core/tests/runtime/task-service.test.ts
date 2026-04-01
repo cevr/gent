@@ -9,7 +9,7 @@ import {
   type AgentName,
   type SubagentResult,
 } from "@gent/core/domain/agent"
-import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
+import { EventStore, SubagentSpawned, type EventEnvelope } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import type { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
@@ -167,7 +167,8 @@ describe("TaskService", () => {
 
     it.live("concurrent tasks get distinct child sessions via toolCallId correlation", () =>
       Effect.gen(function* () {
-        // Two deferreds — one per task
+        // Two deferreds — one per task. Runner publishes SubagentSpawned with
+        // the task's toolCallId before resolving, simulating the real runner.
         const deferred1 = yield* Deferred.make<SubagentResult>()
         const deferred2 = yield* Deferred.make<SubagentResult>()
         const callCount = yield* Ref.make(0)
@@ -184,13 +185,27 @@ describe("TaskService", () => {
             },
           ]),
         )
-        // Runner resolves with different sessionIds based on call order
+
         const runnerLayer = Layer.succeed(SubagentRunnerService, {
-          run: () =>
+          run: (params) =>
             Effect.gen(function* () {
               const n = yield* Ref.getAndUpdate(callCount, (c) => c + 1)
-              if (n === 0) return yield* Deferred.await(deferred1)
-              return yield* Deferred.await(deferred2)
+              const childSessionId = n === 0 ? ("child-A" as SessionId) : ("child-B" as SessionId)
+
+              // Publish SubagentSpawned like the real runner does
+              const eventStore = yield* EventStore
+              yield* eventStore.publish(
+                new SubagentSpawned({
+                  parentSessionId: params.parentSessionId,
+                  childSessionId,
+                  agentName: params.agent.name,
+                  prompt: params.prompt,
+                  toolCallId: params.toolCallId,
+                }),
+              )
+
+              const deferred = n === 0 ? deferred1 : deferred2
+              return yield* Deferred.await(deferred)
             }),
         })
 
@@ -225,10 +240,19 @@ describe("TaskService", () => {
           yield* taskService.run(task1.id)
           yield* taskService.run(task2.id)
 
-          // Let fibers start
-          yield* Effect.sleep("10 millis")
+          // Let fibers start — SubagentSpawned events are published by the fake runner
+          yield* Effect.sleep("50 millis")
 
-          // Resolve both with distinct sessions
+          // Both tasks should have captured their own child session via captureAndTrack
+          const t1Mid = yield* taskService.get(task1.id)
+          const t2Mid = yield* taskService.get(task2.id)
+          const meta1Mid = t1Mid!.metadata as { childSessionId?: string } | undefined
+          const meta2Mid = t2Mid!.metadata as { childSessionId?: string } | undefined
+          // Correlation: each task captured its own child via toolCallId filter
+          expect(meta1Mid?.childSessionId).toBe("child-A")
+          expect(meta2Mid?.childSessionId).toBe("child-B")
+
+          // Resolve both
           yield* Deferred.succeed(deferred1, {
             _tag: "success" as const,
             text: "result A",
@@ -242,7 +266,6 @@ describe("TaskService", () => {
             agentName: "explore" as AgentName,
           })
 
-          // Let completion handlers run
           yield* Effect.sleep("50 millis")
 
           const t1 = yield* taskService.get(task1.id)
@@ -250,7 +273,7 @@ describe("TaskService", () => {
           expect(t1!.status).toBe("completed")
           expect(t2!.status).toBe("completed")
 
-          // Verify distinct child sessions via metadata
+          // Final metadata still has correct child sessions
           const meta1 = t1!.metadata as { childSessionId?: string } | undefined
           const meta2 = t2!.metadata as { childSessionId?: string } | undefined
           expect(meta1?.childSessionId).toBe("child-A")
