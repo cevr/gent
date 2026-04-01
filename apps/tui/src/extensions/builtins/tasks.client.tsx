@@ -4,6 +4,7 @@ import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import { createSignal, createEffect, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
 import type { Task } from "@gent/core/domain/task.js"
+import { useScopedKeyboard } from "../../keyboard/context"
 import { useClient } from "../../client/context"
 import { useRuntime } from "../../hooks/use-runtime"
 import { runWithReconnect } from "../../utils/run-with-reconnect"
@@ -81,6 +82,19 @@ export default {
         })
       })
 
+      // Down-arrow opens tasks dialog when draft is empty and tasks are running
+      useScopedKeyboard(
+        (event) => {
+          if (event.name !== "down") return false
+          const cs = ctx.composerState()
+          if (cs.draft !== "" || !cs.inputFocused) return false
+          if (runningCount() === 0) return false
+          ctx.openOverlay("tasks-dialog")
+          return true
+        },
+        { when: () => runningCount() > 0 },
+      )
+
       // Invisible — just subscribes and updates shared state
       return null
     }
@@ -112,13 +126,18 @@ export default {
       )
     }
 
+    /** TaskWidget fed from shared tracked state — single source of truth. */
+    function TrackedTaskWidget() {
+      return <TaskWidget previewTasks={trackedTasks()} />
+    }
+
     return {
       widgets: [
         {
           id: "tasks",
           slot: "below-messages" as const,
           priority: 20,
-          component: TaskWidget,
+          component: TrackedTaskWidget,
         },
         {
           id: "task-tracker",

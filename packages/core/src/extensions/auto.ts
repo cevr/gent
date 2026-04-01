@@ -24,6 +24,7 @@ import {
   type TurnAfterInput,
 } from "../domain/extension.js"
 import type { AgentEvent } from "../domain/event.js"
+import type { SessionId } from "../domain/ids.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { extension, fromMachine } from "./api.js"
 import { AutoCheckpointTool } from "../tools/auto-checkpoint.js"
@@ -617,6 +618,16 @@ const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent, never, Aut
       const current = (yield* ctx.snapshot) as MachineState
       if (current._tag !== "Inactive") return
 
+      // Only replay in child sessions (handoff targets) — prevents unrelated sessions
+      // from resurrecting old auto loops
+      const storageOpt = yield* Effect.serviceOption(Storage)
+      if (storageOpt._tag === "Some") {
+        const session = yield* storageOpt.value
+          .getSession(ctx.sessionId as SessionId)
+          .pipe(Effect.catchEager(() => Effect.void as Effect.Effect<undefined>))
+        if (session?.parentSessionId === undefined) return
+      }
+
       // Replay journal rows as machine events
       const config = active.rows.find((r) => r.type === "config")
       if (config === undefined || config.type !== "config") return
@@ -669,58 +680,57 @@ const journalInterceptorImpl = (
   Effect.gen(function* () {
     const result = yield* next(input)
 
-    const journal = yield* Effect.serviceOption(AutoJournal)
-    if (journal._tag === "None") return result
+    // Journal writes are best-effort side effects — never fail the tool result
+    yield* Effect.gen(function* () {
+      const journal = yield* Effect.serviceOption(AutoJournal)
+      if (journal._tag === "None") return
 
-    // Read current auto state to check if active
-    const stateRuntime = yield* ExtensionStateRuntime
-    const snapshots = yield* stateRuntime
-      .getUiSnapshots(input.sessionId, input.branchId)
-      .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-    const autoSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
-    const uiModel = autoSnap?.model as AutoUiModel | undefined
-    if (uiModel === undefined || !uiModel.active) return result
+      const stateRuntime = yield* ExtensionStateRuntime
+      const snapshots = yield* stateRuntime
+        .getUiSnapshots(input.sessionId, input.branchId)
+        .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+      const autoSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
+      const uiModel = autoSnap?.model as AutoUiModel | undefined
+      if (uiModel === undefined || !uiModel.active) return
 
-    if (input.toolName === "auto_checkpoint") {
-      // Parse checkpoint params from input
-      const params = input.input as {
-        status?: string
-        summary?: string
-        learnings?: string
-        metrics?: Record<string, number>
-        nextIdea?: string
-      }
+      if (input.toolName === "auto_checkpoint") {
+        const params = input.input as {
+          status?: string
+          summary?: string
+          learnings?: string
+          metrics?: Record<string, number>
+          nextIdea?: string
+        }
 
-      // Start journal on first checkpoint if not already active
-      const activePath = yield* journal.value.getActivePath()
-      if (activePath === undefined && uiModel.goal !== undefined) {
-        yield* journal.value.start({
-          goal: uiModel.goal,
-          maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+        const activePath = yield* journal.value.getActivePath()
+        if (activePath === undefined && uiModel.goal !== undefined) {
+          yield* journal.value.start({
+            goal: uiModel.goal,
+            maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+          })
+        }
+
+        yield* journal.value.appendCheckpoint({
+          iteration: uiModel.iteration ?? 1,
+          status: (params.status ?? "continue") as CheckpointRow["status"],
+          summary: params.summary ?? "Checkpoint",
+          learnings: params.learnings,
+          metrics: params.metrics,
+          nextIdea: params.nextIdea,
         })
+
+        if (params.status === "complete" || params.status === "abandon") {
+          yield* journal.value.finish()
+        }
       }
 
-      yield* journal.value.appendCheckpoint({
-        iteration: uiModel.iteration ?? 1,
-        status: (params.status ?? "continue") as CheckpointRow["status"],
-        summary: params.summary ?? "Checkpoint",
-        learnings: params.learnings,
-        metrics: params.metrics,
-        nextIdea: params.nextIdea,
-      })
-
-      // If terminal, clear the active pointer
-      if (params.status === "complete" || params.status === "abandon") {
-        yield* journal.value.finish()
+      if (input.toolName === "counsel") {
+        yield* journal.value.appendCounsel(uiModel.iteration ?? 1)
       }
-    }
-
-    if (input.toolName === "counsel") {
-      yield* journal.value.appendCounsel(uiModel.iteration ?? 1)
-    }
+    }).pipe(Effect.catchEager(() => Effect.void))
 
     return result
-  }).pipe(Effect.catchEager(() => next(input)))
+  })
 
 // Cast: interceptor runs in agent loop fiber where services are ambient
 const journalInterceptor = defineInterceptor(
@@ -768,10 +778,22 @@ const autoHandoffImpl = (
       Effect.annotateLogs({ contextPercent, iteration: uiModel.iteration }),
     )
 
-    // Present handoff — auto mode auto-accepts
-    const handoffHandler = yield* HandoffHandler
+    // Ensure journal exists before handoff — if no checkpoint has fired yet,
+    // create the journal now so the child session can replay from it
     const journal = yield* Effect.serviceOption(AutoJournal)
-    const journalPath = journal._tag === "Some" ? yield* journal.value.getActivePath() : undefined
+    let journalPath: string | undefined
+    if (journal._tag === "Some") {
+      journalPath = yield* journal.value.getActivePath()
+      if (journalPath === undefined && uiModel.goal !== undefined) {
+        journalPath = yield* journal.value.start({
+          goal: uiModel.goal,
+          maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+        })
+      }
+    }
+
+    // Present handoff
+    const handoffHandler = yield* HandoffHandler
 
     yield* handoffHandler
       .present({
