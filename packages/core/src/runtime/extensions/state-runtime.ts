@@ -4,6 +4,7 @@ import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/ev
 import type {
   ExtensionActor,
   ExtensionDeriveContext,
+  ExtensionProjection,
   ExtensionProjectionConfig,
   ExtensionReduceContext,
   LoadedExtension,
@@ -203,15 +204,20 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 const entries = yield* getOrSpawnActors(sessionId)
                 const results: Array<{ extensionId: string; projection: TurnProjection }> = []
                 for (const { actor, projection } of entries) {
-                  if (projection?.deriveTurn === undefined) continue
+                  const deriveFn = projection?.derive
+                  if (deriveFn === undefined) continue
                   const { state } = yield* actor.getState.pipe(
                     Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
                   )
                   if (state !== undefined) {
-                    results.push({
-                      extensionId: actor.id,
-                      projection: projection.deriveTurn(state, ctx),
-                    })
+                    // @effect-diagnostics-next-line effectSucceedWithVoid:off
+                    const derived = yield* Effect.sync(() => deriveFn(state, ctx)).pipe(
+                      Effect.catchDefect(() => Effect.succeed(undefined)),
+                    )
+                    if (derived !== undefined) {
+                      const { uiModel: _, ...turn } = derived
+                      results.push({ extensionId: actor.id, projection: turn })
+                    }
                   }
                 }
 
@@ -250,14 +256,19 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               Effect.gen(function* () {
                 const snapshots: ExtensionUiSnapshot[] = []
                 const entries = yield* getOrSpawnActors(sessionId, branchId)
-                for (const { actor, projection } of entries) {
-                  if (projection === undefined) continue
+                for (const entry of entries) {
+                  const { actor, projection } = entry
+                  if (projection === undefined || projection.derive === undefined) continue
+                  const deriveFn = projection.derive
                   const { state, version } = yield* actor.getState.pipe(
                     Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
                   )
                   if (state === undefined) continue
-                  if (projection.deriveUi === undefined) continue
-                  let uiModel = projection.deriveUi(state)
+                  // @effect-diagnostics-next-line effectSucceedWithVoid:off
+                  const derived = yield* Effect.sync(() => deriveFn(state, undefined)).pipe(
+                    Effect.catchDefect(() => Effect.succeed(undefined)),
+                  )
+                  let uiModel = (derived as ExtensionProjection | undefined)?.uiModel
                   if (uiModel !== undefined) {
                     // Validate against schema if provided
                     if (projection.uiModelSchema !== undefined) {

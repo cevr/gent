@@ -35,9 +35,10 @@ export interface FromReducerConfig<State, Intent = void> {
     event: AgentEvent,
     ctx: ExtensionReduceContext,
   ) => ReduceResult<State>
-  /** Full derive — used when extension needs both turn + UI projection from one function */
-  readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
-  /** Context-free UI model derivation — preferred over derive for UI snapshots */
+  /** Derive projection from state. ctx is provided for turn-time (prompt assembly),
+   *  undefined for UI snapshots. Extensions can check ctx to return different projections. */
+  readonly derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
+  /** Context-free UI model derivation — shorthand for extensions that only need UI projection */
   readonly deriveUi?: (state: State) => unknown
   readonly handleIntent?: (state: State, intent: Intent) => ReduceResult<State>
   readonly intentSchema?: Schema.Schema<Intent>

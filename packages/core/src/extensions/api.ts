@@ -252,6 +252,7 @@ export interface SimpleStateConfig<S> {
       readonly include?: ReadonlyArray<string>
       readonly exclude?: ReadonlyArray<string>
     }
+    readonly uiModel?: unknown
   }
   readonly persist?: { readonly schema: Schema.Schema<S> }
 }
@@ -588,9 +589,13 @@ export const extension = (
           derive: (() => {
             const deriveFn = sc.derive
             if (deriveFn === undefined) return undefined
-            return (state: unknown, _deriveCtx: ExtensionDeriveContext): ExtensionProjection => {
+            return (state: unknown): ExtensionProjection => {
               const derived = deriveFn(state as Readonly<typeof sc.initial>)
-              return { promptSections: derived.promptSections, toolPolicy: derived.toolPolicy }
+              return {
+                promptSections: derived.promptSections,
+                toolPolicy: derived.toolPolicy,
+                uiModel: derived.uiModel,
+              }
             }
           })(),
           stateSchema: sc.persist?.schema,

@@ -207,23 +207,36 @@ describe("fromMachine", () => {
     })
 
     expect(projection).toBeDefined()
-    const ui = projection!.deriveUi!({ _tag: "Counting", count: 5 })
-    expect(ui).toEqual({ tag: "Counting" })
+    // UI-only (no context)
+    const ui = projection!.derive!({ _tag: "Counting", count: 5 }, undefined)
+    expect(ui?.uiModel).toEqual({ tag: "Counting" })
   })
 
-  test("deriveUi fallback uses safe sentinel when derive reads ctx.agent", () => {
+  test("derive with ctx.agent access works with optional ctx", () => {
     const { projection } = fromMachine({
-      id: "sentinel-test",
+      id: "ctx-test",
       built: counterMachine,
-      derive: (state, ctx) => ({
-        uiModel: { tag: state._tag, agentName: ctx.agent.name },
+      derive: (state, ctx?) => ({
+        uiModel: { tag: state._tag, agentName: ctx?.agent.name ?? "none" },
       }),
     })
 
-    expect(projection).toBeDefined()
-    const ui = projection!.deriveUi!({ _tag: "Idle" }) as { tag: string; agentName: string }
-    expect(ui.tag).toBe("Idle")
-    expect(ui.agentName).toBe("__derive_ui__")
+    const deriveFn = projection?.derive
+    expect(deriveFn).toBeInstanceOf(Function)
+    // With context
+    const withCtx = deriveFn?.(
+      { _tag: "Idle" },
+      {
+        agent: { name: "test" } as never,
+        allTools: [],
+      },
+    )
+    const withCtxModel = withCtx?.uiModel as { agentName: string } | undefined
+    expect(withCtxModel?.agentName).toBe("test")
+    // Without context
+    const noCtx = deriveFn?.({ _tag: "Idle" }, undefined)
+    const noCtxModel = noCtx?.uiModel as { agentName: string } | undefined
+    expect(noCtxModel?.agentName).toBe("none")
   })
 
   test("no projection when derive not provided", () => {

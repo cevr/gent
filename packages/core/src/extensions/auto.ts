@@ -279,7 +279,7 @@ const autoMachine = Machine.make({
 
 // ── Derive ──
 
-const derive = (state: MachineState, _ctx: ExtensionDeriveContext): ExtensionProjection => {
+const derive = (state: MachineState, _ctx?: ExtensionDeriveContext): ExtensionProjection => {
   if (state._tag === "Inactive") {
     const uiModel: AutoUiModel = { active: false, learningsCount: 0 }
     return { toolPolicy: { exclude: [AUTO_CHECKPOINT_TOOL] }, uiModel }
@@ -538,7 +538,7 @@ export const AutoActorConfig = {
 
     return { state }
   },
-  derive: derive as (state: AutoState, ctx: ExtensionDeriveContext) => ExtensionProjection,
+  derive: derive as (state: AutoState, ctx?: ExtensionDeriveContext) => ExtensionProjection,
   handleIntent: (state: AutoState, intent: AutoIntent): { state: AutoState } => {
     switch (intent._tag) {
       case "StartAuto": {

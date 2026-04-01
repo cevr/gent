@@ -13,7 +13,6 @@ import type {
   ExtensionProjectionConfig,
 } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
-import { AgentDefinition, type AgentName as AgentNameType } from "../../domain/agent.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
 
 /**
@@ -31,11 +30,13 @@ export const makePersistCodec = <S>(schema: Schema.Schema<S>) => {
 
 /**
  * Build ExtensionProjectionConfig from derive/deriveUi config.
- * Identical between fromMachine and fromReducer — extracted to avoid
- * maintaining two copies of the sentinel + fallback logic.
+ * Identical between fromMachine and fromReducer — extracted to avoid duplication.
+ *
+ * Merges the author-facing `derive` and `deriveUi` into a single
+ * `derive(state, ctx?)` function on the runtime-facing config.
  */
 export const buildProjectionConfig = <State>(config: {
-  derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
+  derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
   deriveUi?: (state: State) => unknown
   uiModelSchema?: Schema.Schema<unknown>
 }): ExtensionProjectionConfig | undefined => {
@@ -43,27 +44,27 @@ export const buildProjectionConfig = <State>(config: {
   const deriveUiFn = config.deriveUi
   if (deriveFn === undefined && deriveUiFn === undefined) return undefined
 
-  let deriveTurn: ExtensionProjectionConfig["deriveTurn"]
-  if (deriveFn !== undefined) {
-    deriveTurn = (state: unknown, deriveCtx: ExtensionDeriveContext) => {
-      const { uiModel: _, ...turn } = deriveFn(state as State, deriveCtx)
-      return turn
+  let derive: ExtensionProjectionConfig["derive"]
+
+  if (deriveFn !== undefined && deriveUiFn !== undefined) {
+    // Both provided: use derive for turn-time, deriveUi for UI-only
+    derive = (state: unknown, ctx?: ExtensionDeriveContext) => {
+      if (ctx !== undefined) {
+        const { uiModel: _, ...turn } = deriveFn(state as State, ctx)
+        return turn
+      }
+      return { uiModel: deriveUiFn(state as State) }
     }
-  }
-
-  let deriveUi: ExtensionProjectionConfig["deriveUi"]
-  if (deriveUiFn !== undefined) {
-    deriveUi = (state: unknown) => deriveUiFn(state as State)
   } else if (deriveFn !== undefined) {
-    const sentinel = new AgentDefinition({
-      name: "__derive_ui__" as AgentNameType,
-      kind: "system",
-    })
-    deriveUi = (state: unknown) =>
-      deriveFn(state as State, { agent: sentinel, allTools: [] }).uiModel
+    // Only derive — used for both turn and UI. If derive reads ctx.agent
+    // and ctx is undefined, catchDefect in state-runtime handles it.
+    derive = (state: unknown, ctx?: ExtensionDeriveContext) => deriveFn(state as State, ctx)
+  } else if (deriveUiFn !== undefined) {
+    // Only deriveUi — UI-only projection (e.g. handoff extension)
+    derive = (state: unknown) => ({ uiModel: deriveUiFn(state as State) })
   }
 
-  return { deriveTurn, deriveUi, uiModelSchema: config.uiModelSchema }
+  return { derive, uiModelSchema: config.uiModelSchema }
 }
 
 /**

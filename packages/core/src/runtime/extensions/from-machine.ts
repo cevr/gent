@@ -45,9 +45,9 @@ export interface FromMachineConfig<
   readonly mapIntent?: (intent: Intent, state: State) => Event | undefined
   /** Intent schema for validation */
   readonly intentSchema?: Schema.Schema<Intent>
-  /** Full derive — turn + UI projection from one function */
-  readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
-  /** Context-free UI model derivation — preferred over derive for UI snapshots */
+  /** Derive projection from state. ctx is provided for turn-time, undefined for UI snapshots. */
+  readonly derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
+  /** Context-free UI model derivation — shorthand for extensions that only need UI projection */
   readonly deriveUi?: (state: State) => unknown
   /** Schema for the uiModel returned by derive/deriveUi */
   readonly uiModelSchema?: Schema.Schema<unknown>

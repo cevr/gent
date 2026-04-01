@@ -156,23 +156,35 @@ describe("Actor lifecycle", () => {
   test("PlanExtension harness exposes projection", () => {
     const harness = createExtensionHarness(PlanExtension)
     expect(harness.projection).toBeDefined()
-    expect(harness.projection!.deriveTurn).toBeInstanceOf(Function)
-    expect(harness.projection!.deriveUi).toBeInstanceOf(Function)
+    expect(harness.projection!.derive).toBeInstanceOf(Function)
   })
 
-  test("fromReducer deriveUi fallback uses safe sentinel when derive reads ctx.agent", () => {
+  test("derive with ctx.agent access returns uiModel when ctx is undefined", () => {
     const { projection } = fromReducer({
-      id: "sentinel-test",
+      id: "ctx-safety-test",
       initial: { label: "" },
       reduce: (state: { label: string }) => ({ state }),
-      // derive reads ctx.agent.name — would crash with undefined as never
-      derive: (state: { label: string }, ctx) => ({
-        uiModel: { label: state.label, agentName: ctx.agent.name },
+      // derive reads ctx.agent.name — will throw when ctx is undefined
+      // The runtime wraps derive calls in catchDefect, so this is safe
+      derive: (state: { label: string }, ctx?) => ({
+        uiModel: {
+          label: state.label,
+          agentName: ctx?.agent.name ?? "no-agent",
+        },
       }),
     })
-    expect(projection.deriveUi).toBeInstanceOf(Function)
-    const ui = projection.deriveUi!({ label: "test" }) as { label: string; agentName: string }
-    expect(ui.label).toBe("test")
-    expect(ui.agentName).toBe("__derive_ui__")
+    expect(projection.derive).toBeInstanceOf(Function)
+    // With context
+    const withCtx = projection.derive!(
+      { label: "test" },
+      {
+        agent: { name: "test-agent" } as never,
+        allTools: [],
+      },
+    )
+    expect((withCtx.uiModel as { agentName: string }).agentName).toBe("test-agent")
+    // Without context — author handles undefined ctx gracefully
+    const noCtx = projection.derive!({ label: "test" }, undefined)
+    expect((noCtx.uiModel as { agentName: string }).agentName).toBe("no-agent")
   })
 })

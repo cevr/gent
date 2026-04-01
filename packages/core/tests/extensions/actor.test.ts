@@ -162,15 +162,12 @@ describe("fromReducer", () => {
     })
 
     expect(projection).toBeDefined()
-    // Turn projection — needs context
-    const turn = projection!.deriveTurn!(
-      { mode: "plan" },
-      { agent: undefined as never, allTools: [] },
-    )
+    // Turn projection — with context
+    const turn = projection!.derive!({ mode: "plan" }, { agent: undefined as never, allTools: [] })
     expect(turn.promptSections).toHaveLength(1)
-    // UI projection — context-free
-    const ui = projection!.deriveUi!({ mode: "plan" })
-    expect(ui).toEqual({ mode: "plan" })
+    // UI projection — without context
+    const ui = projection!.derive!({ mode: "plan" }, undefined)
+    expect(ui?.uiModel).toEqual({ mode: "plan" })
 
     // Actor itself has no derive — projection is framework-owned
     return Effect.gen(function* () {

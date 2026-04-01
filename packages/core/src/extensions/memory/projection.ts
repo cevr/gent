@@ -64,7 +64,7 @@ const buildMemorySection = (state: MemoryState): PromptSection | undefined => {
 
 export const deriveProjection = (
   state: MemoryState,
-  _ctx: ExtensionDeriveContext,
+  _ctx?: ExtensionDeriveContext,
 ): ExtensionProjection => {
   const section = buildMemorySection(state)
   const uiModel = {

@@ -178,7 +178,7 @@ Mark items complete as you finish them. Stay focused on the current item.`,
 
 // ── Derive ──
 
-const deriveProjection = (state: PlanState, _ctx: ExtensionDeriveContext): ExtensionProjection => {
+const deriveProjection = (state: PlanState, _ctx?: ExtensionDeriveContext): ExtensionProjection => {
   const progress = {
     total: state.todos.length,
     done: state.todos.filter((t) => t.status === "done").length,

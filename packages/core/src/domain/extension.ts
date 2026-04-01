@@ -200,17 +200,14 @@ export interface ExtensionActor {
 }
 
 /**
- * Projection config — framework-owned, separated by boundary.
+ * Projection config — framework-owned.
  *
- * Two boundaries, two derive functions:
- * - deriveTurn: needs {agent, allTools}, produces toolPolicy + promptSections
- * - deriveUi: state-only, produces uiModel for client rendering
+ * Single derive function handles both turn-time and UI projection:
+ * - ctx provided → turn-time (prompt assembly, tool policy)
+ * - ctx undefined → UI-only (snapshots, widget rendering)
  */
 export interface ExtensionProjectionConfig {
-  /** Turn-time projection — called during prompt assembly with full context */
-  readonly deriveTurn?: (state: unknown, ctx: ExtensionDeriveContext) => TurnProjection
-  /** UI projection — state-only, called for UI snapshots without turn context */
-  readonly deriveUi?: (state: unknown) => unknown
+  readonly derive?: (state: unknown, ctx?: ExtensionDeriveContext) => ExtensionProjection
   readonly uiModelSchema?: Schema.Schema<unknown>
 }
 
