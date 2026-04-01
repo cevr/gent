@@ -9,7 +9,6 @@
 
 import { Effect, Ref } from "effect"
 import type { ReduceResult } from "../../domain/extension.js"
-import type { SessionId } from "../../domain/ids.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { extension, fromReducer } from "../api.js"
 import {
@@ -79,12 +78,10 @@ export const MemoryActorConfig = {
   handleIntent,
 }
 
-const memoryActor = fromReducer<MemoryState, MemoryIntent>({
+const memoryActor = fromReducer<MemoryState, MemoryIntent, MemoryVault>({
   ...MemoryActorConfig,
   intentSchema: MemoryIntent,
-  // onInit runs in ambient runtime where MemoryVault is provided via setup.layer
-  // @effect-diagnostics strictEffectProvide:off
-  onInit: (({ stateRef, sessionCwd }) =>
+  onInit: ({ stateRef, sessionCwd }) =>
     Effect.gen(function* () {
       const vault = yield* MemoryVault
       yield* vault.ensureDirs()
@@ -97,11 +94,7 @@ const memoryActor = fromReducer<MemoryState, MemoryIntent>({
         yield* Ref.update(stateRef, (s) => setProjectKey(s, key))
         yield* vault.ensureDirs(key)
       }
-    })) as (ctx: {
-    sessionId: SessionId
-    stateRef: Ref.Ref<MemoryState>
-    sessionCwd?: string
-  }) => Effect.Effect<void>,
+    }),
 })
 
 // ── Extension ──

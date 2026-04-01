@@ -27,7 +27,7 @@ import {
   makePersistCodec,
 } from "./extension-actor-shared.js"
 
-export interface FromReducerConfig<State, Intent = void> {
+export interface FromReducerConfig<State, Intent = void, InitR = never> {
   readonly id: string
   readonly initial: State
   readonly reduce: (
@@ -49,12 +49,13 @@ export interface FromReducerConfig<State, Intent = void> {
   /** If true, state is persisted on Persist effect and hydrated on init */
   readonly persist?: boolean
   /** Custom init logic — runs after persistence hydration, receives stateRef for mutation.
-   *  Runs in the ambient runtime context — extension layer services (from setup.layer) are available. */
+   *  Runs in the ambient runtime context — extension layer services (from setup.layer) are available.
+   *  Use the InitR generic to declare required services (e.g. fromReducer<S, I, MyService>). */
   readonly onInit?: (ctx: {
     sessionId: SessionId
     stateRef: Ref.Ref<State>
     sessionCwd?: string
-  }) => Effect.Effect<void>
+  }) => Effect.Effect<void, never, InitR>
 }
 
 export interface FromReducerResult {
@@ -68,8 +69,8 @@ export interface FromReducerResult {
  * Services (ExtensionTurnControl) are acquired at spawn
  * time and closed over — the returned actor's methods have no service requirements.
  */
-export const fromReducer = <State, Intent = void>(
-  config: FromReducerConfig<State, Intent>,
+export const fromReducer = <State, Intent = void, InitR = never>(
+  config: FromReducerConfig<State, Intent, InitR>,
 ): FromReducerResult => {
   const spawnActor: SpawnActor = (ctx) =>
     Effect.gen(function* () {
@@ -111,7 +112,8 @@ export const fromReducer = <State, Intent = void>(
       const actor: ExtensionActor = {
         id: config.id,
 
-        // Hydrate persisted state on init
+        // Hydrate persisted state on init.
+        // InitR services are provided in the ambient runtime (from extension's setup.layer).
         init: Effect.gen(function* () {
           if (config.persist === true && storage._tag === "Some" && codec !== undefined) {
             const loaded = yield* storage.value
@@ -127,7 +129,7 @@ export const fromReducer = <State, Intent = void>(
               }
             }
           }
-          // Custom init hook
+          // Custom init hook — InitR services available in ambient context
           if (config.onInit !== undefined) {
             let sessionCwd: string | undefined
             if (storage._tag === "Some") {
@@ -140,7 +142,8 @@ export const fromReducer = <State, Intent = void>(
               .onInit({ sessionId: ctx.sessionId, stateRef, sessionCwd })
               .pipe(Effect.catchEager(() => Effect.void))
           }
-        }),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any as Effect.Effect<void>,
 
         handleEvent: (event: AgentEvent, reduceCtx: ExtensionReduceContext) =>
           Effect.gen(function* () {
