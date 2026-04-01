@@ -185,11 +185,19 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
  * 2. Feeds the event to ExtensionStateRuntime.reduce
  * 3. If any machine changed state, publishes UI snapshots through BaseEventStore
  *
- * Re-entrance guard: a Ref tracks reduce depth. If publish is called while
- * reduce is already running (e.g. extension actor spawn publishes
- * MachineInspected, or persist.onRestore publishes TurnRecoveryApplied), the nested
- * publish skips reduce entirely. This prevents deadlocks on spawnSemaphore and
- * eliminates the need for event-type allowlists.
+ * Re-entrance guard: a Ref tracks whether any reduce is in progress. If publish
+ * is called while reduce is running, the nested publish skips reduce. This
+ * prevents deadlocks from re-entrant semaphore acquisition in getOrSpawnActors.
+ *
+ * Note: this is a process-wide guard, not fiber-scoped. The inspector's
+ * combineInspectors fans out to child fibers (concurrency: "unbounded"), so the
+ * re-entrant MachineInspected publish comes from a different fiber than the
+ * parent reduce. A fiber-ID guard misses this. The process-wide Ref is correct
+ * because:
+ * - Extension reduction is already serialized per session via spawnSemaphore
+ * - Cross-session reduce suppression is safe (reduce is idempotent — the
+ *   next publish for that session will catch up)
+ * - This guard is temporary — Batch 4 decouples reduce from publish entirely
  */
 export const makeReducingEventStore = Layer.effect(
   EventStore,
