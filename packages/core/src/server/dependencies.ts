@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
+import { Effect, FileSystem, Layer, Path, Ref, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -183,44 +183,57 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
  * On every publish, it:
  * 1. Delegates to BaseEventStore.publish (raw storage)
  * 2. Feeds the event to ExtensionStateRuntime.reduce
- * 3. If any machine changed state, publishes UI snapshots through BaseEventStore (no recursion)
+ * 3. If any machine changed state, publishes UI snapshots through BaseEventStore
  *
- * ExtensionUiSnapshot events skip reduce entirely to avoid infinite loops.
+ * Re-entrance guard: a Ref tracks reduce depth. If publish is called while
+ * reduce is already running (e.g. extension actor spawn publishes
+ * MachineInspected, or persist.onRestore publishes TurnRecoveryApplied), the nested
+ * publish skips reduce entirely. This prevents deadlocks on spawnSemaphore and
+ * eliminates the need for event-type allowlists.
  */
 export const makeReducingEventStore = Layer.effect(
   EventStore,
   Effect.gen(function* () {
     const base = yield* BaseEventStore
     const stateRuntime = yield* ExtensionStateRuntime
+    const reduceDepth = yield* Ref.make(0)
 
     return {
       publish: (event: AgentEvent) =>
         base.publish(event).pipe(
           Effect.tap(() => {
-            // Skip reduce for synthetic/diagnostic events to avoid recursion.
-            // ExtensionUiSnapshot: published by reduce itself (infinite loop).
-            // MachineInspected: published during Machine.spawn/transition — re-enters
-            // getOrSpawnActors while the spawnSemaphore is held (deadlock).
-            if (event._tag === "ExtensionUiSnapshot" || event._tag === "MachineInspected")
-              return Effect.void
-
             const sessionId = getEventSessionId(event)
             if (sessionId === undefined) return Effect.void
 
-            const branchId = getEventBranchId(event)
-            return stateRuntime.reduce(event, { sessionId, branchId }).pipe(
-              Effect.tap((changed) => {
-                if (!changed || branchId === undefined) return Effect.void
-                return stateRuntime.getUiSnapshots(sessionId, branchId).pipe(
-                  Effect.tap((snapshots) =>
-                    Effect.forEach(snapshots, (snapshot) => base.publish(snapshot), {
-                      concurrency: "unbounded",
-                    }),
+            return Ref.get(reduceDepth).pipe(
+              Effect.flatMap((depth) => {
+                if (depth > 0) {
+                  return Effect.logDebug("re-entrant reduce skipped").pipe(
+                    Effect.annotateLogs({ event: event._tag, depth }),
+                  )
+                }
+
+                const branchId = getEventBranchId(event)
+                return Ref.update(reduceDepth, (d: number) => d + 1).pipe(
+                  Effect.andThen(
+                    stateRuntime.reduce(event, { sessionId, branchId }).pipe(
+                      Effect.tap((changed) => {
+                        if (!changed || branchId === undefined) return Effect.void
+                        return stateRuntime.getUiSnapshots(sessionId, branchId).pipe(
+                          Effect.tap((snapshots) =>
+                            Effect.forEach(snapshots, (snapshot) => base.publish(snapshot), {
+                              concurrency: "unbounded",
+                            }),
+                          ),
+                          Effect.catchEager(() => Effect.void),
+                        )
+                      }),
+                      Effect.catchDefect(() => Effect.void),
+                    ),
                   ),
-                  Effect.catchEager(() => Effect.void),
+                  Effect.ensuring(Ref.update(reduceDepth, (d: number) => d - 1)),
                 )
               }),
-              Effect.catchDefect(() => Effect.void),
             )
           }),
         ),

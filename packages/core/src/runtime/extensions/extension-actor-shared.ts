@@ -78,33 +78,35 @@ export const interpretEffects = (
   turnControl: ExtensionTurnControlService,
   persistFn?: () => Effect.Effect<void>,
 ): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    for (const effect of effects) {
-      switch (effect._tag) {
-        case "QueueFollowUp":
-          if (branchId !== undefined) {
-            yield* turnControl
-              .queueFollowUp({
-                sessionId,
-                branchId,
-                content: effect.content,
-                metadata: effect.metadata,
-              })
-              .pipe(Effect.catchDefect(() => Effect.void))
-          }
-          break
-        case "Interject":
-          if (branchId !== undefined) {
-            yield* turnControl
-              .interject({ sessionId, branchId, content: effect.content })
-              .pipe(Effect.catchDefect(() => Effect.void))
-          }
-          break
-        case "Persist":
-          if (persistFn !== undefined) {
-            yield* persistFn().pipe(Effect.catchDefect(() => Effect.void))
-          }
-          break
+  Effect.withSpan("interpretEffects")(
+    Effect.gen(function* () {
+      for (const effect of effects) {
+        switch (effect._tag) {
+          case "QueueFollowUp":
+            if (branchId !== undefined) {
+              yield* turnControl
+                .queueFollowUp({
+                  sessionId,
+                  branchId,
+                  content: effect.content,
+                  metadata: effect.metadata,
+                })
+                .pipe(Effect.catchDefect(() => Effect.void))
+            }
+            break
+          case "Interject":
+            if (branchId !== undefined) {
+              yield* turnControl
+                .interject({ sessionId, branchId, content: effect.content })
+                .pipe(Effect.catchDefect(() => Effect.void))
+            }
+            break
+          case "Persist":
+            if (persistFn !== undefined) {
+              yield* persistFn().pipe(Effect.catchDefect(() => Effect.void))
+            }
+            break
+        }
       }
-    }
-  })
+    }),
+  )

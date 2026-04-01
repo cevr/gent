@@ -468,7 +468,7 @@ const executeToolCalls = (params: {
         const run = params.toolRunner.run(toolCall, ctx, { bypass: params.bypass })
         const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
         const result = yield* tool?.concurrency === "serial"
-          ? params.bashSemaphore.withPermits(1)(run)
+          ? Effect.withSpan("AgentLoop.bashSemaphore")(params.bashSemaphore.withPermits(1)(run))
           : run
 
         const outputSummary = summarizeToolOutput(result)
@@ -1762,18 +1762,20 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           // until actor.start. This prevents the self-deadlock where
           // background fibers re-enter getLoop before the handle is
           // installed in loopsRef.
-          const created = yield* loopsSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              const existing = (yield* Ref.get(loopsRef)).get(key)
-              if (existing !== undefined) return undefined
-              const handle = yield* makeLoop(sessionId, branchId)
-              yield* Ref.update(loopsRef, (loops) => {
-                const next = new Map(loops)
-                next.set(key, handle)
-                return next
-              })
-              return handle
-            }),
+          const created = yield* Effect.withSpan("AgentLoop.getLoop.semaphore")(
+            loopsSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                const existing = (yield* Ref.get(loopsRef)).get(key)
+                if (existing !== undefined) return undefined
+                const handle = yield* makeLoop(sessionId, branchId)
+                yield* Ref.update(loopsRef, (loops) => {
+                  const next = new Map(loops)
+                  next.set(key, handle)
+                  return next
+                })
+                return handle
+              }),
+            ),
           )
           if (created !== undefined) {
             yield* created.actor.start
@@ -2337,7 +2339,9 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                       }
                       const run = toolRunner.run(toolCall, ctx, { bypass: input.bypass })
                       const result = yield* tool?.concurrency === "serial"
-                        ? bashSemaphore.withPermits(1)(run)
+                        ? Effect.withSpan("AgentActor.bashSemaphore")(
+                            bashSemaphore.withPermits(1)(run),
+                          )
                         : run
 
                       const outputSummary = summarizeToolOutput(result)

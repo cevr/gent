@@ -94,172 +94,188 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
         const spawnSemaphore = yield* Semaphore.make(1)
 
         const getOrSpawnActors = (sessionId: SessionId, branchId?: BranchId) =>
-          spawnSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              // Re-check after acquiring semaphore
-              const existing = (yield* Ref.get(actorsRef)).get(sessionId)
-              if (existing !== undefined) return existing
+          Effect.withSpan("ExtensionStateRuntime.spawnActors")(
+            spawnSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                // Re-check after acquiring semaphore
+                const existing = (yield* Ref.get(actorsRef)).get(sessionId)
+                if (existing !== undefined) return existing
 
-              // Yield services lazily — they're available at call time (reduce),
-              // not at layer-build time. Provide them to spawn calls.
-              const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
-              const spawnLayer =
-                turnControl._tag === "Some"
-                  ? Layer.succeed(ExtensionTurnControl, turnControl.value)
-                  : ExtensionTurnControl.Test()
+                // Yield services lazily — they're available at call time (reduce),
+                // not at layer-build time. Provide them to spawn calls.
+                const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
+                const spawnLayer =
+                  turnControl._tag === "Some"
+                    ? Layer.succeed(ExtensionTurnControl, turnControl.value)
+                    : ExtensionTurnControl.Test()
 
-              const entries: ActorEntry[] = []
-              for (const { extensionId, spawn, projection } of spawnActors) {
-                const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
-                  sessionId,
-                  branchId,
-                }).pipe(
-                  Effect.tap((a) => a.init),
-                  // @effect-diagnostics-next-line strictEffectProvide:off
-                  Effect.provide(spawnLayer),
-                  Effect.catchDefect((defect) =>
-                    Effect.logWarning("actor.init.failed").pipe(
-                      Effect.annotateLogs({ extensionId, error: String(defect) }),
-                      Effect.as(undefined),
+                const entries: ActorEntry[] = []
+                for (const { extensionId, spawn, projection } of spawnActors) {
+                  const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
+                    sessionId,
+                    branchId,
+                  }).pipe(
+                    Effect.tap((a) => a.init),
+                    // @effect-diagnostics-next-line strictEffectProvide:off
+                    Effect.provide(spawnLayer),
+                    Effect.catchDefect((defect) =>
+                      Effect.logWarning("actor.init.failed").pipe(
+                        Effect.annotateLogs({ extensionId, error: String(defect) }),
+                        Effect.as(undefined),
+                      ),
                     ),
-                  ),
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ) as any
-                const actor = yield* spawnEffect
-                if (actor !== undefined) {
-                  entries.push({ actor, projection })
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  ) as any
+                  const actor = yield* spawnEffect
+                  if (actor !== undefined) {
+                    entries.push({ actor, projection })
+                  }
                 }
-              }
 
-              yield* Ref.update(actorsRef, (actors) => {
-                const next = new Map(actors)
-                next.set(sessionId, entries)
-                return next
-              })
-              return entries
-            }),
+                yield* Ref.update(actorsRef, (actors) => {
+                  const next = new Map(actors)
+                  next.set(sessionId, entries)
+                  return next
+                })
+                return entries
+              }),
+            ),
           )
 
         return {
           reduce: (event, ctx) =>
-            Effect.gen(function* () {
-              let changed = false
-              const entries = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
-              for (const { actor } of entries) {
-                const actorChanged = yield* actor
-                  .handleEvent(event, ctx)
-                  .pipe(
-                    Effect.catchDefect((defect) =>
-                      Effect.logWarning("actor.handleEvent.failed").pipe(
-                        Effect.annotateLogs({ actorId: actor.id, error: String(defect) }),
-                        Effect.as(false),
-                      ),
-                    ),
-                  )
-                if (actorChanged) changed = true
-              }
-
-              return changed
-            }),
-
-          deriveAll: (sessionId, ctx) =>
-            Effect.gen(function* () {
-              const entries = yield* getOrSpawnActors(sessionId)
-              const results: Array<{ extensionId: string; projection: TurnProjection }> = []
-              for (const { actor, projection } of entries) {
-                if (projection?.deriveTurn === undefined) continue
-                const { state } = yield* actor.getState.pipe(
-                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
-                )
-                if (state !== undefined) {
-                  results.push({
-                    extensionId: actor.id,
-                    projection: projection.deriveTurn(state, ctx),
-                  })
-                }
-              }
-
-              return results
-            }),
-
-          handleIntent: (sessionId, extensionId, intent, epoch, branchId) =>
-            Effect.gen(function* () {
-              const entries = yield* getOrSpawnActors(sessionId, branchId)
-              const entry = entries.find((a) => a.actor.id === extensionId)
-              if (entry?.actor.handleIntent !== undefined) {
-                // Epoch validation: reject stale intents
-                const { version } = yield* entry.actor.getState.pipe(
-                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
-                )
-                if (epoch < version) {
-                  return yield* new StaleIntentError({
-                    extensionId,
-                    expectedEpoch: version,
-                    actualEpoch: epoch,
-                  })
-                }
-                yield* entry.actor
-                  .handleIntent(intent, branchId)
-                  .pipe(Effect.catchDefect(() => Effect.void))
-              }
-            }),
-
-          getUiSnapshots: (sessionId, branchId) =>
-            Effect.gen(function* () {
-              const snapshots: ExtensionUiSnapshot[] = []
-              const entries = yield* getOrSpawnActors(sessionId, branchId)
-              for (const { actor, projection } of entries) {
-                if (projection === undefined) continue
-                const { state, version } = yield* actor.getState.pipe(
-                  Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
-                )
-                if (state === undefined) continue
-                if (projection.deriveUi === undefined) continue
-                let uiModel = projection.deriveUi(state)
-                if (uiModel !== undefined) {
-                  // Validate against schema if provided
-                  if (projection.uiModelSchema !== undefined) {
-                    const validated = yield* Schema.decodeUnknownEffect(
-                      projection.uiModelSchema as Schema.Any,
-                    )(uiModel).pipe(
-                      Effect.catchEager(() =>
-                        Effect.logWarning("extension.uiModel.schemaValidation.failed").pipe(
-                          Effect.annotateLogs({ actorId: actor.id }),
-                          Effect.as(undefined),
+            Effect.withSpan("ExtensionStateRuntime.reduce", {
+              attributes: { "extension.event": event._tag },
+            })(
+              Effect.gen(function* () {
+                let changed = false
+                const entries = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
+                for (const { actor } of entries) {
+                  const actorChanged = yield* actor
+                    .handleEvent(event, ctx)
+                    .pipe(
+                      Effect.catchDefect((defect) =>
+                        Effect.logWarning("actor.handleEvent.failed").pipe(
+                          Effect.annotateLogs({ actorId: actor.id, error: String(defect) }),
+                          Effect.as(false),
                         ),
                       ),
                     )
-                    uiModel = validated
+                  if (actorChanged) changed = true
+                }
+
+                return changed
+              }),
+            ),
+
+          deriveAll: (sessionId, ctx) =>
+            Effect.withSpan("ExtensionStateRuntime.deriveAll")(
+              Effect.gen(function* () {
+                const entries = yield* getOrSpawnActors(sessionId)
+                const results: Array<{ extensionId: string; projection: TurnProjection }> = []
+                for (const { actor, projection } of entries) {
+                  if (projection?.deriveTurn === undefined) continue
+                  const { state } = yield* actor.getState.pipe(
+                    Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
+                  )
+                  if (state !== undefined) {
+                    results.push({
+                      extensionId: actor.id,
+                      projection: projection.deriveTurn(state, ctx),
+                    })
                   }
                 }
-                if (uiModel !== undefined) {
-                  snapshots.push(
-                    new ExtensionUiSnapshotClass({
-                      sessionId,
-                      branchId,
-                      extensionId: actor.id,
-                      epoch: version,
-                      model: uiModel,
-                    }),
-                  )
-                }
-              }
 
-              return snapshots
-            }),
+                return results
+              }),
+            ),
+
+          handleIntent: (sessionId, extensionId, intent, epoch, branchId) =>
+            Effect.withSpan("ExtensionStateRuntime.handleIntent", {
+              attributes: { "extension.id": extensionId },
+            })(
+              Effect.gen(function* () {
+                const entries = yield* getOrSpawnActors(sessionId, branchId)
+                const entry = entries.find((a) => a.actor.id === extensionId)
+                if (entry?.actor.handleIntent !== undefined) {
+                  // Epoch validation: reject stale intents
+                  const { version } = yield* entry.actor.getState.pipe(
+                    Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
+                  )
+                  if (epoch < version) {
+                    return yield* new StaleIntentError({
+                      extensionId,
+                      expectedEpoch: version,
+                      actualEpoch: epoch,
+                    })
+                  }
+                  yield* entry.actor
+                    .handleIntent(intent, branchId)
+                    .pipe(Effect.catchDefect(() => Effect.void))
+                }
+              }),
+            ),
+
+          getUiSnapshots: (sessionId, branchId) =>
+            Effect.withSpan("ExtensionStateRuntime.getUiSnapshots")(
+              Effect.gen(function* () {
+                const snapshots: ExtensionUiSnapshot[] = []
+                const entries = yield* getOrSpawnActors(sessionId, branchId)
+                for (const { actor, projection } of entries) {
+                  if (projection === undefined) continue
+                  const { state, version } = yield* actor.getState.pipe(
+                    Effect.catchDefect(() => Effect.succeed({ state: undefined, version: 0 })),
+                  )
+                  if (state === undefined) continue
+                  if (projection.deriveUi === undefined) continue
+                  let uiModel = projection.deriveUi(state)
+                  if (uiModel !== undefined) {
+                    // Validate against schema if provided
+                    if (projection.uiModelSchema !== undefined) {
+                      const validated = yield* Schema.decodeUnknownEffect(
+                        projection.uiModelSchema as Schema.Any,
+                      )(uiModel).pipe(
+                        Effect.catchEager(() =>
+                          Effect.logWarning("extension.uiModel.schemaValidation.failed").pipe(
+                            Effect.annotateLogs({ actorId: actor.id }),
+                            Effect.as(undefined),
+                          ),
+                        ),
+                      )
+                      uiModel = validated
+                    }
+                  }
+                  if (uiModel !== undefined) {
+                    snapshots.push(
+                      new ExtensionUiSnapshotClass({
+                        sessionId,
+                        branchId,
+                        extensionId: actor.id,
+                        epoch: version,
+                        model: uiModel,
+                      }),
+                    )
+                  }
+                }
+
+                return snapshots
+              }),
+            ),
 
           terminateAll: (sessionId) =>
-            Effect.gen(function* () {
-              const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
-              for (const { actor } of actors) {
-                yield* actor.terminate.pipe(Effect.catchDefect(() => Effect.void))
-              }
-              yield* Ref.update(actorsRef, (map) => {
-                const next = new Map(map)
-                next.delete(sessionId)
-                return next
-              })
-            }),
+            Effect.withSpan("ExtensionStateRuntime.terminateAll")(
+              Effect.gen(function* () {
+                const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
+                for (const { actor } of actors) {
+                  yield* actor.terminate.pipe(Effect.catchDefect(() => Effect.void))
+                }
+                yield* Ref.update(actorsRef, (map) => {
+                  const next = new Map(map)
+                  next.delete(sessionId)
+                  return next
+                })
+              }),
+            ),
         }
       }),
     )
