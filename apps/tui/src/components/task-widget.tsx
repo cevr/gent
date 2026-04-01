@@ -14,6 +14,7 @@ const STATUS_ICONS: Record<string, string> = {
   in_progress: "◰",
   completed: "✔",
   failed: "✗",
+  stopped: "◼",
 }
 
 const IN_PROGRESS_SPINNER = ["◰", "◳", "◲", "◱"] as const
@@ -86,6 +87,7 @@ export function TaskWidget(props?: TaskWidgetProps) {
                   case "TaskUpdated":
                   case "TaskCompleted":
                   case "TaskFailed":
+                  case "TaskStopped":
                   case "TaskDeleted":
                     loadTasks()
                     break
