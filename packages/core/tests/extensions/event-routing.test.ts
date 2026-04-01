@@ -268,6 +268,45 @@ describe("ReducingEventStore — event routing", () => {
     }).pipe(Effect.provide(fullLayer))
   })
 
+  it.live(
+    "derive that crashes on ctx=undefined still produces UI snapshots for other extensions",
+    () => {
+      // Extension with derive that reads ctx.agent (crashes when ctx is undefined)
+      const crashingDerive = fromReducer({
+        id: "crashing-derive",
+        initial: { value: 0 },
+        reduce: (state: { value: number }) => ({ state: { value: state.value + 1 } }),
+        // This will throw when called with ctx=undefined in getUiSnapshots
+        derive: (state: { value: number }, ctx?) => {
+          if (ctx === undefined) throw new Error("ctx.agent required")
+          return { uiModel: { value: state.value } }
+        },
+      })
+      const crashingExtension: LoadedExtension = {
+        manifest: { id: "crashing-derive" },
+        kind: "builtin",
+        sourcePath: "test",
+        setup: { spawnActor: crashingDerive.spawnActor, projection: crashingDerive.projection },
+      }
+      const { fullLayer } = makeLayer([recorderExtension, crashingExtension])
+
+      return Effect.gen(function* () {
+        const eventStore = yield* EventStore
+        const stateRuntime = yield* ExtensionStateRuntime
+
+        yield* eventStore.publish(new SessionStarted({ sessionId, branchId }))
+
+        // getUiSnapshots should not crash — crashing derive is caught, recorder still works
+        const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+        const recorder = snapshots.find((s) => s.extensionId === "test-recorder")
+        expect(recorder).toBeDefined()
+        // Crashing extension's snapshot is dropped
+        const crashing = snapshots.find((s) => s.extensionId === "crashing-derive")
+        expect(crashing).toBeUndefined()
+      }).pipe(Effect.provide(fullLayer))
+    },
+  )
+
   it.live("events without branchId skip snapshot publication but still reduce", () => {
     const { fullLayer } = makeLayer([recorderExtension])
 

@@ -26,11 +26,21 @@ export interface ExtensionStorage {
 }
 
 const SAFE_KEY_PATTERN = /^[a-zA-Z0-9_-]+$/
+/** Extension IDs may contain @ and / for scoped packages (e.g. @gent/memory) */
+const SAFE_ID_PATTERN = /^@?[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/
 
 const validateKey = (key: string): void => {
   if (!SAFE_KEY_PATTERN.test(key)) {
     throw new Error(
       `Invalid storage key "${key}". Keys must match /^[a-zA-Z0-9_-]+$/ (no path separators, dots, or special characters).`,
+    )
+  }
+}
+
+const validateExtensionId = (id: string): void => {
+  if (!SAFE_ID_PATTERN.test(id)) {
+    throw new Error(
+      `Invalid extension ID "${id}" for storage. IDs must match /^@?[a-zA-Z0-9_-]+(\\/[a-zA-Z0-9_-]+)*$/.`,
     )
   }
 }
@@ -42,6 +52,7 @@ const validateKey = (key: string): void => {
  * @param baseDir - The base directory for extension storage (e.g. ~/.gent/extensions)
  */
 export const createExtensionStorage = (extensionId: string, baseDir: string): ExtensionStorage => {
+  validateExtensionId(extensionId)
   const dir = join(baseDir, extensionId, "storage")
 
   const ensureDir = () => {
