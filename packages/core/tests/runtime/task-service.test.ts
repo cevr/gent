@@ -22,6 +22,39 @@ const branchId = "task-test-branch" as BranchId
  * The runner blocks on a Deferred — tests resolve it to simulate completion,
  * or leave it pending to test stop/interrupt.
  */
+const makeLayerWithInterruptFlag = (
+  runnerDeferred: Deferred.Deferred<SubagentResult>,
+  interruptedRef: Ref.Ref<boolean>,
+) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
+  const registryLayer = ExtensionRegistry.fromResolved(
+    resolveExtensions([
+      {
+        manifest: { id: "test-agents" },
+        kind: "builtin",
+        sourcePath: "test",
+        setup: { agents: Object.values(Agents), tools: [] },
+      },
+    ]),
+  )
+  const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    run: () =>
+      Deferred.await(runnerDeferred).pipe(Effect.onInterrupt(() => Ref.set(interruptedRef, true))),
+  })
+
+  const baseDeps = Layer.mergeAll(
+    storageLayer,
+    taskStorageLayer,
+    EventStore.Memory,
+    registryLayer,
+    runnerLayer,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  )
+
+  return Layer.provideMerge(TaskService.Live, baseDeps)
+}
+
 const makeLayer = (runnerDeferred: Deferred.Deferred<SubagentResult>) => {
   const storageLayer = Storage.MemoryWithSql()
   const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
@@ -56,7 +89,8 @@ describe("TaskService", () => {
     it.live("stop while running: fiber interrupted, stopped status, TaskStopped event", () =>
       Effect.gen(function* () {
         const deferred = yield* Deferred.make<SubagentResult>()
-        const layer = makeLayer(deferred)
+        const interruptedRef = yield* Ref.make(false)
+        const layer = makeLayerWithInterruptFlag(deferred, interruptedRef)
 
         yield* Effect.gen(function* () {
           const taskService = yield* TaskService
@@ -90,13 +124,14 @@ describe("TaskService", () => {
           expect(stopped).toBeDefined()
           expect(stopped!.status).toBe("stopped")
 
+          // Verify the runner was actually interrupted (not just status set)
+          yield* Effect.sleep("10 millis")
+          expect(yield* Ref.get(interruptedRef)).toBe(true)
+
           // Verify final status in storage
           const final = yield* taskService.get(task.id)
           expect(final).toBeDefined()
           expect(final!.status).toBe("stopped")
-
-          // Let events propagate
-          yield* Effect.sleep("10 millis")
 
           // Check TaskStopped event was published
           const events = yield* Ref.get(eventsRef)

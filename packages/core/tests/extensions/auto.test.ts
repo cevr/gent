@@ -953,4 +953,33 @@ describe("Auto JSONL replay via onInit", () => {
       ),
     ),
   )
+
+  it.live("legacy pointer without sessionId fails closed — no replay", () =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const now = new Date()
+      yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
+      yield* storage.createSession(
+        new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
+      )
+
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+        sessionId: childId,
+        branchId: childBranchId,
+      })
+
+      const snap = yield* getAutoSnapshot(runtime)
+      expect(snap).toBeDefined()
+      const ui = snap!.model as AutoUiModel
+      expect(ui.active).toBe(false) // Not replayed — no sessionId in pointer = fail closed
+    }).pipe(
+      Effect.provide(
+        makeReplayLayer(
+          [{ type: "config", goal: "legacy pointer", maxIterations: 3, startedAt: Date.now() }],
+          undefined, // No sessionId — simulates legacy active.json without scoping
+        ),
+      ),
+    ),
+  )
 })
