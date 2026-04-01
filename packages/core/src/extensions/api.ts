@@ -156,15 +156,43 @@ export interface SimpleAgentDef {
 // ── Simple Event (curated subset of AgentEvent for external authors) ──
 
 export type SimpleEventType =
+  // Session lifecycle
   | "session-started"
+  | "session-name-updated"
+  | "session-settings-updated"
+  // Messages
   | "message-received"
+  // Streaming
   | "stream-started"
+  | "stream-chunk"
   | "stream-ended"
+  // Turn lifecycle
   | "turn-completed"
+  | "turn-recovery-applied"
+  // Tool calls
   | "tool-call-started"
   | "tool-call-succeeded"
   | "tool-call-failed"
+  // Agent lifecycle
   | "agent-switched"
+  | "agent-restarted"
+  // Subagent lifecycle
+  | "subagent-spawned"
+  | "subagent-succeeded"
+  | "subagent-failed"
+  // Tasks
+  | "task-created"
+  | "task-updated"
+  | "task-completed"
+  | "task-failed"
+  | "task-stopped"
+  | "task-deleted"
+  // Branching
+  | "branch-created"
+  | "branch-switched"
+  // Questions
+  | "questions-asked"
+  // Errors
   | "error-occurred"
 
 export interface SimpleEvent {
@@ -173,32 +201,42 @@ export interface SimpleEvent {
   readonly raw: AgentEvent
 }
 
-const mapEventType = (tag: string): SimpleEventType | undefined => {
-  switch (tag) {
-    case "SessionStarted":
-      return "session-started"
-    case "MessageReceived":
-      return "message-received"
-    case "StreamStarted":
-      return "stream-started"
-    case "StreamEnded":
-      return "stream-ended"
-    case "TurnCompleted":
-      return "turn-completed"
-    case "ToolCallStarted":
-      return "tool-call-started"
-    case "ToolCallSucceeded":
-      return "tool-call-succeeded"
-    case "ToolCallFailed":
-      return "tool-call-failed"
-    case "AgentSwitched":
-      return "agent-switched"
-    case "ErrorOccurred":
-      return "error-occurred"
-    default:
-      return undefined
-  }
+/** Maps AgentEvent._tag to SimpleEventType. Diagnostic/internal events are intentionally omitted:
+ *  MachineInspected, MachineTaskSucceeded, MachineTaskFailed, ExtensionUiSnapshot,
+ *  PermissionRequested, PromptPresented, PromptConfirmed, PromptRejected, PromptEdited,
+ *  HandoffPresented, HandoffConfirmed, HandoffRejected, InteractionDismissed,
+ *  ProviderRetrying, BranchSummarized */
+const EVENT_TAG_MAP: Record<string, SimpleEventType> = {
+  SessionStarted: "session-started",
+  SessionNameUpdated: "session-name-updated",
+  SessionSettingsUpdated: "session-settings-updated",
+  MessageReceived: "message-received",
+  StreamStarted: "stream-started",
+  StreamChunk: "stream-chunk",
+  StreamEnded: "stream-ended",
+  TurnCompleted: "turn-completed",
+  TurnRecoveryApplied: "turn-recovery-applied",
+  ToolCallStarted: "tool-call-started",
+  ToolCallSucceeded: "tool-call-succeeded",
+  ToolCallFailed: "tool-call-failed",
+  AgentSwitched: "agent-switched",
+  AgentRestarted: "agent-restarted",
+  SubagentSpawned: "subagent-spawned",
+  SubagentSucceeded: "subagent-succeeded",
+  SubagentFailed: "subagent-failed",
+  TaskCreated: "task-created",
+  TaskUpdated: "task-updated",
+  TaskCompleted: "task-completed",
+  TaskFailed: "task-failed",
+  TaskStopped: "task-stopped",
+  TaskDeleted: "task-deleted",
+  BranchCreated: "branch-created",
+  BranchSwitched: "branch-switched",
+  QuestionsAsked: "questions-asked",
+  ErrorOccurred: "error-occurred",
 }
+
+const mapEventType = (tag: string): SimpleEventType | undefined => EVENT_TAG_MAP[tag]
 
 // ── Simple State Config ──
 

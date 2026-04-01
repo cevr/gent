@@ -157,22 +157,39 @@ ext.state({
 
 **State is `Readonly<S>`** in the reducer — returning the same reference means "no change" (efficient ref equality check).
 
-**Events** are curated `SimpleEvent` objects with kebab-case `type`:
+**Events** are `SimpleEvent` objects with kebab-case `type`:
 
-| type                  | When                     |
-| --------------------- | ------------------------ |
-| `session-started`     | New session created      |
-| `message-received`    | User message received    |
-| `stream-started`      | LLM streaming begins     |
-| `stream-ended`        | LLM streaming ends       |
-| `turn-completed`      | Turn finished            |
-| `tool-call-started`   | Tool execution begins    |
-| `tool-call-succeeded` | Tool execution succeeded |
-| `tool-call-failed`    | Tool execution failed    |
-| `agent-switched`      | Active agent changed     |
-| `error-occurred`      | Error in the agent loop  |
+| type                       | When                           |
+| -------------------------- | ------------------------------ |
+| `session-started`          | New session created            |
+| `session-name-updated`     | Session name changed           |
+| `session-settings-updated` | Session settings changed       |
+| `message-received`         | User message received          |
+| `stream-started`           | LLM streaming begins           |
+| `stream-chunk`             | LLM streaming chunk received   |
+| `stream-ended`             | LLM streaming ends             |
+| `turn-completed`           | Turn finished                  |
+| `turn-recovery-applied`    | Turn recovered from checkpoint |
+| `tool-call-started`        | Tool execution begins          |
+| `tool-call-succeeded`      | Tool execution succeeded       |
+| `tool-call-failed`         | Tool execution failed          |
+| `agent-switched`           | Active agent changed           |
+| `agent-restarted`          | Agent restarted                |
+| `subagent-spawned`         | Subagent launched              |
+| `subagent-succeeded`       | Subagent completed             |
+| `subagent-failed`          | Subagent failed                |
+| `task-created`             | Task created                   |
+| `task-updated`             | Task updated                   |
+| `task-completed`           | Task completed                 |
+| `task-failed`              | Task failed                    |
+| `task-stopped`             | Task stopped                   |
+| `task-deleted`             | Task deleted                   |
+| `branch-created`           | Branch created                 |
+| `branch-switched`          | Branch switched                |
+| `questions-asked`          | Agent asked questions          |
+| `error-occurred`           | Error in the agent loop        |
 
-Internal/diagnostic events are filtered out before reaching your reducer.
+Internal/diagnostic events (machine inspection, interaction flow, provider retries) are filtered out before reaching your reducer.
 
 **Effects** — trigger side effects from the reducer:
 
