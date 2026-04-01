@@ -79,61 +79,6 @@ describe("Plan extension E2E", () => {
     }),
   )
 
-  it.live("execute plan: heuristic advances todos through StreamStarted/TurnCompleted", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* createSequenceProvider([
-        // Turn 1: plan output
-        textStep("- [ ] Fix auth\n- [ ] Add tests\n- [ ] Update docs"),
-        // Turn 2: executing — first todo
-        textStep("Fixed the auth bug."),
-        // Turn 3: executing — second todo
-        textStep("Added tests."),
-        // Turn 4: executing — third todo (should auto-complete → normal mode)
-        textStep("Updated docs."),
-      ])
-
-      const e2eLayer = createE2ELayer({ providerLayer })
-
-      yield* Effect.gen(function* () {
-        const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ExtensionStateRuntime
-
-        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
-          sessionId,
-          branchId,
-        })
-
-        // Toggle plan mode + run to extract todos
-        yield* stateRuntime.handleIntent(sessionId, "plan", { _tag: "TogglePlan" }, 0, branchId)
-        yield* agentLoop.run(makeMessage("Create a plan"))
-
-        const planned = yield* getPlanSnapshot(stateRuntime)
-        expect(planned.todos.length).toBe(3)
-
-        // Execute plan (use high epoch to avoid stale rejection after many events)
-        yield* stateRuntime.handleIntent(
-          sessionId,
-          "plan",
-          { _tag: "ExecutePlan" },
-          Number.MAX_SAFE_INTEGER,
-          branchId,
-        )
-        const executing = yield* getPlanSnapshot(stateRuntime)
-        expect(executing.mode).toBe("executing")
-
-        // Run 3 turns — heuristic: StreamStarted marks first pending in-progress,
-        // TurnCompleted marks all in-progress as done
-        yield* agentLoop.run(makeMessage("Execute step 1"))
-        yield* agentLoop.run(makeMessage("Execute step 2"))
-        yield* agentLoop.run(makeMessage("Execute step 3"))
-
-        const final = yield* getPlanSnapshot(stateRuntime)
-        // All todos done → mode should be "normal"
-        expect(final.mode).toBe("normal")
-        expect(final.progress.done).toBe(3)
-        expect(final.progress.total).toBe(3)
-        expect(final.todos.every((t) => t.status === "done")).toBe(true)
-      }).pipe(Effect.provide(e2eLayer))
-    }),
-  )
+  // Heuristic executor was removed — execution tracking is now task-event-based only.
+  // See plan.test.ts "executing behavior — task events" for pure reducer coverage.
 })

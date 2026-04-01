@@ -42,6 +42,8 @@ export const PlanState = Schema.Struct({
   pendingText: Schema.optional(Schema.String),
   /** taskId → todo index mapping for execution tracking */
   taskMap: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  /** Path to the plan file on disk (set when plan tool approves) */
+  planFilePath: Schema.optional(Schema.String),
 })
 export type PlanState = typeof PlanState.Type
 
@@ -295,51 +297,83 @@ const reduceExecutingTask = (
   return undefined
 }
 
-const reduceExecutingHeuristic = (state: PlanState, event: AgentEvent): ReduceResult<PlanState> => {
-  if (event._tag === "StreamStarted") {
-    const pendingIdx = state.todos.findIndex((t) => t.status === "pending")
-    if (pendingIdx === -1) return { state }
-    return { state: { ...state, todos: setTodoStatus(state.todos, pendingIdx, "in-progress") } }
-  }
+const reduceExecutingMode = (state: PlanState, event: AgentEvent): ReduceResult<PlanState> =>
+  reduceExecutingTask(state, event) ?? { state }
 
-  if (event._tag === "TurnCompleted") {
-    const hasInProgress = state.todos.some((t) => t.status === "in-progress")
-    if (!hasInProgress) return { state }
-    const updated = state.todos.map((t) =>
-      t.status === "in-progress" ? { ...t, status: "done" as const } : t,
-    )
-    return {
-      state: {
-        mode: allComplete(updated) ? "normal" : state.mode,
-        todos: updated,
-        taskMap: state.taskMap,
-      },
-    }
-  }
+// ── Plan tool observation ──
 
-  if (event._tag === "ToolCallSucceeded") {
-    if (event.toolName !== "edit" && event.toolName !== "write") return { state }
-    const inProgressIdx = state.todos.findIndex((t) => t.status === "in-progress")
-    if (inProgressIdx === -1) return { state }
-    let updated = setTodoStatus(state.todos, inProgressIdx, "done")
-    const nextPendingIdx = updated.findIndex((t) => t.status === "pending")
-    if (nextPendingIdx !== -1) {
-      updated = setTodoStatus(updated, nextPendingIdx, "in-progress")
-    }
-    return {
-      state: {
-        mode: allComplete(updated) ? "normal" : state.mode,
-        todos: updated,
-        taskMap: state.taskMap,
-      },
-    }
+/** Parse plan tool output from ToolCallSucceeded.output (stringified JSON) */
+const parsePlanToolOutput = (
+  output: unknown,
+): { decision: string; plan?: string; path?: string } | undefined => {
+  // ToolCallSucceeded.output is Schema.optional(Schema.String) — JSON-stringified
+  if (typeof output !== "string") return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(output)
+  } catch {
+    return undefined
   }
-
-  return { state }
+  if (typeof parsed !== "object" || parsed === null) return undefined
+  const obj = parsed as Record<string, unknown>
+  if (typeof obj["decision"] !== "string") return undefined
+  return {
+    decision: obj["decision"],
+    plan: typeof obj["plan"] === "string" ? obj["plan"] : undefined,
+    path: typeof obj["path"] === "string" ? obj["path"] : undefined,
+  }
 }
 
-const reduceExecutingMode = (state: PlanState, event: AgentEvent): ReduceResult<PlanState> =>
-  reduceExecutingTask(state, event) ?? reduceExecutingHeuristic(state, event)
+const reducePlanToolResult = (
+  state: PlanState,
+  event: AgentEvent,
+): ReduceResult<PlanState> | undefined => {
+  if (event._tag !== "ToolCallSucceeded" || event.toolName !== "plan") return undefined
+
+  const parsed = parsePlanToolOutput(event.output)
+  if (parsed === undefined) return undefined
+
+  if (parsed.decision === "yes" && parsed.plan !== undefined) {
+    const todos = extractTodos(parsed.plan)
+    return {
+      state: {
+        ...state,
+        mode: "executing",
+        todos: todos.length > 0 ? todos : state.todos,
+        pendingText: undefined,
+        taskMap: {},
+        planFilePath: parsed.path,
+      },
+      effects: [
+        {
+          _tag: "QueueFollowUp" as const,
+          content: [
+            "The plan has been approved. Execute it by calling the handoff tool with the plan as context.",
+            parsed.path !== undefined ? `Plan file: ${parsed.path}` : undefined,
+            parsed.plan !== undefined ? `Plan:\n${parsed.plan}` : undefined,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        },
+      ],
+    }
+  }
+
+  if (parsed.decision === "edit" && parsed.plan !== undefined) {
+    const todos = extractTodos(parsed.plan)
+    return {
+      state: {
+        ...state,
+        mode: "plan",
+        todos: todos.length > 0 ? todos : state.todos,
+        pendingText: undefined,
+        planFilePath: parsed.path,
+      },
+    }
+  }
+
+  return undefined
+}
 
 // ── Reduce ──
 
@@ -348,6 +382,10 @@ const reduce = (
   event: AgentEvent,
   _ctx: ExtensionReduceContext,
 ): ReduceResult<PlanState> => {
+  // Plan tool result can fire in any mode
+  const planToolResult = reducePlanToolResult(state, event)
+  if (planToolResult !== undefined) return planToolResult
+
   if (state.mode === "plan") return reducePlanMode(state, event)
   if (state.mode === "executing") return reduceExecutingMode(state, event)
   return { state }
@@ -394,12 +432,17 @@ const planActor = fromReducer<PlanState, PlanIntent>({
   stateSchema: PlanState,
   intentSchema: PlanIntent,
   uiModelSchema: PlanUiModel,
+  persist: true,
 })
 
 export const PlanSpawnActor = planActor.spawnActor
 
 // ── Extension ──
 
+import { PlanTool } from "../tools/plan.js"
+export { PlanTool, PlanParams } from "../tools/plan.js"
+
 export const PlanExtension = extension("@gent/plan", (ext) => {
   ext.actor(planActor)
+  ext.tool(PlanTool)
 })

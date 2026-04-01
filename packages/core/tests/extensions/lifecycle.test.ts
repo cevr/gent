@@ -19,10 +19,9 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 describe("createExtensionHarness", () => {
-  test("WorkflowToolsExtension provides tools", () => {
+  test("WorkflowToolsExtension provides audit tool", () => {
     const harness = createExtensionHarness(WorkflowToolsExtension)
     expect(harness.tools.has("audit")).toBe(true)
-    expect(harness.tools.has("plan")).toBe(true)
     expect(harness.spawnActor).toBeUndefined()
   })
 
@@ -34,9 +33,10 @@ describe("createExtensionHarness", () => {
     expect(harness.spawnActor).toBeUndefined()
   })
 
-  test("PlanExtension provides spawnActor", () => {
+  test("PlanExtension provides spawnActor and plan tool", () => {
     const harness = createExtensionHarness(PlanExtension)
     expect(harness.spawnActor).toBeDefined()
+    expect(harness.tools.has("plan")).toBe(true)
   })
 })
 

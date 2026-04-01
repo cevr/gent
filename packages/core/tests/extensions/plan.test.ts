@@ -317,59 +317,7 @@ describe("Plan actor", () => {
 describe("Plan pure reducer — executing behavior", () => {
   const { reduce, derive, intent, events } = createActorHarness(PlanActorConfig)
 
-  test("executing mode — StreamStarted marks first pending as in-progress", () => {
-    const state: PlanState = {
-      mode: "executing",
-      todos: [
-        { id: 1, text: "A", status: "pending" },
-        { id: 2, text: "B", status: "pending" },
-      ],
-    }
-    const result = reduce(state, events.streamStarted())
-    expect(result.state.todos[0]!.status).toBe("in-progress")
-    expect(result.state.todos[1]!.status).toBe("pending")
-  })
-
-  test("executing mode — TurnCompleted marks in-progress as done", () => {
-    const state: PlanState = {
-      mode: "executing",
-      todos: [
-        { id: 1, text: "A", status: "in-progress" },
-        { id: 2, text: "B", status: "pending" },
-      ],
-    }
-    const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
-    expect(result.state.todos[0]!.status).toBe("done")
-    expect(result.state.mode).toBe("executing") // Still have pending items
-  })
-
-  test("executing mode — transitions to normal when all done", () => {
-    const state: PlanState = {
-      mode: "executing",
-      todos: [{ id: 1, text: "A", status: "in-progress" }],
-    }
-    const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
-    expect(result.state.todos[0]!.status).toBe("done")
-    expect(result.state.mode).toBe("normal")
-  })
-
-  test("executing mode — edit tool success advances progress and auto-starts next", () => {
-    const state: PlanState = {
-      mode: "executing",
-      todos: [
-        { id: 1, text: "A", status: "in-progress" },
-        { id: 2, text: "B", status: "pending" },
-      ],
-    }
-    const result = reduce(
-      state,
-      events.toolCallSucceeded({ toolCallId: "tc1" as ToolCallId, toolName: "edit" }),
-    )
-    expect(result.state.todos[0]!.status).toBe("done")
-    expect(result.state.todos[1]!.status).toBe("in-progress")
-  })
-
-  test("executing mode — non-edit tool success does not advance", () => {
+  test("executing mode — unmatched events preserve state", () => {
     const state: PlanState = {
       mode: "executing",
       todos: [{ id: 1, text: "A", status: "in-progress" }],
@@ -447,6 +395,76 @@ describe("Plan pure reducer — executing behavior", () => {
       todos: [{ id: 1, text: "A", status: "pending" }],
     }
     const result = intent!(state, { _tag: "TogglePlan" })
+    expect(result.state.mode).toBe("normal")
+  })
+})
+
+describe("Plan pure reducer — plan tool observation", () => {
+  const { reduce, events } = createActorHarness(PlanActorConfig)
+
+  const planToolOutput = (output: Record<string, unknown>) =>
+    events.toolCallSucceeded({
+      toolCallId: "tc-plan" as ToolCallId,
+      toolName: "plan",
+      output: JSON.stringify(output),
+    })
+
+  test("plan tool decision=yes transitions to executing with todos", () => {
+    const state: PlanState = { mode: "normal", todos: [] }
+    const result = reduce(
+      state,
+      planToolOutput({
+        mode: "plan-only",
+        decision: "yes",
+        plan: "## Plan\n- [ ] Fix auth\n- [ ] Add tests",
+        path: "/tmp/plan.md",
+      }),
+    )
+    expect(result.state.mode).toBe("executing")
+    expect(result.state.todos.length).toBe(2)
+    expect(result.state.planFilePath).toBe("/tmp/plan.md")
+    expect(result.state.taskMap).toEqual({})
+    expect(result.effects?.length).toBe(1)
+    expect(result.effects![0]!._tag).toBe("QueueFollowUp")
+  })
+
+  test("plan tool decision=edit stays in plan mode with extracted todos", () => {
+    const state: PlanState = { mode: "normal", todos: [] }
+    const result = reduce(
+      state,
+      planToolOutput({
+        mode: "plan-only",
+        decision: "edit",
+        plan: "- [ ] Refactored step 1\n- [ ] Step 2",
+        path: "/tmp/plan-edited.md",
+      }),
+    )
+    expect(result.state.mode).toBe("plan")
+    expect(result.state.todos.length).toBe(2)
+    expect(result.state.planFilePath).toBe("/tmp/plan-edited.md")
+    expect(result.effects).toBeUndefined()
+  })
+
+  test("plan tool decision=no is ignored", () => {
+    const state: PlanState = { mode: "normal", todos: [] }
+    const result = reduce(
+      state,
+      planToolOutput({ mode: "plan-only", decision: "no", plan: "some plan" }),
+    )
+    expect(result.state.mode).toBe("normal")
+    expect(result.state.todos.length).toBe(0)
+  })
+
+  test("non-plan tool ToolCallSucceeded is ignored", () => {
+    const state: PlanState = { mode: "normal", todos: [] }
+    const result = reduce(
+      state,
+      events.toolCallSucceeded({
+        toolCallId: "tc1" as ToolCallId,
+        toolName: "read",
+        output: JSON.stringify({ decision: "yes" }),
+      }),
+    )
     expect(result.state.mode).toBe("normal")
   })
 })
