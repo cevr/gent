@@ -67,6 +67,13 @@ import type { Message, MessageMetadata } from "../domain/message.js"
 import { fromReducer } from "../runtime/extensions/from-reducer.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { interpretEffects } from "../runtime/extensions/extension-actor-shared.js"
+import {
+  createExtensionStorage,
+  type ExtensionStorage,
+} from "../runtime/extensions/extension-storage.js"
+import { homedir } from "node:os"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { join as joinPath } from "node:path"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -112,6 +119,7 @@ export {
 } from "../domain/extension.js"
 export type { PromptSection } from "../domain/prompt.js"
 export type { AgentEvent } from "../domain/event.js"
+export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
 
 // ── Simple Parameter Types ──
 
@@ -313,6 +321,11 @@ export interface ExtensionBuilder {
   /** Inject a message mid-turn (interrupts the current turn).
    *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
   interject(content: string): void
+
+  /** File-backed key-value storage, namespaced by extension ID.
+   *  Stored at ~/.gent/extensions/<id>/storage/<key>.json.
+   *  Available at setup time and in hook handlers. */
+  readonly storage: ExtensionStorage
 
   // ── Full-power path (Effect-aware) ──
 
@@ -543,7 +556,14 @@ export const extension = (
         },
       }
 
+      const extensionStorage = createExtensionStorage(
+        id,
+        joinPath(homedir(), ".gent", "extensions"),
+      )
+
       const builder: ExtensionBuilder = {
+        storage: extensionStorage,
+
         tool: (def) => {
           if (isFullToolDef(def)) {
             tools.push(def)
