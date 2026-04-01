@@ -472,10 +472,10 @@ const wrapTransformHandler =
       catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
     }).pipe(
       Effect.orDie,
-      Effect.tap(() => {
-        effectBinder.unbind()
-        return drainEffects(effects, hookKey, input)
-      }),
+      // Always unbind (even on failure) to keep the stack clean
+      Effect.ensuring(Effect.sync(() => effectBinder.unbind())),
+      // Drain effects only on success
+      Effect.tap(() => drainEffects(effects, hookKey, input)),
     ) as Effect.Effect<O>
   }
 
@@ -493,8 +493,7 @@ const wrapFireAndForgetHandler =
       yield* Effect.tryPromise({
         try: () => Promise.resolve(handler(input)),
         catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
-      }).pipe(Effect.orDie)
-      effectBinder.unbind()
+      }).pipe(Effect.orDie, Effect.ensuring(Effect.sync(() => effectBinder.unbind())))
       yield* drainEffects(effects, hookKey, input)
     })
 
@@ -542,17 +541,16 @@ export const extension = (
       let stateConfig: SimpleStateConfig<any> | undefined
       let actorResult: ActorResult | undefined
 
-      // Per-invocation effect buffer for imperative side effects
-      let currentEffects: ExtensionEffect[] | undefined
-      let currentHookKey: string | undefined
+      // Stack-based effect buffer for imperative side effects.
+      // Stack is necessary because interceptor chains nest via next() — an outer
+      // handler's buffer must survive while inner interceptors bind their own.
+      const effectStack: Array<{ effects: ExtensionEffect[]; hookKey: string }> = []
       const effectBinder: EffectBinder = {
         bind: (effects, hookKey) => {
-          currentEffects = effects
-          currentHookKey = hookKey
+          effectStack.push({ effects, hookKey })
         },
         unbind: () => {
-          currentEffects = undefined
-          currentHookKey = undefined
+          effectStack.pop()
         },
       }
 
@@ -611,35 +609,37 @@ export const extension = (
         }) as any,
 
         queueFollowUp: (content, metadata?) => {
-          if (currentEffects === undefined) {
+          const top = effectStack[effectStack.length - 1]
+          if (top === undefined) {
             throw new Error(
               `ext.queueFollowUp() called outside of a hook handler. ` +
                 `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
             )
           }
-          if (!EFFECT_CAPABLE_HOOKS.has(currentHookKey ?? "")) {
+          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
             throw new Error(
-              `ext.queueFollowUp() is not available in "${currentHookKey}" handlers. ` +
+              `ext.queueFollowUp() is not available in "${top.hookKey}" handlers. ` +
                 `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
             )
           }
-          currentEffects.push({ _tag: "QueueFollowUp", content, metadata })
+          top.effects.push({ _tag: "QueueFollowUp", content, metadata })
         },
 
         interject: (content) => {
-          if (currentEffects === undefined) {
+          const top = effectStack[effectStack.length - 1]
+          if (top === undefined) {
             throw new Error(
               `ext.interject() called outside of a hook handler. ` +
                 `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
             )
           }
-          if (!EFFECT_CAPABLE_HOOKS.has(currentHookKey ?? "")) {
+          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
             throw new Error(
-              `ext.interject() is not available in "${currentHookKey}" handlers. ` +
+              `ext.interject() is not available in "${top.hookKey}" handlers. ` +
                 `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
             )
           }
-          currentEffects.push({ _tag: "Interject", content })
+          top.effects.push({ _tag: "Interject", content })
         },
 
         state: (config) => {
