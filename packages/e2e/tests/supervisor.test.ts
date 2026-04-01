@@ -1,3 +1,10 @@
+/**
+ * Worker supervisor lifecycle tests.
+ *
+ * Every test here MUST need real subprocess isolation (restart, SIGKILL,
+ * process cleanup). Transport/runtime behavior that can be tested in-process
+ * belongs in test:integration (event-stream-parity, watch-state-parity, etc).
+ */
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"
 import * as path from "node:path"
@@ -51,34 +58,6 @@ describe("worker supervisor", () => {
 
     expect(launch.runtimePath).toBe("/usr/local/bin/bun")
     expect(launch.serverEntryPath).toBe("/repo/apps/server/src/main.ts")
-  })
-
-  test("boots worker and serves the shared client contract", async () => {
-    const dataDir = makeTempDir()
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const worker = yield* startWorkerWithSupervisor({
-            cwd: repoRoot,
-            env: { GENT_DATA_DIR: dataDir },
-          })
-
-          expect(worker.getState()._tag).toBe("running")
-
-          const initial = yield* worker.client.session.list()
-          expect(initial).toEqual([])
-
-          const created = yield* worker.client.session.create({
-            cwd: repoRoot,
-            bypass: true,
-          })
-
-          const sessions = yield* worker.client.session.list()
-          expect(sessions.some((session) => session.id === created.sessionId)).toBe(true)
-        }),
-      ),
-    )
   })
 
   test("restarts the worker on the same transport url", async () => {
@@ -172,8 +151,6 @@ describe("worker supervisor", () => {
 
           const states = yield* Deferred.make<string>()
 
-          // Stream subscriptions may fail transiently after WebSocket reconnect.
-          // Mirror TUI's runWithReconnect pattern: retry the stream factory on error.
           yield* Effect.forever(
             Effect.gen(function* () {
               yield* worker.client.session
@@ -209,96 +186,6 @@ describe("worker supervisor", () => {
       ),
     )
   }, 30_000)
-
-  test("watchRuntime survives more than 10 seconds of idle time", async () => {
-    const dataDir = makeTempDir()
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const worker = yield* startWorkerWithSupervisor({
-            cwd: repoRoot,
-            env: { GENT_DATA_DIR: dataDir },
-          })
-
-          const created = yield* worker.client.session.create({
-            cwd: repoRoot,
-            bypass: true,
-          })
-
-          const update = yield* Deferred.make<number>()
-
-          yield* worker.client.session
-            .watchRuntime({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            })
-            .pipe(
-              Stream.runForEach((state) =>
-                state.status !== "idle"
-                  ? Deferred.succeed(update, state.queue.followUp.length).pipe(Effect.ignore)
-                  : Effect.void,
-              ),
-              Effect.forkScoped,
-            )
-
-          yield* Effect.sleep("11 seconds")
-
-          yield* worker.client.message.send({
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-            content: "hello after idle",
-          })
-
-          const count = yield* Deferred.await(update).pipe(
-            Effect.timeoutOption("10 seconds"),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(new Error("watchRuntime dropped after idle timeout window")),
-                onSome: Effect.succeed,
-              }),
-            ),
-          )
-
-          expect(count).toBeGreaterThanOrEqual(0)
-        }),
-      ),
-    )
-  }, 25_000)
-
-  test("debug mode keeps the worker transport seam with ephemeral runtime state", async () => {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const worker = yield* startWorkerWithSupervisor({
-            cwd: repoRoot,
-            mode: "debug",
-          })
-
-          const sessions = yield* worker.client.session.list()
-          const debugSession = sessions.find((session) => session.name === "debug scenario")
-
-          expect(sessions.length).toBeGreaterThanOrEqual(1)
-          expect(debugSession).toBeDefined()
-          expect(worker.url).toBe(`http://127.0.0.1:${worker.port}/rpc`)
-
-          const state = yield* waitFor(
-            worker.client.session.getSnapshot({
-              sessionId: debugSession!.id,
-              branchId: debugSession!.branchId!,
-            }),
-            (snapshot) => snapshot.messages.length > 0,
-            15_000,
-          )
-
-          expect(state.sessionId).toBe(debugSession!.id)
-          expect(state.branchId).toBe(debugSession!.branchId)
-          expect(state.messages.length).toBeGreaterThan(0)
-        }),
-      ),
-    )
-  }, 15_000)
 
   test("persists file-backed auth visibility through worker restart", async () => {
     const root = makeTempDir()
@@ -413,9 +300,6 @@ describe("worker supervisor", () => {
           yield* Effect.promise(() => waitForRunning(worker, 1, 30_000))
           yield* waitForRpcReady(worker.client)
 
-          // Trigger lazy loop restoration — queue.get calls findOrRestoreLoop(),
-          // which replays queued turns from the checkpoint. message.list() alone
-          // only reads storage and won't wake the loop.
           yield* waitFor(
             worker.client.queue.get({
               sessionId: created.sessionId,
@@ -465,61 +349,6 @@ describe("worker supervisor", () => {
       ),
     )
   }, 60_000)
-
-  test("delivers live events after streamEvents is established", async () => {
-    const dataDir = makeTempDir()
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const worker = yield* startWorkerWithSupervisor({
-            cwd: repoRoot,
-            env: { GENT_DATA_DIR: dataDir },
-          })
-
-          const created = yield* worker.client.session.create({
-            cwd: repoRoot,
-            bypass: true,
-          })
-
-          const firstLiveEvent = yield* Deferred.make<string>()
-
-          yield* worker.client.session
-            .events({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            })
-            .pipe(
-              Stream.runForEach((envelope) =>
-                envelope.event._tag === "MessageReceived" || envelope.event._tag === "StreamStarted"
-                  ? Deferred.succeed(firstLiveEvent, envelope.event._tag).pipe(Effect.ignore)
-                  : Effect.void,
-              ),
-              Effect.forkScoped,
-            )
-
-          yield* worker.client.message.send({
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-            content: "hello",
-          })
-
-          const tag = yield* Deferred.await(firstLiveEvent).pipe(
-            Effect.timeoutOption("5 seconds"),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(new Error("worker did not deliver a live event after sendMessage")),
-                onSome: Effect.succeed,
-              }),
-            ),
-          )
-
-          expect(["MessageReceived", "StreamStarted"]).toContain(tag)
-        }),
-      ),
-    )
-  }, 15_000)
 
   test("streamEvents with latest cursor delivers future events after worker restart", async () => {
     const dataDir = makeTempDir()
@@ -611,7 +440,6 @@ describe("worker supervisor", () => {
     const dataDir = makeTempDir()
     let capturedPid: number | null = null
 
-    // Run in a scope that closes naturally
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -621,48 +449,12 @@ describe("worker supervisor", () => {
           })
           capturedPid = worker.pid()
           expect(capturedPid).not.toBeNull()
-          // scope closes here — supervisor finalizer should kill worker
         }),
       ),
     )
 
-    // After scope close, worker process should be gone
     expect(capturedPid).not.toBeNull()
-    // Give the process a moment to die
     await Bun.sleep(500)
     expect(() => process.kill(capturedPid!, 0)).toThrow()
   })
-
-  test("headless mode exits cleanly without orphaning worker", async () => {
-    const dataDir = makeTempDir()
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const worker = yield* startWorkerWithSupervisor({
-            cwd: repoRoot,
-            env: { GENT_DATA_DIR: dataDir },
-          })
-
-          const created = yield* worker.client.session.create({
-            cwd: repoRoot,
-            bypass: true,
-            initialPrompt: "hello",
-          })
-
-          // Wait for the session to have at least one message
-          yield* waitFor(
-            worker.client.message.list({ branchId: created.branchId }),
-            (messages) => messages.length > 0,
-            10_000,
-          )
-
-          const pid = worker.pid()
-          expect(pid).not.toBeNull()
-
-          // Scope closes — worker should be cleaned up
-        }),
-      ),
-    )
-  }, 15_000)
 })
