@@ -1,4 +1,4 @@
-import { ServiceMap, DateTime, Effect, Fiber, Layer, Ref } from "effect"
+import { ServiceMap, DateTime, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import {
   Task,
   TaskTransitionError,
@@ -13,6 +13,7 @@ import {
   TaskFailed,
   TaskStopped,
   TaskDeleted,
+  type SubagentSpawned,
 } from "../domain/event.js"
 import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
@@ -156,7 +157,27 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           const parentSessionId = task.sessionId
           const parentBranchId = task.branchId
 
-          // Run subagent — store child sessionId in metadata for getOutput()
+          // Capture child sessionId eagerly from SubagentSpawned event
+          // so getOutput() works for in-progress/stopped tasks
+          const captureChildSession = eventStore
+            .subscribe({ sessionId: parentSessionId, branchId: parentBranchId })
+            .pipe(
+              Stream.filter((env) => env.event._tag === "SubagentSpawned"),
+              Stream.take(1),
+              Stream.runForEach((env) => {
+                const spawned = env.event as SubagentSpawned
+                return storage
+                  .updateTask(taskId, {
+                    metadata: { childSessionId: spawned.childSessionId },
+                  })
+                  .pipe(Effect.catchEager(() => Effect.void))
+              }),
+              Effect.catchEager(() => Effect.void),
+            )
+
+          const childCaptureFiber = yield* Effect.forkChild(captureChildSession)
+
+          // Run subagent
           const result = yield* runner.run({
             agent,
             prompt: task.prompt ?? task.subject,
@@ -164,6 +185,9 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             parentBranchId,
             cwd: task.cwd ?? platform.cwd,
           })
+
+          // Clean up the event capture fiber
+          yield* Fiber.interrupt(childCaptureFiber).pipe(Effect.catchEager(() => Effect.void))
 
           // Guard: if stop() raced and already set terminal state, don't overwrite
           const currentTask = yield* storage
