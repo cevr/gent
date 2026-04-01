@@ -11,6 +11,8 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { MODEL_CONTEXT_WINDOWS } from "@gent/core/runtime/context-estimation"
+import { DEFAULT_MODEL_ID } from "@gent/core/domain/agent"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 
@@ -399,6 +401,74 @@ describe("Auto extension E2E", () => {
         // Auto completed without calling HandoffHandler.present directly
         expect(yield* Ref.get(presentCalled)).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
+    }),
+  )
+
+  it.live("threshold: auto active queues follow-up instead of HandoffPresented", () =>
+    Effect.gen(function* () {
+      // Shrink context window so messages exceed the 85% threshold.
+      // System overhead is 4000 tokens. With a 5000-token window, overhead alone = 80%.
+      // Any message content pushes past 85%.
+      const originalWindow = MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]
+      MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID] = 5_000
+
+      yield* Effect.gen(function* () {
+        const presentCalled = yield* Ref.make(false)
+        const trackingHandoffLayer = Layer.succeed(HandoffHandler, {
+          present: () => Ref.set(presentCalled, true).pipe(Effect.as("confirm" as const)),
+          peek: () => Effect.succeed(undefined),
+          claim: () => Effect.succeed(undefined),
+          respond: () => Effect.succeed(undefined),
+          rehydrate: () => Effect.void,
+        })
+
+        const { layer: providerLayer } = yield* createSequenceProvider([
+          textStep("x".repeat(2000)), // ~500 tokens — context over 85%
+          toolCallStep("auto_checkpoint", {
+            status: "complete",
+            summary: "Done with threshold test",
+          }),
+          // Extra step for the queued handoff follow-up turn
+          textStep("Acknowledged handoff request."),
+        ])
+
+        const e2eLayer = createE2ELayer({
+          providerLayer,
+          extraLayers: [trackingHandoffLayer as Layer.Layer<never>],
+        })
+
+        yield* Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const stateRuntime = yield* ExtensionStateRuntime
+
+          yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+            sessionId,
+            branchId,
+          })
+          yield* stateRuntime.handleIntent(
+            sessionId,
+            "auto",
+            { _tag: "StartAuto", goal: "Threshold handoff test" },
+            0,
+            branchId,
+          )
+
+          yield* agentLoop.run(makeMessage("begin"))
+
+          // Auto's interceptor queued a follow-up (QueueFollowUp), NOT a direct HandoffPresented
+          expect(yield* Ref.get(presentCalled)).toBe(false)
+        }).pipe(Effect.provide(e2eLayer))
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (originalWindow !== undefined) {
+              MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID] = originalWindow
+            } else {
+              delete MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]
+            }
+          }),
+        ),
+      )
     }),
   )
 })
