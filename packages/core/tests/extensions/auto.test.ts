@@ -531,7 +531,7 @@ const autoExtension: LoadedExtension = {
   manifest: AutoExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: Effect.runSync(AutoExtension.setup({ cwd: "/tmp", source: "test" })),
+  setup: Effect.runSync(AutoExtension.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
 }
 
 const makeLayer = () =>

@@ -78,7 +78,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
 
   // Load all builtins, patching setup.layer for extensions that need test overrides
   const defaultExtensions: ReadonlyArray<LoadedExtension> = BuiltinExtensions.map((ext) => {
-    const setup = Effect.runSync(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = Effect.runSync(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     const override = TEST_LAYER_OVERRIDES[ext.manifest.id]
     return {
       manifest: ext.manifest,

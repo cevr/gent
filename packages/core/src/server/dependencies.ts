@@ -65,12 +65,12 @@ export interface DependenciesConfig {
   disabledExtensions?: ReadonlyArray<string>
 }
 
-const loadBuiltinExtensions = (cwd: string): LoadedExtension[] =>
+const loadBuiltinExtensions = (cwd: string, home: string): LoadedExtension[] =>
   BuiltinExtensions.map((extension) => ({
     manifest: extension.manifest,
     kind: "builtin" as const,
     sourcePath: "builtin",
-    setup: Effect.runSync(extension.setup({ cwd, source: "builtin" })),
+    setup: Effect.runSync(extension.setup({ cwd, source: "builtin", home })),
   }))
 
 import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
@@ -111,7 +111,7 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       const external: LoadedExtension[] = []
       for (const discoveredExtension of discovery.loaded) {
         if (disabledSet.has(discoveredExtension.extension.manifest.id)) continue
-        const loaded = yield* setupExtension(discoveredExtension, config.cwd).pipe(
+        const loaded = yield* setupExtension(discoveredExtension, config.cwd, config.home).pipe(
           Effect.catchEager((error) =>
             Effect.logWarning("extension.setup.failed").pipe(
               Effect.annotateLogs({
@@ -125,7 +125,7 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         if (loaded !== undefined) external.push(loaded)
       }
 
-      const builtins = loadBuiltinExtensions(config.cwd).filter(
+      const builtins = loadBuiltinExtensions(config.cwd, config.home).filter(
         (ext) => !disabledSet.has(ext.manifest.id),
       )
       const allExtensions = [...builtins, ...external]

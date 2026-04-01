@@ -32,7 +32,7 @@ const planExtension: LoadedExtension = {
   manifest: PlanExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: Effect.runSync(PlanExtension.setup({ cwd: "/tmp", source: "test" })),
+  setup: Effect.runSync(PlanExtension.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
 }
 
 const makeLayer = () =>

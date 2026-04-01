@@ -204,6 +204,7 @@ export const discoverExtensions = (opts: {
 export const setupExtension = (
   discovered: DiscoveredExtension,
   cwd: string,
+  home: string,
 ): Effect.Effect<LoadedExtension, ExtensionLoadError> =>
   Effect.gen(function* () {
     const { extension, kind, sourcePath } = discovered
@@ -211,6 +212,7 @@ export const setupExtension = (
       .setup({
         cwd,
         source: sourcePath,
+        home,
       })
       .pipe(
         Effect.catchDefect((defect) =>

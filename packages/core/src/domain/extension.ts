@@ -279,12 +279,17 @@ export interface ExtensionSetup {
 
 // Extension — the core primitive
 
+/** Context provided to extension setup functions. */
+export interface ExtensionSetupContext {
+  readonly cwd: string
+  readonly source: string
+  /** User home directory (e.g. ~/.gent lives here). Defaults to os.homedir(). */
+  readonly home: string
+}
+
 export interface GentExtension {
   readonly manifest: ExtensionManifest
-  readonly setup: (ctx: {
-    readonly cwd: string
-    readonly source: string
-  }) => Effect.Effect<ExtensionSetup, ExtensionLoadError>
+  readonly setup: (ctx: ExtensionSetupContext) => Effect.Effect<ExtensionSetup, ExtensionLoadError>
 }
 
 // Factory

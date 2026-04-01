@@ -19,7 +19,7 @@ describe("extension", () => {
     })
 
     expect(ext.manifest.id).toBe("test-simple")
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.tools).toBeDefined()
     expect(setup.tools!.length).toBe(1)
     expect(setup.tools![0]!.name).toBe("greet")
@@ -35,7 +35,7 @@ describe("extension", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     const tool = setup.tools![0]!
     const result = await Effect.runPromise(
       tool.execute(
@@ -59,7 +59,7 @@ describe("extension", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     const tool = setup.tools![0]!
     const result = await Effect.runPromise(
       tool.execute(
@@ -79,7 +79,7 @@ describe("extension", () => {
       b.promptSection({ id: "custom-rules", content: "Be nice.", priority: 50 })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.promptSections).toBeDefined()
     expect(setup.promptSections![0]!.id).toBe("custom-rules")
     expect(setup.promptSections![0]!.content).toBe("Be nice.")
@@ -94,7 +94,7 @@ describe("extension", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.agents).toBeDefined()
     expect(setup.agents![0]!.name).toBe("helper")
   })
@@ -113,7 +113,7 @@ describe("extension", () => {
       manifest: ext.manifest,
       kind: "user" as const,
       sourcePath: "test",
-      setup: await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" })),
+      setup: await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
     }
 
     const resolved = resolveExtensions([loaded])
@@ -133,7 +133,7 @@ describe("extension", () => {
 
   test("empty extension produces valid setup", async () => {
     const ext = extension("empty", () => {})
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.tools).toBeUndefined()
     expect(setup.agents).toBeUndefined()
     expect(setup.promptSections).toBeUndefined()
@@ -160,7 +160,7 @@ describe("extension through ToolRunner.run", () => {
   let layer: Layer.Layer<any>
 
   beforeAll(async () => {
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     const baseDeps = Layer.mergeAll(
       ExtensionRegistry.fromResolved(
         resolveExtensions([{ manifest: ext.manifest, kind: "user", sourcePath: "test", setup }]),
@@ -245,7 +245,7 @@ describe("extension async factory", () => {
       b.tool({ name: "delayed", description: "Added async", execute: async () => "ok" })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.tools!.length).toBe(1)
     expect(setup.tools![0]!.name).toBe("delayed")
   })
@@ -258,7 +258,9 @@ describe("extension async factory", () => {
       receivedSource = ctx.source
     })
 
-    await Effect.runPromise(ext.setup({ cwd: "/my/project", source: "/path/to/ext.ts" }))
+    await Effect.runPromise(
+      ext.setup({ cwd: "/my/project", source: "/path/to/ext.ts", home: "/tmp" }),
+    )
     expect(receivedCwd).toBe("/my/project")
     expect(receivedSource).toBe("/path/to/ext.ts")
   })
@@ -268,7 +270,9 @@ describe("extension async factory", () => {
       throw new Error("factory broke")
     })
 
-    const exit = await Effect.runPromiseExit(ext.setup({ cwd: "/tmp", source: "test" }))
+    const exit = await Effect.runPromiseExit(
+      ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
+    )
     expect(exit._tag).toBe("Failure")
   })
 })
@@ -282,7 +286,7 @@ describe("extension hooks", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.hooks).toBeDefined()
     expect(setup.hooks!.interceptors!.length).toBe(1)
     expect(setup.hooks!.interceptors![0]!.key).toBe("prompt.system")
@@ -295,7 +299,7 @@ describe("extension hooks", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.hooks!.interceptors![0]!.key).toBe("turn.after")
   })
 })
@@ -309,7 +313,7 @@ describe("extension lifecycle", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.onStartup).toBeDefined()
     // onStartup effect is returned, not run during setup
     await Effect.runPromise(setup.onStartup!)
@@ -324,7 +328,7 @@ describe("extension lifecycle", () => {
       b.onStartup(() => order.push(3))
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     await Effect.runPromise(setup.onStartup!)
     expect(order).toEqual([1, 2, 3])
   })
@@ -337,7 +341,7 @@ describe("extension lifecycle", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.onShutdown).toBeDefined()
     await Effect.runPromise(setup.onShutdown!)
     expect(cleaned).toBe(true)
@@ -356,7 +360,7 @@ describe("extension state", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.spawnActor).toBeDefined()
   })
 
@@ -374,7 +378,7 @@ describe("extension state", () => {
       })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.spawnActor).toBeDefined()
     expect(setup.projection).toBeDefined()
   })
@@ -385,7 +389,9 @@ describe("extension state", () => {
       b.state({ initial: { b: 2 }, reduce: (s) => ({ state: s }) })
     })
 
-    const exit = await Effect.runPromiseExit(ext.setup({ cwd: "/tmp", source: "test" }))
+    const exit = await Effect.runPromiseExit(
+      ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
+    )
     expect(exit._tag).toBe("Failure")
   })
 
@@ -399,7 +405,9 @@ describe("extension state", () => {
       })
     })
 
-    const exit = await Effect.runPromiseExit(ext.setup({ cwd: "/tmp", source: "test" }))
+    const exit = await Effect.runPromiseExit(
+      ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
+    )
     expect(exit._tag).toBe("Failure")
   })
 })
@@ -420,7 +428,7 @@ describe("extension full-power methods", () => {
       b.tool(fullTool)
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.tools!.length).toBe(1)
     expect(setup.tools![0]!.name).toBe("full-tool")
   })
@@ -436,7 +444,7 @@ describe("extension full-power methods", () => {
       b.agent(fullAgent)
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.agents!.length).toBe(1)
     expect(setup.agents![0]!.name).toBe("full-agent")
   })
@@ -446,7 +454,7 @@ describe("extension full-power methods", () => {
       b.interceptor("prompt.system", (input, next) => next(input))
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.hooks!.interceptors!.length).toBe(1)
     expect(setup.hooks!.interceptors![0]!.key).toBe("prompt.system")
   })
@@ -459,7 +467,7 @@ describe("extension full-power methods", () => {
       b.interceptor(desc)
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.hooks!.interceptors![0]!.key).toBe("turn.after")
   })
 
@@ -475,7 +483,7 @@ describe("extension full-power methods", () => {
       b.actor(actor)
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.spawnActor).toBeDefined()
   })
 
@@ -488,7 +496,7 @@ describe("extension full-power methods", () => {
       b.layer(testLayer)
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.layer).toBeDefined()
   })
 
@@ -497,7 +505,7 @@ describe("extension full-power methods", () => {
       b.provider({ id: "test", name: "Test Provider", resolveModel: () => null })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.providers!.length).toBe(1)
     expect(setup.providers![0]!.id).toBe("test")
   })
@@ -507,7 +515,7 @@ describe("extension full-power methods", () => {
       b.interactionHandler({ type: "permission", layer: {} as never })
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.interactionHandlers!.length).toBe(1)
     expect(setup.interactionHandlers![0]!.type).toBe("permission")
   })
@@ -519,7 +527,7 @@ describe("extension full-power methods", () => {
       b.onStartupEffect(Effect.sync(() => order.push(2)))
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test" }))
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     await Effect.runPromise(setup.onStartup!)
     expect(order).toEqual([1, 2])
   })
@@ -533,7 +541,9 @@ describe("extension full-power methods", () => {
       b.actor(actor)
     })
 
-    const exit = await Effect.runPromiseExit(ext.setup({ cwd: "/tmp", source: "test" }))
+    const exit = await Effect.runPromiseExit(
+      ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
+    )
     expect(exit._tag).toBe("Failure")
   })
 })

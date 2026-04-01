@@ -71,7 +71,6 @@ import {
   createExtensionStorage,
   type ExtensionStorage,
 } from "../runtime/extensions/extension-storage.js"
-import { homedir } from "node:os"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join as joinPath } from "node:path"
 
@@ -560,6 +559,7 @@ const resolveSimpleState = (
 export interface ExtensionContext {
   readonly cwd: string
   readonly source: string
+  readonly home: string
 }
 
 /**
@@ -605,10 +605,7 @@ export const extension = (
         },
       }
 
-      const extensionStorage = createExtensionStorage(
-        id,
-        joinPath(homedir(), ".gent", "extensions"),
-      )
+      const extensionStorage = createExtensionStorage(id, joinPath(ctx.home, ".gent", "extensions"))
 
       const builder: ExtensionBuilder = {
         storage: extensionStorage,

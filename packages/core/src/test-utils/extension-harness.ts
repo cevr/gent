@@ -217,7 +217,9 @@ export const createExtensionHarness = (
   extension: GentExtension,
   options?: { cwd?: string },
 ): ExtensionHarnessResult => {
-  const setup = Effect.runSync(extension.setup({ cwd: options?.cwd ?? "/tmp", source: "test" }))
+  const setup = Effect.runSync(
+    extension.setup({ cwd: options?.cwd ?? "/tmp", source: "test", home: "/tmp" }),
+  )
 
   const tools = new Map<string, AnyToolDefinition>()
   for (const tool of setup.tools ?? []) {
@@ -267,7 +269,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     manifest: ext.manifest,
     kind: "builtin" as const,
     sourcePath: "test",
-    setup: Effect.runSync(ext.setup({ cwd: "/tmp", source: "test" })),
+    setup: Effect.runSync(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
   }))
 
   const allExtensions: LoadedExtension[] = [
