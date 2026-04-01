@@ -14,6 +14,8 @@ import {
   type AutoState,
   type AutoUiModel,
 } from "@gent/core/extensions/auto"
+import { AutoJournal, type JournalRow } from "@gent/core/extensions/auto-journal"
+import { Session } from "@gent/core/domain/message"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
@@ -799,5 +801,156 @@ describe("Auto runtime integration", () => {
       const section = pm!.projection.promptSections![0]!
       expect(section.content).toContain("SQL injection in user service")
     }).pipe(Effect.provide(makeLayer())),
+  )
+})
+
+// ── JSONL replay tests ──
+
+describe("Auto JSONL replay via onInit", () => {
+  const parentId = "parent-session" as SessionId
+  const childId = "child-session" as SessionId
+  const childBranchId = "child-branch" as BranchId
+
+  /** Build a mock AutoJournal that returns pre-built rows */
+  const mockJournal = (rows: JournalRow[], originSessionId?: string) =>
+    Layer.succeed(AutoJournal, {
+      start: () => Effect.succeed("/tmp/test.jsonl"),
+      appendCheckpoint: () => Effect.void,
+      appendCounsel: () => Effect.void,
+      finish: () => Effect.void,
+      readActive: () =>
+        Effect.succeed({
+          rows,
+          path: "/tmp/test.jsonl",
+          sessionId: originSessionId,
+        }),
+      getActivePath: () => Effect.succeed("/tmp/test.jsonl" as string | undefined),
+    })
+
+  const makeReplayLayer = (rows: JournalRow[], originSessionId?: string) =>
+    Layer.mergeAll(
+      ExtensionStateRuntime.Live([autoExtension]),
+      EventStore.Memory,
+      ExtensionTurnControl.Test(),
+      Storage.Test(),
+      mockJournal(rows, originSessionId),
+    )
+
+  const getAutoSnapshot = (runtime: ExtensionStateRuntime) =>
+    Effect.gen(function* () {
+      const snapshots = yield* runtime.getUiSnapshots(childId, childBranchId)
+      return snapshots.find((s) => s.extensionId === "auto")
+    })
+
+  it.live("replays config + checkpoint + counsel → correct iteration", () =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
+
+      // Create parent → child session chain
+      const now = new Date()
+      yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
+      yield* storage.createSession(
+        new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
+      )
+
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+        sessionId: childId,
+        branchId: childBranchId,
+      })
+
+      const snap = yield* getAutoSnapshot(runtime)
+      expect(snap).toBeDefined()
+      const ui = snap!.model as AutoUiModel
+      // After replay: config → Working(1), checkpoint(continue) → AwaitingCounsel(1),
+      // counsel → Working(2)
+      expect(ui.active).toBe(true)
+      expect(ui.phase).toBe("working")
+      expect(ui.iteration).toBe(2)
+      expect(ui.goal).toBe("fix all bugs")
+      expect(ui.learningsCount).toBe(1)
+    }).pipe(
+      Effect.provide(
+        makeReplayLayer(
+          [
+            { type: "config", goal: "fix all bugs", maxIterations: 5, startedAt: Date.now() },
+            {
+              type: "checkpoint",
+              iteration: 1,
+              status: "continue",
+              summary: "Found 3 issues",
+              learnings: "Auth needs refactor",
+            },
+            { type: "counsel", iteration: 1 },
+          ],
+          parentId,
+        ),
+      ),
+    ),
+  )
+
+  it.live("root session never replays journal", () =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const now = new Date()
+      yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
+
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId: parentId, branchId }), {
+        sessionId: parentId,
+        branchId,
+      })
+
+      const snapshots = yield* runtime.getUiSnapshots(parentId, branchId)
+      const autoSnap = snapshots.find((s) => s.extensionId === "auto")
+      expect(autoSnap).toBeDefined()
+      const ui = autoSnap!.model as AutoUiModel
+      expect(ui.active).toBe(false) // Not replayed — root session
+    }).pipe(
+      Effect.provide(
+        makeReplayLayer(
+          [{ type: "config", goal: "should not replay", maxIterations: 3, startedAt: Date.now() }],
+          parentId,
+        ),
+      ),
+    ),
+  )
+
+  it.live("unrelated child session does not replay", () =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const now = new Date()
+      // Create two separate lineages
+      const otherParentId = "other-parent" as SessionId
+      yield* storage.createSession(
+        new Session({ id: otherParentId, createdAt: now, updatedAt: now }),
+      )
+      yield* storage.createSession(
+        new Session({
+          id: childId,
+          parentSessionId: otherParentId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.reduce(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+        sessionId: childId,
+        branchId: childBranchId,
+      })
+
+      const snap = yield* getAutoSnapshot(runtime)
+      expect(snap).toBeDefined()
+      const ui = snap!.model as AutoUiModel
+      expect(ui.active).toBe(false) // Not replayed — ancestry doesn't match
+    }).pipe(
+      Effect.provide(
+        makeReplayLayer(
+          [{ type: "config", goal: "scoped to parentId", maxIterations: 3, startedAt: Date.now() }],
+          parentId, // Journal scoped to parentId, but child is under otherParent
+        ),
+      ),
+    ),
   )
 })

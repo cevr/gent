@@ -397,6 +397,24 @@ describe("Plan pure reducer — executing behavior", () => {
     const result = intent!(state, { _tag: "TogglePlan" })
     expect(result.state.mode).toBe("normal")
   })
+
+  test("refinePlan — executing → plan with cleared todos", () => {
+    const state: PlanState = {
+      mode: "executing",
+      todos: [
+        { id: 1, text: "Read files", status: "done" },
+        { id: 2, text: "Edit code", status: "in-progress" },
+        { id: 3, text: "Run tests", status: "pending" },
+      ],
+      taskMap: { "t-1": 0, "t-2": 1 },
+      planFilePath: "/tmp/plan.md",
+    }
+    const result = intent!(state, { _tag: "RefinePlan" })
+    expect(result.state.mode).toBe("plan")
+    expect(result.state.todos).toEqual([])
+    expect(result.state.taskMap).toBeUndefined()
+    expect(result.state.pendingText).toBeUndefined()
+  })
 })
 
 describe("Plan pure reducer — plan tool observation", () => {

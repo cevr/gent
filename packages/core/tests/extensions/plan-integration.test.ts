@@ -4,9 +4,9 @@ import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { SessionStarted } from "@gent/core/domain/event"
+import { SessionStarted, ToolCallSucceeded } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
-import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { PlanUiModel } from "@gent/core/extensions/plan"
 
 const sessionId = "plan-e2e-session" as SessionId
@@ -79,6 +79,54 @@ describe("Plan extension E2E", () => {
     }),
   )
 
-  // Heuristic executor was removed — execution tracking is now task-event-based only.
-  // See plan.test.ts "executing behavior — task events" for pure reducer coverage.
+  it.live("plan tool observation: decision=yes → executing with todos + QueueFollowUp", () =>
+    Effect.gen(function* () {
+      // Use a text-only provider — the plan tool observation is via reduce, not tool execution
+      const { layer: providerLayer } = yield* createSequenceProvider([
+        textStep("Planning complete."),
+        // QueueFollowUp from afterTransition drives this second turn
+        textStep("Now executing."),
+      ])
+
+      const e2eLayer = createE2ELayer({ providerLayer })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const stateRuntime = yield* ExtensionStateRuntime
+
+        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+
+        // Simulate plan tool returning decision=yes via synthetic ToolCallSucceeded
+        // This is the event the plan reducer observes to transition to executing
+        yield* stateRuntime.reduce(
+          new ToolCallSucceeded({
+            sessionId,
+            branchId,
+            toolCallId: "tc-plan" as ToolCallId,
+            toolName: "plan",
+            output: JSON.stringify({
+              mode: "plan-only",
+              decision: "yes",
+              plan: "## Plan\n- [ ] Fix auth\n- [ ] Add tests",
+              path: "/tmp/plan.md",
+            }),
+          }),
+          { sessionId, branchId },
+        )
+
+        // Verify the actor transitioned to executing via the observation
+        const after = yield* getPlanSnapshot(stateRuntime)
+        expect(after.mode).toBe("executing")
+        expect(after.todos.length).toBe(2)
+        expect(after.todos[0]?.text).toBe("Fix auth")
+        expect(after.todos[1]?.text).toBe("Add tests")
+
+        // Run a turn — the QueueFollowUp from afterTransition should drive it
+        yield* agentLoop.run(makeMessage("execute"))
+      }).pipe(Effect.provide(e2eLayer))
+    }),
+  )
 })
