@@ -108,6 +108,7 @@ export const fromMachine = <
         id: spawnId,
         ...(hydratedState !== undefined ? { hydrate: hydratedState } : {}),
       })
+      yield* ref.start
       if (initialVersion > 0) {
         yield* Ref.set(versionRef, initialVersion)
       }

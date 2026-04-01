@@ -197,8 +197,12 @@ export const makeReducingEventStore = Layer.effect(
       publish: (event: AgentEvent) =>
         base.publish(event).pipe(
           Effect.tap(() => {
-            // Skip reduce for synthetic events to avoid recursion
-            if (event._tag === "ExtensionUiSnapshot") return Effect.void
+            // Skip reduce for synthetic/diagnostic events to avoid recursion.
+            // ExtensionUiSnapshot: published by reduce itself (infinite loop).
+            // MachineInspected: published during Machine.spawn/transition — re-enters
+            // getOrSpawnActors while the spawnSemaphore is held (deadlock).
+            if (event._tag === "ExtensionUiSnapshot" || event._tag === "MachineInspected")
+              return Effect.void
 
             const sessionId = getEventSessionId(event)
             if (sessionId === undefined) return Effect.void
@@ -455,23 +459,12 @@ export const createDependencies = (config: DependenciesConfig) => {
             .list()
             .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
           if (checkpoints.length === 0) return
-          yield* Effect.logInfo("checkpoint-wake.restoring").pipe(
-            Effect.annotateLogs({ count: checkpoints.length }),
-          )
           for (const cp of checkpoints) {
-            yield* Effect.logInfo("checkpoint-wake.waking").pipe(
-              Effect.annotateLogs({ sessionId: cp.sessionId, branchId: cp.branchId }),
-            )
             yield* agentLoop
               .isRunning({ sessionId: cp.sessionId, branchId: cp.branchId })
               .pipe(Effect.catchEager(() => Effect.succeed(false)))
-            yield* Effect.logInfo("checkpoint-wake.woke").pipe(
-              Effect.annotateLogs({ sessionId: cp.sessionId, branchId: cp.branchId }),
-            )
           }
-          yield* Effect.logInfo("checkpoint-wake.done").pipe(
-            Effect.annotateLogs({ count: checkpoints.length }),
-          )
+          yield* Effect.log(`Woke ${checkpoints.length} checkpointed agent loop(s)`)
         }),
       )
     }),

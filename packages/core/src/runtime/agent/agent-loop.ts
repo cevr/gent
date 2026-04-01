@@ -1757,19 +1757,36 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           branchId: BranchId,
         ) {
           const key = stateKey(sessionId, branchId)
-          return yield* loopsSemaphore.withPermits(1)(
+          // Allocate + register under semaphore, then start outside.
+          // Machine.spawn returns an unstarted actor — fibers don't run
+          // until actor.start. This prevents the self-deadlock where
+          // background fibers re-enter getLoop before the handle is
+          // installed in loopsRef.
+          const created = yield* loopsSemaphore.withPermits(1)(
             Effect.gen(function* () {
               const existing = (yield* Ref.get(loopsRef)).get(key)
-              if (existing !== undefined) return existing
-              const created = yield* makeLoop(sessionId, branchId)
+              if (existing !== undefined) return undefined
+              const handle = yield* makeLoop(sessionId, branchId)
               yield* Ref.update(loopsRef, (loops) => {
                 const next = new Map(loops)
-                next.set(key, created)
+                next.set(key, handle)
                 return next
               })
-              return created
+              return handle
             }),
           )
+          if (created !== undefined) {
+            yield* created.actor.start
+            return created
+          }
+          // Handle was installed by another fiber — guaranteed to exist
+          // since the semaphore serializes creation for the same key.
+          const loops = yield* Ref.get(loopsRef)
+          const existing = loops.get(key)
+          if (existing === undefined) {
+            return yield* Effect.die(new Error(`Loop handle missing for ${key} after creation`))
+          }
+          return existing
         })
 
         const findLoop = Effect.fn("AgentLoop.findLoop")(function* (
@@ -2408,6 +2425,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                   : new SubagentError({ message: String(error), cause: error }),
               ),
             )
+            yield* actor.start
 
             const terminal = yield* actor.sendAndWait(AgentActorEvent.Start({ input }))
 

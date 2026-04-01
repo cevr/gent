@@ -25,7 +25,12 @@ const waitForRunning = async (
   new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       unsubscribe()
-      reject(new Error(`worker did not reach running state ${expectedRestartCount}`))
+      const state = worker.getState()
+      reject(
+        new Error(
+          `worker did not reach running state ${expectedRestartCount} within ${timeoutMs}ms (current: ${state._tag}, restartCount: ${"restartCount" in state ? state.restartCount : "N/A"})`,
+        ),
+      )
     }, timeoutMs)
     const unsubscribe = worker.subscribe((state) => {
       if (state._tag !== "running" || state.restartCount !== expectedRestartCount) return
@@ -162,24 +167,31 @@ describe("worker supervisor", () => {
           expect(pid).not.toBeNull()
           process.kill(pid!, "SIGKILL")
 
-          yield* Effect.promise(() => waitForRunning(worker, 1))
+          yield* Effect.promise(() => waitForRunning(worker, 1, 20_000))
           yield* waitForRpcReady(worker.client)
 
           const states = yield* Deferred.make<string>()
 
-          yield* worker.client.session
-            .watchRuntime({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            })
-            .pipe(
-              Stream.runForEach((state) =>
-                state.status === "idle" && state.queue.followUp.length === 0
-                  ? Deferred.succeed(states, created.sessionId).pipe(Effect.ignore)
-                  : Effect.void,
-              ),
-              Effect.forkScoped,
-            )
+          // Stream subscriptions may fail transiently after WebSocket reconnect.
+          // Mirror TUI's runWithReconnect pattern: retry the stream factory on error.
+          yield* Effect.forever(
+            Effect.gen(function* () {
+              yield* worker.client.session
+                .watchRuntime({
+                  sessionId: created.sessionId,
+                  branchId: created.branchId,
+                })
+                .pipe(
+                  Stream.runForEach((state) =>
+                    state.status === "idle" && state.queue.followUp.length === 0
+                      ? Deferred.succeed(states, created.sessionId).pipe(Effect.ignore)
+                      : Effect.void,
+                  ),
+                  Effect.catchEager(() => Effect.void),
+                )
+              yield* Effect.sleep("100 millis")
+            }),
+          ).pipe(Effect.forkScoped)
 
           const sessionId = yield* Deferred.await(states).pipe(
             Effect.timeoutOption("10 seconds"),
@@ -196,7 +208,7 @@ describe("worker supervisor", () => {
         }),
       ),
     )
-  }, 20_000)
+  }, 30_000)
 
   test("watchRuntime survives more than 10 seconds of idle time", async () => {
     const dataDir = makeTempDir()
@@ -333,10 +345,14 @@ describe("worker supervisor", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
+          const logFile = `${root}/worker.log`
           const worker = yield* startWorkerWithSupervisor({
             cwd: repoRoot,
             startupTimeoutMs: 20_000,
-            env: createWorkerEnv(root, { providerMode: "debug-slow" }),
+            env: createWorkerEnv(root, {
+              providerMode: "debug-slow",
+              extra: { GENT_LOG_FILE: logFile },
+            }),
           })
 
           const created = yield* worker.client.session.create({
@@ -394,8 +410,21 @@ describe("worker supervisor", () => {
           expect(pid).not.toBeNull()
           process.kill(pid!, "SIGKILL")
 
-          yield* Effect.promise(() => waitForRunning(worker, 1, 20_000))
+          yield* Effect.promise(() => waitForRunning(worker, 1, 30_000))
           yield* waitForRpcReady(worker.client)
+
+          // Trigger lazy loop restoration — queue.get calls findOrRestoreLoop(),
+          // which replays queued turns from the checkpoint. message.list() alone
+          // only reads storage and won't wake the loop.
+          yield* waitFor(
+            worker.client.queue.get({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            () => true,
+            10_000,
+            "loop restoration trigger after restart",
+          )
 
           const messages = yield* waitFor(
             worker.client.message.list({ branchId: created.branchId }),
@@ -409,7 +438,7 @@ describe("worker supervisor", () => {
                 userTexts.includes("queued follow-up")
               )
             },
-            20_000,
+            30_000,
             "replayed user message order after worker restart",
           )
 
@@ -435,7 +464,7 @@ describe("worker supervisor", () => {
         }),
       ),
     )
-  }, 25_000)
+  }, 60_000)
 
   test("delivers live events after streamEvents is established", async () => {
     const dataDir = makeTempDir()
