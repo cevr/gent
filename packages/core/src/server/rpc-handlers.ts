@@ -248,15 +248,25 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "task.stop": ({ taskId }) =>
         taskService.stop(taskId).pipe(Effect.map((task) => ({ task: task ?? undefined }))),
       "task.output": ({ taskId }) =>
-        taskService
-          .getOutput(taskId)
-          .pipe(
-            Effect.map((result) =>
-              result !== undefined
-                ? { status: result.status, messageCount: result.messages.length }
-                : { status: "pending" as const, messageCount: 0 },
-            ),
-          ),
+        taskService.getOutput(taskId).pipe(
+          Effect.map((result) => {
+            if (result === undefined) {
+              return { status: "pending" as const, messageCount: 0 }
+            }
+            const summaries = result.messages.map((m) => {
+              const text = m.parts
+                .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                .map((p) => p.text)
+                .join("\n")
+              return { role: m.role, excerpt: text.slice(0, 200) }
+            })
+            return {
+              status: result.status,
+              messageCount: result.messages.length,
+              messages: summaries,
+            }
+          }),
+        ),
 
       // -- skill --
       "skill.list": () =>

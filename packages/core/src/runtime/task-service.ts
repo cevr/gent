@@ -18,7 +18,7 @@ import {
 import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
-import type { TaskId, SessionId, BranchId } from "../domain/ids.js"
+import type { TaskId, SessionId, BranchId, ToolCallId } from "../domain/ids.js"
 import { TaskStorage } from "../storage/task-storage.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import type { Message } from "../domain/message.js"
@@ -163,13 +163,20 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           const parentSessionId = task.sessionId
           const parentBranchId = task.branchId
 
+          // Synthetic toolCallId for correlation — concurrent tasks each get their own
+          const taskToolCallId = `task:${taskId}` as ToolCallId
+
           // Capture child sessionId + track progress from child session events
           const startedAt = yield* DateTime.nowAsDate
           const progressState = { toolCount: 0, tokenCount: 0, startedAt: startedAt.getTime() }
           const captureAndTrack = eventStore
             .subscribe({ sessionId: parentSessionId, branchId: parentBranchId })
             .pipe(
-              Stream.filter((env) => env.event._tag === "SubagentSpawned"),
+              Stream.filter(
+                (env) =>
+                  env.event._tag === "SubagentSpawned" &&
+                  (env.event as SubagentSpawned).toolCallId === taskToolCallId,
+              ),
               Stream.take(1),
               Stream.runForEach((env) => {
                 const spawned = env.event as SubagentSpawned
@@ -217,12 +224,13 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
 
           const childCaptureFiber = yield* Effect.forkChild(captureAndTrack)
 
-          // Run subagent
+          // Run subagent — toolCallId correlates SubagentSpawned to this specific task
           const result = yield* runner.run({
             agent,
             prompt: task.prompt ?? task.subject,
             parentSessionId,
             parentBranchId,
+            toolCallId: taskToolCallId,
             cwd: task.cwd ?? platform.cwd,
           })
 

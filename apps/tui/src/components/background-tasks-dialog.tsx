@@ -47,7 +47,9 @@ export function BackgroundTasksDialog(props: {
 
   const [selectedIdx, setSelectedIdx] = createSignal(0)
   const [detailTaskId, setDetailTaskId] = createSignal<TaskId | undefined>(undefined)
-  const [detailOutput, setDetailOutput] = createSignal<string | undefined>(undefined)
+  const [detailMessages, setDetailMessages] = createSignal<
+    ReadonlyArray<{ role: string; excerpt: string }> | undefined
+  >(undefined)
 
   // Reset selection when tasks change
   createEffect(() => {
@@ -71,10 +73,10 @@ export function BackgroundTasksDialog(props: {
       clientCtx.client.task.output({ taskId }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            setDetailOutput(`Status: ${result.status}\nMessages: ${result.messageCount}`)
+            setDetailMessages(result.messages ?? [])
           }),
         ),
-        Effect.catchEager(() => Effect.sync(() => setDetailOutput("Failed to load output"))),
+        Effect.catchEager(() => Effect.sync(() => setDetailMessages([]))),
       ),
     )
   }
@@ -86,7 +88,7 @@ export function BackgroundTasksDialog(props: {
       if (event.name === "escape") {
         if (detailTaskId() !== undefined) {
           setDetailTaskId(undefined)
-          setDetailOutput(undefined)
+          setDetailMessages(undefined)
         } else {
           props.onClose()
         }
@@ -207,9 +209,28 @@ export function BackgroundTasksDialog(props: {
                   )
                 })()}
                 <text />
-                <text>
-                  <span style={{ fg: theme.textMuted }}>{detailOutput() ?? "Loading..."}</span>
-                </text>
+                <Show
+                  when={detailMessages() !== undefined}
+                  fallback={
+                    <text>
+                      <span style={{ fg: theme.textMuted }}>Loading...</span>
+                    </text>
+                  }
+                >
+                  <For each={[...(detailMessages() ?? [])]}>
+                    {(msg) => (
+                      <text>
+                        <span style={{ fg: theme.primary }}>{msg.role}: </span>
+                        <span style={{ fg: theme.textMuted }}>{msg.excerpt || "(empty)"}</span>
+                      </text>
+                    )}
+                  </For>
+                  <Show when={(detailMessages() ?? []).length === 0}>
+                    <text>
+                      <span style={{ fg: theme.textMuted }}>No messages yet</span>
+                    </text>
+                  </Show>
+                </Show>
               </box>
             }
           >
