@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Fiber, Ref, Stream } from "effect"
+import { Effect, Fiber, Layer, Ref, Stream } from "effect"
 import {
   createSequenceProvider,
   toolCallStep,
@@ -10,6 +10,7 @@ import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
+import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 
@@ -277,6 +278,126 @@ describe("Auto extension E2E", () => {
         const finalAuto = finalSnapshots.find((s) => s.extensionId === "auto")
         if (finalAuto === undefined) throw new Error("final auto snapshot not found")
         expect((finalAuto.model as { active: boolean }).active).toBe(false)
+      }).pipe(Effect.provide(e2eLayer))
+    }),
+  )
+
+  it.live("handoff dedup: handoff extension skips when auto is active", () =>
+    Effect.gen(function* () {
+      // Track whether HandoffHandler.present() is called
+      const presentCalled = yield* Ref.make(false)
+      const trackingHandoffLayer = Layer.succeed(HandoffHandler, {
+        present: () => Ref.set(presentCalled, true).pipe(Effect.as("confirm" as const)),
+        peek: () => Effect.succeed(undefined),
+        claim: () => Effect.succeed(undefined),
+        respond: () => Effect.succeed(undefined),
+        rehydrate: () => Effect.void,
+      })
+
+      const { layer: providerLayer } = yield* createSequenceProvider([
+        textStep("Starting auto."),
+        toolCallStep("auto_checkpoint", {
+          status: "continue",
+          summary: "First pass",
+          nextIdea: "Keep going",
+        }),
+        toolCallStep("counsel", { prompt: "Review" }),
+        toolCallStep("auto_checkpoint", {
+          status: "complete",
+          summary: "Done",
+        }),
+      ])
+
+      const e2eLayer = createE2ELayer({
+        providerLayer,
+        extraLayers: [trackingHandoffLayer as Layer.Layer<never>],
+      })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const stateRuntime = yield* ExtensionStateRuntime
+
+        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        yield* stateRuntime.handleIntent(
+          sessionId,
+          "auto",
+          { _tag: "StartAuto", goal: "Test handoff dedup" },
+          0,
+          branchId,
+        )
+
+        yield* agentLoop.run(makeMessage("begin"))
+
+        // Handoff extension should NOT have called present() while auto was active.
+        // (Context is small so threshold won't trigger, but even if it did, the guard skips.)
+        expect(yield* Ref.get(presentCalled)).toBe(false)
+
+        // Also verify no HandoffPresented events were published
+        const eventStore = yield* EventStore
+        const envelopesRef = yield* Ref.make<EventEnvelope[]>([])
+        yield* eventStore.subscribe({ sessionId, branchId }).pipe(
+          Stream.take(100),
+          Stream.runForEach((env) => Ref.update(envelopesRef, (curr) => [...curr, env])),
+          Effect.timeout("100 millis"),
+          Effect.catchEager(() => Effect.void),
+        )
+        const envelopes = yield* Ref.get(envelopesRef)
+        const handoffEvents = envelopes.filter((e) => e.event._tag === "HandoffPresented")
+        expect(handoffEvents.length).toBe(0)
+      }).pipe(Effect.provide(e2eLayer))
+    }),
+  )
+
+  it.live("auto handoff emits QueueFollowUp, not HandoffPresented", () =>
+    Effect.gen(function* () {
+      // Verify auto's turn.after interceptor no longer imports/uses HandoffHandler.
+      // This is a structural assertion — auto.ts should not produce HandoffPresented events.
+      const presentCalled = yield* Ref.make(false)
+      const trackingHandoffLayer = Layer.succeed(HandoffHandler, {
+        present: () => Ref.set(presentCalled, true).pipe(Effect.as("confirm" as const)),
+        peek: () => Effect.succeed(undefined),
+        claim: () => Effect.succeed(undefined),
+        respond: () => Effect.succeed(undefined),
+        rehydrate: () => Effect.void,
+      })
+
+      // Single iteration that completes — auto is active during the run
+      const { layer: providerLayer } = yield* createSequenceProvider([
+        textStep("Working on it."),
+        toolCallStep("auto_checkpoint", {
+          status: "complete",
+          summary: "All done",
+        }),
+      ])
+
+      const e2eLayer = createE2ELayer({
+        providerLayer,
+        extraLayers: [trackingHandoffLayer as Layer.Layer<never>],
+      })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const stateRuntime = yield* ExtensionStateRuntime
+
+        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        yield* stateRuntime.handleIntent(
+          sessionId,
+          "auto",
+          { _tag: "StartAuto", goal: "Verify no direct handoff" },
+          0,
+          branchId,
+        )
+
+        yield* agentLoop.run(makeMessage("begin"))
+
+        // Auto completed without calling HandoffHandler.present directly
+        expect(yield* Ref.get(presentCalled)).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),
   )

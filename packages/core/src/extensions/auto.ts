@@ -35,7 +35,7 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
 import { estimateContextPercent } from "../runtime/context-estimation.js"
 import { DEFAULTS } from "../domain/defaults.js"
-import { HandoffHandler } from "../domain/interaction-handlers.js"
+import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 
 // ── Constants ──
 
@@ -806,24 +806,23 @@ const autoHandoffImpl = (
       }
     }
 
-    // Present handoff
-    const handoffHandler = yield* HandoffHandler
-
-    yield* handoffHandler
-      .present({
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        summary: [
-          `Auto loop iteration ${uiModel.iteration}/${uiModel.maxIterations}`,
-          `Goal: ${uiModel.goal}`,
-          journalPath !== undefined ? `Journal: ${journalPath}` : undefined,
-          `Context at ${contextPercent}%`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        reason: `Auto loop context at ${contextPercent}%`,
-      })
-      .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
+    // Queue follow-up telling model to call the handoff tool.
+    // @gent/handoff owns presentation — auto just requests the handoff.
+    const turnControl = yield* ExtensionTurnControl
+    yield* turnControl.queueFollowUp({
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+      content: [
+        `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
+        `Include this context:`,
+        `- Auto loop iteration ${uiModel.iteration}/${uiModel.maxIterations}`,
+        `- Goal: ${uiModel.goal}`,
+        journalPath !== undefined ? `- Journal: ${journalPath}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      metadata: { extensionId: "auto", hidden: true },
+    })
   }).pipe(Effect.catchEager(() => Effect.void))
 
 // Cast: interceptor runs in agent loop fiber where services are ambient

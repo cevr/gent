@@ -67,20 +67,20 @@ const autoHandoffImpl = (
 
     if (input.interrupted) return
 
-    // Read cooldown + epoch from actor state
+    // Read cooldown + epoch from actor state, and check if auto is active
     const stateRuntime = yield* ExtensionStateRuntime
-    const { cooldown, epoch } = yield* stateRuntime
+    const snapshots = yield* stateRuntime
       .getUiSnapshots(input.sessionId, input.branchId)
-      .pipe(
-        Effect.map((snapshots) => {
-          const snap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
-          return {
-            cooldown: (snap?.model as CooldownState | undefined)?.cooldown ?? 0,
-            epoch: snap?.epoch ?? 0,
-          }
-        }),
-        Effect.catchEager(() => Effect.succeed({ cooldown: 0, epoch: 0 })),
-      )
+      .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+
+    // Auto owns its own handoff flow — skip generic threshold handoff when active
+    const autoSnap = snapshots.find((s) => s.extensionId === "auto")
+    const autoActive = (autoSnap?.model as { active?: boolean } | undefined)?.active === true
+    if (autoActive) return
+
+    const handoffSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
+    const cooldown = (handoffSnap?.model as CooldownState | undefined)?.cooldown ?? 0
+    const epoch = handoffSnap?.epoch ?? 0
 
     if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
