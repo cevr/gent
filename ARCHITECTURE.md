@@ -216,6 +216,27 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, `snapshots()` for widgets
 - Widgets are zero-prop components that self-source from context hooks
 
+### Extension State Runtime Lifecycle
+
+Extension actors (state machines) are managed by `ExtensionStateRuntime`. Key patterns:
+
+**Lazy init with Deferred readiness** (`state-runtime.ts`):
+
+- `getOrSpawnActors(sessionId)` registers a Deferred placeholder under `spawnSemaphore`, then spawns + inits actors OUTSIDE the lock. Concurrent callers await the Deferred.
+- This prevents deadlocks where extension actor spawn triggers events that re-enter `getOrSpawnActors`.
+
+**Synchronous reduce in publish path** (`dependencies.ts`):
+
+- `ReducingEventStore.publish` persists the event, then synchronously calls `stateRuntime.reduce`. Extension `afterTransition` effects (QueueFollowUp, Interject) run during this reduce, which schedules follow-up turns on the agent loop.
+- This MUST be synchronous — extension side effects participate in the turn lifecycle. Async reduction would cause the loop to reach idle before follow-ups are queued.
+- Re-entrance guard: a process-wide `Ref<number>` tracks reduce depth. Nested publishes during reduce (e.g., from inspector `MachineInspected` events) skip reduce.
+
+**effect-machine integration**:
+
+- `Machine.spawn` is cold — no I/O, no inspector, no supervisor before `actor.start`. Recovery (state loading) and supervisor arming happen during `start`.
+- `from-machine.ts` extensions use `Machine.spawn` + `ref.start` with their own persistence hydration separate from effect-machine's `Lifecycle` API.
+- `AgentLoop` uses effect-machine's `Lifecycle` API: `recovery.resolve` loads checkpoints + runs `makeRecoveryDecision`, `durability.save` persists checkpoints after transitions.
+
 ## Testing
 
 Use the smallest honest boundary:
