@@ -1695,49 +1695,60 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
             const loopActor = yield* Machine.spawn(loopMachine, {
               id: `agent-loop:${sessionId}:${branchId}`,
-              persist: {
-                load: () =>
-                  Effect.gen(function* () {
-                    const record = yield* checkpointStorage.get({ sessionId, branchId })
-                    if (record === undefined) return Option.none<LoopState>()
-                    if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
-                      yield* checkpointStorage.remove({ sessionId, branchId })
-                      return Option.none<LoopState>()
-                    }
-                    const decoded = yield* Effect.option(
-                      decodeLoopCheckpointState(record.stateJson),
-                    )
-                    if (Option.isNone(decoded)) {
-                      yield* checkpointStorage.remove({ sessionId, branchId })
-                    }
-                    return decoded
-                  }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
-                save: (state) =>
-                  Effect.gen(function* () {
-                    if (!shouldRetainLoopCheckpoint(state)) {
-                      yield* checkpointStorage.remove({ sessionId, branchId })
-                      return
-                    }
-                    yield* checkpointStorage.upsert(
-                      yield* buildLoopCheckpointRecord({ sessionId, branchId, state }),
-                    )
-                  }).pipe(
-                    Effect.catchEager((error) =>
-                      Effect.logWarning("checkpoint.save failed").pipe(
-                        Effect.annotateLogs({ error: String(error) }),
+              lifecycle: {
+                recovery: {
+                  resolve: (_ctx) =>
+                    Effect.withSpan("AgentLoop.recovery.resolve")(
+                      Effect.gen(function* () {
+                        const record = yield* checkpointStorage.get({ sessionId, branchId })
+                        if (record === undefined) return Option.none<LoopState>()
+                        if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
+                          yield* checkpointStorage.remove({ sessionId, branchId })
+                          return Option.none<LoopState>()
+                        }
+                        const decoded = yield* Effect.option(
+                          decodeLoopCheckpointState(record.stateJson),
+                        )
+                        if (Option.isNone(decoded)) {
+                          yield* checkpointStorage.remove({ sessionId, branchId })
+                          return Option.none<LoopState>()
+                        }
+                        return yield* makeRecoveryDecision({
+                          state: decoded.value,
+                          storage,
+                          extensionRegistry,
+                          currentAgent,
+                          publishEvent: publishEventOrDie,
+                          sessionId,
+                          branchId,
+                        }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>())))
+                      }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
+                    ),
+                },
+                durability: {
+                  save: (commit) =>
+                    Effect.withSpan("AgentLoop.durability.save")(
+                      Effect.gen(function* () {
+                        if (!shouldRetainLoopCheckpoint(commit.nextState)) {
+                          yield* checkpointStorage.remove({ sessionId, branchId })
+                          return
+                        }
+                        yield* checkpointStorage.upsert(
+                          yield* buildLoopCheckpointRecord({
+                            sessionId,
+                            branchId,
+                            state: commit.nextState,
+                          }),
+                        )
+                      }).pipe(
+                        Effect.catchEager((error) =>
+                          Effect.logWarning("checkpoint.save failed").pipe(
+                            Effect.annotateLogs({ error: String(error) }),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                onRestore: (persisted) =>
-                  makeRecoveryDecision({
-                    state: persisted,
-                    storage,
-                    extensionRegistry,
-                    currentAgent,
-                    publishEvent: publishEventOrDie,
-                    sessionId,
-                    branchId,
-                  }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
+                },
               },
             }).pipe(
               Effect.provideService(InspectorService, inspector),
