@@ -341,7 +341,12 @@ export const runTestWithRecording = <A, E>(
 import type { ToolCallId } from "../domain/ids.js"
 
 // E2E test layer
-export { createE2ELayer, type E2ELayerConfig } from "./e2e-layer.js"
+export {
+  createE2ELayer,
+  type E2ELayerConfig,
+  withTinyContextWindow,
+  trackingHandoffHandler,
+} from "./e2e-layer.js"
 
 // Extension test harnesses
 export {

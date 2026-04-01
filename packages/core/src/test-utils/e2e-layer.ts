@@ -8,11 +8,12 @@
  * Import from @gent/core/test-utils/e2e-layer
  */
 
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { tmpdir } from "node:os"
 import { BunServices } from "@effect/platform-bun"
 import {
   Agents,
+  DEFAULT_MODEL_ID,
   SubagentRunnerService,
   type AgentName,
   type SubagentRunner,
@@ -26,6 +27,7 @@ import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/interaction-handlers.js"
+import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import type { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
@@ -202,3 +204,65 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     ),
   )
 }
+
+// ── Test helpers ──
+
+/**
+ * Temporarily shrink the context window for the default model so that
+ * even small messages exceed the handoff threshold (85%).
+ *
+ * With 5000-token window and 4000-token system overhead, any message
+ * content pushes context past 85%. Restores the original value via
+ * Effect.ensuring, safe against test failures.
+ *
+ * Usage:
+ * ```ts
+ * yield* withTinyContextWindow(Effect.gen(function* () { ... }))
+ * ```
+ */
+export const withTinyContextWindow = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> => {
+  const originalWindow = MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]
+  return Effect.suspend(() => {
+    MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID] = 5_000
+    return effect
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (originalWindow !== undefined) {
+          MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID] = originalWindow
+        } else {
+          delete MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]
+        }
+      }),
+    ),
+  )
+}
+
+/**
+ * HandoffHandler that tracks whether present() was called.
+ *
+ * Returns a Layer + a Ref<boolean> that flips to true if present() fires.
+ * Always resolves with "confirm" so tests don't hang.
+ *
+ * Usage:
+ * ```ts
+ * const { layer, presentCalled } = yield* trackingHandoffHandler()
+ * // ... provide layer ...
+ * expect(yield* Ref.get(presentCalled)).toBe(false)
+ * ```
+ */
+// @effect-diagnostics effectSucceedWithVoid:off
+export const trackingHandoffHandler = () =>
+  Effect.gen(function* () {
+    const presentCalled = yield* Ref.make(false)
+    const layer = Layer.succeed(HandoffHandler, {
+      present: () => Ref.set(presentCalled, true).pipe(Effect.as("confirm" as const)),
+      peek: () => Effect.succeed(undefined),
+      claim: () => Effect.succeed(undefined),
+      respond: () => Effect.succeed(undefined),
+      rehydrate: () => Effect.void,
+    })
+    return { layer, presentCalled }
+  })
