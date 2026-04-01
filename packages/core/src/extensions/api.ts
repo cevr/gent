@@ -63,8 +63,10 @@ import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../doma
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PermissionResult } from "../domain/permission.js"
-import type { Message } from "../domain/message.js"
+import type { Message, MessageMetadata } from "../domain/message.js"
 import { fromReducer } from "../runtime/extensions/from-reducer.js"
+import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
+import { interpretEffects } from "../runtime/extensions/extension-actor-shared.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -303,6 +305,15 @@ export interface ExtensionBuilder {
   /** Register a shutdown hook. Multiple calls compose in order. */
   onShutdown(fn: () => void | Promise<void>): void
 
+  // ── Imperative side effects (usable from ext.on() handlers) ──
+
+  /** Queue a follow-up message after the current turn completes.
+   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  queueFollowUp(content: string, metadata?: MessageMetadata): void
+  /** Inject a message mid-turn (interrupts the current turn).
+   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  interject(content: string): void
+
   // ── Full-power path (Effect-aware) ──
 
   /** Register a raw Effect interceptor. */
@@ -391,30 +402,87 @@ const convertSimpleAgent = (def: SimpleAgentDef): AgentDefinition =>
     hidden: def.hidden,
   })
 
+/** Extract sessionId/branchId from hook input for effect draining */
+const extractContext = (
+  _key: string,
+  input: unknown,
+): { sessionId?: string; branchId?: string } => {
+  const record = input as Record<string, unknown>
+  return {
+    sessionId: record["sessionId"] as string | undefined,
+    branchId: record["branchId"] as string | undefined,
+  }
+}
+
+/** Keys where queueFollowUp/interject are allowed (have sessionId/branchId in input) */
+const EFFECT_CAPABLE_HOOKS = new Set([
+  "turn.after",
+  "tool.execute",
+  "tool.result",
+  "context.messages",
+])
+
+type EffectBinder = {
+  bind: (effects: ExtensionEffect[], hookKey: string) => void
+  unbind: () => void
+}
+
+const drainEffects = (effects: ExtensionEffect[], hookKey: string, input: unknown) =>
+  Effect.gen(function* () {
+    if (effects.length === 0) return
+    const ctx = extractContext(hookKey, input)
+    const tc = yield* Effect.serviceOption(ExtensionTurnControl)
+    if (tc._tag === "Some" && ctx.sessionId !== undefined) {
+      yield* interpretEffects(
+        effects,
+        ctx.sessionId as never,
+        ctx.branchId as never,
+        tc.value,
+      ).pipe(Effect.catchDefect(() => Effect.void))
+    }
+  })
+
 const wrapTransformHandler =
   <I, O>(
     handler: TransformHandler<I, O>,
+    hookKey: string,
+    effectBinder: EffectBinder,
   ): ((input: I, next: (input: I) => Effect.Effect<O>) => Effect.Effect<O>) =>
-  (input, next) =>
-    Effect.tryPromise({
+  (input, next) => {
+    const effects: ExtensionEffect[] = []
+    effectBinder.bind(effects, hookKey)
+    return Effect.tryPromise({
       try: () => {
         const effectNext = (i: I) => Effect.runPromise(next(i))
         return Promise.resolve(handler(input, effectNext))
       },
       catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
-    }).pipe(Effect.orDie) as Effect.Effect<O>
+    }).pipe(
+      Effect.orDie,
+      Effect.tap(() => {
+        effectBinder.unbind()
+        return drainEffects(effects, hookKey, input)
+      }),
+    ) as Effect.Effect<O>
+  }
 
 const wrapFireAndForgetHandler =
   <I>(
     handler: FireAndForgetHandler<I>,
+    hookKey: string,
+    effectBinder: EffectBinder,
   ): ((input: I, next: (input: I) => Effect.Effect<void>) => Effect.Effect<void>) =>
   (input, next) =>
     Effect.gen(function* () {
       yield* next(input)
+      const effects: ExtensionEffect[] = []
+      effectBinder.bind(effects, hookKey)
       yield* Effect.tryPromise({
         try: () => Promise.resolve(handler(input)),
         catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
       }).pipe(Effect.orDie)
+      effectBinder.unbind()
+      yield* drainEffects(effects, hookKey, input)
     })
 
 const convertSimpleEffect = (effect: SimpleEffect): ExtensionEffect => {
@@ -461,6 +529,20 @@ export const extension = (
       let stateConfig: SimpleStateConfig<any> | undefined
       let actorResult: ActorResult | undefined
 
+      // Per-invocation effect buffer for imperative side effects
+      let currentEffects: ExtensionEffect[] | undefined
+      let currentHookKey: string | undefined
+      const effectBinder: EffectBinder = {
+        bind: (effects, hookKey) => {
+          currentEffects = effects
+          currentHookKey = hookKey
+        },
+        unbind: () => {
+          currentEffects = undefined
+          currentHookKey = undefined
+        },
+      }
+
       const builder: ExtensionBuilder = {
         tool: (def) => {
           if (isFullToolDef(def)) {
@@ -485,20 +567,60 @@ export const extension = (
             interceptors.push(
               defineInterceptor(
                 key,
-                wrapFireAndForgetHandler(handler as FireAndForgetHandler<TurnAfterInput>),
+                wrapFireAndForgetHandler(
+                  handler as FireAndForgetHandler<TurnAfterInput>,
+                  key,
+                  effectBinder,
+                ),
               ),
             )
           } else {
             interceptors.push(
               defineInterceptor(
                 key,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                wrapTransformHandler(handler as TransformHandler<any, any>) as never,
+                wrapTransformHandler(
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  handler as TransformHandler<any, any>,
+                  key,
+                  effectBinder,
+                ) as never,
               ),
             )
           }
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         }) as any,
+
+        queueFollowUp: (content, metadata?) => {
+          if (currentEffects === undefined) {
+            throw new Error(
+              `ext.queueFollowUp() called outside of a hook handler. ` +
+                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
+            )
+          }
+          if (!EFFECT_CAPABLE_HOOKS.has(currentHookKey ?? "")) {
+            throw new Error(
+              `ext.queueFollowUp() is not available in "${currentHookKey}" handlers. ` +
+                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
+            )
+          }
+          currentEffects.push({ _tag: "QueueFollowUp", content, metadata })
+        },
+
+        interject: (content) => {
+          if (currentEffects === undefined) {
+            throw new Error(
+              `ext.interject() called outside of a hook handler. ` +
+                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
+            )
+          }
+          if (!EFFECT_CAPABLE_HOOKS.has(currentHookKey ?? "")) {
+            throw new Error(
+              `ext.interject() is not available in "${currentHookKey}" handlers. ` +
+                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
+            )
+          }
+          currentEffects.push({ _tag: "Interject", content })
+        },
 
         state: (config) => {
           if (stateConfig !== undefined || actorResult !== undefined) {
