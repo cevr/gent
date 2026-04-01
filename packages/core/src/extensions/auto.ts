@@ -13,17 +13,28 @@
  * Uses effect-machine for state transitions, fromMachine for actor wrapping.
  */
 
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
-import type {
-  ExtensionDeriveContext,
-  ExtensionEffect,
-  ExtensionProjection,
+import {
+  defineInterceptor,
+  type ExtensionDeriveContext,
+  type ExtensionEffect,
+  type ExtensionProjection,
+  type ToolResultInput,
+  type TurnAfterInput,
 } from "../domain/extension.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { extension, fromMachine } from "./api.js"
 import { AutoCheckpointTool } from "../tools/auto-checkpoint.js"
+import { AutoJournal, type CheckpointRow } from "./auto-journal.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { Storage } from "../storage/sqlite-storage.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
+import { estimateContextPercent } from "../runtime/context-estimation.js"
+import { DEFAULTS } from "../domain/defaults.js"
+import { HandoffHandler } from "../domain/interaction-handlers.js"
 
 // ── Constants ──
 
@@ -156,6 +167,8 @@ const workingPromptSection = (state: Extract<MachineState, { _tag: "Working" }>)
   }
 
   parts.push(
+    "",
+    "Maintain a findings doc at `.gent/auto/findings.md` — update it with wins, dead ends, and open questions.",
     "",
     "When you have completed this iteration's work, call `auto_checkpoint` with your results.",
     `This is iteration ${state.iteration} of ${state.maxIterations}.`,
@@ -332,10 +345,10 @@ const afterTransition = (
       (before._tag === "Working" && before.iteration !== after.iteration)
     if (isNewEntry) {
       if (after.iteration === 1) {
-        // Kickoff
+        // Kickoff — journal start is handled by tool.result interceptor
         effects.push({
           _tag: "QueueFollowUp",
-          content: `Begin: ${after.goal}. Call \`auto_checkpoint\` when this iteration is done.`,
+          content: `Begin: ${after.goal}. Update \`.gent/auto/findings.md\` as you work. Call \`auto_checkpoint\` when this iteration is done.`,
           metadata: { extensionId: "auto", hidden: true },
         })
       } else {
@@ -343,7 +356,7 @@ const afterTransition = (
         const hint = after.nextIdea ?? after.goal
         effects.push({
           _tag: "QueueFollowUp",
-          content: `Iteration ${after.iteration}/${after.maxIterations}. ${hint}. Review learnings. Call \`auto_checkpoint\` when done.`,
+          content: `Iteration ${after.iteration}/${after.maxIterations}. ${hint}. Review learnings, update findings doc. Call \`auto_checkpoint\` when done.`,
           metadata: { extensionId: "auto", hidden: true },
         })
       }
@@ -581,7 +594,7 @@ export const AutoActorConfig = {
 
 // ── Actor (effect-machine based) ──
 
-const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent>({
+const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent, never, AutoJournal>({
   id: "auto",
   built: autoMachine,
   mapEvent,
@@ -592,13 +605,206 @@ const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent>({
   uiModelSchema: AutoUiModel,
   persist: true,
   afterTransition,
+  onInit: (ctx) =>
+    Effect.gen(function* () {
+      const journalOpt = yield* Effect.serviceOption(AutoJournal)
+      if (journalOpt._tag === "None") return
+      const journal = journalOpt.value
+      const active = yield* journal.readActive()
+      if (active === undefined) return
+
+      // Check if current state is already non-Inactive (hydrated from persistence)
+      const current = (yield* ctx.snapshot) as MachineState
+      if (current._tag !== "Inactive") return
+
+      // Replay journal rows as machine events
+      const config = active.rows.find((r) => r.type === "config")
+      if (config === undefined || config.type !== "config") return
+
+      // Start the machine
+      yield* ctx.send(
+        MachineEvent.StartAuto({
+          goal: config.goal,
+          maxIterations: config.maxIterations,
+        }),
+      )
+
+      // Replay checkpoints and counsel signals in order
+      for (const row of active.rows) {
+        if (row.type === "checkpoint") {
+          yield* ctx.send(
+            MachineEvent.AutoSignal({
+              status: row.status,
+              summary: row.summary,
+              learnings: row.learnings,
+              metrics: row.metrics,
+              nextIdea: row.nextIdea,
+            }),
+          )
+        }
+        if (row.type === "counsel") {
+          yield* ctx.send(MachineEvent.CounselSignal)
+        }
+      }
+
+      yield* Effect.logInfo("auto.onInit.replayed").pipe(
+        Effect.annotateLogs({
+          journalPath: active.path,
+          rowCount: active.rows.length,
+        }),
+      )
+    }).pipe(Effect.catchEager(() => Effect.void)),
 })
 
 export const AutoSpawnActor = autoActor.spawnActor
+
+// ── tool.result interceptor — JSONL append on checkpoint/counsel ──
+
+const EXTENSION_ID = "auto"
+
+const journalInterceptorImpl = (
+  input: ToolResultInput,
+  next: (input: ToolResultInput) => Effect.Effect<unknown>,
+) =>
+  Effect.gen(function* () {
+    const result = yield* next(input)
+
+    const journal = yield* Effect.serviceOption(AutoJournal)
+    if (journal._tag === "None") return result
+
+    // Read current auto state to check if active
+    const stateRuntime = yield* ExtensionStateRuntime
+    const snapshots = yield* stateRuntime
+      .getUiSnapshots(input.sessionId, input.branchId)
+      .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+    const autoSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
+    const uiModel = autoSnap?.model as AutoUiModel | undefined
+    if (uiModel === undefined || !uiModel.active) return result
+
+    if (input.toolName === "auto_checkpoint") {
+      // Parse checkpoint params from input
+      const params = input.input as {
+        status?: string
+        summary?: string
+        learnings?: string
+        metrics?: Record<string, number>
+        nextIdea?: string
+      }
+
+      // Start journal on first checkpoint if not already active
+      const activePath = yield* journal.value.getActivePath()
+      if (activePath === undefined && uiModel.goal !== undefined) {
+        yield* journal.value.start({
+          goal: uiModel.goal,
+          maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+        })
+      }
+
+      yield* journal.value.appendCheckpoint({
+        iteration: uiModel.iteration ?? 1,
+        status: (params.status ?? "continue") as CheckpointRow["status"],
+        summary: params.summary ?? "Checkpoint",
+        learnings: params.learnings,
+        metrics: params.metrics,
+        nextIdea: params.nextIdea,
+      })
+
+      // If terminal, clear the active pointer
+      if (params.status === "complete" || params.status === "abandon") {
+        yield* journal.value.finish()
+      }
+    }
+
+    if (input.toolName === "counsel") {
+      yield* journal.value.appendCounsel(uiModel.iteration ?? 1)
+    }
+
+    return result
+  }).pipe(Effect.catchEager(() => next(input)))
+
+// Cast: interceptor runs in agent loop fiber where services are ambient
+const journalInterceptor = defineInterceptor(
+  "tool.result",
+  journalInterceptorImpl as unknown as (
+    input: ToolResultInput,
+    next: (input: ToolResultInput) => Effect.Effect<unknown>,
+  ) => Effect.Effect<unknown>,
+)
+
+// ── turn.after interceptor — auto-handoff on context fill ──
+
+const autoHandoffImpl = (
+  input: TurnAfterInput,
+  next: (input: TurnAfterInput) => Effect.Effect<void>,
+) =>
+  Effect.gen(function* () {
+    yield* next(input)
+
+    if (input.interrupted) return
+
+    // Check if auto is active
+    const stateRuntime = yield* ExtensionStateRuntime
+    const snapshots = yield* stateRuntime
+      .getUiSnapshots(input.sessionId, input.branchId)
+      .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+    const autoSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
+    const uiModel = autoSnap?.model as AutoUiModel | undefined
+    if (uiModel === undefined || !uiModel.active) return
+
+    // Estimate context fill
+    const storage = yield* Storage
+    const registry = yield* ExtensionRegistry
+
+    const allMessages = yield* storage.listMessages(input.branchId)
+    const agentDef = yield* registry.getAgent(input.agentName)
+    const coworkDef = yield* registry.getAgent("cowork")
+    let modelId = DEFAULT_MODEL_ID
+    if (agentDef !== undefined) modelId = resolveAgentModel(agentDef)
+    else if (coworkDef !== undefined) modelId = resolveAgentModel(coworkDef)
+    const contextPercent = estimateContextPercent(allMessages, modelId)
+    if (contextPercent < DEFAULTS.handoffThresholdPercent) return
+
+    yield* Effect.logInfo("auto.handoff.threshold").pipe(
+      Effect.annotateLogs({ contextPercent, iteration: uiModel.iteration }),
+    )
+
+    // Present handoff — auto mode auto-accepts
+    const handoffHandler = yield* HandoffHandler
+    const journal = yield* Effect.serviceOption(AutoJournal)
+    const journalPath = journal._tag === "Some" ? yield* journal.value.getActivePath() : undefined
+
+    yield* handoffHandler
+      .present({
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        summary: [
+          `Auto loop iteration ${uiModel.iteration}/${uiModel.maxIterations}`,
+          `Goal: ${uiModel.goal}`,
+          journalPath !== undefined ? `Journal: ${journalPath}` : undefined,
+          `Context at ${contextPercent}%`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        reason: `Auto loop context at ${contextPercent}%`,
+      })
+      .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
+  }).pipe(Effect.catchEager(() => Effect.void))
+
+// Cast: interceptor runs in agent loop fiber where services are ambient
+const autoHandoffInterceptor = defineInterceptor(
+  "turn.after",
+  autoHandoffImpl as unknown as (
+    input: TurnAfterInput,
+    next: (input: TurnAfterInput) => Effect.Effect<void>,
+  ) => Effect.Effect<void>,
+)
 
 // ── Extension ──
 
 export const AutoExtension = extension("@gent/auto", (ext) => {
   ext.actor(autoActor)
   ext.tool(AutoCheckpointTool)
+  ext.interceptor(journalInterceptor)
+  ext.interceptor(autoHandoffInterceptor)
+  ext.layer(AutoJournal.Live)
 })
