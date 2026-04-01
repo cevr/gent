@@ -145,22 +145,27 @@ Special prefixes at input start trigger different modes:
 
 ## Extensions
 
-Builtins are individual `.client.ts` files in `src/extensions/builtins/`:
+Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 
-| File                            | Extension ID       | What                     |
-| ------------------------------- | ------------------ | ------------------------ |
-| `builtins/tools.client.ts`      | `@gent/tools`      | Tool renderers           |
-| `builtins/plan.client.ts`       | `@gent/plan`       | Plan widget              |
-| `builtins/auto.client.ts`       | `@gent/auto`       | Auto loop progress       |
-| `builtins/tasks.client.ts`      | `@gent/tasks`      | Task widget              |
-| `builtins/connection.client.ts` | `@gent/connection` | Connection status widget |
+| File                              | Extension ID         | What                                           |
+| --------------------------------- | -------------------- | ---------------------------------------------- |
+| `builtins/tools.client.ts`        | `@gent/tools`        | Tool renderers                                 |
+| `builtins/plan.client.ts`         | `@gent/plan`         | Plan widget + border labels                    |
+| `builtins/auto.client.ts`         | `@gent/auto`         | Auto loop progress                             |
+| `builtins/tasks.client.tsx`       | `@gent/tasks`        | Task widget, dialog overlay, border label      |
+| `builtins/connection.client.ts`   | `@gent/connection`   | Connection status widget                       |
+| `builtins/interactions.client.ts` | `@gent/interactions` | Interaction renderers (questions, permissions) |
+| `builtins/handoff.client.ts`      | `@gent/handoff`      | Handoff interaction renderer                   |
 
-Extension pipeline: `discovery.ts` → `loader.ts` → `resolve.ts` → `context.tsx`
+Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader.ts` → `resolve.ts`
 
-- Builtins go through the same pipeline as user/project extensions
+- Builtins are statically imported in `context.tsx` for Bun compiled binary compatibility
+- User/project extensions discovered via filesystem scan (`discovery.ts`)
 - `loader.ts` accepts `disabled` list — skips `setup()` for disabled extensions
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - `useExtensionUI()` provides `sessionId()`, `branchId()`, `snapshots()`
+- Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
+- `composerState` reactive signal available in `ExtensionClientContext`: `{ draft, mode, inputFocused, autocompleteOpen }`
 
 ## Key Files (Composer + Session)
 
