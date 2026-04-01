@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Ref, Schema, Semaphore } from "effect"
+import { ServiceMap, Deferred, Effect, Layer, Ref, Schema, Semaphore } from "effect"
 import type { AgentEvent, ExtensionUiSnapshot } from "../../domain/event.js"
 import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/event.js"
 import type {
@@ -87,59 +87,88 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           }
         }
 
-        // Session-scoped actors
-        const actorsRef = yield* Ref.make<Map<SessionId, ActorEntry[]>>(new Map())
-
-        // Serialized actor spawn — prevents double-init on concurrent access
+        // Session-scoped actors with Deferred readiness.
+        // Registration happens under a semaphore (fast), but spawn+init runs
+        // outside the lock. This prevents re-entrant deadlocks where extension
+        // actor spawn publishes events that trigger reduce → getOrSpawnActors.
+        type ActorSlot =
+          | { readonly _tag: "ready"; readonly entries: ActorEntry[] }
+          | { readonly _tag: "pending"; readonly gate: Deferred.Deferred<ActorEntry[]> }
+        const actorsRef = yield* Ref.make<Map<SessionId, ActorSlot>>(new Map())
         const spawnSemaphore = yield* Semaphore.make(1)
 
         const getOrSpawnActors = (sessionId: SessionId, branchId?: BranchId) =>
           Effect.withSpan("ExtensionStateRuntime.spawnActors")(
-            spawnSemaphore.withPermits(1)(
-              Effect.gen(function* () {
-                // Re-check after acquiring semaphore
-                const existing = (yield* Ref.get(actorsRef)).get(sessionId)
-                if (existing !== undefined) return existing
+            Effect.gen(function* () {
+              // Phase 1: under semaphore, check or register a Deferred placeholder.
+              // Returns { _tag: "owner", gate } if we created the placeholder,
+              // or the existing slot if already initialized/pending.
+              const result = yield* spawnSemaphore.withPermits(1)(
+                Effect.gen(function* () {
+                  const existing = (yield* Ref.get(actorsRef)).get(sessionId)
+                  if (existing !== undefined) return existing
+                  const gate = yield* Deferred.make<ActorEntry[]>()
+                  const slot: ActorSlot = { _tag: "pending", gate }
+                  yield* Ref.update(actorsRef, (m) => {
+                    const next = new Map(m)
+                    next.set(sessionId, slot)
+                    return next
+                  })
+                  // Return a sentinel so the caller knows it owns init
+                  return { _tag: "owner" as const, gate }
+                }),
+              )
 
-                // Yield services lazily — they're available at call time (reduce),
-                // not at layer-build time. Provide them to spawn calls.
-                const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
-                const spawnLayer =
-                  turnControl._tag === "Some"
-                    ? Layer.succeed(ExtensionTurnControl, turnControl.value)
-                    : ExtensionTurnControl.Test()
+              // Fast path: already initialized
+              if ("entries" in result && result._tag === "ready") return result.entries
 
-                const entries: ActorEntry[] = []
-                for (const { extensionId, spawn, projection } of spawnActors) {
-                  const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
-                    sessionId,
-                    branchId,
-                  }).pipe(
-                    Effect.tap((a) => a.init),
-                    // @effect-diagnostics-next-line strictEffectProvide:off
-                    Effect.provide(spawnLayer),
-                    Effect.catchDefect((defect) =>
-                      Effect.logWarning("actor.init.failed").pipe(
-                        Effect.annotateLogs({ extensionId, error: String(defect) }),
-                        Effect.as(undefined),
-                      ),
+              // Another fiber is initializing — wait for it
+              if ("gate" in result && result._tag === "pending") {
+                return yield* Deferred.await(result.gate)
+              }
+
+              // We own the init (result._tag === "owner")
+              const gate = (result as { _tag: "owner"; gate: Deferred.Deferred<ActorEntry[]> }).gate
+
+              // Phase 2: outside semaphore, spawn + init actors
+              const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
+              const spawnLayer =
+                turnControl._tag === "Some"
+                  ? Layer.succeed(ExtensionTurnControl, turnControl.value)
+                  : ExtensionTurnControl.Test()
+
+              const entries: ActorEntry[] = []
+              for (const { extensionId, spawn, projection } of spawnActors) {
+                const spawnEffect: Effect.Effect<ExtensionActor | undefined> = spawn({
+                  sessionId,
+                  branchId,
+                }).pipe(
+                  Effect.tap((a) => a.init),
+                  // @effect-diagnostics-next-line strictEffectProvide:off
+                  Effect.provide(spawnLayer),
+                  Effect.catchDefect((defect) =>
+                    Effect.logWarning("actor.init.failed").pipe(
+                      Effect.annotateLogs({ extensionId, error: String(defect) }),
+                      Effect.as(undefined),
                     ),
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  ) as any
-                  const actor = yield* spawnEffect
-                  if (actor !== undefined) {
-                    entries.push({ actor, projection })
-                  }
+                  ),
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                ) as any
+                const actor = yield* spawnEffect
+                if (actor !== undefined) {
+                  entries.push({ actor, projection })
                 }
+              }
 
-                yield* Ref.update(actorsRef, (actors) => {
-                  const next = new Map(actors)
-                  next.set(sessionId, entries)
-                  return next
-                })
-                return entries
-              }),
-            ),
+              // Phase 3: publish entries + complete the gate
+              yield* Ref.update(actorsRef, (m) => {
+                const next = new Map(m)
+                next.set(sessionId, { _tag: "ready", entries })
+                return next
+              })
+              yield* Deferred.succeed(gate, entries)
+              return entries
+            }),
           )
 
         return {
@@ -265,9 +294,11 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           terminateAll: (sessionId) =>
             Effect.withSpan("ExtensionStateRuntime.terminateAll")(
               Effect.gen(function* () {
-                const actors = (yield* Ref.get(actorsRef)).get(sessionId) ?? []
-                for (const { actor } of actors) {
-                  yield* actor.terminate.pipe(Effect.catchDefect(() => Effect.void))
+                const slot = (yield* Ref.get(actorsRef)).get(sessionId)
+                if (slot !== undefined && slot._tag === "ready") {
+                  for (const { actor } of slot.entries) {
+                    yield* actor.terminate.pipe(Effect.catchDefect(() => Effect.void))
+                  }
                 }
                 yield* Ref.update(actorsRef, (map) => {
                   const next = new Map(map)
