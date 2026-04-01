@@ -47,8 +47,6 @@ export interface FromMachineConfig<
   readonly intentSchema?: Schema.Schema<Intent>
   /** Derive projection from state. ctx is provided for turn-time, undefined for UI snapshots. */
   readonly derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
-  /** Context-free UI model derivation — shorthand for extensions that only need UI projection */
-  readonly deriveUi?: (state: State) => unknown
   /** Schema for the uiModel returned by derive/deriveUi */
   readonly uiModelSchema?: Schema.Schema<unknown>
   /** Schema for serializing/deserializing state to/from JSON.
@@ -229,7 +227,6 @@ export const fromMachine = <
 
   const projection = buildProjectionConfig<State>({
     derive: config.derive,
-    deriveUi: config.deriveUi,
     uiModelSchema: config.uiModelSchema,
   })
 

@@ -39,7 +39,7 @@ const cooldownActor = fromReducer<CooldownState, CooldownIntent>({
     }
     return { state }
   },
-  deriveUi: (state: CooldownState) => state,
+  derive: (state: CooldownState) => ({ uiModel: state }),
 })
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {

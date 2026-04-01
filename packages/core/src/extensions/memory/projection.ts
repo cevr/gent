@@ -1,8 +1,8 @@
 /**
  * Memory extension projection — prompt injection + UI model.
  *
- * deriveTurn: injects compact memory summary as prompt section.
- * deriveUi: exposes memory counts + top entries for TUI.
+ * derive: injects compact memory summary as prompt section + exposes
+ * memory counts and top entries as uiModel for TUI.
  */
 
 import type { ExtensionDeriveContext, ExtensionProjection } from "../../domain/extension.js"

@@ -38,11 +38,9 @@ export interface FromReducerConfig<State, Intent = void, InitR = never> {
   /** Derive projection from state. ctx is provided for turn-time (prompt assembly),
    *  undefined for UI snapshots. Extensions can check ctx to return different projections. */
   readonly derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
-  /** Context-free UI model derivation — shorthand for extensions that only need UI projection */
-  readonly deriveUi?: (state: State) => unknown
   readonly handleIntent?: (state: State, intent: Intent) => ReduceResult<State>
   readonly intentSchema?: Schema.Schema<Intent>
-  /** Schema for the uiModel returned by derive/deriveUi — used for transport encoding/validation */
+  /** Schema for the uiModel returned by derive — used for transport encoding/validation */
   readonly uiModelSchema?: Schema.Schema<unknown>
   /** Schema for serializing/deserializing state to/from JSON (required for persistence) */
   readonly stateSchema?: Schema.Schema<State>
@@ -212,7 +210,6 @@ export const fromReducer = <State, Intent = void, InitR = never>(
 
   const projection = buildProjectionConfig<State>({
     derive: config.derive,
-    deriveUi: config.deriveUi,
     uiModelSchema: config.uiModelSchema,
   })
 
