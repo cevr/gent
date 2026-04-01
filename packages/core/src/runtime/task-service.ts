@@ -113,6 +113,12 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
       const mainStorage = yield* Storage
       const fiberMap = yield* Ref.make(new Map<TaskId, Fiber.Fiber<void>>())
 
+      /** Merge new metadata fields into existing task metadata without clobbering */
+      const mergeMetadata = (existing: unknown, patch: Record<string, unknown>): unknown => {
+        const base = typeof existing === "object" && existing !== null ? existing : {}
+        return { ...base, ...patch }
+      }
+
       const forkTask = (taskId: TaskId, effect: Effect.Effect<void>) =>
         Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(
@@ -157,25 +163,59 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           const parentSessionId = task.sessionId
           const parentBranchId = task.branchId
 
-          // Capture child sessionId eagerly from SubagentSpawned event
-          // so getOutput() works for in-progress/stopped tasks
-          const captureChildSession = eventStore
+          // Capture child sessionId + track progress from child session events
+          const startedAt = yield* DateTime.nowAsDate
+          const progressState = { toolCount: 0, tokenCount: 0, startedAt: startedAt.getTime() }
+          const captureAndTrack = eventStore
             .subscribe({ sessionId: parentSessionId, branchId: parentBranchId })
             .pipe(
               Stream.filter((env) => env.event._tag === "SubagentSpawned"),
               Stream.take(1),
               Stream.runForEach((env) => {
                 const spawned = env.event as SubagentSpawned
-                return storage
-                  .updateTask(taskId, {
-                    metadata: { childSessionId: spawned.childSessionId },
-                  })
-                  .pipe(Effect.catchEager(() => Effect.void))
+                return Effect.gen(function* () {
+                  // Store child sessionId immediately
+                  yield* storage
+                    .updateTask(taskId, {
+                      metadata: { childSessionId: spawned.childSessionId, progress: progressState },
+                    })
+                    .pipe(Effect.catchEager(() => Effect.void))
+
+                  // Subscribe to child session events for progress tracking
+                  yield* eventStore.subscribe({ sessionId: spawned.childSessionId }).pipe(
+                    Stream.runForEach((childEnv) =>
+                      Effect.gen(function* () {
+                        const e = childEnv.event
+                        let updated = false
+                        if (e._tag === "ToolCallSucceeded" || e._tag === "ToolCallFailed") {
+                          progressState.toolCount++
+                          updated = true
+                        }
+                        if (e._tag === "StreamEnded" && e.usage !== undefined) {
+                          progressState.tokenCount +=
+                            (e.usage.inputTokens ?? 0) + (e.usage.outputTokens ?? 0)
+                          updated = true
+                        }
+                        if (updated) {
+                          yield* storage
+                            .updateTask(taskId, {
+                              metadata: {
+                                childSessionId: spawned.childSessionId,
+                                progress: progressState,
+                              },
+                            })
+                            .pipe(Effect.catchEager(() => Effect.void))
+                        }
+                      }),
+                    ),
+                    Effect.catchEager(() => Effect.void),
+                  )
+                })
               }),
               Effect.catchEager(() => Effect.void),
             )
 
-          const childCaptureFiber = yield* Effect.forkChild(captureChildSession)
+          const childCaptureFiber = yield* Effect.forkChild(captureAndTrack)
 
           // Run subagent
           const result = yield* runner.run({
@@ -196,11 +236,12 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           if (currentTask?.status === "stopped") return
 
           if (result._tag === "success") {
+            const existingMeta = currentTask?.metadata
             yield* storage
               .updateTask(taskId, {
                 status: "completed",
                 owner: result.sessionId,
-                metadata: { childSessionId: result.sessionId },
+                metadata: mergeMetadata(existingMeta, { childSessionId: result.sessionId }),
               })
               .pipe(Effect.catchEager(() => Effect.void))
             yield* eventStore
@@ -218,7 +259,10 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             yield* checkAndRunDependents(taskId).pipe(Effect.catchEager(() => Effect.void))
           } else {
             yield* storage
-              .updateTask(taskId, { status: "failed", metadata: { error: result.error } })
+              .updateTask(taskId, {
+                status: "failed",
+                metadata: mergeMetadata(currentTask?.metadata, { error: result.error }),
+              })
               .pipe(Effect.catchEager(() => Effect.void))
             yield* eventStore
               .publish(

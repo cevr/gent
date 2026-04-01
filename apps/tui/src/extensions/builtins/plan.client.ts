@@ -22,6 +22,23 @@ export default defineClientExtension({
           return []
         },
       },
+      {
+        position: "bottom-left" as const,
+        priority: 40,
+        produce: () => {
+          const snap = ctx.getSnapshot("plan")
+          const model = snap?.model as
+            | { mode?: string; progress?: { total: number; done: number; inProgress: number } }
+            | undefined
+          if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
+          if (model?.mode === "executing") {
+            const p = model.progress
+            const label = p ? `exec ${p.done}/${p.total}` : "exec"
+            return [{ text: label, color: "primary" }]
+          }
+          return []
+        },
+      },
     ],
     widgets: [
       {

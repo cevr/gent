@@ -409,9 +409,11 @@ const handleIntent = (state: PlanState, intent: PlanIntent): ReduceResult<PlanSt
       return { state: { ...state, mode: "executing", pendingText: undefined, taskMap: {} } }
     }
     case "RefinePlan": {
-      if (state.mode !== "plan") return { state }
-      // Reset todos so the agent produces a fresh plan
-      return { state: { ...state, todos: [], pendingText: undefined } }
+      if (state.mode === "normal") return { state }
+      // Pause execution (if executing) and return to plan mode for refinement
+      return {
+        state: { ...state, mode: "plan", todos: [], pendingText: undefined, taskMap: undefined },
+      }
     }
   }
 }

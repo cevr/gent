@@ -153,6 +153,13 @@ export function BackgroundTasksDialog(props: {
     return id !== undefined ? props.tasks.find((t) => t.id === id) : undefined
   }
 
+  const taskProgress = (task: Task) => {
+    const meta = task.metadata as
+      | { progress?: { toolCount?: number; tokenCount?: number } }
+      | undefined
+    return meta?.progress
+  }
+
   const left = () => Math.max(0, Math.floor((dimensions().width - PANEL_WIDTH) / 2))
   const top = () => Math.max(0, Math.floor((dimensions().height - PANEL_HEIGHT) / 2))
 
@@ -186,6 +193,19 @@ export function BackgroundTasksDialog(props: {
                     <span style={{ fg: theme.text }}>{detailTask()?.agentType}</span>
                   </text>
                 </Show>
+                {(() => {
+                  const dt = detailTask()
+                  const p = dt !== undefined ? taskProgress(dt) : undefined
+                  if (p === undefined) return null
+                  return (
+                    <text>
+                      <span style={{ fg: theme.textMuted }}>Progress: </span>
+                      <span style={{ fg: theme.text }}>
+                        {p.toolCount ?? 0} tools, {p.tokenCount ?? 0} tokens
+                      </span>
+                    </text>
+                  )
+                })()}
                 <text />
                 <text>
                   <span style={{ fg: theme.textMuted }}>{detailOutput() ?? "Loading..."}</span>
@@ -206,6 +226,7 @@ export function BackgroundTasksDialog(props: {
               <For each={[...props.tasks]}>
                 {(task, idx) => {
                   const selected = () => idx() === selectedIdx()
+                  const progress = () => taskProgress(task)
                   return (
                     <text>
                       <span style={{ fg: selected() ? theme.primary : theme.textMuted }}>
@@ -218,6 +239,12 @@ export function BackgroundTasksDialog(props: {
                         {" "}
                         {task.subject}
                       </span>
+                      <Show when={task.status === "in_progress" && progress() !== undefined}>
+                        <span style={{ fg: theme.textMuted }}>
+                          {" "}
+                          ({progress()?.toolCount ?? 0} tools)
+                        </span>
+                      </Show>
                     </text>
                   )
                 }}
