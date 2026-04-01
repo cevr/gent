@@ -33,6 +33,7 @@ export interface FromMachineConfig<
   Event extends { readonly _tag: string },
   Intent = void,
   R = never,
+  InitR = never,
 > {
   /** Actor/extension id */
   readonly id: string
@@ -56,6 +57,16 @@ export interface FromMachineConfig<
   readonly persist?: boolean
   /** Compute extension effects after a state transition. Called with (before, after). */
   readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
+  /** Custom init logic — runs after persistence hydration and machine spawn.
+   *  Use to reconstruct state from external sources (e.g. JSONL files).
+   *  Send machine events via `send` to drive state transitions during init.
+   *  Extension layer services (from setup.layer) are available via InitR. */
+  readonly onInit?: (ctx: {
+    readonly sessionId: string
+    readonly snapshot: Effect.Effect<State>
+    readonly send: (event: Event) => Effect.Effect<boolean>
+    readonly sessionCwd?: string
+  }) => Effect.Effect<void, never, InitR>
 }
 
 export interface FromMachineResult {
@@ -71,8 +82,9 @@ export const fromMachine = <
   Event extends { readonly _tag: string },
   Intent = void,
   R = never,
+  InitR = never,
 >(
-  config: FromMachineConfig<State, Event, Intent, R>,
+  config: FromMachineConfig<State, Event, Intent, R, InitR>,
 ): FromMachineResult => {
   const spawnActor: SpawnActor = (ctx) =>
     Effect.withSpan("fromMachine.spawnActor", { attributes: { "extension.id": config.id } })(
@@ -183,7 +195,30 @@ export const fromMachine = <
         const actor: ExtensionActor = {
           id: config.id,
 
-          init: Effect.void,
+          // onInit runs after hydration + spawn — InitR services available in ambient context
+          init: (config.onInit !== undefined
+            ? Effect.gen(function* () {
+                let sessionCwd: string | undefined
+                if (storage._tag === "Some") {
+                  const session = yield* storage.value
+                    .getSession(ctx.sessionId)
+                    .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+                  sessionCwd = session?.cwd ?? undefined
+                }
+                const onInit = config.onInit
+                if (onInit === undefined) return
+                yield* onInit({
+                  sessionId: ctx.sessionId,
+                  snapshot: ref.snapshot as Effect.Effect<State>,
+                  send: (event: Event) =>
+                    dispatch(event, ctx.branchId).pipe(
+                      Effect.catchEager(() => Effect.succeed(false)),
+                    ),
+                  sessionCwd,
+                }).pipe(Effect.catchEager(() => Effect.void))
+              })
+            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              Effect.void) as any as Effect.Effect<void>,
 
           handleEvent: (event: AgentEvent, reduceCtx) =>
             Effect.gen(function* () {
