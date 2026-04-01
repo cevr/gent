@@ -618,14 +618,26 @@ const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent, never, Aut
       const current = (yield* ctx.snapshot) as MachineState
       if (current._tag !== "Inactive") return
 
-      // Only replay in child sessions (handoff targets) — prevents unrelated sessions
-      // from resurrecting old auto loops
+      // Only replay in child sessions whose ancestry matches the journal's originator
       const storageOpt = yield* Effect.serviceOption(Storage)
       if (storageOpt._tag === "Some") {
-        const session = yield* storageOpt.value
+        const store = storageOpt.value
+        const session = yield* store
           .getSession(ctx.sessionId as SessionId)
           .pipe(Effect.catchEager(() => Effect.void as Effect.Effect<undefined>))
+
+        // Root sessions never replay
         if (session?.parentSessionId === undefined) return
+
+        // Journal must have a sessionId — fail closed for legacy pointers without one
+        if (active.sessionId === undefined) return
+
+        // Verify this session descends from the journal's originator
+        const ancestors = yield* store
+          .getSessionAncestors(ctx.sessionId as SessionId)
+          .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+        const ancestorIds = new Set(ancestors.map((a) => a.id as string))
+        if (!ancestorIds.has(active.sessionId)) return
       }
 
       // Replay journal rows as machine events
@@ -707,6 +719,7 @@ const journalInterceptorImpl = (
           yield* journal.value.start({
             goal: uiModel.goal,
             maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+            sessionId: input.sessionId,
           })
         }
 
@@ -788,6 +801,7 @@ const autoHandoffImpl = (
         journalPath = yield* journal.value.start({
           goal: uiModel.goal,
           maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+          sessionId: input.sessionId,
         })
       }
     }

@@ -53,8 +53,13 @@ export type JournalRow = ConfigRow | CheckpointRow | CounselRow
 // ── Service ──
 
 export interface AutoJournalService {
-  /** Start a new journal for a goal. Creates the JSONL file + sets active pointer. */
-  readonly start: (params: { goal: string; maxIterations: number }) => Effect.Effect<string> // returns journal path
+  /** Start a new journal for a goal. Creates the JSONL file + sets active pointer.
+   *  Pass sessionId to scope the journal — only child sessions of this session will replay it. */
+  readonly start: (params: {
+    goal: string
+    maxIterations: number
+    sessionId?: string
+  }) => Effect.Effect<string> // returns journal path
 
   /** Append a checkpoint row to the active journal. */
   readonly appendCheckpoint: (row: Omit<CheckpointRow, "type">) => Effect.Effect<void>
@@ -67,7 +72,7 @@ export interface AutoJournalService {
 
   /** Read all rows from the active journal (for onInit replay). Returns undefined if no active journal. */
   readonly readActive: () => Effect.Effect<
-    { rows: ReadonlyArray<JournalRow>; path: string } | undefined
+    { rows: ReadonlyArray<JournalRow>; path: string; sessionId?: string } | undefined
   >
 
   /** Get the active journal path, if any. */
@@ -85,12 +90,15 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
         // No RuntimePlatform — return no-op journal (tests, headless without cwd)
         // @effect-diagnostics effectSucceedWithVoid:off
         return {
-          start: () => Effect.succeed(""),
+          start: () => Effect.succeed("") as Effect.Effect<string>,
           appendCheckpoint: () => Effect.void,
           appendCounsel: () => Effect.void,
           finish: () => Effect.void,
-          readActive: () => Effect.succeed(undefined),
-          getActivePath: () => Effect.succeed(undefined),
+          readActive: () =>
+            Effect.succeed(undefined) as Effect.Effect<
+              { rows: ReadonlyArray<JournalRow>; path: string; sessionId?: string } | undefined
+            >,
+          getActivePath: () => Effect.succeed(undefined) as Effect.Effect<string | undefined>,
         } satisfies AutoJournalService
       }
       const platform = platformOpt.value
@@ -129,7 +137,15 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
       }
 
       return {
-        start: ({ goal, maxIterations }) =>
+        start: ({
+          goal,
+          maxIterations,
+          sessionId,
+        }: {
+          goal: string
+          maxIterations: number
+          sessionId?: string
+        }) =>
           Effect.sync(() => {
             ensureDir()
             const slug = slugify(goal)
@@ -142,21 +158,27 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
             }
             // Overwrite if exists (new run for same goal)
             writeFileSync(journalPath, JSON.stringify(row) + "\n")
-            // Set active pointer
-            writeFileSync(activePath, JSON.stringify({ path: journalPath }))
+            // Set active pointer — sessionId scopes replay to this session's lineage
+            writeFileSync(
+              activePath,
+              JSON.stringify({
+                path: journalPath,
+                ...(sessionId !== undefined ? { sessionId } : {}),
+              }),
+            )
             return journalPath
           }),
 
-        appendCheckpoint: (params) =>
+        appendCheckpoint: (params: Omit<CheckpointRow, "type">) =>
           Effect.sync(() => {
-            const active = getActivePathSync()
+            const active = readActivePointerSync()?.path
             if (active === undefined) return
             appendRow(active, { type: "checkpoint", ...params })
           }),
 
-        appendCounsel: (iteration) =>
+        appendCounsel: (iteration: number) =>
           Effect.sync(() => {
-            const active = getActivePathSync()
+            const active = readActivePointerSync()?.path
             if (active === undefined) return
             appendRow(active, { type: "counsel", iteration })
           }),
@@ -168,19 +190,27 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
 
         readActive: () =>
           Effect.sync(() => {
-            const path = getActivePathSync()
-            if (path === undefined || !existsSync(path)) return undefined
-            return { rows: readRows(path), path }
+            const active = readActivePointerSync()
+            if (active === undefined || !existsSync(active.path)) return undefined
+            return {
+              rows: readRows(active.path),
+              path: active.path,
+              sessionId: active.sessionId,
+            }
           }),
 
-        getActivePath: () => Effect.sync(() => getActivePathSync()),
-      }
+        getActivePath: () => Effect.sync(() => readActivePointerSync()?.path),
+      } satisfies AutoJournalService
 
-      function getActivePathSync(): string | undefined {
+      function readActivePointerSync(): { path: string; sessionId?: string } | undefined {
         if (!existsSync(activePath)) return undefined
         try {
           const content = JSON.parse(readFileSync(activePath, "utf8"))
-          return typeof content.path === "string" ? content.path : undefined
+          if (typeof content.path !== "string") return undefined
+          return {
+            path: content.path,
+            sessionId: typeof content.sessionId === "string" ? content.sessionId : undefined,
+          }
         } catch {
           return undefined
         }
