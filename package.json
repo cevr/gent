@@ -38,9 +38,9 @@
     "effect": "catalog:",
     "effect-bun-test": "catalog:",
     "lefthook": "^2.1.4",
-    "oxfmt": "^0.42.0",
-    "oxlint": "^1.56.0",
-    "turbo": "^2.8.21",
+    "oxfmt": "^0.43.0",
+    "oxlint": "^1.58.0",
+    "turbo": "^2.9.3",
     "typescript": "^6.0.2"
   },
   "overrides": {
@@ -56,10 +56,10 @@
     "effect-wide-event": "file:/Users/cvr/Developer/personal/effect-wide-event",
     "msgpackr": "^1.11.9",
     "multipasta": "^0.2.7",
-    "ai": "^6.0.141",
+    "ai": "^6.0.142",
     "@ai-sdk/anthropic": "^3.0.63",
-    "@ai-sdk/openai": "^3.0.47",
-    "@ai-sdk/google": "^3.0.52",
+    "@ai-sdk/openai": "^3.0.49",
+    "@ai-sdk/google": "^3.0.55",
     "@ai-sdk/mistral": "^3.0.27",
     "effect-bun-test": "0.3.0",
     "solid-js": "^1.9.11"
