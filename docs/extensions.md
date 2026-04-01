@@ -218,6 +218,52 @@ ext.state({
 
 Omit `persist` for memory-only state. Missing `schema` with `persist` is a setup-time error.
 
+### Imperative Side Effects
+
+Queue follow-up turns or inject messages from hook handlers — no actors needed:
+
+```ts
+ext.on("turn.after", async (input) => {
+  if (shouldContinue(input)) {
+    ext.queueFollowUp("Continue working on the task.")
+  }
+})
+
+ext.on("tool.result", async (input, next) => {
+  const result = await next(input)
+  ext.interject("I noticed something — let me check.")
+  return result
+})
+```
+
+Available in `turn.after`, `tool.execute`, `tool.result`, `context.messages` handlers. Not available in `prompt.system` or `permission.check` (throws descriptive error).
+
+### File-Backed Storage
+
+Simple key-value storage, namespaced by extension ID:
+
+```ts
+// Available at setup time and in handlers
+await ext.storage.set("config", { theme: "dark" })
+const config = await ext.storage.get("config")
+await ext.storage.delete("config")
+const keys = await ext.storage.list()
+```
+
+Stored at `~/.gent/extensions/<id>/storage/<key>.json`. Keys must be alphanumeric with hyphens/underscores.
+
+### Event Observation
+
+Observe all events (including diagnostic) without actors or state:
+
+```ts
+ext.observe((event) => {
+  console.log(`[${event._tag}] session=${event.sessionId}`)
+})
+```
+
+Fire-and-forget: errors caught and logged, return value ignored. Runs after reduction.
+
 ## Validation
 
 The framework validates all loaded extensions before creating the registry:
