@@ -89,8 +89,7 @@ describe("extension concurrency", () => {
           }
           return Effect.succeed(false)
         },
-        notifyPublished: () => Effect.void,
-        flush: () => Effect.void,
+        notifyObservers: () => Effect.void,
         deriveAll: () => Effect.succeed([]),
         handleIntent: () => Effect.void,
         getUiSnapshots: () => Effect.succeed([]),
@@ -133,8 +132,7 @@ describe("extension concurrency", () => {
           }
           return Effect.succeed(false)
         },
-        notifyPublished: () => Effect.void,
-        flush: () => Effect.void,
+        notifyObservers: () => Effect.void,
         deriveAll: () => Effect.succeed([]),
         handleIntent: () => Effect.void,
         getUiSnapshots: () => Effect.succeed([]),

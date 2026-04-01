@@ -61,6 +61,9 @@ export interface ExtensionStateRuntimeService {
 
   /** Terminate all actors for a session (call on session delete) */
   readonly terminateAll: (sessionId: SessionId) => Effect.Effect<void>
+
+  /** Notify observers of a published event. Fire-and-forget, errors caught. */
+  readonly notifyObservers: (event: AgentEvent) => Effect.Effect<void>
 }
 
 export class ExtensionStateRuntime extends ServiceMap.Service<
@@ -85,6 +88,14 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               spawn: ext.setup.spawnActor,
               projection: ext.setup.projection,
             })
+          }
+        }
+
+        // Collect observers from all extensions
+        const allObservers: Array<(event: AgentEvent) => void | Promise<void>> = []
+        for (const ext of extensions) {
+          if (ext.setup.observers !== undefined) {
+            allObservers.push(...ext.setup.observers)
           }
         }
 
@@ -317,6 +328,20 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   return next
                 })
               }),
+            ),
+
+          notifyObservers: (event) =>
+            Effect.forEach(
+              allObservers,
+              (observer) =>
+                Effect.tryPromise({
+                  try: () => Promise.resolve(observer(event)),
+                  catch: () => undefined,
+                }).pipe(
+                  Effect.catchDefect(() => Effect.void),
+                  Effect.catchEager(() => Effect.void),
+                ),
+              { concurrency: "unbounded", discard: true },
             ),
         }
       }),

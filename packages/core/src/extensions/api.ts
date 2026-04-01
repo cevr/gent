@@ -346,6 +346,13 @@ export interface ExtensionBuilder {
   onStartupEffect(effect: Effect.Effect<void>): void
   /** Register an Effect-based shutdown hook. Composes with onShutdown(). */
   onShutdownEffect(effect: Effect.Effect<void>): void
+
+  // ── Event observation ──
+
+  /** Observe all events (including diagnostic) without needing actors or state.
+   *  Fire-and-forget: return value ignored, errors caught and logged.
+   *  Runs after reduction — no re-entrance risk. */
+  observe(handler: (event: AgentEvent) => void | Promise<void>): void
 }
 
 // ── Internal Helpers ──
@@ -504,6 +511,49 @@ const convertSimpleEffect = (effect: SimpleEffect): ExtensionEffect => {
   }
 }
 
+/** Convert SimpleStateConfig to fromReducer result. Extracted to reduce factory generator complexity. */
+const resolveSimpleState = (
+  id: string,
+  sc: SimpleStateConfig<unknown>,
+): { error: string } | { spawnActor: SpawnActor; projection?: ExtensionProjectionConfig } => {
+  if (sc.persist !== undefined && sc.persist.schema === undefined) {
+    return { error: `ext.state() persist requires a schema: { persist: { schema } }` } as const
+  }
+  const reducerResult = fromReducer({
+    id,
+    initial: sc.initial,
+    reduce: (
+      state: unknown,
+      event: AgentEvent,
+      _ctx: ExtensionReduceContext,
+    ): ReduceResult<unknown> => {
+      const simpleType = mapEventType(event._tag)
+      if (simpleType === undefined) return { state }
+      const simpleEvent: SimpleEvent = { type: simpleType, _tag: event._tag, raw: event }
+      const result = sc.reduce(state as Readonly<typeof sc.initial>, simpleEvent)
+      return { state: result.state, effects: result.effects?.map(convertSimpleEffect) }
+    },
+    derive: (() => {
+      const deriveFn = sc.derive
+      if (deriveFn === undefined) return undefined
+      return (state: unknown): ExtensionProjection => {
+        const derived = deriveFn(state as Readonly<typeof sc.initial>)
+        return {
+          promptSections: derived.promptSections,
+          toolPolicy: derived.toolPolicy,
+          uiModel: derived.uiModel,
+        }
+      }
+    })(),
+    stateSchema: sc.persist?.schema,
+    persist: sc.persist !== undefined,
+  })
+  return {
+    spawnActor: reducerResult.spawnActor,
+    projection: reducerResult.projection,
+  } as const
+}
+
 // ── Public API ──
 
 /** Setup context passed to the factory function. */
@@ -536,6 +586,7 @@ export const extension = (
       const providers: ProviderContribution[] = []
       const interactionHandlers: InteractionHandlerContribution[] = []
       const tagInjections: TagInjection[] = []
+      const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
       const layers: Layer.Any[] = []
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let stateConfig: SimpleStateConfig<any> | undefined
@@ -684,6 +735,7 @@ export const extension = (
         tagInjection: (t) => tagInjections.push(t),
         onStartupEffect: (e) => startupEffects.push(e),
         onShutdownEffect: (e) => shutdownEffects.push(e),
+        observe: (handler) => observers.push(handler),
       }
 
       // Run factory — sync factories stay sync (no Promise.resolve tick)
@@ -705,46 +757,12 @@ export const extension = (
       let projection: ExtensionSetup["projection"]
 
       if (stateConfig !== undefined) {
-        const sc = stateConfig
-        if (sc.persist !== undefined && sc.persist.schema === undefined) {
-          return yield* Effect.fail(
-            new ExtensionLoadError(
-              id,
-              `ext.state() persist requires a schema: { persist: { schema } }`,
-            ),
-          )
+        const resolved = resolveSimpleState(id, stateConfig)
+        if ("error" in resolved) {
+          return yield* Effect.fail(new ExtensionLoadError(id, resolved.error))
         }
-        const reducerResult = fromReducer({
-          id,
-          initial: sc.initial,
-          reduce: (
-            state: unknown,
-            event: AgentEvent,
-            _ctx: ExtensionReduceContext,
-          ): ReduceResult<unknown> => {
-            const simpleType = mapEventType(event._tag)
-            if (simpleType === undefined) return { state }
-            const simpleEvent: SimpleEvent = { type: simpleType, _tag: event._tag, raw: event }
-            const result = sc.reduce(state as Readonly<typeof sc.initial>, simpleEvent)
-            return { state: result.state, effects: result.effects?.map(convertSimpleEffect) }
-          },
-          derive: (() => {
-            const deriveFn = sc.derive
-            if (deriveFn === undefined) return undefined
-            return (state: unknown): ExtensionProjection => {
-              const derived = deriveFn(state as Readonly<typeof sc.initial>)
-              return {
-                promptSections: derived.promptSections,
-                toolPolicy: derived.toolPolicy,
-                uiModel: derived.uiModel,
-              }
-            }
-          })(),
-          stateSchema: sc.persist?.schema,
-          persist: sc.persist !== undefined,
-        })
-        spawnActor = reducerResult.spawnActor
-        projection = reducerResult.projection
+        spawnActor = resolved.spawnActor
+        projection = resolved.projection
       } else if (actorResult !== undefined) {
         spawnActor = actorResult.spawnActor
         projection = actorResult.projection
@@ -797,6 +815,7 @@ export const extension = (
         ...(providers.length > 0 ? { providers } : {}),
         ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
         ...(tagInjections.length > 0 ? { tagInjections } : {}),
+        ...(observers.length > 0 ? { observers } : {}),
         spawnActor,
         projection,
         onStartup,

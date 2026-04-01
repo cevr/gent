@@ -268,6 +268,9 @@ export interface ExtensionSetup {
   readonly interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
   /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
   readonly promptSections?: ReadonlyArray<PromptSection>
+  /** Fire-and-forget event observers. Receive raw AgentEvent after reduction.
+   *  Errors are caught and logged — one failing observer doesn't affect others. */
+  readonly observers?: ReadonlyArray<(event: AgentEvent) => void | Promise<void>>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
   /** Cleanup effect — runs as scope finalizer during graceful shutdown. */

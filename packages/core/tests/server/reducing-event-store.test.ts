@@ -32,6 +32,7 @@ describe("ReducingEventStore", () => {
       handleIntent: () => Effect.void,
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
+      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(makeReducingEventStore, Layer.merge(baseLayer, stateRuntimeLayer))
@@ -67,6 +68,7 @@ describe("ReducingEventStore", () => {
       handleIntent: () => Effect.void,
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
+      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(makeReducingEventStore, Layer.merge(baseLayer, stateRuntimeLayer))
@@ -106,6 +108,7 @@ describe("ReducingEventStore", () => {
       handleIntent: () => Effect.void,
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
+      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(makeReducingEventStore, Layer.merge(baseLayer, stateRuntimeLayer))
@@ -138,6 +141,7 @@ describe("ReducingEventStore", () => {
       handleIntent: () => Effect.void,
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
+      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(makeReducingEventStore, Layer.merge(baseLayer, stateRuntimeLayer))

@@ -237,6 +237,8 @@ export const makeReducingEventStore = Layer.effect(
                         )
                       }),
                       Effect.catchDefect(() => Effect.void),
+                      // Notify observers after reduction (fire-and-forget)
+                      Effect.tap(() => stateRuntime.notifyObservers(event)),
                     ),
                   ),
                   Effect.ensuring(Ref.update(reduceDepth, (d: number) => d - 1)),
