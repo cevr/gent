@@ -50,6 +50,7 @@ export function BackgroundTasksDialog(props: {
   const [detailMessages, setDetailMessages] = createSignal<
     ReadonlyArray<{ role: string; excerpt: string }> | undefined
   >(undefined)
+  const [detailError, setDetailError] = createSignal(false)
 
   // Reset selection when tasks change
   createEffect(() => {
@@ -69,6 +70,7 @@ export function BackgroundTasksDialog(props: {
   }
 
   const loadOutput = (taskId: TaskId) => {
+    setDetailError(false)
     cast(
       clientCtx.client.task.output({ taskId }).pipe(
         Effect.tap((result) =>
@@ -76,7 +78,12 @@ export function BackgroundTasksDialog(props: {
             setDetailMessages(result.messages ?? [])
           }),
         ),
-        Effect.catchEager(() => Effect.sync(() => setDetailMessages([]))),
+        Effect.catchEager(() =>
+          Effect.sync(() => {
+            setDetailError(true)
+            setDetailMessages([])
+          }),
+        ),
       ),
     )
   }
@@ -89,6 +96,7 @@ export function BackgroundTasksDialog(props: {
         if (detailTaskId() !== undefined) {
           setDetailTaskId(undefined)
           setDetailMessages(undefined)
+          setDetailError(false)
         } else {
           props.onClose()
         }
@@ -217,6 +225,11 @@ export function BackgroundTasksDialog(props: {
                     </text>
                   }
                 >
+                  <Show when={detailError()}>
+                    <text>
+                      <span style={{ fg: theme.error }}>Failed to load output</span>
+                    </text>
+                  </Show>
                   <For each={[...(detailMessages() ?? [])]}>
                     {(msg) => (
                       <text>
@@ -225,7 +238,7 @@ export function BackgroundTasksDialog(props: {
                       </text>
                     )}
                   </For>
-                  <Show when={(detailMessages() ?? []).length === 0}>
+                  <Show when={!detailError() && (detailMessages() ?? []).length === 0}>
                     <text>
                       <span style={{ fg: theme.textMuted }}>No messages yet</span>
                     </text>
