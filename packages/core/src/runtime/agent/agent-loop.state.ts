@@ -375,6 +375,15 @@ export const toFinalizingState = (params: {
     streamFailed: params.streamFailed,
   })
 
+/** Re-enter Resolving from ExecutingTools for tool-result continuation.
+ *  Preserves the original turn's startedAtMs and message. */
+export const buildContinuationResolvingState = (state: ExecutingToolsState): ResolvingState =>
+  AgentLoopState.Resolving.derive(state, {
+    agentOverride: state.agentOverride,
+    turnInterrupted: false,
+    interruptAfterTools: false,
+  })
+
 export const queueSnapshotFromState = (state: LoopState): QueueSnapshot =>
   toQueueSnapshot(state.queue.steering, state.queue.followUp)
 

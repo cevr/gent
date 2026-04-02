@@ -19,6 +19,9 @@ export const DEFAULTS = {
 
   // Tool execution concurrency
   toolConcurrency: 8,
+
+  // Max steps (resolve→stream→tools cycles) within a single turn
+  maxTurnSteps: 200,
 } as const
 
 export type Defaults = typeof DEFAULTS

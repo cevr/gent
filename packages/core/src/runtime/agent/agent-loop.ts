@@ -96,6 +96,7 @@ import {
   queueSnapshotFromState,
   runtimeStateFromLoopState,
   takeNextQueuedTurn,
+  buildContinuationResolvingState,
   toExecutingToolsState,
   toFinalizingState,
   toStreamingState,
@@ -1181,16 +1182,24 @@ const makeRecoveryDecision = (params: {
         toolResultMessageIdForTurn(state.message.id),
       )
       if (toolResultMessage !== undefined) {
+        if (state.turnInterrupted || state.interruptAfterTools) {
+          yield* publishRecovery({
+            phase: "ExecutingTools",
+            action: "reuse-persisted-tool-results",
+          })
+          return Option.some(
+            toFinalizingState({
+              state,
+              currentTurnAgent: state.currentTurnAgent,
+              usage: state.draft.usage,
+              streamFailed: false,
+              turnInterrupted: true,
+            }),
+          )
+        }
+        // Tool results persisted — continue the turn by re-entering Resolving
         yield* publishRecovery({ phase: "ExecutingTools", action: "reuse-persisted-tool-results" })
-        return Option.some(
-          toFinalizingState({
-            state,
-            currentTurnAgent: state.currentTurnAgent,
-            usage: state.draft.usage,
-            streamFailed: false,
-            turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
-          }),
-        )
+        return Option.some(buildContinuationResolvingState(state))
       }
 
       const canReplay = yield* Effect.forEach(
@@ -1329,6 +1338,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const turnToolsRef = yield* Ref.make<ReadonlyArray<AnyToolDefinition>>([])
             const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
+            const turnStepRef = yield* Ref.make(0)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
             const inspector = makePublishingInspector({
               publishEvent: publishEventOrDie,
@@ -1367,8 +1377,18 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runResolvingState = Effect.fn("AgentLoop.runResolvingState")(function* (
               state: ResolvingState,
             ) {
-              // Reset turn metrics at the start of each turn (before any phase can finalize)
-              yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
+              const step = yield* Ref.updateAndGet(turnStepRef, (s) => s + 1)
+              if (step > DEFAULTS.maxTurnSteps) {
+                yield* Effect.logWarning("resolve.max-turn-steps-exceeded").pipe(
+                  Effect.annotateLogs({ step, max: DEFAULTS.maxTurnSteps }),
+                )
+                return AgentLoopEvent.PhaseFailed
+              }
+
+              // Reset turn metrics only on fresh turns, not on tool continuations
+              if (step === 1) {
+                yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
+              }
 
               const resolved = yield* resolveTurnPhase({
                 message: state.message,
@@ -1532,7 +1552,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               initial: buildIdleState({ currentAgent }),
             })
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
-                buildResolvingState(state, event.item),
+                Ref.set(turnStepRef, 0).pipe(Effect.as(buildResolvingState(state, event.item))),
               )
               .on(
                 [
@@ -1657,13 +1677,15 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 markInterruptAfterTools(state),
               )
               .on(AgentLoopState.ExecutingTools, AgentLoopEvent.ToolsFinished, ({ state }) =>
-                toFinalizingState({
-                  state,
-                  currentTurnAgent: state.currentTurnAgent,
-                  usage: state.draft.usage,
-                  streamFailed: false,
-                  turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
-                }),
+                state.turnInterrupted || state.interruptAfterTools
+                  ? toFinalizingState({
+                      state,
+                      currentTurnAgent: state.currentTurnAgent,
+                      usage: state.draft.usage,
+                      streamFailed: false,
+                      turnInterrupted: true,
+                    })
+                  : buildContinuationResolvingState(state),
               )
               .on(AgentLoopState.ExecutingTools, AgentLoopEvent.PhaseFailed, ({ state }) =>
                 toFinalizingState({
@@ -1720,18 +1742,22 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 markTurnInterrupted(state),
               )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.FinalizeFinished, ({ state, event }) =>
-                event.nextItem !== undefined
-                  ? buildResolvingState(
+                Effect.gen(function* () {
+                  if (event.nextItem !== undefined) {
+                    yield* Ref.set(turnStepRef, 0)
+                    return buildResolvingState(
                       {
                         queue: event.queue,
                         currentAgent: state.currentAgent,
                       },
                       event.nextItem,
                     )
-                  : buildIdleState({
-                      queue: event.queue,
-                      currentAgent: state.currentAgent,
-                    }),
+                  }
+                  return buildIdleState({
+                    queue: event.queue,
+                    currentAgent: state.currentAgent,
+                  })
+                }),
               )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.PhaseFailed, ({ state }) =>
                 buildIdleState({

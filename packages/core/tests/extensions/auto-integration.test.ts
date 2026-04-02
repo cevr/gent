@@ -72,6 +72,7 @@ describe("Auto extension E2E", () => {
           summary: "Task done",
           learnings: "Everything worked",
         }),
+        textStep("Auto mode complete."), // continuation after tool call
       ],
       (controls) =>
         Effect.gen(function* () {
@@ -84,7 +85,7 @@ describe("Auto extension E2E", () => {
           const autoSnapshot = snapshots.find((s) => s.extensionId === "auto")
           if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
           expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
-          expect(yield* controls.callCount).toBe(2)
+          expect(yield* controls.callCount).toBe(3)
           yield* controls.assertDone()
         }),
     ),
@@ -93,23 +94,29 @@ describe("Auto extension E2E", () => {
   it.live("multi-iteration: continue → counsel → checkpoint(complete)", () =>
     runE2ETest(
       [
-        // Turn 1: initial message
+        // Step 1: initial message → text response
         textStep("OK entering auto."),
-        // Turn 2: auto kickoff → checkpoint(continue) → AwaitingCounsel
+        // Step 2: auto kickoff → checkpoint(continue) → AwaitingCounsel
         toolCallStep("auto_checkpoint", {
           status: "continue",
           summary: "First pass done",
           learnings: "Found 3 issues",
           nextIdea: "Fix the issues",
         }),
-        // Turn 3: counsel follow-up → call counsel tool → Working(iteration 2)
+        // Step 3: tool continuation → text (loop stops, queued counsel follow-up dequeued)
+        textStep("Checkpoint recorded."),
+        // Step 4: counsel follow-up → call counsel tool → Working(iteration 2)
         toolCallStep("counsel", { prompt: "Reviewed iteration 1. Proceed." }),
-        // Turn 4: iteration 2 → checkpoint(complete) → Inactive
+        // Step 5: tool continuation → text (loop stops, queued iteration-2 follow-up dequeued)
+        textStep("Counsel complete."),
+        // Step 6: iteration 2 → checkpoint(complete) → Inactive
         toolCallStep("auto_checkpoint", {
           status: "complete",
           summary: "All fixed",
           learnings: "Fixed all 3 issues",
         }),
+        // Step 7: tool continuation → text (loop stops, no more items)
+        textStep("All done."),
       ],
       (controls) =>
         Effect.gen(function* () {
@@ -122,7 +129,7 @@ describe("Auto extension E2E", () => {
           const autoSnapshot = snapshots.find((s) => s.extensionId === "auto")
           if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
           expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
-          expect(yield* controls.callCount).toBe(4)
+          expect(yield* controls.callCount).toBe(7)
           yield* controls.assertDone()
         }),
     ),
@@ -138,11 +145,14 @@ describe("Auto extension E2E", () => {
           learnings: "Found issues",
           nextIdea: "Fix them",
         }),
+        textStep("Checkpoint recorded."),
         toolCallStep("counsel", { prompt: "Review iteration 1." }),
+        textStep("Counsel done."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
           summary: "All fixed",
         }),
+        textStep("All done."),
       ],
       (controls) =>
         Effect.gen(function* () {
@@ -168,11 +178,12 @@ describe("Auto extension E2E", () => {
           expect(toolNames.filter((n) => n === "auto_checkpoint").length).toBe(2)
           expect(toolNames.filter((n) => n === "counsel").length).toBe(1)
 
-          // Also verify TurnCompleted events
+          // TurnCompleted fires once per user-initiated turn, plus once per queued follow-up turn
+          // With tool continuation, each tool-call step auto-continues within the same turn
           const turnCompleted = envelopes.filter((e) => e.event._tag === "TurnCompleted")
           expect(turnCompleted.length).toBe(4)
 
-          expect(yield* controls.callCount).toBe(4)
+          expect(yield* controls.callCount).toBe(7)
         }),
     ),
   )
