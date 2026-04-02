@@ -79,6 +79,7 @@ export const ActorProcessPhase = Schema.Literals([
   "resolving",
   "streaming",
   "executing-tools",
+  "waiting-for-interaction",
   "finalizing",
 ])
 export type ActorProcessPhase = typeof ActorProcessPhase.Type

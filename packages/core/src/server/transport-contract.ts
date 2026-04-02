@@ -246,6 +246,7 @@ export const RuntimePhase = Schema.Literals([
   "resolving",
   "streaming",
   "executing-tools",
+  "waiting-for-interaction",
   "finalizing",
 ])
 export type RuntimePhase = typeof RuntimePhase.Type

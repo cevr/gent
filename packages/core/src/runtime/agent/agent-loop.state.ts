@@ -7,7 +7,7 @@ import {
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
-import { Message, TextPart, ToolCallPart } from "../../domain/message.js"
+import { Message, TextPart, ToolCallPart, ToolResultPart } from "../../domain/message.js"
 import { ModelId } from "../../domain/model.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
 import { QueueEntryInfo, type QueueSnapshot } from "../../domain/queue.js"
@@ -208,6 +208,19 @@ export const AgentLoopState = State({
     currentTurnAgent: AgentName,
     draft: AssistantDraftSchema,
   },
+  WaitingForInteraction: {
+    ...ActiveTurnFields,
+    currentTurnAgent: AgentName,
+    draft: AssistantDraftSchema,
+    /** Completed tool results from tools that ran before the interaction */
+    completedToolResults: Schema.Array(ToolResultPart),
+    /** requestId of the pending interaction in InteractionStorage */
+    pendingRequestId: Schema.String,
+    /** Which tool call triggered the interaction */
+    pendingToolCallId: Schema.String,
+    /** Interaction type for recovery dispatch */
+    interactionType: Schema.Literals(["prompt", "handoff", "ask-user"]),
+  },
   Finalizing: {
     ...ActiveTurnFields,
     currentTurnAgent: Schema.optional(AgentName),
@@ -228,6 +241,15 @@ export const AgentLoopEvent = Event({
   StreamInterrupted: { currentTurnAgent: AgentName },
   StreamFailed: { currentTurnAgent: AgentName },
   ToolsFinished: {},
+  InteractionRequested: {
+    completedToolResults: Schema.Array(ToolResultPart),
+    pendingRequestId: Schema.String,
+    pendingToolCallId: Schema.String,
+    interactionType: Schema.Literals(["prompt", "handoff", "ask-user"]),
+  },
+  InteractionResponded: {
+    requestId: Schema.String,
+  },
   FinalizeFinished: {
     queue: LoopQueueState,
     nextItem: Schema.optional(QueuedTurnItemSchema),
@@ -240,10 +262,17 @@ export type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type ResolvingState = Extract<LoopState, { _tag: "Resolving" }>
 export type StreamingState = Extract<LoopState, { _tag: "Streaming" }>
 export type ExecutingToolsState = Extract<LoopState, { _tag: "ExecutingTools" }>
+export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
 export type FinalizingState = Extract<LoopState, { _tag: "Finalizing" }>
 export type ActiveLoopState = Exclude<LoopState, IdleState>
 export type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
-export type LoopRuntimePhase = "idle" | "resolving" | "streaming" | "executing-tools" | "finalizing"
+export type LoopRuntimePhase =
+  | "idle"
+  | "resolving"
+  | "streaming"
+  | "executing-tools"
+  | "waiting-for-interaction"
+  | "finalizing"
 export type LoopRuntimeStatus = "idle" | "running" | "interrupted"
 export type LoopRuntimeState = {
   phase: LoopRuntimePhase
@@ -317,8 +346,22 @@ export const toExecutingToolsState = (params: {
     draft: params.draft,
   })
 
+export const toWaitingForInteractionState = (params: {
+  state: ExecutingToolsState
+  completedToolResults: ReadonlyArray<typeof ToolResultPart.Type>
+  pendingRequestId: string
+  pendingToolCallId: string
+  interactionType: "prompt" | "handoff" | "ask-user"
+}): WaitingForInteractionState =>
+  AgentLoopState.WaitingForInteraction.derive(params.state, {
+    completedToolResults: [...params.completedToolResults],
+    pendingRequestId: params.pendingRequestId,
+    pendingToolCallId: params.pendingToolCallId,
+    interactionType: params.interactionType,
+  })
+
 export const toFinalizingState = (params: {
-  state: ResolvingState | StreamingState | ExecutingToolsState
+  state: ResolvingState | StreamingState | ExecutingToolsState | WaitingForInteractionState
   currentTurnAgent?: AgentNameType
   usage?: { inputTokens: number; outputTokens: number }
   streamFailed: boolean
@@ -365,6 +408,13 @@ export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState =>
       return {
         phase: "executing-tools",
         status: state.turnInterrupted || state.interruptAfterTools ? "interrupted" : "running",
+        agent,
+        queue,
+      }
+    case "WaitingForInteraction":
+      return {
+        phase: "waiting-for-interaction",
+        status: state.turnInterrupted ? "interrupted" : "running",
         agent,
         queue,
       }

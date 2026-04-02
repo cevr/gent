@@ -104,7 +104,9 @@ import {
   type ExecutingToolsState,
   type FinalizingState,
   type LoopActor,
+  type LoopRuntimePhase,
   type LoopRuntimeState,
+  type LoopRuntimeStatus,
   type LoopState,
   type QueuedTurnItem,
   type ResolvedTurn,
@@ -1233,8 +1235,8 @@ export interface AgentLoopService {
     branchId: BranchId
   }) => Effect.Effect<LoopActor>
   readonly getState: (input: { sessionId: SessionId; branchId: BranchId }) => Effect.Effect<{
-    phase: "idle" | "resolving" | "streaming" | "executing-tools" | "finalizing"
-    status: "idle" | "running" | "interrupted"
+    phase: LoopRuntimePhase
+    status: LoopRuntimeStatus
     agent: AgentNameType
     queue: QueueSnapshot
   }>
