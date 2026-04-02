@@ -55,6 +55,7 @@ import {
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId, type ToolCallId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolAction, type ToolContext } from "../../domain/tool.js"
+import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
@@ -98,6 +99,7 @@ import {
   toExecutingToolsState,
   toFinalizingState,
   toStreamingState,
+  toWaitingForInteractionState,
   updateCurrentAgentOnState,
   updateQueueOnState,
   type AssistantDraft,
@@ -436,6 +438,15 @@ export const persistAssistantTurn = (params: {
       .pipe(Effect.orDie)
   })
 
+/** InteractionPendingError enriched with the toolCallId that triggered it */
+class ToolInteractionPending {
+  readonly _tag = "ToolInteractionPending" as const
+  constructor(
+    readonly pending: InteractionPendingError,
+    readonly toolCallId: ToolCallId,
+  ) {}
+}
+
 const executeToolCalls = (params: {
   draft: AssistantDraft
   publishEvent: PublishEvent
@@ -466,7 +477,9 @@ const executeToolCalls = (params: {
           toolCallId: toolCall.toolCallId,
           agentName: params.currentTurnAgent,
         }
-        const run = params.toolRunner.run(toolCall, ctx)
+        const run = params.toolRunner
+          .run(toolCall, ctx)
+          .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
         const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
         const result = yield* tool?.concurrency === "serial"
           ? Effect.withSpan("AgentLoop.bashSemaphore")(params.bashSemaphore.withPermits(1)(run))
@@ -1047,7 +1060,13 @@ const makePublishingInspector = (params: {
 type LoopRecoveryDecision = {
   state: LoopState
   recovery?: {
-    phase: "Idle" | "Resolving" | "Streaming" | "ExecutingTools" | "Finalizing"
+    phase:
+      | "Idle"
+      | "Resolving"
+      | "Streaming"
+      | "ExecutingTools"
+      | "WaitingForInteraction"
+      | "Finalizing"
     action:
       | "resume-queued-turn"
       | "replay-resolving"
@@ -1056,6 +1075,7 @@ type LoopRecoveryDecision = {
       | "replay-idempotent-tools"
       | "reuse-persisted-tool-results"
       | "abort-non-idempotent-tools"
+      | "restore-cold"
       | "replay-finalizing"
     detail?: string
   }
@@ -1201,6 +1221,13 @@ const makeRecoveryDecision = (params: {
       )
     }
 
+    if (state._tag === "WaitingForInteraction") {
+      // Cold state — restore directly. Interaction re-publish happens via
+      // InteractionStorage.listPending() in the server startup path.
+      yield* publishRecovery({ phase: "WaitingForInteraction", action: "restore-cold" })
+      return Option.some(state)
+    }
+
     yield* publishRecovery({ phase: "Finalizing", action: "replay-finalizing" })
     return Option.some(state)
   })
@@ -1230,6 +1257,11 @@ export interface AgentLoopService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<boolean>
+  readonly respondInteraction: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+    requestId: string
+  }) => Effect.Effect<void>
   readonly getActor: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -1431,7 +1463,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runExecutingToolsState = Effect.fn("AgentLoop.runExecutingToolsState")(function* (
               state: ExecutingToolsState,
             ) {
-              yield* executeToolsPhase({
+              const interactionSignal = yield* executeToolsPhase({
                 messageId: state.message.id,
                 draft: state.draft,
                 publishEvent: publishEventOrDie,
@@ -1442,7 +1474,24 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 extensionRegistry,
                 bashSemaphore,
                 storage,
-              })
+              }).pipe(
+                Effect.as(undefined as ToolInteractionPending | undefined),
+                Effect.catchIf(
+                  (e): e is ToolInteractionPending => e instanceof ToolInteractionPending,
+                  (e) => Effect.succeed(e),
+                ),
+              )
+
+              if (interactionSignal !== undefined) {
+                const { pending, toolCallId } = interactionSignal
+                return AgentLoopEvent.InteractionRequested({
+                  completedToolResults: [],
+                  pendingRequestId: pending.requestId,
+                  pendingToolCallId: toolCallId as string,
+                  interactionType: pending.interactionType,
+                })
+              }
+
               return AgentLoopEvent.ToolsFinished
             })
 
@@ -1484,6 +1533,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   AgentLoopState.Resolving,
                   AgentLoopState.Streaming,
                   AgentLoopState.ExecutingTools,
+                  AgentLoopState.WaitingForInteraction,
                   AgentLoopState.Finalizing,
                 ],
                 AgentLoopEvent.QueueFollowUp,
@@ -1496,6 +1546,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   AgentLoopState.Resolving,
                   AgentLoopState.Streaming,
                   AgentLoopState.ExecutingTools,
+                  AgentLoopState.WaitingForInteraction,
                   AgentLoopState.Finalizing,
                 ],
                 AgentLoopEvent.ClearQueue,
@@ -1507,6 +1558,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   AgentLoopState.Resolving,
                   AgentLoopState.Streaming,
                   AgentLoopState.ExecutingTools,
+                  AgentLoopState.WaitingForInteraction,
                   AgentLoopState.Finalizing,
                 ],
                 AgentLoopEvent.SwitchAgent,
@@ -1614,6 +1666,45 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   streamFailed: true,
                   turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
                 }),
+              )
+              // ExecutingTools → WaitingForInteraction
+              .on(
+                AgentLoopState.ExecutingTools,
+                AgentLoopEvent.InteractionRequested,
+                ({ state, event }) =>
+                  toWaitingForInteractionState({
+                    state,
+                    completedToolResults: [...event.completedToolResults],
+                    pendingRequestId: event.pendingRequestId,
+                    pendingToolCallId: event.pendingToolCallId,
+                    interactionType: event.interactionType,
+                  }),
+              )
+              // WaitingForInteraction — cold state, no task fiber
+              .on(
+                AgentLoopState.WaitingForInteraction,
+                AgentLoopEvent.QueueSteering,
+                ({ state, event }) =>
+                  updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
+              )
+              .on(AgentLoopState.WaitingForInteraction, AgentLoopEvent.Interrupt, ({ state }) =>
+                toFinalizingState({
+                  state,
+                  currentTurnAgent: state.currentTurnAgent,
+                  streamFailed: false,
+                  turnInterrupted: true,
+                }),
+              )
+              .on(
+                AgentLoopState.WaitingForInteraction,
+                AgentLoopEvent.InteractionResponded,
+                ({ state }) =>
+                  // Resume tool execution — the tool re-calls present()
+                  // which finds the stored resolution and continues
+                  AgentLoopState.ExecutingTools.derive(state, {
+                    currentTurnAgent: state.currentTurnAgent,
+                    draft: state.draft,
+                  }),
               )
               .on(AgentLoopState.Finalizing, AgentLoopEvent.QueueSteering, ({ state, event }) =>
                 updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
@@ -1878,7 +1969,11 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return
                 case "Cancel":
                 case "Interrupt":
-                  if (loopState._tag === "Streaming" || loopState._tag === "ExecutingTools") {
+                  if (
+                    loopState._tag === "Streaming" ||
+                    loopState._tag === "ExecutingTools" ||
+                    loopState._tag === "WaitingForInteraction"
+                  ) {
                     yield* loop.actor.cast(AgentLoopEvent.Interrupt)
                   }
                   return
@@ -1946,6 +2041,17 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               return runtimeStateFromLoopState(yield* loop.actor.snapshot).status !== "idle"
             }),
 
+          respondInteraction: (input) =>
+            Effect.gen(function* () {
+              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
+              if (loop === undefined) return
+              const state = yield* loop.actor.snapshot
+              if (state._tag !== "WaitingForInteraction") return
+              yield* loop.actor.call(
+                AgentLoopEvent.InteractionResponded({ requestId: input.requestId }),
+              )
+            }),
+
           getActor: (input) =>
             Effect.gen(function* () {
               const loop = yield* getLoop(input.sessionId, input.branchId)
@@ -1997,6 +2103,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
       drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       isRunning: (_input) => Effect.succeed(false),
+      respondInteraction: () => Effect.void,
       getActor: () => Effect.die("AgentLoop.Test.getActor not implemented"),
       getState: () =>
         Effect.succeed({

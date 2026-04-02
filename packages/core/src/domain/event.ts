@@ -53,6 +53,7 @@ export const RecoveryPhase = Schema.Literals([
   "Resolving",
   "Streaming",
   "ExecutingTools",
+  "WaitingForInteraction",
   "Finalizing",
 ])
 export type RecoveryPhase = typeof RecoveryPhase.Type
@@ -65,6 +66,7 @@ export const RecoveryAction = Schema.Literals([
   "replay-idempotent-tools",
   "reuse-persisted-tool-results",
   "abort-non-idempotent-tools",
+  "restore-cold",
   "replay-finalizing",
 ])
 export type RecoveryAction = typeof RecoveryAction.Type

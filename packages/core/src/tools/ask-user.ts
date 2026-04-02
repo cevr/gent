@@ -13,6 +13,7 @@ import {
 import type { SessionId, BranchId } from "../domain/ids.js"
 import {
   makeInteractionService,
+  type InteractionPendingError,
   type InteractionRequestRecord,
   type InteractionStorageConfig,
 } from "../domain/interaction-request.js"
@@ -68,7 +69,7 @@ export interface AskUserHandlerService {
   readonly askMany: (
     questions: ReadonlyArray<Question>,
     ctx: ToolContext,
-  ) => Effect.Effect<AskUserDecision, EventStoreError>
+  ) => Effect.Effect<AskUserDecision, EventStoreError | InteractionPendingError>
   readonly respond: (
     requestId: string,
     answers: ReadonlyArray<ReadonlyArray<string>>,

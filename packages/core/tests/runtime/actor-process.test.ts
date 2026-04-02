@@ -59,6 +59,7 @@ describe("ActorProcess", () => {
         }),
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      respondInteraction: () => Effect.void,
       getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
     })
 
@@ -85,6 +86,7 @@ describe("ActorProcess", () => {
       steer: () => Effect.void,
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      respondInteraction: () => Effect.void,
       getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
     })
 
@@ -158,6 +160,7 @@ describe("ActorProcess", () => {
       steer: () => Effect.void,
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      respondInteraction: () => Effect.void,
       getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
     })
     const toolRunnerLayer = Layer.succeed(ToolRunner, {

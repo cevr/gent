@@ -297,6 +297,8 @@ export type WatchRuntimeInput = typeof WatchRuntimeInput.Type
 
 export const RespondQuestionsInput = Schema.Struct({
   requestId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   answers: Schema.Array(Schema.Array(Schema.String)),
   cancelled: Schema.optional(Schema.Boolean),
 })
@@ -315,6 +317,8 @@ export type UpdateSessionReasoningLevelResult = typeof UpdateSessionReasoningLev
 
 export const RespondPromptInput = Schema.Struct({
   requestId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   decision: PromptDecision,
   content: Schema.optional(Schema.String),
 })
@@ -322,6 +326,8 @@ export type RespondPromptInput = typeof RespondPromptInput.Type
 
 export const RespondHandoffInput = Schema.Struct({
   requestId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
   decision: HandoffDecision,
   reason: Schema.optional(Schema.String),
 })

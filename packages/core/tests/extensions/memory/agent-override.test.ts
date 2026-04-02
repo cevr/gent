@@ -18,6 +18,7 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Provider } from "@gent/core/providers/provider"
+import { AskUserHandler } from "@gent/core/tools/ask-user"
 
 const testExtensions = resolveExtensions([
   {
@@ -46,6 +47,7 @@ const makeTestLayer = (logs: {
       : () => Effect.void,
     followUp: () => Effect.void,
     isRunning: () => Effect.succeed(false),
+    respondInteraction: () => Effect.void,
     getState: () =>
       Effect.succeed({
         phase: "idle" as const,
@@ -74,6 +76,7 @@ const makeTestLayer = (logs: {
   )
   const deps = Layer.mergeAll(
     baseWithActorProcess,
+    AskUserHandler.Test([["yes"]]),
     Layer.provide(PromptHandler.Live, baseWithActorProcess),
     Layer.provide(HandoffHandler.Live, baseWithActorProcess),
   )

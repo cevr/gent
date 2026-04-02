@@ -174,6 +174,8 @@ export function useSessionController(props: {
           client.client.interaction
             .respondQuestions({
               requestId,
+              sessionId: props.sessionId,
+              branchId: props.branchId,
               answers:
                 r._tag === "cancelled" ? [] : [...r.answers.map((a: readonly string[]) => [...a])],
               cancelled: r._tag === "cancelled" ? true : undefined,
@@ -188,6 +190,8 @@ export function useSessionController(props: {
           Effect.gen(function* () {
             const handoffResult = yield* client.client.interaction.respondHandoff({
               requestId,
+              sessionId: props.sessionId,
+              branchId: props.branchId,
               decision: r._tag,
               ...(r._tag === "reject" && r.reason !== undefined ? { reason: r.reason } : {}),
             })
@@ -221,6 +225,8 @@ export function useSessionController(props: {
           client.client.interaction
             .respondPrompt({
               requestId,
+              sessionId: props.sessionId,
+              branchId: props.branchId,
               decision: r._tag,
               ...(r._tag === "no" && r.reason !== undefined ? { content: r.reason } : {}),
             })

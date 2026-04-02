@@ -3,7 +3,6 @@ import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-bou
 import { GentRpcs } from "./rpcs"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
-import { AskUserHandler } from "../tools/ask-user.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
@@ -31,7 +30,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const subscriptions = yield* SessionSubscriptions
     const interactions = yield* InteractionCommands
     const skills = yield* Skills
-    const askUserHandler = yield* AskUserHandler
     const permission = yield* Permission
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
@@ -170,19 +168,29 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "queue.get": ({ sessionId, branchId }) => queries.getQueuedMessages({ sessionId, branchId }),
 
       // -- interaction --
-      "interaction.respondQuestions": ({ requestId, answers, cancelled }) =>
-        askUserHandler.respond(requestId, answers, cancelled),
+      "interaction.respondQuestions": ({ requestId, sessionId, branchId, answers, cancelled }) =>
+        interactions.respondQuestions({
+          requestId,
+          sessionId,
+          branchId,
+          answers,
+          ...(cancelled !== undefined ? { cancelled } : {}),
+        }),
 
-      "interaction.respondPrompt": ({ requestId, decision, content }) =>
+      "interaction.respondPrompt": ({ requestId, sessionId, branchId, decision, content }) =>
         interactions.respondPrompt({
           requestId,
+          sessionId,
+          branchId,
           decision,
           ...(content !== undefined ? { content } : {}),
         }),
 
-      "interaction.respondHandoff": ({ requestId, decision, reason }) =>
+      "interaction.respondHandoff": ({ requestId, sessionId, branchId, decision, reason }) =>
         interactions.respondHandoff({
           requestId,
+          sessionId,
+          branchId,
           decision,
           ...(reason !== undefined ? { reason } : {}),
         }),

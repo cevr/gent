@@ -3,6 +3,7 @@ import { type ToolContext, type AnyToolDefinition, type ToolDefinition } from ".
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { ToolResultPart } from "../../domain/message.js"
 import { Permission } from "../../domain/permission.js"
+import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { formatSchemaError } from "../format-schema-error"
 import {
   withWideEvent,
@@ -16,7 +17,7 @@ export interface ToolRunnerService {
   readonly run: (
     toolCall: { toolCallId: ToolCallId; toolName: string; input: unknown },
     ctx: ToolContext,
-  ) => Effect.Effect<ToolResultPart, never>
+  ) => Effect.Effect<ToolResultPart, InteractionPendingError>
 }
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
@@ -139,7 +140,14 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               .pipe(Effect.result)
 
             if (executeResult._tag === "Failure") {
-              const failure = executeResult.failure
+              // InteractionPendingError must escape the tool runner so the machine
+              // transitions to WaitingForInteraction. The interceptor type system erases
+              // the error to `never`, but the error exists at runtime.
+              const failure = executeResult.failure as unknown
+              if (failure instanceof InteractionPendingError) {
+                return yield* Effect.fail(failure)
+              }
+
               const message = Schema.isSchemaError(failure)
                 ? formatSchemaError(toolCall.toolName, failure)
                 : `Tool '${toolCall.toolName}' failed: ${String(failure)}`

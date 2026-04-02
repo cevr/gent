@@ -48,13 +48,24 @@ export const runHeadless = (
             case "HandoffPresented":
               process.stdout.write(`\n[handoff: auto-confirming]\n`)
               yield* client.interaction
-                .respondHandoff({ requestId: event.requestId, decision: "confirm" })
+                .respondHandoff({
+                  requestId: event.requestId,
+                  sessionId,
+                  branchId,
+                  decision: "confirm",
+                })
                 .pipe(Effect.catchEager(() => Effect.void))
               break
             case "QuestionsAsked":
               process.stderr.write(`\n[ask_user: auto-cancelling in headless mode]\n`)
               yield* client.interaction
-                .respondQuestions({ requestId: event.requestId, answers: [], cancelled: true })
+                .respondQuestions({
+                  requestId: event.requestId,
+                  sessionId,
+                  branchId,
+                  answers: [],
+                  cancelled: true,
+                })
                 .pipe(Effect.catchEager(() => Effect.void))
               break
             case "HandoffConfirmed":
