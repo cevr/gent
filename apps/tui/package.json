@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "bun scripts/build.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "test": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests",
     "test:integration": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts integration"
   },
