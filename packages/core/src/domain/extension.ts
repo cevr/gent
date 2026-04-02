@@ -256,6 +256,8 @@ export interface ExtensionSetup {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Any
+  /** Layers provided after agentRuntimeLive — for services that depend on SubagentRunnerService etc. */
+  readonly runtimeLayers?: ReadonlyArray<Layer.Any>
   /** Spawn an actor for this extension — unified lifecycle model */
   readonly spawnActor?: SpawnActor
   /** Projection config — derive function externalized from actor (framework-owned) */
@@ -269,8 +271,20 @@ export interface ExtensionSetup {
   /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
   readonly promptSections?: ReadonlyArray<PromptSection>
   /** Fire-and-forget event observers. Receive raw AgentEvent after reduction.
-   *  Errors are caught and logged — one failing observer doesn't affect others. */
+   *  Errors are caught and logged — one failing observer doesn't affect others.
+   *  @deprecated Use bus subscriptions via `ext.bus.on("agent:*", handler)` instead. */
   readonly observers?: ReadonlyArray<(event: AgentEvent) => void | Promise<void>>
+  /** Bus channel subscriptions — registered at startup time.
+   *  Each entry: { pattern, handler } where handler receives BusEnvelope and runs with full service access. */
+  readonly busSubscriptions?: ReadonlyArray<{
+    readonly pattern: string
+    readonly handler: (envelope: {
+      channel: string
+      payload: unknown
+      sessionId?: string
+      branchId?: string
+    }) => void | Promise<void>
+  }>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
   /** Cleanup effect — runs as scope finalizer during graceful shutdown. */

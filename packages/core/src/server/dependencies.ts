@@ -32,6 +32,7 @@ import {
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
+import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { TaskService } from "../runtime/task-service.js"
@@ -41,6 +42,13 @@ import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
 import { buildBasePromptSections, compileSystemPrompt } from "./system-prompt.js"
 import type { InteractionRequestType } from "../domain/interaction-request.js"
+
+/** Carries extension runtime-phase layers through the dep graph.
+ *  Populated by makeExtensionLayers, consumed by createDependencies after agentRuntimeLive. */
+class RuntimeExtensionLayers extends ServiceMap.Service<
+  RuntimeExtensionLayers,
+  { readonly layers: ReadonlyArray<Layer.Any> }
+>()("@gent/core/src/server/dependencies/RuntimeExtensionLayers") {}
 
 /** Marker service — construction triggers recovery of pending interaction requests */
 class InteractionRecoveryTag extends ServiceMap.Service<
@@ -161,15 +169,33 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         }
       }
 
-      // Collect extension-provided layers (setup.layer)
+      // Collect extension-provided layers (setup.layer — default phase)
       const extensionLayers = allExtensions
         .filter((ext) => ext.setup.layer !== undefined)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
-      const baseLayers = Layer.merge(
+      // Collect runtime-phase layers (setup.runtimeLayers — provided after agentRuntimeLive)
+      const runtimeLayers = allExtensions.flatMap((ext) => ext.setup.runtimeLayers ?? [])
+
+      // Collect bus subscriptions from extensions
+      const busSubscriptions = allExtensions.flatMap((ext) =>
+        (ext.setup.busSubscriptions ?? []).map((sub) => ({
+          pattern: sub.pattern,
+          handler: sub.handler as (envelope: {
+            channel: string
+            payload: unknown
+            sessionId?: string
+            branchId?: string
+          }) => void | Promise<void>,
+        })),
+      )
+
+      const baseLayers = Layer.mergeAll(
         ExtensionRegistry.Live(allExtensions),
         ExtensionStateRuntime.Live(allExtensions),
+        ExtensionEventBus.withSubscriptions(busSubscriptions),
+        Layer.succeed(RuntimeExtensionLayers, { layers: runtimeLayers }),
       )
 
       if (extensionLayers.length === 0) return baseLayers
@@ -203,6 +229,8 @@ export const makeReducingEventStore = Layer.effect(
   Effect.gen(function* () {
     const base = yield* BaseEventStore
     const stateRuntime = yield* ExtensionStateRuntime
+    const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+    const bus = busOpt._tag === "Some" ? busOpt.value : undefined
     const reduceDepth = yield* Ref.make(0)
 
     return {
@@ -238,6 +266,18 @@ export const makeReducingEventStore = Layer.effect(
                       Effect.catchDefect(() => Effect.void),
                       // Notify observers after reduction (fire-and-forget)
                       Effect.tap(() => stateRuntime.notifyObservers(event)),
+                      // Publish agent event to bus
+                      Effect.tap(() => {
+                        if (bus === undefined) return Effect.void
+                        return bus
+                          .emit({
+                            channel: `agent:${event._tag}`,
+                            payload: event,
+                            sessionId,
+                            branchId,
+                          })
+                          .pipe(Effect.catchEager(() => Effect.void))
+                      }),
                     ),
                   ),
                   Effect.ensuring(Ref.update(reduceDepth, (d: number) => d - 1)),
@@ -482,7 +522,28 @@ export const createDependencies = (config: DependenciesConfig) => {
     ExtensionTurnControl.Live,
     Layer.merge(allDeps, agentRuntimeLive),
   )
-  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, taskServiceLive, turnControlLive)
+
+  // Provide runtime-phase extension layers (those needing SubagentRunnerService etc.)
+  const runtimeExtLayers = Layer.unwrap(
+    Effect.gen(function* () {
+      const { layers } = yield* RuntimeExtensionLayers
+      if (layers.length === 0) return Layer.empty
+      type NarrowLayer = Layer.Layer<never>
+      return Layer.mergeAll(...(layers as [NarrowLayer, ...NarrowLayer[]]))
+    }),
+  )
+  const runtimeExtLayersProvided = Layer.provide(
+    runtimeExtLayers,
+    Layer.merge(allDeps, agentRuntimeLive),
+  )
+
+  const allWithRuntime = Layer.mergeAll(
+    allDeps,
+    agentRuntimeLive,
+    taskServiceLive,
+    turnControlLive,
+    runtimeExtLayersProvided,
+  )
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
   return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)

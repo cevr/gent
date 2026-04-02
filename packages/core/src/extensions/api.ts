@@ -333,8 +333,10 @@ export interface ExtensionBuilder {
   interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
   /** Register an actor from fromReducer() or fromMachine(). Mutually exclusive with state(). */
   actor(result: ActorResult): void
-  /** Provide a service Layer. Multiple calls merge. */
-  layer(layer: Layer.Any): void
+  /** Provide a service Layer. Multiple calls merge.
+   *  Pass `{ phase: "runtime" }` for layers that depend on services from agentRuntimeLive
+   *  (e.g. SubagentRunnerService). These are provided after agentRuntimeLive in the dep graph. */
+  layer(layer: Layer.Any, options?: { phase?: "default" | "runtime" }): void
   /** Register an AI model provider. */
   provider(provider: ProviderContribution): void
   /** Register an interaction handler. */
@@ -350,8 +352,28 @@ export interface ExtensionBuilder {
 
   /** Observe all events (including diagnostic) without needing actors or state.
    *  Fire-and-forget: return value ignored, errors caught and logged.
-   *  Runs after reduction — no re-entrance risk. */
+   *  Runs after reduction — no re-entrance risk.
+   *  @deprecated Use `ext.bus.on("agent:*", handler)` instead. */
   observe(handler: (event: AgentEvent) => void | Promise<void>): void
+
+  // ── Event bus ──
+
+  /** Channel-based event bus for extension communication.
+   *  Replaces `observe()` with richer routing and full service access in handlers. */
+  readonly bus: {
+    /** Subscribe to a bus channel. Handlers run with full service access.
+     *  Pattern: exact match (e.g. `"@gent/task-tools:StopTask"`) or wildcard (`"agent:*"`).
+     *  `"agent:*"` matches all agent events — equivalent to `ext.observe()`. */
+    on(
+      pattern: string,
+      handler: (envelope: {
+        channel: string
+        payload: unknown
+        sessionId?: string
+        branchId?: string
+      }) => void | Promise<void>,
+    ): void
+  }
 }
 
 // ── Internal Helpers ──
@@ -562,6 +584,42 @@ export interface ExtensionContext {
   readonly home: string
 }
 
+type BusSubscriptionEntry = NonNullable<ExtensionSetup["busSubscriptions"]>[number]
+
+/** Merge startup hooks into a single Effect. Extracted to reduce generator complexity. */
+const mergeStartupHooks = (
+  fns: Array<() => void | Promise<void>>,
+  effects: Array<Effect.Effect<void>>,
+): Effect.Effect<void> | undefined => {
+  const all: Effect.Effect<void>[] = [
+    ...fns.map((fn) =>
+      Effect.tryPromise({
+        try: () => Promise.resolve(fn()),
+        catch: (e) => new SimpleHookError({ message: `onStartup: ${String(e)}`, cause: e }),
+      }).pipe(Effect.orDie, Effect.asVoid),
+    ),
+    ...effects,
+  ]
+  return all.length > 0 ? Effect.all(all, { discard: true }).pipe(Effect.asVoid) : undefined
+}
+
+/** Merge shutdown hooks into a single Effect. Extracted to reduce generator complexity. */
+const mergeShutdownHooks = (
+  fns: Array<() => void | Promise<void>>,
+  effects: Array<Effect.Effect<void>>,
+): Effect.Effect<void> | undefined => {
+  const all: Effect.Effect<void>[] = [
+    ...fns.map((fn) =>
+      Effect.tryPromise({
+        try: () => Promise.resolve(fn()),
+        catch: (e) => new SimpleHookError({ message: `onShutdown: ${String(e)}`, cause: e }),
+      }).pipe(Effect.orDie, Effect.asVoid),
+    ),
+    ...effects,
+  ]
+  return all.length > 0 ? Effect.all(all, { discard: true }).pipe(Effect.asVoid) : undefined
+}
+
 /**
  * Create an extension. One API for both simple and full-power extensions.
  *
@@ -587,7 +645,9 @@ export const extension = (
       const interactionHandlers: InteractionHandlerContribution[] = []
       const tagInjections: TagInjection[] = []
       const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
+      const busSubscriptions: BusSubscriptionEntry[] = []
       const layers: Layer.Any[] = []
+      const runtimeLayers: Layer.Any[] = []
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let stateConfig: SimpleStateConfig<any> | undefined
       let actorResult: ActorResult | undefined
@@ -726,13 +786,22 @@ export const extension = (
           actorResult = result
         },
 
-        layer: (l) => layers.push(l),
+        layer: (l, options?) => {
+          if (options?.phase === "runtime") {
+            runtimeLayers.push(l)
+          } else {
+            layers.push(l)
+          }
+        },
         provider: (p) => providers.push(p),
         interactionHandler: (h) => interactionHandlers.push(h),
         tagInjection: (t) => tagInjections.push(t),
         onStartupEffect: (e) => startupEffects.push(e),
         onShutdownEffect: (e) => shutdownEffects.push(e),
         observe: (handler) => observers.push(handler),
+        bus: {
+          on: (pattern, handler) => busSubscriptions.push({ pattern, handler }),
+        },
       }
 
       // Run factory — sync factories stay sync (no Promise.resolve tick)
@@ -774,34 +843,8 @@ export const extension = (
         mergedLayer = Layer.mergeAll(...(layers as [NarrowLayer, NarrowLayer, ...NarrowLayer[]]))
       }
 
-      // Merge startup effects (Promise fns + Effect values)
-      const allStartup: Effect.Effect<void>[] = [
-        ...startupFns.map((fn) =>
-          Effect.tryPromise({
-            try: () => Promise.resolve(fn()),
-            catch: (e) => new SimpleHookError({ message: `onStartup: ${String(e)}`, cause: e }),
-          }).pipe(Effect.orDie, Effect.asVoid),
-        ),
-        ...startupEffects,
-      ]
-      const onStartup =
-        allStartup.length > 0
-          ? Effect.all(allStartup, { discard: true }).pipe(Effect.asVoid)
-          : undefined
-
-      const allShutdown: Effect.Effect<void>[] = [
-        ...shutdownFns.map((fn) =>
-          Effect.tryPromise({
-            try: () => Promise.resolve(fn()),
-            catch: (e) => new SimpleHookError({ message: `onShutdown: ${String(e)}`, cause: e }),
-          }).pipe(Effect.orDie, Effect.asVoid),
-        ),
-        ...shutdownEffects,
-      ]
-      const onShutdown =
-        allShutdown.length > 0
-          ? Effect.all(allShutdown, { discard: true }).pipe(Effect.asVoid)
-          : undefined
+      const onStartup = mergeStartupHooks(startupFns, startupEffects)
+      const onShutdown = mergeShutdownHooks(shutdownFns, shutdownEffects)
 
       return {
         ...(tools.length > 0 ? { tools } : {}),
@@ -809,10 +852,12 @@ export const extension = (
         ...(promptSections.length > 0 ? { promptSections } : {}),
         ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
+        ...(runtimeLayers.length > 0 ? { runtimeLayers } : {}),
         ...(providers.length > 0 ? { providers } : {}),
         ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
         ...(tagInjections.length > 0 ? { tagInjections } : {}),
         ...(observers.length > 0 ? { observers } : {}),
+        ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),
         spawnActor,
         projection,
         onStartup,
