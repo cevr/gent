@@ -108,6 +108,7 @@ import {
   type RunningState,
 } from "./agent-loop.state.js"
 import {
+  assistantDraftFromMessage,
   assistantMessageIdForTurn,
   buildTurnPrompt,
   resolveReasoning,
@@ -1254,12 +1255,62 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             // ── The inner agentic loop ──
             // resolve → stream → tools → repeat until LLM returns no tool calls
             const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
-              yield* Ref.set(interruptedRef, false)
               yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
               let step = 0
-              let interrupted = false
+              let interrupted = yield* Ref.get(interruptedRef)
               let streamFailed = false
               let currentTurnAgent: AgentNameType = state.currentAgent ?? "cowork"
+
+              // Resume check: if assistant message with tool calls exists but no tool results,
+              // we're resuming from WaitingForInteraction or crash. Execute tools first.
+              const existingAssistant = yield* storage
+                .getMessage(assistantMessageIdForTurn(state.message.id))
+                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+              if (existingAssistant !== undefined && !interrupted) {
+                const draft = assistantDraftFromMessage(existingAssistant)
+                if (draft.toolCalls.length > 0) {
+                  const existingResults = yield* storage
+                    .getMessage(toolResultMessageIdForTurn(state.message.id))
+                    .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                  if (existingResults === undefined) {
+                    // Resume tool execution (interaction response or crash recovery)
+                    yield* Effect.logInfo("turn.resume-tools")
+                    const interactionSignal = yield* executeToolsPhase({
+                      messageId: state.message.id,
+                      draft,
+                      publishEvent: publishEventOrDie,
+                      sessionId,
+                      branchId,
+                      currentTurnAgent,
+                      toolRunner,
+                      extensionRegistry,
+                      bashSemaphore,
+                      storage,
+                    }).pipe(
+                      Effect.as(undefined as ToolInteractionPending | undefined),
+                      Effect.catchIf(
+                        (e): e is ToolInteractionPending => e instanceof ToolInteractionPending,
+                        (e) => Effect.succeed(e),
+                      ),
+                    )
+
+                    if (interactionSignal !== undefined) {
+                      const { pending, toolCallId } = interactionSignal
+                      return AgentLoopEvent.InteractionRequested({
+                        completedToolResults: [],
+                        pendingRequestId: pending.requestId,
+                        pendingToolCallId: toolCallId as string,
+                        interactionType: pending.interactionType,
+                        currentTurnAgent,
+                        draft,
+                      })
+                    }
+                    // Tools done — fall through to the loop which will resolve/stream the next step
+                    step = 1
+                  }
+                  // If tool results already exist, the loop will re-resolve (picks them up from storage)
+                }
+              }
 
               while (true) {
                 step++
@@ -1479,7 +1530,15 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
               )
               .on(AgentLoopState.WaitingForInteraction, AgentLoopEvent.Interrupt, ({ state }) =>
-                buildIdleState({ queue: state.queue, currentAgent: state.currentAgent }),
+                Effect.gen(function* () {
+                  // Transition to Running with interrupt set — task will finalize immediately
+                  yield* Ref.set(interruptedRef, true)
+                  return AgentLoopState.Running.derive(state, {
+                    message: state.message,
+                    startedAtMs: state.startedAtMs,
+                    agentOverride: state.agentOverride,
+                  })
+                }),
               )
               // WaitingForInteraction → Running (resume)
               .on(
