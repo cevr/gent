@@ -213,7 +213,7 @@ describe("ActorProcess", () => {
         yield* actorProcess.invokeTool({
           sessionId: "invoke-session" as never,
           branchId: "invoke-branch" as never,
-          toolName: "todo_read",
+          toolName: "read",
           input: {},
         })
 
@@ -226,7 +226,7 @@ describe("ActorProcess", () => {
         expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
         expect(messages[0]?.parts[0]?.type).toBe("tool-call")
         expect(messages[1]?.parts[0]?.type).toBe("tool-result")
-        expect(followUpText).toBe("Tool todo_read completed. Review the result and continue.")
+        expect(followUpText).toBe("Tool read completed. Review the result and continue.")
         expect(publishedTags).toContain("ToolCallStarted")
         expect(publishedTags).toContain("ToolCallSucceeded")
         expect(

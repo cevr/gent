@@ -30,7 +30,7 @@ describe("compileToolPolicy", () => {
     makeTool("ask_user", "interact"),
     makeTool("webfetch", "network"),
     makeTool("websearch", "network"),
-    makeTool("todo_read", "state"),
+    makeTool("search_skills", "read"),
   ]
 
   const emptyCtx = { sessionId: "s" as SessionId, branchId: "b" as BranchId }
@@ -46,7 +46,7 @@ describe("compileToolPolicy", () => {
   test("allowedActions filters by action", () => {
     const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedActions: ["read"] })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
-    expect(names(tools)).toEqual(["glob", "grep", "read"])
+    expect(names(tools)).toEqual(["glob", "grep", "read", "search_skills"])
   })
 
   test("allowedActions + allowedTools unions", () => {
@@ -57,7 +57,7 @@ describe("compileToolPolicy", () => {
       allowedTools: ["bash"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
-    expect(names(tools)).toEqual(["bash", "glob", "grep", "read"])
+    expect(names(tools)).toEqual(["bash", "glob", "grep", "read", "search_skills"])
   })
 
   test("allowedTools: [] means no tools", () => {
@@ -74,7 +74,7 @@ describe("compileToolPolicy", () => {
       deniedTools: ["grep"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
-    expect(names(tools)).toEqual(["glob", "read"])
+    expect(names(tools)).toEqual(["glob", "read", "search_skills"])
   })
 
   test("multiple actions", () => {
@@ -84,7 +84,7 @@ describe("compileToolPolicy", () => {
       allowedActions: ["read", "network"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
-    expect(names(tools)).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+    expect(names(tools)).toEqual(["glob", "grep", "read", "search_skills", "webfetch", "websearch"])
   })
 
   test("tag injection adds tools when tag matches", () => {

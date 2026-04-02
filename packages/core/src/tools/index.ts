@@ -49,17 +49,6 @@ export {
   RepoExplorerError,
 } from "./repo-explorer.js"
 
-// Todo Tools
-export {
-  TodoReadTool,
-  TodoReadParams,
-  TodoReadResult,
-  TodoWriteTool,
-  TodoWriteParams,
-  TodoWriteResult,
-  TodoHandler,
-} from "./todo.js"
-
 // WebFetch Tool
 export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch"
 
@@ -113,6 +102,11 @@ export { TaskCreateTool, TaskCreateParams } from "./task-create"
 export { TaskListTool, TaskListParams } from "./task-list"
 export { TaskGetTool, TaskGetParams } from "./task-get"
 export { TaskUpdateTool, TaskUpdateParams } from "./task-update"
+export { TaskStopTool, TaskStopParams } from "./task-stop"
+export { TaskOutputTool, TaskOutputParams } from "./task-output"
+
+// Session Tools
+export { RenameSessionTool, RenameSessionParams } from "./rename-session"
 
 // Delegate Tools
 export { PlanTool, PlanParams } from "./plan"
