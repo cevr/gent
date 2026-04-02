@@ -36,7 +36,6 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { TaskService } from "../runtime/task-service.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
@@ -475,28 +474,8 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   // Wake checkpointed agent loops on startup so in-flight turns resume
   // without waiting for a client to open the session.
-  // Forked so it doesn't block GENT_WORKER_READY — loop restoration can
-  // take seconds when queued turns replay through the provider.
-  const checkpointWakeLive = Layer.effectDiscard(
-    Effect.gen(function* () {
-      const checkpointStore = yield* CheckpointStorage
-      const agentLoop = yield* AgentLoop
-      yield* Effect.forkScoped(
-        Effect.gen(function* () {
-          const checkpoints = yield* checkpointStore
-            .list()
-            .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-          if (checkpoints.length === 0) return
-          for (const cp of checkpoints) {
-            yield* agentLoop
-              .isRunning({ sessionId: cp.sessionId, branchId: cp.branchId })
-              .pipe(Effect.catchEager(() => Effect.succeed(false)))
-          }
-          yield* Effect.log(`Woke ${checkpoints.length} checkpointed agent loop(s)`)
-        }),
-      )
-    }),
-  ).pipe(Layer.provide(Layer.merge(allDeps, agentRuntimeLive)))
+  // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
+  // client opens a session. No eager wake on startup.
 
   const taskServiceLive = Layer.provide(TaskService.Live, Layer.merge(allDeps, agentRuntimeLive))
   const turnControlLive = Layer.provide(
@@ -506,10 +485,5 @@ export const createDependencies = (config: DependenciesConfig) => {
   const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, taskServiceLive, turnControlLive)
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
-  return Layer.mergeAll(
-    allWithRuntime,
-    actorProcessLive,
-    interactionRecoveryLive,
-    checkpointWakeLive,
-  )
+  return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)
 }
