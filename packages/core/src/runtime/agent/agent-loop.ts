@@ -847,6 +847,7 @@ export const finalizeTurnPhase = (params: {
       .pipe(Effect.orDie)
 
     // Run turn.after interceptor — extensions can schedule follow-ups, count turns, etc.
+    yield* Effect.logDebug("finalize.turn-after.start")
     yield* params.extensionRegistry.hooks
       .runInterceptor(
         "turn.after",
@@ -860,6 +861,7 @@ export const finalizeTurnPhase = (params: {
         () => Effect.void,
       )
       .pipe(Effect.catchEager(() => Effect.void))
+    yield* Effect.logDebug("finalize.turn-after.done")
 
     yield* Effect.logInfo("turn.completed").pipe(
       Effect.annotateLogs({
@@ -1498,6 +1500,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const runFinalizingState = Effect.fn("AgentLoop.runFinalizingState")(function* (
               state: FinalizingState,
             ) {
+              yield* Effect.logInfo("finalize.start")
               yield* finalizeTurnPhase({
                 storage,
                 publishEvent: publishEventOrDie,
@@ -1511,8 +1514,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 extensionRegistry,
                 turnMetrics: turnMetricsRef,
               })
+              yield* Effect.logInfo("finalize.turn-phase-done")
 
               const { queue, nextItem } = takeNextQueuedTurn(state.queue)
+              yield* Effect.logInfo("finalize.end").pipe(
+                Effect.annotateLogs({ hasNext: nextItem !== undefined }),
+              )
               return AgentLoopEvent.FinalizeFinished({
                 queue,
                 nextItem,
@@ -1817,8 +1824,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   save: (commit) =>
                     Effect.withSpan("AgentLoop.durability.save")(
                       Effect.gen(function* () {
+                        yield* Effect.logDebug("checkpoint.save.start").pipe(
+                          Effect.annotateLogs({ nextState: commit.nextState._tag }),
+                        )
                         if (!shouldRetainLoopCheckpoint(commit.nextState)) {
                           yield* checkpointStorage.remove({ sessionId, branchId })
+                          yield* Effect.logDebug("checkpoint.save.removed")
                           return
                         }
                         yield* checkpointStorage.upsert(
@@ -1827,6 +1838,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                             branchId,
                             state: commit.nextState,
                           }),
+                        )
+                        yield* Effect.logDebug("checkpoint.save.done").pipe(
+                          Effect.annotateLogs({ nextState: commit.nextState._tag }),
                         )
                       }).pipe(
                         Effect.catchEager((error) =>

@@ -1,5 +1,6 @@
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "../env/context"
+import { clientLog } from "../utils/client-logger"
 
 const ESC_DOUBLE_TAP_MS = 500
 
@@ -13,7 +14,9 @@ export function useExit() {
   let lastEscTime = 0
 
   const exit = () => {
+    clientLog.info("exit.renderer-destroy")
     renderer.destroy()
+    clientLog.info("exit.shutdown-signal")
     env.shutdown()
   }
 

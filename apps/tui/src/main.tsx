@@ -16,7 +16,7 @@ import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
-import { clearClientLog } from "./utils/client-logger"
+import { clearClientLog, clientLog } from "./utils/client-logger"
 import { resolveAppBootstrap, resolveInitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent } from "@gent/sdk"
@@ -184,11 +184,16 @@ const main = Command.make(
       // Block until shutdown signal — then let the scope unwind so
       // finalizers (supervisor.stop) kill the worker child process.
       yield* Deferred.await(shutdownDeferred)
+      clientLog.info("shutdown.deferred-resolved")
       // Safety: if scope finalizers hang (e.g. render refs), force exit after 3s.
       // unref'd so clean exits that finish before 3s don't wait on this timer.
       // @effect-diagnostics-next-line globalTimersInEffect:off
-      const watchdog = setTimeout(() => process.exit(0), 3_000)
+      const watchdog = setTimeout(() => {
+        clientLog.info("shutdown.watchdog-fired")
+        process.exit(0)
+      }, 3_000)
       if (typeof watchdog === "object" && "unref" in watchdog) watchdog.unref()
+      clientLog.info("shutdown.scope-unwinding")
     }),
 )
 

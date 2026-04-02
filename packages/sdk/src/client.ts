@@ -258,7 +258,10 @@ const supervisorLifecycle = (supervisor: WorkerSupervisor): GentLifecycle => ({
   restart: supervisor.restart.pipe(
     Effect.mapError((e) => new GentConnectionError({ message: e.message })),
   ),
-  waitForReady: waitForWorkerRunning(supervisor),
+  // waitForWorkerRunning fails on "stopped" and "failed" to unblock waiting fibers.
+  // Swallow here so the GentLifecycle.waitForReady: Effect<void> contract holds.
+  // runWithReconnect callers handle retry/backoff on their own.
+  waitForReady: waitForWorkerRunning(supervisor).pipe(Effect.catchEager(() => Effect.void)),
 })
 
 // ---------------------------------------------------------------------------

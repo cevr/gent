@@ -63,6 +63,20 @@ export const EventStoreLive: Layer.Layer<EventStore | BaseEventStore, never, Sto
                   Stream.filter((env) => env.id > maxId && matchesBranchFilter(env, branchId)),
                 )
 
+                yield* Effect.logInfo("EventStore.subscribe.open").pipe(
+                  Effect.annotateLogs({
+                    sessionId,
+                    branchId: branchId ?? "all",
+                    afterId,
+                    initialCount: initial.length,
+                  }),
+                )
+                yield* Effect.addFinalizer(() =>
+                  Effect.logInfo("EventStore.subscribe.close").pipe(
+                    Effect.annotateLogs({ sessionId, branchId: branchId ?? "all" }),
+                  ),
+                )
+
                 return Stream.concat(Stream.fromIterable(initial), live)
               }),
             ),

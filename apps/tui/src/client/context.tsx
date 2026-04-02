@@ -223,6 +223,12 @@ export function ClientProvider(props: ClientProviderProps) {
 
   createEffect(() => {
     const unsubscribe = runtime.lifecycle.subscribe((nextState) => {
+      clientLog.info("connection.state", {
+        tag: nextState._tag,
+        ...("generation" in nextState ? { generation: nextState.generation } : {}),
+        ...("reason" in nextState ? { reason: nextState.reason } : {}),
+        ...("pid" in nextState ? { pid: nextState.pid } : {}),
+      })
       setConnectionState(nextState)
     })
     onCleanup(unsubscribe)
@@ -360,16 +366,28 @@ export function ClientProvider(props: ClientProviderProps) {
         }
       }
 
+      clientLog.info("ctx.subscribe.start", { sessionId, branchId })
       const fiber = runtime.fork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
               if (connectionState()?._tag !== "connected") {
+                clientLog.info("ctx.wait-for-ready", { sessionId, branchId })
                 yield* runtime.lifecycle.waitForReady
+                clientLog.info("ctx.ready", { sessionId, branchId })
               }
 
+              clientLog.info("ctx.snapshot.fetch", { sessionId, branchId })
               const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
               const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
+              clientLog.info("ctx.snapshot.hydrated", {
+                sessionId,
+                branchId,
+                lastEventId: snapshot.lastEventId,
+                after,
+                agent: snapshot.runtime.agent,
+                status: snapshot.runtime.status,
+              })
 
               yield* Effect.sync(() => {
                 setConnectionIssue(null)
@@ -401,6 +419,7 @@ export function ClientProvider(props: ClientProviderProps) {
                 ...(after !== undefined ? { after } : {}),
               })
 
+              clientLog.info("ctx.stream.open", { sessionId, branchId, after })
               yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
                 Effect.sync(() => {
                   try {
@@ -412,8 +431,10 @@ export function ClientProvider(props: ClientProviderProps) {
                   }
                 }),
               )
+              clientLog.info("ctx.stream.closed", { sessionId, branchId })
             }),
           {
+            label: "ctx.events",
             onError: (err) => {
               if (cancelled) return
               if (connectionState()?._tag !== "connected") return
@@ -426,6 +447,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
 
       onCleanup(() => {
+        clientLog.info("ctx.subscribe.cleanup", { sessionId, branchId })
         cancelled = true
         Effect.runFork(Fiber.interrupt(fiber))
       })

@@ -257,22 +257,45 @@ const spawnWorkerProcess = (
 
 export const waitForWorkerRunning = (
   worker: Pick<WorkerSupervisor, "getState" | "subscribe">,
-): Effect.Effect<void> =>
-  Effect.promise(
-    () =>
-      new Promise<void>((resolve) => {
-        if (worker.getState()._tag === "running") {
-          resolve()
-          return
-        }
+): Effect.Effect<void, WorkerSupervisorError> =>
+  Effect.callback<void, WorkerSupervisorError>((resume) => {
+    const current = worker.getState()
+    if (current._tag === "running") {
+      resume(Effect.void)
+      return
+    }
+    if (current._tag === "stopped" || current._tag === "failed") {
+      resume(
+        Effect.fail(
+          new WorkerSupervisorError({
+            message: `worker ${current._tag}${current._tag === "failed" ? `: ${current.message}` : ""}`,
+          }),
+        ),
+      )
+      return
+    }
 
-        const unsubscribe = worker.subscribe((state) => {
-          if (state._tag !== "running") return
-          unsubscribe()
-          resolve()
-        })
-      }),
-  )
+    const unsubscribe = worker.subscribe((state) => {
+      if (state._tag === "running") {
+        unsubscribe()
+        resume(Effect.void)
+      } else if (state._tag === "stopped" || state._tag === "failed") {
+        unsubscribe()
+        resume(
+          Effect.fail(
+            new WorkerSupervisorError({
+              message: `worker ${state._tag}${state._tag === "failed" ? `: ${state.message}` : ""}`,
+            }),
+          ),
+        )
+      }
+    })
+
+    // Clean up subscription on fiber interrupt
+    return Effect.sync(() => {
+      unsubscribe()
+    })
+  })
 
 export const startWorkerSupervisor = (
   options: WorkerSupervisorOptions,

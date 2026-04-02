@@ -252,15 +252,22 @@ export function useSessionFeed(
 
       const branch = branchId()
       const session = sessionId()
-      clientLog.info("sessionFeed.activate", { key })
+      clientLog.info("feed.activate", { key })
 
       const streamFiber = client.runtime.fork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
+              clientLog.info("feed.snapshot.fetch", { key })
               const snapshot = yield* client.client.session.getSnapshot({
                 sessionId: session,
                 branchId: branch,
+              })
+              clientLog.info("feed.snapshot.hydrated", {
+                key,
+                messageCount: snapshot.messages.length,
+                lastEventId: snapshot.lastEventId,
+                hasInteraction: snapshot.activeInteraction !== undefined,
               })
 
               yield* Effect.sync(() => {
@@ -282,6 +289,7 @@ export function useSessionFeed(
                 ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
               })
 
+              clientLog.info("feed.stream.open", { key, after: snapshot.lastEventId })
               const eventsFiber = yield* eventStream.pipe(
                 Stream.runForEach((envelope) =>
                   Effect.sync(() => {
@@ -296,7 +304,7 @@ export function useSessionFeed(
               // Send the prompt only after the event stream is established.
               if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
                 sentPrompts.add(key)
-                clientLog.info("sessionFeed.sendInitialPrompt", {
+                clientLog.info("feed.sendInitialPrompt", {
                   sessionId: session,
                   branchId: branch,
                 })
@@ -310,9 +318,11 @@ export function useSessionFeed(
               return yield* Fiber.join(eventsFiber)
             }),
           {
+            label: "feed.events",
             onError: (err) => {
               if (currentKey !== key) return
-              clientLog.error("sessionFeed.snapshot.failed", {
+              clientLog.error("feed.error", {
+                key,
                 error: formatConnectionIssue(err),
               })
               client.setConnectionIssue(formatConnectionIssue(err))
@@ -323,6 +333,7 @@ export function useSessionFeed(
       )
 
       onCleanup(() => {
+        clientLog.info("feed.cleanup", { key })
         Effect.runFork(Fiber.interrupt(streamFiber))
       })
     }),
@@ -331,6 +342,8 @@ export function useSessionFeed(
   const processEvent = (event: AgentEvent, branch: BranchId, key: string) => {
     // Drop events if identity changed
     if (currentKey !== key) return
+
+    clientLog.debug("feed.event", { key, tag: event._tag })
 
     if (event._tag === "InteractionDismissed") {
       callbacks.onInteractionDismissed(event.requestId)

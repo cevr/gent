@@ -71,6 +71,7 @@ export default {
                 ),
               ),
             {
+              label: "tasks.events",
               onError: () => undefined,
               waitForRetry: () => clientCtx.waitForTransportReady(),
             },
