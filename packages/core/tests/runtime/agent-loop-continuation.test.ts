@@ -19,6 +19,10 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createSequenceProvider, toolCallStep, textStep } from "@gent/core/debug/provider"
 import { BunServices } from "@effect/platform-bun"
 import type { MessageId, SessionId, BranchId } from "@gent/core/domain/ids"
+import {
+  assistantMessageIdForTurn,
+  toolResultMessageIdForTurn,
+} from "@gent/core/runtime/agent/agent-loop.utils"
 
 const sessionId = "cont-test-session" as SessionId
 const branchId = "cont-test-branch" as BranchId
@@ -262,5 +266,49 @@ describe("Agent loop tool continuation", () => {
         const events = yield* Ref.get(eventsRef)
         expect(events.filter((e) => e._tag === "TurnCompleted").length).toBe(1)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.runPromise))
+
+  test("GUARD: multi-hop persists distinct assistant + tool-result messages per step", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* createSequenceProvider([
+        toolCallStep("echo", { text: "step 1" }),
+        toolCallStep("echo", { text: "step 2" }),
+        textStep("Final answer."),
+      ])
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const msg = makeMessage("multi-hop persistence")
+
+        yield* agentLoop.run(msg)
+
+        // Step 1: assistant + tool-result messages exist
+        const a1 = yield* storage.getMessage(assistantMessageIdForTurn(msg.id, 1))
+        const t1 = yield* storage.getMessage(toolResultMessageIdForTurn(msg.id, 1))
+        expect(a1).toBeDefined()
+        expect(t1).toBeDefined()
+        expect(a1!.role).toBe("assistant")
+        expect(t1!.role).toBe("tool")
+
+        // Step 2: separate assistant + tool-result messages exist
+        const a2 = yield* storage.getMessage(assistantMessageIdForTurn(msg.id, 2))
+        const t2 = yield* storage.getMessage(toolResultMessageIdForTurn(msg.id, 2))
+        expect(a2).toBeDefined()
+        expect(t2).toBeDefined()
+        expect(a2!.role).toBe("assistant")
+        expect(t2!.role).toBe("tool")
+
+        // Step 3 (text-only): assistant exists, no tool-result
+        const a3 = yield* storage.getMessage(assistantMessageIdForTurn(msg.id, 3))
+        const t3 = yield* storage.getMessage(toolResultMessageIdForTurn(msg.id, 3))
+        expect(a3).toBeDefined()
+        expect(a3!.role).toBe("assistant")
+        expect(t3).toBeUndefined()
+
+        // All IDs are distinct
+        expect(new Set([a1!.id, a2!.id, a3!.id]).size).toBe(3)
+        expect(new Set([t1!.id, t2!.id]).size).toBe(2)
+      }).pipe(Effect.provide(makeLayer(providerLayer)))
     }).pipe(Effect.runPromise))
 })

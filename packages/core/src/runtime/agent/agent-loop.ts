@@ -547,6 +547,7 @@ export const resolveTurnPhase = (params: {
 
 export const streamTurnPhase = (params: {
   messageId: MessageId
+  step: number
   resolved: ResolvedTurn
   provider: ProviderService
   extensionRegistry: ExtensionRegistryService
@@ -564,7 +565,7 @@ export const streamTurnPhase = (params: {
         publishEvent: params.publishEvent,
         sessionId: params.sessionId,
         branchId: params.branchId,
-        messageId: assistantMessageIdForTurn(params.messageId),
+        messageId: assistantMessageIdForTurn(params.messageId, params.step),
         text,
         reasoning,
         createdAt,
@@ -684,7 +685,7 @@ export const streamTurnPhase = (params: {
       publishEvent: params.publishEvent,
       sessionId: params.sessionId,
       branchId: params.branchId,
-      messageId: assistantMessageIdForTurn(params.messageId),
+      messageId: assistantMessageIdForTurn(params.messageId, params.step),
       draft: collected.draft,
     })
 
@@ -693,6 +694,7 @@ export const streamTurnPhase = (params: {
 
 export const executeToolsPhase = (params: {
   messageId: MessageId
+  step: number
   draft: AssistantDraft
   publishEvent: PublishEvent
   sessionId: SessionId
@@ -706,7 +708,7 @@ export const executeToolsPhase = (params: {
   Effect.gen(function* () {
     if (params.draft.toolCalls.length === 0) return
 
-    const toolResultMessageId = toolResultMessageIdForTurn(params.messageId)
+    const toolResultMessageId = toolResultMessageIdForTurn(params.messageId, params.step)
     const existing = yield* params.storage.getMessage(toolResultMessageId)
     if (existing !== undefined) return
 
@@ -1263,20 +1265,23 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
               // Resume check: if assistant message with tool calls exists but no tool results,
               // we're resuming from WaitingForInteraction or crash. Execute tools first.
+              // Resume always targets step 1 — interactions/crashes happen during the first tool execution.
+              const resumeStep = 1
               const existingAssistant = yield* storage
-                .getMessage(assistantMessageIdForTurn(state.message.id))
-                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                .getMessage(assistantMessageIdForTurn(state.message.id, resumeStep))
+                .pipe(Effect.orElseSucceed(() => undefined))
               if (existingAssistant !== undefined && !interrupted) {
                 const draft = assistantDraftFromMessage(existingAssistant)
                 if (draft.toolCalls.length > 0) {
                   const existingResults = yield* storage
-                    .getMessage(toolResultMessageIdForTurn(state.message.id))
-                    .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                    .getMessage(toolResultMessageIdForTurn(state.message.id, resumeStep))
+                    .pipe(Effect.orElseSucceed(() => undefined))
                   if (existingResults === undefined) {
                     // Resume tool execution (interaction response or crash recovery)
                     yield* Effect.logInfo("turn.resume-tools")
                     const interactionSignal = yield* executeToolsPhase({
                       messageId: state.message.id,
+                      step: resumeStep,
                       draft,
                       publishEvent: publishEventOrDie,
                       sessionId,
@@ -1366,6 +1371,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
                 const collected = yield* streamTurnPhase({
                   messageId: state.message.id,
+                  step,
                   resolved: {
                     currentTurnAgent: resolved.currentTurnAgent,
                     messages: resolved.messages,
@@ -1402,6 +1408,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 // 3. Execute tools
                 const interactionSignal = yield* executeToolsPhase({
                   messageId: state.message.id,
+                  step,
                   draft: collected.draft,
                   publishEvent: publishEventOrDie,
                   sessionId,

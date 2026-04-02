@@ -98,11 +98,11 @@ export const messageText = (message: Message): string =>
     .map((part) => part.text)
     .join("\n")
 
-export const assistantMessageIdForTurn = (messageId: MessageId): MessageId =>
-  `${messageId}:assistant` as MessageId
+export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
+  `${messageId}:assistant:${step}` as MessageId
 
-export const toolResultMessageIdForTurn = (messageId: MessageId): MessageId =>
-  `${messageId}:tool-result` as MessageId
+export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
+  `${messageId}:tool-result:${step}` as MessageId
 
 export const assistantDraftFromMessage = (message: Message): AssistantDraft => ({
   text: message.parts
