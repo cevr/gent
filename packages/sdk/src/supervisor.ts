@@ -194,7 +194,7 @@ const waitForWorkerReady = (
 
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync } from "node:fs"
-const slog = (msg: string, data?: Record<string, unknown>) => {
+const shutdownLog = (msg: string, data?: Record<string, unknown>) => {
   const entry = { ts: new Date().toISOString(), level: "info", source: "supervisor", msg, ...data }
   try {
     appendFileSync("/tmp/gent-client.log", JSON.stringify(entry) + "\n")
@@ -203,30 +203,30 @@ const slog = (msg: string, data?: Record<string, unknown>) => {
 
 const stopSubprocess = (proc: Bun.Subprocess): Effect.Effect<void> =>
   Effect.promise(async () => {
-    slog("stop.start", { pid: proc.pid, exitCode: proc.exitCode })
+    shutdownLog("stop.start", { pid: proc.pid, exitCode: proc.exitCode })
     if (proc.exitCode !== null) return
     try {
       process.kill(proc.pid, "SIGTERM")
-      slog("stop.sigterm", { pid: proc.pid })
+      shutdownLog("stop.sigterm", { pid: proc.pid })
     } catch {
-      slog("stop.sigterm-failed", { pid: proc.pid })
+      shutdownLog("stop.sigterm-failed", { pid: proc.pid })
       return
     }
     const exited = proc.exited.then(() => undefined)
     const timedOut = Bun.sleep(SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const)
     const result = await Promise.race([exited, timedOut])
     if (result === "timeout") {
-      slog("stop.timeout", { pid: proc.pid })
+      shutdownLog("stop.timeout", { pid: proc.pid })
       try {
         process.kill(proc.pid, "SIGKILL")
-        slog("stop.sigkill", { pid: proc.pid })
+        shutdownLog("stop.sigkill", { pid: proc.pid })
       } catch {
         return
       }
       await proc.exited
-      slog("stop.killed", { pid: proc.pid })
+      shutdownLog("stop.killed", { pid: proc.pid })
     } else {
-      slog("stop.exited-gracefully", { pid: proc.pid })
+      shutdownLog("stop.exited-gracefully", { pid: proc.pid })
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
@@ -458,7 +458,7 @@ export const startWorkerSupervisor = (
       yield* launchCurrent
 
       const stop = Effect.gen(function* () {
-        slog("supervisor.stop.enter")
+        shutdownLog("supervisor.stop.enter")
         if (stopped) return
         stopped = true
         process.off("exit", handleProcessExit)
@@ -466,7 +466,7 @@ export const startWorkerSupervisor = (
         current = undefined
         if (proc !== undefined) yield* stopSubprocess(proc)
         emit({ _tag: "stopped", port: assignedPort, restartCount })
-        slog("supervisor.stop.done")
+        shutdownLog("supervisor.stop.done")
       }).pipe(Effect.catchEager(() => Effect.void))
 
       return {

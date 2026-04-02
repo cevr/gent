@@ -17,7 +17,7 @@ import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
-import { clearClientLog, createClientLog, syncLog } from "./utils/client-logger"
+import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
 import { resolveAppBootstrap, resolveInitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent } from "@gent/sdk"
@@ -95,7 +95,9 @@ const main = Command.make(
       const log = createClientLog(logServices as ServiceMap.ServiceMap<unknown>)
 
       const bundle = yield* Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
-      yield* Effect.addFinalizer(() => Effect.sync(() => syncLog("shutdown.finalizer.post-spawn")))
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => shutdownLog("shutdown.finalizer.post-spawn")),
+      )
 
       const authProviders = yield* bundle.client.auth.listProviders()
       const missingProviders = authProviders
@@ -164,7 +166,7 @@ const main = Command.make(
       const envWithShutdown = {
         ...env,
         shutdown: () => {
-          syncLog("shutdown.interrupt-fiber")
+          shutdownLog("shutdown.interrupt-fiber")
           if (mainFiber !== undefined) {
             Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber))
           }
@@ -196,19 +198,21 @@ const main = Command.make(
           </EnvProvider>
         )),
       )
-      yield* Effect.addFinalizer(() => Effect.sync(() => syncLog("shutdown.finalizer.post-render")))
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => shutdownLog("shutdown.finalizer.post-render")),
+      )
 
-      yield* Effect.addFinalizer(() => Effect.sync(() => syncLog("shutdown.finalizer.first")))
+      yield* Effect.addFinalizer(() => Effect.sync(() => shutdownLog("shutdown.finalizer.first")))
 
       // Block until interrupted. Fiber interrupt from env.shutdown() breaks
       // Layer.launch's Effect.never, triggering scope finalization.
       return yield* Effect.never.pipe(
         Effect.onInterrupt(() =>
           Effect.sync(() => {
-            syncLog("shutdown.interrupted")
+            shutdownLog("shutdown.interrupted")
             // Safety: if scope finalizers hang, force exit after 3s.
             const watchdog = setTimeout(() => {
-              syncLog("shutdown.watchdog-fired")
+              shutdownLog("shutdown.watchdog-fired")
               process.exit(0)
             }, 3_000)
             if (typeof watchdog === "object" && "unref" in watchdog) watchdog.unref()

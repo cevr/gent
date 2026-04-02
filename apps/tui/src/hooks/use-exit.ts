@@ -1,6 +1,6 @@
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "../env/context"
-import { syncLog } from "../utils/client-logger"
+import { shutdownLog } from "../utils/client-logger"
 
 const ESC_DOUBLE_TAP_MS = 500
 
@@ -14,12 +14,12 @@ export function useExit() {
   let lastEscTime = 0
 
   const exit = () => {
-    // Use syncLog here — renderer.destroy() tears down Solid tree,
+    // Use shutdownLog here — renderer.destroy() tears down Solid tree,
     // and env.shutdown() interrupts the fiber. After this point
     // the Effect runtime is shutting down.
-    syncLog("exit.renderer-destroy")
+    shutdownLog("exit.renderer-destroy")
     renderer.destroy()
-    syncLog("exit.shutdown-signal")
+    shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }
 

@@ -4,7 +4,7 @@
  * `createClientLog(services)` — creates a logger backed by Effect.runForkWith.
  *   All logs flow through the Effect logger layer and land in the same file.
  *
- * `syncLog` — synchronous file write, survives process.exit(). Use for
+ * `shutdownLog` — synchronous file write, survives process.exit(). Use for
  *   shutdown paths only (after Effect runtime is torn down).
  */
 
@@ -18,7 +18,7 @@ export const CLIENT_LOG_PATH = "/tmp/gent-client.log"
 const isoNow = () => new Date().toISOString()
 
 /** Synchronous log — survives process.exit(). Use for shutdown paths only. */
-export const syncLog = (msg: string, data?: Record<string, unknown>) => {
+export const shutdownLog = (msg: string, data?: Record<string, unknown>) => {
   const entry: Record<string, unknown> = {
     ts: isoNow(),
     level: "info",
@@ -47,7 +47,7 @@ export interface ClientLog {
 /**
  * Create an Effect-backed client logger from captured services.
  * Uses runForkWith — logs are async, fire-and-forget, flow through Effect's logger.
- * Falls back to syncLog if the Effect runtime throws (e.g. during teardown).
+ * Falls back to shutdownLog if the Effect runtime throws (e.g. during teardown).
  */
 export const createClientLog = (services: ServiceMap.ServiceMap<unknown>): ClientLog => {
   const fork = Effect.runForkWith(services as ServiceMap.ServiceMap<never>)
@@ -62,7 +62,7 @@ export const createClientLog = (services: ServiceMap.ServiceMap<unknown>): Clien
           fork(effectLog(msg))
         }
       } catch {
-        syncLog(msg, data)
+        shutdownLog(msg, data)
       }
     }
 
