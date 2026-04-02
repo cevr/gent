@@ -258,4 +258,85 @@ describe("Cold interaction lifecycle", () => {
       ),
     )
   })
+
+  test("GUARD: interaction resume executes tool without new LLM call", async () => {
+    // Regression guard: after InteractionResponded, the loop must resume tool
+    // execution from storage (not restart resolve→stream). The provider is
+    // called once for the initial tool-call stream, and once for the
+    // post-tool-result continuation — NOT twice for the tool call.
+    const callCount = Ref.makeUnsafe(0)
+    const resolution = Deferred.makeUnsafe<void>()
+    const tool = makeInteractionTool(callCount, resolution)
+
+    const providerCallsRef = Ref.makeUnsafe(0)
+    let streamCallIndex = 0
+    const separateCallProvider = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.gen(function* () {
+          yield* Ref.update(providerCallsRef, (n) => n + 1)
+          const idx = streamCallIndex++
+          if (idx === 0) {
+            // First call: return tool call
+            return Stream.fromIterable([
+              new ToolCallChunk({
+                toolCallId: "tc-guard" as ToolCallId,
+                toolName: tool.name,
+                input: { value: "guard-test" },
+              }),
+              new FinishChunk({ finishReason: "tool_calls" }),
+            ] satisfies StreamChunk[])
+          }
+          // Second call (after tool resume + continuation): return text
+          return Stream.fromIterable([
+            new TextChunk({ text: "interaction resolved" }),
+            new FinishChunk({ finishReason: "stop" }),
+          ] satisfies StreamChunk[])
+        }),
+      generate: () => Effect.succeed("test"),
+    })
+
+    const baseDeps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      separateCallProvider,
+      makeExtRegistry([tool]),
+      ExtensionStateRuntime.Test(),
+      EventStore.Test(),
+      HandoffHandler.Test(),
+      Permission.Live([], "allow"),
+      BunServices.layer,
+    )
+    const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
+    const loopLayer = Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const fiber = yield* Effect.forkChild(agentLoop.run(makeMessage("guard interaction")))
+
+          // Wait for WaitingForInteraction
+          yield* Effect.sleep("200 millis")
+          const parked = yield* agentLoop.getState({ sessionId, branchId })
+          expect(parked.phase).toBe("waiting-for-interaction")
+
+          // Provider called once (the tool-call stream)
+          expect(Ref.getUnsafe(providerCallsRef)).toBe(1)
+
+          // Resume interaction
+          yield* agentLoop.respondInteraction({ sessionId, branchId, requestId: "req-test-1" })
+          yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
+
+          // Tool called twice (first = pending, second = resolved)
+          expect(Ref.getUnsafe(callCount)).toBe(2)
+
+          yield* Fiber.join(fiber)
+
+          // Provider called twice total: once for tool-call, once for continuation text
+          // If it were 3, the resume incorrectly re-streamed the tool call
+          expect(Ref.getUnsafe(providerCallsRef)).toBe(2)
+        }).pipe(Effect.provide(loopLayer)),
+      ),
+    )
+  })
 })
