@@ -19,7 +19,7 @@ import {
   extractToolCallsWithResults,
   type MessageInfoReadonly,
 } from "@gent/sdk"
-import type { Message, SessionItem } from "../components/message-list"
+import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
 import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { formatConnectionIssue } from "../utils/format-error"
@@ -51,12 +51,56 @@ type SessionFeedStore = {
 
 // ── Build messages from raw ──
 
+const buildSegments = (
+  parts: MessageInfoReadonly["parts"],
+  resultMap: Map<string, { summary: string; output: string; isError: boolean }>,
+): AssistantSegment[] => {
+  const segments: AssistantSegment[] = []
+  for (const part of parts) {
+    switch (part.type) {
+      case "text":
+        segments.push({ _tag: "text", content: (part as { text: string }).text })
+        break
+      case "reasoning":
+        segments.push({ _tag: "reasoning", content: (part as { text: string }).text })
+        break
+      case "image":
+        segments.push({
+          _tag: "image",
+          image: { mediaType: (part as { mediaType?: string }).mediaType ?? "image" },
+        })
+        break
+      case "tool-call": {
+        const tc = part as { toolCallId: string; toolName: string; input: unknown }
+        const result = resultMap.get(tc.toolCallId)
+        let tcStatus: "running" | "completed" | "error" = "running"
+        if (result !== undefined) tcStatus = result.isError ? "error" : "completed"
+        segments.push({
+          _tag: "tool-call",
+          toolCall: {
+            id: tc.toolCallId,
+            toolName: tc.toolName,
+            status: tcStatus,
+            input: tc.input,
+            summary: result?.summary,
+            output: result?.output,
+          },
+        })
+        break
+      }
+      // tool-result parts are handled via resultMap join
+    }
+  }
+  return segments
+}
+
 const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
   const resultMap = buildToolResultMap(msgs)
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
   return filteredMsgs.map((m) => {
     const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
+    const segments = m.role === "assistant" ? buildSegments(m.parts, resultMap) : undefined
     return {
       _tag: "message" as const,
       id: m.id,
@@ -67,6 +111,7 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
       images: extractImages(m.parts),
       createdAt: m.createdAt,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      segments,
       metadata: m.metadata,
     }
   })
@@ -136,10 +181,21 @@ const ensureAssistantMessage = (setStore: SetStoreFunction<SessionFeedStore>, co
       const last = draft.messages[draft.messages.length - 1]
       if (last !== undefined && last.role === "assistant") {
         last.content += content
+        // Append to last text segment or create new one
+        if (last.segments !== undefined) {
+          const lastSeg = last.segments[last.segments.length - 1]
+          if (lastSeg !== undefined && lastSeg._tag === "text") {
+            lastSeg.content += content
+          } else {
+            last.segments.push({ _tag: "text", content })
+          }
+        }
         return
       }
 
-      draft.messages.push(createAssistantMessage(content))
+      const msg = createAssistantMessage(content)
+      msg.segments = content.length > 0 ? [{ _tag: "text", content }] : []
+      draft.messages.push(msg)
     }),
   )
 }
@@ -172,6 +228,17 @@ const handleToolCallResult = (
     tc.status = isError ? "error" : "completed"
     tc.summary = toolEvent.summary
     tc.output = toolEvent.output
+    // Also update the segment's toolCall
+    if (message.segments !== undefined) {
+      const seg = message.segments.find(
+        (s) => s._tag === "tool-call" && s.toolCall.id === toolEvent.toolCallId,
+      )
+      if (seg !== undefined && seg._tag === "tool-call") {
+        seg.toolCall.status = tc.status
+        seg.toolCall.summary = tc.summary
+        seg.toolCall.output = tc.output
+      }
+    }
   })
 }
 
@@ -411,16 +478,20 @@ export function useSessionFeed(
         setActiveTool(
           inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
         )
+        const toolCall = {
+          id: event.toolCallId,
+          toolName: event.toolName,
+          status: "running" as const,
+          input: event.input,
+          summary: undefined,
+          output: undefined,
+        }
         updateLatestToolCall(setStore, (message) => {
           if (message.toolCalls === undefined) message.toolCalls = []
-          message.toolCalls.push({
-            id: event.toolCallId,
-            toolName: event.toolName,
-            status: "running" as const,
-            input: event.input,
-            summary: undefined,
-            output: undefined,
-          })
+          message.toolCalls.push(toolCall)
+          // Also push to segments for interleaved rendering
+          if (message.segments === undefined) message.segments = []
+          message.segments.push({ _tag: "tool-call", toolCall })
         })
         break
       }

@@ -22,12 +22,12 @@ describe("extractText", () => {
     expect(extractText(parts)).toBe("")
   })
 
-  test("returns first text part when multiple", () => {
+  test("concatenates all text parts", () => {
     const parts: MessagePart[] = [
       { type: "text", text: "First" },
       { type: "text", text: "Second" },
     ]
-    expect(extractText(parts)).toBe("First")
+    expect(extractText(parts)).toBe("FirstSecond")
   })
 
   test("handles mixed parts", () => {
@@ -256,7 +256,7 @@ describe("extractToolCallsWithResults", () => {
     expect(calls[0]?.status).toBe("error")
   })
 
-  test("handles missing results gracefully", () => {
+  test("missing result marks tool call as running", () => {
     const parts: MessagePart[] = [
       { type: "tool-call", toolCallId: "tc1", toolName: "read", input: {} },
     ]
@@ -266,7 +266,7 @@ describe("extractToolCallsWithResults", () => {
     expect(calls[0]).toEqual({
       id: "tc1",
       toolName: "read",
-      status: "completed",
+      status: "running",
       input: {},
       summary: undefined,
       output: undefined,

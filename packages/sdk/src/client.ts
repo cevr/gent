@@ -89,13 +89,17 @@ export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 // ---------------------------------------------------------------------------
 
 export function extractText(parts: readonly MessagePart[]): string {
-  const textPart = parts.find((p): p is TextPart => p.type === "text")
-  return textPart?.text ?? ""
+  return parts
+    .filter((p): p is TextPart => p.type === "text")
+    .map((p) => p.text)
+    .join("")
 }
 
 export function extractReasoning(parts: readonly MessagePart[]): string {
-  const reasoningPart = parts.find((p): p is ReasoningPart => p.type === "reasoning")
-  return reasoningPart?.text ?? ""
+  return parts
+    .filter((p): p is ReasoningPart => p.type === "reasoning")
+    .map((p) => p.text)
+    .join("")
 }
 
 export interface ImageInfo {
@@ -113,7 +117,7 @@ type ImagePart = { type: "image"; image: string; mediaType?: string }
 export interface ExtractedToolCall {
   id: string
   toolName: string
-  status: "completed" | "error"
+  status: "running" | "completed" | "error"
   input: unknown | undefined
   summary: string | undefined
   output: string | undefined
@@ -163,10 +167,12 @@ export function extractToolCallsWithResults(
     .filter((p): p is ToolCallPart => p.type === "tool-call")
     .map((tc) => {
       const result = resultMap.get(tc.toolCallId)
+      let status: ExtractedToolCall["status"] = "running"
+      if (result !== undefined) status = result.isError ? "error" : "completed"
       return {
         id: tc.toolCallId,
         toolName: tc.toolName,
-        status: result?.isError === true ? ("error" as const) : ("completed" as const),
+        status,
         input: tc.input,
         summary: result?.summary,
         output: result?.output,
