@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Deferred, Effect, Layer, Option, Tracer } from "effect"
+import { Config, Console, Effect, Fiber, Layer, Option, Tracer } from "effect"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
@@ -16,7 +16,7 @@ import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
-import { clearClientLog, clientLog } from "./utils/client-logger"
+import { clearClientLog, syncLog } from "./utils/client-logger"
 import { resolveAppBootstrap, resolveInitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent } from "@gent/sdk"
@@ -90,6 +90,7 @@ const main = Command.make(
       }
 
       const bundle = yield* Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
+      yield* Effect.addFinalizer(() => Effect.sync(() => syncLog("shutdown.finalizer.post-spawn")))
 
       const authProviders = yield* bundle.client.auth.listProviders()
       const missingProviders = authProviders
@@ -146,13 +147,22 @@ const main = Command.make(
         debugMode: debug,
       })
 
-      // Shutdown signal — components call env.shutdown() instead of process.exit()
-      const shutdownDeferred = yield* Deferred.make<void>()
+      // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
+      // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
+      let mainFiber: Fiber.Fiber<unknown, unknown> | undefined
+      yield* Effect.withFiber((fiber) =>
+        Effect.sync(() => {
+          mainFiber = fiber
+        }),
+      )
       const mainServices = yield* Effect.services<never>()
       const envWithShutdown = {
         ...env,
         shutdown: () => {
-          Effect.runForkWith(mainServices)(Deferred.complete(shutdownDeferred, Effect.void))
+          syncLog("shutdown.interrupt-fiber")
+          if (mainFiber !== undefined) {
+            Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber))
+          }
         },
       }
 
@@ -180,20 +190,25 @@ const main = Command.make(
           </EnvProvider>
         )),
       )
+      yield* Effect.addFinalizer(() => Effect.sync(() => syncLog("shutdown.finalizer.post-render")))
 
-      // Block until shutdown signal — then let the scope unwind so
-      // finalizers (supervisor.stop) kill the worker child process.
-      yield* Deferred.await(shutdownDeferred)
-      clientLog.info("shutdown.deferred-resolved")
-      // Safety: if scope finalizers hang (e.g. render refs), force exit after 3s.
-      // unref'd so clean exits that finish before 3s don't wait on this timer.
-      // @effect-diagnostics-next-line globalTimersInEffect:off
-      const watchdog = setTimeout(() => {
-        clientLog.info("shutdown.watchdog-fired")
-        process.exit(0)
-      }, 3_000)
-      if (typeof watchdog === "object" && "unref" in watchdog) watchdog.unref()
-      clientLog.info("shutdown.scope-unwinding")
+      yield* Effect.addFinalizer(() => Effect.sync(() => syncLog("shutdown.finalizer.first")))
+
+      // Block until interrupted. Fiber interrupt from env.shutdown() breaks
+      // Layer.launch's Effect.never, triggering scope finalization.
+      return yield* Effect.never.pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            syncLog("shutdown.interrupted")
+            // Safety: if scope finalizers hang, force exit after 3s.
+            const watchdog = setTimeout(() => {
+              syncLog("shutdown.watchdog-fired")
+              process.exit(0)
+            }, 3_000)
+            if (typeof watchdog === "object" && "unref" in watchdog) watchdog.unref()
+          }),
+        ),
+      )
     }),
 )
 
@@ -228,9 +243,6 @@ const cli = Command.run(command, {
   version: "0.0.0",
 })
 
-// Run with base platform layers; command handlers provide core layers as needed
 const CliLayer = Layer.effectDiscard(cli)
-
 const MainLayer = CliLayer.pipe(Layer.provide(PlatformLayer))
-
 BunRuntime.runMain(Effect.scoped(Layer.launch(MainLayer)))

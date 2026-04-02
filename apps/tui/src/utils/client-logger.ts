@@ -3,8 +3,13 @@
  *
  * Logs TUI lifecycle events (session create, message send, event dispatch,
  * errors) as structured JSON for debugging client-server interactions.
+ *
+ * `clientLog` — async (fire-and-forget), use for normal lifecycle logs.
+ * `syncLog` — synchronous, survives process.exit(). Use for shutdown paths.
  */
 
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { appendFileSync } from "node:fs"
 import { appendFileString, writeFileString } from "../platform/fs-runtime"
 
 const LOG_PATH = "/tmp/gent-client.log"
@@ -30,6 +35,20 @@ const emit = (level: LogLevel, msg: string, data?: Record<string, unknown>) => {
     ...data,
   }
   writeLine(JSON.stringify(entry))
+}
+
+/** Synchronous log — survives process.exit(). Use for shutdown paths only. */
+export const syncLog = (msg: string, data?: Record<string, unknown>) => {
+  const entry: Record<string, unknown> = {
+    ts: isoNow(),
+    level: "info",
+    source: "sync",
+    msg,
+    ...data,
+  }
+  try {
+    appendFileSync(LOG_PATH, JSON.stringify(entry) + "\n")
+  } catch {}
 }
 
 export const clientLog = {
