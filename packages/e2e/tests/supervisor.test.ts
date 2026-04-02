@@ -74,7 +74,6 @@ describe("worker supervisor", () => {
 
           const created = yield* worker.client.session.create({
             cwd: repoRoot,
-            bypass: true,
           })
 
           yield* worker.restart
@@ -106,7 +105,6 @@ describe("worker supervisor", () => {
 
           const created = yield* worker.client.session.create({
             cwd: repoRoot,
-            bypass: true,
           })
           const pid = worker.pid()
 
@@ -139,7 +137,6 @@ describe("worker supervisor", () => {
 
           const created = yield* worker.client.session.create({
             cwd: repoRoot,
-            bypass: true,
           })
 
           const pid = worker.pid()
@@ -244,7 +241,6 @@ describe("worker supervisor", () => {
 
           const created = yield* worker.client.session.create({
             cwd: repoRoot,
-            bypass: true,
           })
 
           yield* worker.client.message.send({
@@ -364,7 +360,6 @@ describe("worker supervisor", () => {
 
           const created = yield* worker.client.session.create({
             cwd: repoRoot,
-            bypass: true,
           })
 
           yield* worker.restart

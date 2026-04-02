@@ -2,11 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
-import {
-  PermissionHandler,
-  PromptHandler,
-  HandoffHandler,
-} from "@gent/core/domain/interaction-handlers"
+import { PromptHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -88,12 +84,11 @@ describe("SessionCommands → ActorProcess integration", () => {
       storageDeps,
       actorProcessLayer,
       Provider.Test([]),
-      Permission.Live([], "ask"),
+      Permission.Live([], "allow"),
       ConfigService.Test(),
     )
     const deps = Layer.mergeAll(
       baseWithActorProcess,
-      Layer.provide(PermissionHandler.Live, baseWithActorProcess),
       Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
     )
@@ -183,12 +178,11 @@ describe("SessionCommands → ActorProcess integration", () => {
       storageDeps,
       actorProcessLayer,
       Provider.Test([]),
-      Permission.Live([], "ask"),
+      Permission.Live([], "allow"),
       ConfigService.Test(),
     )
     const deps = Layer.mergeAll(
       baseWithActorProcess,
-      Layer.provide(PermissionHandler.Live, baseWithActorProcess),
       Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
     )

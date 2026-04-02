@@ -1,21 +1,15 @@
 import { Effect, Layer, ServiceMap } from "effect"
-import { ConfigService } from "../runtime/config-service.js"
-import { Permission, PermissionRule } from "../domain/permission.js"
-import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/interaction-handlers.js"
+import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionQueries } from "./session-queries.js"
 import { type AppServiceError } from "./errors.js"
 import type {
   RespondHandoffInput,
   RespondHandoffResult,
-  RespondPermissionInput,
   RespondPromptInput,
 } from "./transport-contract.js"
 
 export interface InteractionCommandsService {
-  readonly respondPermission: (
-    input: RespondPermissionInput,
-  ) => Effect.Effect<void, AppServiceError>
   readonly respondPrompt: (input: RespondPromptInput) => Effect.Effect<void, AppServiceError>
   readonly respondHandoff: (
     input: RespondHandoffInput,
@@ -29,28 +23,12 @@ export class InteractionCommands extends ServiceMap.Service<
   static Live = Layer.effect(
     InteractionCommands,
     Effect.gen(function* () {
-      const permissionHandler = yield* PermissionHandler
       const promptHandler = yield* PromptHandler
       const handoffHandler = yield* HandoffHandler
-      const permission = yield* Permission
-      const configService = yield* ConfigService
       const queries = yield* SessionQueries
       const commands = yield* SessionCommands
 
       return {
-        respondPermission: Effect.fn("InteractionCommands.respondPermission")(function* (
-          input: RespondPermissionInput,
-        ) {
-          const request = yield* permissionHandler.respond(input.requestId, input.decision)
-          if (input.persist === true && request !== undefined) {
-            const rule = new PermissionRule({
-              tool: request.toolName,
-              action: input.decision,
-            })
-            yield* configService.addPermissionRule(rule)
-            yield* permission.addRule(rule)
-          }
-        }),
         respondPrompt: (input) =>
           promptHandler
             .respond(input.requestId, input.decision, input.content)
@@ -71,7 +49,6 @@ export class InteractionCommands extends ServiceMap.Service<
           const parentSession = yield* queries.getSession(entry.sessionId)
           const result = yield* commands.createSession({
             ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
-            ...(parentSession?.bypass !== undefined ? { bypass: parentSession.bypass } : {}),
             parentSessionId: entry.sessionId,
             parentBranchId: entry.branchId,
             initialPrompt: `[Handoff]\n\n${entry.summary}`,

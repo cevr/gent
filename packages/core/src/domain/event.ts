@@ -109,18 +109,6 @@ export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCa
   output: Schema.optional(Schema.String),
 }) {}
 
-export class PermissionRequested extends Schema.TaggedClass<PermissionRequested>()(
-  "PermissionRequested",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    requestId: Schema.String,
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    input: Schema.optional(Schema.Unknown),
-  },
-) {}
-
 export class PromptPresented extends Schema.TaggedClass<PromptPresented>()("PromptPresented", {
   sessionId: SessionId,
   branchId: BranchId,
@@ -280,7 +268,6 @@ export class SessionSettingsUpdated extends Schema.TaggedClass<SessionSettingsUp
   "SessionSettingsUpdated",
   {
     sessionId: SessionId,
-    bypass: Schema.optional(Schema.Boolean),
     reasoningLevel: Schema.optional(ReasoningEffort),
   },
 ) {}
@@ -408,16 +395,11 @@ export class ExtensionUiSnapshot extends Schema.TaggedClass<ExtensionUiSnapshot>
 // ============================================================================
 
 /** Event tags that represent interactive prompts requiring user response */
-export type InteractionEventTag =
-  | "QuestionsAsked"
-  | "PermissionRequested"
-  | "PromptPresented"
-  | "HandoffPresented"
+export type InteractionEventTag = "QuestionsAsked" | "PromptPresented" | "HandoffPresented"
 
 /** Active interaction — raw event discriminated union for interaction rendering */
 export type ActiveInteraction =
   | (typeof QuestionsAsked.Type & { readonly _tag: "QuestionsAsked" })
-  | (typeof PermissionRequested.Type & { readonly _tag: "PermissionRequested" })
   | (typeof PromptPresented.Type & { readonly _tag: "PromptPresented" })
   | (typeof HandoffPresented.Type & { readonly _tag: "HandoffPresented" })
 
@@ -426,9 +408,6 @@ export type InteractionResolutionByTag = {
   readonly QuestionsAsked:
     | { readonly _tag: "answered"; readonly answers: ReadonlyArray<ReadonlyArray<string>> }
     | { readonly _tag: "cancelled" }
-  readonly PermissionRequested:
-    | { readonly _tag: "allow"; readonly persist: boolean }
-    | { readonly _tag: "deny"; readonly persist: boolean }
   readonly PromptPresented:
     | { readonly _tag: "yes" }
     | { readonly _tag: "no"; readonly reason?: string }
@@ -467,7 +446,6 @@ export const AgentEvent = Schema.Union([
   ToolCallStarted,
   ToolCallSucceeded,
   ToolCallFailed,
-  PermissionRequested,
   PromptPresented,
   PromptConfirmed,
   PromptRejected,

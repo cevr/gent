@@ -212,7 +212,7 @@ export interface SimpleEvent {
 
 /** Maps AgentEvent._tag to SimpleEventType. Diagnostic/internal events are intentionally omitted:
  *  MachineInspected, MachineTaskSucceeded, MachineTaskFailed, ExtensionUiSnapshot,
- *  PermissionRequested, PromptPresented, PromptConfirmed, PromptRejected, PromptEdited,
+ *  PromptPresented, PromptConfirmed, PromptRejected, PromptEdited,
  *  HandoffPresented, HandoffConfirmed, HandoffRejected, InteractionDismissed,
  *  ProviderRetrying, BranchSummarized */
 const EVENT_TAG_MAP: Record<string, SimpleEventType> = {

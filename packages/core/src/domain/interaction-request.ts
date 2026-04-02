@@ -22,7 +22,7 @@ import type { BranchId, SessionId } from "./ids"
 
 export type InteractionRequestStatus = "pending" | "resolved"
 
-export type InteractionRequestType = "permission" | "prompt" | "handoff" | "ask-user"
+export type InteractionRequestType = "prompt" | "handoff" | "ask-user"
 
 export interface InteractionRequestRecord {
   readonly requestId: string

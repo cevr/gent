@@ -39,16 +39,10 @@ const waitForFrame = (
     )
   })
 
-const makeSessionState = (created: {
-  sessionId: string
-  branchId: string
-  name: string
-  bypass: boolean
-}) => ({
+const makeSessionState = (created: { sessionId: string; branchId: string; name: string }) => ({
   sessionId: created.sessionId,
   branchId: created.branchId,
   name: created.name,
-  bypass: created.bypass,
   reasoningLevel: undefined,
 })
 
@@ -62,7 +56,7 @@ describe("session feed boundary", () => {
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
 
-          const created = yield* client.session.create({ cwd: repoRoot, bypass: true })
+          const created = yield* client.session.create({ cwd: repoRoot })
 
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
@@ -118,7 +112,7 @@ describe("session feed boundary", () => {
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
 
-          const created = yield* client.session.create({ cwd: repoRoot, bypass: true })
+          const created = yield* client.session.create({ cwd: repoRoot })
 
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
@@ -190,7 +184,7 @@ describe("session feed boundary", () => {
             baseLocalLayerWithProvider(DebugFailingProvider),
           )
 
-          const created = yield* client.session.create({ cwd: repoRoot, bypass: true })
+          const created = yield* client.session.create({ cwd: repoRoot })
 
           const setup = yield* Effect.promise(() =>
             renderWithProviders(

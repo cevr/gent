@@ -57,7 +57,6 @@ function createMockClient() {
         branchId: "b1",
         messages: [],
         lastEventId: null,
-        bypass: true,
         reasoningLevel: undefined,
       }),
     ),

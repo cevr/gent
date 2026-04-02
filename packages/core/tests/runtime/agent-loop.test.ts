@@ -9,7 +9,7 @@ import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
 import { Agents } from "@gent/core/domain/agent"
 import { defineTool, type AnyToolDefinition } from "@gent/core/domain/tool"
 import { Permission } from "@gent/core/domain/permission"
-import { PermissionHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
@@ -605,11 +605,7 @@ describe("AgentActor", () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const extRegistry = makeTestExtRegistry()
-    const toolDeps = Layer.mergeAll(
-      extRegistry,
-      Permission.Test(),
-      PermissionHandler.Test(["allow"]),
-    )
+    const toolDeps = Layer.mergeAll(extRegistry, Permission.Test())
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.Test(),
@@ -633,7 +629,6 @@ describe("AgentActor", () => {
         const session = new Session({
           id: "inspection-session",
           name: "Inspection",
-          bypass: true,
           createdAt: now,
           updatedAt: now,
         })
@@ -652,7 +647,6 @@ describe("AgentActor", () => {
           agentName: "cowork",
           prompt: "inspect",
           systemPrompt: "",
-          bypass: true,
         })
 
         yield* Effect.yieldNow
@@ -724,7 +718,6 @@ describe("Tool concurrency", () => {
       EventStore.Test(),
 
       Permission.Test(),
-      PermissionHandler.Test(["allow"]),
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const actorDeps = Layer.mergeAll(deps, toolRunnerLayer)
@@ -740,7 +733,6 @@ describe("Tool concurrency", () => {
         const session = new Session({
           id: "serial-session",
           name: "Serial Test",
-          bypass: true,
           createdAt: now,
           updatedAt: now,
         })
@@ -759,7 +751,6 @@ describe("Tool concurrency", () => {
           agentName: "cowork",
           prompt: "run serial tools",
           systemPrompt: "",
-          bypass: true,
         })
       }).pipe(Effect.provide(layer)),
     )

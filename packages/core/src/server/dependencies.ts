@@ -11,8 +11,8 @@ import {
   getEventSessionId,
 } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
-import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/interaction-handlers.js"
-import { Permission } from "../domain/permission.js"
+import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
+import { Permission, PermissionRule } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { Skills } from "../domain/skills.js"
 import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
@@ -325,12 +325,21 @@ export const createDependencies = (config: DependenciesConfig) => {
     providerLive,
   )
 
+  const builtinDenyRules = [
+    new PermissionRule({
+      tool: "bash",
+      pattern: "git\\s+(add\\s+[-.]|push\\s+--force|reset\\s+--hard|clean\\s+-f)",
+      action: "deny",
+    }),
+    new PermissionRule({ tool: "bash", pattern: "rm\\s+-rf\\s+/", action: "deny" }),
+  ]
+
   const permissionLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
         const configService = yield* ConfigService
         const rules = yield* configService.getPermissionRules()
-        return Permission.Live(rules, "ask")
+        return Permission.Live([...builtinDenyRules, ...rules], "allow")
       }),
     ),
     baseServicesLive,
@@ -354,7 +363,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     )
   const interactionHandlersLive = Layer.mergeAll(
     resolveHandlerLayer("ask-user", AskUserHandler.Live),
-    resolveHandlerLayer("permission", PermissionHandler.Live),
     resolveHandlerLayer("prompt", PromptHandler.Live),
     resolveHandlerLayer("handoff", HandoffHandler.Live),
   )
@@ -382,7 +390,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     InteractionRecoveryTag,
     Effect.gen(function* () {
       const interactionStore = yield* InteractionStorage
-      const permissionHandler = yield* PermissionHandler
       const promptHandler = yield* PromptHandler
       const handoffHandler = yield* HandoffHandler
       const askUserHandler = yield* AskUserHandler
@@ -394,8 +401,6 @@ export const createDependencies = (config: DependenciesConfig) => {
         InteractionRequestType,
         (record: (typeof pending)[number]) => Effect.Effect<void>
       > = {
-        permission: (r) =>
-          permissionHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
         prompt: (r) => promptHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
         handoff: (r) => handoffHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
         "ask-user": (r) => askUserHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),

@@ -240,15 +240,12 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
       const sessionId = Bun.randomUUIDv7() as SessionId
       const branchId = Bun.randomUUIDv7() as BranchId
       const now = yield* DateTime.nowAsDate
-      const parentSession = yield* storage.getSession(params.parentSessionId)
-      const bypass = parentSession?.bypass ?? true
 
       yield* storage.createSession(
         new Session({
           id: sessionId,
           name: `${params.agent.name}: ${params.prompt.slice(0, 60)}`,
           cwd: params.cwd,
-          bypass,
           parentSessionId: params.parentSessionId,
           parentBranchId: params.parentBranchId,
           createdAt: now,
@@ -263,7 +260,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
         }),
       )
 
-      return { sessionId, branchId, bypass }
+      return { sessionId, branchId }
     })
 
   const publishSubagentSpawned = (params: {
@@ -372,7 +369,7 @@ export const InProcessRunner = (
       return {
         run: (params) =>
           shared.createSubagentSession(params).pipe(
-            Effect.flatMap(({ sessionId, branchId, bypass }) => {
+            Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
 
@@ -396,7 +393,6 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                   prompt: params.prompt,
                   systemPrompt: runnerConfig.systemPrompt,
-                  bypass,
                   ...buildRunInputOverrides(params.overrides),
                 })
 
@@ -478,7 +474,7 @@ export const SubprocessRunner = (
       return {
         run: (params) =>
           shared.createSubagentSession(params).pipe(
-            Effect.flatMap(({ sessionId, branchId, bypass }) => {
+            Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
 
@@ -497,14 +493,7 @@ export const SubprocessRunner = (
                 )
 
                 const binary = config.subprocessBinaryPath ?? "gent"
-                const args = [
-                  binary,
-                  "--headless",
-                  "--session",
-                  sessionId,
-                  ...(bypass ? [] : ["--no-bypass"]),
-                  params.prompt,
-                ]
+                const args = [binary, "--headless", "--session", sessionId, params.prompt]
 
                 const killSubprocess = (proc: Bun.Subprocess) => {
                   try {

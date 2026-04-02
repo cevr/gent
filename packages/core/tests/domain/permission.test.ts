@@ -15,13 +15,6 @@ describe("Permission", () => {
       ),
     )
 
-    it.live("returns 'ask' when no rules match and default is ask", () =>
-      Permission.use((p) => p.check("TestTool", {})).pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result).toBe("ask"))),
-        Effect.provide(Permission.Live([], "ask")),
-      ),
-    )
-
     it.live("returns 'denied' when no rules match and default is deny", () =>
       Permission.use((p) => p.check("TestTool", {})).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("denied"))),
@@ -43,15 +36,6 @@ describe("Permission", () => {
       const layer = Permission.Live(rules, "allow")
       return Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("denied"))),
-        Effect.provide(layer),
-      )
-    })
-
-    it.live("returns 'ask' when tool matches ask rule", () => {
-      const rules = [new PermissionRule({ tool: "Write", action: "ask" })]
-      const layer = Permission.Live(rules, "allow")
-      return Permission.use((p) => p.check("Write", { path: "/etc/passwd" })).pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result).toBe("ask"))),
         Effect.provide(layer),
       )
     })
@@ -93,6 +77,40 @@ describe("Permission", () => {
         // Second rule matches
         const result2 = yield* Permission.use((p) => p.check("Bash", { command: "rm -rf /" }))
         expect(result2).toBe("denied")
+      }).pipe(Effect.provide(layer))
+    })
+
+    it.live("deny rule blocks matching bash pattern (builtin-style)", () => {
+      const rules = [
+        new PermissionRule({
+          tool: "bash",
+          pattern: "git\\s+(add\\s+[-.]|push\\s+--force|reset\\s+--hard|clean\\s+-f)",
+          action: "deny",
+        }),
+      ]
+      const layer = Permission.Live(rules, "allow")
+      return Effect.gen(function* () {
+        const denied = yield* Permission.use((p) =>
+          p.check("bash", { command: "git push --force origin main" }),
+        )
+        expect(denied).toBe("denied")
+
+        const allowed = yield* Permission.use((p) => p.check("bash", { command: "git status" }))
+        expect(allowed).toBe("allowed")
+      }).pipe(Effect.provide(layer))
+    })
+
+    it.live("explicit allow rule overrides default deny", () => {
+      const rules = [new PermissionRule({ tool: "ReadFile", action: "allow" })]
+      const layer = Permission.Live(rules, "deny")
+      return Effect.gen(function* () {
+        // Explicit allow overrides default deny
+        const result = yield* Permission.use((p) => p.check("ReadFile", { path: "/tmp/x" }))
+        expect(result).toBe("allowed")
+
+        // Unknown tool still falls through to default deny
+        const other = yield* Permission.use((p) => p.check("UnknownTool", {}))
+        expect(other).toBe("denied")
       }).pipe(Effect.provide(layer))
     })
   })

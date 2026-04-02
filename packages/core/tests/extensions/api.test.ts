@@ -4,7 +4,6 @@ import { extension } from "@gent/core/extensions/api"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Permission } from "@gent/core/domain/permission"
-import { PermissionHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("extension", () => {
@@ -166,7 +165,6 @@ describe("extension through ToolRunner.run", () => {
         resolveExtensions([{ manifest: ext.manifest, kind: "user", sourcePath: "test", setup }]),
       ),
       Permission.Test(),
-      PermissionHandler.Test(["allow"]),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(baseDeps))
     layer = Layer.mergeAll(baseDeps, runnerLayer)

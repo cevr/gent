@@ -10,7 +10,6 @@ export class QueueEntryInfo extends Schema.Class<QueueEntryInfo>("QueueEntryInfo
   kind: QueueEntryKind,
   content: Schema.String,
   createdAt: Schema.Number,
-  bypass: Schema.Boolean,
   agentOverride: Schema.optional(AgentName),
 }) {}
 

@@ -22,18 +22,13 @@ const ValidRegexPattern = Schema.String.pipe(
 export class PermissionRule extends Schema.Class<PermissionRule>("PermissionRule")({
   tool: Schema.String,
   pattern: Schema.optional(ValidRegexPattern),
-  action: Schema.Literals(["allow", "deny", "ask"]),
+  action: Schema.Literals(["allow", "deny"]),
 }) {}
 
 // Permission Check Result
 
-export const PermissionResult = Schema.Literals(["allowed", "denied", "ask"])
+export const PermissionResult = Schema.Literals(["allowed", "denied"])
 export type PermissionResult = typeof PermissionResult.Type
-
-// Permission Decision (user response)
-
-export const PermissionDecision = Schema.Literals(["allow", "deny"])
-export type PermissionDecision = typeof PermissionDecision.Type
 
 // Permission Service
 
@@ -60,9 +55,7 @@ export class Permission extends ServiceMap.Service<Permission, PermissionService
           regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
         })
         const rulesRef = yield* Ref.make<StoredRule[]>([...initialRules.map(toStored)])
-        let defaultResult: PermissionResult = "ask"
-        if (defaultAction === "allow") defaultResult = "allowed"
-        else if (defaultAction === "deny") defaultResult = "denied"
+        const defaultResult: PermissionResult = defaultAction === "deny" ? "denied" : "allowed"
         return Permission.of({
           check: (tool, args) =>
             Ref.get(rulesRef).pipe(
@@ -74,7 +67,6 @@ export class Permission extends ServiceMap.Service<Permission, PermissionService
                   if (entry.regex !== undefined && !entry.regex.test(argsStr)) continue
                   if (rule.action === "allow") return "allowed" as const
                   if (rule.action === "deny") return "denied" as const
-                  return "ask" as const
                 }
                 return defaultResult
               }),

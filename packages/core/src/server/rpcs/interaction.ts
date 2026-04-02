@@ -2,7 +2,6 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { GentRpcError } from "../errors.js"
 import {
   RespondQuestionsInput,
-  RespondPermissionInput,
   RespondPromptInput,
   RespondHandoffInput,
   RespondHandoffResult,
@@ -11,10 +10,6 @@ import {
 export class InteractionRpcs extends RpcGroup.make(
   Rpc.make("respondQuestions", {
     payload: RespondQuestionsInput.fields,
-    error: GentRpcError,
-  }),
-  Rpc.make("respondPermission", {
-    payload: RespondPermissionInput.fields,
     error: GentRpcError,
   }),
   Rpc.make("respondPrompt", {

@@ -6,14 +6,13 @@ import { AuthProviderInfo } from "../domain/auth-guard.js"
 import { EventEnvelope, HandoffDecision, PromptDecision } from "../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
-import { PermissionDecision } from "../domain/permission.js"
+// PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { SkillScope } from "../domain/skills.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
-  bypass: Schema.optional(Schema.Boolean),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
   /** If provided, sends this message immediately after creation */
@@ -29,7 +28,6 @@ export const CreateSessionResult = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.String,
-  bypass: Schema.Boolean,
 })
 export type CreateSessionResult = typeof CreateSessionResult.Type
 
@@ -37,7 +35,6 @@ export const SessionInfo = Schema.Struct({
   id: SessionId,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
-  bypass: Schema.optional(Schema.Boolean),
   reasoningLevel: Schema.optional(ReasoningEffort),
   branchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),
@@ -51,7 +48,6 @@ export interface SessionTreeNode {
   id: SessionId
   name?: string
   cwd?: string
-  bypass?: boolean
   parentSessionId?: SessionId
   parentBranchId?: BranchId
   createdAt: number
@@ -63,7 +59,6 @@ interface SessionTreeNodeEncoded {
   id: string
   name?: string
   cwd?: string
-  bypass?: boolean
   parentSessionId?: string
   parentBranchId?: string
   createdAt: number
@@ -76,7 +71,6 @@ export const SessionTreeNode: Schema.Codec<SessionTreeNode, SessionTreeNodeEncod
     id: SessionId,
     name: Schema.optional(Schema.String),
     cwd: Schema.optional(Schema.String),
-    bypass: Schema.optional(Schema.Boolean),
     parentSessionId: Schema.optional(SessionId),
     parentBranchId: Schema.optional(BranchId),
     createdAt: Schema.Number,
@@ -236,7 +230,6 @@ export const SessionSnapshot = Schema.Struct({
   name: Schema.optional(Schema.String),
   messages: Schema.Array(MessageInfo),
   lastEventId: Schema.NullOr(Schema.Number),
-  bypass: Schema.optional(Schema.Boolean),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (phase/status/agent/queue). Idle sessions return idle runtime. */
@@ -307,24 +300,6 @@ export const RespondQuestionsInput = Schema.Struct({
   cancelled: Schema.optional(Schema.Boolean),
 })
 export type RespondQuestionsInput = typeof RespondQuestionsInput.Type
-
-export const RespondPermissionInput = Schema.Struct({
-  requestId: Schema.String,
-  decision: PermissionDecision,
-  persist: Schema.optional(Schema.Boolean),
-})
-export type RespondPermissionInput = typeof RespondPermissionInput.Type
-
-export const UpdateSessionBypassInput = Schema.Struct({
-  sessionId: SessionId,
-  bypass: Schema.Boolean,
-})
-export type UpdateSessionBypassInput = typeof UpdateSessionBypassInput.Type
-
-export const UpdateSessionBypassResult = Schema.Struct({
-  bypass: Schema.Boolean,
-})
-export type UpdateSessionBypassResult = typeof UpdateSessionBypassResult.Type
 
 export const UpdateSessionReasoningLevelInput = Schema.Struct({
   sessionId: SessionId,

@@ -136,7 +136,6 @@ interface SessionRow {
   id: SessionId
   name: string | null
   cwd: string | null
-  bypass: number | null
   reasoning_level: string | null
   active_branch_id: BranchId | null
   parent_session_id: SessionId | null
@@ -181,7 +180,6 @@ const sessionFromRow = (row: SessionRow) =>
     id: row.id,
     name: row.name ?? undefined,
     cwd: row.cwd ?? undefined,
-    bypass: typeof row.bypass === "number" ? row.bypass === 1 : undefined,
     reasoningLevel:
       row.reasoning_level !== null && VALID_REASONING.has(row.reasoning_level)
         ? (row.reasoning_level as ReasoningEffort)
@@ -465,9 +463,7 @@ const makeStorage = Effect.gen(function* () {
     // Sessions
     createSession: Effect.fn("Storage.createSession")(
       function* (session) {
-        let bypass: 0 | 1 | null = null
-        if (session.bypass !== undefined) bypass = session.bypass ? 1 : 0
-        yield* sql`INSERT INTO sessions (id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${session.name ?? null}, ${session.cwd ?? null}, ${bypass}, ${session.reasoningLevel ?? null}, ${session.activeBranchId ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
+        yield* sql`INSERT INTO sessions (id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${session.name ?? null}, ${session.cwd ?? null}, ${session.reasoningLevel ?? null}, ${session.activeBranchId ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
         return session
       },
       Effect.mapError(mapError("Failed to create session")),
@@ -476,7 +472,7 @@ const makeStorage = Effect.gen(function* () {
     getSession: Effect.fn("Storage.getSession")(
       function* (id) {
         const rows =
-          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id}`
+          yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id}`
         const row = rows[0]
         if (row === undefined) return undefined
         return sessionFromRow(row)
@@ -487,7 +483,7 @@ const makeStorage = Effect.gen(function* () {
     getLastSessionByCwd: Effect.fn("Storage.getLastSessionByCwd")(
       function* (cwd) {
         const rows =
-          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} ORDER BY updated_at DESC LIMIT 1`
+          yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} ORDER BY updated_at DESC LIMIT 1`
         const row = rows[0]
         if (row === undefined) return undefined
         return sessionFromRow(row)
@@ -498,7 +494,7 @@ const makeStorage = Effect.gen(function* () {
     listSessions: Effect.fn("Storage.listSessions")(
       function* () {
         const rows =
-          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+          yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
         return rows.map(sessionFromRow)
       },
       Effect.mapError(mapError("Failed to list sessions")),
@@ -527,9 +523,7 @@ const makeStorage = Effect.gen(function* () {
 
     updateSession: Effect.fn("Storage.updateSession")(
       function* (session) {
-        let bypass: 0 | 1 | null = null
-        if (session.bypass !== undefined) bypass = session.bypass ? 1 : 0
-        yield* sql`UPDATE sessions SET name = ${session.name ?? null}, bypass = ${bypass}, reasoning_level = ${session.reasoningLevel ?? null}, active_branch_id = ${session.activeBranchId ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id}`
+        yield* sql`UPDATE sessions SET name = ${session.name ?? null}, reasoning_level = ${session.reasoningLevel ?? null}, active_branch_id = ${session.activeBranchId ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id}`
         return session
       },
       Effect.mapError(mapError("Failed to update session")),
@@ -772,7 +766,7 @@ const makeStorage = Effect.gen(function* () {
     getChildSessions: Effect.fn("Storage.getChildSessions")(
       function* (parentSessionId) {
         const rows =
-          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE parent_session_id = ${parentSessionId} ORDER BY created_at ASC`
+          yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE parent_session_id = ${parentSessionId} ORDER BY created_at ASC`
         return rows.map(sessionFromRow)
       },
       Effect.mapError(mapError("Failed to get child sessions")),
@@ -781,16 +775,16 @@ const makeStorage = Effect.gen(function* () {
     getSessionAncestors: Effect.fn("Storage.getSessionAncestors")(
       function* (sessionId) {
         const rows = yield* sql.unsafe<SessionRow>(
-          `WITH RECURSIVE ancestors(id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
-            SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, 0
+          `WITH RECURSIVE ancestors(id, name, cwd, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
+            SELECT id, name, cwd, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, 0
             FROM sessions WHERE id = '${sessionId.replace(/'/g, "''")}'
             UNION ALL
-            SELECT s.id, s.name, s.cwd, s.bypass, s.reasoning_level, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
+            SELECT s.id, s.name, s.cwd, s.reasoning_level, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
             FROM sessions s
             JOIN ancestors a ON s.id = a.parent_session_id
             WHERE a.depth < 20
           )
-          SELECT id, name, cwd, bypass, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at
+          SELECT id, name, cwd, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at
           FROM ancestors
           ORDER BY depth ASC`,
         )
@@ -803,7 +797,7 @@ const makeStorage = Effect.gen(function* () {
       function* (sessionId) {
         // Get session
         const sessionRows =
-          yield* sql<SessionRow>`SELECT id, name, cwd, bypass, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${sessionId}`
+          yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${sessionId}`
         const sessionRow = sessionRows[0]
         if (sessionRow === undefined) {
           return yield* new StorageError({ message: `Session not found: ${sessionId}` })

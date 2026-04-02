@@ -62,7 +62,7 @@ describe("AgentExecutionOverrides", () => {
 
         const now = new Date()
         yield* storage.createSession(
-          new Session({ id: "s1", name: "S", bypass: true, createdAt: now, updatedAt: now }),
+          new Session({ id: "s1", name: "S", createdAt: now, updatedAt: now }),
         )
         yield* storage.createBranch(new Branch({ id: "b1", sessionId: "s1", createdAt: now }))
 
@@ -122,7 +122,6 @@ describe("Subagent Runner", () => {
         const session = new Session({
           id: "parent-session",
           name: "Parent",
-          bypass: true,
           createdAt: now,
           updatedAt: now,
         })
@@ -176,7 +175,6 @@ describe("Subagent Runner", () => {
         const session = new Session({
           id: "parent-session-noretr",
           name: "Parent",
-          bypass: true,
           createdAt: now,
           updatedAt: now,
         })
@@ -225,7 +223,6 @@ describe("Subagent Runner", () => {
         const session = new Session({
           id: "parent-session-timeout",
           name: "Parent",
-          bypass: true,
           createdAt: now,
           updatedAt: now,
         })

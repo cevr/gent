@@ -179,7 +179,6 @@ const handleToolCallResult = (
 const toActiveInteraction = (event: AgentEvent): ActiveInteraction | undefined => {
   switch (event._tag) {
     case "QuestionsAsked":
-    case "PermissionRequested":
     case "PromptPresented":
     case "HandoffPresented":
       return event as ActiveInteraction

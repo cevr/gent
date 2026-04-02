@@ -5,7 +5,6 @@ export interface Session {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
-  readonly bypass: boolean
   readonly reasoningLevel: ReasoningEffort | undefined
 }
 
@@ -22,7 +21,6 @@ export type SessionStateEvent =
   | { readonly _tag: "Clear" }
   | { readonly _tag: "UpdateName"; readonly name: string }
   | { readonly _tag: "UpdateBranch"; readonly branchId: BranchId }
-  | { readonly _tag: "UpdateBypass"; readonly bypass: boolean }
   | { readonly _tag: "UpdateReasoningLevel"; readonly reasoningLevel: ReasoningEffort | undefined }
 
 export const SessionState = {
@@ -51,8 +49,6 @@ export function transitionSessionState(
       return mapActive(state, (session) => ({ ...session, name: event.name }))
     case "UpdateBranch":
       return mapActive(state, (session) => ({ ...session, branchId: event.branchId }))
-    case "UpdateBypass":
-      return mapActive(state, (session) => ({ ...session, bypass: event.bypass }))
     case "UpdateReasoningLevel":
       return mapActive(state, (session) => ({ ...session, reasoningLevel: event.reasoningLevel }))
   }

@@ -16,7 +16,6 @@ import { messageText, getSingleText } from "./agent-loop.utils.js"
 
 const QueuedTurnItemSchema = Schema.Struct({
   message: Message,
-  bypass: Schema.Boolean,
   agentOverride: Schema.optional(AgentName),
 })
 export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
@@ -77,7 +76,6 @@ const toQueueEntry = (
     kind,
     content,
     createdAt: item.message.createdAt.getTime(),
-    bypass: item.bypass,
     ...(item.agentOverride !== undefined ? { agentOverride: item.agentOverride } : {}),
   })
 }
@@ -162,7 +160,6 @@ const LoopStateBaseFields = {
 const ActiveTurnFields = {
   ...LoopStateBaseFields,
   message: Message,
-  bypass: Schema.Boolean,
   startedAtMs: Schema.Number,
   agentOverride: Schema.optional(AgentName),
   turnInterrupted: Schema.Boolean,
@@ -275,7 +272,6 @@ export const buildResolvingState = (
     queue: base.queue,
     currentAgent: base.currentAgent,
     message: item.message,
-    bypass: item.bypass,
     startedAtMs: Date.now(),
     agentOverride: item.agentOverride,
     turnInterrupted: false,

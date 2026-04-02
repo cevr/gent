@@ -101,7 +101,6 @@ describe("ActorProcess", () => {
           new Session({
             id: "defect-session",
             name: "Defect",
-            bypass: true,
             createdAt: now,
             updatedAt: now,
           }),
@@ -196,7 +195,6 @@ describe("ActorProcess", () => {
           new Session({
             id: "invoke-session",
             name: "Invoke Tool",
-            bypass: true,
             createdAt: now,
             updatedAt: now,
           }),

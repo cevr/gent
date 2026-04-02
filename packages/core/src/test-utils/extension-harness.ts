@@ -35,7 +35,7 @@ import type {
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import { PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
@@ -320,7 +320,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     subagentRunnerLayer,
     PromptPresenter.Test(),
     Permission.Test(),
-    PermissionHandler.Test(["allow"]),
     PromptHandler.Test(["yes"]),
     HandoffHandler.Test(["confirm"]),
     AskUserHandler.Test([["yes"]]),

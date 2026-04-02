@@ -14,9 +14,9 @@ describe("app bootstrap boundary", () => {
         Effect.gen(function* () {
           const { client } = yield* Gent.test(baseLocalLayer())
 
-          const first = yield* client.session.create({ cwd: repoRoot, bypass: true })
+          const first = yield* client.session.create({ cwd: repoRoot })
           yield* Effect.sleep("5 millis")
-          const second = yield* client.session.create({ cwd: repoRoot, bypass: false })
+          const second = yield* client.session.create({ cwd: repoRoot })
 
           const state = yield* resolveInitialState({
             client,
@@ -26,7 +26,6 @@ describe("app bootstrap boundary", () => {
             headless: false,
             prompt: Option.none(),
             promptArg: Option.none(),
-            bypass: true,
           })
 
           expect(state._tag).toBe("session")
@@ -52,7 +51,6 @@ describe("app bootstrap boundary", () => {
             headless: false,
             prompt: Option.some("bootstrap prompt"),
             promptArg: Option.none(),
-            bypass: true,
           })
 
           expect(state._tag).toBe("session")

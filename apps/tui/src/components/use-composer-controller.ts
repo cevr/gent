@@ -226,7 +226,6 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
             createBranch: Effect.void,
             openTree: () => {},
             openFork: () => {},
-            toggleBypass: Effect.fail(ClientError("Bypass not implemented yet")),
             setReasoningLevel: () => Effect.fail(ClientError("Think not available here")),
             openPermissions: () => {},
             openAuth: () => {},

@@ -209,7 +209,6 @@ const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
         id: sessionId,
         name: `debug child ${iteration}`,
         cwd: parent.cwd,
-        bypass: true,
         parentSessionId: parent.sessionId,
         parentBranchId: parent.branchId,
         createdAt: now,

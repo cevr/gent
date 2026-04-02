@@ -71,7 +71,7 @@ describe("event stream parity", () => {
         await transport.run(({ client }) =>
           Effect.gen(function* () {
             const created = yield* client.session
-              .create({ cwd: process.cwd(), bypass: true })
+              .create({ cwd: process.cwd() })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             yield* client.message
@@ -106,7 +106,7 @@ describe("event stream parity", () => {
         await transport.run(({ client }) =>
           Effect.gen(function* () {
             const created = yield* client.session
-              .create({ cwd: process.cwd(), bypass: true })
+              .create({ cwd: process.cwd() })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const live = yield* startCollecting(client, {
@@ -168,7 +168,7 @@ describe("event stream parity", () => {
         await transport.run(({ client }) =>
           Effect.gen(function* () {
             const created = yield* client.session
-              .create({ cwd: process.cwd(), bypass: true })
+              .create({ cwd: process.cwd() })
               .pipe(Effect.mapError((error) => new Error(String(error))))
 
             const firstLive = yield* startCollecting(client, {

@@ -1,7 +1,7 @@
 /**
  * Slash command handlers
  *
- * Commands: /clear, /new, /sessions, /branch, /tree, /fork, /bypass, /handoff
+ * Commands: /clear, /new, /sessions, /branch, /tree, /fork, /handoff
  */
 
 import { Effect } from "effect"
@@ -15,7 +15,6 @@ export interface SlashCommandContext {
   createBranch: Effect.Effect<void, UiError>
   openTree: () => void
   openFork: () => void
-  toggleBypass: Effect.Effect<void, UiError>
   setReasoningLevel: (level: ReasoningEffort | undefined) => Effect.Effect<void, UiError>
   openPermissions: () => void
   openAuth: () => void
@@ -101,9 +100,6 @@ export const executeSlashCommand = (
         ctx.openFork()
         return { handled: true }
       })
-
-    case "bypass":
-      return runCommandEffect(ctx.toggleBypass)
 
     case "think": {
       const level = _args.trim().toLowerCase()

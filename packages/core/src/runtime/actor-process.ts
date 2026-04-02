@@ -37,7 +37,6 @@ export const SendUserMessagePayload = Schema.Struct({
   branchId: BranchId,
   content: Schema.String,
   agentOverride: Schema.optional(AgentName),
-  bypass: Schema.optional(Schema.Boolean),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
@@ -177,8 +176,6 @@ const LocalActorTransportLive: Layer.Layer<
     return ActorTransport.of({
       sendUserMessage: (input) =>
         Effect.gen(function* () {
-          const session = yield* storage.getSession(input.sessionId)
-          const bypass = input.bypass ?? session?.bypass ?? true
           const commandId = input.commandId ?? makeCommandId()
 
           const message = new Message({
@@ -193,7 +190,6 @@ const LocalActorTransportLive: Layer.Layer<
 
           yield* agentLoop
             .submit(message, {
-              bypass,
               ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
             })
             .pipe(
@@ -269,8 +265,6 @@ const LocalActorTransportLive: Layer.Layer<
 
       invokeTool: (input) =>
         Effect.gen(function* () {
-          const session = yield* storage.getSession(input.sessionId)
-          const bypass = session?.bypass ?? true
           const commandId = input.commandId ?? makeCommandId()
           const toolCallId = toolCallIdForCommand(commandId)
           const currentTurnAgent = (yield* agentLoop.getState(input)).agent
@@ -286,7 +280,6 @@ const LocalActorTransportLive: Layer.Layer<
             sessionId: input.sessionId,
             branchId: input.branchId,
             currentTurnAgent,
-            bypass,
             toolRunner,
             extensionRegistry,
             bashSemaphore,
@@ -308,7 +301,7 @@ const LocalActorTransportLive: Layer.Layer<
             createdAt: yield* DateTime.nowAsDate,
           })
 
-          yield* agentLoop.submit(followUpMessage, { bypass }).pipe(
+          yield* agentLoop.submit(followUpMessage).pipe(
             Effect.catchCause((cause) => {
               if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
               return eventStore

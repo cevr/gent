@@ -44,7 +44,6 @@ const SESSION_SLASH_COMMANDS: SlashCommand[] = [
   { id: "branch", label: "/branch", description: "Create new branch" },
   { id: "tree", label: "/tree", description: "Browse branch tree" },
   { id: "fork", label: "/fork", description: "Fork from a message" },
-  { id: "bypass", label: "/bypass", description: "Toggle permission bypass" },
   { id: "think", label: "/think", description: "Set reasoning level" },
   { id: "permissions", label: "/permissions", description: "View/edit permission rules" },
   { id: "auth", label: "/auth", description: "Manage API keys" },

@@ -3,8 +3,7 @@ import { Effect, Layer, Schema } from "effect"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { defineTool } from "@gent/core/domain/tool"
-import { Permission } from "@gent/core/domain/permission"
-import { PermissionHandler } from "@gent/core/domain/interaction-handlers"
+import { Permission, PermissionRule } from "@gent/core/domain/permission"
 
 describe("ToolRunner", () => {
   test("returns error result when tool fails", async () => {
@@ -28,7 +27,6 @@ describe("ToolRunner", () => {
         ]),
       ),
       Permission.Test(),
-      PermissionHandler.Test(["allow"]),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -69,7 +67,6 @@ describe("ToolRunner", () => {
         ]),
       ),
       Permission.Test(),
-      PermissionHandler.Test(["allow"]),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -88,5 +85,50 @@ describe("ToolRunner", () => {
     const error = (result.output.value as { error?: string }).error ?? ""
     expect(error).toContain("Tool 'strict' input failed:")
     expect(error).toContain("path")
+  })
+
+  test("returns 'Permission denied' error when tool is denied by permission rules", async () => {
+    const SafeTool = defineTool({
+      name: "safe",
+      concurrency: "parallel",
+      description: "A safe tool",
+      params: Schema.Struct({}),
+      execute: () => Effect.succeed({ ok: true }),
+    })
+
+    const denyAllPermission = Permission.Live(
+      [new PermissionRule({ tool: "*", action: "deny" })],
+      "allow",
+    )
+
+    const deps = Layer.mergeAll(
+      ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "test" },
+            kind: "builtin",
+            sourcePath: "test",
+            setup: { tools: [SafeTool] },
+          },
+        ]),
+      ),
+      denyAllPermission,
+    )
+    const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc1", toolName: "safe", input: {} },
+          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("error-json")
+    const error = (result.output.value as { error?: string }).error ?? ""
+    expect(error).toBe("Permission denied")
   })
 })

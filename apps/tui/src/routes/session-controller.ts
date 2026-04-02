@@ -182,15 +182,6 @@ export function useSessionController(props: {
         )
         return
       }
-      case "PermissionRequested": {
-        const r = result as InteractionResolutionByTag["PermissionRequested"]
-        cast(
-          client.client.interaction
-            .respondPermission({ requestId, decision: r._tag, persist: r.persist })
-            .pipe(Effect.tapError(rpcError)),
-        )
-        return
-      }
       case "HandoffPresented": {
         const r = result as InteractionResolutionByTag["HandoffPresented"]
         cast(
@@ -440,10 +431,6 @@ export function useSessionController(props: {
         createBranch: client.createBranch().pipe(Effect.asVoid),
         openTree: openSessionTree,
         openFork: openForkPicker,
-        toggleBypass: Effect.gen(function* () {
-          const current = client.session()?.bypass ?? true
-          yield* client.updateSessionBypass(!current)
-        }),
         setReasoningLevel: (level) => client.updateSessionReasoningLevel(level),
         openPermissions: () => router.navigateToPermissions(),
         openAuth: () => router.navigateToAuth(),
@@ -451,17 +438,11 @@ export function useSessionController(props: {
           client.client.session
             .create({
               cwd: workspace.cwd,
-              bypass: client.session()?.bypass ?? true,
             })
             .pipe(
               Effect.tap((result) =>
                 Effect.sync(() => {
-                  client.switchSession(
-                    result.sessionId,
-                    result.branchId,
-                    result.name,
-                    result.bypass,
-                  )
+                  client.switchSession(result.sessionId, result.branchId, result.name)
                   router.navigateToSession(result.sessionId, result.branchId)
                 }),
               ),
@@ -490,12 +471,7 @@ export function useSessionController(props: {
       return
     }
 
-    client.switchSession(
-      nextSession.id,
-      nextSession.branchId,
-      nextSession.name ?? "Unnamed",
-      nextSession.bypass,
-    )
+    client.switchSession(nextSession.id, nextSession.branchId, nextSession.name ?? "Unnamed")
     router.navigateToSession(nextSession.id, nextSession.branchId)
   }
 

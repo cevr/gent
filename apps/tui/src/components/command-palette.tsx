@@ -135,11 +135,6 @@ export function CommandPalette() {
   const currentLevel = () => CommandPaletteState.currentLevel(state())
   const searchQuery = () => state().searchQuery
 
-  const bypassLabel = () => {
-    const session = client.session()
-    return session?.bypass === true ? "Bypass ✓" : "Bypass"
-  }
-
   const themeItems = (): readonly MenuItem[] => {
     const isSystem = selected() === "system"
     const currentMode = mode()
@@ -267,26 +262,6 @@ export function CommandPalette() {
           _tag: "ActivateSelection",
           outcome: { _tag: "PushLevel", level: "theme" },
         }),
-    },
-    {
-      id: "bypass",
-      title: bypassLabel(),
-      description: "Toggle permission bypass for this session",
-      category: "config",
-      onSelect: () => {
-        const session = client.session()
-        if (session === null) return
-        cast(
-          client.updateSessionBypass(!session.bypass).pipe(
-            Effect.catchEager((error) =>
-              Effect.sync(() => {
-                client.setError(formatError(error))
-              }),
-            ),
-          ),
-        )
-        closePalette()
-      },
     },
     {
       id: "new-session",

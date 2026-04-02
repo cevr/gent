@@ -82,7 +82,6 @@ const createSessionState = () => {
       id: sessionId,
       name: "Loop Recovery",
       cwd: process.cwd(),
-      bypass: true,
       createdAt: new Date(),
       updatedAt: new Date(),
     },
@@ -232,7 +231,7 @@ describe("AgentLoop recovery", () => {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
         },
-        { message, bypass: true },
+        { message },
       )
 
       await Effect.runPromise(
@@ -289,7 +288,7 @@ describe("AgentLoop recovery", () => {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
         },
-        { message, bypass: true },
+        { message },
       )
       const streaming = toStreamingState({
         state: resolving,
@@ -357,7 +356,7 @@ describe("AgentLoop recovery", () => {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
         },
-        { message, bypass: true },
+        { message },
       )
       const streaming = toStreamingState({
         state: resolving,
@@ -438,11 +437,10 @@ describe("AgentLoop recovery", () => {
         {
           queue: appendFollowUpQueueState(emptyLoopQueueState(), {
             message: followUpMessage,
-            bypass: true,
           }),
           currentAgent: "cowork",
         },
-        { message, bypass: true },
+        { message },
       )
       const streaming = toStreamingState({
         state: resolving,
@@ -527,7 +525,7 @@ describe("AgentLoop recovery", () => {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
         },
-        { message, bypass: true },
+        { message },
       )
       const streaming = toStreamingState({
         state: resolving,
@@ -588,7 +586,7 @@ describe("AgentLoop recovery", () => {
           queue: emptyLoopQueueState(),
           currentAgent: "cowork",
         },
-        { message, bypass: true },
+        { message },
       )
 
       // Seed checkpoint

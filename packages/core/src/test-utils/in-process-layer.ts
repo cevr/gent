@@ -13,7 +13,7 @@ import { AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { DebugProvider } from "../debug/provider.js"
-import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/interaction-handlers.js"
+import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import type { Provider } from "../providers/provider.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
@@ -60,7 +60,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     extensionRegistryLive,
     ExtensionStateRuntime.Test(),
     Permission.Test(),
-    PermissionHandler.Test(["allow"]),
     PromptHandler.Test(["yes"]),
     HandoffHandler.Test(["confirm"]),
     AskUserHandler.Test([["yes"]]),

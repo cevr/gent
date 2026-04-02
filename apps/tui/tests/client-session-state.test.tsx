@@ -43,7 +43,6 @@ describe("ClientProvider session lifecycle", () => {
             sessionId: "session-created" as SessionId,
             branchId: "branch-created" as BranchId,
             name: "Created",
-            bypass: false,
           }),
       },
     })
@@ -69,7 +68,6 @@ describe("ClientProvider session lifecycle", () => {
         sessionId: "session-created",
         branchId: "branch-created",
         name: "Created",
-        bypass: false,
         reasoningLevel: undefined,
       },
     })
@@ -84,7 +82,6 @@ describe("ClientProvider session lifecycle", () => {
           id: "session-a" as SessionId,
           branchId: "branch-a" as BranchId,
           name: "A",
-          bypass: true,
           createdAt: 0,
           updatedAt: 0,
         },
@@ -92,7 +89,7 @@ describe("ClientProvider session lifecycle", () => {
     )
     if (ctx === undefined) throw new Error("client context not ready")
 
-    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B", false)
+    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
     await setup.renderOnce()
 
     expect(ctx.sessionState()).toEqual({
@@ -101,7 +98,6 @@ describe("ClientProvider session lifecycle", () => {
         sessionId: "session-b",
         branchId: "branch-b",
         name: "B",
-        bypass: false,
         reasoningLevel: undefined,
       },
     })
@@ -116,7 +112,6 @@ describe("ClientProvider session lifecycle", () => {
           id: "session-a" as SessionId,
           branchId: "branch-a" as BranchId,
           name: "A",
-          bypass: true,
           createdAt: 0,
           updatedAt: 0,
         },

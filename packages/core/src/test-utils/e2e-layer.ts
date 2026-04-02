@@ -26,7 +26,7 @@ import type { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { BuiltinExtensions } from "../extensions/index.js"
-import { HandoffHandler, PermissionHandler, PromptHandler } from "../domain/interaction-handlers.js"
+import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import type { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -144,7 +144,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     extensionRegistryLive,
     ExtensionStateRuntime.Live(resolvedExtensions),
     Permission.Test(),
-    PermissionHandler.Test(["allow"]),
     PromptHandler.Test(["yes"]),
     HandoffHandler.Test(["confirm"]),
     AskUserHandler.Test([["yes"]]),

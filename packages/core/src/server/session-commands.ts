@@ -24,8 +24,6 @@ import type {
   ForkBranchInput,
   SendMessageInput,
   SwitchBranchInput,
-  UpdateSessionBypassInput,
-  UpdateSessionBypassResult,
   UpdateSessionReasoningLevelInput,
   UpdateSessionReasoningLevelResult,
 } from "./transport-contract.js"
@@ -50,9 +48,6 @@ export interface SessionCommandsService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<QueueSnapshot, AppServiceError>
-  readonly updateSessionBypass: (
-    input: UpdateSessionBypassInput,
-  ) => Effect.Effect<UpdateSessionBypassResult, AppServiceError>
   readonly updateSessionReasoningLevel: (
     input: UpdateSessionReasoningLevelInput,
   ) => Effect.Effect<UpdateSessionReasoningLevelResult, AppServiceError>
@@ -138,12 +133,10 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         const branchId = Bun.randomUUIDv7() as BranchId
         const now = yield* DateTime.nowAsDate
         const name = input.name ?? "New Chat"
-        const bypass = input.bypass ?? true
         const session = new Session({
           id: sessionId,
           name,
           cwd: input.cwd,
-          bypass,
           activeBranchId: branchId,
           parentSessionId: input.parentSessionId,
           parentBranchId: input.parentBranchId,
@@ -177,7 +170,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           })
         }
 
-        return { sessionId, branchId, name, bypass }
+        return { sessionId, branchId, name }
       })
 
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
@@ -353,25 +346,6 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           actorProcess
             .drainQueuedMessages({ sessionId, branchId })
             .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
-        updateSessionBypass: Effect.fn("SessionCommands.updateSessionBypass")(function* (
-          input: UpdateSessionBypassInput,
-        ) {
-          const session = yield* storage.getSession(input.sessionId)
-          if (session === undefined) {
-            return yield* new NotFoundError({ message: "Session not found", entity: "session" })
-          }
-          yield* storage.updateSession(
-            new Session({
-              ...session,
-              bypass: input.bypass,
-              updatedAt: yield* DateTime.nowAsDate,
-            }),
-          )
-          yield* eventStore.publish(
-            new SessionSettingsUpdated({ sessionId: input.sessionId, bypass: input.bypass }),
-          )
-          return { bypass: input.bypass }
-        }),
         updateSessionReasoningLevel: Effect.fn("SessionCommands.updateSessionReasoningLevel")(
           function* (input: UpdateSessionReasoningLevelInput) {
             const session = yield* storage.getSession(input.sessionId)

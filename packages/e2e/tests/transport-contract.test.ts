@@ -15,7 +15,6 @@ describe("GentClient transport contract", () => {
           const created = yield* client.session
             .create({
               cwd: process.cwd(),
-              bypass: true,
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
@@ -27,7 +26,6 @@ describe("GentClient transport contract", () => {
           expect(createdSession).toBeDefined()
           expect(sessions.length).toBe(initialSessions.length + 1)
           expect(createdSession?.branchId).toBe(created.branchId)
-          expect(createdSession?.bypass).toBe(true)
 
           const loaded = yield* client.session
             .get({ sessionId: created.sessionId })

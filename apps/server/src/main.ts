@@ -72,7 +72,6 @@ const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
           .createSession({
             name: payload.name ?? "New Session",
             ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
-            ...(payload.bypass !== undefined ? { bypass: payload.bypass } : {}),
           })
           .pipe(Effect.orDie),
       )

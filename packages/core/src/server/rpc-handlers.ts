@@ -49,7 +49,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           .createSession({
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-            ...(input.bypass !== undefined ? { bypass: input.bypass } : {}),
             ...(input.parentSessionId !== undefined
               ? { parentSessionId: input.parentSessionId }
               : {}),
@@ -81,7 +80,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             id: typeof node.session.id
             name: typeof node.session.name
             cwd: typeof node.session.cwd
-            bypass: typeof node.session.bypass
             parentSessionId: typeof node.session.parentSessionId
             parentBranchId: typeof node.session.parentBranchId
             createdAt: number
@@ -92,7 +90,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
               id: node.session.id,
               name: node.session.name,
               cwd: node.session.cwd,
-              bypass: node.session.bypass,
               parentSessionId: node.session.parentSessionId,
               parentBranchId: node.session.parentBranchId,
               createdAt: node.session.createdAt.getTime(),
@@ -104,9 +101,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       "session.getSnapshot": ({ sessionId, branchId }) =>
         queries.getSessionSnapshot({ sessionId, branchId }),
-
-      "session.updateBypass": ({ sessionId, bypass }) =>
-        commands.updateSessionBypass({ sessionId, bypass }),
 
       "session.updateReasoningLevel": ({ sessionId, reasoningLevel }) =>
         commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
@@ -178,9 +172,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       // -- interaction --
       "interaction.respondQuestions": ({ requestId, answers, cancelled }) =>
         askUserHandler.respond(requestId, answers, cancelled),
-
-      "interaction.respondPermission": ({ requestId, decision, persist }) =>
-        interactions.respondPermission({ requestId, decision, persist }),
 
       "interaction.respondPrompt": ({ requestId, decision, content }) =>
         interactions.respondPrompt({

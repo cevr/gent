@@ -29,19 +29,17 @@ export const toSession = (session: SessionInfo): Session | undefined => {
     sessionId: session.id,
     branchId: session.branchId,
     name: session.name ?? "Unnamed",
-    bypass: session.bypass ?? true,
     reasoningLevel: session.reasoningLevel,
   }
 }
 
 const toSessionInfo = (
-  result: { sessionId: SessionId; branchId: BranchId; name: string; bypass: boolean },
+  result: { sessionId: SessionId; branchId: BranchId; name: string },
   cwd: string,
 ): SessionInfo => ({
   id: result.sessionId,
   name: result.name,
   cwd,
-  bypass: result.bypass,
   reasoningLevel: undefined,
   branchId: result.branchId,
   parentSessionId: undefined,
@@ -97,10 +95,9 @@ export const resolveInitialState = (input: {
   headless: boolean
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
-  bypass: boolean
 }): Effect.Effect<InitialState, GentRpcError> =>
   Effect.gen(function* () {
-    const { client, cwd, session, continue_, headless, prompt, promptArg, bypass } = input
+    const { client, cwd, session, continue_, headless, prompt, promptArg } = input
 
     if (headless) {
       const promptText = Option.isSome(promptArg) ? promptArg.value : undefined
@@ -117,7 +114,7 @@ export const resolveInitialState = (input: {
         return { _tag: "headless" as const, session: sess, prompt: promptText }
       }
 
-      const result = yield* client.session.create({ cwd, bypass })
+      const result = yield* client.session.create({ cwd })
       return { _tag: "headless" as const, session: toSessionInfo(result, cwd), prompt: promptText }
     }
 
@@ -168,6 +165,6 @@ export const resolveInitialState = (input: {
     }
 
     const promptText = Option.getOrUndefined(prompt)
-    const result = yield* client.session.create({ cwd, bypass })
+    const result = yield* client.session.create({ cwd })
     return { _tag: "session" as const, session: toSessionInfo(result, cwd), prompt: promptText }
   })

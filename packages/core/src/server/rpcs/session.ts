@@ -11,8 +11,6 @@ import {
   GetSessionTreeInput,
   GetSessionSnapshotInput,
   SessionSnapshot,
-  UpdateSessionBypassInput,
-  UpdateSessionBypassResult,
   UpdateSessionReasoningLevelInput,
   UpdateSessionReasoningLevelResult,
   SubscribeEventsInput,
@@ -53,11 +51,6 @@ export class SessionRpcs extends RpcGroup.make(
   Rpc.make("getSnapshot", {
     payload: GetSessionSnapshotInput.fields,
     success: SessionSnapshot,
-    error: GentRpcError,
-  }),
-  Rpc.make("updateBypass", {
-    payload: UpdateSessionBypassInput.fields,
-    success: UpdateSessionBypassResult,
     error: GentRpcError,
   }),
   Rpc.make("updateReasoningLevel", {

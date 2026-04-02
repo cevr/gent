@@ -115,9 +115,8 @@ export interface ClientContextValue {
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string) => void
   createSession: (onCreated?: (sessionId: SessionId, branchId: BranchId) => void) => void
-  switchSession: (sessionId: SessionId, branchId: BranchId, name: string, bypass?: boolean) => void
+  switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
   clearSession: () => void
-  updateSessionBypass: (bypass: boolean) => Effect.Effect<void, GentRpcError>
   updateSessionReasoningLevel: (
     reasoningLevel: ReasoningEffort | undefined,
   ) => Effect.Effect<void, GentRpcError>
@@ -350,9 +349,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
           case "SessionSettingsUpdated":
             if (event.sessionId === sessionId) {
-              if (event.bypass !== undefined) {
-                dispatchSession({ _tag: "UpdateBypass", bypass: event.bypass })
-              }
               if (event.reasoningLevel !== undefined) {
                 dispatchSession({
                   _tag: "UpdateReasoningLevel",
@@ -377,9 +373,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
               yield* Effect.sync(() => {
                 setConnectionIssue(null)
-                if (snapshot.bypass !== undefined) {
-                  dispatchSession({ _tag: "UpdateBypass", bypass: snapshot.bypass ?? true })
-                }
                 if (snapshot.reasoningLevel !== undefined) {
                   dispatchSession({
                     _tag: "UpdateReasoningLevel",
@@ -520,7 +513,6 @@ export function ClientProvider(props: ClientProviderProps) {
                   sessionId: result.sessionId,
                   branchId: result.branchId,
                   name: result.name,
-                  bypass: result.bypass,
                   reasoningLevel: undefined,
                 },
               })
@@ -539,14 +531,14 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    switchSession: (sessionId, branchId, name, bypass) => {
+    switchSession: (sessionId, branchId, name) => {
       // Reset agent state and activate new session
       setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
       dispatchSession({
         _tag: "Activated",
-        session: { sessionId, branchId, name, bypass: bypass ?? true, reasoningLevel: undefined },
+        session: { sessionId, branchId, name, reasoningLevel: undefined },
       })
     },
 
@@ -570,19 +562,6 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       if (s === null) return Effect.succeed([] as readonly BranchInfo[])
       return client.branch.list({ sessionId: s.sessionId })
-    },
-
-    updateSessionBypass: (bypass) => {
-      const s = session()
-      if (s === null) return Effect.sync(() => undefined)
-      return client.session.updateBypass({ sessionId: s.sessionId, bypass }).pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            dispatchSession({ _tag: "UpdateBypass", bypass: result.bypass })
-          }),
-        ),
-        Effect.asVoid,
-      )
     },
 
     updateSessionReasoningLevel: (reasoningLevel) => {

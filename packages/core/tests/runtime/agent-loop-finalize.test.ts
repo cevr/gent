@@ -45,7 +45,6 @@ describe("finalizeTurnPhase", () => {
         new Session({
           id: sessionId,
           cwd: process.cwd(),
-          bypass: true,
           createdAt: new Date(),
           updatedAt: new Date(),
         }),

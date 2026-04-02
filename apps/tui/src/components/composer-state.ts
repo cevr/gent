@@ -81,15 +81,6 @@ function cancelInteraction(interaction: ActiveInteraction): TransitionResult {
           result: { _tag: "cancelled" },
         },
       }
-    case "PermissionRequested":
-      return {
-        state: ComposerState.idle(),
-        effect: {
-          _tag: "DispatchInteractionResult",
-          interaction,
-          result: { _tag: "deny", persist: false },
-        },
-      }
     case "PromptPresented":
       return {
         state: ComposerState.idle(),

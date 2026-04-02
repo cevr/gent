@@ -50,7 +50,6 @@ describe("executeSlashCommand", () => {
     createBranch: number
     openTree: number
     openFork: number
-    toggleBypass: number
     openPermissions: number
     openAuth: number
   }
@@ -64,7 +63,6 @@ describe("executeSlashCommand", () => {
       createBranch: 0,
       openTree: 0,
       openFork: 0,
-      toggleBypass: 0,
       openPermissions: 0,
       openAuth: 0,
     }
@@ -88,9 +86,6 @@ describe("executeSlashCommand", () => {
       openFork: () => {
         calls.openFork++
       },
-      toggleBypass: Effect.sync(() => {
-        calls.toggleBypass++
-      }),
       setReasoningLevel: () => Effect.void,
       openPermissions: () => {
         calls.openPermissions++
@@ -170,16 +165,6 @@ describe("executeSlashCommand", () => {
     )
   })
 
-  it.live("/bypass toggles bypass", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("bypass", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(calls.toggleBypass).toBe(1)
-      }),
-    )
-  })
-
   it.live("unknown command returns error", () => {
     const { ctx } = createMockContext()
     return executeSlashCommand("unknown", "", ctx).pipe(
@@ -210,7 +195,6 @@ describe("executeSlashCommand", () => {
       createBranch: Effect.fail(ClientError("Branch failed")),
       openTree: () => {},
       openFork: () => {},
-      toggleBypass: Effect.void,
       setReasoningLevel: () => Effect.void,
       openPermissions: () => {},
       openAuth: () => {},

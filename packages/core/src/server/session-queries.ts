@@ -198,7 +198,6 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           name: session.name,
           messages: messages.map(messageToInfo),
           lastEventId: lastEventId ?? null,
-          bypass: session.bypass,
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,
           runtime,

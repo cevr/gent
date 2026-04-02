@@ -440,7 +440,6 @@ const executeToolCalls = (params: {
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
-  bypass: boolean
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   bashSemaphore: Semaphore.Semaphore
@@ -465,7 +464,7 @@ const executeToolCalls = (params: {
           toolCallId: toolCall.toolCallId,
           agentName: params.currentTurnAgent,
         }
-        const run = params.toolRunner.run(toolCall, ctx, { bypass: params.bypass })
+        const run = params.toolRunner.run(toolCall, ctx)
         const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
         const result = yield* tool?.concurrency === "serial"
           ? Effect.withSpan("AgentLoop.bashSemaphore")(params.bashSemaphore.withPermits(1)(run))
@@ -692,7 +691,6 @@ export const executeToolsPhase = (params: {
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
-  bypass: boolean
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   bashSemaphore: Semaphore.Semaphore
@@ -737,7 +735,6 @@ export const invokeToolPhase = (params: {
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
-  bypass: boolean
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   bashSemaphore: Semaphore.Semaphore
@@ -775,7 +772,6 @@ export const invokeToolPhase = (params: {
       sessionId: params.sessionId,
       branchId: params.branchId,
       currentTurnAgent: params.currentTurnAgent,
-      bypass: params.bypass,
       toolRunner: params.toolRunner,
       extensionRegistry: params.extensionRegistry,
       bashSemaphore: params.bashSemaphore,
@@ -1212,11 +1208,11 @@ const makeRecoveryDecision = (params: {
 export interface AgentLoopService {
   readonly submit: (
     message: Message,
-    options?: { bypass?: boolean; agentOverride?: AgentNameType },
+    options?: { agentOverride?: AgentNameType },
   ) => Effect.Effect<void, AgentLoopError>
   readonly run: (
     message: Message,
-    options?: { bypass?: boolean; agentOverride?: AgentNameType },
+    options?: { agentOverride?: AgentNameType },
   ) => Effect.Effect<void, AgentLoopError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void>
   readonly followUp: (message: Message) => Effect.Effect<void, AgentLoopError>
@@ -1440,7 +1436,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 sessionId,
                 branchId,
                 currentTurnAgent: state.currentTurnAgent,
-                bypass: state.bypass,
                 toolRunner,
                 extensionRegistry,
                 bashSemaphore,
@@ -1829,14 +1824,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const service: AgentLoopService = {
           submit: Effect.fn("AgentLoop.submit")(function* (
             message: Message,
-            options?: { bypass?: boolean; agentOverride?: AgentNameType },
+            options?: { agentOverride?: AgentNameType },
           ) {
-            const bypass = options?.bypass ?? true
             const loop = yield* getLoop(message.sessionId, message.branchId)
             const initialState = yield* loop.actor.snapshot
             const item: QueuedTurnItem = {
               message,
-              bypass,
               ...(options?.agentOverride !== undefined
                 ? { agentOverride: options.agentOverride }
                 : {}),
@@ -1852,14 +1845,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
           run: Effect.fn("AgentLoop.run")(function* (
             message: Message,
-            options?: { bypass?: boolean; agentOverride?: AgentNameType },
+            options?: { agentOverride?: AgentNameType },
           ) {
-            const bypass = options?.bypass ?? true
             const loop = yield* getLoop(message.sessionId, message.branchId)
             const initialState = yield* loop.actor.snapshot
             const item: QueuedTurnItem = {
               message,
-              bypass,
               ...(options?.agentOverride !== undefined
                 ? { agentOverride: options.agentOverride }
                 : {}),
@@ -1890,10 +1881,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   }
                   return
                 case "Interject": {
-                  const session = yield* storage
-                    .getSession(command.sessionId)
-                    .pipe(Effect.catchEager(() => Effect.void))
-                  const bypass = session?.bypass ?? true
                   const interjectMessage = new Message({
                     id: Bun.randomUUIDv7() as MessageId,
                     sessionId: command.sessionId,
@@ -1905,7 +1892,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   })
                   const item: QueuedTurnItem = {
                     message: interjectMessage,
-                    bypass,
                     ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
                   }
                   const urgent =
@@ -1925,11 +1911,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
                 })
               }
-              const session = yield* storage
-                .getSession(message.sessionId)
-                .pipe(Effect.catchEager(() => Effect.void))
-              const bypass = session?.bypass ?? true
-              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item: { message, bypass } }))
+              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item: { message } }))
             }),
 
           drainQueue: (input) =>
@@ -2035,7 +2017,6 @@ const AgentRunInputFields = {
   agentName: AgentName,
   prompt: Schema.String,
   systemPrompt: Schema.String,
-  bypass: Schema.UndefinedOr(Schema.Boolean),
   modelId: Schema.optional(Schema.String),
   overrideAllowedActions: Schema.optional(Schema.Array(Schema.String)),
   overrideAllowedTools: Schema.optional(Schema.Array(Schema.String)),
@@ -2348,7 +2329,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
                         toolCallId: toolCall.toolCallId,
                         agentName: agent.name,
                       }
-                      const run = toolRunner.run(toolCall, ctx, { bypass: input.bypass })
+                      const run = toolRunner.run(toolCall, ctx)
                       const result = yield* tool?.concurrency === "serial"
                         ? Effect.withSpan("AgentActor.bashSemaphore")(
                             bashSemaphore.withPermits(1)(run),

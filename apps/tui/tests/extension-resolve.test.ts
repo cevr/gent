@@ -274,12 +274,12 @@ describe("resolveTuiExtensions", () => {
       const ext = makeExt("builtins", "builtin", {
         interactionRenderers: [
           { eventTag: "QuestionsAsked", component: () => "questions" },
-          { eventTag: "PermissionRequested", component: () => "permission" },
+          { eventTag: "PromptPresented", component: () => "prompt" },
         ],
       })
       const { interactionRenderers } = resolveTuiExtensions([ext])
       expect(interactionRenderers.get("QuestionsAsked")!()).toBe("questions")
-      expect(interactionRenderers.get("PermissionRequested")!()).toBe("permission")
+      expect(interactionRenderers.get("PromptPresented")!()).toBe("prompt")
     })
 
     test("user overrides builtin for same tag", () => {
@@ -295,13 +295,13 @@ describe("resolveTuiExtensions", () => {
 
     test("project overrides user for same tag", () => {
       const user = makeExt("user-ext", "user", {
-        interactionRenderers: [{ eventTag: "PermissionRequested", component: () => "user-p" }],
+        interactionRenderers: [{ eventTag: "PromptPresented", component: () => "user-p" }],
       })
       const project = makeExt("proj-ext", "project", {
-        interactionRenderers: [{ eventTag: "PermissionRequested", component: () => "proj-p" }],
+        interactionRenderers: [{ eventTag: "PromptPresented", component: () => "proj-p" }],
       })
       const { interactionRenderers } = resolveTuiExtensions([user, project])
-      expect(interactionRenderers.get("PermissionRequested")!()).toBe("proj-p")
+      expect(interactionRenderers.get("PromptPresented")!()).toBe("proj-p")
     })
 
     test("same-scope collision throws", () => {

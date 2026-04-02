@@ -6,7 +6,6 @@ const session: Session = {
   sessionId: "session-1" as SessionId,
   branchId: "branch-1" as BranchId,
   name: "Session 1",
-  bypass: true,
   reasoningLevel: undefined,
 }
 
@@ -35,16 +34,9 @@ describe("session-state", () => {
     })
   })
 
-  test("active updates stay local to the session state", () => {
-    const updated = transitionSessionState(SessionState.active(session), {
-      _tag: "UpdateBypass",
-      bypass: false,
+  test("clear resets to none", () => {
+    expect(transitionSessionState(SessionState.active(session), { _tag: "Clear" })).toEqual({
+      status: "none",
     })
-
-    expect(updated).toEqual({
-      status: "active",
-      session: { ...session, bypass: false },
-    })
-    expect(transitionSessionState(updated, { _tag: "Clear" })).toEqual({ status: "none" })
   })
 })

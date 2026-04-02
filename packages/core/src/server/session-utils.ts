@@ -15,7 +15,6 @@ export const sessionToInfo = (session: Session, branchIdFallback?: BranchId): Se
   id: session.id,
   name: session.name,
   cwd: session.cwd,
-  bypass: session.bypass,
   reasoningLevel: session.reasoningLevel,
   branchId: session.activeBranchId ?? branchIdFallback,
   parentSessionId: session.parentSessionId,

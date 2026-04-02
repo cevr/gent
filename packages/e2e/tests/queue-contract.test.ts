@@ -30,7 +30,6 @@ describe("queue seam contract", () => {
           const created = yield* client.session
             .create({
               cwd: process.cwd(),
-              bypass: true,
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
@@ -117,7 +116,6 @@ describe("queue seam contract", () => {
           const created = yield* client.session
             .create({
               cwd: process.cwd(),
-              bypass: true,
             })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 

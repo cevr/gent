@@ -16,7 +16,6 @@ export interface DebugSessionInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
-  readonly bypass: boolean
   readonly reasoningLevel: undefined
 }
 
@@ -43,7 +42,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     id: sessionId,
     name: "debug scenario",
     cwd,
-    bypass: true,
     createdAt: nowPlus(-60_000),
     updatedAt: nowPlus(-1_000),
   })
@@ -339,7 +337,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     sessionId,
     branchId,
     name: session.name ?? "debug scenario",
-    bypass: session.bypass ?? true,
     reasoningLevel: undefined,
   } satisfies DebugSessionInfo
 })

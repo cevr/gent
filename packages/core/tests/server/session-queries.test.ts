@@ -2,11 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { EventStore, AgentSwitched } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
-import {
-  PermissionHandler,
-  PromptHandler,
-  HandoffHandler,
-} from "@gent/core/domain/interaction-handlers"
+import { PromptHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
@@ -46,13 +42,12 @@ describe("Session Snapshot", () => {
       eventStoreLayer,
       actorProcessLayer,
       ExtensionStateRuntime.Test(),
-      Permission.Live([], "ask"),
+      Permission.Live([], "allow"),
       ConfigService.Test(),
     )
     const deps = Layer.mergeAll(
       baseWithEventStore,
       AgentLoop.Test(),
-      Layer.provide(PermissionHandler.Live, baseWithEventStore),
       Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),
     )
@@ -78,7 +73,6 @@ describe("Session Snapshot", () => {
       })
       expect(result.sessionId).toBeDefined()
       expect(result.messages).toEqual([])
-      expect(result.bypass).toBe(true)
     }).pipe(Effect.provide(testLayer))
   })
 })
@@ -92,13 +86,12 @@ describe("Session Tree", () => {
       eventStoreLayer,
       ActorProcess.Test(),
       ExtensionStateRuntime.Test(),
-      Permission.Live([], "ask"),
+      Permission.Live([], "allow"),
       ConfigService.Test(),
     )
     const deps = Layer.mergeAll(
       baseWithEventStore,
       AgentLoop.Test(),
-      Layer.provide(PermissionHandler.Live, baseWithEventStore),
       Layer.provide(PromptHandler.Live, baseWithEventStore),
       Layer.provide(HandoffHandler.Live, baseWithEventStore),
     )

@@ -94,7 +94,6 @@ export class Session extends Schema.Class<Session>("Session")({
   id: SessionId,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
-  bypass: Schema.optional(Schema.Boolean),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),

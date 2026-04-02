@@ -68,17 +68,13 @@ const main = Command.make(
       Argument.withDescription("Prompt for headless mode"),
       Argument.optional,
     ),
-    bypass: Flag.boolean("bypass").pipe(
-      Flag.withDescription("Auto-allow all tool calls (default: true, use --no-bypass to disable)"),
-      Flag.withDefault(true),
-    ),
     agent: Flag.string("agent").pipe(
       Flag.withAlias("a"),
       Flag.withDescription("Agent to use for headless mode (e.g. memory:reflect)"),
       Flag.optional,
     ),
   },
-  ({ session, continue_, headless, debug, prompt, promptArg, bypass, agent }) =>
+  ({ session, continue_, headless, debug, prompt, promptArg, agent }) =>
     Effect.gen(function* () {
       const cwd = process.cwd()
       const scope = yield* Effect.scope
@@ -114,7 +110,6 @@ const main = Command.make(
         headless,
         prompt,
         promptArg,
-        bypass,
       })
 
       if (state._tag === "headless") {

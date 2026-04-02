@@ -11,8 +11,8 @@ import type { AnyToolDefinition } from "../domain/tool.js"
 import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
 import { Agents } from "../domain/agent.js"
 import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.js"
-import { Permission, type PermissionDecision } from "../domain/permission.js"
-import { PermissionHandler, PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
+import { Permission } from "../domain/permission.js"
+import { PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { PromptDecision, HandoffDecision } from "../domain/event.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -171,7 +171,6 @@ export interface TestLayerConfig {
   askUserResponses?: ReadonlyArray<ReadonlyArray<string>>
   tools?: ReadonlyArray<AnyToolDefinition>
   recording?: boolean
-  permissionDecisions?: ReadonlyArray<PermissionDecision>
   promptDecisions?: ReadonlyArray<PromptDecision>
   handoffDecisions?: ReadonlyArray<HandoffDecision>
 }
@@ -183,7 +182,6 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? [["yes"]]
-  const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const promptDecisions = config.promptDecisions ?? ["yes"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
   const tools = config.tools ?? []
@@ -203,7 +201,6 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     ),
     EventStore.Test(),
     Permission.Test(),
-    PermissionHandler.Test(permissionDecisions),
     AskUserHandler.Test(askUserResponses),
     PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
@@ -219,7 +216,6 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? [["yes"]]
-  const permissionDecisions = config.permissionDecisions ?? ["allow"]
   const promptDecisions = config.promptDecisions ?? ["yes"]
   const handoffDecisions = config.handoffDecisions ?? ["confirm"]
   const tools = config.tools ?? []
@@ -227,7 +223,6 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   return Layer.mergeAll(
     Storage.Test(),
     Permission.Test(),
-    PermissionHandler.Test(permissionDecisions),
     ExtensionRegistry.fromResolved(
       resolveExtensions([
         {

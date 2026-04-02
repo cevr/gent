@@ -2,7 +2,6 @@ import { ServiceMap, Effect, Layer } from "effect"
 import {
   EventStore,
   InteractionDismissed,
-  PermissionRequested,
   type EventStoreError,
   PromptConfirmed,
   PromptEdited,
@@ -14,107 +13,13 @@ import {
   HandoffRejected,
   type HandoffDecision,
 } from "./event"
-import type { BranchId, SessionId, ToolCallId } from "./ids"
-import type { ToolContext } from "./tool"
-import type { PermissionDecision } from "./permission"
+import type { BranchId, SessionId } from "./ids"
 import {
   makeInteractionService,
   type InteractionStorageConfig,
   type InteractionRequestRecord,
 } from "./interaction-request"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-
-// ============================================================================
-// Permission Handler
-// ============================================================================
-
-interface PermissionParams {
-  sessionId: SessionId
-  branchId: BranchId
-  toolCallId: ToolCallId
-  toolName: string
-  input: unknown
-}
-
-export interface PermissionHandlerService {
-  readonly request: (
-    params: { toolCallId: ToolCallId; toolName: string; input: unknown },
-    ctx: ToolContext,
-  ) => Effect.Effect<PermissionDecision, EventStoreError>
-  readonly respond: (
-    requestId: string,
-    decision: PermissionDecision,
-  ) => Effect.Effect<PermissionParams | undefined, EventStoreError>
-  readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
-}
-
-export class PermissionHandler extends ServiceMap.Service<
-  PermissionHandler,
-  PermissionHandlerService
->()("@gent/core/src/domain/interaction-handlers/PermissionHandler") {
-  static Live: Layer.Layer<PermissionHandler, never, EventStore | InteractionStorage> =
-    Layer.effect(
-      PermissionHandler,
-      Effect.gen(function* () {
-        const eventStore = yield* EventStore
-        const storageCallbacks = yield* makeStorageCallbacks
-
-        const interaction = makeInteractionService<PermissionParams, PermissionDecision>({
-          type: "permission",
-          onPresent: (requestId, params) =>
-            eventStore.publish(
-              new PermissionRequested({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                requestId,
-                toolCallId: params.toolCallId,
-                toolName: params.toolName,
-                ...(params.input !== undefined ? { input: params.input } : {}),
-              }),
-            ),
-          onRespond: (requestId, params) =>
-            eventStore.publish(
-              new InteractionDismissed({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                requestId,
-              }),
-            ),
-          getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
-          storage: storageCallbacks,
-        })
-
-        return {
-          request: Effect.fn("PermissionHandler.request")(function* (params, ctx) {
-            return yield* interaction.present({
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-              toolCallId: params.toolCallId,
-              toolName: params.toolName,
-              input: params.input,
-            })
-          }),
-          respond: (requestId, decision) => interaction.respond(requestId, decision),
-          rehydrate: (record) =>
-            interaction.rehydrate(
-              record.requestId,
-              JSON.parse(record.paramsJson) as PermissionParams,
-            ),
-        }
-      }),
-    )
-
-  static Test = (
-    decisions: ReadonlyArray<PermissionDecision> = ["allow"],
-  ): Layer.Layer<PermissionHandler> => {
-    let index = 0
-    return Layer.succeed(PermissionHandler, {
-      request: () => Effect.succeed(decisions[index++] ?? "allow"),
-      respond: () => Effect.sync(() => undefined as PermissionParams | undefined),
-      rehydrate: () => Effect.void,
-    })
-  }
-}
 
 // ============================================================================
 // Prompt Handler

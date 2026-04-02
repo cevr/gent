@@ -2,11 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
-import {
-  PermissionHandler,
-  PromptHandler,
-  HandoffHandler,
-} from "@gent/core/domain/interaction-handlers"
+import { PromptHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { Message } from "@gent/core/domain/message"
 import type { AgentName } from "@gent/core/domain/agent"
 import { Agents } from "@gent/core/domain/agent"
@@ -34,7 +30,7 @@ const testExtensions = resolveExtensions([
 
 interface SubmitCall {
   message: Message
-  options?: { bypass?: boolean; agentOverride?: AgentName }
+  options?: { agentOverride?: AgentName }
 }
 
 const makeTestLayer = (logs: {
@@ -42,7 +38,7 @@ const makeTestLayer = (logs: {
   steerLog?: Ref.Ref<SteerCommand[]>
 }) => {
   const agentLoopLayer = Layer.succeed(AgentLoop, {
-    submit: (message: Message, options?: { bypass?: boolean; agentOverride?: AgentName }) =>
+    submit: (message: Message, options?: { agentOverride?: AgentName }) =>
       Ref.update(logs.submitLog, (log) => [...log, { message, options }]),
     run: (_message: Message) => Effect.void,
     steer: logs.steerLog
@@ -73,12 +69,11 @@ const makeTestLayer = (logs: {
     storageDeps,
     actorProcessLayer,
     Provider.Test([]),
-    Permission.Live([], "ask"),
+    Permission.Live([], "allow"),
     ConfigService.Test(),
   )
   const deps = Layer.mergeAll(
     baseWithActorProcess,
-    Layer.provide(PermissionHandler.Live, baseWithActorProcess),
     Layer.provide(PromptHandler.Live, baseWithActorProcess),
     Layer.provide(HandoffHandler.Live, baseWithActorProcess),
   )

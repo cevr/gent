@@ -63,7 +63,6 @@ describe("TUI renderer surfaces", () => {
         kind: "steering",
         content: "switch to deepwork",
         createdAt: Date.now(),
-        bypass: false,
       },
     ]
     const queuedMessages: QueueEntryInfo[] = [
@@ -72,7 +71,6 @@ describe("TUI renderer surfaces", () => {
         kind: "follow-up",
         content: "line one\nline two\nline three",
         createdAt: Date.now(),
-        bypass: false,
       },
     ]
 
