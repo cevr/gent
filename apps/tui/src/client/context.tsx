@@ -420,8 +420,7 @@ export function ClientProvider(props: ClientProviderProps) {
               clientLog.error("event.subscription.failed", { error: formatError(err) })
               setConnectionIssue(formatConnectionIssue(err))
             },
-            waitForRetry: () =>
-              Effect.andThen(Effect.sleep("1 second"), runtime.lifecycle.waitForReady),
+            waitForRetry: () => runtime.lifecycle.waitForReady,
           },
         ),
       )
