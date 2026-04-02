@@ -76,11 +76,7 @@ export function Composer(props: ComposerProps) {
           Surface({
             draft: props.interactionState.draft,
             setDraft: (text: string) => props.onInteractionEvent({ _tag: "RestoreDraft", text }),
-            submit: () =>
-              controller.handleTextareaKeyDown({
-                name: "return",
-                preventDefault: () => {},
-              }),
+            submit: () => controller.handleSubmitFromTextarea(),
             focused: controller.inputFocused(),
             mode: controller.mode() as "editing" | "shell",
           })
@@ -97,11 +93,14 @@ export function Composer(props: ComposerProps) {
               ref={controller.attachTextarea}
               focused={controller.inputFocused()}
               onKeyDown={controller.handleTextareaKeyDown}
+              onSubmit={controller.handleSubmitFromTextarea}
               wrapMode="word"
               minHeight={1}
               maxHeight={8}
               keyBindings={[
+                { name: "return", action: "submit" },
                 { name: "return", shift: true, action: "newline" },
+                { name: "return", ctrl: true, action: "newline" },
                 { name: "linefeed", action: "newline" },
                 { name: "linefeed", shift: true, action: "newline" },
                 { name: "backspace", meta: true, action: "delete-word-backward" },

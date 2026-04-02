@@ -89,6 +89,7 @@ export interface ComposerController {
     super?: boolean
     preventDefault: () => void
   }) => void
+  readonly handleSubmitFromTextarea: () => void
   readonly resolveInteraction: (
     tag: InteractionEventTag,
     result: InteractionResolutionByTag[InteractionEventTag],
@@ -459,6 +460,20 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     return false
   })
 
+  /** Called by textarea onSubmit (keybinding: bare return → submit action). */
+  const handleSubmitFromTextarea = () => {
+    if (props.suspended === true || effectiveMode() === "interaction") return
+    if (autocomplete() !== null) return
+    submitMode = "queue"
+    handleSubmit()
+  }
+
+  /**
+   * Handles only meta/super+Enter for interject mode.
+   * All other Enter routing goes through textarea keybindings:
+   *   bare return → submit (→ handleSubmitFromTextarea)
+   *   shift/ctrl+return → newline
+   */
   const handleTextareaKeyDown = (event: {
     name?: string
     shift?: boolean
@@ -474,15 +489,23 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
       event.preventDefault()
       return
     }
-    if (event.shift === true || event.ctrl === true) return
+
+    // Meta/Super+Enter = interject (bypasses keybindings)
+    if (event.meta === true || event.super === true) {
+      event.preventDefault()
+      if (autocomplete() !== null) return
+      submitMode = "interject"
+      handleSubmit()
+      return
+    }
+
+    // Autocomplete open: swallow Enter so it doesn't submit
     if (autocomplete() !== null) {
       event.preventDefault()
       return
     }
 
-    event.preventDefault()
-    submitMode = event.super === true || event.meta === true ? "interject" : "queue"
-    handleSubmit()
+    // All other Enter variants (bare, shift, ctrl) fall through to textarea keybindings
   }
 
   createEffect(() => {
@@ -515,6 +538,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
       }
     },
     handleTextareaKeyDown,
+    handleSubmitFromTextarea,
     resolveInteraction: (
       tag: InteractionEventTag,
       result: InteractionResolutionByTag[InteractionEventTag],
