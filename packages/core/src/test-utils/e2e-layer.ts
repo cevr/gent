@@ -261,6 +261,7 @@ export const trackingHandoffHandler = () =>
       peek: () => Effect.succeed(undefined),
       claim: () => Effect.succeed(undefined),
       respond: () => Effect.succeed(undefined),
+      storeResolution: () => {},
       rehydrate: () => Effect.void,
     })
     return { layer, presentCalled }

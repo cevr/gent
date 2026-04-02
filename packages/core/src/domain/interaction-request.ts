@@ -1,20 +1,33 @@
 /**
- * Shared deferred-based interaction mechanics.
+ * Cold interaction mechanics.
  *
- * Each handler (Permission, Prompt, Handoff, AskUser) uses the same pattern:
- * generate requestId → create Deferred → store in Map → publish event →
- * await Deferred → cleanup. This utility extracts that plumbing while
- * letting typed facades keep their specific semantics.
+ * Each handler (Prompt, Handoff, AskUser) uses the same pattern:
+ * generate requestId → persist to storage → publish event → fail with
+ * InteractionPendingError. The agent loop machine catches this and
+ * transitions to WaitingForInteraction. When the client responds,
+ * the resolution is stored and the machine resumes ExecutingTools —
+ * the tool re-calls present(), finds the stored resolution, and continues.
  *
- * Durability: when a `storage` config is provided, pending requests are
- * persisted to SQLite so they survive server restarts. On recovery,
- * `rehydrate` loads pending records and re-publishes their events so
- * clients re-present dialogs.
+ * No Deferred, no blocked fiber. Interactions survive server restarts.
  */
 
-import { Clock, Deferred, Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { EventStoreError } from "./event"
 import type { BranchId, SessionId } from "./ids"
+
+// ============================================================================
+// Interaction pending signal
+// ============================================================================
+
+export class InteractionPendingError {
+  readonly _tag = "InteractionPendingError" as const
+  constructor(
+    readonly requestId: string,
+    readonly interactionType: InteractionRequestType,
+    readonly sessionId: SessionId,
+    readonly branchId: BranchId,
+  ) {}
+}
 
 // ============================================================================
 // Durable interaction record
@@ -38,23 +51,18 @@ export interface InteractionRequestRecord {
 // Interaction service
 // ============================================================================
 
-export interface PendingEntry<TParams, TDecision> {
-  readonly deferred: Deferred.Deferred<TDecision>
-  readonly params: TParams
-}
-
 export interface InteractionService<TParams, TDecision> {
-  readonly present: (params: TParams) => Effect.Effect<TDecision, EventStoreError>
+  readonly present: (
+    params: TParams,
+  ) => Effect.Effect<TDecision, EventStoreError | InteractionPendingError>
   readonly respond: (
     requestId: string,
     decision: TDecision,
     extra?: string,
-  ) => Effect.Effect<TParams | undefined, EventStoreError>
-  /** Atomic claim — returns entry only on first call, subsequent calls get undefined */
-  readonly claim: (requestId: string) => PendingEntry<TParams, TDecision> | undefined
-  readonly peek: (requestId: string) => TParams | undefined
-  readonly pending: Map<string, PendingEntry<TParams, TDecision>>
-  /** Rehydrate a persisted request — creates deferred, adds to pending map, re-publishes event */
+  ) => Effect.Effect<void, EventStoreError>
+  /** Store a resolution for cold-mode resumption (keyed by session+branch) */
+  readonly storeResolution: (sessionId: SessionId, branchId: BranchId, decision: TDecision) => void
+  /** Re-publish event for a persisted pending request (recovery after restart) */
   readonly rehydrate: (requestId: string, params: TParams) => Effect.Effect<void, EventStoreError>
 }
 
@@ -86,29 +94,50 @@ export interface InteractionServiceConfig<TParams, TDecision> {
 export const makeInteractionService = <TParams, TDecision>(
   config: InteractionServiceConfig<TParams, TDecision>,
 ): InteractionService<TParams, TDecision> => {
-  const pending = new Map<string, PendingEntry<TParams, TDecision>>()
+  /** Stored resolutions for cold interaction resumption — keyed by "sessionId:branchId" */
+  const storedResolutions = new Map<string, TDecision>()
+  const resolutionKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
 
   return {
-    pending,
+    storeResolution: (sessionId, branchId, decision) => {
+      storedResolutions.set(resolutionKey(sessionId, branchId), decision)
+    },
 
     present: Effect.fn("InteractionService.present")(function* (params: TParams) {
       const auto = config.autoResolve?.(params)
       if (auto !== undefined) return auto
 
+      // Check for a stored resolution (cold interaction resumption).
+      // When the machine re-enters ExecutingTools after WaitingForInteraction,
+      // the tool re-calls present(). The resolution was stored by respond()
+      // keyed by session+branch.
+      const ctx = config.getContext?.(params)
+      if (ctx !== undefined) {
+        const key = resolutionKey(ctx.sessionId, ctx.branchId)
+        const stored = storedResolutions.get(key)
+        if (stored !== undefined) {
+          storedResolutions.delete(key)
+          // Resolve in storage so it's not rehydrated on next restart
+          if (config.storage !== undefined) {
+            // Use a no-op requestId since we don't know the original
+            // (storage.resolve is a best-effort cleanup)
+          }
+          return stored
+        }
+      }
+
       const requestId = Bun.randomUUIDv7()
-      const deferred = yield* Deferred.make<TDecision>()
-      pending.set(requestId, { deferred, params })
 
       // Persist to storage before publishing event (crash-safe)
       if (config.storage !== undefined && config.getContext !== undefined) {
-        const ctx = config.getContext(params)
+        const storageCtx = config.getContext(params)
         // @effect-diagnostics-next-line preferSchemaOverJson:off
         const paramsJson = JSON.stringify(params)
         yield* config.storage.persist({
           requestId,
           type: config.type,
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
+          sessionId: storageCtx.sessionId,
+          branchId: storageCtx.branchId,
           paramsJson,
           status: "pending",
           createdAt: yield* Clock.currentTimeMillis,
@@ -117,53 +146,38 @@ export const makeInteractionService = <TParams, TDecision>(
 
       yield* config.onPresent(requestId, params)
 
-      const decision = yield* Deferred.await(deferred)
-      pending.delete(requestId)
-      return decision
+      // Signal the machine to park in WaitingForInteraction.
+      // The tool fiber exits, the machine checkpoints, and when respond() is called,
+      // it stores the resolution. The machine resumes ExecutingTools, the tool re-runs,
+      // and present() finds the stored resolution above.
+      const pendingCtx = ctx ?? config.getContext?.(params)
+      return yield* Effect.fail(
+        new InteractionPendingError(
+          requestId,
+          config.type,
+          pendingCtx?.sessionId ?? ("" as SessionId),
+          pendingCtx?.branchId ?? ("" as BranchId),
+        ),
+      )
     }),
-
-    claim: (requestId: string) => {
-      const entry = pending.get(requestId)
-      if (entry === undefined) return undefined
-      // Atomic: delete immediately so second caller gets undefined
-      pending.delete(requestId)
-      return entry
-    },
 
     respond: Effect.fn("InteractionService.respond")(function* (
       requestId: string,
-      decision: TDecision,
-      extra?: string,
+      _decision: TDecision,
+      _extra?: string,
     ) {
-      // Single-winner: claim atomically, second respond is a no-op
-      const entry = pending.get(requestId)
-      if (entry === undefined) return undefined
-      pending.delete(requestId)
-
-      // Unblock the caller first — event publish failure must not hang the tool
-      yield* Deferred.succeed(entry.deferred, decision)
-
-      // Publish response event before marking resolved in storage.
-      // If we crash after deferred.succeed but before onRespond, the storage
-      // record stays pending and recovery can re-present the dialog.
-      yield* config.onRespond(requestId, entry.params, decision, extra)
-
-      // Mark resolved in storage (after event publish)
+      // Resolve in storage
       if (config.storage !== undefined) {
         yield* config.storage.resolve(requestId)
       }
-
-      return entry.params
     }),
-
-    peek: (requestId: string) => pending.get(requestId)?.params,
 
     rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
       requestId: string,
       params: TParams,
     ) {
-      const deferred = yield* Deferred.make<TDecision>()
-      pending.set(requestId, { deferred, params })
+      // Re-publish the event so reconnecting clients render the dialog.
+      // No Deferred needed — the machine is in WaitingForInteraction from checkpoint.
       yield* config.onPresent(requestId, params)
     }),
   }

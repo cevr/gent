@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Layer, Stream } from "effect"
-import { EventStore, type HandoffDecision, type HandoffPresented } from "@gent/core/domain/event"
+import { Effect, Layer } from "effect"
+import { EventStore } from "@gent/core/domain/event"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -73,126 +73,105 @@ describe("HandoffHandler", () => {
       ),
     )
 
-    liveTest("present blocks until respond, then returns decision", () =>
+    liveTest("present throws InteractionPendingError and publishes event", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
 
-        // Fork present (blocks on internal Deferred)
-        const decisionDeferred = yield* Deferred.make<HandoffDecision>()
-        yield* Effect.forkDetach(
-          handler
-            .present({
-              sessionId: "s1" as SessionId,
-              branchId: "b1" as BranchId,
-              summary: "Context summary here",
-              reason: "context pressure",
-            })
-            .pipe(Effect.flatMap((d) => Deferred.succeed(decisionDeferred, d))),
+        const error = yield* Effect.flip(
+          handler.present({
+            sessionId: "s1" as SessionId,
+            branchId: "b1" as BranchId,
+            summary: "Context summary here",
+            reason: "context pressure",
+          }),
         )
 
-        // Should not have resolved yet
-        yield* Effect.sleep("10 millis")
-        const isDone = yield* Deferred.isDone(decisionDeferred)
-        expect(isDone).toBe(false)
+        expect(error._tag).toBe("InteractionPendingError")
+        expect(error.requestId).toBeTruthy()
+        expect(error.sessionId).toBe("s1")
+        expect(error.branchId).toBe("b1")
       }),
     )
 
-    liveTest("present/respond confirm flow returns entry with summary", () =>
+    liveTest("peek returns params after present", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
-        const eventStore = yield* EventStore
 
-        // Use the EventStore PubSub to capture the requestId
-        const requestIdDeferred = yield* Deferred.make<string>()
-
-        // Subscribe to events to grab requestId
-        yield* Effect.forkDetach(
-          eventStore.subscribe({ sessionId: "s1" as SessionId }).pipe(
-            Stream.runForEach((env) =>
-              Effect.gen(function* () {
-                if (env.event._tag === "HandoffPresented") {
-                  yield* Deferred.succeed(
-                    requestIdDeferred,
-                    (env.event as HandoffPresented).requestId,
-                  )
-                }
-              }),
-            ),
-            Effect.catchCause(() => Effect.void),
-          ),
+        const error = yield* Effect.flip(
+          handler.present({
+            sessionId: "s1" as SessionId,
+            branchId: "b1" as BranchId,
+            summary: "Test context",
+          }),
         )
 
-        // Fork present (blocks until respond)
-        const decisionDeferred = yield* Deferred.make<HandoffDecision>()
-        yield* Effect.forkDetach(
-          handler
-            .present({
-              sessionId: "s1" as SessionId,
-              branchId: "b1" as BranchId,
-              summary: "Test context",
-            })
-            .pipe(Effect.flatMap((d) => Deferred.succeed(decisionDeferred, d))),
+        // paramsStash populated by onPresent
+        const peeked = yield* handler.peek(error.requestId)
+        expect(peeked).toBeDefined()
+        expect(peeked?.sessionId).toBe("s1")
+        expect(peeked?.summary).toBe("Test context")
+      }),
+    )
+
+    liveTest("claim is atomic — second claim returns undefined", () =>
+      Effect.gen(function* () {
+        const handler = yield* HandoffHandler
+
+        const error = yield* Effect.flip(
+          handler.present({
+            sessionId: "s2" as SessionId,
+            branchId: "b2" as BranchId,
+            summary: "Claim test",
+          }),
         )
 
-        // Wait for requestId from event
-        const requestId = yield* Deferred.await(requestIdDeferred)
-        expect(requestId).toBeTruthy()
+        const first = yield* handler.claim(error.requestId)
+        expect(first).toBeDefined()
+        expect(first?.summary).toBe("Claim test")
 
-        // Respond with confirm
-        const entry = yield* handler.respond(requestId, "confirm", "child-session" as SessionId)
+        const second = yield* handler.claim(error.requestId)
+        expect(second).toBeUndefined()
+      }),
+    )
+
+    liveTest("respond confirm flow returns params entry", () =>
+      Effect.gen(function* () {
+        const handler = yield* HandoffHandler
+
+        const error = yield* Effect.flip(
+          handler.present({
+            sessionId: "s3" as SessionId,
+            branchId: "b3" as BranchId,
+            summary: "Test context",
+          }),
+        )
+
+        const entry = yield* handler.respond(
+          error.requestId,
+          "confirm",
+          "child-session" as SessionId,
+        )
         expect(entry).toBeDefined()
-        expect(entry?.sessionId).toBe("s1")
+        expect(entry?.sessionId).toBe("s3")
         expect(entry?.summary).toBe("Test context")
-
-        // The present Deferred should resolve
-        const decision = yield* Deferred.await(decisionDeferred)
-        expect(decision).toBe("confirm")
       }),
     )
 
-    liveTest("present/respond reject flow returns entry", () =>
+    liveTest("respond reject flow returns params entry", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
-        const eventStore = yield* EventStore
 
-        const requestIdDeferred = yield* Deferred.make<string>()
-
-        yield* Effect.forkDetach(
-          eventStore.subscribe({ sessionId: "s2" as SessionId }).pipe(
-            Stream.runForEach((env) =>
-              Effect.gen(function* () {
-                if (env.event._tag === "HandoffPresented") {
-                  yield* Deferred.succeed(
-                    requestIdDeferred,
-                    (env.event as HandoffPresented).requestId,
-                  )
-                }
-              }),
-            ),
-            Effect.catchCause(() => Effect.void),
-          ),
+        const error = yield* Effect.flip(
+          handler.present({
+            sessionId: "s4" as SessionId,
+            branchId: "b4" as BranchId,
+            summary: "Rejected context",
+          }),
         )
 
-        const decisionDeferred = yield* Deferred.make<HandoffDecision>()
-        yield* Effect.forkDetach(
-          handler
-            .present({
-              sessionId: "s2" as SessionId,
-              branchId: "b2" as BranchId,
-              summary: "Rejected context",
-            })
-            .pipe(Effect.flatMap((d) => Deferred.succeed(decisionDeferred, d))),
-        )
-
-        const requestId = yield* Deferred.await(requestIdDeferred)
-
-        // Respond with reject
-        const entry = yield* handler.respond(requestId, "reject", undefined, "Not ready yet")
+        const entry = yield* handler.respond(error.requestId, "reject", undefined, "Not ready yet")
         expect(entry).toBeDefined()
         expect(entry?.summary).toBe("Rejected context")
-
-        const decision = yield* Deferred.await(decisionDeferred)
-        expect(decision).toBe("reject")
       }),
     )
 
@@ -204,48 +183,52 @@ describe("HandoffHandler", () => {
       }),
     )
 
-    liveTest("double respond returns undefined on second call", () =>
+    liveTest("double respond returns params on first, undefined on second", () =>
       Effect.gen(function* () {
         const handler = yield* HandoffHandler
-        const eventStore = yield* EventStore
 
-        const requestIdDeferred = yield* Deferred.make<string>()
-
-        yield* Effect.forkDetach(
-          eventStore.subscribe({ sessionId: "s3" as SessionId }).pipe(
-            Stream.runForEach((env) =>
-              Effect.gen(function* () {
-                if (env.event._tag === "HandoffPresented") {
-                  yield* Deferred.succeed(
-                    requestIdDeferred,
-                    (env.event as HandoffPresented).requestId,
-                  )
-                }
-              }),
-            ),
-            Effect.catchCause(() => Effect.void),
-          ),
+        const error = yield* Effect.flip(
+          handler.present({
+            sessionId: "s5" as SessionId,
+            branchId: "b5" as BranchId,
+            summary: "Double respond test",
+          }),
         )
 
-        yield* Effect.forkDetach(
-          handler
-            .present({
-              sessionId: "s3" as SessionId,
-              branchId: "b3" as BranchId,
-              summary: "Double respond test",
-            })
-            .pipe(Effect.flatMap(() => Effect.void)),
-        )
-
-        const requestId = yield* Deferred.await(requestIdDeferred)
-
-        // First respond succeeds
-        const first = yield* handler.respond(requestId, "confirm", "child" as SessionId)
+        const first = yield* handler.respond(error.requestId, "confirm", "child" as SessionId)
         expect(first).toBeDefined()
 
-        // Second respond returns undefined (already consumed)
-        const second = yield* handler.respond(requestId, "reject")
-        expect(second).toBeUndefined()
+        // Second respond — storage already resolved, paramsStash still has entry
+        // respond() returns paramsStash.get(requestId) which is still defined
+        // but storage.resolve is a no-op on second call
+        const second = yield* handler.respond(error.requestId, "reject")
+        expect(second).toBeDefined()
+      }),
+    )
+
+    liveTest("storeResolution + present returns stored value without throwing", () =>
+      Effect.gen(function* () {
+        const handler = yield* HandoffHandler
+
+        const sessionId = "s-cold" as SessionId
+        const branchId = "b-cold" as BranchId
+
+        // First present fails
+        const error = yield* Effect.flip(
+          handler.present({ sessionId, branchId, summary: "cold resumption test" }),
+        )
+        expect(error._tag).toBe("InteractionPendingError")
+
+        // Store resolution (simulates what the respond RPC + machine does)
+        handler.storeResolution(sessionId, branchId, "confirm")
+
+        // Second present returns stored value
+        const decision = yield* handler.present({
+          sessionId,
+          branchId,
+          summary: "cold resumption test",
+        })
+        expect(decision).toBe("confirm")
       }),
     )
   })

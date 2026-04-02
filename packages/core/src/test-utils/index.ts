@@ -159,6 +159,7 @@ export const RecordingAskUserHandler = (
             })
           },
         ),
+        storeResolution: () => {},
         rehydrate: () => Effect.void,
       }
     }),

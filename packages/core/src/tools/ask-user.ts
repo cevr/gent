@@ -74,6 +74,11 @@ export interface AskUserHandlerService {
     answers: ReadonlyArray<ReadonlyArray<string>>,
     cancelled?: boolean,
   ) => Effect.Effect<void, EventStoreError>
+  readonly storeResolution: (
+    sessionId: SessionId,
+    branchId: BranchId,
+    decision: AskUserDecision,
+  ) => void
   readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
 
@@ -137,6 +142,8 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
               cancelled === true ? { _tag: "cancelled" } : { _tag: "answered", answers },
             )
             .pipe(Effect.asVoid),
+        storeResolution: (sessionId, branchId, decision) =>
+          interaction.storeResolution(sessionId, branchId, decision),
         rehydrate: (record) =>
           interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as AskUserParams_),
       }
@@ -152,6 +159,7 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
           answers: questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
         }).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
       respond: () => Effect.void,
+      storeResolution: () => {},
       rehydrate: () => Effect.void,
     })
   }
@@ -160,6 +168,7 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
     Layer.succeed(AskUserHandler, {
       askMany: () => Effect.succeed<AskUserDecision>({ _tag: "cancelled" }),
       respond: () => Effect.void,
+      storeResolution: () => {},
       rehydrate: () => Effect.void,
     })
 }

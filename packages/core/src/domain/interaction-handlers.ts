@@ -16,6 +16,7 @@ import {
 import type { BranchId, SessionId } from "./ids"
 import {
   makeInteractionService,
+  type InteractionPendingError,
   type InteractionStorageConfig,
   type InteractionRequestRecord,
 } from "./interaction-request"
@@ -35,12 +36,19 @@ interface PromptParams {
 }
 
 export interface PromptHandlerService {
-  readonly present: (params: PromptParams) => Effect.Effect<PromptDecision, EventStoreError>
+  readonly present: (
+    params: PromptParams,
+  ) => Effect.Effect<PromptDecision, EventStoreError | InteractionPendingError>
   readonly respond: (
     requestId: string,
     decision: PromptDecision,
     content?: string,
-  ) => Effect.Effect<PromptParams | undefined, EventStoreError>
+  ) => Effect.Effect<void, EventStoreError>
+  readonly storeResolution: (
+    sessionId: SessionId,
+    branchId: BranchId,
+    decision: PromptDecision,
+  ) => void
   readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
 
@@ -121,6 +129,8 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
         present: (params) => interaction.present(params),
         respond: (requestId, decision, content) =>
           interaction.respond(requestId, decision, content),
+        storeResolution: (sessionId, branchId, decision) =>
+          interaction.storeResolution(sessionId, branchId, decision),
         rehydrate: (record) =>
           interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as PromptParams),
       }
@@ -133,7 +143,8 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
     let index = 0
     return Layer.succeed(PromptHandler, {
       present: () => Effect.succeed(decisions[index++] ?? "yes"),
-      respond: () => Effect.sync(() => undefined as PromptParams | undefined),
+      respond: () => Effect.void,
+      storeResolution: () => {},
       rehydrate: () => Effect.void,
     })
   }
@@ -151,7 +162,9 @@ interface HandoffParams {
 }
 
 export interface HandoffHandlerService {
-  readonly present: (params: HandoffParams) => Effect.Effect<HandoffDecision, EventStoreError>
+  readonly present: (
+    params: HandoffParams,
+  ) => Effect.Effect<HandoffDecision, EventStoreError | InteractionPendingError>
   readonly peek: (requestId: string) => Effect.Effect<HandoffParams | undefined>
   readonly claim: (requestId: string) => Effect.Effect<HandoffParams | undefined>
   readonly respond: (
@@ -160,6 +173,11 @@ export interface HandoffHandlerService {
     childSessionId?: SessionId,
     reason?: string,
   ) => Effect.Effect<HandoffParams | undefined, EventStoreError>
+  readonly storeResolution: (
+    sessionId: SessionId,
+    branchId: BranchId,
+    decision: HandoffDecision,
+  ) => void
   readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
 }
 
@@ -171,12 +189,15 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
     Effect.gen(function* () {
       const eventStore = yield* EventStore
       const claimed = new Set<string>()
+      /** Params stash for cold interaction peek/claim — indexed by requestId */
+      const paramsStash = new Map<string, HandoffParams>()
       const storageCallbacks = yield* makeStorageCallbacks
 
       const interaction = makeInteractionService<HandoffParams, HandoffDecision>({
         type: "handoff",
-        onPresent: (requestId, params) =>
-          eventStore.publish(
+        onPresent: (requestId, params) => {
+          paramsStash.set(requestId, params)
+          return eventStore.publish(
             new HandoffPresented({
               sessionId: params.sessionId,
               branchId: params.branchId,
@@ -184,7 +205,8 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
               summary: params.summary,
               ...(params.reason !== undefined ? { reason: params.reason } : {}),
             }),
-          ),
+          )
+        },
         onRespond: (requestId, params, decision, extra) => {
           const dismissed = eventStore.publish(
             new InteractionDismissed({
@@ -223,10 +245,10 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
       return {
         present: (params) => interaction.present(params),
 
-        peek: (requestId) => Effect.succeed(interaction.peek(requestId)),
+        peek: (requestId) => Effect.succeed(paramsStash.get(requestId)),
 
         claim: (requestId) => {
-          const params = interaction.peek(requestId)
+          const params = paramsStash.get(requestId)
           if (params === undefined || claimed.has(requestId)) {
             return Effect.sync(() => undefined as HandoffParams | undefined)
           }
@@ -236,11 +258,14 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
 
         respond: Effect.fn("HandoffHandler.respond")(
           function* (requestId, decision, childSessionId, reason) {
-            // Pass childSessionId or reason as extra
             const extra = decision === "confirm" ? childSessionId : reason
-            return yield* interaction.respond(requestId, decision, extra)
+            yield* interaction.respond(requestId, decision, extra)
+            return paramsStash.get(requestId)
           },
         ),
+
+        storeResolution: (sessionId, branchId, decision) =>
+          interaction.storeResolution(sessionId, branchId, decision),
 
         rehydrate: (record) =>
           interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as HandoffParams),
@@ -257,6 +282,7 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
       peek: () => Effect.sync(() => undefined as HandoffParams | undefined),
       claim: () => Effect.sync(() => undefined as HandoffParams | undefined),
       respond: () => Effect.sync(() => undefined as HandoffParams | undefined),
+      storeResolution: () => {},
       rehydrate: () => Effect.void,
     })
   }

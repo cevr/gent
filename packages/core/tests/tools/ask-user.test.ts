@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
+import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { AskUserTool, AskUserHandler } from "@gent/core/tools/ask-user"
 import type { ToolContext } from "@gent/core/domain/tool"
@@ -26,59 +26,49 @@ describe("AskUser Handler (integration)", () => {
   const deps = Layer.mergeAll(EventStore.Memory, Storage.TestWithSql())
   const handlerLayer = AskUserHandler.Live.pipe(Layer.provideMerge(deps))
 
-  it.scopedLive("respond with cancelled resolves askMany as cancelled", () =>
+  it.live("askMany throws InteractionPendingError and persists request", () =>
     Effect.gen(function* () {
       const handler = yield* AskUserHandler
-      const eventStore = yield* EventStore
 
-      // Latch: deterministic wait for QuestionsAsked event
-      const latch = yield* Deferred.make<string>()
-      const subscription = eventStore.subscribe({ sessionId: "test-session" as never }).pipe(
-        Stream.tap((env) => {
-          if (env.event._tag === "QuestionsAsked") {
-            return Deferred.succeed(latch, env.event.requestId)
-          }
-          return Effect.void
-        }),
-        Stream.runDrain,
-      )
-      yield* Effect.forkScoped(subscription)
+      const error = yield* Effect.flip(handler.askMany([{ question: "Continue?" }], ctx))
+      expect(error._tag).toBe("InteractionPendingError")
+      expect(error.requestId).toBeTruthy()
+      expect(error.interactionType).toBe("ask-user")
+    }).pipe(Effect.provide(handlerLayer)),
+  )
 
-      // Start askMany in a fiber — it blocks on the deferred
-      const askFiber = yield* Effect.forkScoped(handler.askMany([{ question: "Continue?" }], ctx))
+  it.live("storeResolution + askMany returns stored cancelled decision", () =>
+    Effect.gen(function* () {
+      const handler = yield* AskUserHandler
 
-      // Wait for event deterministically, then respond
-      const requestId = yield* Deferred.await(latch)
-      yield* handler.respond(requestId, [], true)
+      // First call fails
+      const error = yield* Effect.flip(handler.askMany([{ question: "Continue?" }], ctx))
+      expect(error._tag).toBe("InteractionPendingError")
 
-      const decision = yield* Fiber.join(askFiber)
+      // Store the cancelled resolution
+      handler.storeResolution(ctx.sessionId as never, ctx.branchId as never, { _tag: "cancelled" })
+
+      // Second call returns stored decision
+      const decision = yield* handler.askMany([{ question: "Continue?" }], ctx)
       expect(decision._tag).toBe("cancelled")
     }).pipe(Effect.provide(handlerLayer)),
   )
 
-  it.scopedLive("respond with answers resolves askMany as answered", () =>
+  it.live("storeResolution + askMany returns stored answered decision", () =>
     Effect.gen(function* () {
       const handler = yield* AskUserHandler
-      const eventStore = yield* EventStore
 
-      const latch = yield* Deferred.make<string>()
-      const subscription = eventStore.subscribe({ sessionId: "test-session" as never }).pipe(
-        Stream.tap((env) => {
-          if (env.event._tag === "QuestionsAsked") {
-            return Deferred.succeed(latch, env.event.requestId)
-          }
-          return Effect.void
-        }),
-        Stream.runDrain,
-      )
-      yield* Effect.forkScoped(subscription)
+      // First call fails
+      yield* Effect.flip(handler.askMany([{ question: "Continue?" }], ctx))
 
-      const askFiber = yield* Effect.forkScoped(handler.askMany([{ question: "Continue?" }], ctx))
+      // Store answered resolution
+      handler.storeResolution(ctx.sessionId as never, ctx.branchId as never, {
+        _tag: "answered",
+        answers: [["Yes"]],
+      })
 
-      const requestId = yield* Deferred.await(latch)
-      yield* handler.respond(requestId, [["Yes"]])
-
-      const decision = yield* Fiber.join(askFiber)
+      // Second call returns stored decision
+      const decision = yield* handler.askMany([{ question: "Continue?" }], ctx)
       expect(decision._tag).toBe("answered")
       if (decision._tag === "answered") {
         expect(decision.answers).toEqual([["Yes"]])

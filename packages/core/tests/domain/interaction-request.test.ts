@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Deferred, Effect } from "effect"
+import { Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import {
@@ -10,13 +10,13 @@ import {
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 
 // ============================================================================
-// Interaction Request Durability
+// Interaction Request — cold interaction mechanics
 // ============================================================================
 
-describe("Interaction Request Durability", () => {
+describe("Interaction Request", () => {
   const storageLive = Storage.MemoryWithSql()
 
-  test("present persists request to storage", async () => {
+  test("present persists request to storage and throws InteractionPendingError", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const is = yield* InteractionStorage
@@ -44,39 +44,26 @@ describe("Interaction Request Durability", () => {
           storage: storageCallbacks,
         })
 
-        // Fork present — it will block on the deferred
-        const resultDeferred = yield* Deferred.make<string>()
-        yield* Effect.forkDetach(
-          interaction
-            .present({
-              sessionId: "s1" as SessionId,
-              branchId: "b1" as BranchId,
-              value: "test",
-            })
-            .pipe(Effect.flatMap((d) => Deferred.succeed(resultDeferred, d))),
+        // present() should fail with InteractionPendingError
+        const error = yield* Effect.flip(
+          interaction.present({
+            sessionId: "s1" as SessionId,
+            branchId: "b1" as BranchId,
+            value: "test",
+          }),
         )
+        expect(error._tag).toBe("InteractionPendingError")
+        expect(error.requestId).toBeTruthy()
+        expect(error.sessionId).toBe("s1")
+        expect(error.branchId).toBe("b1")
 
-        // Give the fork time to persist
-        yield* Effect.sleep("10 millis")
-
-        // Verify persisted
+        // Verify persisted to storage
         const pending = yield* is.listPending()
         expect(pending.length).toBe(1)
         expect(pending[0]!.type).toBe("permission")
         expect(pending[0]!.sessionId).toBe("s1")
         expect(pending[0]!.branchId).toBe("b1")
         expect(pending[0]!.status).toBe("pending")
-
-        // Respond — should resolve the deferred
-        const requestId = pending[0]!.requestId
-        yield* interaction.respond(requestId, "allow")
-
-        const result = yield* Deferred.await(resultDeferred)
-        expect(result).toBe("allow")
-
-        // Verify resolved in storage
-        const afterResolve = yield* is.listPending()
-        expect(afterResolve.length).toBe(0)
       }).pipe(Effect.provide(storageLive)),
     )
   })
@@ -148,7 +135,7 @@ describe("Interaction Request Durability", () => {
     )
   })
 
-  test("double respond is idempotent — second call is a no-op", async () => {
+  test("storeResolution + subsequent present returns stored value without throwing", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const interaction = makeInteractionService<
@@ -158,56 +145,24 @@ describe("Interaction Request Durability", () => {
           type: "permission",
           onPresent: () => Effect.void,
           onRespond: () => Effect.void,
+          getContext: (p) => ({ sessionId: p.sessionId, branchId: p.branchId }),
         })
 
-        // Fork present — blocks on deferred
-        const resultDeferred = yield* Deferred.make<string>()
-        yield* Effect.forkDetach(
-          interaction
-            .present({ sessionId: "s-dr" as SessionId, branchId: "b-dr" as BranchId })
-            .pipe(Effect.flatMap((d) => Deferred.succeed(resultDeferred, d))),
-        )
-        yield* Effect.sleep("10 millis")
+        const sessionId = "s-cold" as SessionId
+        const branchId = "b-cold" as BranchId
 
-        // Get the requestId from pending map
-        const entries = [...interaction.pending.entries()]
-        expect(entries.length).toBe(1)
-        const requestId = entries[0]![0]
+        // First present — fails with InteractionPendingError
+        const error = yield* Effect.flip(interaction.present({ sessionId, branchId }))
+        expect(error._tag).toBe("InteractionPendingError")
 
-        // First respond — should succeed
-        const first = yield* interaction.respond(requestId, "allow")
-        expect(first).toBeDefined()
+        // Store resolution (simulates what respond() + machine does)
+        interaction.storeResolution(sessionId, branchId, "allow")
 
-        // Second respond — should be no-op
-        const second = yield* interaction.respond(requestId, "deny")
-        expect(second).toBeUndefined()
-
-        // The deferred should have resolved with the first decision
-        const result = yield* Deferred.await(resultDeferred)
+        // Second present — finds stored resolution, returns it
+        const result = yield* interaction.present({ sessionId, branchId })
         expect(result).toBe("allow")
       }),
     )
-  })
-
-  test("claim is atomic — second claim returns undefined", () => {
-    const interaction = makeInteractionService<{ value: string }, string>({
-      type: "permission",
-      onPresent: () => Effect.void,
-      onRespond: () => Effect.void,
-    })
-
-    // Manually insert a pending entry for testing
-    const deferred = Effect.runSync(Deferred.make<string>())
-    interaction.pending.set("req-claim", { deferred, params: { value: "test" } })
-
-    // First claim succeeds
-    const first = interaction.claim("req-claim")
-    expect(first).toBeDefined()
-    expect(first!.params.value).toBe("test")
-
-    // Second claim returns undefined
-    const second = interaction.claim("req-claim")
-    expect(second).toBeUndefined()
   })
 
   test("autoResolve skips storage persistence", async () => {
@@ -238,7 +193,7 @@ describe("Interaction Request Durability", () => {
           storage: storageCallbacks,
         })
 
-        // Auto-resolved — should not persist
+        // Auto-resolved — should not persist and not throw
         const result = yield* interaction.present({
           sessionId: "s4" as SessionId,
           branchId: "b5" as BranchId,

@@ -2,6 +2,7 @@ import { ServiceMap, Effect, Layer, FileSystem, Path } from "effect"
 import type { PlatformError } from "effect"
 import type { SessionId, BranchId } from "./ids"
 import type { EventStoreError, PromptDecision } from "./event"
+import type { InteractionPendingError } from "./interaction-request"
 import { PromptHandler } from "./interaction-handlers"
 import { RuntimePlatform } from "../runtime/runtime-platform"
 
@@ -15,14 +16,14 @@ export interface PromptPresenterService {
     branchId: BranchId
     content: string
     title?: string
-  }) => Effect.Effect<void, EventStoreError>
+  }) => Effect.Effect<void, EventStoreError | InteractionPendingError>
 
   readonly confirm: (params: {
     sessionId: SessionId
     branchId: BranchId
     content: string
     title?: string
-  }) => Effect.Effect<"yes" | "no", EventStoreError>
+  }) => Effect.Effect<"yes" | "no", EventStoreError | InteractionPendingError>
 
   readonly review: (params: {
     sessionId: SessionId
@@ -32,7 +33,7 @@ export interface PromptPresenterService {
     fileNameSeed: string
   }) => Effect.Effect<
     { decision: "yes" | "no" | "edit"; path: string; content?: string },
-    EventStoreError | PlatformError.PlatformError
+    EventStoreError | PlatformError.PlatformError | InteractionPendingError
   >
 }
 
