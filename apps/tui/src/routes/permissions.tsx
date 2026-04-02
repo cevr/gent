@@ -13,11 +13,13 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { PermissionRule, GentNamespacedClient, GentRuntime } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { formatError } from "../utils/format-error"
+import type { ClientLog } from "../utils/client-logger"
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface PermissionsProps {
   client: GentNamespacedClient
   runtime: GentRuntime
+  log: ClientLog
 }
 
 type PermissionsState =
@@ -28,7 +30,7 @@ export function Permissions(props: PermissionsProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.runtime)
+  const { cast } = useRuntime(props.runtime, props.log)
 
   const [state, setState] = createSignal<PermissionsState>({ _tag: "loading" })
   let scrollRef: ScrollBoxRenderable | undefined = undefined

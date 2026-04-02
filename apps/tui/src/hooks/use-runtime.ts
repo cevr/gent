@@ -5,7 +5,7 @@
 import { Effect, Exit, Fiber, Cause } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "../atom-solid/result"
-import { clientLog } from "../utils/client-logger"
+import type { ClientLog } from "../utils/client-logger"
 import type { GentRuntime } from "@gent/sdk"
 
 export interface UseRuntimeReturn {
@@ -21,7 +21,7 @@ export interface UseRuntimeReturn {
  * Hook to run Effects via a GentRuntime
  * @param runtime - GentRuntime with cast/fork/run
  */
-export function useRuntime(runtime: GentRuntime): UseRuntimeReturn {
+export function useRuntime(runtime: GentRuntime, log: ClientLog): UseRuntimeReturn {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const call = <A, E>(effect: Effect.Effect<A, E, any>): [Accessor<Result<A, E>>, () => void] => {
     const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))
@@ -55,7 +55,7 @@ export function useRuntime(runtime: GentRuntime): UseRuntimeReturn {
     const fiber = runtime.fork(effect)
     fiber.addObserver((exit) => {
       if (Exit.isFailure(exit)) {
-        clientLog.error("cast.failed", { error: Cause.pretty(exit.cause) })
+        log.error("cast.failed", { error: Cause.pretty(exit.cause) })
       }
     })
   }

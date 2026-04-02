@@ -1,8 +1,9 @@
 import { Effect, Schedule } from "effect"
-import { clientLog } from "./client-logger"
+import type { ClientLog } from "./client-logger"
 
 export interface ReconnectOptions<E> {
   readonly label?: string
+  readonly log: ClientLog
   readonly onError?: (error: E) => void
   readonly waitForRetry: () => Effect.Effect<void>
 }
@@ -18,20 +19,21 @@ export const runWithReconnect = <E, R>(
 ): Effect.Effect<never, never, R> => {
   let attempt = 0
   const label = options.label ?? "unknown"
+  const log = options.log
   return Effect.gen(function* () {
     attempt++
-    clientLog.info("reconnect.attempt", { label, attempt })
+    log.info("reconnect.attempt", { label, attempt })
     yield* effectFactory().pipe(
       Effect.catchEager((error) =>
         Effect.sync(() => {
-          clientLog.warn("reconnect.error", { label, attempt, error: String(error) })
+          log.warn("reconnect.error", { label, attempt, error: String(error) })
           options.onError?.(error)
         }),
       ),
     )
-    clientLog.info("reconnect.stream-ended", { label, attempt })
-    clientLog.info("reconnect.wait-for-ready", { label, attempt })
+    log.info("reconnect.stream-ended", { label, attempt })
+    log.info("reconnect.wait-for-ready", { label, attempt })
     yield* options.waitForRetry()
-    clientLog.info("reconnect.ready", { label, attempt })
+    log.info("reconnect.ready", { label, attempt })
   }).pipe(Effect.repeat(backoff)) as Effect.Effect<never, never, R>
 }

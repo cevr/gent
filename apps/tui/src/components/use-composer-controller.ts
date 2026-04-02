@@ -17,7 +17,6 @@ import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { expandSkillMentions } from "../utils/skill-expansion"
 import { executeShell } from "../utils/shell"
-import { clientLog } from "../utils/client-logger"
 import type { AutocompleteState } from "./autocomplete-popup"
 import type {
   ComposerInteractionEvent,
@@ -105,7 +104,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   const client = useClient()
   const renderer = useRenderer()
   const env = useEnv()
-  const { cast } = useRuntime(client.runtime)
+  const { cast } = useRuntime(client.runtime, client.log)
   const history = usePromptHistory()
   const skillsHook = useSkills()
   const paste = createPasteManager()
@@ -213,7 +212,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     if (parsed === null) return false
 
     const [cmd, args] = parsed
-    clientLog.info("slash-command", { cmd, hasCustomHandler: props.onSlashCommand !== undefined })
+    client.log.info("slash-command", { cmd, hasCustomHandler: props.onSlashCommand !== undefined })
     clearInput()
 
     const commandEffect =
@@ -254,7 +253,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   }
 
   const submitMessage = (text: string, mode: "queue" | "interject") => {
-    clientLog.info("composer.submit.requested", { contentLength: text.length, mode })
+    client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
     cast(
       expandFileRefs(text, workspace.cwd).pipe(

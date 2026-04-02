@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Fiber, Layer, Option, Tracer } from "effect"
+import { Config, Console, Effect, Fiber, Layer, Logger, Option, Tracer } from "effect"
+import { makeClientTraceLogger } from "./utils/client-trace-logger"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
@@ -16,7 +17,7 @@ import { RouterProvider } from "./router/index"
 import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
-import { clearClientLog, syncLog } from "./utils/client-logger"
+import { clearClientLog, createClientLog, syncLog } from "./utils/client-logger"
 import { resolveAppBootstrap, resolveInitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent } from "@gent/sdk"
@@ -88,6 +89,10 @@ const main = Command.make(
         visual: Option.getOrUndefined(visualOpt),
         editor: Option.getOrUndefined(editorOpt),
       }
+
+      // Create Effect-backed logger from captured services
+      const logServices = yield* Effect.services<never>()
+      const log = createClientLog(logServices as ServiceMap.ServiceMap<unknown>)
 
       const bundle = yield* Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
       yield* Effect.addFinalizer(() => Effect.sync(() => syncLog("shutdown.finalizer.post-spawn")))
@@ -174,6 +179,7 @@ const main = Command.make(
                 <ClientProvider
                   client={bundle.client}
                   runtime={bundle.runtime}
+                  log={log}
                   initialSession={bootstrap.initialSession}
                 >
                   <ExtensionUIProvider>
@@ -244,5 +250,11 @@ const cli = Command.run(command, {
 })
 
 const CliLayer = Layer.effectDiscard(cli)
-const MainLayer = CliLayer.pipe(Layer.provide(PlatformLayer))
+const TraceLoggerLayer = Layer.unwrap(
+  makeClientTraceLogger().pipe(Effect.map((logger) => Logger.layer([logger]))),
+)
+const MainLayer = CliLayer.pipe(
+  Layer.provide(PlatformLayer),
+  Layer.provide(Layer.provide(TraceLoggerLayer, PlatformLayer)),
+)
 BunRuntime.runMain(Effect.scoped(Layer.launch(MainLayer)))

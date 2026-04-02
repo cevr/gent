@@ -35,7 +35,6 @@ import { useExtensionUI } from "../extensions/context"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
-import { clientLog } from "../utils/client-logger"
 import { runWithReconnect } from "../utils/run-with-reconnect"
 import {
   getPromptSearchState,
@@ -98,7 +97,7 @@ export function useSessionController(props: {
   const command = useCommand()
   const ext = useExtensionUI()
   const router = useRouter()
-  const { cast } = useRuntime(client.runtime)
+  const { cast } = useRuntime(client.runtime, client.log)
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
   const workspace = useWorkspace()
@@ -288,7 +287,7 @@ export function useSessionController(props: {
     const generation = client.connectionGeneration()
     void generation
     if (!client.isActive()) return
-    clientLog.info("runtime.watch.start", { sessionId: props.sessionId, branchId: props.branchId })
+    client.log.info("runtime.watch.start", { sessionId: props.sessionId, branchId: props.branchId })
     const fiber = client.runtime.fork(
       runWithReconnect(
         () =>
@@ -307,6 +306,7 @@ export function useSessionController(props: {
             ),
         {
           label: "runtime.watch",
+          log: client.log,
           onError: (error) => {
             client.setConnectionIssue(formatConnectionIssue(error))
           },
@@ -315,7 +315,7 @@ export function useSessionController(props: {
       ),
     )
     onCleanup(() => {
-      clientLog.info("runtime.watch.cleanup", {
+      client.log.info("runtime.watch.cleanup", {
         sessionId: props.sessionId,
         branchId: props.branchId,
       })

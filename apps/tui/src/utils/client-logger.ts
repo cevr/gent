@@ -1,59 +1,75 @@
 /**
- * Client-side structured logger — JSON to /tmp/gent-client.log
+ * Client-side structured logger — unified with Effect's logger.
  *
- * Logs TUI lifecycle events (session create, message send, event dispatch,
- * errors) as structured JSON for debugging client-server interactions.
+ * `createClientLog(services)` — creates a logger backed by Effect.runForkWith.
+ *   All logs flow through the Effect logger layer and land in the same file.
  *
- * `clientLog` — async (fire-and-forget), use for normal lifecycle logs.
- * `syncLog` — synchronous, survives process.exit(). Use for shutdown paths.
+ * `syncLog` — synchronous file write, survives process.exit(). Use for
+ *   shutdown paths only (after Effect runtime is torn down).
  */
 
+import { Effect } from "effect"
+import type { ServiceMap } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import { appendFileSync } from "node:fs"
-import { appendFileString, writeFileString } from "../platform/fs-runtime"
+import { appendFileSync, writeFileSync } from "node:fs"
 
-const LOG_PATH = "/tmp/gent-client.log"
+export const CLIENT_LOG_PATH = "/tmp/gent-client.log"
 
 const isoNow = () => new Date().toISOString()
-
-const writeLine = (line: string) => {
-  void appendFileString(LOG_PATH, line + "\n").catch(() => {})
-}
-
-export const clearClientLog = () => {
-  void writeFileString(LOG_PATH, "").catch(() => {})
-}
-
-type LogLevel = "debug" | "info" | "warn" | "error"
-
-const emit = (level: LogLevel, msg: string, data?: Record<string, unknown>) => {
-  const entry: Record<string, unknown> = {
-    ts: isoNow(),
-    level,
-    source: "client",
-    msg,
-    ...data,
-  }
-  writeLine(JSON.stringify(entry))
-}
 
 /** Synchronous log — survives process.exit(). Use for shutdown paths only. */
 export const syncLog = (msg: string, data?: Record<string, unknown>) => {
   const entry: Record<string, unknown> = {
     ts: isoNow(),
     level: "info",
-    source: "sync",
+    source: "client",
     msg,
     ...data,
   }
   try {
-    appendFileSync(LOG_PATH, JSON.stringify(entry) + "\n")
+    appendFileSync(CLIENT_LOG_PATH, JSON.stringify(entry) + "\n")
   } catch {}
 }
 
-export const clientLog = {
-  debug: (msg: string, data?: Record<string, unknown>) => emit("debug", msg, data),
-  info: (msg: string, data?: Record<string, unknown>) => emit("info", msg, data),
-  warn: (msg: string, data?: Record<string, unknown>) => emit("warn", msg, data),
-  error: (msg: string, data?: Record<string, unknown>) => emit("error", msg, data),
+export const clearClientLog = () => {
+  try {
+    writeFileSync(CLIENT_LOG_PATH, "")
+  } catch {}
+}
+
+export interface ClientLog {
+  debug: (msg: string, data?: Record<string, unknown>) => void
+  info: (msg: string, data?: Record<string, unknown>) => void
+  warn: (msg: string, data?: Record<string, unknown>) => void
+  error: (msg: string, data?: Record<string, unknown>) => void
+}
+
+/**
+ * Create an Effect-backed client logger from captured services.
+ * Uses runForkWith — logs are async, fire-and-forget, flow through Effect's logger.
+ * Falls back to syncLog if the Effect runtime throws (e.g. during teardown).
+ */
+export const createClientLog = (services: ServiceMap.ServiceMap<unknown>): ClientLog => {
+  const fork = Effect.runForkWith(services as ServiceMap.ServiceMap<never>)
+
+  const makeLogFn =
+    (effectLog: (msg: string) => Effect.Effect<void>) =>
+    (msg: string, data?: Record<string, unknown>) => {
+      try {
+        if (data !== undefined && Object.keys(data).length > 0) {
+          fork(effectLog(msg).pipe(Effect.annotateLogs(data)))
+        } else {
+          fork(effectLog(msg))
+        }
+      } catch {
+        syncLog(msg, data)
+      }
+    }
+
+  return {
+    debug: makeLogFn(Effect.logDebug),
+    info: makeLogFn(Effect.logInfo),
+    warn: makeLogFn(Effect.logWarning),
+    error: makeLogFn(Effect.logError),
+  }
 }

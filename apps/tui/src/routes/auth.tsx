@@ -10,13 +10,14 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { GentNamespacedClient, GentRuntime } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
-import { clientLog } from "../utils/client-logger"
+import type { ClientLog } from "../utils/client-logger"
 import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./auth-state"
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
   client: GentNamespacedClient
   runtime: GentRuntime
+  log: ClientLog
   enforceAuth?: boolean
   onResolved?: () => void
 }
@@ -29,7 +30,7 @@ export function Auth(props: AuthProps) {
   const { theme } = useTheme()
   const router = useRouter()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.runtime)
+  const { cast } = useRuntime(props.runtime, props.log)
 
   const [state, setState] = createSignal<AuthRouteState>(AuthState.initial())
   const send = (event: Parameters<typeof transitionAuth>[1]) => {
@@ -55,19 +56,19 @@ export function Auth(props: AuthProps) {
   // ── Side effects ──
 
   const loadAuth = () => {
-    clientLog.info("auth:load-start")
+    props.log.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
       Effect.all([props.client.auth.listProviders(), props.client.auth.listMethods()]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
-            clientLog.info("auth:load-complete", { providers: loadedProviders.length })
+            props.log.info("auth:load-complete", { providers: loadedProviders.length })
             send({ _tag: "Loaded", providers: [...loadedProviders], methods: loadedMethods })
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
-            clientLog.error("auth:load", { error: String(err) })
+            props.log.error("auth:load", { error: String(err) })
             send({ _tag: "LoadFailed", error: formatError(err) })
           }),
         ),
@@ -77,7 +78,7 @@ export function Auth(props: AuthProps) {
 
   const openAuthorization = (url: string) =>
     Effect.gen(function* () {
-      clientLog.info("auth:open-authorization", { url })
+      props.log.info("auth:open-authorization", { url })
       const opener = yield* LinkOpener
       yield* opener.open(url)
     }).pipe(
@@ -143,7 +144,7 @@ export function Auth(props: AuthProps) {
     const provider = current.providers[current.providerIndex]
     const key = current.value.trim()
     if (provider === undefined || key.length === 0) return
-    clientLog.info("auth:submit-key", { provider: provider.provider })
+    props.log.info("auth:submit-key", { provider: provider.provider })
     send({ _tag: "SubmitKeyStarted" })
 
     cast(
@@ -169,7 +170,7 @@ export function Auth(props: AuthProps) {
     const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
     const method = methods[current.methodIndex]
     if (provider === undefined || method === undefined) return
-    clientLog.info("auth:start-method", { provider: provider.provider, method: method.type })
+    props.log.info("auth:start-method", { provider: provider.provider, method: method.type })
 
     if (method.type === "api") {
       send({ _tag: "StartKey" })
@@ -266,7 +267,7 @@ export function Auth(props: AuthProps) {
     if (current.phase === "waiting") return
     const provider = current.providers[current.providerIndex]
     if (provider === undefined) return
-    clientLog.info("auth:submit-oauth", {
+    props.log.info("auth:submit-oauth", {
       provider: provider.provider,
       method: current.authorization.method,
     })

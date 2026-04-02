@@ -23,7 +23,7 @@ export default {
     /** Invisible widget that subscribes to task events and maintains the task list. */
     function TaskTracker() {
       const clientCtx = useClient()
-      const { cast } = useRuntime(clientCtx.runtime)
+      const { cast } = useRuntime(clientCtx.runtime, clientCtx.log)
 
       const refreshTasks = () => {
         const sid = clientCtx.session()?.sessionId
@@ -72,6 +72,7 @@ export default {
               ),
             {
               label: "tasks.events",
+              log: clientCtx.log,
               onError: () => undefined,
               waitForRetry: () => clientCtx.waitForTransportReady(),
             },
@@ -103,7 +104,7 @@ export default {
     /** Overlay wrapper that passes tracked tasks to the dialog. */
     function TasksDialogOverlay(overlayProps: { open: boolean; onClose: () => void }) {
       const clientCtx = useClient()
-      const { cast } = useRuntime(clientCtx.runtime)
+      const { cast } = useRuntime(clientCtx.runtime, clientCtx.log)
 
       const refreshTasks = () => {
         const sid = clientCtx.session()?.sessionId

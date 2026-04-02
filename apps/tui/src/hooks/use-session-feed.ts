@@ -22,7 +22,6 @@ import {
 import type { Message, SessionItem } from "../components/message-list"
 import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
-import { clientLog } from "../utils/client-logger"
 import { formatConnectionIssue } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
 import type { ClientContextValue } from "../client/context"
@@ -252,18 +251,18 @@ export function useSessionFeed(
 
       const branch = branchId()
       const session = sessionId()
-      clientLog.info("feed.activate", { key })
+      client.log.info("feed.activate", { key })
 
       const streamFiber = client.runtime.fork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
-              clientLog.info("feed.snapshot.fetch", { key })
+              client.log.info("feed.snapshot.fetch", { key })
               const snapshot = yield* client.client.session.getSnapshot({
                 sessionId: session,
                 branchId: branch,
               })
-              clientLog.info("feed.snapshot.hydrated", {
+              client.log.info("feed.snapshot.hydrated", {
                 key,
                 messageCount: snapshot.messages.length,
                 lastEventId: snapshot.lastEventId,
@@ -289,7 +288,7 @@ export function useSessionFeed(
                 ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
               })
 
-              clientLog.info("feed.stream.open", { key, after: snapshot.lastEventId })
+              client.log.info("feed.stream.open", { key, after: snapshot.lastEventId })
               const eventsFiber = yield* eventStream.pipe(
                 Stream.runForEach((envelope) =>
                   Effect.sync(() => {
@@ -304,7 +303,7 @@ export function useSessionFeed(
               // Send the prompt only after the event stream is established.
               if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
                 sentPrompts.add(key)
-                clientLog.info("feed.sendInitialPrompt", {
+                client.log.info("feed.sendInitialPrompt", {
                   sessionId: session,
                   branchId: branch,
                 })
@@ -319,9 +318,10 @@ export function useSessionFeed(
             }),
           {
             label: "feed.events",
+            log: client.log,
             onError: (err) => {
               if (currentKey !== key) return
-              clientLog.error("feed.error", {
+              client.log.error("feed.error", {
                 key,
                 error: formatConnectionIssue(err),
               })
@@ -333,7 +333,7 @@ export function useSessionFeed(
       )
 
       onCleanup(() => {
-        clientLog.info("feed.cleanup", { key })
+        client.log.info("feed.cleanup", { key })
         Effect.runFork(Fiber.interrupt(streamFiber))
       })
     }),
@@ -343,7 +343,7 @@ export function useSessionFeed(
     // Drop events if identity changed
     if (currentKey !== key) return
 
-    clientLog.debug("feed.event", { key, tag: event._tag })
+    client.log.debug("feed.event", { key, tag: event._tag })
 
     if (event._tag === "InteractionDismissed") {
       callbacks.onInteractionDismissed(event.requestId)
@@ -433,7 +433,7 @@ export function useSessionFeed(
         break
 
       case "ErrorOccurred":
-        clientLog.error("sessionFeed.error", { error: event.error, seq: eventSeq })
+        client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
         appendSessionEvent(setStore, createErrorEvent(event.error, eventSeq++))
         break
     }

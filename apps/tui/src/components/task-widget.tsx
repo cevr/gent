@@ -34,7 +34,7 @@ type TaskWidgetProps = {
 
 export function TaskWidget(props?: TaskWidgetProps) {
   const client = useClient()
-  const { cast } = useRuntime(client.runtime)
+  const { cast } = useRuntime(client.runtime, client.log)
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
@@ -96,6 +96,7 @@ export function TaskWidget(props?: TaskWidgetProps) {
             ),
           ),
         {
+          log: client.log,
           onError: () => undefined,
           waitForRetry: () => client.waitForTransportReady(),
         },

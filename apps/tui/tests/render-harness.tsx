@@ -17,6 +17,10 @@ import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import type { SessionInfo, SessionRuntime } from "@gent/sdk"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import type { ClientLog } from "../src/utils/client-logger"
+
+const noop = () => {}
+const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 
 type TestRenderSetup = Awaited<ReturnType<typeof testRender>>
 
@@ -188,6 +192,7 @@ export const renderWithProviders = async (
                   <ClientProvider
                     client={client}
                     runtime={runtime}
+                    log={noopLog}
                     initialSession={options?.initialSession}
                   >
                     <WorkspaceProvider

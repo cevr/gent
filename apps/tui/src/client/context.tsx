@@ -21,7 +21,7 @@ import {
 import { calculateCost, type Model } from "@gent/core/domain/model.js"
 import type { EventEnvelope } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
-import { clientLog } from "../utils/client-logger"
+import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
 import { reduceAgentLifecycle } from "./agent-lifecycle"
@@ -84,6 +84,8 @@ export interface ClientContextValue {
   client: GentNamespacedClient
   /** Runtime for executing Effects */
   runtime: GentRuntime
+  /** Structured logger — flows through Effect's logger layer */
+  log: ClientLog
 
   // Session state (union)
   sessionState: () => SessionState
@@ -154,6 +156,7 @@ export function useClient(): ClientContextValue {
 interface ClientProviderProps extends ParentProps {
   client: GentNamespacedClient
   runtime: GentRuntime
+  log: ClientLog
   initialSession: Session | undefined
 }
 
@@ -161,6 +164,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const defaultAgent: AgentName = "cowork"
   const client = props.client
   const runtime = props.runtime
+  const log = props.log
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
     runtime.cast(effect)
@@ -223,7 +227,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
   createEffect(() => {
     const unsubscribe = runtime.lifecycle.subscribe((nextState) => {
-      clientLog.info("connection.state", {
+      log.info("connection.state", {
         tag: nextState._tag,
         ...("generation" in nextState ? { generation: nextState.generation } : {}),
         ...("reason" in nextState ? { reason: nextState.reason } : {}),
@@ -288,7 +292,7 @@ export function ClientProvider(props: ClientProviderProps) {
       const processEvent = (envelope: EventEnvelope): void => {
         if (cancelled) return
 
-        clientLog.debug("event.received", {
+        log.debug("event.received", {
           eventId: envelope.id,
           tag: envelope.event._tag,
           traceId: envelope.traceId,
@@ -312,7 +316,7 @@ export function ClientProvider(props: ClientProviderProps) {
         }
 
         if (event._tag === "ErrorOccurred") {
-          clientLog.error("agent.error", { error: event.error, eventId: envelope.id })
+          log.error("agent.error", { error: event.error, eventId: envelope.id })
         }
 
         const lifecycle = reduceAgentLifecycle(event)
@@ -366,21 +370,21 @@ export function ClientProvider(props: ClientProviderProps) {
         }
       }
 
-      clientLog.info("ctx.subscribe.start", { sessionId, branchId })
+      log.info("ctx.subscribe.start", { sessionId, branchId })
       const fiber = runtime.fork(
         runWithReconnect(
           () =>
             Effect.gen(function* () {
               if (connectionState()?._tag !== "connected") {
-                clientLog.info("ctx.wait-for-ready", { sessionId, branchId })
+                log.info("ctx.wait-for-ready", { sessionId, branchId })
                 yield* runtime.lifecycle.waitForReady
-                clientLog.info("ctx.ready", { sessionId, branchId })
+                log.info("ctx.ready", { sessionId, branchId })
               }
 
-              clientLog.info("ctx.snapshot.fetch", { sessionId, branchId })
+              log.info("ctx.snapshot.fetch", { sessionId, branchId })
               const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
               const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
-              clientLog.info("ctx.snapshot.hydrated", {
+              log.info("ctx.snapshot.hydrated", {
                 sessionId,
                 branchId,
                 lastEventId: snapshot.lastEventId,
@@ -419,26 +423,27 @@ export function ClientProvider(props: ClientProviderProps) {
                 ...(after !== undefined ? { after } : {}),
               })
 
-              clientLog.info("ctx.stream.open", { sessionId, branchId, after })
+              log.info("ctx.stream.open", { sessionId, branchId, after })
               yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
                 Effect.sync(() => {
                   try {
                     processEvent(envelope)
                   } catch (err) {
-                    clientLog.error("event.processing.error", {
+                    log.error("event.processing.error", {
                       error: err instanceof Error ? err.message : String(err),
                     })
                   }
                 }),
               )
-              clientLog.info("ctx.stream.closed", { sessionId, branchId })
+              log.info("ctx.stream.closed", { sessionId, branchId })
             }),
           {
             label: "ctx.events",
+            log,
             onError: (err) => {
               if (cancelled) return
               if (connectionState()?._tag !== "connected") return
-              clientLog.error("event.subscription.failed", { error: formatError(err) })
+              log.error("event.subscription.failed", { error: formatError(err) })
               setConnectionIssue(formatConnectionIssue(err))
             },
             waitForRetry: () => runtime.lifecycle.waitForReady,
@@ -447,7 +452,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
 
       onCleanup(() => {
-        clientLog.info("ctx.subscribe.cleanup", { sessionId, branchId })
+        log.info("ctx.subscribe.cleanup", { sessionId, branchId })
         cancelled = true
         Effect.runFork(Fiber.interrupt(fiber))
       })
@@ -457,6 +462,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const value: ClientContextValue = {
     client,
     runtime,
+    log,
 
     // Session state
     sessionState,
@@ -501,7 +507,7 @@ export function ClientProvider(props: ClientProviderProps) {
       if (s === null) return
 
       const requestId = crypto.randomUUID()
-      clientLog.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
+      log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
       cast(
         client.message
           .send({
@@ -523,7 +529,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     createSession: (onCreated) => {
       const requestId = crypto.randomUUID()
-      clientLog.info("createSession", { requestId })
+      log.info("createSession", { requestId })
       dispatchSession({ _tag: "CreateRequested" })
       cast(
         client.session.create({ requestId }).pipe(
@@ -543,7 +549,7 @@ export function ClientProvider(props: ClientProviderProps) {
           ),
           Effect.catchEager((err) =>
             Effect.sync(() => {
-              clientLog.error("createSession.failed", { error: String(err) })
+              log.error("createSession.failed", { error: String(err) })
               dispatchSession({ _tag: "CreateFailed" })
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }),
