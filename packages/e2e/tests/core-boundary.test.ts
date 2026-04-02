@@ -3,6 +3,7 @@ import { Effect, Layer, Ref } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { PromptHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { AskUserHandler } from "@gent/core/tools/ask-user"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -91,6 +92,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       baseWithActorProcess,
       Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
+      AskUserHandler.Test([]),
     )
     return Layer.provideMerge(AppServicesLive, deps)
   }
@@ -185,6 +187,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       baseWithActorProcess,
       Layer.provide(PromptHandler.Live, baseWithActorProcess),
       Layer.provide(HandoffHandler.Live, baseWithActorProcess),
+      AskUserHandler.Test([]),
     )
     const layer = Layer.provideMerge(AppServicesLive, deps)
 
