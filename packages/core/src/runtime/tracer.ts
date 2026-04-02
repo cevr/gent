@@ -8,7 +8,7 @@
 import type { ServiceMap, PlatformError, Scope } from "effect"
 import { Config, Effect, FileSystem, Layer, Option, Tracer, Exit, Cause } from "effect"
 
-const LOG_PATH = "/tmp/gent-trace.log"
+import { resolveLogPaths, ensureLogDir, getLogPaths } from "./log-paths.js"
 
 const timestamp = () => {
   const d = new Date()
@@ -16,7 +16,7 @@ const timestamp = () => {
 }
 
 export const clearTraceLog = () => {
-  void Bun.write(LOG_PATH, "")
+  void Bun.write(getLogPaths().trace, "")
 }
 
 const formatTraceValue = (value: unknown): string => {
@@ -179,8 +179,10 @@ export const GentTracerLive: Layer.Layer<
 > = Layer.effect(
   Tracer.Tracer,
   Effect.gen(function* () {
+    const { trace } = yield* resolveLogPaths
+    yield* ensureLogDir
     const fs = yield* FileSystem.FileSystem
-    const traceFile = yield* fs.open(LOG_PATH, { flag: "a+" })
+    const traceFile = yield* fs.open(trace, { flag: "a+" })
     const encoder = new TextEncoder()
     const services = yield* Effect.services<never>()
     const writeLine = (line: string) => {
@@ -193,10 +195,12 @@ export const GentTracerLive: Layer.Layer<
 /** Clear trace log — call at startup (not in subprocess mode). */
 export const clearTraceLogIfRoot: Layer.Layer<never, never, FileSystem.FileSystem> = Layer.unwrap(
   Effect.gen(function* () {
+    const { trace } = yield* resolveLogPaths
+    yield* ensureLogDir
     const fs = yield* FileSystem.FileSystem
     const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
     if (!isSubprocess) {
-      yield* Effect.ignore(fs.writeFileString(LOG_PATH, ""))
+      yield* Effect.ignore(fs.writeFileString(trace, ""))
     }
     return Layer.empty
   }).pipe(Effect.catchEager(() => Effect.succeed(Layer.empty))),

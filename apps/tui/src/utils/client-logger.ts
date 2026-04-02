@@ -13,7 +13,9 @@ import type { ServiceMap } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, writeFileSync } from "node:fs"
 
-export const CLIENT_LOG_PATH = "/tmp/gent-client.log"
+import { getLogPaths } from "@gent/core/runtime/log-paths"
+
+export const CLIENT_LOG_PATH = getLogPaths().client
 
 const isoNow = () => new Date().toISOString()
 

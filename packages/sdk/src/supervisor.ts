@@ -194,10 +194,12 @@ const waitForWorkerReady = (
 
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync } from "node:fs"
+import { getLogPaths } from "@gent/core/runtime/log-paths"
+
 const shutdownLog = (msg: string, data?: Record<string, unknown>) => {
   const entry = { ts: new Date().toISOString(), level: "info", source: "supervisor", msg, ...data }
   try {
-    appendFileSync("/tmp/gent-client.log", JSON.stringify(entry) + "\n")
+    appendFileSync(getLogPaths().client, JSON.stringify(entry) + "\n")
   } catch {}
 }
 

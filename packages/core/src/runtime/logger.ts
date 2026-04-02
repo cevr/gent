@@ -208,10 +208,11 @@ const makeJsonFileLogger = (
 // Config
 // =============================================================================
 
-const DEFAULT_LOG_FILE = "/tmp/gent.log"
+import { resolveLogPaths, ensureLogDir, getLogPaths } from "./log-paths.js"
 
 const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
+    yield* ensureLogDir
     const fs = yield* FileSystem.FileSystem
     yield* Effect.ignore(fs.writeFileString(path, ""))
   })
@@ -227,10 +228,11 @@ export const GentLogger: Layer.Layer<
   FileSystem.FileSystem | Scope.Scope
 > = Layer.unwrap(
   Effect.gen(function* () {
+    const { log: defaultLogFile } = yield* resolveLogPaths
     const formatOpt = yield* Config.option(Config.string("GENT_LOG_FORMAT"))
     const format = Option.getOrElse(formatOpt, () => "json")
     const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
-    const logFile = Option.getOrElse(logFileOpt, () => DEFAULT_LOG_FILE)
+    const logFile = Option.getOrElse(logFileOpt, () => defaultLogFile)
     // Don't truncate when running as subprocess — parent is writing to same file
     const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
 
@@ -249,12 +251,13 @@ export const GentLogger: Layer.Layer<
     const jsonLogger = yield* makeJsonFileLogger(logFile)
     return Logger.layer([jsonLogger])
   }).pipe(
-    Effect.catchEager(() =>
-      makeJsonFileLogger(DEFAULT_LOG_FILE).pipe(
+    Effect.catchEager(() => {
+      const fallback = getLogPaths().log
+      return makeJsonFileLogger(fallback).pipe(
         Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
         Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
-      ),
-    ),
+      )
+    }),
   ),
 )
 
@@ -265,19 +268,21 @@ export const GentLoggerJson: Layer.Layer<
   FileSystem.FileSystem | Scope.Scope
 > = Layer.unwrap(
   Effect.gen(function* () {
+    const { log: defaultLogFile } = yield* resolveLogPaths
     const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
-    const logFile = Option.getOrElse(logFileOpt, () => DEFAULT_LOG_FILE)
+    const logFile = Option.getOrElse(logFileOpt, () => defaultLogFile)
     const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
     if (!isSubprocess) yield* clearLogFile(logFile)
     const jsonLogger = yield* makeJsonFileLogger(logFile)
     return Logger.layer([jsonLogger])
   }).pipe(
-    Effect.catchEager(() =>
-      makeJsonFileLogger(DEFAULT_LOG_FILE).pipe(
+    Effect.catchEager(() => {
+      const fallback = getLogPaths().log
+      return makeJsonFileLogger(fallback).pipe(
         Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
         Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
-      ),
-    ),
+      )
+    }),
   ),
 )
 
@@ -293,14 +298,14 @@ export const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
       switch (env) {
         case "trace":
           return "Trace"
-        case "debug":
-          return "Debug"
+        case "info":
+          return "Info"
         case "warning":
           return "Warn"
         case "error":
           return "Error"
         default:
-          return "Info"
+          return "Debug"
       }
     })()
     return Layer.effectServices(Effect.succeed(ServiceMap.make(MinimumLogLevel, level)))
