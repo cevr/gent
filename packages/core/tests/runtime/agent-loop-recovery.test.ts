@@ -4,9 +4,9 @@ import { Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { Agents, resolveAgentModel } from "@gent/core/domain/agent"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { Branch, Message, TextPart, ToolCallPart, ToolResultPart } from "@gent/core/domain/message"
+import { Agents } from "@gent/core/domain/agent"
+import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { Branch, Message, TextPart, ToolResultPart } from "@gent/core/domain/message"
 import { defineTool } from "@gent/core/domain/tool"
 import { Provider, FinishChunk, TextChunk, type StreamChunk } from "@gent/core/providers/provider"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
@@ -16,20 +16,10 @@ import {
 } from "@gent/core/runtime/agent/agent-loop.checkpoint"
 import {
   appendFollowUpQueueState,
+  buildRunningState,
   emptyLoopQueueState,
-  toWaitingForInteractionState,
   type LoopState,
 } from "@gent/core/runtime/agent/agent-loop.state"
-
-// Stubs for old state builders — tests are skipped, these satisfy the import
-const buildResolvingState = (..._args: unknown[]): LoopState => ({}) as LoopState
-const toStreamingState = (..._args: unknown[]): LoopState => ({}) as LoopState
-const toExecutingToolsState = (..._args: unknown[]): LoopState => ({}) as LoopState
-const toFinalizingState = (..._args: unknown[]): LoopState => ({}) as LoopState
-import {
-  assistantMessageIdForTurn,
-  toolResultMessageIdForTurn,
-} from "@gent/core/runtime/agent/agent-loop.utils"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
@@ -48,22 +38,6 @@ const idempotentTestTool = defineTool({
   idempotent: true,
   params: Schema.Unknown,
   execute: () => Effect.succeed({ ok: true }),
-})
-
-const nonIdempotentTestTool = defineTool({
-  name: "test-non-idempotent",
-  action: "exec",
-  description: "Test non-idempotent tool",
-  concurrency: "serial",
-  params: Schema.Unknown,
-  execute: () => Effect.succeed({ ok: true }),
-})
-
-const toolCall = new ToolCallPart({
-  type: "tool-call",
-  toolCallId: "tool-call-1" as ToolCallId,
-  toolName: idempotentTestTool.name,
-  input: { path: "/tmp/test" },
 })
 
 const createSessionState = () => {
@@ -97,23 +71,10 @@ const createSessionState = () => {
   }
 }
 
-const makeResolvedTurn = (message: Message) => ({
-  currentTurnAgent: "cowork" as const,
-  messages: [message],
-  systemPrompt,
-  modelId: resolveAgentModel(Agents.cowork),
-  ...(Agents.cowork.reasoningEffort !== undefined
-    ? { reasoning: Agents.cowork.reasoningEffort }
-    : {}),
-  ...(Agents.cowork.temperature !== undefined ? { temperature: Agents.cowork.temperature } : {}),
-})
-
 const makeRecoveryLayer = (params: {
   dbPath: string
   providerChunks?: ReadonlyArray<StreamChunk>
   providerCalls?: Ref.Ref<number>
-  toolRunnerCalls?: Ref.Ref<number>
-  tools?: ReadonlyArray<typeof idempotentTestTool | typeof nonIdempotentTestTool>
 }) => {
   const storageLayer = Storage.LiveWithSql(params.dbPath).pipe(
     Layer.provide(BunFileSystem.layer),
@@ -128,7 +89,7 @@ const makeRecoveryLayer = (params: {
         sourcePath: "test",
         setup: {
           agents: Object.values(Agents),
-          tools: params.tools ?? [idempotentTestTool],
+          tools: [idempotentTestTool],
         },
       },
     ]),
@@ -149,15 +110,13 @@ const makeRecoveryLayer = (params: {
   })
   const toolRunnerLayer = Layer.succeed(ToolRunner, {
     run: (input) =>
-      Ref.update(params.toolRunnerCalls ?? Ref.makeUnsafe(0), (count) => count + 1).pipe(
-        Effect.as(
-          new ToolResultPart({
-            type: "tool-result",
-            toolCallId: input.toolCallId,
-            toolName: input.toolName,
-            output: { type: "json", value: { ok: true } },
-          }),
-        ),
+      Effect.succeed(
+        new ToolResultPart({
+          type: "tool-result",
+          toolCallId: input.toolCallId,
+          toolName: input.toolName,
+          output: { type: "json", value: { ok: true } },
+        }),
       ),
   })
   const handoffLayer = Layer.succeed(HandoffHandler, {
@@ -222,295 +181,91 @@ const seedCheckpoint = (params: {
     return { session, branch, message }
   })
 
-// TODO(B3): rewrite for 3-state machine (Idle/Running/WaitingForInteraction)
-describe.skip("AgentLoop recovery", () => {
-  test("resolves a restoring turn from a resolving checkpoint", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-resolving-"))
+describe("AgentLoop recovery", () => {
+  test("recovers from Running checkpoint and completes the turn", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-running-"))
     const dbPath = path.join(dir, "data.db")
 
     try {
-      const { message, session, branch } = createSessionState()
-      const resolving = buildResolvingState(
-        {
-          queue: emptyLoopQueueState(),
-          currentAgent: "cowork",
-        },
+      const { message } = createSessionState()
+      const running = buildRunningState(
+        { queue: emptyLoopQueueState(), currentAgent: "cowork" },
         { message },
       )
 
-      await Effect.runPromise(
-        seedCheckpoint({ state: resolving }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
-      )
+      const providerCalls = Ref.makeUnsafe(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
 
       await Effect.runPromise(
-        Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
-          const cs = yield* CheckpointStorage
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* seedCheckpoint({ state: running })
+            const agentLoop = yield* AgentLoop
 
-          yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
+            // getState triggers checkpoint restore → Running task re-runs
+            const state = yield* waitFor(
+              agentLoop.getState({
+                sessionId: running.message.sessionId,
+                branchId: running.message.branchId,
+              }),
+              (s) => s.phase === "idle",
+            )
 
-          const assistantMessage = yield* waitFor(
-            storage.getMessage(assistantMessageIdForTurn(message.id)),
-            (value) => value !== undefined,
-          )
-          const recoveryTag = yield* waitFor(
-            storage.getLatestEventTag({
-              sessionId: session.id,
-              branchId: branch.id,
-              tags: ["TurnRecoveryApplied"],
-            }),
-            (value) => value === "TurnRecoveryApplied",
-          )
-          const checkpoint = yield* waitFor(
-            cs.get({
-              sessionId: session.id,
-              branchId: branch.id,
-            }),
-            (value) => value === undefined,
-          )
-
-          expect(assistantMessage?.parts.some((part) => part.type === "text")).toBe(true)
-          expect(recoveryTag).toBe("TurnRecoveryApplied")
-          expect(checkpoint).toBeUndefined()
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
+            expect(state.phase).toBe("idle")
+            // Provider was called during recovery (turn re-ran)
+            expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
+          }).pipe(Effect.provide(layer)),
+        ),
       )
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("skips provider replay when streaming checkpoint already persisted the assistant turn", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-streaming-"))
+  test("recovers from Idle with queued follow-up", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-idle-queue-"))
     const dbPath = path.join(dir, "data.db")
-    const providerCalls = Ref.makeUnsafe(0)
 
     try {
-      const { session, branch, message } = createSessionState()
-      const resolving = buildResolvingState(
-        {
-          queue: emptyLoopQueueState(),
-          currentAgent: "cowork",
-        },
-        { message },
-      )
-      const streaming = toStreamingState({
-        state: resolving,
-        resolved: makeResolvedTurn(message),
-      })
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          yield* seedCheckpoint({ state: streaming })
-          yield* storage.createMessageIfAbsent(
-            new Message({
-              id: assistantMessageIdForTurn(message.id),
-              sessionId: session.id,
-              branchId: branch.id,
-              role: "assistant",
-              parts: [new TextPart({ type: "text", text: "already persisted" })],
-              createdAt: new Date(),
-            }),
-          )
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath, providerCalls }))),
-      )
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
-          const cs = yield* CheckpointStorage
-
-          yield* agentLoop.getQueue({ sessionId: session.id, branchId: branch.id })
-
-          const checkpoint = yield* waitFor(
-            cs.get({ sessionId: session.id, branchId: branch.id }),
-            (value) => value === undefined,
-          )
-          const recoveryTag = yield* waitFor(
-            storage.getLatestEventTag({
-              sessionId: session.id,
-              branchId: branch.id,
-              tags: ["TurnRecoveryApplied"],
-            }),
-            (value) => value === "TurnRecoveryApplied",
-          )
-          const providerCount = yield* Ref.get(providerCalls)
-
-          expect(checkpoint).toBeUndefined()
-          expect(recoveryTag).toBe("TurnRecoveryApplied")
-          expect(providerCount).toBe(0)
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath, providerCalls }))),
-      )
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("skips tool rerun when executing-tools checkpoint already persisted tool results", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-tools-"))
-    const dbPath = path.join(dir, "data.db")
-    const toolRunnerCalls = Ref.makeUnsafe(0)
-
-    try {
-      const { session, branch, message } = createSessionState()
-      const resolving = buildResolvingState(
-        {
-          queue: emptyLoopQueueState(),
-          currentAgent: "cowork",
-        },
-        { message },
-      )
-      const streaming = toStreamingState({
-        state: resolving,
-        resolved: makeResolvedTurn(message),
-      })
-      const executing = toExecutingToolsState({
-        state: streaming,
-        currentTurnAgent: "cowork",
-        draft: {
-          text: "",
-          reasoning: "",
-          toolCalls: [toolCall],
-        },
-      })
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          yield* seedCheckpoint({ state: executing })
-          yield* storage.createMessageIfAbsent(
-            new Message({
-              id: toolResultMessageIdForTurn(message.id),
-              sessionId: session.id,
-              branchId: branch.id,
-              role: "tool",
-              parts: [
-                new ToolResultPart({
-                  type: "tool-result",
-                  toolCallId: toolCall.toolCallId,
-                  toolName: toolCall.toolName,
-                  output: { type: "json", value: { ok: true } },
-                }),
-              ],
-              createdAt: new Date(),
-            }),
-          )
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath, toolRunnerCalls }))),
-      )
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
-          const cs = yield* CheckpointStorage
-
-          yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
-
-          const checkpoint = yield* waitFor(
-            cs.get({ sessionId: session.id, branchId: branch.id }),
-            (value) => value === undefined,
-          )
-          const callCount = yield* Ref.get(toolRunnerCalls)
-
-          expect(checkpoint).toBeUndefined()
-          expect(callCount).toBe(0)
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath, toolRunnerCalls }))),
-      )
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("aborts non-idempotent tool replay and continues draining the queued turn", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-non-idempotent-"))
-    const dbPath = path.join(dir, "data.db")
-    const toolRunnerCalls = Ref.makeUnsafe(0)
-
-    try {
-      const { session, branch, message } = createSessionState()
-      const followUpMessage = new Message({
-        id: "message-loop-follow-up" as MessageId,
-        sessionId: session.id,
-        branchId: branch.id,
+      const { message } = createSessionState()
+      const queuedMessage = new Message({
+        id: "queued-msg" as MessageId,
+        sessionId: message.sessionId,
+        branchId: message.branchId,
         role: "user",
-        parts: [new TextPart({ type: "text", text: "queued follow-up" })],
+        parts: [new TextPart({ type: "text", text: "queued" })],
         createdAt: new Date(),
       })
-      const resolving = buildResolvingState(
-        {
-          queue: appendFollowUpQueueState(emptyLoopQueueState(), {
-            message: followUpMessage,
-          }),
-          currentAgent: "cowork",
-        },
-        { message },
-      )
-      const streaming = toStreamingState({
-        state: resolving,
-        resolved: makeResolvedTurn(message),
-      })
-      const executing = toExecutingToolsState({
-        state: streaming,
-        currentTurnAgent: "cowork",
-        draft: {
-          text: "",
-          reasoning: "",
-          toolCalls: [
-            new ToolCallPart({
-              type: "tool-call",
-              toolCallId: "tool-call-2" as ToolCallId,
-              toolName: nonIdempotentTestTool.name,
-              input: { cmd: "mutate" },
-            }),
-          ],
-        },
-      })
+
+      const idleWithQueue = {
+        _tag: "Idle" as const,
+        queue: appendFollowUpQueueState(emptyLoopQueueState(), {
+          message: queuedMessage,
+        }),
+        currentAgent: "cowork" as const,
+      } as LoopState
+
+      const providerCalls = Ref.makeUnsafe(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
 
       await Effect.runPromise(
-        seedCheckpoint({ state: executing }).pipe(
-          Effect.provide(
-            makeRecoveryLayer({
-              dbPath,
-              toolRunnerCalls,
-              tools: [idempotentTestTool, nonIdempotentTestTool],
-            }),
-          ),
-        ),
-      )
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* seedCheckpoint({ state: idleWithQueue })
+            const agentLoop = yield* AgentLoop
 
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
+            const state = yield* waitFor(
+              agentLoop.getState({
+                sessionId: message.sessionId,
+                branchId: message.branchId,
+              }),
+              (s) => s.phase === "idle",
+            )
 
-          yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
-
-          const recoveryTag = yield* waitFor(
-            storage.getLatestEventTag({
-              sessionId: session.id,
-              branchId: branch.id,
-              tags: ["TurnRecoveryApplied"],
-            }),
-            (value) => value === "TurnRecoveryApplied",
-          )
-          const followUpAssistant = yield* waitFor(
-            storage.getMessage(assistantMessageIdForTurn(followUpMessage.id)),
-            (value) => value !== undefined,
-          )
-          const callCount = yield* Ref.get(toolRunnerCalls)
-
-          expect(recoveryTag).toBe("TurnRecoveryApplied")
-          expect(followUpAssistant?.parts.some((part) => part.type === "text")).toBe(true)
-          expect(callCount).toBe(0)
-        }).pipe(
-          Effect.provide(
-            makeRecoveryLayer({
-              dbPath,
-              toolRunnerCalls,
-              tools: [idempotentTestTool, nonIdempotentTestTool],
-            }),
-          ),
+            expect(state.phase).toBe("idle")
+            // The queued follow-up triggered a turn
+            expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
+          }).pipe(Effect.provide(layer)),
         ),
       )
     } finally {
@@ -518,207 +273,54 @@ describe.skip("AgentLoop recovery", () => {
     }
   })
 
-  test("replays finalizing checkpoint to completion", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-finalizing-"))
+  test("discards incompatible checkpoint version and starts fresh", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-stale-"))
     const dbPath = path.join(dir, "data.db")
 
     try {
-      const { session, branch, message } = createSessionState()
-      const resolving = buildResolvingState(
-        {
-          queue: emptyLoopQueueState(),
-          currentAgent: "cowork",
-        },
-        { message },
-      )
-      const streaming = toStreamingState({
-        state: resolving,
-        resolved: makeResolvedTurn(message),
-      })
-      const finalizing = toFinalizingState({
-        state: streaming,
-        currentTurnAgent: "cowork",
-        streamFailed: false,
-        turnInterrupted: false,
-      })
-
-      await Effect.runPromise(
-        seedCheckpoint({ state: finalizing }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
-      )
-
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
-          const cs = yield* CheckpointStorage
-
-          yield* agentLoop.getQueue({ sessionId: session.id, branchId: branch.id })
-
-          const latestTag = yield* waitFor(
-            storage.getLatestEventTag({
-              sessionId: session.id,
-              branchId: branch.id,
-              tags: ["TurnCompleted"],
-            }),
-            (value) => value === "TurnCompleted",
-          )
-          const checkpoint = yield* waitFor(
-            cs.get({
-              sessionId: session.id,
-              branchId: branch.id,
-            }),
-            (value) => value === undefined,
-          )
-
-          expect(latestTag).toBe("TurnCompleted")
-          expect(checkpoint).toBeUndefined()
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
-      )
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("startup checkpoint wake: isRunning triggers restore for all checkpointed sessions", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-wake-"))
-    const dbPath = path.join(dir, "data.db")
-
-    try {
-      const { session, branch, message } = createSessionState()
-      const resolving = buildResolvingState(
-        {
-          queue: emptyLoopQueueState(),
-          currentAgent: "cowork",
-        },
+      const { message } = createSessionState()
+      const running = buildRunningState(
+        { queue: emptyLoopQueueState(), currentAgent: "cowork" },
         { message },
       )
 
-      // Seed checkpoint
-      await Effect.runPromise(
-        seedCheckpoint({ state: resolving }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
+      // Build a checkpoint with a bogus version
+      const record = await Effect.runPromise(
+        buildLoopCheckpointRecord({
+          sessionId: running.message.sessionId,
+          branchId: running.message.branchId,
+          state: running,
+        }),
       )
+      const staleRecord = { ...record, version: 999 }
 
-      // Simulate startup wake: list checkpoints → isRunning for each
+      const providerCalls = Ref.makeUnsafe(0)
+      const layer = makeRecoveryLayer({ dbPath, providerCalls })
+
       await Effect.runPromise(
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const cs = yield* CheckpointStorage
-          const agentLoop = yield* AgentLoop
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* seedCheckpoint({ state: running, checkpointRecord: staleRecord })
+            const agentLoop = yield* AgentLoop
 
-          // Verify checkpoint exists
-          const checkpoints = yield* cs.list()
-          expect(checkpoints.length).toBe(1)
-          expect(checkpoints[0]!.sessionId).toBe(session.id)
+            // Stale checkpoint discarded — loop starts idle, no provider calls
+            const state = yield* agentLoop.getState({
+              sessionId: running.message.sessionId,
+              branchId: running.message.branchId,
+            })
 
-          // Wake via isRunning (same as startup sweep in dependencies.ts)
-          yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
+            expect(state.phase).toBe("idle")
+            expect(yield* Ref.get(providerCalls)).toBe(0)
 
-          // Wait for turn to complete
-          const completed = yield* waitFor(
-            storage.getLatestEventTag({
-              sessionId: session.id,
-              branchId: branch.id,
-              tags: ["TurnCompleted"],
-            }),
-            (value) => value === "TurnCompleted",
-          )
-          expect(completed).toBe("TurnCompleted")
-
-          // Checkpoint should be cleaned up after idle
-          const remaining = yield* waitFor(
-            cs.get({
-              sessionId: session.id,
-              branchId: branch.id,
-            }),
-            (value) => value === undefined,
-          )
-          expect(remaining).toBeUndefined()
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
-      )
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("restores WaitingForInteraction as cold state (no task, stays parked)", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-waiting-"))
-    const dbPath = path.join(dir, "data.db")
-    const providerCalls = Ref.makeUnsafe(0)
-    const toolRunnerCalls = Ref.makeUnsafe(0)
-
-    try {
-      const { session, branch, message } = createSessionState()
-      const resolving = buildResolvingState(
-        {
-          queue: emptyLoopQueueState(),
-          currentAgent: "cowork",
-        },
-        { message },
-      )
-      const streaming = toStreamingState({
-        state: resolving,
-        resolved: makeResolvedTurn(message),
-      })
-      const executing = toExecutingToolsState({
-        state: streaming,
-        currentTurnAgent: "cowork",
-        draft: {
-          text: "",
-          reasoning: "",
-          toolCalls: [toolCall],
-        },
-      })
-      const waiting = toWaitingForInteractionState({
-        state: executing,
-        completedToolResults: [],
-        pendingRequestId: "req-cold-1",
-        pendingToolCallId: toolCall.toolCallId as string,
-        interactionType: "prompt",
-      })
-
-      // Seed checkpoint in WaitingForInteraction
-      await Effect.runPromise(
-        seedCheckpoint({ state: waiting }).pipe(
-          Effect.provide(makeRecoveryLayer({ dbPath, providerCalls, toolRunnerCalls })),
+            // Checkpoint should be cleaned up
+            const cs = yield* CheckpointStorage
+            const checkpoint = yield* cs.get({
+              sessionId: running.message.sessionId,
+              branchId: running.message.branchId,
+            })
+            expect(checkpoint).toBeUndefined()
+          }).pipe(Effect.provide(layer)),
         ),
-      )
-
-      // Boot the loop — recovery should restore cold state, NOT resume tools or stream
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
-          const cs = yield* CheckpointStorage
-
-          // Trigger recovery by querying the loop
-          yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
-
-          // Give recovery a moment to settle
-          yield* Effect.sleep("100 millis")
-
-          // Recovery event should be published
-          const recoveryTag = yield* waitFor(
-            storage.getLatestEventTag({
-              sessionId: session.id,
-              branchId: branch.id,
-              tags: ["TurnRecoveryApplied"],
-            }),
-            (value) => value === "TurnRecoveryApplied",
-          )
-          expect(recoveryTag).toBe("TurnRecoveryApplied")
-
-          // Machine should be in WaitingForInteraction — cold, no task running
-          const state = yield* agentLoop.getState({ sessionId: session.id, branchId: branch.id })
-          expect(state.phase).toBe("waiting-for-interaction")
-
-          // No provider or tool runner calls — cold state doesn't re-execute anything
-          expect(yield* Ref.get(providerCalls)).toBe(0)
-          expect(yield* Ref.get(toolRunnerCalls)).toBe(0)
-
-          // Checkpoint should still be retained (WaitingForInteraction is not Idle)
-          const checkpoint = yield* cs.get({ sessionId: session.id, branchId: branch.id })
-          expect(checkpoint).toBeDefined()
-        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath, providerCalls, toolRunnerCalls }))),
       )
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })

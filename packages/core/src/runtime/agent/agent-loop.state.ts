@@ -3,12 +3,10 @@ import { type ActorRef, Event, State } from "effect-machine"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import {
   AgentName,
-  ReasoningEffort,
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
 import { Message, TextPart, ToolCallPart, ToolResultPart } from "../../domain/message.js"
-import { ModelId } from "../../domain/model.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
 import { QueueEntryInfo, type QueueSnapshot } from "../../domain/queue.js"
 import { UsageSchema } from "../../domain/event.js"
@@ -168,16 +166,7 @@ const RunningTurnFields = {
   agentOverride: Schema.optional(AgentName),
 }
 
-// ── Resolved turn (not persisted in machine state) ──
-
-export const ResolvedTurnFields = {
-  currentTurnAgent: AgentName,
-  messages: Schema.Array(Message),
-  systemPrompt: Schema.String,
-  modelId: ModelId,
-  reasoning: Schema.optional(ReasoningEffort),
-  temperature: Schema.optional(Schema.Number),
-}
+// ── Turn types (not persisted in machine state) ──
 
 export const AssistantDraftSchema = Schema.Struct({
   text: Schema.String,
