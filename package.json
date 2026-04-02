@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "effect-language-service patch && turbo run typecheck --force",
-    "lint": "oxlint",
+    "lint": "concurrently -n oxlint,effect -c yellow,blue \"oxlint\" \"turbo run lint\"",
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",

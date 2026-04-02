@@ -17,6 +17,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
+    "lint": "effect-language-service diagnostics --project tsconfig.json",
     "test": "bun test tests/"
   },
   "dependencies": {

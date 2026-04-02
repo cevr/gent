@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/main.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsgo --noEmit",
+    "lint": "effect-language-service diagnostics --project tsconfig.json"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
