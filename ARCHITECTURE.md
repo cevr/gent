@@ -124,10 +124,40 @@ Shape:
 - production actor routing is cluster-backed inside the worker process
 - queue ownership is structural
 - turn phases are explicit (resolve → stream → execute-tools → finalize)
+- interactions are cold machine states, not blocked fibers
 - machine inspection events are published as diagnostics
 - `SubagentRunnerConfig` is a plain interface passed to `InProcessRunner`/`SubprocessRunner`, not a service
 
 Do not rebuild business logic from inspection events. They are receipts, not inputs.
+
+### Interactions (Cold Pattern)
+
+Tools that need human input (prompt, handoff, ask-user) use a cold interaction pattern instead of blocking fibers:
+
+```text
+tool calls handler.present()
+  → InteractionPendingError thrown
+    → ToolRunner re-raises it
+      → executeToolsPhase propagates it
+        → machine emits InteractionRequested
+          → ExecutingTools → WaitingForInteraction (cold, no task fiber)
+
+client responds via RPC
+  → InteractionCommands stores resolution in-memory
+    → machine receives InteractionResponded
+      → WaitingForInteraction → ExecutingTools
+        → tool re-runs, calls present(), finds stored resolution
+          → continues normally
+```
+
+Key properties:
+
+- **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no `.task()`, no background work. The machine is checkpointed and survives restarts.
+- **Crash-safe respond ordering.** `storeResolution` (in-memory) → `respondInteraction` (wake machine) → `handler.respond` (resolve in storage). If process dies before wake, request stays pending; `listPending()` re-publishes on recovery.
+- **Tool re-execution on resume.** The full `executeToolsPhase` re-runs. Pre-interaction side effects re-execute (idempotent by convention). No continuation payloads.
+- **Permissions are not interactive.** Default-allow with explicit deny rules. `Permission.check` is a synchronous policy check, never blocks.
+
+Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `interaction-handlers.ts` (PromptHandler, HandoffHandler), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
 
 ## Platform Boundaries
 

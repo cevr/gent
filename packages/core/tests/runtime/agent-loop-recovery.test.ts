@@ -21,6 +21,7 @@ import {
   toExecutingToolsState,
   toFinalizingState,
   toStreamingState,
+  toWaitingForInteractionState,
   type LoopState,
 } from "@gent/core/runtime/agent/agent-loop.state"
 import {
@@ -630,6 +631,91 @@ describe("AgentLoop recovery", () => {
           )
           expect(remaining).toBeUndefined()
         }).pipe(Effect.provide(makeRecoveryLayer({ dbPath }))),
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("restores WaitingForInteraction as cold state (no task, stays parked)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-waiting-"))
+    const dbPath = path.join(dir, "data.db")
+    const providerCalls = Ref.makeUnsafe(0)
+    const toolRunnerCalls = Ref.makeUnsafe(0)
+
+    try {
+      const { session, branch, message } = createSessionState()
+      const resolving = buildResolvingState(
+        {
+          queue: emptyLoopQueueState(),
+          currentAgent: "cowork",
+        },
+        { message },
+      )
+      const streaming = toStreamingState({
+        state: resolving,
+        resolved: makeResolvedTurn(message),
+      })
+      const executing = toExecutingToolsState({
+        state: streaming,
+        currentTurnAgent: "cowork",
+        draft: {
+          text: "",
+          reasoning: "",
+          toolCalls: [toolCall],
+        },
+      })
+      const waiting = toWaitingForInteractionState({
+        state: executing,
+        completedToolResults: [],
+        pendingRequestId: "req-cold-1",
+        pendingToolCallId: toolCall.toolCallId as string,
+        interactionType: "prompt",
+      })
+
+      // Seed checkpoint in WaitingForInteraction
+      await Effect.runPromise(
+        seedCheckpoint({ state: waiting }).pipe(
+          Effect.provide(makeRecoveryLayer({ dbPath, providerCalls, toolRunnerCalls })),
+        ),
+      )
+
+      // Boot the loop — recovery should restore cold state, NOT resume tools or stream
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const storage = yield* Storage
+          const cs = yield* CheckpointStorage
+
+          // Trigger recovery by querying the loop
+          yield* agentLoop.isRunning({ sessionId: session.id, branchId: branch.id })
+
+          // Give recovery a moment to settle
+          yield* Effect.sleep("100 millis")
+
+          // Recovery event should be published
+          const recoveryTag = yield* waitFor(
+            storage.getLatestEventTag({
+              sessionId: session.id,
+              branchId: branch.id,
+              tags: ["TurnRecoveryApplied"],
+            }),
+            (value) => value === "TurnRecoveryApplied",
+          )
+          expect(recoveryTag).toBe("TurnRecoveryApplied")
+
+          // Machine should be in WaitingForInteraction — cold, no task running
+          const state = yield* agentLoop.getState({ sessionId: session.id, branchId: branch.id })
+          expect(state.phase).toBe("waiting-for-interaction")
+
+          // No provider or tool runner calls — cold state doesn't re-execute anything
+          expect(yield* Ref.get(providerCalls)).toBe(0)
+          expect(yield* Ref.get(toolRunnerCalls)).toBe(0)
+
+          // Checkpoint should still be retained (WaitingForInteraction is not Idle)
+          const checkpoint = yield* cs.get({ sessionId: session.id, branchId: branch.id })
+          expect(checkpoint).toBeDefined()
+        }).pipe(Effect.provide(makeRecoveryLayer({ dbPath, providerCalls, toolRunnerCalls }))),
       )
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
