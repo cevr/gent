@@ -14,6 +14,8 @@ import { QueueEntryInfo, type QueueSnapshot } from "../../domain/queue.js"
 import { UsageSchema } from "../../domain/event.js"
 import { messageText, getSingleText } from "./agent-loop.utils.js"
 
+// ── Queue ──
+
 const QueuedTurnItemSchema = Schema.Struct({
   message: Message,
   agentOverride: Schema.optional(AgentName),
@@ -152,19 +154,21 @@ export const takeNextQueuedTurn = (
 
 export const countQueuedFollowUps = (queue: LoopQueueState) => queue.followUp.length
 
+// ── Shared field groups ──
+
 const LoopStateBaseFields = {
   queue: LoopQueueState,
   currentAgent: Schema.optional(AgentName),
 }
 
-const ActiveTurnFields = {
+const RunningTurnFields = {
   ...LoopStateBaseFields,
   message: Message,
   startedAtMs: Schema.Number,
   agentOverride: Schema.optional(AgentName),
-  turnInterrupted: Schema.Boolean,
-  interruptAfterTools: Schema.Boolean,
 }
+
+// ── Resolved turn (not persisted in machine state) ──
 
 export const ResolvedTurnFields = {
   currentTurnAgent: AgentName,
@@ -191,81 +195,59 @@ export type ResolvedTurn = {
   modelId: ModelIdType
   reasoning?: ReasoningEffortType
   temperature?: number
-  /** Active tools for this turn — resolved per-agent, not serialized into machine state.
-   *  Absent in state machine transitions (tools live in a side-channel Ref). */
   tools?: ReadonlyArray<AnyToolDefinition>
 }
 
+// ── 3-State Machine ──
+
 export const AgentLoopState = State({
+  /** No turn in progress. */
   Idle: LoopStateBaseFields,
-  Resolving: ActiveTurnFields,
-  Streaming: {
-    ...ActiveTurnFields,
-    ...ResolvedTurnFields,
-  },
-  ExecutingTools: {
-    ...ActiveTurnFields,
-    currentTurnAgent: AgentName,
-    draft: AssistantDraftSchema,
-  },
+  /** Agentic loop running: resolve → stream → tools → repeat. */
+  Running: RunningTurnFields,
+  /** Cold state: a tool requested human approval. No task fiber. */
   WaitingForInteraction: {
-    ...ActiveTurnFields,
+    ...RunningTurnFields,
     currentTurnAgent: AgentName,
     draft: AssistantDraftSchema,
-    /** Completed tool results from tools that ran before the interaction */
     completedToolResults: Schema.Array(ToolResultPart),
-    /** requestId of the pending interaction in InteractionStorage */
     pendingRequestId: Schema.String,
-    /** Which tool call triggered the interaction */
     pendingToolCallId: Schema.String,
-    /** Interaction type for recovery dispatch */
     interactionType: Schema.Literals(["prompt", "handoff", "ask-user"]),
-  },
-  Finalizing: {
-    ...ActiveTurnFields,
-    currentTurnAgent: Schema.optional(AgentName),
-    usage: Schema.optional(UsageSchema),
-    streamFailed: Schema.Boolean,
   },
 })
 
 export const AgentLoopEvent = Event({
   Start: { item: QueuedTurnItemSchema },
-  QueueFollowUp: { item: QueuedTurnItemSchema },
-  QueueSteering: { item: QueuedTurnItemSchema, urgent: Schema.Boolean },
-  Interrupt: {},
-  SwitchAgent: { agent: AgentName },
-  ClearQueue: {},
-  Resolved: ResolvedTurnFields,
-  StreamFinished: { currentTurnAgent: AgentName, draft: AssistantDraftSchema },
-  StreamInterrupted: { currentTurnAgent: AgentName },
-  StreamFailed: { currentTurnAgent: AgentName },
-  ToolsFinished: {},
+  TurnDone: {},
+  TurnFailed: {},
   InteractionRequested: {
     completedToolResults: Schema.Array(ToolResultPart),
     pendingRequestId: Schema.String,
     pendingToolCallId: Schema.String,
     interactionType: Schema.Literals(["prompt", "handoff", "ask-user"]),
+    currentTurnAgent: AgentName,
+    draft: AssistantDraftSchema,
   },
-  InteractionResponded: {
-    requestId: Schema.String,
-  },
-  FinalizeFinished: {
-    queue: LoopQueueState,
-    nextItem: Schema.optional(QueuedTurnItemSchema),
-  },
-  PhaseFailed: {},
+  InteractionResponded: { requestId: Schema.String },
+  QueueFollowUp: { item: QueuedTurnItemSchema },
+  QueueSteering: { item: QueuedTurnItemSchema, urgent: Schema.Boolean },
+  ClearQueue: {},
+  SwitchAgent: { agent: AgentName },
+  Interrupt: {},
 })
+
+// ── Type aliases ──
 
 export type LoopState = typeof AgentLoopState.Type
 export type IdleState = Extract<LoopState, { _tag: "Idle" }>
-export type ResolvingState = Extract<LoopState, { _tag: "Resolving" }>
-export type StreamingState = Extract<LoopState, { _tag: "Streaming" }>
-export type ExecutingToolsState = Extract<LoopState, { _tag: "ExecutingTools" }>
+export type RunningState = Extract<LoopState, { _tag: "Running" }>
 export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
-export type FinalizingState = Extract<LoopState, { _tag: "Finalizing" }>
-export type ActiveLoopState = Exclude<LoopState, IdleState>
 export type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
+
+// ── Runtime projection (transport/UI) ──
+// Phase values preserved for backwards compat with transport contract.
+
 export type LoopRuntimePhase =
   | "idle"
   | "resolving"
@@ -281,6 +263,8 @@ export type LoopRuntimeState = {
   queue: QueueSnapshot
 }
 
+// ── State builders ──
+
 export const buildIdleState = (params?: {
   queue?: LoopQueueState
   currentAgent?: AgentNameType
@@ -290,22 +274,37 @@ export const buildIdleState = (params?: {
     currentAgent: params?.currentAgent,
   })
 
-export const buildResolvingState = (
-  base: {
-    queue: LoopQueueState
-    currentAgent?: AgentNameType
-  },
+export const buildRunningState = (
+  base: { queue: LoopQueueState; currentAgent?: AgentNameType },
   item: QueuedTurnItem,
-): ResolvingState =>
-  AgentLoopState.Resolving({
+): RunningState =>
+  AgentLoopState.Running({
     queue: base.queue,
     currentAgent: base.currentAgent,
     message: item.message,
     startedAtMs: Date.now(),
     agentOverride: item.agentOverride,
-    turnInterrupted: false,
-    interruptAfterTools: false,
   })
+
+export const toWaitingForInteractionState = (params: {
+  state: RunningState
+  currentTurnAgent: AgentNameType
+  draft: AssistantDraft
+  completedToolResults: ReadonlyArray<typeof ToolResultPart.Type>
+  pendingRequestId: string
+  pendingToolCallId: string
+  interactionType: "prompt" | "handoff" | "ask-user"
+}): WaitingForInteractionState =>
+  AgentLoopState.WaitingForInteraction.derive(params.state, {
+    currentTurnAgent: params.currentTurnAgent,
+    draft: params.draft,
+    completedToolResults: [...params.completedToolResults],
+    pendingRequestId: params.pendingRequestId,
+    pendingToolCallId: params.pendingToolCallId,
+    interactionType: params.interactionType,
+  })
+
+// ── Queue helpers on state ──
 
 export const updateQueueOnState = <S extends LoopState>(state: S, queue: LoopQueueState): S =>
   AgentLoopState.derive(state, { queue } as Partial<Omit<S, "_tag">>)
@@ -315,75 +314,6 @@ export const updateCurrentAgentOnState = <S extends LoopState>(
   currentAgent: AgentNameType,
 ): S => AgentLoopState.derive(state, { currentAgent } as Partial<Omit<S, "_tag">>)
 
-export const markInterruptAfterTools = (state: ExecutingToolsState): ExecutingToolsState =>
-  AgentLoopState.derive(state, { interruptAfterTools: true })
-
-export const markTurnInterrupted = <S extends ActiveLoopState>(state: S): S =>
-  AgentLoopState.derive(state, { turnInterrupted: true } as Partial<Omit<S, "_tag">>)
-
-export const toStreamingState = (params: {
-  state: ResolvingState
-  resolved: ResolvedTurn
-}): StreamingState =>
-  AgentLoopState.Streaming.derive(params.state, {
-    currentTurnAgent: params.resolved.currentTurnAgent,
-    messages: params.resolved.messages,
-    systemPrompt: params.resolved.systemPrompt,
-    modelId: params.resolved.modelId,
-    ...(params.resolved.reasoning !== undefined ? { reasoning: params.resolved.reasoning } : {}),
-    ...(params.resolved.temperature !== undefined
-      ? { temperature: params.resolved.temperature }
-      : {}),
-  })
-
-export const toExecutingToolsState = (params: {
-  state: StreamingState
-  currentTurnAgent: AgentNameType
-  draft: AssistantDraft
-}): ExecutingToolsState =>
-  AgentLoopState.ExecutingTools.derive(params.state, {
-    currentTurnAgent: params.currentTurnAgent,
-    draft: params.draft,
-  })
-
-export const toWaitingForInteractionState = (params: {
-  state: ExecutingToolsState
-  completedToolResults: ReadonlyArray<typeof ToolResultPart.Type>
-  pendingRequestId: string
-  pendingToolCallId: string
-  interactionType: "prompt" | "handoff" | "ask-user"
-}): WaitingForInteractionState =>
-  AgentLoopState.WaitingForInteraction.derive(params.state, {
-    completedToolResults: [...params.completedToolResults],
-    pendingRequestId: params.pendingRequestId,
-    pendingToolCallId: params.pendingToolCallId,
-    interactionType: params.interactionType,
-  })
-
-export const toFinalizingState = (params: {
-  state: ResolvingState | StreamingState | ExecutingToolsState | WaitingForInteractionState
-  currentTurnAgent?: AgentNameType
-  usage?: { inputTokens: number; outputTokens: number }
-  streamFailed: boolean
-  turnInterrupted: boolean
-}): FinalizingState =>
-  AgentLoopState.Finalizing.derive(params.state, {
-    interruptAfterTools: false,
-    turnInterrupted: params.turnInterrupted,
-    currentTurnAgent: params.currentTurnAgent,
-    usage: params.usage,
-    streamFailed: params.streamFailed,
-  })
-
-/** Re-enter Resolving from ExecutingTools for tool-result continuation.
- *  Preserves the original turn's startedAtMs and message. */
-export const buildContinuationResolvingState = (state: ExecutingToolsState): ResolvingState =>
-  AgentLoopState.Resolving.derive(state, {
-    agentOverride: state.agentOverride,
-    turnInterrupted: false,
-    interruptAfterTools: false,
-  })
-
 export const queueSnapshotFromState = (state: LoopState): QueueSnapshot =>
   toQueueSnapshot(state.queue.steering, state.queue.followUp)
 
@@ -392,6 +322,8 @@ export const queueContainsContent = (
   content: string,
 ): boolean => queue.some((item) => messageText(item.message).includes(content))
 
+// ── Runtime state projection ──
+
 export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState => {
   const agent = state.currentAgent ?? "cowork"
   const queue = queueSnapshotFromState(state)
@@ -399,40 +331,9 @@ export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState =>
   switch (state._tag) {
     case "Idle":
       return { phase: "idle", status: "idle", agent, queue }
-    case "Resolving":
-      return {
-        phase: "resolving",
-        status: state.turnInterrupted ? "interrupted" : "running",
-        agent,
-        queue,
-      }
-    case "Streaming":
-      return {
-        phase: "streaming",
-        status: state.turnInterrupted ? "interrupted" : "running",
-        agent,
-        queue,
-      }
-    case "ExecutingTools":
-      return {
-        phase: "executing-tools",
-        status: state.turnInterrupted || state.interruptAfterTools ? "interrupted" : "running",
-        agent,
-        queue,
-      }
+    case "Running":
+      return { phase: "streaming", status: "running", agent, queue }
     case "WaitingForInteraction":
-      return {
-        phase: "waiting-for-interaction",
-        status: state.turnInterrupted ? "interrupted" : "running",
-        agent,
-        queue,
-      }
-    case "Finalizing":
-      return {
-        phase: "finalizing",
-        status: state.turnInterrupted ? "interrupted" : "running",
-        agent,
-        queue,
-      }
+      return { phase: "waiting-for-interaction", status: "running", agent, queue }
   }
 }

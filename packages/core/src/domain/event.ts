@@ -48,26 +48,13 @@ export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnComp
   interrupted: Schema.optional(Schema.Boolean),
 }) {}
 
-export const RecoveryPhase = Schema.Literals([
-  "Idle",
-  "Resolving",
-  "Streaming",
-  "ExecutingTools",
-  "WaitingForInteraction",
-  "Finalizing",
-])
+export const RecoveryPhase = Schema.Literals(["Idle", "Running", "WaitingForInteraction"])
 export type RecoveryPhase = typeof RecoveryPhase.Type
 
 export const RecoveryAction = Schema.Literals([
   "resume-queued-turn",
-  "replay-resolving",
-  "replay-streaming",
-  "reuse-persisted-assistant",
-  "replay-idempotent-tools",
-  "reuse-persisted-tool-results",
-  "abort-non-idempotent-tools",
+  "replay-running",
   "restore-cold",
-  "replay-finalizing",
 ])
 export type RecoveryAction = typeof RecoveryAction.Type
 

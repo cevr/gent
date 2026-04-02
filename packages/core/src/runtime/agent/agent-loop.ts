@@ -88,24 +88,16 @@ import {
   appendFollowUpQueueState,
   appendSteeringItem,
   buildIdleState,
-  buildResolvingState,
+  buildRunningState,
   clearQueueState,
   countQueuedFollowUps,
-  markInterruptAfterTools,
-  markTurnInterrupted,
   queueSnapshotFromState,
   runtimeStateFromLoopState,
   takeNextQueuedTurn,
-  buildContinuationResolvingState,
-  toExecutingToolsState,
-  toFinalizingState,
-  toStreamingState,
   toWaitingForInteractionState,
   updateCurrentAgentOnState,
   updateQueueOnState,
   type AssistantDraft,
-  type ExecutingToolsState,
-  type FinalizingState,
   type LoopActor,
   type LoopRuntimePhase,
   type LoopRuntimeState,
@@ -113,11 +105,9 @@ import {
   type LoopState,
   type QueuedTurnItem,
   type ResolvedTurn,
-  type ResolvingState,
-  type StreamingState,
+  type RunningState,
 } from "./agent-loop.state.js"
 import {
-  assistantDraftFromMessage,
   assistantMessageIdForTurn,
   buildTurnPrompt,
   resolveReasoning,
@@ -1063,23 +1053,8 @@ const makePublishingInspector = (params: {
 type LoopRecoveryDecision = {
   state: LoopState
   recovery?: {
-    phase:
-      | "Idle"
-      | "Resolving"
-      | "Streaming"
-      | "ExecutingTools"
-      | "WaitingForInteraction"
-      | "Finalizing"
-    action:
-      | "resume-queued-turn"
-      | "replay-resolving"
-      | "replay-streaming"
-      | "reuse-persisted-assistant"
-      | "replay-idempotent-tools"
-      | "reuse-persisted-tool-results"
-      | "abort-non-idempotent-tools"
-      | "restore-cold"
-      | "replay-finalizing"
+    phase: "Idle" | "Running" | "WaitingForInteraction"
+    action: "resume-queued-turn" | "replay-running" | "restore-cold"
     detail?: string
   }
 }
@@ -1100,41 +1075,25 @@ const makeRecoveryDecision = (params: {
     const publishRecovery = (recovery: LoopRecoveryDecision["recovery"]) =>
       recovery === undefined
         ? Effect.void
-        : Effect.gen(function* () {
-            yield* params
-              .publishEvent(
-                new TurnRecoveryApplied({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  phase: recovery.phase,
-                  action: recovery.action,
-                  ...(recovery.detail !== undefined ? { detail: recovery.detail } : {}),
-                }),
-              )
-              .pipe(Effect.catchEager(() => Effect.void))
-            if (recovery.action === "abort-non-idempotent-tools") {
-              yield* params
-                .publishEvent(
-                  new ErrorOccurred({
-                    sessionId: params.sessionId,
-                    branchId: params.branchId,
-                    error: recovery.detail ?? "Skipped ambiguous tool replay after crash",
-                  }),
-                )
-                .pipe(Effect.catchEager(() => Effect.void))
-            }
-          })
+        : params
+            .publishEvent(
+              new TurnRecoveryApplied({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                phase: recovery.phase,
+                action: recovery.action,
+                ...(recovery.detail !== undefined ? { detail: recovery.detail } : {}),
+              }),
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
 
     if (state._tag === "Idle") {
       const { queue, nextItem } = takeNextQueuedTurn(state.queue)
       if (nextItem !== undefined) {
         yield* publishRecovery({ phase: "Idle", action: "resume-queued-turn" })
         return Option.some(
-          buildResolvingState(
-            {
-              queue,
-              currentAgent: state.currentAgent ?? params.currentAgent,
-            },
+          buildRunningState(
+            { queue, currentAgent: state.currentAgent ?? params.currentAgent },
             nextItem,
           ),
         )
@@ -1146,90 +1105,11 @@ const makeRecoveryDecision = (params: {
       )
     }
 
-    if (state._tag === "Resolving") {
-      yield* publishRecovery({ phase: "Resolving", action: "replay-resolving" })
+    if (state._tag === "Running") {
+      // The Running task will re-derive loop position from storage
+      // (assistant message? tool results? → resume from correct point)
+      yield* publishRecovery({ phase: "Running", action: "replay-running" })
       return Option.some(state)
-    }
-
-    if (state._tag === "Streaming") {
-      const assistantMessage = yield* params.storage.getMessage(
-        assistantMessageIdForTurn(state.message.id),
-      )
-      if (assistantMessage !== undefined) {
-        const draft = assistantDraftFromMessage(assistantMessage)
-        yield* publishRecovery({ phase: "Streaming", action: "reuse-persisted-assistant" })
-        return Option.some(
-          draft.toolCalls.length === 0
-            ? toFinalizingState({
-                state,
-                currentTurnAgent: state.currentTurnAgent,
-                streamFailed: false,
-                turnInterrupted: state.turnInterrupted,
-              })
-            : toExecutingToolsState({
-                state,
-                currentTurnAgent: state.currentTurnAgent,
-                draft,
-              }),
-        )
-      }
-      yield* publishRecovery({ phase: "Streaming", action: "replay-streaming" })
-      return Option.some(state)
-    }
-
-    if (state._tag === "ExecutingTools") {
-      const toolResultMessage = yield* params.storage.getMessage(
-        toolResultMessageIdForTurn(state.message.id),
-      )
-      if (toolResultMessage !== undefined) {
-        if (state.turnInterrupted || state.interruptAfterTools) {
-          yield* publishRecovery({
-            phase: "ExecutingTools",
-            action: "reuse-persisted-tool-results",
-          })
-          return Option.some(
-            toFinalizingState({
-              state,
-              currentTurnAgent: state.currentTurnAgent,
-              usage: state.draft.usage,
-              streamFailed: false,
-              turnInterrupted: true,
-            }),
-          )
-        }
-        // Tool results persisted — continue the turn by re-entering Resolving
-        yield* publishRecovery({ phase: "ExecutingTools", action: "reuse-persisted-tool-results" })
-        return Option.some(buildContinuationResolvingState(state))
-      }
-
-      const canReplay = yield* Effect.forEach(
-        state.draft.toolCalls,
-        (toolCall) =>
-          params.extensionRegistry
-            .getTool(toolCall.toolName)
-            .pipe(Effect.map((tool) => tool?.idempotent === true)),
-        { concurrency: "unbounded" },
-      ).pipe(Effect.map((results) => results.every(Boolean)))
-
-      if (canReplay) {
-        yield* publishRecovery({ phase: "ExecutingTools", action: "replay-idempotent-tools" })
-        return Option.some(state)
-      }
-
-      yield* publishRecovery({
-        phase: "ExecutingTools",
-        action: "abort-non-idempotent-tools",
-        detail: "Skipped replay for non-idempotent tool calls after crash",
-      })
-      return Option.some(
-        toFinalizingState({
-          state,
-          currentTurnAgent: state.currentTurnAgent,
-          usage: state.draft.usage,
-          streamFailed: true,
-          turnInterrupted: true,
-        }),
-      )
     }
 
     if (state._tag === "WaitingForInteraction") {
@@ -1239,8 +1119,7 @@ const makeRecoveryDecision = (params: {
       return Option.some(state)
     }
 
-    yield* publishRecovery({ phase: "Finalizing", action: "replay-finalizing" })
-    return Option.some(state)
+    return Option.none()
   })
 
 // Agent Loop Service
@@ -1319,8 +1198,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
-            // Session-scoped publish — extension reduce + UI snapshot publication
-            // is handled centrally by ReducingEventStore (see dependencies.ts)
             const publishEvent = (event: AgentEvent) =>
               eventStore.publish(event).pipe(
                 Effect.mapError(
@@ -1338,7 +1215,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const turnToolsRef = yield* Ref.make<ReadonlyArray<AnyToolDefinition>>([])
             const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
-            const turnStepRef = yield* Ref.make(0)
+            const interruptedRef = yield* Ref.make(false)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
             const inspector = makePublishingInspector({
               publishEvent: publishEventOrDie,
@@ -1374,153 +1251,139 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 return updateCurrentAgentOnState(state, next)
               }).pipe(Effect.orDie) as Effect.Effect<S>
 
-            const runResolvingState = Effect.fn("AgentLoop.runResolvingState")(function* (
-              state: ResolvingState,
-            ) {
-              const step = yield* Ref.updateAndGet(turnStepRef, (s) => s + 1)
-              if (step > DEFAULTS.maxTurnSteps) {
-                yield* Effect.logWarning("resolve.max-turn-steps-exceeded").pipe(
-                  Effect.annotateLogs({ step, max: DEFAULTS.maxTurnSteps }),
-                )
-                return AgentLoopEvent.PhaseFailed
-              }
+            // ── The inner agentic loop ──
+            // resolve → stream → tools → repeat until LLM returns no tool calls
+            const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
+              yield* Ref.set(interruptedRef, false)
+              yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
+              let step = 0
+              let interrupted = false
+              let streamFailed = false
+              let currentTurnAgent: AgentNameType = state.currentAgent ?? "cowork"
 
-              // Reset turn metrics only on fresh turns, not on tool continuations
-              if (step === 1) {
-                yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
-              }
-
-              const resolved = yield* resolveTurnPhase({
-                message: state.message,
-                agentOverride: state.agentOverride,
-                currentAgent: state.currentAgent,
-                storage,
-                branchId,
-                extensionRegistry,
-                extensionStateRuntime,
-                sessionId,
-                publishEvent: publishEventOrDie,
-                baseSections: config.baseSections,
-              })
-              if (resolved === undefined) {
-                return AgentLoopEvent.PhaseFailed
-              }
-
-              // Store tools in side-channel ref (not serializable into state machine)
-              yield* Ref.set(turnToolsRef, resolved.tools)
-
-              // Populate turn metrics with agent/model from resolve (available even if stream fails)
-              yield* Ref.update(turnMetricsRef, (m) => ({
-                ...m,
-                agent: resolved.currentTurnAgent,
-                model: resolved.modelId,
-              }))
-
-              return AgentLoopEvent.Resolved(resolved)
-            })
-
-            const runStreamingState = Effect.fn("AgentLoop.runStreamingState")(function* (
-              state: StreamingState,
-            ) {
-              const activeStream: ActiveStreamHandle = {
-                abortController: new AbortController(),
-                interruptDeferred: yield* Deferred.make<void>(),
-                interruptedRef: yield* Ref.make(false),
-              }
-
-              yield* Ref.set(activeStreamRef, activeStream)
-              // Re-resolve tools if turnToolsRef is empty (crash recovery path)
-              let turnTools = yield* Ref.get(turnToolsRef)
-              if (turnTools.length === 0) {
-                const agent = yield* extensionRegistry.getAgent(state.currentTurnAgent)
-                if (agent !== undefined) {
-                  const policy = yield* extensionRegistry.resolveToolPolicy(
-                    agent,
-                    { sessionId, branchId, agentName: state.currentTurnAgent },
-                    [],
+              while (true) {
+                step++
+                if (step > DEFAULTS.maxTurnSteps) {
+                  yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
+                    Effect.annotateLogs({ step, max: DEFAULTS.maxTurnSteps }),
                   )
-                  turnTools = policy.tools
-                  yield* Ref.set(turnToolsRef, turnTools)
+                  break
                 }
-              }
-              const collected = yield* streamTurnPhase({
-                messageId: state.message.id,
-                resolved: {
-                  currentTurnAgent: state.currentTurnAgent,
-                  messages: state.messages,
-                  systemPrompt: state.systemPrompt,
-                  modelId: state.modelId,
-                  tools: turnTools,
-                  ...(state.reasoning !== undefined ? { reasoning: state.reasoning } : {}),
-                  ...(state.temperature !== undefined ? { temperature: state.temperature } : {}),
-                },
-                provider,
-                extensionRegistry,
-                publishEvent: publishEventOrDie,
-                storage,
-                sessionId,
-                branchId,
-                activeStream,
-                turnMetrics: turnMetricsRef,
-              }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined)))
 
-              if (collected.interrupted) {
-                return AgentLoopEvent.StreamInterrupted({
-                  currentTurnAgent: state.currentTurnAgent,
+                if (yield* Ref.get(interruptedRef)) {
+                  interrupted = true
+                  break
+                }
+
+                // 1. Resolve
+                const resolved = yield* resolveTurnPhase({
+                  message: state.message,
+                  agentOverride: state.agentOverride,
+                  currentAgent: state.currentAgent,
+                  storage,
+                  branchId,
+                  extensionRegistry,
+                  extensionStateRuntime,
+                  sessionId,
+                  publishEvent: publishEventOrDie,
+                  baseSections: config.baseSections,
                 })
+                if (resolved === undefined) break
+
+                yield* Ref.set(turnToolsRef, resolved.tools)
+                currentTurnAgent = resolved.currentTurnAgent
+                if (step === 1) {
+                  yield* Ref.update(turnMetricsRef, (m) => ({
+                    ...m,
+                    agent: resolved.currentTurnAgent,
+                    model: resolved.modelId,
+                  }))
+                }
+
+                if (yield* Ref.get(interruptedRef)) {
+                  interrupted = true
+                  break
+                }
+
+                // 2. Stream
+                const activeStream: ActiveStreamHandle = {
+                  abortController: new AbortController(),
+                  interruptDeferred: yield* Deferred.make<void>(),
+                  interruptedRef: yield* Ref.make(false),
+                }
+                yield* Ref.set(activeStreamRef, activeStream)
+
+                const collected = yield* streamTurnPhase({
+                  messageId: state.message.id,
+                  resolved: {
+                    currentTurnAgent: resolved.currentTurnAgent,
+                    messages: resolved.messages,
+                    systemPrompt: resolved.systemPrompt,
+                    modelId: resolved.modelId,
+                    tools: yield* Ref.get(turnToolsRef),
+                    ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+                    ...(resolved.temperature !== undefined
+                      ? { temperature: resolved.temperature }
+                      : {}),
+                  },
+                  provider,
+                  extensionRegistry,
+                  publishEvent: publishEventOrDie,
+                  storage,
+                  sessionId,
+                  branchId,
+                  activeStream,
+                  turnMetrics: turnMetricsRef,
+                }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined)))
+
+                if (collected.interrupted) {
+                  interrupted = true
+                  break
+                }
+                if (collected.streamFailed) {
+                  streamFailed = true
+                  break
+                }
+
+                // No tool calls → LLM is done
+                if (collected.draft.toolCalls.length === 0) break
+
+                // 3. Execute tools
+                const interactionSignal = yield* executeToolsPhase({
+                  messageId: state.message.id,
+                  draft: collected.draft,
+                  publishEvent: publishEventOrDie,
+                  sessionId,
+                  branchId,
+                  currentTurnAgent: resolved.currentTurnAgent,
+                  toolRunner,
+                  extensionRegistry,
+                  bashSemaphore,
+                  storage,
+                }).pipe(
+                  Effect.as(undefined as ToolInteractionPending | undefined),
+                  Effect.catchIf(
+                    (e): e is ToolInteractionPending => e instanceof ToolInteractionPending,
+                    (e) => Effect.succeed(e),
+                  ),
+                )
+
+                if (interactionSignal !== undefined) {
+                  const { pending, toolCallId } = interactionSignal
+                  return AgentLoopEvent.InteractionRequested({
+                    completedToolResults: [],
+                    pendingRequestId: pending.requestId,
+                    pendingToolCallId: toolCallId as string,
+                    interactionType: pending.interactionType,
+                    currentTurnAgent: resolved.currentTurnAgent,
+                    draft: collected.draft,
+                  })
+                }
+
+                // Loop — tool results persisted, next resolve picks them up
               }
 
-              if (collected.streamFailed) {
-                return AgentLoopEvent.StreamFailed({
-                  currentTurnAgent: state.currentTurnAgent,
-                })
-              }
-
-              return AgentLoopEvent.StreamFinished({
-                currentTurnAgent: state.currentTurnAgent,
-                draft: collected.draft,
-              })
-            })
-
-            const runExecutingToolsState = Effect.fn("AgentLoop.runExecutingToolsState")(function* (
-              state: ExecutingToolsState,
-            ) {
-              const interactionSignal = yield* executeToolsPhase({
-                messageId: state.message.id,
-                draft: state.draft,
-                publishEvent: publishEventOrDie,
-                sessionId,
-                branchId,
-                currentTurnAgent: state.currentTurnAgent,
-                toolRunner,
-                extensionRegistry,
-                bashSemaphore,
-                storage,
-              }).pipe(
-                Effect.as(undefined as ToolInteractionPending | undefined),
-                Effect.catchIf(
-                  (e): e is ToolInteractionPending => e instanceof ToolInteractionPending,
-                  (e) => Effect.succeed(e),
-                ),
-              )
-
-              if (interactionSignal !== undefined) {
-                const { pending, toolCallId } = interactionSignal
-                return AgentLoopEvent.InteractionRequested({
-                  completedToolResults: [],
-                  pendingRequestId: pending.requestId,
-                  pendingToolCallId: toolCallId as string,
-                  interactionType: pending.interactionType,
-                })
-              }
-
-              return AgentLoopEvent.ToolsFinished
-            })
-
-            const runFinalizingState = Effect.fn("AgentLoop.runFinalizingState")(function* (
-              state: FinalizingState,
-            ) {
-              yield* Effect.logInfo("finalize.start")
+              // Finalize — TurnCompleted fires once per turn
               yield* finalizeTurnPhase({
                 storage,
                 publishEvent: publishEventOrDie,
@@ -1528,22 +1391,14 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 branchId,
                 startedAtMs: state.startedAtMs,
                 messageId: state.message.id,
-                turnInterrupted: state.turnInterrupted,
-                streamFailed: state.streamFailed,
-                currentAgent: state.currentAgent ?? state.currentTurnAgent ?? "cowork",
+                turnInterrupted: interrupted,
+                streamFailed,
+                currentAgent: currentTurnAgent,
                 extensionRegistry,
                 turnMetrics: turnMetricsRef,
               })
-              yield* Effect.logInfo("finalize.turn-phase-done")
 
-              const { queue, nextItem } = takeNextQueuedTurn(state.queue)
-              yield* Effect.logInfo("finalize.end").pipe(
-                Effect.annotateLogs({ hasNext: nextItem !== undefined }),
-              )
-              return AgentLoopEvent.FinalizeFinished({
-                queue,
-                nextItem,
-              })
+              return AgentLoopEvent.TurnDone
             })
 
             const loopMachine = Machine.make({
@@ -1551,43 +1406,24 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               event: AgentLoopEvent,
               initial: buildIdleState({ currentAgent }),
             })
+              // Idle → Running
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
-                Ref.set(turnStepRef, 0).pipe(Effect.as(buildResolvingState(state, event.item))),
+                buildRunningState(state, event.item),
               )
+              // Queue/steer/switch accepted in all states
               .on(
-                [
-                  AgentLoopState.Idle,
-                  AgentLoopState.Resolving,
-                  AgentLoopState.Streaming,
-                  AgentLoopState.ExecutingTools,
-                  AgentLoopState.WaitingForInteraction,
-                  AgentLoopState.Finalizing,
-                ],
+                [AgentLoopState.Idle, AgentLoopState.Running, AgentLoopState.WaitingForInteraction],
                 AgentLoopEvent.QueueFollowUp,
                 ({ state, event }) =>
                   updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
               )
               .on(
-                [
-                  AgentLoopState.Idle,
-                  AgentLoopState.Resolving,
-                  AgentLoopState.Streaming,
-                  AgentLoopState.ExecutingTools,
-                  AgentLoopState.WaitingForInteraction,
-                  AgentLoopState.Finalizing,
-                ],
+                [AgentLoopState.Idle, AgentLoopState.Running, AgentLoopState.WaitingForInteraction],
                 AgentLoopEvent.ClearQueue,
                 ({ state }) => updateQueueOnState(state, clearQueueState(state.queue)),
               )
               .on(
-                [
-                  AgentLoopState.Idle,
-                  AgentLoopState.Resolving,
-                  AgentLoopState.Streaming,
-                  AgentLoopState.ExecutingTools,
-                  AgentLoopState.WaitingForInteraction,
-                  AgentLoopState.Finalizing,
-                ],
+                [AgentLoopState.Idle, AgentLoopState.Running, AgentLoopState.WaitingForInteraction],
                 AgentLoopEvent.SwitchAgent,
                 ({ state, event }) => switchAgentOnState(state, event.agent),
               )
@@ -1595,24 +1431,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
               )
               .on(AgentLoopState.Idle, AgentLoopEvent.Interrupt, ({ state }) => state)
-              .on(AgentLoopState.Resolving, AgentLoopEvent.QueueSteering, ({ state, event }) =>
-                updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
-              )
-              .on(AgentLoopState.Resolving, AgentLoopEvent.Interrupt, ({ state }) =>
-                markTurnInterrupted(state),
-              )
-              .on(AgentLoopState.Resolving, AgentLoopEvent.Resolved, ({ state, event }) =>
-                toStreamingState({ state, resolved: event }),
-              )
-              .on(AgentLoopState.Resolving, AgentLoopEvent.PhaseFailed, ({ state }) =>
-                toFinalizingState({
-                  state,
-                  currentTurnAgent: state.agentOverride ?? state.currentAgent ?? "cowork",
-                  streamFailed: true,
-                  turnInterrupted: state.turnInterrupted,
-                }),
-              )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.QueueSteering, ({ state, event }) =>
+              // Running — steering and interrupt
+              .on(AgentLoopState.Running, AgentLoopEvent.QueueSteering, ({ state, event }) =>
                 Effect.gen(function* () {
                   if (event.urgent) {
                     yield* interruptActiveStream(activeStreamRef)
@@ -1620,94 +1440,36 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return updateQueueOnState(state, appendSteeringItem(state.queue, event.item))
                 }),
               )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.Interrupt, ({ state }) =>
-                interruptActiveStream(activeStreamRef).pipe(Effect.as(state)),
+              .on(AgentLoopState.Running, AgentLoopEvent.Interrupt, ({ state }) =>
+                Effect.gen(function* () {
+                  yield* Ref.set(interruptedRef, true)
+                  yield* interruptActiveStream(activeStreamRef)
+                  return state
+                }),
               )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.StreamFinished, ({ state, event }) =>
-                event.draft.toolCalls.length === 0
-                  ? toFinalizingState({
-                      state,
-                      currentTurnAgent: event.currentTurnAgent,
-                      usage: event.draft.usage,
-                      streamFailed: false,
-                      turnInterrupted: state.turnInterrupted,
-                    })
-                  : toExecutingToolsState({
-                      state,
-                      currentTurnAgent: event.currentTurnAgent,
-                      draft: event.draft,
-                    }),
+              // Running → Idle (turn done), or re-enter Running (queued follow-up)
+              // Use state.queue (live, includes follow-ups queued during turn) not event.queue (stale)
+              .reenter(AgentLoopState.Running, AgentLoopEvent.TurnDone, ({ state }) => {
+                const { queue, nextItem } = takeNextQueuedTurn(state.queue)
+                if (nextItem !== undefined) {
+                  return buildRunningState({ queue, currentAgent: state.currentAgent }, nextItem)
+                }
+                return buildIdleState({ queue, currentAgent: state.currentAgent })
+              })
+              .on(AgentLoopState.Running, AgentLoopEvent.TurnFailed, ({ state }) =>
+                buildIdleState({ queue: state.queue, currentAgent: state.currentAgent }),
               )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.StreamInterrupted, ({ state, event }) =>
-                toFinalizingState({
+              // Running → WaitingForInteraction
+              .on(AgentLoopState.Running, AgentLoopEvent.InteractionRequested, ({ state, event }) =>
+                toWaitingForInteractionState({
                   state,
                   currentTurnAgent: event.currentTurnAgent,
-                  streamFailed: false,
-                  turnInterrupted: true,
+                  draft: event.draft,
+                  completedToolResults: [...event.completedToolResults],
+                  pendingRequestId: event.pendingRequestId,
+                  pendingToolCallId: event.pendingToolCallId,
+                  interactionType: event.interactionType,
                 }),
-              )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.StreamFailed, ({ state, event }) =>
-                toFinalizingState({
-                  state,
-                  currentTurnAgent: event.currentTurnAgent,
-                  streamFailed: true,
-                  turnInterrupted: state.turnInterrupted,
-                }),
-              )
-              .on(AgentLoopState.Streaming, AgentLoopEvent.PhaseFailed, ({ state }) =>
-                toFinalizingState({
-                  state,
-                  currentTurnAgent: state.currentTurnAgent,
-                  streamFailed: true,
-                  turnInterrupted: state.turnInterrupted,
-                }),
-              )
-              .on(
-                AgentLoopState.ExecutingTools,
-                AgentLoopEvent.QueueSteering,
-                ({ state, event }) => {
-                  const nextState = updateQueueOnState(
-                    state,
-                    appendSteeringItem(state.queue, event.item),
-                  ) as ExecutingToolsState
-                  return event.urgent ? markInterruptAfterTools(nextState) : nextState
-                },
-              )
-              .on(AgentLoopState.ExecutingTools, AgentLoopEvent.Interrupt, ({ state }) =>
-                markInterruptAfterTools(state),
-              )
-              .on(AgentLoopState.ExecutingTools, AgentLoopEvent.ToolsFinished, ({ state }) =>
-                state.turnInterrupted || state.interruptAfterTools
-                  ? toFinalizingState({
-                      state,
-                      currentTurnAgent: state.currentTurnAgent,
-                      usage: state.draft.usage,
-                      streamFailed: false,
-                      turnInterrupted: true,
-                    })
-                  : buildContinuationResolvingState(state),
-              )
-              .on(AgentLoopState.ExecutingTools, AgentLoopEvent.PhaseFailed, ({ state }) =>
-                toFinalizingState({
-                  state,
-                  currentTurnAgent: state.currentTurnAgent,
-                  usage: state.draft.usage,
-                  streamFailed: true,
-                  turnInterrupted: state.turnInterrupted || state.interruptAfterTools,
-                }),
-              )
-              // ExecutingTools → WaitingForInteraction
-              .on(
-                AgentLoopState.ExecutingTools,
-                AgentLoopEvent.InteractionRequested,
-                ({ state, event }) =>
-                  toWaitingForInteractionState({
-                    state,
-                    completedToolResults: [...event.completedToolResults],
-                    pendingRequestId: event.pendingRequestId,
-                    pendingToolCallId: event.pendingToolCallId,
-                    interactionType: event.interactionType,
-                  }),
               )
               // WaitingForInteraction — cold state, no task fiber
               .on(
@@ -1717,101 +1479,31 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
               )
               .on(AgentLoopState.WaitingForInteraction, AgentLoopEvent.Interrupt, ({ state }) =>
-                toFinalizingState({
-                  state,
-                  currentTurnAgent: state.currentTurnAgent,
-                  streamFailed: false,
-                  turnInterrupted: true,
-                }),
+                buildIdleState({ queue: state.queue, currentAgent: state.currentAgent }),
               )
+              // WaitingForInteraction → Running (resume)
               .on(
                 AgentLoopState.WaitingForInteraction,
                 AgentLoopEvent.InteractionResponded,
                 ({ state }) =>
-                  // Resume tool execution — the tool re-calls present()
-                  // which finds the stored resolution and continues
-                  AgentLoopState.ExecutingTools.derive(state, {
-                    currentTurnAgent: state.currentTurnAgent,
-                    draft: state.draft,
+                  AgentLoopState.Running.derive(state, {
+                    message: state.message,
+                    startedAtMs: state.startedAtMs,
+                    agentOverride: state.agentOverride,
                   }),
               )
-              .on(AgentLoopState.Finalizing, AgentLoopEvent.QueueSteering, ({ state, event }) =>
-                updateQueueOnState(state, appendSteeringItem(state.queue, event.item)),
-              )
-              .on(AgentLoopState.Finalizing, AgentLoopEvent.Interrupt, ({ state }) =>
-                markTurnInterrupted(state),
-              )
-              .on(AgentLoopState.Finalizing, AgentLoopEvent.FinalizeFinished, ({ state, event }) =>
-                Effect.gen(function* () {
-                  if (event.nextItem !== undefined) {
-                    yield* Ref.set(turnStepRef, 0)
-                    return buildResolvingState(
-                      {
-                        queue: event.queue,
-                        currentAgent: state.currentAgent,
-                      },
-                      event.nextItem,
-                    )
-                  }
-                  return buildIdleState({
-                    queue: event.queue,
-                    currentAgent: state.currentAgent,
-                  })
-                }),
-              )
-              .on(AgentLoopState.Finalizing, AgentLoopEvent.PhaseFailed, ({ state }) =>
-                buildIdleState({
-                  queue: state.queue,
-                  currentAgent: state.currentAgent,
-                }),
-              )
+              // Running task — the agentic loop
               .task(
-                AgentLoopState.Resolving,
+                AgentLoopState.Running,
                 ({ state }) =>
-                  runResolvingState(state).pipe(
+                  runTurn(state).pipe(
                     Effect.annotateLogs({ sessionId, branchId }),
-                    Effect.withSpan("AgentLoop.resolve"),
+                    Effect.withSpan("AgentLoop.turn"),
                     Effect.tapCause((cause) =>
                       publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
                     ),
                   ),
-                { name: "resolve", onFailure: () => AgentLoopEvent.PhaseFailed },
-              )
-              .task(
-                AgentLoopState.Streaming,
-                ({ state }) =>
-                  runStreamingState(state).pipe(
-                    Effect.annotateLogs({ sessionId, branchId }),
-                    Effect.withSpan("AgentLoop.stream"),
-                    Effect.tapCause((cause) =>
-                      publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
-                    ),
-                  ),
-                { name: "stream", onFailure: () => AgentLoopEvent.PhaseFailed },
-              )
-              .task(
-                AgentLoopState.ExecutingTools,
-                ({ state }) =>
-                  runExecutingToolsState(state).pipe(
-                    Effect.annotateLogs({ sessionId, branchId }),
-                    Effect.withSpan("AgentLoop.tools"),
-                    Effect.tapCause((cause) =>
-                      publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
-                    ),
-                  ),
-                { name: "tools", onFailure: () => AgentLoopEvent.PhaseFailed },
-              )
-              .task(
-                AgentLoopState.Finalizing,
-                ({ state }) =>
-                  runFinalizingState(state).pipe(
-                    Effect.annotateLogs({ sessionId, branchId }),
-                    Effect.withSpan("AgentLoop.finalize"),
-                    Effect.tapCause((cause) =>
-                      publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
-                    ),
-                  ),
-                { name: "finalize", onFailure: () => AgentLoopEvent.PhaseFailed },
+                { name: "turn", onFailure: () => AgentLoopEvent.TurnFailed },
               )
 
             const loopActor = yield* Machine.spawn(loopMachine, {
@@ -2009,11 +1701,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   return
                 case "Cancel":
                 case "Interrupt":
-                  if (
-                    loopState._tag === "Streaming" ||
-                    loopState._tag === "ExecutingTools" ||
-                    loopState._tag === "WaitingForInteraction"
-                  ) {
+                  if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
                     yield* loop.actor.cast(AgentLoopEvent.Interrupt)
                   }
                   return
@@ -2031,8 +1719,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     message: interjectMessage,
                     ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
                   }
-                  const urgent =
-                    loopState._tag === "Streaming" || loopState._tag === "ExecutingTools"
+                  const urgent = loopState._tag === "Running"
                   yield* loop.actor.call(AgentLoopEvent.QueueSteering({ item, urgent }))
                   return
                 }

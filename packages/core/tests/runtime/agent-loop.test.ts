@@ -366,7 +366,7 @@ describe("AgentLoop actor model", () => {
               to: getStateTag(event.payload, "toState"),
             }))
 
-          expect(transitions).toContainEqual({ from: "Resolving", to: "Streaming" })
+          expect(transitions).toContainEqual({ from: "Idle", to: "Running" })
         }).pipe(Effect.provide(layer)),
       ),
     )
