@@ -14,7 +14,7 @@
  * - Errors caught per-handler — one failing handler doesn't affect others
  */
 
-import { Effect, ServiceMap, Layer, Ref } from "effect"
+import { Effect, ServiceMap, Layer } from "effect"
 import type { SessionId, BranchId } from "../../domain/ids.js"
 
 // ── Envelope ──
@@ -40,144 +40,109 @@ export interface ExtensionEventBusService {
   readonly on: (pattern: string, handler: BusHandler) => Effect.Effect<() => void>
 }
 
+const parseWildcard = (pattern: string): { prefix: string } | undefined => {
+  if (pattern.endsWith(":*")) return { prefix: pattern.slice(0, -1) }
+  return undefined
+}
+
 export class ExtensionEventBus extends ServiceMap.Service<
   ExtensionEventBus,
   ExtensionEventBusService
 >()("@gent/core/src/runtime/extensions/event-bus/ExtensionEventBus") {
-  static Live: Layer.Layer<ExtensionEventBus> = Layer.effect(
-    ExtensionEventBus,
-    Effect.gen(function* () {
-      // Two maps: exact channel → handlers, wildcard prefix → handlers
-      const exactRef = yield* Ref.make(new Map<string, Set<BusHandler>>())
-      const wildcardRef = yield* Ref.make(new Map<string, Set<BusHandler>>())
+  static Live: Layer.Layer<ExtensionEventBus> = Layer.sync(ExtensionEventBus, () => {
+    // Mutable maps — bus is created once, handlers registered/unregistered synchronously
+    const exactHandlers = new Map<string, Set<BusHandler>>()
+    const wildcardHandlers = new Map<string, Set<BusHandler>>()
 
-      const parseWildcard = (pattern: string): { prefix: string } | undefined => {
-        if (pattern.endsWith(":*")) {
-          return { prefix: pattern.slice(0, -1) } // "agent:*" → prefix "agent:"
-        }
-        return undefined
-      }
+    return {
+      emit: (envelope) =>
+        Effect.suspend(() => {
+          const handlers: BusHandler[] = []
 
-      return {
-        emit: (envelope) =>
-          Effect.gen(function* () {
-            const exact = yield* Ref.get(exactRef)
-            const wildcards = yield* Ref.get(wildcardRef)
+          // Exact match
+          const exact = exactHandlers.get(envelope.channel)
+          if (exact !== undefined) {
+            for (const h of exact) handlers.push(h)
+          }
 
-            const handlers: BusHandler[] = []
-
-            // Exact match
-            const exactHandlers = exact.get(envelope.channel)
-            if (exactHandlers !== undefined) {
-              for (const h of exactHandlers) handlers.push(h)
+          // Wildcard matches
+          for (const [prefix, set] of wildcardHandlers) {
+            if (envelope.channel.startsWith(prefix)) {
+              for (const h of set) handlers.push(h)
             }
+          }
 
-            // Wildcard matches
-            for (const [prefix, set] of wildcards) {
-              if (envelope.channel.startsWith(prefix)) {
-                for (const h of set) handlers.push(h)
-              }
-            }
+          if (handlers.length === 0) return Effect.void
 
-            // Fire-and-forget all handlers concurrently — errors caught per handler
-            if (handlers.length > 0) {
-              yield* Effect.forEach(
-                handlers,
-                (handler) =>
-                  handler(envelope).pipe(
-                    Effect.catchDefect((defect: unknown) =>
-                      Effect.logWarning("bus.handler.defect").pipe(
-                        Effect.annotateLogs({
-                          channel: envelope.channel,
-                          defect: String(defect),
-                        }),
-                      ),
-                    ),
-                    Effect.catchEager((error) =>
-                      Effect.logWarning("bus.handler.error").pipe(
-                        Effect.annotateLogs({
-                          channel: envelope.channel,
-                          error: String(error),
-                        }),
-                      ),
-                    ),
+          return Effect.forEach(
+            handlers,
+            (handler) =>
+              handler(envelope).pipe(
+                Effect.catchDefect((defect: unknown) =>
+                  Effect.logWarning("bus.handler.defect").pipe(
+                    Effect.annotateLogs({
+                      channel: envelope.channel,
+                      defect: String(defect),
+                    }),
                   ),
-                { concurrency: "unbounded", discard: true },
-              )
-            }
-          }),
+                ),
+                Effect.catchEager((error) =>
+                  Effect.logWarning("bus.handler.error").pipe(
+                    Effect.annotateLogs({
+                      channel: envelope.channel,
+                      error: String(error),
+                    }),
+                  ),
+                ),
+              ),
+            { concurrency: "unbounded", discard: true },
+          )
+        }),
 
-        on: (pattern, handler) =>
-          Effect.gen(function* () {
-            const wildcard = parseWildcard(pattern)
-            if (wildcard !== undefined) {
-              yield* Ref.update(wildcardRef, (m) => {
-                const next = new Map(m)
-                const set = next.get(wildcard.prefix) ?? new Set()
-                set.add(handler)
-                next.set(wildcard.prefix, set)
-                return next
-              })
-              return () => {
-                Effect.runSync(
-                  Ref.update(wildcardRef, (m) => {
-                    const next = new Map(m)
-                    const set = next.get(wildcard.prefix)
-                    if (set !== undefined) {
-                      set.delete(handler)
-                      if (set.size === 0) next.delete(wildcard.prefix)
-                    }
-                    return next
-                  }),
-                )
-              }
+      on: (pattern, handler) =>
+        Effect.sync(() => {
+          const wildcard = parseWildcard(pattern)
+          const map = wildcard !== undefined ? wildcardHandlers : exactHandlers
+          const key = wildcard !== undefined ? wildcard.prefix : pattern
+          let set = map.get(key)
+          if (set === undefined) {
+            set = new Set()
+            map.set(key, set)
+          }
+          set.add(handler)
+          return () => {
+            const s = map.get(key)
+            if (s !== undefined) {
+              s.delete(handler)
+              if (s.size === 0) map.delete(key)
             }
-            // Exact match
-            yield* Ref.update(exactRef, (m) => {
-              const next = new Map(m)
-              const set = next.get(pattern) ?? new Set()
-              set.add(handler)
-              next.set(pattern, set)
-              return next
-            })
-            return () => {
-              Effect.runSync(
-                Ref.update(exactRef, (m) => {
-                  const next = new Map(m)
-                  const set = next.get(pattern)
-                  if (set !== undefined) {
-                    set.delete(handler)
-                    if (set.size === 0) next.delete(pattern)
-                  }
-                  return next
-                }),
-              )
-            }
-          }),
-      }
-    }),
-  )
+          }
+        }),
+    }
+  })
 
-  /** Create a bus with pre-registered subscriptions from extensions. */
   /** Create a bus with pre-registered subscriptions from extensions. */
   static withSubscriptions = (
     subscriptions: ReadonlyArray<{
       readonly pattern: string
-      readonly handler: (envelope: BusEnvelope) => void | Promise<void>
+      readonly handler: (
+        envelope: BusEnvelope,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ) => void | Promise<void> | Effect.Effect<void, any, any>
     }>,
   ): Layer.Layer<ExtensionEventBus> => {
     if (subscriptions.length === 0) return ExtensionEventBus.Live
-    // Build a layer that registers all subscriptions after the bus is created
     const registrationLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         const bus = yield* ExtensionEventBus
         for (const sub of subscriptions) {
-          yield* bus.on(sub.pattern, (envelope) =>
-            Effect.tryPromise({
-              try: () => Promise.resolve(sub.handler(envelope)),
-              catch: () => Effect.void as never,
-            }).pipe(Effect.catchEager(() => Effect.void)),
-          )
+          yield* bus.on(sub.pattern, (envelope) => {
+            const result = sub.handler(envelope)
+            if (result === undefined) return Effect.void
+            // @effect-diagnostics-next-line *:off
+            if (Effect.isEffect(result)) return result as Effect.Effect<void>
+            return Effect.promise(() => Promise.resolve(result as Promise<void>))
+          })
         }
       }),
     )

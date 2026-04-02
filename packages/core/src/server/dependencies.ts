@@ -35,7 +35,6 @@ import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { TaskService } from "../runtime/task-service.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -517,7 +516,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
   // client opens a session. No eager wake on startup.
 
-  const taskServiceLive = Layer.provide(TaskService.Live, Layer.merge(allDeps, agentRuntimeLive))
+  // TaskService.Live is now contributed by @gent/task-tools via ext.layer(TaskService.Live, { phase: "runtime" })
   const turnControlLive = Layer.provide(
     ExtensionTurnControl.Live,
     Layer.merge(allDeps, agentRuntimeLive),
@@ -540,7 +539,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   const allWithRuntime = Layer.mergeAll(
     allDeps,
     agentRuntimeLive,
-    taskServiceLive,
     turnControlLive,
     runtimeExtLayersProvided,
   )

@@ -363,7 +363,9 @@ export interface ExtensionBuilder {
   readonly bus: {
     /** Subscribe to a bus channel. Handlers run with full service access.
      *  Pattern: exact match (e.g. `"@gent/task-tools:StopTask"`) or wildcard (`"agent:*"`).
-     *  `"agent:*"` matches all agent events — equivalent to `ext.observe()`. */
+     *  `"agent:*"` matches all agent events — equivalent to `ext.observe()`.
+     *  Handler can return void, Promise<void>, or Effect<void, any, any> for service access.
+     *  Effect handlers run in the full service context — all services available. */
     on(
       pattern: string,
       handler: (envelope: {
@@ -371,7 +373,8 @@ export interface ExtensionBuilder {
         payload: unknown
         sessionId?: string
         branchId?: string
-      }) => void | Promise<void>,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) => void | Promise<void> | Effect.Effect<void, any, any>,
     ): void
   }
 }

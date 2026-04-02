@@ -565,7 +565,9 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
 
 const runTaskLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
-    const taskService = yield* TaskService
+    const taskServiceOpt = yield* Effect.serviceOption(TaskService)
+    if (taskServiceOpt._tag === "None") return
+    const taskService = taskServiceOpt.value
 
     while (true) {
       const existing = yield* taskService.list(params.sessionId, params.branchId)

@@ -1,90 +1,67 @@
 import type { ExtensionClientModule } from "@gent/core/domain/extension-client.js"
-import { TaskWidget } from "../../components/task-widget"
+import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
-import { createSignal, createEffect, onCleanup } from "solid-js"
-import { Effect, Fiber, Stream } from "effect"
+import { createSignal, createMemo } from "solid-js"
 import type { Task } from "@gent/core/domain/task.js"
 import { useScopedKeyboard } from "../../keyboard/context"
-import { useClient } from "../../client/context"
-import { useRuntime } from "../../hooks/use-runtime"
-import { runWithReconnect } from "../../utils/run-with-reconnect"
+import { useExtensionUI } from "../context"
+
+const EXTENSION_ID = "@gent/task-tools"
 
 export default {
   id: "@gent/tasks",
   setup: (ctx) => {
-    // Shared task state — populated by TaskTracker widget, read by border label
-    const [trackedTasks, setTrackedTasks] = createSignal<Task[]>([])
+    /** Read task list from extension snapshot (populated by server-side task-tools actor). */
+    function useTasksFromSnapshot(): () => Task[] {
+      const ext = useExtensionUI()
+      return createMemo(() => {
+        const snapshot = ext.snapshots().get(EXTENSION_ID)
+        if (snapshot === undefined) return []
+        const model = snapshot.model as { tasks?: unknown[] } | undefined
+        if (model?.tasks === undefined) return []
+        return model.tasks as Task[]
+      })
+    }
+
+    // Shared task state sourced from extension snapshots
+    const [overrideTasks, setOverrideTasks] = createSignal<Task[] | undefined>(undefined)
+
+    /** Invisible widget that reads tasks from extension snapshot and maintains shared state. */
+    function TaskTracker() {
+      const tasks = useTasksFromSnapshot()
+      // Propagate to shared signal for border labels (which run outside render tree)
+      createMemo(() => setOverrideTasks(tasks()))
+      return null
+    }
+
+    const trackedTasks = () => overrideTasks() ?? []
 
     const runningCount = () => {
       const t = trackedTasks()
       return t.filter((x) => x.status === "in_progress" || x.status === "pending").length
     }
 
-    /** Invisible widget that subscribes to task events and maintains the task list. */
-    function TaskTracker() {
-      const clientCtx = useClient()
-      const { cast } = useRuntime(clientCtx.runtime, clientCtx.log)
+    /** Overlay wrapper that passes tracked tasks to the dialog. */
+    function TasksDialogOverlay(overlayProps: { open: boolean; onClose: () => void }) {
+      return (
+        <BackgroundTasksDialog
+          open={overlayProps.open}
+          onClose={overlayProps.onClose}
+          tasks={trackedTasks()}
+        />
+      )
+    }
 
-      const refreshTasks = () => {
-        const sid = clientCtx.session()?.sessionId
-        const bid = clientCtx.session()?.branchId
-        if (sid === undefined || bid === undefined) return
-        cast(
-          clientCtx.client.task.list({ sessionId: sid, branchId: bid }).pipe(
-            Effect.tap((result) => Effect.sync(() => setTrackedTasks([...result]))),
-            Effect.catchEager(() => Effect.void),
-          ),
-        )
-      }
+    /** TaskWidget fed from shared tracked state — single source of truth. */
+    function TrackedTaskWidget() {
+      const previews = createMemo((): TaskPreview[] =>
+        trackedTasks().map((t) => ({ subject: t.subject, status: t.status })),
+      )
+      return <TaskWidget previewTasks={previews()} />
+    }
 
-      // Initial load
-      createEffect(() => {
-        if (!clientCtx.isActive()) return
-        refreshTasks()
-      })
-
-      // Subscribe to task events
-      createEffect(() => {
-        if (!clientCtx.isActive()) return
-        const sid = clientCtx.session()?.sessionId
-        const bid = clientCtx.session()?.branchId
-        if (sid === undefined || bid === undefined) return
-
-        const fiber = clientCtx.runtime.fork(
-          runWithReconnect(
-            () =>
-              clientCtx.client.session.events({ sessionId: sid, branchId: bid }).pipe(
-                Stream.runForEach((envelope) =>
-                  Effect.sync(() => {
-                    const tag = envelope.event._tag
-                    if (
-                      tag === "TaskCreated" ||
-                      tag === "TaskUpdated" ||
-                      tag === "TaskCompleted" ||
-                      tag === "TaskFailed" ||
-                      tag === "TaskStopped" ||
-                      tag === "TaskDeleted"
-                    ) {
-                      refreshTasks()
-                    }
-                  }),
-                ),
-              ),
-            {
-              label: "tasks.events",
-              log: clientCtx.log,
-              onError: () => undefined,
-              waitForRetry: () => clientCtx.waitForTransportReady(),
-            },
-          ),
-        )
-
-        onCleanup(() => {
-          Effect.runFork(Fiber.interrupt(fiber))
-        })
-      })
-
-      // Down-arrow opens tasks dialog when draft is empty and tasks are running
+    // Down-arrow opens tasks dialog when draft is empty and tasks are running
+    const registerKeyboard = () => {
       useScopedKeyboard(
         (event) => {
           if (event.name !== "down") return false
@@ -96,41 +73,6 @@ export default {
         },
         { when: () => runningCount() > 0 },
       )
-
-      // Invisible — just subscribes and updates shared state
-      return null
-    }
-
-    /** Overlay wrapper that passes tracked tasks to the dialog. */
-    function TasksDialogOverlay(overlayProps: { open: boolean; onClose: () => void }) {
-      const clientCtx = useClient()
-      const { cast } = useRuntime(clientCtx.runtime, clientCtx.log)
-
-      const refreshTasks = () => {
-        const sid = clientCtx.session()?.sessionId
-        const bid = clientCtx.session()?.branchId
-        if (sid === undefined || bid === undefined) return
-        cast(
-          clientCtx.client.task.list({ sessionId: sid, branchId: bid }).pipe(
-            Effect.tap((result) => Effect.sync(() => setTrackedTasks([...result]))),
-            Effect.catchEager(() => Effect.void),
-          ),
-        )
-      }
-
-      return (
-        <BackgroundTasksDialog
-          open={overlayProps.open}
-          onClose={overlayProps.onClose}
-          tasks={trackedTasks()}
-          onRefresh={refreshTasks}
-        />
-      )
-    }
-
-    /** TaskWidget fed from shared tracked state — single source of truth. */
-    function TrackedTaskWidget() {
-      return <TaskWidget previewTasks={trackedTasks()} />
     }
 
     return {
@@ -145,7 +87,10 @@ export default {
           id: "task-tracker",
           slot: "below-input" as const,
           priority: 999,
-          component: TaskTracker,
+          component: () => {
+            registerKeyboard()
+            return <TaskTracker />
+          },
         },
       ],
       overlays: [

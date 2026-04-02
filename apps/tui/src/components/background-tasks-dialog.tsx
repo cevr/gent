@@ -37,7 +37,6 @@ export function BackgroundTasksDialog(props: {
   open: boolean
   onClose: () => void
   tasks: readonly Task[]
-  onRefresh: () => void
 }) {
   const clientCtx = useClient()
   const { cast } = useRuntime(clientCtx.runtime, clientCtx.log)
@@ -61,11 +60,17 @@ export function BackgroundTasksDialog(props: {
   })
 
   const stopTask = (taskId: TaskId) => {
+    const sid = clientCtx.session()?.sessionId
+    if (sid === undefined) return
     cast(
-      clientCtx.client.task.stop({ taskId }).pipe(
-        Effect.tap(() => Effect.sync(() => props.onRefresh())),
-        Effect.catchEager(() => Effect.void),
-      ),
+      clientCtx.client.extension
+        .sendIntent({
+          sessionId: sid,
+          extensionId: "@gent/task-tools",
+          intent: { _tag: "StopTask", taskId },
+          epoch: 0, // bus handler doesn't check epoch
+        })
+        .pipe(Effect.catchEager(() => Effect.void)),
     )
   }
 

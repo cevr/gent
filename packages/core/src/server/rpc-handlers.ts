@@ -16,7 +16,8 @@ import { SessionCommands } from "./session-commands.js"
 import { SessionEvents } from "./session-events.js"
 import { SessionSubscriptions } from "./session-subscriptions.js"
 import { InteractionCommands } from "./interaction-commands.js"
-import { TaskService } from "../runtime/task-service.js"
+import { TaskService, type TaskServiceApi } from "../runtime/task-service.js"
+import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -38,7 +39,11 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
     const extensionStateRuntime = yield* ExtensionStateRuntime
-    const taskService = yield* TaskService
+    const taskServiceOpt = yield* Effect.serviceOption(TaskService)
+    const taskService: TaskServiceApi | undefined =
+      taskServiceOpt._tag === "Some" ? taskServiceOpt.value : undefined
+    const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+    const bus = busOpt._tag === "Some" ? busOpt.value : undefined
 
     return {
       // -- session --
@@ -243,29 +248,28 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         providerAuth.callback(sessionId, provider, method, authorizationId, code),
 
       // -- task --
-      "task.list": ({ sessionId, branchId }) => queries.listTasks(sessionId, branchId),
-      "task.stop": ({ taskId }) =>
-        taskService.stop(taskId).pipe(Effect.map((task) => ({ task: task ?? undefined }))),
       "task.output": ({ taskId }) =>
-        taskService.getOutput(taskId).pipe(
-          Effect.map((result) => {
-            if (result === undefined) {
-              return { status: "pending" as const, messageCount: 0 }
-            }
-            const summaries = result.messages.map((m) => {
-              const text = m.parts
-                .filter((p): p is { type: "text"; text: string } => p.type === "text")
-                .map((p) => p.text)
-                .join("\n")
-              return { role: m.role, excerpt: text.slice(0, 200) }
-            })
-            return {
-              status: result.status,
-              messageCount: result.messages.length,
-              messages: summaries,
-            }
-          }),
-        ),
+        taskService !== undefined
+          ? taskService.getOutput(taskId).pipe(
+              Effect.map((result) => {
+                if (result === undefined) {
+                  return { status: "pending" as const, messageCount: 0 }
+                }
+                const summaries = result.messages.map((m) => {
+                  const text = m.parts
+                    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                    .map((p) => p.text)
+                    .join("\n")
+                  return { role: m.role, excerpt: text.slice(0, 200) }
+                })
+                return {
+                  status: result.status,
+                  messageCount: result.messages.length,
+                  messages: summaries,
+                }
+              }),
+            )
+          : Effect.succeed({ status: "pending" as const, messageCount: 0 }),
 
       // -- skill --
       "skill.list": () =>
@@ -298,9 +302,25 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       // -- extension --
       "extension.sendIntent": ({ sessionId, extensionId, intent, epoch, branchId }) =>
-        extensionStateRuntime
-          .handleIntent(sessionId, extensionId, intent, epoch, branchId)
-          .pipe(Effect.orDie),
+        extensionStateRuntime.handleIntent(sessionId, extensionId, intent, epoch, branchId).pipe(
+          Effect.orDie,
+          // Also emit to bus for handlers with full service access
+          Effect.tap(() => {
+            if (bus === undefined) return Effect.void
+            const intentTag =
+              typeof intent === "object" && intent !== null && "_tag" in intent
+                ? (intent as { _tag: string })._tag
+                : "intent"
+            return bus
+              .emit({
+                channel: `${extensionId}:${intentTag}`,
+                payload: intent,
+                sessionId,
+                branchId,
+              })
+              .pipe(Effect.catchEager(() => Effect.void))
+          }),
+        ),
 
       // -- actor --
       "actor.sendUserMessage": (input) => actorProcess.sendUserMessage(input),

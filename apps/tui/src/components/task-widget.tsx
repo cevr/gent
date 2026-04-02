@@ -1,12 +1,7 @@
-import { Effect, Fiber, Stream } from "effect"
-import { createSignal, createEffect, onCleanup, Show, For } from "solid-js"
+import { Show, For } from "solid-js"
 import type { Task } from "@gent/core/domain/task.js"
-import type { SessionId, BranchId } from "@gent/core/domain/ids.js"
-import { useClient } from "../client/context"
-import { useRuntime } from "../hooks/use-runtime"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useTheme } from "../theme/index"
-import { runWithReconnect } from "../utils/run-with-reconnect"
 import { InlineChrome } from "./inline-chrome"
 
 const STATUS_ICONS: Record<string, string> = {
@@ -26,90 +21,12 @@ export interface TaskPreview {
   status: Task["status"]
 }
 
-type TaskWidgetProps = {
-  sessionId?: SessionId
-  branchId?: BranchId
-  previewTasks?: readonly TaskPreview[]
-}
-
-export function TaskWidget(props?: TaskWidgetProps) {
-  const client = useClient()
-  const { cast } = useRuntime(client.runtime, client.log)
+export function TaskWidget(props: { previewTasks: readonly TaskPreview[] }) {
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
-  // Resolve sessionId/branchId from props or active session
-  const sessionId = () => props?.sessionId ?? client.session()?.sessionId
-  const branchId = () => props?.branchId ?? client.session()?.branchId
-
-  const [tasks, setTasks] = createSignal<Task[]>([])
-  const currentTasks = () => props?.previewTasks ?? tasks()
-
-  const loadTasks = () => {
-    if (props?.previewTasks !== undefined) return
-    const sid = sessionId()
-    const bid = branchId()
-    if (sid === undefined || bid === undefined) return
-    cast(
-      client.client.task.list({ sessionId: sid, branchId: bid }).pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            setTasks([...result])
-          }),
-        ),
-        Effect.catchEager(() => Effect.void),
-      ),
-    )
-  }
-
-  // Initial load
-  createEffect(() => {
-    if (props?.previewTasks !== undefined) return
-    loadTasks()
-  })
-
-  // Subscribe to task events for live updates
-  createEffect(() => {
-    if (props?.previewTasks !== undefined) return
-    if (!client.isActive()) return
-    const sid = sessionId()
-    const bid = branchId()
-    if (sid === undefined || bid === undefined) return
-
-    const fiber = client.runtime.fork(
-      runWithReconnect(
-        () =>
-          client.client.session.events({ sessionId: sid, branchId: bid }).pipe(
-            Stream.runForEach((envelope) =>
-              Effect.sync(() => {
-                switch (envelope.event._tag) {
-                  case "TaskCreated":
-                  case "TaskUpdated":
-                  case "TaskCompleted":
-                  case "TaskFailed":
-                  case "TaskStopped":
-                  case "TaskDeleted":
-                    loadTasks()
-                    break
-                }
-              }),
-            ),
-          ),
-        {
-          log: client.log,
-          onError: () => undefined,
-          waitForRetry: () => client.waitForTransportReady(),
-        },
-      ),
-    )
-
-    onCleanup(() => {
-      Effect.runFork(Fiber.interrupt(fiber))
-    })
-  })
-
   const summary = () => {
-    const t = currentTasks()
+    const t = props.previewTasks
     const pending = t.filter((x) => x.status === "pending").length
     const active = t.filter((x) => x.status === "in_progress").length
     const done = t.filter((x) => x.status === "completed").length
@@ -123,9 +40,9 @@ export function TaskWidget(props?: TaskWidgetProps) {
     return `${t.length} tasks (${parts.join(", ")})`
   }
 
-  const displayTasks = () => currentTasks().slice(0, MAX_DISPLAY)
+  const displayTasks = () => props.previewTasks.slice(0, MAX_DISPLAY)
 
-  const overflow = () => Math.max(0, currentTasks().length - MAX_DISPLAY)
+  const overflow = () => Math.max(0, props.previewTasks.length - MAX_DISPLAY)
 
   const statusIcon = (status: Task["status"]) => {
     if (status !== "in_progress") {
@@ -148,7 +65,7 @@ export function TaskWidget(props?: TaskWidgetProps) {
   }
 
   return (
-    <Show when={currentTasks().length > 0}>
+    <Show when={props.previewTasks.length > 0}>
       <InlineChrome.Root paddingLeft={2} marginTop={1} marginBottom={1}>
         <InlineChrome.Header
           accentColor={theme.info}
