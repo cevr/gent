@@ -16,6 +16,7 @@ import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { createDependencies } from "@gent/core/server/dependencies.js"
 import { AppServicesLive } from "@gent/core/server/index.js"
+import { wsTracingLayer } from "@gent/core/server/ws-tracing.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
@@ -180,6 +181,7 @@ const program = Effect.scoped(
 
     // Merge all routes (REST API + RPC + docs)
     const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
+      Layer.provide(wsTracingLayer),
       Layer.provide(HttpRouter.cors()),
     )
 

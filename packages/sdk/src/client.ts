@@ -269,7 +269,15 @@ const toWsUrl = (httpUrl: string): string => httpUrl.replace(/^http(s?):\/\//, "
 
 const WsTransport = (url: string): Layer.Layer<RpcClient.Protocol> =>
   RpcClient.layerProtocolSocket().pipe(
-    Layer.provide(Socket.layerWebSocket(toWsUrl(url))),
+    Layer.provide(
+      Socket.layerWebSocket(toWsUrl(url)).pipe(
+        Layer.tapCause((cause) =>
+          Effect.logWarning("ws.client.error").pipe(
+            Effect.annotateLogs({ url, error: String(cause) }),
+          ),
+        ),
+      ),
+    ),
     Layer.provide(Socket.layerWebSocketConstructorGlobal),
     Layer.provide(RpcSerialization.layerJson),
   )
