@@ -2,7 +2,7 @@ import { createMemo, For, Show } from "solid-js"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
-import { GenericToolRenderer, type ToolCall } from "./tool-renderers/index"
+import type { ToolCall } from "./tool-renderers/index"
 import { useExtensionUI } from "../extensions/context"
 import { SessionEventIndicator } from "./session-event-indicator"
 import type { SessionEvent } from "./session-event-label"
@@ -242,18 +242,37 @@ function SingleToolCall(props: {
   expanded: boolean
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
+  const { theme } = useTheme()
   const ext = useExtensionUI()
   const toolName = () => props.toolCall.toolName.toLowerCase()
-
-  // Resolved map includes builtins + extensions with scope precedence
-  const Renderer = () => ext.renderers().get(toolName()) ?? GenericToolRenderer
+  const hasRenderer = () => ext.renderers().has(toolName())
+  const Renderer = () => ext.renderers().get(toolName())
 
   const childSessions = () => props.getChildSessions?.(props.toolCall.id)
 
-  return (() => {
-    const R = Renderer()
-    return <R toolCall={props.toolCall} expanded={props.expanded} childSessions={childSessions()} />
-  })()
+  return (
+    <Show
+      when={hasRenderer()}
+      fallback={
+        // No renderer: show compact error for failures, hide otherwise
+        <Show when={props.toolCall.status === "error"}>
+          <text>
+            <span style={{ fg: theme.error }}>
+              [x {props.toolCall.toolName}] {props.toolCall.summary ?? "failed"}
+            </span>
+          </text>
+        </Show>
+      }
+    >
+      {(() => {
+        const R = Renderer()
+        if (R === undefined) return null
+        return (
+          <R toolCall={props.toolCall} expanded={props.expanded} childSessions={childSessions()} />
+        )
+      })()}
+    </Show>
+  )
 }
 
 interface MessageListProps {
