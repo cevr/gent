@@ -11,12 +11,12 @@ export default defineClientExtension({
         produce: () => {
           const snap = ctx.getSnapshot("plan")
           const model = snap?.model as
-            | { mode?: string; progress?: { total: number; done: number; inProgress: number } }
+            | { mode?: string; progress?: { total: number; completed: number; inProgress: number } }
             | undefined
           if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
           if (model?.mode === "executing") {
             const p = model.progress
-            const label = p ? `exec ${p.done}/${p.total}` : "exec"
+            const label = p ? `exec ${p.completed}/${p.total}` : "exec"
             return [{ text: label, color: "primary" }]
           }
           return []
@@ -28,12 +28,12 @@ export default defineClientExtension({
         produce: () => {
           const snap = ctx.getSnapshot("plan")
           const model = snap?.model as
-            | { mode?: string; progress?: { total: number; done: number; inProgress: number } }
+            | { mode?: string; progress?: { total: number; completed: number; inProgress: number } }
             | undefined
           if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
           if (model?.mode === "executing") {
             const p = model.progress
-            const label = p ? `exec ${p.done}/${p.total}` : "exec"
+            const label = p ? `exec ${p.completed}/${p.total}` : "exec"
             return [{ text: label, color: "primary" }]
           }
           return []

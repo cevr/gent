@@ -32,7 +32,7 @@ const getPlanSnapshot = (stateRuntime: ExtensionStateRuntime["Type"]) =>
   })
 
 describe("Plan extension E2E", () => {
-  it.live("plan mode: text accumulation → TurnCompleted → todos extracted", () =>
+  it.live("plan mode: text accumulation → TurnCompleted → steps extracted", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* createSequenceProvider([
         // The agent outputs a plan with markdown checkboxes
@@ -59,32 +59,32 @@ describe("Plan extension E2E", () => {
         // Verify plan mode is active
         const before = yield* getPlanSnapshot(stateRuntime)
         expect(before.mode).toBe("plan")
-        expect(before.todos.length).toBe(0)
+        expect(before.steps.length).toBe(0)
 
         // Run a turn — provider emits text with checkboxes
         // StreamChunk events accumulate in pendingText
-        // TurnCompleted triggers extractTodos
+        // TurnCompleted triggers extractSteps
         yield* agentLoop.run(makeMessage("Create a plan"))
 
         const after = yield* getPlanSnapshot(stateRuntime)
         expect(after.mode).toBe("plan")
-        expect(after.todos.length).toBe(3)
-        expect(after.todos[0]?.text).toBe("Fix the authentication bug")
-        expect(after.todos[1]?.text).toBe("Add unit tests")
-        expect(after.todos[2]?.text).toBe("Update documentation")
-        expect(after.todos.every((t) => t.status === "pending")).toBe(true)
+        expect(after.steps.length).toBe(3)
+        expect(after.steps[0]?.text).toBe("Fix the authentication bug")
+        expect(after.steps[1]?.text).toBe("Add unit tests")
+        expect(after.steps[2]?.text).toBe("Update documentation")
+        expect(after.steps.every((t) => t.status === "pending")).toBe(true)
         expect(after.progress.total).toBe(3)
-        expect(after.progress.done).toBe(0)
+        expect(after.progress.completed).toBe(0)
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
 
   it.live(
-    "plan tool observation: ToolCallSucceeded(plan, decision=yes) → executing with todos",
+    "plan tool observation: ToolCallSucceeded(plan, decision=yes) → executing with steps",
     () =>
       Effect.gen(function* () {
         // Reducer-level integration: inject synthetic ToolCallSucceeded and verify
-        // the actor transitions to executing mode with extracted todos.
+        // the actor transitions to executing mode with extracted steps.
         // A full E2E test driving the plan tool through AgentLoop would require
         // mocking SubagentRunner + PromptPresenter; pure reducer coverage is in plan.test.ts.
         const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
@@ -116,9 +116,9 @@ describe("Plan extension E2E", () => {
 
           const after = yield* getPlanSnapshot(stateRuntime)
           expect(after.mode).toBe("executing")
-          expect(after.todos.length).toBe(2)
-          expect(after.todos[0]?.text).toBe("Fix auth")
-          expect(after.todos[1]?.text).toBe("Add tests")
+          expect(after.steps.length).toBe(2)
+          expect(after.steps[0]?.text).toBe("Fix auth")
+          expect(after.steps[1]?.text).toBe("Add tests")
         }).pipe(Effect.provide(e2eLayer))
       }),
   )

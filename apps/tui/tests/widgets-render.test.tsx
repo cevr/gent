@@ -125,16 +125,16 @@ describe("TUI renderer surfaces", () => {
 describe("uiModel schema validation", () => {
   const PlanUiModel = Schema.Struct({
     mode: Schema.Literals(["normal", "plan", "executing"]),
-    todos: Schema.Array(
+    steps: Schema.Array(
       Schema.Struct({
         id: Schema.Number,
         text: Schema.String,
-        status: Schema.Literals(["pending", "in-progress", "done"]),
+        status: Schema.Literals(["pending", "in_progress", "completed", "failed", "stopped"]),
       }),
     ),
     progress: Schema.Struct({
       total: Schema.Number,
-      done: Schema.Number,
+      completed: Schema.Number,
       inProgress: Schema.Number,
     }),
   })
@@ -143,15 +143,31 @@ describe("uiModel schema validation", () => {
   test("valid plan snapshot decodes correctly", () => {
     const valid = {
       mode: "plan",
-      todos: [{ id: 1, text: "Do thing", status: "pending" }],
-      progress: { total: 1, done: 0, inProgress: 0 },
+      steps: [{ id: 1, text: "Do thing", status: "pending" }],
+      progress: { total: 1, completed: 0, inProgress: 0 },
+    }
+    const result = decode(valid)
+    expect(result._tag).toBe("Some")
+  })
+
+  test("all step statuses decode correctly", () => {
+    const valid = {
+      mode: "executing",
+      steps: [
+        { id: 1, text: "A", status: "completed" },
+        { id: 2, text: "B", status: "in_progress" },
+        { id: 3, text: "C", status: "failed" },
+        { id: 4, text: "D", status: "stopped" },
+        { id: 5, text: "E", status: "pending" },
+      ],
+      progress: { total: 5, completed: 1, inProgress: 1 },
     }
     const result = decode(valid)
     expect(result._tag).toBe("Some")
   })
 
   test("malformed snapshot decodes to None (not crash)", () => {
-    const malformed = { mode: "invalid-mode", todos: "not-an-array" }
+    const malformed = { mode: "invalid-mode", steps: "not-an-array" }
     const result = decode(malformed)
     expect(result._tag).toBe("None")
   })

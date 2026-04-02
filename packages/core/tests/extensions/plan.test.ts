@@ -8,6 +8,7 @@ import {
   TaskCompleted,
   TaskCreated,
   TaskFailed,
+  TaskStopped,
   TaskUpdated,
   TurnCompleted,
   ToolCallSucceeded,
@@ -15,7 +16,7 @@ import {
 import type { BranchId, SessionId, TaskId, ToolCallId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import {
-  extractTodos,
+  extractSteps,
   PlanActorConfig,
   PlanExtension,
   type PlanState,
@@ -60,7 +61,7 @@ const sendIntent = (runtime: ExtensionStateRuntime, intent: unknown) =>
 
 describe("Plan actor", () => {
   describe("initial state", () => {
-    it.live("starts in normal mode with empty todos", () =>
+    it.live("starts in normal mode with empty steps", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         // Trigger actor spawn
@@ -72,7 +73,7 @@ describe("Plan actor", () => {
         expect(snap).toBeDefined()
         const model = snap!.model as PlanState
         expect(model.mode).toBe("normal")
-        expect(model.todos).toEqual([])
+        expect(model.steps).toEqual([])
       }).pipe(Effect.provide(makeLayer())),
     )
   })
@@ -151,11 +152,11 @@ describe("Plan actor", () => {
         })
 
         // Toggle to plan, then manually get into executing state via intent
-        // Since we can't easily set todos through the actor, we'll verify through
+        // Since we can't easily set steps through the actor, we'll verify through
         // the full event flow — the actor's reduce is the same pure function
         yield* sendIntent(runtime, { _tag: "TogglePlan" })
 
-        // Send stream started — in plan mode, this is a no-op (no todos to mark)
+        // Send stream started — in plan mode, this is a no-op (no steps to mark)
         yield* runtime.reduce(new StreamStarted({ sessionId, branchId }), { sessionId, branchId })
 
         const snap = yield* getPlanSnapshot(runtime)
@@ -224,7 +225,7 @@ describe("Plan actor", () => {
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
         expect(model.mode).toBe("plan")
-        expect(model.todos).toEqual([])
+        expect(model.steps).toEqual([])
       }).pipe(Effect.provide(makeLayer())),
     )
 
@@ -245,7 +246,7 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("executePlan — plan with no todos → no-op", () =>
+    it.live("executePlan — plan with no steps → no-op", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
@@ -258,7 +259,7 @@ describe("Plan actor", () => {
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
-        expect(model.mode).toBe("plan") // No todos → stays in plan
+        expect(model.mode).toBe("plan") // No steps → stays in plan
       }).pipe(Effect.provide(makeLayer())),
     )
 
@@ -278,7 +279,7 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("refinePlan — plan mode → resets todos", () =>
+    it.live("refinePlan — plan mode → resets steps", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
@@ -292,7 +293,7 @@ describe("Plan actor", () => {
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
         expect(model.mode).toBe("plan")
-        expect(model.todos).toEqual([])
+        expect(model.steps).toEqual([])
       }).pipe(Effect.provide(makeLayer())),
     )
 
@@ -320,21 +321,21 @@ describe("Plan pure reducer — executing behavior", () => {
   test("executing mode — unmatched events preserve state", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [{ id: 1, text: "A", status: "in-progress" }],
+      steps: [{ id: 1, text: "A", status: "in_progress" }],
     }
     const result = reduce(
       state,
       events.toolCallSucceeded({ toolCallId: "tc1" as ToolCallId, toolName: "read" }),
     )
-    expect(result.state.todos[0]!.status).toBe("in-progress")
+    expect(result.state.steps[0]!.status).toBe("in_progress")
   })
 
   test("executing mode — derive injects plan context prompt section", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [
-        { id: 1, text: "Read files", status: "done" },
-        { id: 2, text: "Edit code", status: "in-progress" },
+      steps: [
+        { id: 1, text: "Read files", status: "completed" },
+        { id: 2, text: "Edit code", status: "in_progress" },
         { id: 3, text: "Run tests", status: "pending" },
       ],
     }
@@ -350,7 +351,7 @@ describe("Plan pure reducer — executing behavior", () => {
   test("executing mode — no tool policy restriction", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [{ id: 1, text: "Do thing", status: "pending" }],
+      steps: [{ id: 1, text: "Do thing", status: "pending" }],
     }
     const projection = derive(state)
     expect(projection.toolPolicy).toBeUndefined()
@@ -359,31 +360,31 @@ describe("Plan pure reducer — executing behavior", () => {
   test("ui model includes progress counts", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [
-        { id: 1, text: "A", status: "done" },
-        { id: 2, text: "B", status: "in-progress" },
+      steps: [
+        { id: 1, text: "A", status: "completed" },
+        { id: 2, text: "B", status: "in_progress" },
         { id: 3, text: "C", status: "pending" },
       ],
     }
     const projection = derive(state)
     const ui = projection.uiModel as {
-      progress: { total: number; done: number; inProgress: number }
+      progress: { total: number; completed: number; inProgress: number }
     }
     expect(ui.progress.total).toBe(3)
-    expect(ui.progress.done).toBe(1)
+    expect(ui.progress.completed).toBe(1)
     expect(ui.progress.inProgress).toBe(1)
   })
 
   test("normal mode — events are no-ops (reference equality)", () => {
-    const state: PlanState = { mode: "normal", todos: [] }
+    const state: PlanState = { mode: "normal", steps: [] }
     const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
     expect(result.state).toBe(state)
   })
 
-  test("executePlan intent — plan with todos → executing", () => {
+  test("executePlan intent — plan with steps → executing", () => {
     const state: PlanState = {
       mode: "plan",
-      todos: [{ id: 1, text: "A", status: "pending" }],
+      steps: [{ id: 1, text: "A", status: "pending" }],
     }
     const result = intent!(state, { _tag: "ExecutePlan" })
     expect(result.state.mode).toBe("executing")
@@ -392,18 +393,18 @@ describe("Plan pure reducer — executing behavior", () => {
   test("togglePlan — executing → normal", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [{ id: 1, text: "A", status: "pending" }],
+      steps: [{ id: 1, text: "A", status: "pending" }],
     }
     const result = intent!(state, { _tag: "TogglePlan" })
     expect(result.state.mode).toBe("normal")
   })
 
-  test("refinePlan — executing → plan with cleared todos", () => {
+  test("refinePlan — executing → plan with cleared steps", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [
-        { id: 1, text: "Read files", status: "done" },
-        { id: 2, text: "Edit code", status: "in-progress" },
+      steps: [
+        { id: 1, text: "Read files", status: "completed" },
+        { id: 2, text: "Edit code", status: "in_progress" },
         { id: 3, text: "Run tests", status: "pending" },
       ],
       taskMap: { "t-1": 0, "t-2": 1 },
@@ -411,7 +412,7 @@ describe("Plan pure reducer — executing behavior", () => {
     }
     const result = intent!(state, { _tag: "RefinePlan" })
     expect(result.state.mode).toBe("plan")
-    expect(result.state.todos).toEqual([])
+    expect(result.state.steps).toEqual([])
     expect(result.state.taskMap).toBeUndefined()
     expect(result.state.pendingText).toBeUndefined()
   })
@@ -427,8 +428,8 @@ describe("Plan pure reducer — plan tool observation", () => {
       output: JSON.stringify(output),
     })
 
-  test("plan tool decision=yes transitions to executing with todos", () => {
-    const state: PlanState = { mode: "normal", todos: [] }
+  test("plan tool decision=yes transitions to executing with steps", () => {
+    const state: PlanState = { mode: "normal", steps: [] }
     const result = reduce(
       state,
       planToolOutput({
@@ -439,15 +440,15 @@ describe("Plan pure reducer — plan tool observation", () => {
       }),
     )
     expect(result.state.mode).toBe("executing")
-    expect(result.state.todos.length).toBe(2)
+    expect(result.state.steps.length).toBe(2)
     expect(result.state.planFilePath).toBe("/tmp/plan.md")
     expect(result.state.taskMap).toEqual({})
     expect(result.effects?.length).toBe(1)
     expect(result.effects![0]!._tag).toBe("QueueFollowUp")
   })
 
-  test("plan tool decision=edit stays in plan mode with extracted todos", () => {
-    const state: PlanState = { mode: "normal", todos: [] }
+  test("plan tool decision=edit stays in plan mode with extracted steps", () => {
+    const state: PlanState = { mode: "normal", steps: [] }
     const result = reduce(
       state,
       planToolOutput({
@@ -458,23 +459,23 @@ describe("Plan pure reducer — plan tool observation", () => {
       }),
     )
     expect(result.state.mode).toBe("plan")
-    expect(result.state.todos.length).toBe(2)
+    expect(result.state.steps.length).toBe(2)
     expect(result.state.planFilePath).toBe("/tmp/plan-edited.md")
     expect(result.effects).toBeUndefined()
   })
 
   test("plan tool decision=no is ignored", () => {
-    const state: PlanState = { mode: "normal", todos: [] }
+    const state: PlanState = { mode: "normal", steps: [] }
     const result = reduce(
       state,
       planToolOutput({ mode: "plan-only", decision: "no", plan: "some plan" }),
     )
     expect(result.state.mode).toBe("normal")
-    expect(result.state.todos.length).toBe(0)
+    expect(result.state.steps.length).toBe(0)
   })
 
   test("non-plan tool ToolCallSucceeded is ignored", () => {
-    const state: PlanState = { mode: "normal", todos: [] }
+    const state: PlanState = { mode: "normal", steps: [] }
     const result = reduce(
       state,
       events.toolCallSucceeded({
@@ -487,52 +488,52 @@ describe("Plan pure reducer — plan tool observation", () => {
   })
 })
 
-describe("Plan pure reducer — todo extraction", () => {
+describe("Plan pure reducer — step extraction", () => {
   const { reduce, events } = createActorHarness(PlanActorConfig)
 
   const streamChunk = (chunk: string) => new StreamChunk({ sessionId, branchId, chunk })
 
   test("plan mode — StreamChunk accumulates pendingText", () => {
-    const state: PlanState = { mode: "plan", todos: [] }
+    const state: PlanState = { mode: "plan", steps: [] }
     const r1 = reduce(state, streamChunk("## Plan\n"))
     expect(r1.state.pendingText).toBe("## Plan\n")
     const r2 = reduce(r1.state, streamChunk("- [ ] First step\n"))
     expect(r2.state.pendingText).toBe("## Plan\n- [ ] First step\n")
   })
 
-  test("plan mode — TurnCompleted extracts todos from accumulated text", () => {
+  test("plan mode — TurnCompleted extracts steps from accumulated text", () => {
     const state: PlanState = {
       mode: "plan",
-      todos: [],
+      steps: [],
       pendingText: "## Plan\n- [ ] Read files\n- [ ] Edit code\n- [x] Already done",
     }
     const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
-    expect(result.state.todos.length).toBe(3)
-    expect(result.state.todos[0]!.text).toBe("Read files")
-    expect(result.state.todos[0]!.status).toBe("pending")
-    expect(result.state.todos[2]!.status).toBe("done")
+    expect(result.state.steps.length).toBe(3)
+    expect(result.state.steps[0]!.text).toBe("Read files")
+    expect(result.state.steps[0]!.status).toBe("pending")
+    expect(result.state.steps[2]!.status).toBe("completed")
     expect(result.state.pendingText).toBeUndefined()
   })
 
   test("plan mode — TurnCompleted with no pendingText → no-op", () => {
-    const state: PlanState = { mode: "plan", todos: [] }
+    const state: PlanState = { mode: "plan", steps: [] }
     const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
     expect(result.state).toBe(state)
   })
 
-  test("plan mode — TurnCompleted with non-plan text → clears pendingText, no todos", () => {
+  test("plan mode — TurnCompleted with non-plan text → clears pendingText, no steps", () => {
     const state: PlanState = {
       mode: "plan",
-      todos: [],
+      steps: [],
       pendingText: "Just some regular text without any plan items.",
     }
     const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
-    expect(result.state.todos.length).toBe(0)
+    expect(result.state.steps.length).toBe(0)
     expect(result.state.pendingText).toBeUndefined()
   })
 
   test("normal mode — StreamChunk is no-op", () => {
-    const state: PlanState = { mode: "normal", todos: [] }
+    const state: PlanState = { mode: "normal", steps: [] }
     const result = reduce(state, streamChunk("## Plan\n- [ ] item\n"))
     expect(result.state).toBe(state)
   })
@@ -550,13 +551,16 @@ describe("Plan pure reducer — task integration", () => {
   const taskFailed = (taskId: string) =>
     new TaskFailed({ sessionId, branchId, taskId: taskId as TaskId })
 
+  const taskStopped = (taskId: string) =>
+    new TaskStopped({ sessionId, branchId, taskId: taskId as TaskId })
+
   const taskUpdated = (taskId: string, status: string) =>
     new TaskUpdated({ sessionId, branchId, taskId: taskId as TaskId, status })
 
-  test("executing mode — TaskCreated maps to matching todo", () => {
+  test("executing mode — TaskCreated maps to matching step", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [
+      steps: [
         { id: 1, text: "Read files", status: "pending" },
         { id: 2, text: "Edit code", status: "pending" },
       ],
@@ -564,63 +568,95 @@ describe("Plan pure reducer — task integration", () => {
     }
     const result = reduce(state, taskCreated("t-1", "Read files"))
     expect(result.state.taskMap?.["t-1"]).toBe(0)
-    expect(result.state.todos[0]!.status).toBe("in-progress")
-    expect(result.state.todos[1]!.status).toBe("pending")
+    expect(result.state.steps[0]!.status).toBe("in_progress")
+    expect(result.state.steps[1]!.status).toBe("pending")
   })
 
-  test("executing mode — TaskCompleted marks matching todo done", () => {
+  test("executing mode — TaskCompleted marks matching step done", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [
-        { id: 1, text: "Read files", status: "in-progress" },
+      steps: [
+        { id: 1, text: "Read files", status: "in_progress" },
         { id: 2, text: "Edit code", status: "pending" },
       ],
       taskMap: { "t-1": 0 },
     }
     const result = reduce(state, taskCompleted("t-1"))
-    expect(result.state.todos[0]!.status).toBe("done")
+    expect(result.state.steps[0]!.status).toBe("completed")
     expect(result.state.mode).toBe("executing") // still have pending
   })
 
   test("executing mode — all tasks done → normal", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [
-        { id: 1, text: "A", status: "done" },
-        { id: 2, text: "B", status: "in-progress" },
+      steps: [
+        { id: 1, text: "A", status: "completed" },
+        { id: 2, text: "B", status: "in_progress" },
       ],
       taskMap: { "t-2": 1 },
     }
     const result = reduce(state, taskCompleted("t-2"))
-    expect(result.state.todos[1]!.status).toBe("done")
+    expect(result.state.steps[1]!.status).toBe("completed")
     expect(result.state.mode).toBe("normal")
   })
 
-  test("executing mode — TaskFailed marks matching todo failed", () => {
+  test("executing mode — TaskFailed marks matching step failed", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [{ id: 1, text: "A", status: "in-progress" }],
+      steps: [
+        { id: 1, text: "A", status: "in_progress" },
+        { id: 2, text: "B", status: "pending" },
+      ],
       taskMap: { "t-1": 0 },
     }
     const result = reduce(state, taskFailed("t-1"))
-    expect(result.state.todos[0]!.status).toBe("failed")
-    expect(result.state.mode).toBe("executing") // failed doesn't auto-complete
+    expect(result.state.steps[0]!.status).toBe("failed")
+    expect(result.state.mode).toBe("executing") // still has pending step
   })
 
-  test("executing mode — TaskUpdated(in_progress) marks todo in-progress", () => {
+  test("executing mode — TaskStopped marks matching step stopped", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [{ id: 1, text: "A", status: "pending" }],
+      steps: [
+        { id: 1, text: "A", status: "in_progress" },
+        { id: 2, text: "B", status: "pending" },
+      ],
+      taskMap: { "t-1": 0 },
+    }
+    const result = reduce(state, taskStopped("t-1"))
+    expect(result.state.steps[0]!.status).toBe("stopped")
+    expect(result.state.mode).toBe("executing") // still has pending step
+  })
+
+  test("executing mode — allComplete includes stopped as terminal", () => {
+    const state: PlanState = {
+      mode: "executing",
+      steps: [
+        { id: 1, text: "A", status: "completed" },
+        { id: 2, text: "B", status: "in_progress" },
+      ],
+      taskMap: { "t-1": 0, "t-2": 1 },
+    }
+    // Stopping the last non-terminal step → all terminal → mode goes to normal
+    const result = reduce(state, taskStopped("t-2"))
+    expect(result.state.steps[1]!.status).toBe("stopped")
+    expect(result.state.mode).toBe("normal")
+  })
+
+  test("executing mode — TaskUpdated(in_progress) marks step in_progress", () => {
+    const state: PlanState = {
+      mode: "executing",
+      steps: [{ id: 1, text: "A", status: "pending" }],
       taskMap: { "t-1": 0 },
     }
     const result = reduce(state, taskUpdated("t-1", "in_progress"))
-    expect(result.state.todos[0]!.status).toBe("in-progress")
+    expect(result.state.steps[0]!.status).toBe("in_progress")
   })
 
   test("executing mode — unmapped taskId → no-op", () => {
     const state: PlanState = {
       mode: "executing",
-      todos: [{ id: 1, text: "A", status: "pending" }],
+      steps: [{ id: 1, text: "A", status: "pending" }],
       taskMap: {},
     }
     const result = reduce(state, taskCompleted("t-unknown"))
@@ -628,7 +664,7 @@ describe("Plan pure reducer — task integration", () => {
   })
 
   test("normal mode — task events are no-ops", () => {
-    const state: PlanState = { mode: "normal", todos: [] }
+    const state: PlanState = { mode: "normal", steps: [] }
     const result = reduce(state, taskCreated("t-1", "something"))
     expect(result.state).toBe(state)
   })
@@ -677,17 +713,17 @@ describe("Stale intent rejection", () => {
   )
 })
 
-describe("extractTodos", () => {
+describe("extractSteps", () => {
   test("extracts markdown checklist items", () => {
     const text = `## Plan
 - [ ] Read the config file
 - [ ] Update the schema
 - [x] Already done item`
-    const todos = extractTodos(text)
-    expect(todos.length).toBe(3)
-    expect(todos[0]).toEqual({ id: 1, text: "Read the config file", status: "pending" })
-    expect(todos[1]).toEqual({ id: 2, text: "Update the schema", status: "pending" })
-    expect(todos[2]).toEqual({ id: 3, text: "Already done item", status: "done" })
+    const steps = extractSteps(text)
+    expect(steps.length).toBe(3)
+    expect(steps[0]).toEqual({ id: 1, text: "Read the config file", status: "pending" })
+    expect(steps[1]).toEqual({ id: 2, text: "Update the schema", status: "pending" })
+    expect(steps[2]).toEqual({ id: 3, text: "Already done item", status: "completed" })
   })
 
   test("extracts numbered list under plan header", () => {
@@ -695,10 +731,10 @@ describe("extractTodos", () => {
 1. First thing
 2. Second thing
 3. Third thing`
-    const todos = extractTodos(text)
-    expect(todos.length).toBe(3)
-    expect(todos[0]!.text).toBe("First thing")
-    expect(todos[2]!.text).toBe("Third thing")
+    const steps = extractSteps(text)
+    expect(steps.length).toBe(3)
+    expect(steps[0]!.text).toBe("First thing")
+    expect(steps[2]!.text).toBe("Third thing")
   })
 
   test("ignores numbered lists outside plan headers", () => {
@@ -706,24 +742,24 @@ describe("extractTodos", () => {
 
 1. Random numbered item
 2. Another one`
-    const todos = extractTodos(text)
-    expect(todos.length).toBe(0)
+    const steps = extractSteps(text)
+    expect(steps.length).toBe(0)
   })
 
   test("extracts checklists anywhere (not header-gated)", () => {
     const text = `Here are some items:
 - [ ] Ungated checklist item
 - [x] Done item`
-    const todos = extractTodos(text)
-    expect(todos.length).toBe(2)
+    const steps = extractSteps(text)
+    expect(steps.length).toBe(2)
   })
 
   test("handles empty text", () => {
-    expect(extractTodos("")).toEqual([])
+    expect(extractSteps("")).toEqual([])
   })
 
-  test("handles text with no todos", () => {
-    expect(extractTodos("Just some regular text\nwith multiple lines")).toEqual([])
+  test("handles text with no steps", () => {
+    expect(extractSteps("Just some regular text\nwith multiple lines")).toEqual([])
   })
 
   test("stops numbered list on new non-plan header", () => {
@@ -733,7 +769,7 @@ describe("extractTodos", () => {
 
 ## Results
 3. This is not a task`
-    const todos = extractTodos(text)
-    expect(todos.length).toBe(2)
+    const steps = extractSteps(text)
+    expect(steps.length).toBe(2)
   })
 })

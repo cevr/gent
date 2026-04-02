@@ -1,12 +1,13 @@
 /**
  * Plan-mode widget — renders server-projected plan state.
  *
- * Shows mode indicator + todo checklist when plan extension is active.
+ * Shows mode indicator + progress when plan extension is active.
+ * Step-level display is delegated to the task widget.
  * Placed in `above-input` slot so it's always visible during session interaction.
  */
 
 import { Schema } from "effect"
-import { Show, For, createMemo } from "solid-js"
+import { Show, createMemo } from "solid-js"
 import type { RGBA } from "@opentui/core"
 import { useExtensionUI } from "./context"
 import { useTheme } from "../theme/context"
@@ -15,16 +16,16 @@ const EXTENSION_ID = "plan"
 
 const PlanUiModel = Schema.Struct({
   mode: Schema.Literals(["normal", "plan", "executing"]),
-  todos: Schema.Array(
+  steps: Schema.Array(
     Schema.Struct({
       id: Schema.Number,
       text: Schema.String,
-      status: Schema.Literals(["pending", "in-progress", "done"]),
+      status: Schema.Literals(["pending", "in_progress", "completed", "failed", "stopped"]),
     }),
   ),
   progress: Schema.Struct({
     total: Schema.Number,
-    done: Schema.Number,
+    completed: Schema.Number,
     inProgress: Schema.Number,
   }),
 })
@@ -76,54 +77,18 @@ export function PlanWidget() {
   const progressText = createMemo(() => {
     const m = model()
     if (m === undefined || m.progress.total === 0) return ""
-    return `${m.progress.done}/${m.progress.total}`
+    return `${m.progress.completed}/${m.progress.total}`
   })
 
   return (
     <Show when={isActive()}>
       <box flexDirection="column" paddingLeft={1} paddingRight={1}>
-        {/* Mode indicator + progress */}
         <text>
           <span style={{ fg: modeColor(), bold: true }}>[{modeLabel()}]</span>
           <Show when={progressText() !== ""}>
             <span style={{ fg: theme.textMuted }}> {progressText()}</span>
           </Show>
         </text>
-
-        {/* Todo list (compact — only show when there are items) */}
-        <Show when={model()?.todos !== undefined && (model()?.todos.length ?? 0) > 0}>
-          <For each={model()?.todos ?? []}>
-            {(todo) => {
-              const marker = () => {
-                switch (todo.status) {
-                  case "done":
-                    return "x"
-                  case "in-progress":
-                    return "~"
-                  default:
-                    return " "
-                }
-              }
-              const color = (): RGBA => {
-                switch (todo.status) {
-                  case "done":
-                    return theme.textMuted
-                  case "in-progress":
-                    return theme.warning
-                  default:
-                    return theme.text
-                }
-              }
-              return (
-                <text>
-                  <span style={{ fg: color() }}>
-                    [{marker()}] {todo.text}
-                  </span>
-                </text>
-              )
-            }}
-          </For>
-        </Show>
       </box>
     </Show>
   )
