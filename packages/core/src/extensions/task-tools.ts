@@ -132,7 +132,7 @@ export const TaskToolsExtension = extension("@gent/task-tools", (ext) => {
   ext.tool(TaskStopTool)
   ext.tool(TaskOutputTool)
   ext.layer(TaskStorage.Live)
-  ext.layer(TaskService.Live, { phase: "runtime" })
+  ext.layer(TaskService.Live)
   ext.actor(taskListActor)
 
   // Handle StopTask via bus — full service access for calling TaskService.stop()

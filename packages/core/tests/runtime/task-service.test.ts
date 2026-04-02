@@ -84,7 +84,62 @@ const makeLayer = (runnerDeferred: Deferred.Deferred<SubagentResult>) => {
   return Layer.provideMerge(TaskService.Live, baseDeps)
 }
 
+const makeLayerWithoutRunner = () => {
+  const storageLayer = Storage.MemoryWithSql()
+  const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
+  const registryLayer = ExtensionRegistry.fromResolved(
+    resolveExtensions([
+      {
+        manifest: { id: "test-agents" },
+        kind: "builtin",
+        sourcePath: "test",
+        setup: { agents: Object.values(Agents), tools: [] },
+      },
+    ]),
+  )
+
+  const baseDeps = Layer.mergeAll(
+    storageLayer,
+    taskStorageLayer,
+    EventStore.Memory,
+    registryLayer,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  )
+
+  return Layer.provideMerge(TaskService.Live, baseDeps)
+}
+
 describe("TaskService", () => {
+  it.live("resolves runner lazily and fails the task when it is unavailable", () =>
+    Effect.gen(function* () {
+      const layer = makeLayerWithoutRunner()
+
+      yield* Effect.gen(function* () {
+        const taskService = yield* TaskService
+
+        const task = yield* taskService.create({
+          sessionId,
+          branchId,
+          subject: "Task without runner",
+          prompt: "Do something",
+          agentType: "explore" as AgentName,
+        })
+
+        const runResult = yield* taskService.run(task.id)
+        expect(runResult.status).toBe("running")
+
+        yield* Effect.sleep("50 millis")
+
+        const failedTask = yield* taskService.get(task.id)
+        expect(failedTask).toBeDefined()
+        expect(failedTask!.status).toBe("failed")
+        expect(failedTask!.metadata).toMatchObject({
+          error: "SubagentRunnerService not available",
+        })
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
   describe("stop lifecycle", () => {
     it.live("stop while running: fiber interrupted, stopped status, TaskStopped event", () =>
       Effect.gen(function* () {

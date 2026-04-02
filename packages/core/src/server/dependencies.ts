@@ -42,13 +42,6 @@ import { EventStoreLive } from "./event-store.js"
 import { buildBasePromptSections, compileSystemPrompt } from "./system-prompt.js"
 import type { InteractionRequestType } from "../domain/interaction-request.js"
 
-/** Carries extension runtime-phase layers through the dep graph.
- *  Populated by makeExtensionLayers, consumed by createDependencies after agentRuntimeLive. */
-class RuntimeExtensionLayers extends ServiceMap.Service<
-  RuntimeExtensionLayers,
-  { readonly layers: ReadonlyArray<Layer.Any> }
->()("@gent/core/src/server/dependencies/RuntimeExtensionLayers") {}
-
 /** Marker service — construction triggers recovery of pending interaction requests */
 class InteractionRecoveryTag extends ServiceMap.Service<
   InteractionRecoveryTag,
@@ -174,9 +167,6 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
-      // Collect runtime-phase layers (setup.runtimeLayers — provided after agentRuntimeLive)
-      const runtimeLayers = allExtensions.flatMap((ext) => ext.setup.runtimeLayers ?? [])
-
       // Collect bus subscriptions from extensions
       const busSubscriptions = allExtensions.flatMap((ext) =>
         (ext.setup.busSubscriptions ?? []).map((sub) => ({
@@ -194,7 +184,6 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         ExtensionRegistry.Live(allExtensions),
         ExtensionStateRuntime.Live(allExtensions),
         ExtensionEventBus.withSubscriptions(busSubscriptions),
-        Layer.succeed(RuntimeExtensionLayers, { layers: runtimeLayers }),
       )
 
       if (extensionLayers.length === 0) return baseLayers
@@ -516,32 +505,12 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
   // client opens a session. No eager wake on startup.
 
-  // TaskService.Live is now contributed by @gent/task-tools via ext.layer(TaskService.Live, { phase: "runtime" })
+  // TaskService.Live is contributed by @gent/task-tools via ext.layer(TaskService.Live)
   const turnControlLive = Layer.provide(
     ExtensionTurnControl.Live,
     Layer.merge(allDeps, agentRuntimeLive),
   )
-
-  // Provide runtime-phase extension layers (those needing SubagentRunnerService etc.)
-  const runtimeExtLayers = Layer.unwrap(
-    Effect.gen(function* () {
-      const { layers } = yield* RuntimeExtensionLayers
-      if (layers.length === 0) return Layer.empty
-      type NarrowLayer = Layer.Layer<never>
-      return Layer.mergeAll(...(layers as [NarrowLayer, ...NarrowLayer[]]))
-    }),
-  )
-  const runtimeExtLayersProvided = Layer.provide(
-    runtimeExtLayers,
-    Layer.merge(allDeps, agentRuntimeLive),
-  )
-
-  const allWithRuntime = Layer.mergeAll(
-    allDeps,
-    agentRuntimeLive,
-    turnControlLive,
-    runtimeExtLayersProvided,
-  )
+  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, turnControlLive)
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
   return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)

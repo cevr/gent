@@ -233,7 +233,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 - Full-power path: `ext.actor()`, `ext.interceptor()`, `ext.layer()`, `ext.provider()` — Effect-aware
 - `defineExtension()` deleted — `extension()` is the only way to create extensions
 - `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
-- `ext.layer(layer, { phase: "runtime" })` — layers provided after `agentRuntimeLive` (for services needing `SubagentRunnerService` etc.)
+- `ext.layer(layer)` — layers merge into the main extension graph; services that need `SubagentRunnerService` resolve it lazily at call time
 - `ExtensionSetup.onStartup` — one-time startup effect (e.g., cron registration)
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send
@@ -253,7 +253,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 `TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
 
-- Provided via `ext.layer(TaskService.Live, { phase: "runtime" })` — needs `SubagentRunnerService` from `agentRuntimeLive`
+- Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
 - `task.list` RPC removed — TUI reads from extension actor snapshot (actor reduces task events into UI model)
 - `task.stop` removed from RPC — routed via `sendIntent` → event bus → `ext.bus.on()` handler
 - `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)

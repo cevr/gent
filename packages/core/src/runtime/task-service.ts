@@ -99,7 +99,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
   static Live: Layer.Layer<
     TaskService,
     never,
-    EventStore | SubagentRunnerService | ExtensionRegistry | RuntimePlatform | Storage
+    EventStore | ExtensionRegistry | RuntimePlatform | Storage
   > = Layer.effect(
     TaskService,
     Effect.gen(function* () {
@@ -107,7 +107,6 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
       if (storageOpt._tag === "None") return TaskService.Noop
       const storage = storageOpt.value
       const eventStore = yield* EventStore
-      const runner = yield* SubagentRunnerService
       const extensionRegistry = yield* ExtensionRegistry
       const platform = yield* RuntimePlatform
       const mainStorage = yield* Storage
@@ -162,6 +161,28 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           // Status already set to in_progress by run() before forking
           const parentSessionId = task.sessionId
           const parentBranchId = task.branchId
+          const runnerOpt = yield* Effect.serviceOption(SubagentRunnerService)
+          if (runnerOpt._tag === "None") {
+            const error = "SubagentRunnerService not available"
+            yield* storage
+              .updateTask(taskId, {
+                status: "failed",
+                metadata: mergeMetadata(task.metadata, { error }),
+              })
+              .pipe(Effect.catchEager(() => Effect.void))
+            yield* eventStore
+              .publish(
+                new TaskFailed({
+                  sessionId: parentSessionId,
+                  branchId: parentBranchId,
+                  taskId,
+                  error,
+                }),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+            return
+          }
+          const runner = runnerOpt.value
 
           // Synthetic toolCallId for correlation — concurrent tasks each get their own
           const taskToolCallId = `task:${taskId}` as ToolCallId

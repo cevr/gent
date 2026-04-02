@@ -498,37 +498,20 @@ describe("extension full-power methods", () => {
     expect(setup.layer).toBeDefined()
   })
 
-  test("ext.layer() with phase 'runtime' registers runtime layer", async () => {
-    const { Layer, ServiceMap } = await import("effect")
-    const RuntimeService = ServiceMap.Service<{ value: string }>("RuntimeService")
-    const runtimeLayer = Layer.succeed(RuntimeService, { value: "runtime" })
-
-    const ext = extension("runtime-layer-test", (b) => {
-      b.layer(runtimeLayer, { phase: "runtime" })
-    })
-
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
-    expect(setup.layer).toBeUndefined()
-    expect(setup.runtimeLayers).toBeDefined()
-    expect(setup.runtimeLayers!.length).toBe(1)
-  })
-
-  test("ext.layer() with both default and runtime phases separates layers", async () => {
+  test("ext.layer() merges multiple service layers", async () => {
     const { Layer, ServiceMap } = await import("effect")
     const DefaultService = ServiceMap.Service<{ value: string }>("DefaultService")
-    const RuntimeService = ServiceMap.Service<{ value: string }>("RuntimeService")
     const defaultLayer = Layer.succeed(DefaultService, { value: "default" })
-    const runtimeLayer = Layer.succeed(RuntimeService, { value: "runtime" })
+    const ExtraService = ServiceMap.Service<{ value: string }>("ExtraService")
+    const extraLayer = Layer.succeed(ExtraService, { value: "extra" })
 
     const ext = extension("mixed-layer-test", (b) => {
       b.layer(defaultLayer)
-      b.layer(runtimeLayer, { phase: "runtime" })
+      b.layer(extraLayer)
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.layer).toBeDefined()
-    expect(setup.runtimeLayers).toBeDefined()
-    expect(setup.runtimeLayers!.length).toBe(1)
   })
 
   test("ext.provider() registers a provider", async () => {

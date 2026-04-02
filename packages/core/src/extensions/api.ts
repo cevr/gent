@@ -333,10 +333,8 @@ export interface ExtensionBuilder {
   interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
   /** Register an actor from fromReducer() or fromMachine(). Mutually exclusive with state(). */
   actor(result: ActorResult): void
-  /** Provide a service Layer. Multiple calls merge.
-   *  Pass `{ phase: "runtime" }` for layers that depend on services from agentRuntimeLive
-   *  (e.g. SubagentRunnerService). These are provided after agentRuntimeLive in the dep graph. */
-  layer(layer: Layer.Any, options?: { phase?: "default" | "runtime" }): void
+  /** Provide a service Layer. Multiple calls merge. */
+  layer(layer: Layer.Any): void
   /** Register an AI model provider. */
   provider(provider: ProviderContribution): void
   /** Register an interaction handler. */
@@ -650,7 +648,6 @@ export const extension = (
       const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
       const busSubscriptions: BusSubscriptionEntry[] = []
       const layers: Layer.Any[] = []
-      const runtimeLayers: Layer.Any[] = []
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let stateConfig: SimpleStateConfig<any> | undefined
       let actorResult: ActorResult | undefined
@@ -789,12 +786,8 @@ export const extension = (
           actorResult = result
         },
 
-        layer: (l, options?) => {
-          if (options?.phase === "runtime") {
-            runtimeLayers.push(l)
-          } else {
-            layers.push(l)
-          }
+        layer: (l) => {
+          layers.push(l)
         },
         provider: (p) => providers.push(p),
         interactionHandler: (h) => interactionHandlers.push(h),
@@ -855,7 +848,6 @@ export const extension = (
         ...(promptSections.length > 0 ? { promptSections } : {}),
         ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
-        ...(runtimeLayers.length > 0 ? { runtimeLayers } : {}),
         ...(providers.length > 0 ? { providers } : {}),
         ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
         ...(tagInjections.length > 0 ? { tagInjections } : {}),

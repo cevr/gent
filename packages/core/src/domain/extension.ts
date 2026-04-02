@@ -256,8 +256,6 @@ export interface ExtensionSetup {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Any
-  /** Layers provided after agentRuntimeLive — for services that depend on SubagentRunnerService etc. */
-  readonly runtimeLayers?: ReadonlyArray<Layer.Any>
   /** Spawn an actor for this extension — unified lifecycle model */
   readonly spawnActor?: SpawnActor
   /** Projection config — derive function externalized from actor (framework-owned) */
