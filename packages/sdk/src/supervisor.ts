@@ -216,7 +216,9 @@ const stopSubprocess = (proc: Bun.Subprocess): Effect.Effect<void> =>
 const killSubprocessSync = (proc: Bun.Subprocess | undefined) => {
   if (proc === undefined || proc.exitCode !== null) return
   try {
-    process.kill(proc.pid, "SIGTERM")
+    // SIGKILL — the parent is exiting and can't wait for graceful shutdown.
+    // SIGTERM alone leaves orphans if the worker is busy (e.g. SQLite WAL checkpoint).
+    process.kill(proc.pid, "SIGKILL")
   } catch {
     // Parent is already exiting. Best effort only.
   }

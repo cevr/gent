@@ -181,12 +181,14 @@ const main = Command.make(
         )),
       )
 
-      // Block until shutdown signal — then exit immediately.
-      // renderer.destroy() already ran before shutdown() was called, and
-      // scope finalizers (supervisor.stop) can't complete reliably because
-      // render() holds event-loop refs that prevent the fiber from unwinding.
+      // Block until shutdown signal — then let the scope unwind so
+      // finalizers (supervisor.stop) kill the worker child process.
       yield* Deferred.await(shutdownDeferred)
-      process.exit(0)
+      // Safety: if scope finalizers hang (e.g. render refs), force exit after 3s.
+      // unref'd so clean exits that finish before 3s don't wait on this timer.
+      // @effect-diagnostics-next-line globalTimersInEffect:off
+      const watchdog = setTimeout(() => process.exit(0), 3_000)
+      if (typeof watchdog === "object" && "unref" in watchdog) watchdog.unref()
     }),
 )
 
