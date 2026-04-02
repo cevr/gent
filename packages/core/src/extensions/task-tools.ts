@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Ref, Schema } from "effect"
 import { extension, fromReducer } from "./api.js"
 import { TaskCreateTool } from "../tools/task-create.js"
 import { TaskListTool } from "../tools/task-list.js"
@@ -15,13 +15,13 @@ import type { ExtensionReduceContext, ReduceResult } from "../domain/extension.j
 
 // ── Task list actor — projects task state as extension UI snapshot ──
 
-interface TaskEntry {
+export interface TaskEntry {
   id: TaskId
   subject: string
   status: TaskStatus
 }
 
-interface TaskListState {
+export interface TaskListState {
   tasks: TaskEntry[]
 }
 
@@ -95,12 +95,31 @@ const derive = (state: TaskListState) => ({
   uiModel: { tasks: state.tasks },
 })
 
-const taskListActor = fromReducer<TaskListState>({
-  id: "@gent/task-tools",
-  initial: { tasks: [] },
+/** Exported for pure test harness access */
+export const TaskListActorConfig = {
+  id: "@gent/task-tools" as const,
+  initial: { tasks: [] } satisfies TaskListState,
   reduce,
   derive,
+}
+
+const taskListActor = fromReducer<TaskListState, never, TaskStorage>({
+  ...TaskListActorConfig,
   uiModelSchema: TaskListUiModel,
+  onInit: ({ sessionId, stateRef }) =>
+    Effect.gen(function* () {
+      const storageOpt = yield* Effect.serviceOption(TaskStorage)
+      if (storageOpt._tag === "None") return
+      const tasks = yield* storageOpt.value.listTasks(sessionId).pipe(Effect.orDie)
+      if (tasks.length === 0) return
+      yield* Ref.set(stateRef, {
+        tasks: tasks.map((t) => ({
+          id: t.id,
+          subject: t.subject,
+          status: t.status,
+        })),
+      } satisfies TaskListState)
+    }),
 })
 
 // ── Extension ──

@@ -233,9 +233,31 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 - Full-power path: `ext.actor()`, `ext.interceptor()`, `ext.layer()`, `ext.provider()` — Effect-aware
 - `defineExtension()` deleted — `extension()` is the only way to create extensions
 - `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
+- `ext.layer(layer, { phase: "runtime" })` — layers provided after `agentRuntimeLive` (for services needing `SubagentRunnerService` etc.)
 - `ExtensionSetup.onStartup` — one-time startup effect (e.g., cron registration)
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send
+
+### Extension Event Bus
+
+`ExtensionEventBus` — channel-based pub/sub for extension communication (`runtime/extensions/event-bus.ts`).
+
+- Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId after reduction
+- `ext.bus.on("agent:*", handler)` — wildcard subscription, replaces deprecated `ext.observe()`
+- `ext.bus.on("extensionId:channel", handler)` — targeted side-effect handlers with full service access
+- Handlers can return `void`, `Promise<void>`, or `Effect<void>` — Effect handlers run in the full service context
+- `sendIntent` RPC also emits to bus as `"extensionId:intentTag"` — enables side-effect handling outside pure actor reducers
+- Example: `@gent/task-tools` uses `ext.bus.on("@gent/task-tools:StopTask", handler)` to call `TaskService.stop()` from a bus handler
+
+### Task Service Ownership
+
+`TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
+
+- Provided via `ext.layer(TaskService.Live, { phase: "runtime" })` — needs `SubagentRunnerService` from `agentRuntimeLive`
+- `task.list` RPC removed — TUI reads from extension actor snapshot (actor reduces task events into UI model)
+- `task.stop` removed from RPC — routed via `sendIntent` → event bus → `ext.bus.on()` handler
+- `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
+- Core `dependencies.ts` no longer imports or wires `TaskService` — it comes through the extension layer graph
 
 ### TUI Extensions
 
@@ -340,7 +362,7 @@ Cross-session replay via `onInit`: child sessions verify ancestry includes `acti
 
 ### Task Service
 
-`TaskService` correlates child sessions via synthetic `toolCallId` (`task:<taskId>`). The `SubagentSpawned` event filter matches on `toolCallId`, preventing concurrent tasks from stealing each other's child session.
+`TaskService` is owned by the `@gent/task-tools` extension (not core). It correlates child sessions via synthetic `toolCallId` (`task:<taskId>`). The `SubagentSpawned` event filter matches on `toolCallId`, preventing concurrent tasks from stealing each other's child session.
 
 `task.output` RPC returns `MessageSummary[]` (role + 200-char excerpt) alongside `messageCount`.
 
