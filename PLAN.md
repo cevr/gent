@@ -1,6 +1,6 @@
 # Extension Runtime Fidelity Plan
 
-Status: proposed.
+Status: completed on 2026-04-03.
 
 ## Context
 
@@ -63,6 +63,29 @@ Every batch must:
 4. stop if the review finds a high-severity issue
 5. only continue after review findings are addressed or explicitly deferred in the plan
 6. do not begin the next batch until the current batch commit exists, verification is green, and review has signed off
+
+## Outcome
+
+Completed batch commits:
+
+- `4421f7b` — Batch 0
+- `f3bc0b5` — Batch 1
+- `87ee015` — Batch 2
+- `024e5b6` — Batch 3
+- `334f917` — Batch 4
+- `89549d8` — Batch 5
+- `c18323b` — Batch 6
+- `1f14684` — Batch 7
+- `14b97da` — Batch 8
+
+Final audit result:
+
+- actor lifecycle is parent-owned
+- delivery is queued, not inline on `EventStore.publish`
+- extension health has one server-owned model
+- client-side protocol/status duplication was removed
+- fast integration coverage runs through `bun run test` / `bun run gate`
+- remaining suppressions are boundary glue or low-value warnings, not hidden batch debt
 
 Review prompt baseline for every batch:
 

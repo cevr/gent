@@ -58,9 +58,9 @@ commands      queries/events
    runtime + boundaries
 ```
 
-Process topology is secondary, but production topology is not.
+Process topology is secondary. Default CLI topology is not.
 
-Production TUI is a shell over a supervised worker process. Debug mode uses the same worker transport seam with ephemeral storage and scripted providers.
+Default `gent` runs the runtime locally, in-process, behind a restartable local supervisor. Multi-client / remote topology is explicit: `Gent.connect(...)` or `gent --connect <url>` attaches to a real server boundary.
 
 ## Transport Boundary
 
@@ -122,7 +122,7 @@ Shape:
 - `ActorProcess` is the single command entry for session/branch actor work.
 - `AgentLoop` is a flat machine-owned control plane (turn phases inlined, state uses union-level derive).
 - `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
-- production actor routing is cluster-backed inside the worker process
+- local CLI routing is in-process by default; remote routing is explicit server topology
 - queue ownership is structural
 - turn phases are explicit (resolve → stream → execute-tools → finalize)
 - interactions are cold machine states, not blocked fibers
@@ -185,9 +185,9 @@ App entrypoints bind concrete Bun/OS behavior:
 
 Production rule:
 
-- `apps/tui/src/main.tsx` supervises the worker and talks through transport only
-- debug mode stays on the worker path; only the worker dependencies change
-- production `main.tsx` must not import app dependency wiring directly
+- `apps/tui/src/main.tsx` owns the local runtime by default via `Gent.local(...)`
+- remote/shared topology is explicit via `Gent.connect(...)`
+- `apps/server/src/main.ts` is the durable server boundary, not hidden default CLI plumbing
 
 ## TUI
 
@@ -195,9 +195,9 @@ TUI is a client over the shared contract, not a parallel app.
 
 Production shape:
 
-- shell process owns renderer, input, reconnect UX
-- worker process owns storage, providers, actor runtime, durability
-- reconnect logic rehydrates from worker state, not UI guesses
+- local mode: one process owns renderer, runtime, storage, and reconnect UX under one root scope
+- remote mode: TUI shell attaches to an external server boundary and rehydrates from transport state
+- reconnect logic rehydrates from runtime state, not UI guesses
 
 Main boundaries:
 
@@ -230,7 +230,7 @@ Rules:
 - dispatch compiles once, then runs from typed hook maps
 - extension hook boundaries are where plugin typing must stay strict
 - `uiModelSchema` is enforced at runtime — invalid models are dropped, not passed through
-- `onStartup` hooks run during dependency initialization (no service requirements)
+- activation/startup failures degrade the extension instead of crashing host startup
 - `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
 
 For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
@@ -253,10 +253,9 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 - Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId after reduction
 - `ext.bus.on("agent:*", handler)` — wildcard subscription, replaces deprecated `ext.observe()`
-- `ext.bus.on("extensionId:channel", handler)` — targeted side-effect handlers with full service access
-- Handlers can return `void`, `Promise<void>`, or `Effect<void>` — Effect handlers run in the full service context
-- `sendIntent` RPC also emits to bus as `"extensionId:intentTag"` — enables side-effect handling outside pure actor reducers
-- Example: `@gent/task-tools` uses `ext.bus.on("@gent/task-tools:StopTask", handler)` to call `TaskService.stop()` from a bus handler
+- `ext.bus.on("extensionId:channel", handler)` — targeted side-effect handlers
+- Handlers can return `void`, `Promise<void>`, or `Effect<void>`
+- Bus is observation / side-effect plumbing, not actor ownership or RPC-by-stealth
 
 ### Task Service Ownership
 
@@ -264,7 +263,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 - Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
 - `task.list` RPC removed — TUI reads from extension actor snapshot (actor reduces task events into UI model)
-- `task.stop` removed from RPC — routed via `sendIntent` → event bus → `ext.bus.on()` handler
+- task mutation flows through the extension boundary, not direct core wiring
 - `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
 - Core `dependencies.ts` no longer imports or wires `TaskService` — it comes through the extension layer graph
 
@@ -286,11 +285,12 @@ Extension actors (state machines) are managed by `ExtensionStateRuntime`. Key pa
 - `getOrSpawnActors(sessionId)` registers a Deferred placeholder under `spawnSemaphore`, then spawns + inits actors OUTSIDE the lock. Concurrent callers await the Deferred.
 - This prevents deadlocks where extension actor spawn triggers events that re-enter `getOrSpawnActors`.
 
-**Synchronous reduce in publish path** (`dependencies.ts`):
+**Queued delivery after append** (`dependencies.ts`, `state-runtime.ts`):
 
-- `ReducingEventStore.publish` persists the event, then synchronously calls `stateRuntime.reduce`. Extension `afterTransition` effects (QueueFollowUp, Interject) run during this reduce, which schedules follow-up turns on the agent loop.
-- This MUST be synchronous — extension side effects participate in the turn lifecycle. Async reduction would cause the loop to reach idle before follow-ups are queued.
-- Re-entrance guard: a process-wide `Ref<number>` tracks reduce depth. Nested publishes during reduce (e.g., from inspector `MachineInspected` events) skip reduce.
+- `EventStore.publish` appends and fanouts storage subscribers only
+- extension delivery is a separate queued runtime concern owned by `ExtensionStateRuntime`
+- per-session workers serialize actor delivery and queue nested publishes instead of skipping them
+- ordinary command paths still await delivery where causal consistency matters
 
 **effect-machine integration**:
 
@@ -423,29 +423,27 @@ Extension-defined system agents run in headless mode for memory consolidation:
 Architecture:
 
 ```text
-Bun.cron (launchd plist on macOS)
-  → dream-worker.ts
-    → bun run --cwd apps/tui dev -H -a memory:reflect "..."
-    → gent headless session with system agent
-    → agent uses memory_remember/recall/forget tools
+memory extension
+  → declarative scheduled job contributions
+  → host-owned scheduler reconciliation
+  → real gent executable in headless mode
+  → gent headless session with system agent
+  → agent uses memory_remember/recall/forget tools
 ```
 
-Dream worker is a thin scheduler. Intelligence lives in agent definitions and gent's runtime.
-
-Cron jobs are registered via the extension's `onStartup` hook (idempotent — same title overwrites the launchd plist). The framework runs all `onStartup` hooks during dependency initialization.
+Scheduling is host-owned, not an extension startup side effect. Memory contributes durable global jobs; the host reconciles installation/removal and degrades scheduler failures without crashing extension activation.
 
 Key files:
 
-| File                                                  | Purpose                       |
-| ----------------------------------------------------- | ----------------------------- |
-| `packages/core/src/extensions/memory/vault.ts`        | Vault I/O service             |
-| `packages/core/src/extensions/memory/state.ts`        | Extension state + helpers     |
-| `packages/core/src/extensions/memory/tools.ts`        | Agent tools                   |
-| `packages/core/src/extensions/memory/agents.ts`       | reflect + meditate agent defs |
-| `packages/core/src/extensions/memory/dreaming.ts`     | Bun.cron registration         |
-| `packages/core/src/extensions/memory/dream-worker.ts` | Cron entry point              |
-| `packages/core/src/extensions/memory/projection.ts`   | Prompt section + UI model     |
-| `packages/core/src/extensions/memory/index.ts`        | Extension registration        |
+| File                                                | Purpose                       |
+| --------------------------------------------------- | ----------------------------- |
+| `packages/core/src/extensions/memory/vault.ts`      | Vault I/O service             |
+| `packages/core/src/extensions/memory/state.ts`      | Extension state + helpers     |
+| `packages/core/src/extensions/memory/tools.ts`      | Agent tools                   |
+| `packages/core/src/extensions/memory/agents.ts`     | reflect + meditate agent defs |
+| `packages/core/src/runtime/extensions/scheduler.ts` | Host scheduler reconciliation |
+| `packages/core/src/extensions/memory/projection.ts` | Prompt section + UI model     |
+| `packages/core/src/extensions/memory/index.ts`      | Extension registration        |
 
 ## Observability
 
