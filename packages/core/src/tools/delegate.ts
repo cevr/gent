@@ -32,7 +32,7 @@ export const DelegateParams = Schema.Struct({
   background: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "Run in the background via TaskService. Returns immediately with taskId. Poll with task_get.",
+        "Run in the background via task-tools. Returns immediately with taskId. Poll with task_get.",
     }),
   ),
 })

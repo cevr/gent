@@ -5,6 +5,7 @@ import {
   AgentRunSucceeded,
   AgentRunFailed,
   AgentRunSpawned,
+  BaseEventStore,
   EventStore,
   type AgentEvent,
   type EventStoreService,
@@ -421,7 +422,7 @@ const runEphemeralAgent = (params: {
   prompt: string
   overrides?: AgentExecutionOverrides
   persistence: AgentPersistence
-  parentEventStore: EventStoreService
+  parentBaseEventStore: EventStoreService
 }) => {
   const sessionId = Bun.randomUUIDv7() as SessionId
   const branchId = Bun.randomUUIDv7() as BranchId
@@ -497,7 +498,7 @@ const runEphemeralAgent = (params: {
         localEventStore.subscribe({ sessionId }).pipe(
           Stream.runForEach((envelope) =>
             shouldMirrorEphemeralChildEvent(envelope.event)
-              ? params.parentEventStore
+              ? params.parentBaseEventStore
                   .publish(envelope.event)
                   .pipe(Effect.catchEager(() => Effect.void))
               : Effect.void,
@@ -572,12 +573,13 @@ export const InProcessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  Storage | EventStore | AgentLoop | ExtensionRegistry | Provider | ToolRunner
+  Storage | BaseEventStore | EventStore | AgentLoop | ExtensionRegistry | Provider | ToolRunner
 > =>
   Layer.effect(
     AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
+      const baseEventStore = yield* BaseEventStore
       const eventStore = yield* EventStore
       const loop = yield* AgentLoop
       const extensionRegistry = yield* ExtensionRegistry
@@ -643,7 +645,7 @@ export const InProcessRunner = (
               prompt: params.prompt,
               overrides: params.overrides,
               persistence,
-              parentEventStore: eventStore,
+              parentBaseEventStore: baseEventStore,
             })
           }
 
@@ -728,12 +730,13 @@ export const SubprocessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  Storage | EventStore | ExtensionRegistry | Provider | ToolRunner
+  Storage | BaseEventStore | EventStore | ExtensionRegistry | Provider | ToolRunner
 > =>
   Layer.effect(
     AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
+      const baseEventStore = yield* BaseEventStore
       const eventStore = yield* EventStore
       const extensionRegistry = yield* ExtensionRegistry
       const provider = yield* Provider
@@ -758,7 +761,7 @@ export const SubprocessRunner = (
               prompt: params.prompt,
               overrides: params.overrides,
               persistence,
-              parentEventStore: eventStore,
+              parentBaseEventStore: baseEventStore,
             })
           }
 

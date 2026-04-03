@@ -10,10 +10,17 @@ import {
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
 import { Agents } from "../domain/agent.js"
-import { EventStore, EventEnvelope, matchesEventFilter } from "../domain/event.js"
+import {
+  BaseEventStore,
+  EventStore,
+  EventEnvelope,
+  matchesEventFilter,
+  type PromptDecision,
+  type HandoffDecision,
+  type EventStoreService,
+} from "../domain/event.js"
 import { Permission } from "../domain/permission.js"
 import { PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
-import type { PromptDecision, HandoffDecision } from "../domain/event.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
@@ -94,14 +101,17 @@ export const RecordingProvider = (
 
 // Recording EventStore
 
-export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.effect(
-  EventStore,
+export const RecordingEventStore: Layer.Layer<
+  EventStore | BaseEventStore,
+  never,
+  SequenceRecorder
+> = Layer.unwrap(
   Effect.gen(function* () {
     const recorder = yield* SequenceRecorder
     const events: EventEnvelope[] = []
     let nextId = 0
 
-    return {
+    const service: EventStoreService = {
       publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
         nextId += 1
         const createdAt = yield* Clock.currentTimeMillis
@@ -126,6 +136,8 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
         ),
       removeSession: () => Effect.void,
     }
+
+    return Layer.merge(Layer.succeed(EventStore, service), Layer.succeed(BaseEventStore, service))
   }),
 )
 

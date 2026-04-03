@@ -19,6 +19,11 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
+import {
+  ExtensionStateRuntime,
+  type ExtensionStateRuntimeService,
+} from "@gent/core/runtime/extensions/state-runtime"
+import { makeReducingEventStore } from "@gent/core/server/dependencies"
 
 const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -453,6 +458,93 @@ describe("AgentRunner", () => {
     expect(result.runResult._tag).toBe("success")
     expect(result.childTags).toContain("ToolCallStarted")
     expect(result.childTags).toContain("ToolCallSucceeded")
+  })
+
+  test("ephemeral mirrored child events bypass extension reduction for synthetic child sessions", async () => {
+    const storageLayer = Storage.TestWithSql()
+    const baseEventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
+    const publishedSessionIds: string[] = []
+    const stateRuntime: ExtensionStateRuntimeService = {
+      publish: (_event, ctx) =>
+        Effect.sync(() => {
+          publishedSessionIds.push(ctx.sessionId)
+          return false
+        }),
+      deriveAll: () => Effect.succeed([]),
+      send: () => Effect.void,
+      ask: () => Effect.die("not used"),
+      getUiSnapshots: () => Effect.succeed([]),
+      terminateAll: () => Effect.void,
+      notifyObservers: () => Effect.void,
+    }
+    const reducingEventStoreLayer = Layer.provide(
+      makeReducingEventStore,
+      Layer.merge(baseEventStoreLayer, Layer.succeed(ExtensionStateRuntime, stateRuntime)),
+    )
+    const deps = Layer.mergeAll(
+      storageLayer,
+      baseEventStoreLayer,
+      reducingEventStoreLayer,
+      testRegistryLayer,
+      Provider.Test([
+        [
+          new ToolCallChunk({
+            toolCallId: "tc-ephemeral-reduce",
+            toolName: "bash",
+            input: { command: "pwd" },
+          }),
+          new FinishChunk({ finishReason: "tool_calls" }),
+        ],
+        [new TextChunk({ text: "tool finished" }), new FinishChunk({ finishReason: "stop" })],
+      ]),
+      ToolRunner.Test(),
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.void,
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
+      }),
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        const session = new Session({
+          id: "parent-session-reduce",
+          name: "Parent",
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "parent-branch-reduce",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        yield* runner.run({
+          agent: Agents.explore,
+          prompt: "run helper with mirrored child events",
+          parentSessionId: session.id,
+          parentBranchId: branch.id,
+          cwd: process.cwd(),
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(publishedSessionIds.length).toBeGreaterThan(0)
+    expect(new Set(publishedSessionIds)).toEqual(new Set(["parent-session-reduce"]))
   })
 
   test("durable override persists child sessions for helper agents", async () => {

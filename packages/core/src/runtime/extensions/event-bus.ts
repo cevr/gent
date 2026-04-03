@@ -3,7 +3,7 @@
  *
  * Unifies three previously separate mechanisms into one primitive:
  * - Agent event observation (replaces `ext.observe()`)
- * - Client intent delivery (replaces ad-hoc `sendIntent` RPC wiring)
+ * - Client protocol fanout for non-owning observers
  * - Extension-to-extension communication
  *
  * Dispatch rules:
