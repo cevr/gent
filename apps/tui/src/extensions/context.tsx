@@ -5,7 +5,16 @@
  * Provides resolved contributions to descendants.
  */
 
-import { createContext, useContext, createSignal, onMount, type Accessor, type JSX } from "solid-js"
+import {
+  createContext,
+  useContext,
+  createSignal,
+  createEffect,
+  createMemo,
+  onMount,
+  type Accessor,
+  type JSX,
+} from "solid-js"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
@@ -40,6 +49,8 @@ const disabledRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, Bun
 
 /** Server-projected UI snapshot from extension state machines */
 export interface ExtensionSnapshot {
+  readonly sessionId: string
+  readonly branchId: string
   readonly extensionId: string
   readonly epoch: number
   readonly model: unknown
@@ -50,7 +61,12 @@ export const applyExtensionSnapshot = (
   snapshot: ExtensionSnapshot,
 ): ReadonlyMap<string, ExtensionSnapshot> => {
   const current = prev.get(snapshot.extensionId)
-  if (current !== undefined && current.epoch > snapshot.epoch) {
+  if (
+    current !== undefined &&
+    current.sessionId === snapshot.sessionId &&
+    current.branchId === snapshot.branchId &&
+    current.epoch > snapshot.epoch
+  ) {
     return prev
   }
   const next = new Map(prev)
@@ -103,13 +119,33 @@ const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
 export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const workspace = useWorkspace()
+  const clientCtx = useClient()
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loading, setLoading] = createSignal(true)
   const [snapshots, setSnapshots] = createSignal<ReadonlyMap<string, ExtensionSnapshot>>(new Map())
 
+  const activeSessionKey = createMemo(() => {
+    const session = clientCtx.session()
+    if (session === null) return undefined
+    return `${session.sessionId}:${session.branchId}`
+  })
+
   const updateSnapshot = (snapshot: ExtensionSnapshot) => {
+    const session = clientCtx.session()
+    if (
+      session === null ||
+      session.sessionId !== snapshot.sessionId ||
+      session.branchId !== snapshot.branchId
+    ) {
+      return
+    }
     setSnapshots((prev) => applyExtensionSnapshot(prev, snapshot))
   }
+
+  createEffect(() => {
+    activeSessionKey()
+    setSnapshots(new Map())
+  })
 
   // Mutable overlay dispatch — wired by session controller after mount
   let overlayOpen: (id: string) => void = () => {}
@@ -142,7 +178,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   }
 
   // Wire extension snapshot events from client event stream
-  const clientCtx = useClient()
   clientCtx.onExtensionSnapshot(updateSnapshot)
 
   onMount(async () => {

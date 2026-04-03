@@ -141,7 +141,13 @@ export interface ClientContextValue {
 
   // Extension state snapshot callback (wired by ExtensionUIProvider)
   onExtensionSnapshot: (
-    cb: (snapshot: { extensionId: string; epoch: number; model: unknown }) => void,
+    cb: (snapshot: {
+      sessionId: SessionId
+      branchId: BranchId
+      extensionId: string
+      epoch: number
+      model: unknown
+    }) => void,
   ) => void
 }
 
@@ -172,7 +178,13 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // Extension state snapshot callback — wired by ExtensionUIProvider
   let extensionSnapshotCb:
-    | ((s: { extensionId: string; epoch: number; model: unknown }) => void)
+    | ((s: {
+        sessionId: SessionId
+        branchId: BranchId
+        extensionId: string
+        epoch: number
+        model: unknown
+      }) => void)
     | undefined
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
@@ -282,6 +294,8 @@ export function ClientProvider(props: ClientProviderProps) {
       const forwardExtensionSnapshot = (event: EventEnvelope["event"]): void => {
         if (event._tag === "ExtensionUiSnapshot" && extensionSnapshotCb !== undefined) {
           extensionSnapshotCb({
+            sessionId: event.sessionId,
+            branchId: event.branchId,
             extensionId: event.extensionId,
             epoch: event.epoch,
             model: event.model,
@@ -412,7 +426,11 @@ export function ClientProvider(props: ClientProviderProps) {
                   extensionSnapshotCb !== undefined
                 ) {
                   for (const ext of snapshot.extensionSnapshots) {
-                    extensionSnapshotCb(ext)
+                    extensionSnapshotCb({
+                      sessionId,
+                      branchId,
+                      ...ext,
+                    })
                   }
                 }
               })

@@ -676,12 +676,16 @@ describe("protocol resolution", () => {
 describe("snapshot ordering", () => {
   test("older extension snapshots do not overwrite newer ones", () => {
     const latest = applyExtensionSnapshot(new Map(), {
+      sessionId: "s-1",
+      branchId: "b-1",
       extensionId: "@test/shared",
       epoch: 2,
       model: { status: "latest" },
     })
 
     const merged = applyExtensionSnapshot(latest, {
+      sessionId: "s-1",
+      branchId: "b-1",
       extensionId: "@test/shared",
       epoch: 1,
       model: { status: "stale" },
@@ -689,9 +693,37 @@ describe("snapshot ordering", () => {
 
     expect(merged).toBe(latest)
     expect(merged.get("@test/shared")).toEqual({
+      sessionId: "s-1",
+      branchId: "b-1",
       extensionId: "@test/shared",
       epoch: 2,
       model: { status: "latest" },
+    })
+  })
+
+  test("new branch snapshots replace older snapshots even when epoch resets", () => {
+    const previousBranch = applyExtensionSnapshot(new Map(), {
+      sessionId: "s-1",
+      branchId: "b-old",
+      extensionId: "@test/shared",
+      epoch: 9,
+      model: { status: "old-branch" },
+    })
+
+    const merged = applyExtensionSnapshot(previousBranch, {
+      sessionId: "s-1",
+      branchId: "b-new",
+      extensionId: "@test/shared",
+      epoch: 1,
+      model: { status: "new-branch" },
+    })
+
+    expect(merged.get("@test/shared")).toEqual({
+      sessionId: "s-1",
+      branchId: "b-new",
+      extensionId: "@test/shared",
+      epoch: 1,
+      model: { status: "new-branch" },
     })
   })
 })
