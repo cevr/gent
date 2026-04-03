@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onMount, For, Show } from "solid-js"
+import { createSignal, createEffect, on, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -40,6 +40,7 @@ export function Auth(props: AuthProps) {
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
   const authSessionId = Bun.randomUUIDv7()
+  let loadVersion = 0
   let successTimer: ReturnType<typeof setTimeout> | undefined
 
   const flashSuccess = (msg: string) => {
@@ -51,11 +52,21 @@ export function Auth(props: AuthProps) {
 
   useScrollSync(() => `auth-provider-${state().providerIndex}`, { getRef: () => scrollRef })
 
-  onMount(() => loadAuth())
+  createEffect(
+    on(
+      () => props.agentName,
+      () => {
+        setAutoPrompted(false)
+        loadAuth()
+      },
+      { defer: false },
+    ),
+  )
 
   // ── Side effects ──
 
   const loadAuth = () => {
+    const version = ++loadVersion
     props.log.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
@@ -67,12 +78,14 @@ export function Auth(props: AuthProps) {
       ]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
+            if (version !== loadVersion) return
             props.log.info("auth:load-complete", { providers: loadedProviders.length })
             send({ _tag: "Loaded", providers: [...loadedProviders], methods: loadedMethods })
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
+            if (version !== loadVersion) return
             props.log.error("auth:load", { error: String(err) })
             send({ _tag: "LoadFailed", error: formatError(err) })
           }),
