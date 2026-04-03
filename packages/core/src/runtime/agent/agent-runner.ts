@@ -1,4 +1,4 @@
-import { Cause, DateTime, Duration, Effect, Layer } from "effect"
+import { Cause, DateTime, Duration, Effect, Fiber, Layer, Stream } from "effect"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -6,6 +6,7 @@ import {
   AgentRunFailed,
   AgentRunSpawned,
   EventStore,
+  type AgentEvent,
   type EventStoreService,
   type EventEnvelope,
 } from "../../domain/event.js"
@@ -393,6 +394,19 @@ const buildEphemeralLoopLayer = (params: {
   return Layer.mergeAll(deps, loopLayer)
 }
 
+const shouldMirrorEphemeralChildEvent = (event: AgentEvent): boolean => {
+  switch (event._tag) {
+    case "StreamStarted":
+    case "StreamEnded":
+    case "ToolCallStarted":
+    case "ToolCallSucceeded":
+    case "ToolCallFailed":
+      return true
+    default:
+      return false
+  }
+}
+
 const runEphemeralAgent = (params: {
   runnerConfig: AgentRunnerConfig
   shared: ReturnType<typeof makeSharedRunnerHelpers>
@@ -407,6 +421,7 @@ const runEphemeralAgent = (params: {
   prompt: string
   overrides?: AgentExecutionOverrides
   persistence: AgentPersistence
+  parentEventStore: EventStoreService
 }) => {
   const sessionId = Bun.randomUUIDv7() as SessionId
   const branchId = Bun.randomUUIDv7() as BranchId
@@ -477,6 +492,19 @@ const runEphemeralAgent = (params: {
           createdAt: now,
         }),
       )
+
+      const mirrorFiber = yield* Effect.forkChild(
+        localEventStore.subscribe({ sessionId }).pipe(
+          Stream.runForEach((envelope) =>
+            shouldMirrorEphemeralChildEvent(envelope.event)
+              ? params.parentEventStore
+                  .publish(envelope.event)
+                  .pipe(Effect.catchEager(() => Effect.void))
+              : Effect.void,
+          ),
+          Effect.catchEager(() => Effect.void),
+        ),
+      )
       yield* localEventStore.publish(
         new AgentSwitched({
           sessionId,
@@ -486,24 +514,26 @@ const runEphemeralAgent = (params: {
         }),
       )
 
-      yield* runWithTimeout(
-        localLoop.runOnce({
-          sessionId,
-          branchId,
-          agentName: params.agentName,
-          prompt: params.prompt,
-          interactive: false,
-          ...(normalizedOverrides !== undefined ? { overrides: normalizedOverrides } : {}),
-        }),
-      )
+      return yield* Effect.gen(function* () {
+        yield* runWithTimeout(
+          localLoop.runOnce({
+            sessionId,
+            branchId,
+            agentName: params.agentName,
+            prompt: params.prompt,
+            interactive: false,
+            ...(normalizedOverrides !== undefined ? { overrides: normalizedOverrides } : {}),
+          }),
+        )
 
-      return yield* loadAgentRunSuccessData({
-        storage: localStorage,
-        branchId,
-        sessionId,
-        agentName: params.agentName,
-        persistence: params.persistence,
-      })
+        return yield* loadAgentRunSuccessData({
+          storage: localStorage,
+          branchId,
+          sessionId,
+          agentName: params.agentName,
+          persistence: params.persistence,
+        })
+      }).pipe(Effect.ensuring(Fiber.interrupt(mirrorFiber)))
     }).pipe(Effect.provide(ephemeralLayer))
 
     yield* params.shared.publishAgentRunSucceeded({
@@ -613,6 +643,7 @@ export const InProcessRunner = (
               prompt: params.prompt,
               overrides: params.overrides,
               persistence,
+              parentEventStore: eventStore,
             })
           }
 
@@ -727,6 +758,7 @@ export const SubprocessRunner = (
               prompt: params.prompt,
               overrides: params.overrides,
               persistence,
+              parentEventStore: eventStore,
             })
           }
 

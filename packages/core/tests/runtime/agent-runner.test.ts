@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { FinishChunk, Provider, TextChunk } from "@gent/core/providers/provider"
+import { FinishChunk, Provider, TextChunk, ToolCallChunk } from "@gent/core/providers/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner } from "@gent/core/runtime/agent/agent-runner"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
@@ -17,6 +17,7 @@ import type { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 
 const testRegistryLayer = ExtensionRegistry.fromResolved(
@@ -374,6 +375,84 @@ describe("AgentRunner", () => {
       expect(result.runResult.text).toContain("ephemeral response")
     }
     expect(result.sessions.map((session) => session.id)).toEqual(["parent-session-ephemeral"])
+  })
+
+  test("ephemeral helper runs mirror child tool events into the parent store", async () => {
+    const storageLayer = Storage.TestWithSql()
+    const deps = Layer.mergeAll(
+      storageLayer,
+      EventStoreLive.pipe(Layer.provide(storageLayer)),
+      testRegistryLayer,
+      Provider.Test([
+        [
+          new ToolCallChunk({
+            toolCallId: "tc-ephemeral",
+            toolName: "bash",
+            input: { command: "pwd" },
+          }),
+          new FinishChunk({ finishReason: "tool_calls" }),
+        ],
+        [new TextChunk({ text: "tool finished" }), new FinishChunk({ finishReason: "stop" })],
+      ]),
+      ToolRunner.Test(),
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.void,
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
+      }),
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        const session = new Session({
+          id: "parent-session-mirror",
+          name: "Parent",
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "parent-branch-mirror",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        const runResult = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "run helper with one tool",
+          parentSessionId: session.id,
+          parentBranchId: branch.id,
+          cwd: process.cwd(),
+        })
+
+        if (runResult._tag !== "success") {
+          return { runResult, childTags: [] as string[] }
+        }
+
+        const childEvents = yield* storage.listEvents({ sessionId: runResult.sessionId })
+        return {
+          runResult,
+          childTags: childEvents.map((event) => event.event._tag),
+        }
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.runResult._tag).toBe("success")
+    expect(result.childTags).toContain("ToolCallStarted")
+    expect(result.childTags).toContain("ToolCallSucceeded")
   })
 
   test("durable override persists child sessions for helper agents", async () => {

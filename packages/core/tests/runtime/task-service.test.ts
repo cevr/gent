@@ -162,6 +162,65 @@ describe("TaskService", () => {
     }),
   )
 
+  it.live("forces durable agent-run persistence for task execution", () =>
+    Effect.gen(function* () {
+      const persistenceRef = yield* Ref.make<ReadonlyArray<string>>([])
+
+      const storageLayer = Storage.MemoryWithSql()
+      const registryLayer = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "test-agents" },
+            kind: "builtin",
+            sourcePath: "test",
+            setup: { agents: Object.values(Agents), tools: [] },
+          },
+        ]),
+      )
+      const runnerLayer = Layer.succeed(AgentRunnerService, {
+        run: (params) =>
+          Ref.update(persistenceRef, (values) => [...values, params.persistence ?? "missing"]).pipe(
+            Effect.as({
+              _tag: "success" as const,
+              text: "done",
+              sessionId: "task-child" as SessionId,
+              agentName: "explore" as AgentName,
+              persistence: "durable" as const,
+            }),
+          ),
+      })
+
+      const baseDeps = Layer.mergeAll(
+        storageLayer,
+        EventStore.Memory,
+        registryLayer,
+        runnerLayer,
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const taskExtensionLayer = Layer.provide(
+        Layer.mergeAll(TaskStorage.Live, TaskService.Live),
+        baseDeps,
+      )
+      const layer = Layer.mergeAll(baseDeps, taskExtensionLayer)
+
+      yield* Effect.gen(function* () {
+        const taskService = yield* TaskService
+        const task = yield* taskService.create({
+          sessionId,
+          branchId,
+          subject: "Durable task",
+          prompt: "Do durable work",
+          agentType: "explore" as AgentName,
+        })
+
+        yield* taskService.run(task.id)
+        yield* Effect.sleep("50 millis")
+
+        expect(yield* Ref.get(persistenceRef)).toEqual(["durable"])
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
   describe("stop lifecycle", () => {
     it.live("stop while running: fiber interrupted, stopped status, TaskStopped event", () =>
       Effect.gen(function* () {
