@@ -7,6 +7,8 @@ import {
   AgentRunSpawned,
   BaseEventStore,
   EventStore,
+  getEventBranchId,
+  getEventSessionId,
   type AgentEvent,
   type EventStoreService,
   type EventEnvelope,
@@ -32,6 +34,7 @@ import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
 } from "../extensions/state-runtime.js"
+import { ExtensionEventBus } from "../extensions/event-bus.js"
 import { EventStoreLive } from "../event-store-live.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 
@@ -423,6 +426,7 @@ const runEphemeralAgent = (params: {
   overrides?: AgentExecutionOverrides
   persistence: AgentPersistence
   parentBaseEventStore: EventStoreService
+  notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
 }) => {
   const sessionId = Bun.randomUUIDv7() as SessionId
   const branchId = Bun.randomUUIDv7() as BranchId
@@ -500,6 +504,7 @@ const runEphemeralAgent = (params: {
             shouldMirrorEphemeralChildEvent(envelope.event)
               ? params.parentBaseEventStore
                   .publish(envelope.event)
+                  .pipe(Effect.tap(() => params.notifyMirroredEventObservers(envelope.event)))
                   .pipe(Effect.catchEager(() => Effect.void))
               : Effect.void,
           ),
@@ -585,7 +590,29 @@ export const InProcessRunner = (
       const extensionRegistry = yield* ExtensionRegistry
       const provider = yield* Provider
       const toolRunner = yield* ToolRunner
+      const stateRuntimeOpt = yield* Effect.serviceOption(ExtensionStateRuntime)
+      const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
       const shared = makeSharedRunnerHelpers(storage, eventStore)
+      const notifyMirroredEventObservers = (event: AgentEvent) => {
+        const sessionId = getEventSessionId(event)
+        const branchId = getEventBranchId(event)
+        return Effect.all(
+          [
+            stateRuntimeOpt._tag === "Some"
+              ? stateRuntimeOpt.value.notifyObservers(event)
+              : Effect.void,
+            busOpt._tag === "Some" && sessionId !== undefined
+              ? busOpt.value.emit({
+                  channel: `agent:${event._tag}`,
+                  payload: event,
+                  sessionId,
+                  branchId,
+                })
+              : Effect.void,
+          ],
+          { discard: true },
+        )
+      }
       const publishAgentSwitch = (params: {
         sessionId: SessionId
         branchId: BranchId
@@ -646,6 +673,7 @@ export const InProcessRunner = (
               overrides: params.overrides,
               persistence,
               parentBaseEventStore: baseEventStore,
+              notifyMirroredEventObservers,
             })
           }
 
@@ -741,7 +769,29 @@ export const SubprocessRunner = (
       const extensionRegistry = yield* ExtensionRegistry
       const provider = yield* Provider
       const toolRunner = yield* ToolRunner
+      const stateRuntimeOpt = yield* Effect.serviceOption(ExtensionStateRuntime)
+      const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
       const shared = makeSharedRunnerHelpers(storage, eventStore)
+      const notifyMirroredEventObservers = (event: AgentEvent) => {
+        const sessionId = getEventSessionId(event)
+        const branchId = getEventBranchId(event)
+        return Effect.all(
+          [
+            stateRuntimeOpt._tag === "Some"
+              ? stateRuntimeOpt.value.notifyObservers(event)
+              : Effect.void,
+            busOpt._tag === "Some" && sessionId !== undefined
+              ? busOpt.value.emit({
+                  channel: `agent:${event._tag}`,
+                  payload: event,
+                  sessionId,
+                  branchId,
+                })
+              : Effect.void,
+          ],
+          { discard: true },
+        )
+      }
 
       return {
         run: (params) => {
@@ -762,6 +812,7 @@ export const SubprocessRunner = (
               overrides: params.overrides,
               persistence,
               parentBaseEventStore: baseEventStore,
+              notifyMirroredEventObservers,
             })
           }
 
