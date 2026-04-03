@@ -1,13 +1,8 @@
-import { Cause, Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
+import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
-import type {
-  FailedExtension,
-  InteractionHandlerType,
-  LoadedExtension,
-  ScheduledJobFailureInfo,
-} from "../domain/extension.js"
+import type { InteractionHandlerType } from "../domain/extension.js"
 import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
@@ -23,20 +18,17 @@ import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
+import { discoverExtensions } from "../runtime/extensions/loader.js"
 import {
-  activateLoadedExtensions,
+  reconcileLoadedExtensions,
+  setupDiscoveredExtensions,
   setupBuiltinExtensions,
-  validateLoadedExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
-import {
-  reconcileScheduledJobs,
-  type ScheduledJobCommand,
-} from "../runtime/extensions/scheduler.js"
+import { type ScheduledJobCommand } from "../runtime/extensions/scheduler.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -84,6 +76,12 @@ const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, st
   ...(config.providerMode !== undefined ? { GENT_PROVIDER_MODE: config.providerMode } : {}),
 })
 
+const extensionFailureLogMessage = (phase: "setup" | "validation" | "startup") => {
+  if (phase === "setup") return "extension.setup.failed"
+  if (phase === "validation") return "extension.validation.failed"
+  return "extension.startup.failed"
+}
+
 const makeExtensionLayers = (config: DependenciesConfig) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -117,32 +115,12 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         )
       }
 
-      const external: LoadedExtension[] = []
-      const failedExtensions: FailedExtension[] = []
-      for (const discoveredExtension of discovery.loaded) {
-        if (disabledSet.has(discoveredExtension.extension.manifest.id)) continue
-        const exit = yield* setupExtension(discoveredExtension, config.cwd, config.home).pipe(
-          Effect.exit,
-        )
-        if (exit._tag === "Failure") {
-          const error = String(Cause.squash(exit.cause))
-          yield* Effect.logWarning("extension.setup.failed").pipe(
-            Effect.annotateLogs({
-              extensionId: discoveredExtension.extension.manifest.id,
-              error,
-            }),
-          )
-          failedExtensions.push({
-            manifest: discoveredExtension.extension.manifest,
-            kind: discoveredExtension.kind,
-            sourcePath: discoveredExtension.sourcePath,
-            phase: "setup",
-            error,
-          })
-          continue
-        }
-        external.push(exit.value)
-      }
+      const externalSetup = yield* setupDiscoveredExtensions({
+        extensions: discovery.loaded,
+        cwd: config.cwd,
+        home: config.home,
+        disabled: disabledSet,
+      })
 
       const builtinSetup = yield* setupBuiltinExtensions({
         extensions: BuiltinExtensions,
@@ -150,46 +128,23 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         home: config.home,
         disabled: disabledSet,
       })
-      for (const failed of builtinSetup.failed) {
-        yield* Effect.logWarning("extension.setup.failed").pipe(
-          Effect.annotateLogs({
-            extensionId: failed.manifest.id,
-            error: failed.error,
-          }),
-        )
-      }
-      failedExtensions.push(...builtinSetup.failed)
-
-      const allExtensions = [...builtinSetup.active, ...external]
-      const validated = yield* validateLoadedExtensions(allExtensions)
-      for (const failed of validated.failed) {
-        yield* Effect.logWarning("extension.validation.failed").pipe(
-          Effect.annotateLogs({
-            extensionId: failed.manifest.id,
-            error: failed.error,
-          }),
-        )
-      }
-      failedExtensions.push(...validated.failed)
-
-      const activated = yield* activateLoadedExtensions(validated.active)
-      for (const failed of activated.failed) {
-        yield* Effect.logWarning("extension.startup.failed").pipe(
-          Effect.annotateLogs({
-            extensionId: failed.manifest.id,
-            error: failed.error,
-          }),
-        )
-      }
-      failedExtensions.push(...activated.failed)
-
-      const scheduledJobFailures = yield* reconcileScheduledJobs({
-        extensions: activated.active,
+      const reconciled = yield* reconcileLoadedExtensions({
+        extensions: [...builtinSetup.active, ...externalSetup.active],
+        failedExtensions: [...builtinSetup.failed, ...externalSetup.failed],
         home: config.home,
         command: config.scheduledJobCommand,
         env: scheduledJobEnv(config),
       })
-      for (const failure of scheduledJobFailures) {
+      for (const failed of reconciled.resolved.failedExtensions) {
+        const message = extensionFailureLogMessage(failed.phase)
+        yield* Effect.logWarning(message).pipe(
+          Effect.annotateLogs({
+            extensionId: failed.manifest.id,
+            error: failed.error,
+          }),
+        )
+      }
+      for (const failure of reconciled.scheduledJobFailures) {
         yield* Effect.logWarning("extension.scheduled-job.failed").pipe(
           Effect.annotateLogs({
             extensionId: failure.extensionId,
@@ -198,26 +153,15 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
           }),
         )
       }
-      const scheduledJobFailuresByExtension = new Map<
-        string,
-        ReadonlyArray<ScheduledJobFailureInfo>
-      >()
-      for (const failure of scheduledJobFailures) {
-        const existing = scheduledJobFailuresByExtension.get(failure.extensionId) ?? []
-        scheduledJobFailuresByExtension.set(failure.extensionId, [
-          ...existing,
-          { jobId: failure.jobId, error: failure.error },
-        ])
-      }
 
       // Collect extension-provided layers (setup.layer — default phase)
-      const extensionLayers = activated.active
+      const extensionLayers = reconciled.resolved.extensions
         .filter((ext) => ext.setup.layer !== undefined)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
       // Collect bus subscriptions from extensions
-      const busSubscriptions = activated.active.flatMap((ext) =>
+      const busSubscriptions = reconciled.resolved.extensions.flatMap((ext) =>
         (ext.setup.busSubscriptions ?? []).map((sub) => ({
           pattern: sub.pattern,
           handler: sub.handler as (envelope: {
@@ -229,16 +173,12 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         })),
       )
 
-      const extensionRuntimeLive = ExtensionStateRuntime.Live(activated.active).pipe(
+      const extensionRuntimeLive = ExtensionStateRuntime.Live(reconciled.resolved.extensions).pipe(
         Layer.provideMerge(ExtensionTurnControl.Live),
       )
 
       const baseLayers = Layer.mergeAll(
-        ExtensionRegistry.LiveWithFailures(
-          activated.active,
-          failedExtensions,
-          scheduledJobFailuresByExtension,
-        ),
+        ExtensionRegistry.fromResolved(reconciled.resolved),
         extensionRuntimeLive,
         ExtensionEventBus.withSubscriptions(busSubscriptions),
       )

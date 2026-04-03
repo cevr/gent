@@ -4,6 +4,7 @@
  * Import from @gent/core/test-utils/extension-harness
  */
 
+import { BunServices } from "@effect/platform-bun"
 import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import {
@@ -38,7 +39,11 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
-import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
+import {
+  reconcileLoadedExtensions,
+  setupBuiltinExtensions,
+} from "../runtime/extensions/activation.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -262,23 +267,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     tools: [...(config.tools ?? [])],
   }
 
-  const extensionSetups = (config.extensions ?? []).map((ext) => ({
-    manifest: ext.manifest,
-    kind: "builtin" as const,
-    sourcePath: "test",
-    setup: Effect.runSync(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
-  }))
-
-  const allExtensions: LoadedExtension[] = [
-    {
-      manifest: { id: "test-agents" },
-      kind: "builtin" as const,
-      sourcePath: "test",
-      setup: builtinSetup,
-    },
-    ...extensionSetups,
-  ]
-
   const defaultRunner: AgentRunner = {
     run: () =>
       Effect.succeed({
@@ -294,41 +282,69 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
   )
 
   const turnControlLayer = ExtensionTurnControl.Test()
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const setupResult = yield* setupBuiltinExtensions({
+        extensions: config.extensions ?? [],
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
 
-  const baseLayer = Layer.mergeAll(
-    Storage.TestWithSql(),
-    EventStore.Memory,
-    ExtensionRegistry.fromResolved(resolveExtensions(allExtensions)),
-    turnControlLayer,
-    subagentRunnerLayer,
-    PromptPresenter.Test(),
-    Permission.Test(),
-    PromptHandler.Test(["yes"]),
-    HandoffHandler.Test(["confirm"]),
-    AskUserHandler.Test([["yes"]]),
-    AgentLoop.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    Skills.Test(),
-  )
-  const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(allExtensions).pipe(
-    Layer.provideMerge(turnControlLayer),
-  )
-  const runtimeDeps = Layer.merge(baseLayer, stateRuntimeLayer)
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, runtimeDeps)
-  const baseLayerAny: Layer.Layer<never, never, object> = Layer.merge(
-    runtimeDeps,
-    eventPublisherLayer,
-  )
+      const allExtensions: LoadedExtension[] = [
+        {
+          manifest: { id: "test-agents" },
+          kind: "builtin" as const,
+          sourcePath: "test",
+          setup: builtinSetup,
+        },
+        ...setupResult.active,
+      ]
 
-  const contributedLayers: Array<Layer.Layer<never, never, object>> = extensionSetups.flatMap(
-    (ext) =>
-      ext.setup.layer === undefined ? [] : [Layer.provideMerge(ext.setup.layer, baseLayerAny)],
-  )
+      const reconciled = yield* reconcileLoadedExtensions({
+        extensions: allExtensions,
+        failedExtensions: setupResult.failed,
+        home: "/tmp",
+        command: undefined,
+      })
 
-  let extensionLayer: Layer.Layer<never, never, object> | undefined
-  for (const layer of contributedLayers) {
-    extensionLayer = extensionLayer === undefined ? layer : Layer.merge(extensionLayer, layer)
-  }
+      const activeExtensions = reconciled.resolved.extensions
+      const baseLayer = Layer.mergeAll(
+        Storage.TestWithSql(),
+        EventStore.Memory,
+        ExtensionRegistry.fromResolved(reconciled.resolved),
+        turnControlLayer,
+        subagentRunnerLayer,
+        PromptPresenter.Test(),
+        Permission.Test(),
+        PromptHandler.Test(["yes"]),
+        HandoffHandler.Test(["confirm"]),
+        AskUserHandler.Test([["yes"]]),
+        AgentLoop.Test(),
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        Skills.Test(),
+      )
+      const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(activeExtensions).pipe(
+        Layer.provideMerge(turnControlLayer),
+      )
+      const runtimeDeps = Layer.merge(baseLayer, stateRuntimeLayer)
+      const eventPublisherLayer = Layer.provide(EventPublisherLive, runtimeDeps)
+      const baseLayerAny: Layer.Layer<never, never, object> = Layer.merge(
+        runtimeDeps,
+        eventPublisherLayer,
+      )
 
-  return extensionLayer === undefined ? baseLayerAny : Layer.merge(baseLayerAny, extensionLayer)
+      const contributedLayers: Array<Layer.Layer<never, never, object>> = activeExtensions.flatMap(
+        (ext) =>
+          ext.setup.layer === undefined ? [] : [Layer.provideMerge(ext.setup.layer, baseLayerAny)],
+      )
+
+      let extensionLayer: Layer.Layer<never, never, object> | undefined
+      for (const layer of contributedLayers) {
+        extensionLayer = extensionLayer === undefined ? layer : Layer.merge(extensionLayer, layer)
+      }
+
+      return extensionLayer === undefined ? baseLayerAny : Layer.merge(baseLayerAny, extensionLayer)
+    }),
+  ).pipe(Layer.provide(BunServices.layer))
 }

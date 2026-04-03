@@ -109,36 +109,6 @@ describe("resolveExtensions", () => {
     expect(resolved.agents.get("explore")?.description).toBe("project explore")
   })
 
-  test("same-scope tool collision degrades conflicting extensions instead of throwing", () => {
-    const resolved = resolveExtensions([
-      makeExt("ext-a", "builtin", { tools: [makeTool("conflict")] }),
-      makeExt("ext-b", "builtin", { tools: [makeTool("conflict")] }),
-    ])
-
-    expect(resolved.tools.size).toBe(0)
-    expect(resolved.extensions).toEqual([])
-    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
-      "ext-a",
-      "ext-b",
-    ])
-    expect(resolved.failedExtensions.every((ext) => ext.phase === "validation")).toBe(true)
-  })
-
-  test("same-scope agent collision degrades conflicting extensions instead of throwing", () => {
-    const resolved = resolveExtensions([
-      makeExt("ext-a", "builtin", { agents: [makeAgent("explore")] }),
-      makeExt("ext-b", "builtin", { agents: [makeAgent("explore")] }),
-    ])
-
-    expect(resolved.agents.size).toBe(0)
-    expect(resolved.extensions).toEqual([])
-    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
-      "ext-a",
-      "ext-b",
-    ])
-    expect(resolved.failedExtensions.every((ext) => ext.phase === "validation")).toBe(true)
-  })
-
   test("allows same-name tool/agent from different scopes (override)", () => {
     expect(() =>
       resolveExtensions([
@@ -165,19 +135,6 @@ describe("resolveExtensions", () => {
     expect(resolved.providers.get("anthropic")?.name).toBe("Custom Anthropic")
   })
 
-  test("same-scope provider collision degrades conflicting extensions instead of throwing", () => {
-    const resolved = resolveExtensions([
-      makeExt("ext-a", "builtin", { providers: [makeProvider("anthropic")] }),
-      makeExt("ext-b", "builtin", { providers: [makeProvider("anthropic")] }),
-    ])
-
-    expect(resolved.providers.size).toBe(0)
-    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
-      "ext-a",
-      "ext-b",
-    ])
-  })
-
   test("collects interaction handlers from extensions", () => {
     const resolved = resolveExtensions([
       makeExt("a", "builtin", {
@@ -202,19 +159,6 @@ describe("resolveExtensions", () => {
     expect(resolved.interactionHandlers.get("permission")).toBe(projectHandler)
   })
 
-  test("same-scope interaction handler collision degrades conflicting extensions instead of throwing", () => {
-    const resolved = resolveExtensions([
-      makeExt("ext-a", "builtin", { interactionHandlers: [makeHandler("permission")] }),
-      makeExt("ext-b", "builtin", { interactionHandlers: [makeHandler("permission")] }),
-    ])
-
-    expect(resolved.interactionHandlers.size).toBe(0)
-    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
-      "ext-a",
-      "ext-b",
-    ])
-  })
-
   test("merges scheduled job failures into extension statuses", () => {
     const resolved = resolveExtensions(
       [makeExt("@gent/memory", "builtin")],
@@ -229,6 +173,48 @@ describe("resolveExtensions", () => {
         sourcePath: "/test/@gent/memory",
         status: "active",
         scheduledJobFailures: [{ jobId: "reflect", error: "launchd registration failed" }],
+      },
+    ])
+  })
+
+  test("surfaces provided failed extensions without recomputing validation", () => {
+    const resolved = resolveExtensions(
+      [makeExt("healthy", "builtin", { tools: [makeTool("read")] })],
+      [
+        {
+          manifest: { id: "broken" },
+          kind: "builtin",
+          sourcePath: "builtin",
+          phase: "validation",
+          error: "duplicate tool read",
+        },
+      ],
+    )
+
+    expect(resolved.extensions.map((ext) => ext.manifest.id)).toEqual(["healthy"])
+    expect(resolved.failedExtensions).toEqual([
+      {
+        manifest: { id: "broken" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        phase: "validation",
+        error: "duplicate tool read",
+      },
+    ])
+    expect(resolved.extensionStatuses).toEqual([
+      {
+        manifest: { id: "healthy" },
+        kind: "builtin",
+        sourcePath: "/test/healthy",
+        status: "active",
+      },
+      {
+        manifest: { id: "broken" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        phase: "validation",
+        error: "duplicate tool read",
+        status: "failed",
       },
     ])
   })

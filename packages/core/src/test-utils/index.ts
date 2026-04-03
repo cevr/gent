@@ -8,7 +8,6 @@ import {
   type StreamChunk,
 } from "../providers/provider.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
-import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/registry.js"
 import { Agents } from "../domain/agent.js"
 import {
   BaseEventStore,
@@ -25,6 +24,7 @@ import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
+import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"
@@ -203,16 +203,14 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
   return Layer.mergeAll(
     Storage.Test(),
     Provider.Test(providerResponses),
-    ExtensionRegistry.fromResolved(
-      resolveExtensions([
-        {
-          manifest: { id: "test-agents" },
-          kind: "builtin",
-          sourcePath: "test",
-          setup: { agents: Object.values(Agents), tools: [...tools] },
-        },
-      ]),
-    ),
+    testExtensionRegistryLayer([
+      {
+        manifest: { id: "test-agents" },
+        kind: "builtin",
+        sourcePath: "test",
+        setup: { agents: Object.values(Agents), tools: [...tools] },
+      },
+    ]),
     EventStore.Test(),
     Permission.Test(),
     AskUserHandler.Test(askUserResponses),
@@ -238,16 +236,14 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   return Layer.mergeAll(
     Storage.Test(),
     Permission.Test(),
-    ExtensionRegistry.fromResolved(
-      resolveExtensions([
-        {
-          manifest: { id: "test-agents" },
-          kind: "builtin",
-          sourcePath: "test",
-          setup: { agents: Object.values(Agents), tools: [...tools] },
-        },
-      ]),
-    ),
+    testExtensionRegistryLayer([
+      {
+        manifest: { id: "test-agents" },
+        kind: "builtin",
+        sourcePath: "test",
+        setup: { agents: Object.values(Agents), tools: [...tools] },
+      },
+    ]),
     PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
     ExtensionTurnControl.Test(),

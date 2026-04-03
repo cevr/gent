@@ -1,16 +1,28 @@
 import { Cause, Effect } from "effect"
-import type { Scope } from "effect"
+import type { FileSystem, Path, Scope } from "effect"
 import type {
   FailedExtension,
   FailedExtensionPhase,
   GentExtension,
   LoadedExtension,
 } from "../../domain/extension.js"
+import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
+import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
+import {
+  reconcileScheduledJobs,
+  type ScheduledJobCommand,
+  type SchedulerFailure,
+} from "./scheduler.js"
 
 export interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>
   readonly failed: ReadonlyArray<FailedExtension>
+}
+
+export interface ExtensionReconciliationResult {
+  readonly resolved: ResolvedExtensions
+  readonly scheduledJobFailures: ReadonlyArray<SchedulerFailure>
 }
 
 const toFailedExtension = (
@@ -60,6 +72,40 @@ export const setupBuiltinExtensions = (params: {
         failed.push(
           toFailedExtension(
             { manifest: extension.manifest, kind: "builtin", sourcePath: "builtin" },
+            "setup",
+            formatFailure(Cause.squash(exit.cause)),
+          ),
+        )
+      }
+    }
+
+    return { active, failed }
+  })
+
+export const setupDiscoveredExtensions = (params: {
+  readonly extensions: ReadonlyArray<DiscoveredExtension>
+  readonly cwd: string
+  readonly home: string
+  readonly disabled: ReadonlySet<string>
+}): Effect.Effect<ExtensionActivationResult> =>
+  Effect.gen(function* () {
+    const active: LoadedExtension[] = []
+    const failed: FailedExtension[] = []
+
+    for (const discovered of params.extensions) {
+      if (params.disabled.has(discovered.extension.manifest.id)) continue
+
+      const exit = yield* setupExtension(discovered, params.cwd, params.home).pipe(Effect.exit)
+      if (exit._tag === "Success") {
+        active.push(exit.value)
+      } else {
+        failed.push(
+          toFailedExtension(
+            {
+              manifest: discovered.extension.manifest,
+              kind: discovered.kind,
+              sourcePath: discovered.sourcePath,
+            },
             "setup",
             formatFailure(Cause.squash(exit.cause)),
           ),
@@ -218,4 +264,51 @@ export const activateLoadedExtensions = (
     }
 
     return { active, failed }
+  })
+
+const groupScheduledJobFailures = (
+  failures: ReadonlyArray<SchedulerFailure>,
+): ReadonlyMap<string, ReadonlyArray<{ jobId: string; error: string }>> => {
+  const byExtension = new Map<string, Array<{ jobId: string; error: string }>>()
+  for (const failure of failures) {
+    const existing = byExtension.get(failure.extensionId) ?? []
+    existing.push({ jobId: failure.jobId, error: failure.error })
+    byExtension.set(failure.extensionId, existing)
+  }
+  return byExtension
+}
+
+export const reconcileLoadedExtensions = (params: {
+  readonly extensions: ReadonlyArray<LoadedExtension>
+  readonly failedExtensions?: ReadonlyArray<FailedExtension>
+  readonly home: string
+  readonly command: ScheduledJobCommand | undefined
+  readonly env?: Readonly<Record<string, string>>
+  readonly schedulerRuntime?: Parameters<typeof reconcileScheduledJobs>[0]["runtime"]
+}): Effect.Effect<
+  ExtensionReconciliationResult,
+  never,
+  Scope.Scope | FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function* () {
+    const validated = yield* validateLoadedExtensions(params.extensions)
+    const activated = yield* activateLoadedExtensions(validated.active)
+    const scheduledJobFailures = yield* reconcileScheduledJobs({
+      extensions: activated.active,
+      home: params.home,
+      command: params.command,
+      env: params.env,
+      runtime: params.schedulerRuntime,
+    })
+
+    const resolved = resolveExtensions(
+      activated.active,
+      [...(params.failedExtensions ?? []), ...validated.failed, ...activated.failed],
+      groupScheduledJobFailures(scheduledJobFailures),
+    )
+
+    return {
+      resolved,
+      scheduledJobFailures,
+    }
   })

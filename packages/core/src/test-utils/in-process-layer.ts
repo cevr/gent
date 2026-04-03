@@ -19,7 +19,6 @@ import type { Provider } from "../providers/provider.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { resolveExtensions, ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -29,21 +28,20 @@ import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
+import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
 const sharedInfra = () => {
   const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
-  const extensionRegistryLive = ExtensionRegistry.fromResolved(
-    resolveExtensions([
-      {
-        manifest: { id: "test-agents" },
-        kind: "builtin",
-        sourcePath: "test",
-        setup: { agents: Object.values(Agents), tools: [] },
-      },
-    ]),
-  )
+  const extensionRegistryLive = testExtensionRegistryLayer([
+    {
+      manifest: { id: "test-agents" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents), tools: [] },
+    },
+  ])
 
   const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
   const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)

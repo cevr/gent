@@ -18,7 +18,6 @@ import type { PromptSection } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { type CompiledHookMap, compileHooks } from "./hooks.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
-import { collectValidationFailures } from "./activation.js"
 
 // Resolved snapshot — the immutable compiled state
 
@@ -53,34 +52,14 @@ const compileContributions = <T>(
   return result
 }
 
-const failureKey = (failure: FailedExtension) =>
-  `${failure.kind}:${failure.manifest.id}:${failure.sourcePath}:${failure.phase}:${failure.error}`
-
-/** Compile loaded extensions into an immutable resolved snapshot. Same-scope collisions degrade conflicting extensions instead of throwing. */
+/** Compile prevalidated extensions into an immutable resolved snapshot. */
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
   failedExtensions: ReadonlyArray<FailedExtension> = [],
   scheduledJobFailures: ScheduledJobFailureByExtension = new Map(),
 ): ResolvedExtensions => {
-  const validationFailures = collectValidationFailures(extensions)
-  const validationFailed = [...validationFailures.values()].map(({ ext, errors }) => ({
-    manifest: ext.manifest,
-    kind: ext.kind,
-    sourcePath: ext.sourcePath,
-    phase: "validation" as const,
-    error: errors.join("; "),
-  }))
-  const mergedFailures = [
-    ...failedExtensions,
-    ...validationFailed.filter(
-      (failure) =>
-        !failedExtensions.some((existing) => failureKey(existing) === failureKey(failure)),
-    ),
-  ]
-  const activeExtensions = extensions.filter(
-    (ext) => !validationFailures.has(`${ext.kind}:${ext.manifest.id}:${ext.sourcePath}`),
-  )
-  const sorted = [...activeExtensions].sort((a, b) => {
+  const mergedFailures = [...failedExtensions]
+  const sorted = [...extensions].sort((a, b) => {
     const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
@@ -375,18 +354,6 @@ export class ExtensionRegistry extends ServiceMap.Service<
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       hooks: resolved.hooks,
     })
-
-  static Live = (extensions: ReadonlyArray<LoadedExtension>): Layer.Layer<ExtensionRegistry> =>
-    ExtensionRegistry.fromResolved(resolveExtensions(extensions))
-
-  static LiveWithFailures = (
-    extensions: ReadonlyArray<LoadedExtension>,
-    failedExtensions: ReadonlyArray<FailedExtension>,
-    scheduledJobFailures: ScheduledJobFailureByExtension = new Map(),
-  ): Layer.Layer<ExtensionRegistry> =>
-    ExtensionRegistry.fromResolved(
-      resolveExtensions(extensions, failedExtensions, scheduledJobFailures),
-    )
 
   static Test = (): Layer.Layer<ExtensionRegistry> =>
     ExtensionRegistry.fromResolved(resolveExtensions([]))

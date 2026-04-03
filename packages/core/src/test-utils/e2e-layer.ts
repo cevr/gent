@@ -33,7 +33,7 @@ import { ProviderAuth } from "../providers/provider-auth.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { resolveExtensions, ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -45,6 +45,10 @@ import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { Test as MemoryVaultTest } from "../extensions/memory/vault.js"
+import {
+  reconcileLoadedExtensions,
+  setupBuiltinExtensions,
+} from "../runtime/extensions/activation.js"
 
 /** Test-safe layer overrides for extension setup.layer fields */
 const TEST_LAYER_OVERRIDES: Record<string, () => Layer.Layer<never>> = {
@@ -78,128 +82,140 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     tools: [] as const,
   }
 
-  // Load all builtins, patching setup.layer for extensions that need test overrides
-  const defaultExtensions: ReadonlyArray<LoadedExtension> = BuiltinExtensions.map((ext) => {
-    const setup = Effect.runSync(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
-    const override = TEST_LAYER_OVERRIDES[ext.manifest.id]
-    return {
-      manifest: ext.manifest,
-      kind: "builtin" as const,
-      sourcePath: "builtin",
-      setup: override ? { ...setup, layer: override() } : setup,
-    }
-  })
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const setupResult = config.extensions
+        ? { active: config.extensions, failed: [] as const }
+        : yield* setupBuiltinExtensions({
+            extensions: BuiltinExtensions,
+            cwd: "/tmp",
+            home: "/tmp",
+            disabled: new Set(),
+          })
 
-  const resolvedExtensions: LoadedExtension[] = config.extensions
-    ? [
-        {
-          manifest: { id: "test-agents" },
-          kind: "builtin",
-          sourcePath: "test",
-          setup: builtinSetup,
-        },
-        ...config.extensions,
-      ]
-    : [...defaultExtensions]
+      const loadedExtensions = config.extensions
+        ? [
+            {
+              manifest: { id: "test-agents" },
+              kind: "builtin" as const,
+              sourcePath: "test",
+              setup: builtinSetup,
+            },
+            ...setupResult.active,
+          ]
+        : setupResult.active.map((ext) => {
+            const override = TEST_LAYER_OVERRIDES[ext.manifest.id]
+            return override === undefined
+              ? ext
+              : {
+                  ...ext,
+                  setup: {
+                    ...ext.setup,
+                    layer: override(),
+                  },
+                }
+          })
 
-  const resolved = resolveExtensions(resolvedExtensions)
+      const reconciled = yield* reconcileLoadedExtensions({
+        extensions: loadedExtensions,
+        failedExtensions: setupResult.failed,
+        home: "/tmp",
+        command: undefined,
+      })
+      const resolved = reconciled.resolved
 
-  // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts).
-  // Extension layers may require SqlClient, so provide it via storageLayer.
-  const storageLayer = Storage.MemoryWithSql()
-  const extensionLayers: Layer.Layer<never>[] = resolvedExtensions
-    .filter((ext) => ext.setup.layer !== undefined)
-    .map(
-      (ext) =>
-        Layer.provide(ext.setup.layer as Layer.Layer<never>, storageLayer) as Layer.Layer<never>,
-    )
+      // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts).
+      // Extension layers may require SqlClient, so provide it via storageLayer.
+      const storageLayer = Storage.MemoryWithSql()
+      const extensionLayers: Layer.Layer<never>[] = resolved.extensions
+        .filter((ext) => ext.setup.layer !== undefined)
+        .map(
+          (ext) =>
+            Layer.provide(
+              ext.setup.layer as Layer.Layer<never>,
+              storageLayer,
+            ) as Layer.Layer<never>,
+        )
 
-  // Subagent runner
-  const defaultRunner: AgentRunner = {
-    run: () =>
-      Effect.succeed({
-        _tag: "success" as const,
-        text: "",
-        sessionId: "test-subagent-session" as SessionId,
-        agentName: "cowork" as AgentName,
-      }),
-  }
-  const subagentRunnerLayer = Layer.succeed(
-    AgentRunnerService,
-    config.subagentRunner ?? defaultRunner,
-  )
+      // Subagent runner
+      const defaultRunner: AgentRunner = {
+        run: () =>
+          Effect.succeed({
+            _tag: "success" as const,
+            text: "",
+            sessionId: "test-subagent-session" as SessionId,
+            agentName: "cowork" as AgentName,
+          }),
+      }
+      const subagentRunnerLayer = Layer.succeed(
+        AgentRunnerService,
+        config.subagentRunner ?? defaultRunner,
+      )
 
-  // Auth
-  const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
-  const extensionRegistryLive = ExtensionRegistry.fromResolved(resolved)
-  const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
-  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
-  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
-  const extensionRuntimeLive = ExtensionStateRuntime.Live(resolvedExtensions).pipe(
-    Layer.provideMerge(ExtensionTurnControl.Live),
-  )
+      // Auth
+      const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
+      const extensionRegistryLive = ExtensionRegistry.fromResolved(resolved)
+      const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
+      const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
+      const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
+      const extensionRuntimeLive = ExtensionStateRuntime.Live(resolved.extensions).pipe(
+        Layer.provideMerge(ExtensionTurnControl.Live),
+      )
 
-  // Base services — everything that doesn't depend on reducing event store
-  const baseDeps = Layer.mergeAll(
-    BunServices.layer,
-    storageLayer,
-    config.providerLayer,
-    extensionRegistryLive,
-    extensionRuntimeLive,
-    Permission.Test(),
-    PromptHandler.Test(["yes"]),
-    HandoffHandler.Test(["confirm"]),
-    AskUserHandler.Test([["yes"]]),
-    Skills.Test(),
-    ConfigService.Test(),
-    ModelRegistry.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    subagentRunnerLayer,
-    authStoreLive,
-    authGuardLive,
-    providerAuthLive,
-    // Extension-provided layers (e.g., MemoryVault) + caller extra layers
-    ...extensionLayers,
-    ...(config.extraLayers ?? []),
-  )
+      // Base services — everything that doesn't depend on reducing event store
+      const baseDeps = Layer.mergeAll(
+        BunServices.layer,
+        storageLayer,
+        config.providerLayer,
+        extensionRegistryLive,
+        extensionRuntimeLive,
+        Permission.Test(),
+        PromptHandler.Test(["yes"]),
+        HandoffHandler.Test(["confirm"]),
+        AskUserHandler.Test([["yes"]]),
+        Skills.Test(),
+        ConfigService.Test(),
+        ModelRegistry.Test(),
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        subagentRunnerLayer,
+        authStoreLive,
+        authGuardLive,
+        providerAuthLive,
+        ...extensionLayers,
+        ...(config.extraLayers ?? []),
+      )
 
-  // Base event store (raw storage, provides BaseEventStore and EventStore tags)
-  const baseEventStoreLive = Layer.provide(EventStoreLive, baseDeps)
+      const baseEventStoreLive = Layer.provide(EventStoreLive, baseDeps)
+      const eventPublisherLive = Layer.provide(
+        EventPublisherLive,
+        Layer.merge(baseDeps, baseEventStoreLive),
+      )
+      const toolRunnerLive = Layer.provide(ToolRunner.Live, baseDeps)
+      const agentLoopDeps = Layer.mergeAll(baseDeps, eventPublisherLive, toolRunnerLive)
+      const agentLoopLive = Layer.provide(
+        AgentLoop.Live({
+          baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
+        }),
+        agentLoopDeps,
+      )
+      const actorProcessLive = Layer.provide(
+        LocalActorProcessLive,
+        Layer.mergeAll(agentLoopDeps, agentLoopLive),
+      )
 
-  const eventPublisherLive = Layer.provide(
-    EventPublisherLive,
-    Layer.merge(baseDeps, baseEventStoreLive),
-  )
-
-  // Tool runner — real execution
-  const toolRunnerLive = Layer.provide(ToolRunner.Live, baseDeps)
-
-  // Agent loop — real turn lifecycle
-  const agentLoopDeps = Layer.mergeAll(baseDeps, eventPublisherLive, toolRunnerLive)
-  const agentLoopLive = Layer.provide(
-    AgentLoop.Live({
-      baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
+      return Layer.provideMerge(
+        AppServicesLive,
+        Layer.mergeAll(
+          baseDeps,
+          baseEventStoreLive,
+          eventPublisherLive,
+          toolRunnerLive,
+          agentLoopLive,
+          actorProcessLive,
+        ),
+      )
     }),
-    agentLoopDeps,
-  )
-
-  // Actor process
-  const actorProcessLive = Layer.provide(
-    LocalActorProcessLive,
-    Layer.mergeAll(agentLoopDeps, agentLoopLive),
-  )
-
-  return Layer.provideMerge(
-    AppServicesLive,
-    Layer.mergeAll(
-      baseDeps,
-      baseEventStoreLive,
-      eventPublisherLive,
-      toolRunnerLive,
-      agentLoopLive,
-      actorProcessLive,
-    ),
-  )
+  ).pipe(Layer.provide(BunServices.layer))
 }
 
 // ── Test helpers ──
