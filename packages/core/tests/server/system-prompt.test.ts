@@ -126,7 +126,6 @@ describe("buildBasePromptSections", () => {
 describe("buildTurnPrompt", () => {
   const agent = new AgentDefinition({
     name: "test-agent",
-    kind: "primary",
     systemPromptAddendum: "Be helpful.",
   })
 

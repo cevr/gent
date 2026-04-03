@@ -6,9 +6,6 @@ import type { ToolAction as ToolActionType, AnyToolDefinition } from "./tool"
 
 // Agent definitions
 
-export const AgentKind = Schema.Literals(["primary", "subagent", "system"])
-export type AgentKind = typeof AgentKind.Type
-
 export const AgentName = Schema.String
 export type AgentName = typeof AgentName.Type
 
@@ -38,8 +35,6 @@ export const AgentDefinitionBrand: unique symbol = Symbol.for("@gent/AgentDefini
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
   description: Schema.optional(Schema.String),
-  kind: AgentKind,
-  hidden: Schema.optional(Schema.Boolean),
   model: Schema.optional(ModelId),
   systemPromptAddendum: Schema.optional(Schema.String),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
@@ -143,7 +138,6 @@ export const Agents = {
   cowork: defineAgent({
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
-    kind: "primary",
     model: "anthropic/claude-opus-4-6" as ModelId,
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     systemPromptAddendum: COWORK_PROMPT,
@@ -152,8 +146,6 @@ export const Agents = {
   deepwork: defineAgent({
     name: "deepwork",
     description: "Adversarial reviewer — used by counsel tool for cross-vendor review",
-    kind: "primary",
-    hidden: true,
     model: "openai/gpt-5.4" as ModelId,
     canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     systemPromptAddendum: DEEPWORK_PROMPT,
@@ -163,7 +155,6 @@ export const Agents = {
   explore: defineAgent({
     name: "explore",
     description: "Fast codebase exploration - finds files, searches patterns",
-    kind: "subagent",
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
@@ -173,7 +164,6 @@ export const Agents = {
   architect: defineAgent({
     name: "architect",
     description: "Designs implementation approaches",
-    kind: "subagent",
     model: "anthropic/claude-opus-4-6" as ModelId,
     allowedActions: ["read", "network"],
     systemPromptAddendum: ARCHITECT_PROMPT,
@@ -182,7 +172,6 @@ export const Agents = {
   librarian: defineAgent({
     name: "librarian",
     description: "Answers questions about external repos using local cached clones",
-    kind: "subagent",
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     systemPromptAddendum: LIBRARIAN_PROMPT,
@@ -190,8 +179,6 @@ export const Agents = {
 
   summarizer: defineAgent({
     name: "summarizer",
-    kind: "system",
-    hidden: true,
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: [],
     systemPromptAddendum: SUMMARIZER_PROMPT,
@@ -199,8 +186,6 @@ export const Agents = {
 
   title: defineAgent({
     name: "title",
-    kind: "system",
-    hidden: true,
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: [],
     temperature: 0.5,
@@ -209,7 +194,6 @@ export const Agents = {
   finder: defineAgent({
     name: "finder",
     description: "Fast multi-step codebase search via cheap model",
-    kind: "subagent",
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
@@ -219,7 +203,6 @@ export const Agents = {
   reviewer: defineAgent({
     name: "reviewer",
     description: "Structured code review with severity-graded comments",
-    kind: "subagent",
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
@@ -229,7 +212,6 @@ export const Agents = {
   auditor: defineAgent({
     name: "auditor",
     description: "Audits code for a specific concern category",
-    kind: "subagent",
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     allowedTools: ["bash"],
@@ -261,14 +243,14 @@ export interface AgentExecutionOverrides {
 
 export type BuiltinAgentName = keyof typeof Agents
 
-// Subagent depth
+// Agent run depth
 
 /**
  * Maximum session nesting depth for subagent spawns. Derived from the persisted
  * parent chain (includes both subagent spawns and handoff sessions). A depth of 3
  * means root → child → grandchild → great-grandchild is blocked.
  */
-export const DEFAULT_MAX_SUBAGENT_DEPTH = 3
+export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
 
 // Subagent runner types
 

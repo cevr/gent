@@ -10,7 +10,7 @@ import type { MemoryEntry } from "@gent/core/extensions/memory/vault"
 import { AgentDefinition } from "@gent/core/domain/agent"
 
 const deriveCtx = {
-  agent: new AgentDefinition({ name: "test" as never, kind: "primary" as const }),
+  agent: new AgentDefinition({ name: "test" as never }),
   allTools: [],
 }
 

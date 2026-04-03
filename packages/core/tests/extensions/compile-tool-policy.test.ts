@@ -38,13 +38,13 @@ describe("compileToolPolicy", () => {
   const names = (tools: ReadonlyArray<{ name: string }>) => tools.map((t) => t.name).sort()
 
   test("no allow-list → all tools", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
     expect(names(tools)).toEqual(names(allTools))
   })
 
   test("allowedActions filters by action", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedActions: ["read"] })
+    const agent = new AgentDefinition({ name: "cowork", allowedActions: ["read"] })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
     expect(names(tools)).toEqual(["glob", "grep", "read", "search_skills"])
   })
@@ -52,7 +52,6 @@ describe("compileToolPolicy", () => {
   test("allowedActions + allowedTools unions", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      kind: "primary",
       allowedActions: ["read"],
       allowedTools: ["bash"],
     })
@@ -61,7 +60,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("allowedTools: [] means no tools", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary", allowedTools: [] })
+    const agent = new AgentDefinition({ name: "cowork", allowedTools: [] })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
     expect(tools).toEqual([])
   })
@@ -69,7 +68,6 @@ describe("compileToolPolicy", () => {
   test("deniedTools removes from result", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      kind: "primary",
       allowedActions: ["read"],
       deniedTools: ["grep"],
     })
@@ -80,7 +78,6 @@ describe("compileToolPolicy", () => {
   test("multiple actions", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      kind: "primary",
       allowedActions: ["read", "network"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
@@ -88,7 +85,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("tag injection adds tools when tag matches", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const extra = makeTool("test_signal", "state")
     const tagInjections = [{ tag: "test-signal", tools: [extra] }]
     const ctx = { ...emptyCtx, tags: ["test-signal"] as ReadonlyArray<string> }
@@ -97,7 +94,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("tag injection skipped when tag absent", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const extra = makeTool("test_signal", "state")
     const tagInjections = [{ tag: "test-signal", tools: [extra] }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, tagInjections, [])
@@ -107,7 +104,6 @@ describe("compileToolPolicy", () => {
   test("extension projection include adds tools", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      kind: "primary",
       allowedActions: ["read"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
@@ -117,7 +113,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("extension projection exclude removes tools", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const projections = [{ toolPolicy: { exclude: ["bash", "write"] } }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
     expect(names(tools)).not.toContain("bash")
@@ -125,7 +121,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("extension projection overrideSet replaces tool list", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const projections = [{ toolPolicy: { overrideSet: ["read", "grep"] } }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)
     expect(names(tools)).toEqual(["grep", "read"])
@@ -134,7 +130,6 @@ describe("compileToolPolicy", () => {
   test("denied tools cannot be re-added by extension projection", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      kind: "primary",
       deniedTools: ["bash"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
@@ -143,7 +138,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("extension prompt sections collected", () => {
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const projections = [
       { promptSections: [{ id: "ext-a", content: "Section A", priority: 90 }] },
       { promptSections: [{ id: "ext-b", content: "Section B", priority: 91 }] },
@@ -164,7 +159,7 @@ describe("compileToolPolicy", () => {
       execute: () => Effect.succeed(null),
     })
     const nonInteractiveTool = makeTool("read", "read")
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const ctx = { ...emptyCtx, interactive: false as const }
     const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [], [])
     expect(names(tools)).toEqual(["read"])
@@ -181,7 +176,7 @@ describe("compileToolPolicy", () => {
       params: Schema.Struct({}),
       execute: () => Effect.succeed(null),
     })
-    const agent = new AgentDefinition({ name: "cowork", kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" })
     const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [], [])
     expect(names(tools)).toContain("ask_user")
   })

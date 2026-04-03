@@ -1,8 +1,8 @@
 /**
- * Memory extension agents — system agents for dreaming (reflect + meditate).
+ * Memory extension agents for dreaming (reflect + meditate).
  *
- * These agents are hidden from the agent switcher and invoked only by
- * the dream worker via headless mode (gent -H -a memory:reflect "...").
+ * They are normally invoked by the dream worker via headless mode
+ * (`gent -H -a memory:reflect "..."`).
  */
 
 import { defineAgent, type AgentName } from "../../domain/agent.js"
@@ -46,8 +46,6 @@ After processing, summarize what you extracted and stored.
 
 export const MemoryReflectAgent = defineAgent({
   name: "memory:reflect" as AgentName,
-  kind: "system",
-  hidden: true,
   model: "anthropic/claude-sonnet-4-6" as ModelId,
   description: "Review recent sessions and extract project-level memories",
   systemPromptAddendum: REFLECT_PROMPT,
@@ -84,8 +82,6 @@ Summarize: how many entries reviewed, merged, promoted, pruned.
 
 export const MemoryMeditateAgent = defineAgent({
   name: "memory:meditate" as AgentName,
-  kind: "system",
-  hidden: true,
   model: "anthropic/claude-sonnet-4-6" as ModelId,
   description: "Consolidate project memories, prune duplicates, promote to global principles",
   systemPromptAddendum: MEDITATE_PROMPT,

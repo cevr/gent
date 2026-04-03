@@ -22,12 +22,10 @@ const testProviders: ProviderContribution[] = [
 const testAgents = [
   new AgentDefinition({
     name: "cowork" as never,
-    kind: "primary",
     model: "anthropic/claude-opus-4-6" as never,
   }),
   new AgentDefinition({
     name: "deepwork" as never,
-    kind: "primary",
     model: "openai/gpt-5.4" as never,
   }),
 ]

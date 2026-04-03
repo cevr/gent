@@ -237,8 +237,6 @@ export interface ExtensionRegistryService {
   // Agent resolution
   readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
-  readonly listPrimaryAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
-  readonly listSubagents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
   // Provider resolution
   readonly getProvider: (id: string) => Effect.Effect<ProviderContribution | undefined>
@@ -251,7 +249,7 @@ export interface ExtensionRegistryService {
   ) => Effect.Effect<ReadonlyArray<unknown>>
 
   /** Resolve primary + reviewer model pair for dual-model workflows.
-   *  Tries cowork/deepwork by name, falls back to first two primary agents, dies if none. */
+   *  Tries cowork/deepwork by name, falls back to first two modeled agents, dies if none. */
   readonly resolveDualModelPair: () => Effect.Effect<[ModelId, ModelId]>
 
   // Prompt sections
@@ -304,10 +302,6 @@ export class ExtensionRegistry extends ServiceMap.Service<
           }
           return catalog
         }),
-      listPrimaryAgents: () =>
-        Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "primary")),
-      listSubagents: () =>
-        Effect.succeed([...resolved.agents.values()].filter((a) => a.kind === "subagent")),
       resolveDualModelPair: () =>
         Effect.gen(function* () {
           const cowork = resolved.agents.get("cowork")
@@ -315,23 +309,24 @@ export class ExtensionRegistry extends ServiceMap.Service<
           if (cowork !== undefined && deepwork !== undefined) {
             return [resolveAgentModel(cowork), resolveAgentModel(deepwork)] as [ModelId, ModelId]
           }
-          // Fallback: first two primary agents
-          const primaries = [...resolved.agents.values()].filter((a) => a.kind === "primary")
-          if (primaries.length >= 2) {
-            const first = primaries[0]
-            const second = primaries[1]
+          const modeledAgents = [...resolved.agents.values()].filter(
+            (agent) => agent.model !== undefined,
+          )
+          if (modeledAgents.length >= 2) {
+            const first = modeledAgents[0]
+            const second = modeledAgents[1]
             if (first !== undefined && second !== undefined) {
               return [resolveAgentModel(first), resolveAgentModel(second)] as [ModelId, ModelId]
             }
           }
-          if (primaries.length === 1) {
-            const only = primaries[0]
+          if (modeledAgents.length === 1) {
+            const only = modeledAgents[0]
             if (only !== undefined) {
               return [resolveAgentModel(only), resolveAgentModel(only)] as [ModelId, ModelId]
             }
           }
           return yield* Effect.die(
-            "No primary agents registered — dual-model workflows require at least one primary agent",
+            "No modeled agents registered — dual-model workflows require at least one agent with a model",
           )
         }),
       listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),

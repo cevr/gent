@@ -4,8 +4,6 @@ import { MemoryReflectAgent, MemoryMeditateAgent } from "@gent/core/extensions/m
 describe("memory agents", () => {
   test("reflect agent has correct properties", () => {
     expect(MemoryReflectAgent.name).toBe("memory:reflect")
-    expect(MemoryReflectAgent.kind).toBe("system")
-    expect(MemoryReflectAgent.hidden).toBe(true)
     expect(MemoryReflectAgent.model).toBeDefined()
     expect(MemoryReflectAgent.systemPromptAddendum).toBeDefined()
     expect(MemoryReflectAgent.systemPromptAddendum!.length).toBeGreaterThan(100)
@@ -24,8 +22,6 @@ describe("memory agents", () => {
 
   test("meditate agent has correct properties", () => {
     expect(MemoryMeditateAgent.name).toBe("memory:meditate")
-    expect(MemoryMeditateAgent.kind).toBe("system")
-    expect(MemoryMeditateAgent.hidden).toBe(true)
     expect(MemoryMeditateAgent.model).toBeDefined()
     expect(MemoryMeditateAgent.systemPromptAddendum).toBeDefined()
   })

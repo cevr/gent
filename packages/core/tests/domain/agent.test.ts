@@ -2,9 +2,8 @@ import { describe, test, expect } from "bun:test"
 import { Agents, resolveAgentModel } from "@gent/core/domain/agent"
 
 describe("Built-in Agent Definitions", () => {
-  test("auditor agent exists and is a subagent", () => {
+  test("auditor agent exists", () => {
     expect(Agents.auditor).toBeDefined()
-    expect(Agents.auditor.kind).toBe("subagent")
     expect(Agents.auditor.name).toBe("auditor")
   })
 
@@ -12,9 +11,9 @@ describe("Built-in Agent Definitions", () => {
     expect(Agents.cowork.canDelegateToAgents).toContain("auditor")
   })
 
-  test("deepwork is hidden primary (reviewer only)", () => {
-    expect(Agents.deepwork.kind).toBe("primary")
-    expect(Agents.deepwork.hidden).toBe(true)
+  test("deepwork is available for reviewer workflows", () => {
+    expect(Agents.deepwork.name).toBe("deepwork")
+    expect(resolveAgentModel(Agents.deepwork)).toBeDefined()
   })
 
   test("auditor has read + bash tools", () => {

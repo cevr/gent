@@ -173,14 +173,12 @@ export interface SimpleToolDef {
 
 export interface SimpleAgentDef {
   readonly name: string
-  readonly kind?: "primary" | "subagent" | "system"
   readonly model: string
   readonly systemPromptAddendum?: string
   readonly description?: string
   readonly allowedTools?: ReadonlyArray<string>
   readonly deniedTools?: ReadonlyArray<string>
   readonly temperature?: number
-  readonly hidden?: boolean
 }
 
 // ── Simple Event (curated subset of AgentEvent for external authors) ──
@@ -457,14 +455,12 @@ const convertSimpleTool = (def: SimpleToolDef): AnyToolDefinition =>
 const convertSimpleAgent = (def: SimpleAgentDef): AgentDefinition =>
   defineAgent({
     name: def.name,
-    kind: def.kind ?? "subagent",
     model: def.model as never,
     systemPromptAddendum: def.systemPromptAddendum,
     description: def.description,
     allowedTools: def.allowedTools,
     deniedTools: def.deniedTools,
     temperature: def.temperature,
-    hidden: def.hidden,
   })
 
 /** Extract sessionId/branchId from hook input for effect draining */

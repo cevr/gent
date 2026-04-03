@@ -20,8 +20,8 @@ const makeTool = (name: string, action: ToolAction = "read"): AnyToolDefinition 
   execute: () => Effect.void,
 })
 
-const makeAgent = (name: string, kind: "primary" | "subagent" | "system" = "subagent") =>
-  new AgentDefinition({ name: name as never, kind })
+const makeAgent = (name: string, options?: ConstructorParameters<typeof AgentDefinition>[0]) =>
+  new AgentDefinition({ name: name as never, ...options })
 
 const makeProvider = (providerId: string, name?: string): ProviderContribution => ({
   id: providerId,
@@ -98,7 +98,6 @@ describe("resolveExtensions", () => {
     const builtinExplore = makeAgent("explore")
     const projectExplore = new AgentDefinition({
       name: "explore" as never,
-      kind: "subagent",
       description: "project explore",
     })
 
@@ -215,7 +214,9 @@ describe("resolveExtensions — disabled filtering", () => {
   test("disabled extensions agents are excluded", () => {
     const disabledSet = new Set(["@gent/agents"])
     const extensions = [
-      makeExt("@gent/agents", "builtin", { agents: [makeAgent("cowork", "primary")] }),
+      makeExt("@gent/agents", "builtin", {
+        agents: [makeAgent("cowork", { model: "anthropic/claude-opus-4-6" as never })],
+      }),
       makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
     ]
     const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
@@ -242,7 +243,9 @@ describe("resolveExtensions — disabled filtering", () => {
     const disabledSet = new Set(["@gent/task-tools", "@gent/agents", "@gent/openai"])
     const extensions = [
       makeExt("@gent/task-tools", "builtin", { tools: [makeTool("add_todo")] }),
-      makeExt("@gent/agents", "builtin", { agents: [makeAgent("cowork", "primary")] }),
+      makeExt("@gent/agents", "builtin", {
+        agents: [makeAgent("cowork", { model: "anthropic/claude-opus-4-6" as never })],
+      }),
       makeExt("@gent/openai", "builtin", { providers: [makeProvider("openai")] }),
       makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
     ]
@@ -294,30 +297,26 @@ describe("ExtensionRegistry", () => {
     expect(agent?.name).toBe("explore")
   })
 
-  test("listPrimaryAgents includes hidden primary agents", async () => {
-    const primary = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
-    const sub = makeAgent("explore", "subagent")
-    const hidden = new AgentDefinition({ name: "deepwork" as never, kind: "primary", hidden: true })
+  test("listAgents returns all registered agents", async () => {
+    const cowork = new AgentDefinition({
+      name: "cowork" as never,
+      model: "anthropic/claude-opus-4-6" as never,
+    })
+    const explore = makeAgent("explore")
+    const deepwork = new AgentDefinition({
+      name: "deepwork" as never,
+      model: "openai/gpt-5.4" as never,
+    })
 
     const registry = await buildRegistry([
-      makeExt("a", "builtin", { agents: [primary, sub, hidden] }),
+      makeExt("a", "builtin", { agents: [cowork, explore, deepwork] }),
     ])
 
-    const primaryAgents = await Effect.runPromise(registry.listPrimaryAgents())
-    expect(primaryAgents.length).toBe(2)
-    expect(primaryAgents.map((a) => a.name)).toContain("cowork")
-    expect(primaryAgents.map((a) => a.name)).toContain("deepwork")
-  })
-
-  test("listSubagents filters correctly", async () => {
-    const primary = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
-    const sub = makeAgent("explore", "subagent")
-
-    const registry = await buildRegistry([makeExt("a", "builtin", { agents: [primary, sub] })])
-
-    const subagents = await Effect.runPromise(registry.listSubagents())
-    expect(subagents.length).toBe(1)
-    expect(subagents[0]?.name).toBe("explore")
+    const agents = await Effect.runPromise(registry.listAgents())
+    expect(agents.length).toBe(3)
+    expect(agents.map((a) => a.name)).toContain("cowork")
+    expect(agents.map((a) => a.name)).toContain("explore")
+    expect(agents.map((a) => a.name)).toContain("deepwork")
   })
 
   test("resolveToolPolicy filters by allowedActions", async () => {
@@ -325,7 +324,6 @@ describe("ExtensionRegistry", () => {
     const bashTool = makeTool("bash", "exec")
     const agent = new AgentDefinition({
       name: "explore" as never,
-      kind: "subagent",
       allowedActions: ["read"],
     })
 
@@ -344,7 +342,6 @@ describe("ExtensionRegistry", () => {
     const editTool = makeTool("edit", "edit")
     const agent = new AgentDefinition({
       name: "explore" as never,
-      kind: "subagent",
       allowedActions: ["read"],
       allowedTools: ["bash"],
     })
@@ -365,7 +362,6 @@ describe("ExtensionRegistry", () => {
     const writeTool = makeTool("write", "read")
     const agent = new AgentDefinition({
       name: "cowork" as never,
-      kind: "primary",
       deniedTools: ["write"],
     })
 
@@ -382,7 +378,7 @@ describe("ExtensionRegistry", () => {
   test("tagInjections inject tools when tag matches", async () => {
     const readTool = makeTool("read", "read")
     const signalTool = makeTool("test_signal", "state")
-    const agent = new AgentDefinition({ name: "cowork" as never, kind: "primary" })
+    const agent = new AgentDefinition({ name: "cowork" as never })
 
     const registry = await buildRegistry([
       makeExt("core", "builtin", { tools: [readTool] }),
@@ -410,7 +406,6 @@ describe("ExtensionRegistry", () => {
     const secretTool = makeTool("secret", "read")
     const agent = new AgentDefinition({
       name: "cowork" as never,
-      kind: "primary",
       deniedTools: ["secret"],
     })
 

@@ -32,6 +32,27 @@ describe("Delegate Tool", () => {
     )
   })
 
+  it.live("delegates to any registered agent when no caller allow-list applies", () => {
+    const layer = createToolTestLayer({
+      subagentRunner: {
+        run: (params) =>
+          Effect.succeed({
+            _tag: "success" as const,
+            text: `${params.agent.name}:${params.prompt}`,
+            sessionId: "child-session",
+            agentName: params.agent.name,
+          }),
+      },
+    })
+
+    return DelegateTool.execute({ agent: "cowork", task: "hello" }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.output).toBe("cowork:hello\n\nFull session: session://child-session")
+      }),
+      Effect.provide(layer),
+    )
+  })
+
   it.live("chain mode appends session refs for all steps", () => {
     let stepIdx = 0
     const layer = createToolTestLayer({

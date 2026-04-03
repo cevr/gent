@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Exit } from "effect"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch } from "@gent/core/domain/message"
-import { DEFAULT_MAX_SUBAGENT_DEPTH } from "@gent/core/domain/agent"
+import { DEFAULT_MAX_AGENT_RUN_DEPTH } from "@gent/core/domain/agent"
 import { getSessionDepth } from "@gent/core/runtime/agent/subagent-runner"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 
@@ -90,11 +90,11 @@ describe("getSessionDepth", () => {
     await run(
       Effect.gen(function* () {
         const storage = yield* Storage
-        yield* buildSessionChain(storage, DEFAULT_MAX_SUBAGENT_DEPTH)
+        yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
 
-        const deepest = `s${DEFAULT_MAX_SUBAGENT_DEPTH}` as SessionId
+        const deepest = `s${DEFAULT_MAX_AGENT_RUN_DEPTH}` as SessionId
         const depth = yield* getSessionDepth(deepest, storage)
-        expect(depth).toBe(DEFAULT_MAX_SUBAGENT_DEPTH)
+        expect(depth).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH)
       }),
     )
   })
@@ -105,12 +105,12 @@ describe("depth guard behavior", () => {
     await run(
       Effect.gen(function* () {
         const storage = yield* Storage
-        yield* buildSessionChain(storage, DEFAULT_MAX_SUBAGENT_DEPTH)
+        yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
 
-        // The deepest session is at DEFAULT_MAX_SUBAGENT_DEPTH — spawning from it should be blocked
-        const parentId = `s${DEFAULT_MAX_SUBAGENT_DEPTH}` as SessionId
+        // The deepest session is at DEFAULT_MAX_AGENT_RUN_DEPTH — spawning from it should be blocked
+        const parentId = `s${DEFAULT_MAX_AGENT_RUN_DEPTH}` as SessionId
         const parentDepth = yield* getSessionDepth(parentId, storage)
-        expect(parentDepth >= DEFAULT_MAX_SUBAGENT_DEPTH).toBe(true)
+        expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
       }),
     )
   })
@@ -119,11 +119,11 @@ describe("depth guard behavior", () => {
     await run(
       Effect.gen(function* () {
         const storage = yield* Storage
-        yield* buildSessionChain(storage, DEFAULT_MAX_SUBAGENT_DEPTH - 1)
+        yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
 
-        const parentId = `s${DEFAULT_MAX_SUBAGENT_DEPTH - 1}` as SessionId
+        const parentId = `s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}` as SessionId
         const parentDepth = yield* getSessionDepth(parentId, storage)
-        expect(parentDepth < DEFAULT_MAX_SUBAGENT_DEPTH).toBe(true)
+        expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
       }),
     )
   })
@@ -144,8 +144,8 @@ describe("depth guard behavior", () => {
   })
 })
 
-describe("DEFAULT_MAX_SUBAGENT_DEPTH", () => {
+describe("DEFAULT_MAX_AGENT_RUN_DEPTH", () => {
   test("is 3", () => {
-    expect(DEFAULT_MAX_SUBAGENT_DEPTH).toBe(3)
+    expect(DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(3)
   })
 })

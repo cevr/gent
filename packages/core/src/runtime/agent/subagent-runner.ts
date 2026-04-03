@@ -10,7 +10,7 @@ import {
   SubagentSpawned,
 } from "../../domain/event.js"
 import {
-  DEFAULT_MAX_SUBAGENT_DEPTH,
+  DEFAULT_MAX_AGENT_RUN_DEPTH,
   SubagentError,
   SubagentRunnerService,
   type SubagentToolCall,
@@ -231,9 +231,9 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
   }) =>
     Effect.gen(function* () {
       const parentDepth = yield* getSessionDepth(params.parentSessionId, storage)
-      if (parentDepth >= DEFAULT_MAX_SUBAGENT_DEPTH) {
+      if (parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH) {
         return yield* new SubagentError({
-          message: `Subagent depth limit reached (max ${DEFAULT_MAX_SUBAGENT_DEPTH}). Cannot spawn "${params.agent.name}" — parent session is already at depth ${parentDepth}.`,
+          message: `Agent run depth limit reached (max ${DEFAULT_MAX_AGENT_RUN_DEPTH}). Cannot spawn "${params.agent.name}" — parent session is already at depth ${parentDepth}.`,
         })
       }
 
@@ -393,6 +393,7 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                   prompt: params.prompt,
                   systemPrompt: runnerConfig.systemPrompt,
+                  interactive: false,
                   ...buildRunInputOverrides(params.overrides),
                 })
 

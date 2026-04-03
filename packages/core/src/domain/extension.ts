@@ -67,6 +67,7 @@ export type Interceptor<I, O, E = never, R = never> = (
 export interface SystemPromptInput {
   readonly basePrompt: string
   readonly agent: AgentDefinition
+  readonly interactive?: boolean
 }
 
 export interface ToolExecuteInput {

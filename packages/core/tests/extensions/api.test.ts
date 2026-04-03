@@ -448,7 +448,6 @@ describe("extension full-power methods", () => {
     const { AgentDefinition } = await import("@gent/core/domain/agent")
     const fullAgent = new AgentDefinition({
       name: "full-agent",
-      kind: "subagent",
     })
 
     const ext = extension("full-agent-test", (b) => {

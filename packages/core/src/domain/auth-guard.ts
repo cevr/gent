@@ -31,14 +31,15 @@ export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()
       const authStore = yield* AuthStore
       const extensionRegistry = yield* ExtensionRegistry
 
-      // Derive required providers from all primary agents' model prefixes,
+      // Derive required providers from all modeled agents' model prefixes,
       // intersected with registered provider IDs (supports extension-contributed agents)
-      const agents = yield* extensionRegistry.listPrimaryAgents()
+      const agents = yield* extensionRegistry.listAgents()
       const registeredProviders = yield* extensionRegistry.listProviders()
       const registeredIds = new Set(registeredProviders.map((p) => p.id))
       const requiredProviders: ProviderId[] = []
       const seen = new Set<string>()
       for (const agent of agents) {
+        if (agent.model === undefined) continue
         const modelId = resolveAgentModel(agent)
         const provider = parseModelProvider(modelId)
         if (provider !== undefined && registeredIds.has(provider) && !seen.has(provider)) {

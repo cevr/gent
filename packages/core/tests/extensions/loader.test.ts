@@ -45,7 +45,6 @@ const makeLoaded = (
             (name) =>
               ({
                 name,
-                kind: "subagent",
               }) as never,
           )
         : undefined,

@@ -270,7 +270,7 @@ const resolveTurnContext = (params: {
     const turnPrompt = buildTurnPrompt(params.baseSections, agent, tools, extensionSections)
     const systemPrompt = yield* params.extensionRegistry.hooks.runInterceptor(
       "prompt.system",
-      { basePrompt: turnPrompt, agent },
+      { basePrompt: turnPrompt, agent, interactive: params.interactive },
       (input) => Effect.succeed(input.basePrompt),
     )
     const session = yield* params.storage
@@ -936,9 +936,7 @@ const resolveStoredAgent = (params: {
         ? latestAgentEvent.toAgent
         : undefined
 
-    const agent = Schema.is(AgentName)(raw) ? raw : "cowork"
-    // Normalize: deepwork is no longer user-selectable, fall back to cowork
-    return agent === "deepwork" ? "cowork" : agent
+    return Schema.is(AgentName)(raw) ? raw : "cowork"
   })
 
 const applyAgentOverrides = (agent: AgentDefinition, input: AgentRunInput): AgentDefinition => {
@@ -1919,6 +1917,7 @@ const AgentRunInputFields = {
   agentName: AgentName,
   prompt: Schema.String,
   systemPrompt: Schema.String,
+  interactive: Schema.optional(Schema.Boolean),
   modelId: Schema.optional(Schema.String),
   overrideAllowedActions: Schema.optional(Schema.Array(Schema.String)),
   overrideAllowedTools: Schema.optional(Schema.Array(Schema.String)),
@@ -2079,7 +2078,7 @@ export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService
             )
             const basePrompt = yield* extensionRegistry.hooks.runInterceptor(
               "prompt.system",
-              { basePrompt: turnPrompt, agent: effectiveAgent },
+              { basePrompt: turnPrompt, agent: effectiveAgent, interactive: input.interactive },
               (i) => Effect.succeed(i.basePrompt),
             )
 

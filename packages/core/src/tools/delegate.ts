@@ -40,12 +40,12 @@ export const DelegateTool = defineTool({
   action: "delegate",
   concurrency: "serial",
   description:
-    "Delegate work to specialized subagents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
+    "Delegate work to specialized agents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",
   promptSnippet: "Delegate work to specialized subagents",
   promptGuidelines: [
     "Use for work that benefits from specialized focus or parallelism",
     "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
-    "Each task prompt must be self-contained — subagents have no conversation history",
+    "Each task prompt must be self-contained — delegated agents have no conversation history",
   ],
   params: DelegateParams,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
@@ -74,9 +74,6 @@ export const DelegateTool = defineTool({
         Effect.map((agent) => {
           if (agent === undefined) {
             return { ok: false as const, error: `Unknown agent: ${agentName}` }
-          }
-          if (agent.kind !== "subagent") {
-            return { ok: false as const, error: `Not a subagent: ${agentName}` }
           }
           if (!ensureAllowed(agent.name)) {
             return { ok: false as const, error: `Not allowed to delegate to: ${agentName}` }

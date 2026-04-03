@@ -10,7 +10,6 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const tinyAgent = defineAgent({
   name: "tiny",
-  kind: "primary",
   model: "test/tiny" as never,
   systemPromptAddendum: "test",
 })

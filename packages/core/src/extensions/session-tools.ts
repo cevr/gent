@@ -16,7 +16,7 @@ export const SessionToolsExtension = extension("@gent/session-tools", (ext) => {
     defineInterceptor(
       "prompt.system",
       (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
-        input.agent.kind === "system"
+        input.interactive === false
           ? next(input)
           : next({ ...input, basePrompt: input.basePrompt + NAMING_INSTRUCTION }),
     ),
