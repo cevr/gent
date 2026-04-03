@@ -72,6 +72,7 @@ function AppContent(props: AppProps) {
             client={client.client}
             runtime={client.runtime}
             log={client.log}
+            agentName={client.agent()}
             enforceAuth={authGateActive()}
             onResolved={() => setAuthGateActive(false)}
           />

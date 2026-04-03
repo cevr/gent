@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onMount, For, Show } from "solid-js"
+import { createSignal, createEffect, on, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -18,6 +18,7 @@ export interface AuthProps {
   client: GentNamespacedClient
   runtime: GentRuntime
   log: ClientLog
+  agentName?: string
   enforceAuth?: boolean
   onResolved?: () => void
 }
@@ -50,8 +51,15 @@ export function Auth(props: AuthProps) {
 
   useScrollSync(() => `auth-provider-${state().providerIndex}`, { getRef: () => scrollRef })
 
-  // Initial load
-  onMount(() => loadAuth())
+  createEffect(
+    on(
+      () => props.agentName,
+      () => {
+        loadAuth()
+      },
+      { defer: false },
+    ),
+  )
 
   // ── Side effects ──
 
@@ -59,7 +67,12 @@ export function Auth(props: AuthProps) {
     props.log.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
-      Effect.all([props.client.auth.listProviders({}), props.client.auth.listMethods()]).pipe(
+      Effect.all([
+        props.client.auth.listProviders({
+          ...(props.agentName !== undefined ? { agentName: props.agentName } : {}),
+        }),
+        props.client.auth.listMethods(),
+      ]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
             props.log.info("auth:load-complete", { providers: loadedProviders.length })
