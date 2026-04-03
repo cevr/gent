@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { FinishChunk, Provider, TextChunk } from "@gent/core/providers/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner } from "@gent/core/runtime/agent/agent-runner"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
@@ -15,7 +16,19 @@ import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
+
+const testRegistryLayer = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents) },
+    },
+  ]),
+)
 
 describe("AgentExecutionOverrides", () => {
   test("resolveDualModelPair returns cowork/deepwork models from registry", () => {
@@ -52,6 +65,9 @@ describe("AgentExecutionOverrides", () => {
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: (input) => {
           capturedInput = input
@@ -88,6 +104,7 @@ describe("AgentExecutionOverrides", () => {
           parentSessionId: "s1" as SessionId,
           parentBranchId: "b1" as BranchId,
           cwd: "/tmp",
+          persistence: "durable",
           overrides: {
             modelId: "custom/model" as ModelId,
             allowedActions: ["read", "edit"],
@@ -118,6 +135,9 @@ describe("AgentRunner", () => {
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.void,
         submit: () => Effect.void,
@@ -162,6 +182,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
+          persistence: "durable",
         })
 
         const calls = yield* recorder.getCalls()
@@ -178,6 +199,9 @@ describe("AgentRunner", () => {
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.fail(new AgentRunError({ message: "permanent failure" })),
         submit: () => Effect.void,
@@ -221,6 +245,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
+          persistence: "durable",
         })
 
         // Without retry, failure propagates as error result
@@ -232,6 +257,9 @@ describe("AgentRunner", () => {
   test("fails with timeout", async () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.sleep("50 millis"),
         submit: () => Effect.void,
@@ -274,11 +302,140 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
+          persistence: "durable",
         })
       }).pipe(Effect.provide(layer)),
     )
 
     expect(result._tag).toBe("error")
     expect(result.error).toContain("timed out")
+  })
+
+  test("ephemeral helper runs do not persist child sessions", async () => {
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      EventStore.Test(),
+      testRegistryLayer,
+      Provider.Test([
+        [new TextChunk({ text: "ephemeral response" }), new FinishChunk({ finishReason: "stop" })],
+      ]),
+      ToolRunner.Test(),
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.void,
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
+      }),
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        const session = new Session({
+          id: "parent-session-ephemeral",
+          name: "Parent",
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "parent-branch-ephemeral",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        const runResult = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "scan repo",
+          parentSessionId: session.id,
+          parentBranchId: branch.id,
+          cwd: process.cwd(),
+        })
+
+        const sessions = yield* storage.listSessions()
+        return { runResult, sessions }
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.runResult._tag).toBe("success")
+    if (result.runResult._tag === "success") {
+      expect(result.runResult.persistence).toBe("ephemeral")
+      expect(result.runResult.text).toContain("ephemeral response")
+    }
+    expect(result.sessions.map((session) => session.id)).toEqual(["parent-session-ephemeral"])
+  })
+
+  test("durable override persists child sessions for helper agents", async () => {
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.void,
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
+      }),
+      EventStore.Test(),
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        const session = new Session({
+          id: "parent-session-durable",
+          name: "Parent",
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "parent-branch-durable",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        const runResult = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "persist this child",
+          parentSessionId: session.id,
+          parentBranchId: branch.id,
+          cwd: process.cwd(),
+          persistence: "durable",
+        })
+
+        const sessions = yield* storage.listSessions()
+        return { runResult, sessions }
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.runResult._tag).toBe("success")
+    if (result.runResult._tag === "success") {
+      expect(result.runResult.persistence).toBe("durable")
+    }
+    expect(result.sessions).toHaveLength(2)
   })
 })

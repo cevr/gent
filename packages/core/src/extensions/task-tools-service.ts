@@ -314,6 +314,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             parentBranchId,
             toolCallId: taskToolCallId,
             cwd: task.cwd ?? platform.cwd,
+            persistence: "durable",
           })
 
           // Clean up the event capture fiber

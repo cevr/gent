@@ -20,13 +20,15 @@ describe("Delegate Tool", () => {
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: "child-session",
             agentName: params.agent.name,
+            persistence: "ephemeral" as const,
           }),
       },
     })
 
     return DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(
       Effect.map((result) => {
-        expect(result.output).toBe("explore:hello\n\nFull session: session://child-session")
+        expect(result.output).toBe("explore:hello")
+        expect(result.metadata?.sessionId).toBeUndefined()
       }),
       Effect.provide(layer),
     )
@@ -41,6 +43,7 @@ describe("Delegate Tool", () => {
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: "child-session",
             agentName: params.agent.name,
+            persistence: "durable" as const,
           }),
       },
     })
@@ -53,7 +56,7 @@ describe("Delegate Tool", () => {
     )
   })
 
-  it.live("chain mode appends session refs for all steps", () => {
+  it.live("chain mode omits session refs for ephemeral helper runs", () => {
     let stepIdx = 0
     const layer = createToolTestLayer({
       subagentRunner: {
@@ -64,6 +67,7 @@ describe("Delegate Tool", () => {
             text: `step-${idx}`,
             sessionId: `session-${idx}`,
             agentName: params.agent.name,
+            persistence: "ephemeral" as const,
           })
         },
       },
@@ -78,13 +82,13 @@ describe("Delegate Tool", () => {
       ctx,
     ).pipe(
       Effect.map((result) => {
-        expect(result.output).toContain("Full sessions: session://session-0, session://session-1")
+        expect(result.output).toBe("step-1")
       }),
       Effect.provide(layer),
     )
   })
 
-  it.live("parallel mode appends session refs for successes", () => {
+  it.live("parallel mode omits session refs for ephemeral helper runs", () => {
     let callIdx = 0
     const layer = createToolTestLayer({
       subagentRunner: {
@@ -95,6 +99,7 @@ describe("Delegate Tool", () => {
             text: `result-${idx}`,
             sessionId: `session-${idx}`,
             agentName: params.agent.name,
+            persistence: "ephemeral" as const,
           })
         },
       },
@@ -110,8 +115,8 @@ describe("Delegate Tool", () => {
     ).pipe(
       Effect.map((result) => {
         expect(result.output).toContain("2/2 succeeded")
-        expect(result.output).toContain("Full sessions:")
-        expect(result.output).toContain("session://session-")
+        expect(result.output).not.toContain("Full sessions:")
+        expect(result.output).not.toContain("session://session-")
       }),
       Effect.provide(layer),
     )

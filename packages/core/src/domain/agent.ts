@@ -19,6 +19,9 @@ export const ReasoningEffort = Schema.Literals([
 ])
 export type ReasoningEffort = typeof ReasoningEffort.Type
 
+export const AgentPersistence = Schema.Literals(["durable", "ephemeral"])
+export type AgentPersistence = typeof AgentPersistence.Type
+
 export const ToolAction = Schema.Literals([
   "read",
   "edit",
@@ -43,6 +46,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   temperature: Schema.optional(Schema.Number),
   reasoningEffort: Schema.optional(ReasoningEffort),
   canDelegateToAgents: Schema.optional(Schema.Array(AgentName)),
+  persistence: Schema.optional(AgentPersistence),
 }) {}
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
@@ -159,6 +163,7 @@ export const Agents = {
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: EXPLORE_PROMPT,
+    persistence: "ephemeral",
   }),
 
   architect: defineAgent({
@@ -175,6 +180,7 @@ export const Agents = {
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedActions: ["read"],
     systemPromptAddendum: LIBRARIAN_PROMPT,
+    persistence: "ephemeral",
   }),
 
   summarizer: defineAgent({
@@ -182,6 +188,7 @@ export const Agents = {
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: [],
     systemPromptAddendum: SUMMARIZER_PROMPT,
+    persistence: "ephemeral",
   }),
 
   title: defineAgent({
@@ -189,6 +196,7 @@ export const Agents = {
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: [],
     temperature: 0.5,
+    persistence: "ephemeral",
   }),
 
   finder: defineAgent({
@@ -198,6 +206,7 @@ export const Agents = {
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: FINDER_PROMPT,
+    persistence: "ephemeral",
   }),
 
   reviewer: defineAgent({
@@ -207,6 +216,7 @@ export const Agents = {
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: REVIEWER_PROMPT,
+    persistence: "ephemeral",
   }),
 
   auditor: defineAgent({
@@ -216,6 +226,7 @@ export const Agents = {
     allowedActions: ["read"],
     allowedTools: ["bash"],
     systemPromptAddendum: AUDITOR_PROMPT,
+    persistence: "ephemeral",
   }),
 } as const
 
@@ -225,6 +236,11 @@ export const DEFAULT_MODEL_ID = "openai/gpt-5.4-mini" as ModelId
 /** Resolve model for an agent definition */
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
+
+export const resolveAgentPersistence = (
+  agent: AgentDefinition,
+  override?: AgentPersistence,
+): AgentPersistence => override ?? agent.persistence ?? "durable"
 
 // Agent Execution Overrides — per-run overrides for agent dispatch
 
@@ -277,6 +293,7 @@ export type AgentRunResult =
       text: string
       sessionId: SessionId
       agentName: AgentName
+      persistence?: AgentPersistence
       usage?: { input: number; output: number; cost?: number }
       toolCalls?: ReadonlyArray<AgentRunToolCall>
     }
@@ -285,7 +302,13 @@ export type AgentRunResult =
       error: string
       sessionId?: SessionId
       agentName?: AgentName
+      persistence?: AgentPersistence
     }
+
+export const getDurableAgentRunSessionId = (result: AgentRunResult): SessionId | undefined =>
+  result.sessionId !== undefined && (result.persistence ?? "durable") === "durable"
+    ? result.sessionId
+    : undefined
 
 export class AgentRunError extends Schema.TaggedErrorClass<AgentRunError>()("AgentRunError", {
   message: Schema.String,
@@ -301,6 +324,7 @@ export interface AgentRunner {
     toolCallId?: ToolCallId
     cwd: string
     overrides?: AgentExecutionOverrides
+    persistence?: AgentPersistence
   }) => EffectNs.Effect<AgentRunResult, AgentRunError>
 }
 

@@ -3,9 +3,11 @@ import { defineTool } from "../domain/tool.js"
 import {
   AgentName,
   AgentRunnerService,
-  type AgentRunResult,
+  getDurableAgentRunSessionId,
   type AgentRunError,
+  type AgentRunResult,
 } from "../domain/agent.js"
+import type { SessionId } from "../domain/ids.js"
 import type { Task } from "../domain/task.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { TaskProtocol } from "../extensions/task-tools-protocol.js"
@@ -180,7 +182,7 @@ export const DelegateTool = defineTool({
         results.push(result)
         if (result._tag === "error") {
           return {
-            error: appendSessionRef(result.error, result.sessionId),
+            error: appendSessionRef(result.error, getDurableAgentRunSessionId(result)),
             metadata: { mode: "chain" as const, results },
           }
         }
@@ -189,7 +191,9 @@ export const DelegateTool = defineTool({
 
       const chainSessionRefs = results
         .filter((r): r is Extract<AgentRunResult, { _tag: "success" }> => r._tag === "success")
-        .map((r) => `session://${r.sessionId}`)
+        .map((r) => getDurableAgentRunSessionId(r))
+        .filter((sessionId): sessionId is SessionId => sessionId !== undefined)
+        .map((sessionId) => `session://${sessionId}`)
         .join(", ")
       const output =
         chainSessionRefs.length > 0
@@ -233,7 +237,11 @@ export const DelegateTool = defineTool({
       const successes = results.filter(
         (r): r is Extract<AgentRunResult, { _tag: "success" }> => r._tag === "success",
       )
-      const parallelSessionRefs = successes.map((r) => `session://${r.sessionId}`).join(", ")
+      const parallelSessionRefs = successes
+        .map((r) => getDurableAgentRunSessionId(r))
+        .filter((sessionId): sessionId is SessionId => sessionId !== undefined)
+        .map((sessionId) => `session://${sessionId}`)
+        .join(", ")
       const output =
         parallelSessionRefs.length > 0
           ? `Parallel: ${successes.length}/${results.length} succeeded\n\nFull sessions: ${parallelSessionRefs}`
@@ -258,14 +266,18 @@ export const DelegateTool = defineTool({
       })
 
       if (result._tag === "error") {
-        return { error: appendSessionRef(result.error, result.sessionId) }
+        return { error: appendSessionRef(result.error, getDurableAgentRunSessionId(result)) }
       }
 
+      const sessionId = getDurableAgentRunSessionId(result)
       return {
-        output: `${result.text}\n\nFull session: session://${result.sessionId}`,
+        output:
+          sessionId !== undefined
+            ? `${result.text}\n\nFull session: session://${sessionId}`
+            : result.text,
         metadata: {
           mode: "single" as const,
-          sessionId: result.sessionId,
+          sessionId,
           agentName: result.agentName,
           usage: result.usage,
           toolCalls: result.toolCalls,

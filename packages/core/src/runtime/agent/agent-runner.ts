@@ -13,14 +13,25 @@ import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   AgentRunError,
   AgentRunnerService,
+  resolveAgentPersistence,
   type AgentRunResult,
   type AgentRunToolCall,
+  type AgentPersistence,
   type AgentExecutionOverrides,
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
 import type { SessionId, BranchId, ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentLoop } from "./agent-loop"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { ToolRunner, type ToolRunnerService } from "./tool-runner.js"
+import { Provider, type ProviderService } from "../../providers/provider.js"
+import {
+  ExtensionStateRuntime,
+  type ExtensionStateRuntimeService,
+} from "../extensions/state-runtime.js"
+import { EventStoreLive } from "../event-store-live.js"
+import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
   usage?: { input: number; output: number }
@@ -89,6 +100,7 @@ export interface AgentRunnerConfig {
   readonly subprocessBinaryPath?: string
   readonly dbPath?: string
   readonly timeoutMs?: number
+  readonly baseSections?: ReadonlyArray<PromptSection>
 }
 
 const latestAssistantText = (messages: ReadonlyArray<Message>) => {
@@ -106,11 +118,13 @@ const buildAgentRunSuccess = (params: {
   sessionId: SessionId
   agentName: string
   meta: ChildMetadata
+  persistence: AgentPersistence
 }) => ({
   _tag: "success" as const,
   text: params.text,
   sessionId: params.sessionId,
   agentName: params.agentName,
+  persistence: params.persistence,
   usage: params.meta.usage,
   toolCalls: params.meta.toolCalls,
 })
@@ -127,6 +141,7 @@ const withAgentRunFailureHandling = <E, R>(
     toolCallId?: ToolCallId
     sessionId: SessionId
     agentName: string
+    persistence: AgentPersistence
     spanName: string
   },
   publishFailed: (params: {
@@ -151,6 +166,7 @@ const withAgentRunFailureHandling = <E, R>(
           error,
           sessionId: params.sessionId,
           agentName: params.agentName,
+          persistence: params.persistence,
         }
       })
     }),
@@ -182,6 +198,44 @@ const normalizeOverrides = (overrides: AgentExecutionOverrides | undefined) =>
         ...(overrides.tags !== undefined ? { tags: overrideArray(overrides.tags) } : {}),
       }
 
+const collectChildMetadata = (
+  storage: StorageService,
+  sessionId: SessionId,
+): Effect.Effect<ChildMetadata> =>
+  storage.listEvents({ sessionId }).pipe(
+    Effect.map((envelopes) => {
+      const state = createChildMetadataAccumulator()
+      for (const env of envelopes) applyChildMetadataEnvelope(state, env)
+      return finalizeChildMetadata(state)
+    }),
+    Effect.catchEager((e) =>
+      Effect.logWarning("failed to collect agent-run metadata").pipe(
+        Effect.annotateLogs({ error: String(e) }),
+        Effect.as({}),
+      ),
+    ),
+  )
+
+const loadAgentRunSuccessData = (params: {
+  storage: StorageService
+  branchId: BranchId
+  sessionId: SessionId
+  agentName: string
+  persistence: AgentPersistence
+}) =>
+  Effect.gen(function* () {
+    const messages = yield* params.storage.listMessages(params.branchId)
+    const text = latestAssistantText(messages)
+    const meta = yield* collectChildMetadata(params.storage, params.sessionId)
+    return buildAgentRunSuccess({
+      text,
+      sessionId: params.sessionId,
+      agentName: params.agentName,
+      meta,
+      persistence: params.persistence,
+    })
+  })
+
 /** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
 export const getSessionDepth = (sessionId: SessionId, storage: StorageService) =>
   storage.getSessionAncestors(sessionId).pipe(
@@ -197,21 +251,6 @@ export const getSessionDepth = (sessionId: SessionId, storage: StorageService) =
   )
 
 const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStoreService) => {
-  const collectChildMetadata = (sessionId: SessionId): Effect.Effect<ChildMetadata> =>
-    storage.listEvents({ sessionId }).pipe(
-      Effect.map((envelopes) => {
-        const state = createChildMetadataAccumulator()
-        for (const env of envelopes) applyChildMetadataEnvelope(state, env)
-        return finalizeChildMetadata(state)
-      }),
-      Effect.catchEager((e) =>
-        Effect.logWarning("failed to collect agent-run metadata").pipe(
-          Effect.annotateLogs({ error: String(e) }),
-          Effect.as({}),
-        ),
-      ),
-    )
-
   const createAgentRunSession = (params: {
     agent: { name: string }
     prompt: string
@@ -314,33 +353,206 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
         ),
       )
 
-  const loadAgentRunSuccessData = (branchId: BranchId, sessionId: SessionId, agentName: string) =>
-    Effect.gen(function* () {
-      const messages = yield* storage.listMessages(branchId)
-      const text = latestAssistantText(messages)
-      const meta = yield* collectChildMetadata(sessionId)
-      return buildAgentRunSuccess({ text, sessionId, agentName, meta })
-    })
-
   return {
-    collectChildMetadata,
     createAgentRunSession,
     publishAgentRunSpawned,
     publishAgentRunSucceeded,
     publishAgentRunFailed,
-    loadAgentRunSuccessData,
   }
+}
+
+const NoopExtensionStateRuntime: ExtensionStateRuntimeService = {
+  publish: () => Effect.succeed(false),
+  deriveAll: () => Effect.succeed([]),
+  send: () => Effect.die("ephemeral agent runs do not support extension command sends"),
+  ask: () => Effect.die("ephemeral agent runs do not support extension requests"),
+  getUiSnapshots: () => Effect.succeed([]),
+  terminateAll: () => Effect.void,
+  notifyObservers: () => Effect.void,
+}
+
+const buildEphemeralLoopLayer = (params: {
+  config: AgentRunnerConfig
+  extensionRegistry: ExtensionRegistryService
+  provider: ProviderService
+  toolRunner: ToolRunnerService
+}) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
+  const deps = Layer.mergeAll(
+    storageLayer,
+    eventStoreLayer,
+    Layer.succeed(ExtensionRegistry, params.extensionRegistry),
+    Layer.succeed(ExtensionStateRuntime, NoopExtensionStateRuntime),
+    Layer.succeed(Provider, params.provider),
+    Layer.succeed(ToolRunner, params.toolRunner),
+  )
+  const loopLayer = AgentLoop.Live({ baseSections: params.config.baseSections ?? [] }).pipe(
+    Layer.provide(deps),
+  )
+  return Layer.mergeAll(deps, loopLayer)
+}
+
+const runEphemeralAgent = (params: {
+  runnerConfig: AgentRunnerConfig
+  shared: ReturnType<typeof makeSharedRunnerHelpers>
+  extensionRegistry: ExtensionRegistryService
+  provider: ProviderService
+  toolRunner: ToolRunnerService
+  parentSessionId: SessionId
+  parentBranchId: BranchId
+  toolCallId?: ToolCallId
+  cwd: string
+  agentName: string
+  prompt: string
+  overrides?: AgentExecutionOverrides
+  persistence: AgentPersistence
+}) => {
+  const sessionId = Bun.randomUUIDv7() as SessionId
+  const branchId = Bun.randomUUIDv7() as BranchId
+  const normalizedOverrides = normalizeOverrides(params.overrides)
+  const ephemeralLayer = buildEphemeralLoopLayer({
+    config: params.runnerConfig,
+    extensionRegistry: params.extensionRegistry,
+    provider: params.provider,
+    toolRunner: params.toolRunner,
+  })
+
+  const runWithTimeout = (effect: Effect.Effect<void, AgentRunError>) =>
+    params.runnerConfig.timeoutMs === undefined
+      ? effect
+      : effect.pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.millis(params.runnerConfig.timeoutMs),
+            orElse: () =>
+              Effect.fail(
+                new AgentRunError({
+                  message: `Agent run timed out after ${params.runnerConfig.timeoutMs}ms`,
+                }),
+              ),
+          }),
+        )
+
+  const handleUnexpectedFailure = (cause: Cause.Cause<unknown>) => {
+    if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+    return Effect.succeed({
+      _tag: "error" as const,
+      error: Cause.pretty(cause),
+      agentName: params.agentName,
+      persistence: params.persistence,
+    })
+  }
+
+  const run = Effect.gen(function* () {
+    yield* WideEvent.set({ childSessionId: sessionId })
+
+    yield* params.shared.publishAgentRunSpawned({
+      parentSessionId: params.parentSessionId,
+      parentBranchId: params.parentBranchId,
+      toolCallId: params.toolCallId,
+      sessionId,
+      agentName: params.agentName,
+      prompt: params.prompt,
+    })
+
+    const result = yield* Effect.gen(function* () {
+      const localStorage = yield* Storage
+      const localEventStore = yield* EventStore
+      const localLoop = yield* AgentLoop
+      const now = yield* DateTime.nowAsDate
+
+      yield* localStorage.createSession(
+        new Session({
+          id: sessionId,
+          name: `${params.agentName}: ${params.prompt.slice(0, 60)}`,
+          cwd: params.cwd,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* localStorage.createBranch(
+        new Branch({
+          id: branchId,
+          sessionId,
+          createdAt: now,
+        }),
+      )
+      yield* localEventStore.publish(
+        new AgentSwitched({
+          sessionId,
+          branchId,
+          fromAgent: "cowork",
+          toAgent: params.agentName,
+        }),
+      )
+
+      yield* runWithTimeout(
+        localLoop.runOnce({
+          sessionId,
+          branchId,
+          agentName: params.agentName,
+          prompt: params.prompt,
+          interactive: false,
+          ...(normalizedOverrides !== undefined ? { overrides: normalizedOverrides } : {}),
+        }),
+      )
+
+      return yield* loadAgentRunSuccessData({
+        storage: localStorage,
+        branchId,
+        sessionId,
+        agentName: params.agentName,
+        persistence: params.persistence,
+      })
+    }).pipe(Effect.provide(ephemeralLayer))
+
+    yield* params.shared.publishAgentRunSucceeded({
+      parentSessionId: params.parentSessionId,
+      parentBranchId: params.parentBranchId,
+      toolCallId: params.toolCallId,
+      sessionId,
+      agentName: params.agentName,
+    })
+
+    yield* WideEvent.set({
+      usage: result.usage,
+      toolCallCount: result.toolCalls?.length ?? 0,
+    })
+
+    return result
+  }).pipe(withWideEvent(agentRunBoundary(params.agentName, params.parentSessionId)))
+
+  return withAgentRunFailureHandling(
+    run,
+    {
+      parentSessionId: params.parentSessionId,
+      parentBranchId: params.parentBranchId,
+      toolCallId: params.toolCallId,
+      sessionId,
+      agentName: params.agentName,
+      persistence: params.persistence,
+      spanName: "AgentRunner.inProcess.ephemeral",
+    },
+    params.shared.publishAgentRunFailed,
+  ).pipe(Effect.catchCause(handleUnexpectedFailure))
 }
 
 export const InProcessRunner = (
   runnerConfig: AgentRunnerConfig,
-): Layer.Layer<AgentRunnerService, never, Storage | EventStore | AgentLoop> =>
+): Layer.Layer<
+  AgentRunnerService,
+  never,
+  Storage | EventStore | AgentLoop | ExtensionRegistry | Provider | ToolRunner
+> =>
   Layer.effect(
     AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
       const eventStore = yield* EventStore
       const loop = yield* AgentLoop
+      const extensionRegistry = yield* ExtensionRegistry
+      const provider = yield* Provider
+      const toolRunner = yield* ToolRunner
       const shared = makeSharedRunnerHelpers(storage, eventStore)
       const publishAgentSwitch = (params: {
         sessionId: SessionId
@@ -356,9 +568,55 @@ export const InProcessRunner = (
           }),
         )
 
+      const runWithTimeout = (effect: Effect.Effect<void, AgentRunError>) =>
+        runnerConfig.timeoutMs === undefined
+          ? effect
+          : effect.pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.millis(runnerConfig.timeoutMs),
+                orElse: () =>
+                  Effect.fail(
+                    new AgentRunError({
+                      message: `Agent run timed out after ${runnerConfig.timeoutMs}ms`,
+                    }),
+                  ),
+              }),
+            )
+
       return {
-        run: (params) =>
-          shared.createAgentRunSession(params).pipe(
+        run: (params) => {
+          const persistence = resolveAgentPersistence(params.agent, params.persistence)
+          const normalizedOverrides = normalizeOverrides(params.overrides)
+
+          const handleUnexpectedFailure = (cause: Cause.Cause<unknown>) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+            return Effect.succeed({
+              _tag: "error" as const,
+              error: Cause.pretty(cause),
+              agentName: params.agent.name,
+              persistence,
+            })
+          }
+
+          if (persistence === "ephemeral") {
+            return runEphemeralAgent({
+              runnerConfig,
+              shared,
+              extensionRegistry,
+              provider,
+              toolRunner,
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              toolCallId: params.toolCallId,
+              cwd: params.cwd,
+              agentName: params.agent.name,
+              prompt: params.prompt,
+              overrides: params.overrides,
+              persistence,
+            })
+          }
+
+          return shared.createAgentRunSession(params).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
@@ -377,40 +635,26 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                 })
 
-                const runSubagent = loop.runOnce({
-                  sessionId,
-                  branchId,
-                  agentName: params.agent.name,
-                  prompt: params.prompt,
-                  interactive: false,
-                  ...(normalizeOverrides(params.overrides) !== undefined
-                    ? { overrides: normalizeOverrides(params.overrides) }
-                    : {}),
-                })
-
-                // No actor-level retry — replays non-idempotent tool calls.
-                // Provider-level retry stays in runtime/src/retry.ts (transient, same process).
-                const runWithTimeout =
-                  runnerConfig.timeoutMs === undefined
-                    ? runSubagent
-                    : runSubagent.pipe(
-                        Effect.timeoutOrElse({
-                          duration: Duration.millis(runnerConfig.timeoutMs),
-                          orElse: () =>
-                            Effect.fail(
-                              new AgentRunError({
-                                message: `Agent run timed out after ${runnerConfig.timeoutMs}ms`,
-                              }),
-                            ),
-                        }),
-                      )
-
-                yield* runWithTimeout
-                const result = yield* shared.loadAgentRunSuccessData(
-                  branchId,
-                  sessionId,
-                  params.agent.name,
+                yield* runWithTimeout(
+                  loop.runOnce({
+                    sessionId,
+                    branchId,
+                    agentName: params.agent.name,
+                    prompt: params.prompt,
+                    interactive: false,
+                    ...(normalizedOverrides !== undefined
+                      ? { overrides: normalizedOverrides }
+                      : {}),
+                  }),
                 )
+
+                const result = yield* loadAgentRunSuccessData({
+                  storage,
+                  branchId,
+                  sessionId,
+                  agentName: params.agent.name,
+                  persistence,
+                })
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
@@ -435,37 +679,58 @@ export const InProcessRunner = (
                   toolCallId: params.toolCallId,
                   sessionId,
                   agentName: params.agent.name,
+                  persistence,
                   spanName: "AgentRunner.inProcess",
                 },
                 shared.publishAgentRunFailed,
               )
             }),
-            Effect.catchCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-              return Effect.succeed({
-                _tag: "error" as const,
-                error: Cause.pretty(cause),
-                agentName: params.agent.name,
-              })
-            }),
-          ),
+            Effect.catchCause(handleUnexpectedFailure),
+          )
+        },
       }
     }),
   )
 
 export const SubprocessRunner = (
   config: AgentRunnerConfig,
-): Layer.Layer<AgentRunnerService, never, Storage | EventStore> =>
+): Layer.Layer<
+  AgentRunnerService,
+  never,
+  Storage | EventStore | ExtensionRegistry | Provider | ToolRunner
+> =>
   Layer.effect(
     AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
       const eventStore = yield* EventStore
+      const extensionRegistry = yield* ExtensionRegistry
+      const provider = yield* Provider
+      const toolRunner = yield* ToolRunner
       const shared = makeSharedRunnerHelpers(storage, eventStore)
 
       return {
-        run: (params) =>
-          shared.createAgentRunSession(params).pipe(
+        run: (params) => {
+          const persistence = resolveAgentPersistence(params.agent, params.persistence)
+          if (persistence === "ephemeral") {
+            return runEphemeralAgent({
+              runnerConfig: config,
+              shared,
+              extensionRegistry,
+              provider,
+              toolRunner,
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              toolCallId: params.toolCallId,
+              cwd: params.cwd,
+              agentName: params.agent.name,
+              prompt: params.prompt,
+              overrides: params.overrides,
+              persistence,
+            })
+          }
+
+          return shared.createAgentRunSession(params).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
@@ -557,14 +822,17 @@ export const SubprocessRunner = (
                         : `Subprocess exited with code ${exitCode}`,
                     sessionId,
                     agentName: params.agent.name,
+                    persistence,
                   }
                 }
 
-                const result = yield* shared.loadAgentRunSuccessData(
+                const result = yield* loadAgentRunSuccessData({
+                  storage,
                   branchId,
                   sessionId,
-                  params.agent.name,
-                )
+                  agentName: params.agent.name,
+                  persistence,
+                })
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
@@ -589,6 +857,7 @@ export const SubprocessRunner = (
                   toolCallId: params.toolCallId,
                   sessionId,
                   agentName: params.agent.name,
+                  persistence,
                   spanName: "AgentRunner.subprocess",
                 },
                 shared.publishAgentRunFailed,
@@ -600,9 +869,11 @@ export const SubprocessRunner = (
                 _tag: "error" as const,
                 error: Cause.pretty(cause),
                 agentName: params.agent.name,
+                persistence,
               })
             }),
-          ),
+          )
+        },
       }
     }),
   )

@@ -1,6 +1,10 @@
 import { Effect, Schema, FileSystem } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { AgentDefinition, AgentRunnerService } from "../domain/agent.js"
+import {
+  AgentDefinition,
+  AgentRunnerService,
+  getDurableAgentRunSessionId,
+} from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
@@ -97,16 +101,21 @@ Instructions:
     })
 
     if (result._tag === "error") {
-      const ref =
-        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+      const sessionId = getDurableAgentRunSessionId(result)
+      const ref = sessionId !== undefined ? `\n\nFull session: session://${sessionId}` : ""
       return { error: `${result.error}${ref}` }
     }
 
+    const sessionId = getDurableAgentRunSessionId(result)
+
     return {
-      review: `${result.text}\n\nFull session: session://${result.sessionId}`,
+      review:
+        sessionId !== undefined
+          ? `${result.text}\n\nFull session: session://${sessionId}`
+          : result.text,
       reviewer: reviewer.name,
       metadata: {
-        sessionId: result.sessionId,
+        sessionId,
         agentName: result.agentName,
         usage: result.usage,
         toolCalls: result.toolCalls,

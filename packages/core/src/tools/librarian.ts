@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { AgentRunnerService } from "../domain/agent.js"
+import { AgentRunnerService, getDurableAgentRunSessionId } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { $ } from "bun"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -157,14 +157,19 @@ Use read, grep, and glob tools to explore the code at ${cachePath} and answer th
     })
 
     if (result._tag === "error") {
-      const ref =
-        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+      const sessionId = getDurableAgentRunSessionId(result)
+      const ref = sessionId !== undefined ? `\n\nFull session: session://${sessionId}` : ""
       return { error: `${result.error}${ref}` }
     }
 
+    const sessionId = getDurableAgentRunSessionId(result)
+
     return {
-      output: `${result.text}\n\nFull session: session://${result.sessionId}`,
-      metadata: { spec: params.spec, cachePath, sessionId: result.sessionId },
+      output:
+        sessionId !== undefined
+          ? `${result.text}\n\nFull session: session://${sessionId}`
+          : result.text,
+      metadata: { spec: params.spec, cachePath, sessionId },
     }
   }),
 })

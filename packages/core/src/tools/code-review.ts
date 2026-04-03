@@ -1,5 +1,10 @@
 import { Effect, Schema } from "effect"
-import { AgentRunnerService, type AgentDefinition, type AgentRunner } from "../domain/agent.js"
+import {
+  AgentRunnerService,
+  getDurableAgentRunSessionId,
+  type AgentDefinition,
+  type AgentRunner,
+} from "../domain/agent.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { requireAgent, ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -248,7 +253,8 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   return {
     comments,
     raw,
-    sessionId: synthesisResult._tag === "success" ? synthesisResult.sessionId : undefined,
+    sessionId:
+      synthesisResult._tag === "success" ? getDurableAgentRunSessionId(synthesisResult) : undefined,
   }
 })
 

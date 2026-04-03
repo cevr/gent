@@ -50,6 +50,8 @@ describe("CodeReviewTool", () => {
           text: "[]",
           sessionId: "child" as SessionId,
           agentName: params.agent.name,
+          persistence:
+            params.agent.name === "reviewer" ? ("ephemeral" as const) : ("durable" as const),
         })
       },
     })
@@ -87,6 +89,7 @@ describe("CodeReviewTool", () => {
           text: jsonOutput,
           sessionId: "child" as SessionId,
           agentName: "reviewer",
+          persistence: "ephemeral" as const,
         }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
@@ -108,6 +111,7 @@ describe("CodeReviewTool", () => {
           text: "not valid json",
           sessionId: "child" as SessionId,
           agentName: "reviewer",
+          persistence: "ephemeral" as const,
         }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
@@ -139,6 +143,8 @@ describe("CodeReviewTool", () => {
               ]),
               sessionId: "synth" as SessionId,
               agentName: params.agent.name,
+              persistence:
+                params.agent.name === "reviewer" ? ("ephemeral" as const) : ("durable" as const),
             }
           }
           if (params.prompt.includes("Fix the issues identified")) {
@@ -147,6 +153,7 @@ describe("CodeReviewTool", () => {
               text: "Applied fixes.",
               sessionId: "exec" as SessionId,
               agentName: params.agent.name,
+              persistence: "durable" as const,
             }
           }
           return {
@@ -154,6 +161,8 @@ describe("CodeReviewTool", () => {
             text: "[]",
             sessionId: "child" as SessionId,
             agentName: params.agent.name,
+            persistence:
+              params.agent.name === "reviewer" ? ("ephemeral" as const) : ("durable" as const),
           }
         }),
     })
@@ -178,7 +187,7 @@ describe("CodeReviewTool", () => {
     )
   })
 
-  it.live("includes session ref on structured output", () => {
+  it.live("omits session ref for ephemeral reviewer output", () => {
     const jsonOutput = JSON.stringify([
       { file: "a.ts", severity: "low", type: "style", text: "minor" },
     ])
@@ -189,12 +198,13 @@ describe("CodeReviewTool", () => {
           text: jsonOutput,
           sessionId: "child" as SessionId,
           agentName: "reviewer",
+          persistence: "ephemeral" as const,
         }),
     })
     const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
     return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
-        expect(result.session).toBe("session://child")
+        expect(result.session).toBeUndefined()
       }),
       Effect.provide(layer),
     )

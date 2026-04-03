@@ -484,6 +484,7 @@ export const createDependencies = (config: DependenciesConfig) => {
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
             : {}),
           ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
+          baseSections,
         }
         const agentLoopLive = AgentLoop.Live({ baseSections })
         const agentRunnerLive =

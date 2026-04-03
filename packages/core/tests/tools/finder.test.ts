@@ -21,6 +21,7 @@ const mockRunnerSuccess = Layer.succeed(AgentRunnerService, {
       text: `response from ${params.agent.name}`,
       sessionId: "child-session" as SessionId,
       agentName: params.agent.name,
+      persistence: "ephemeral" as const,
     }),
 })
 
@@ -38,6 +39,7 @@ const mockRunnerErrorWithSession = Layer.succeed(AgentRunnerService, {
       _tag: "error" as const,
       error: "runner failed",
       sessionId: "error-session" as SessionId,
+      persistence: "ephemeral" as const,
     }),
 })
 
@@ -83,22 +85,23 @@ describe("FinderTool", () => {
     )
   })
 
-  it.live("appends session ref to response", () => {
+  it.live("omits session ref for ephemeral helper runs", () => {
     const layer = Layer.mergeAll(mockRunnerSuccess, platformLayer)
     return FinderTool.execute({ query: "find something" }, ctx).pipe(
       Effect.map((result) => {
-        expect(result.response).toContain("\n\nFull session: session://child-session")
+        expect(result.response).not.toContain("session://")
+        expect(result.metadata?.sessionId).toBeUndefined()
       }),
       Effect.provide(layer),
     )
   })
 
-  it.live("error path includes session ref when sessionId present", () => {
+  it.live("error path omits session ref for ephemeral failures", () => {
     const layer = Layer.mergeAll(mockRunnerErrorWithSession, platformLayer)
     return FinderTool.execute({ query: "find something" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.found).toBe(false)
-        expect(result.error).toContain("session://error-session")
+        expect(result.error).toBe("runner failed")
       }),
       Effect.provide(layer),
     )

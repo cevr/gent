@@ -118,7 +118,9 @@ export const ReadSessionTool = defineTool({
       Effect.mapError(
         (e) =>
           new ReadSessionError({
-            message: `Failed to load session: ${e.message}`,
+            message: e.message.includes("Session not found:")
+              ? `Failed to load session: ${e.message}. Ephemeral helper-agent runs are not persisted and cannot be read back with read_session.`
+              : `Failed to load session: ${e.message}`,
             cause: e,
           }),
       ),

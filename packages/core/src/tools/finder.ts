@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { AgentRunnerService } from "../domain/agent.js"
+import { AgentRunnerService, getDurableAgentRunSessionId } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
@@ -44,16 +44,21 @@ export const FinderTool = defineTool({
     })
 
     if (result._tag === "error") {
-      const ref =
-        result.sessionId !== undefined ? `\n\nFull session: session://${result.sessionId}` : ""
+      const sessionId = getDurableAgentRunSessionId(result)
+      const ref = sessionId !== undefined ? `\n\nFull session: session://${sessionId}` : ""
       return { found: false, error: `${result.error}${ref}` }
     }
 
+    const sessionId = getDurableAgentRunSessionId(result)
+
     return {
       found: true,
-      response: `${result.text}\n\nFull session: session://${result.sessionId}`,
+      response:
+        sessionId !== undefined
+          ? `${result.text}\n\nFull session: session://${sessionId}`
+          : result.text,
       metadata: {
-        sessionId: result.sessionId,
+        sessionId,
         agentName: result.agentName,
         usage: result.usage,
         toolCalls: result.toolCalls,

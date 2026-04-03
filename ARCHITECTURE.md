@@ -121,14 +121,23 @@ Shape:
 
 - `ActorProcess` is the single command entry for session/branch actor work.
 - `AgentLoop` is a flat machine-owned control plane (turn phases inlined, state uses union-level derive).
+- `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
 - production actor routing is cluster-backed inside the worker process
 - queue ownership is structural
 - turn phases are explicit (resolve → stream → execute-tools → finalize)
 - interactions are cold machine states, not blocked fibers
 - machine inspection events are published as diagnostics
-- `SubagentRunnerConfig` is a plain interface passed to `InProcessRunner`/`SubprocessRunner`, not a service
+- `AgentRunnerConfig` is a plain interface passed to `InProcessRunner`/`SubprocessRunner`, not a service
 
 Do not rebuild business logic from inspection events. They are receipts, not inputs.
+
+### Agent Runs
+
+- Default persistence is durable.
+- Read-only helper agents (`explore`, `finder`, `librarian`, `reviewer`, `auditor`, `summarizer`, `title`) default to ephemeral.
+- Durable runs persist a child session/branch and can be revisited with `read_session`.
+- Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
+- Callers that need durable history must opt in explicitly, e.g. task execution forces `persistence: "durable"`.
 
 ### Interactions (Cold Pattern)
 
@@ -316,7 +325,7 @@ tests/
 ├── domain/        # auth-store, auth-guard, agent, event, message, skills, ...
 ├── extensions/    # api, registry, compile-tool-policy, hooks, loader, memory/, ...
 ├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
-├── runtime/       # agent-loop, actor-process, retry, subagent-runner, tool-runner, ...
+├── runtime/       # agent-loop, actor-process, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
 ├── storage/       # sqlite-storage, search-storage, task-storage, bypass
 ├── tools/         # read, edit, bash, finder, code-review, counsel, delegate, ...
@@ -449,7 +458,7 @@ Wide event boundaries (one structured log per unit of work) via `effect-wide-eve
 | Tool call       | `tool-runner` | `runtime/agent/tool-runner.ts`                  |
 | Provider stream | `provider`    | `runtime/agent/agent-loop.ts`                   |
 | RPC request     | `rpc`         | `server/rpc-handlers.ts`                        |
-| Subagent run    | `subagent`    | `runtime/agent/subagent-runner.ts`              |
+| Agent run       | `agent-run`   | `runtime/agent/agent-runner.ts`                 |
 
 Logging conventions:
 
