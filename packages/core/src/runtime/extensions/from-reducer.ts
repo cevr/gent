@@ -10,6 +10,7 @@ import type {
   ExtensionProjection,
   ExtensionProjectionConfig,
   ExtensionReduceContext,
+  ExtensionRef,
   ReduceResult,
   RequestResult,
   SpawnExtensionRef,
@@ -18,7 +19,9 @@ import type { SessionId, BranchId } from "../../domain/ids.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
+  ExtensionProtocolError,
 } from "../../domain/extension-protocol.js"
+import { ExtensionProtocolError as ExtensionProtocolTaggedError } from "../../domain/extension-protocol.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import {
@@ -54,7 +57,9 @@ export interface FromReducerConfig<
   readonly persist?: boolean
   readonly onInit?: (ctx: {
     sessionId: SessionId
-    stateRef: Ref.Ref<State>
+    snapshot: Effect.Effect<State>
+    replaceState: (state: State) => Effect.Effect<void>
+    updateState: (f: (state: State) => State) => Effect.Effect<void>
     sessionCwd?: string
   }) => Effect.Effect<void, never, InitR>
 }
@@ -82,6 +87,27 @@ export const fromReducer = <
       const versionRef = yield* Ref.make(0)
       const startedRef = yield* Ref.make(false)
       const mailbox = yield* Semaphore.make(1)
+      const protocolError = (
+        tag: string,
+        phase: "command" | "request" | "lifecycle",
+        message: string,
+      ): ExtensionProtocolError =>
+        new ExtensionProtocolTaggedError({
+          extensionId: config.id,
+          tag,
+          phase,
+          message,
+        })
+      const ensureStarted = Effect.gen(function* () {
+        const started = yield* Ref.get(startedRef)
+        if (!started) {
+          return yield* protocolError(
+            "lifecycle",
+            "lifecycle",
+            `extension "${config.id}" actor used before start()`,
+          )
+        }
+      })
 
       const codec =
         config.stateSchema !== undefined ? makePersistCodec(config.stateSchema) : undefined
@@ -159,24 +185,31 @@ export const fromReducer = <
                 .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
               sessionCwd = session?.cwd ?? undefined
             }
-            yield* config.onInit({ sessionId: ctx.sessionId, stateRef, sessionCwd }).pipe(
-              Effect.provideServices(services),
-              Effect.catchEager(() => Effect.void),
-            )
+            yield* config
+              .onInit({
+                sessionId: ctx.sessionId,
+                snapshot: Ref.get(stateRef),
+                replaceState: (state) => Ref.set(stateRef, state),
+                updateState: (f) => Ref.update(stateRef, f),
+                sessionCwd,
+              })
+              .pipe(
+                Effect.provideServices(services),
+                Effect.catchEager(() => Effect.void),
+              )
           }
           yield* Ref.set(startedRef, true)
         }),
       )
 
-      yield* start
-
-      return {
+      const ref: ExtensionRef = {
         id: config.id,
         start,
 
         publish: (event, reduceCtx) =>
           mailbox.withPermits(1)(
             Effect.gen(function* () {
+              yield* ensureStarted
               const current = yield* Ref.get(stateRef)
               const result = config.reduce(current, event, reduceCtx)
               return yield* applyResult(current, result, reduceCtx.branchId)
@@ -184,15 +217,20 @@ export const fromReducer = <
           ),
 
         send: (message: AnyExtensionCommandMessage, branchId?: BranchId) => {
-          const receive = config.receive
-          if (receive === undefined) return Effect.void
           return mailbox.withPermits(1)(
             Effect.gen(function* () {
+              yield* ensureStarted
+              const receive = config.receive
+              if (receive === undefined) return
               const decoded =
                 config.messageSchema !== undefined
                   ? yield* Schema.decodeUnknownEffect(config.messageSchema as Schema.Any)(
                       message,
-                    ).pipe(Effect.orDie)
+                    ).pipe(
+                      Effect.mapError((error) =>
+                        protocolError(message._tag, "command", error.message),
+                      ),
+                    )
                   : (message as Message)
               const current = yield* Ref.get(stateRef)
               const result = receive(current, decoded)
@@ -202,19 +240,26 @@ export const fromReducer = <
         },
 
         ask: (message: AnyExtensionRequestMessage, branchId?: BranchId) => {
-          const request = config.request
-          if (request === undefined) {
-            return Effect.die(
-              new Error(`extension "${config.id}" does not handle request "${message._tag}"`),
-            )
-          }
           return mailbox.withPermits(1)(
             Effect.gen(function* () {
+              yield* ensureStarted
+              const request = config.request
+              if (request === undefined) {
+                return yield* protocolError(
+                  message._tag,
+                  "request",
+                  `extension "${config.id}" does not handle request "${message._tag}"`,
+                )
+              }
               const decoded =
                 config.requestSchema !== undefined
                   ? yield* Schema.decodeUnknownEffect(config.requestSchema as Schema.Any)(
                       message,
-                    ).pipe(Effect.orDie)
+                    ).pipe(
+                      Effect.mapError((error) =>
+                        protocolError(message._tag, "request", error.message),
+                      ),
+                    )
                   : (message as Request)
               const current = yield* Ref.get(stateRef)
               const result = yield* request(current, decoded).pipe(Effect.provideServices(services))
@@ -225,6 +270,7 @@ export const fromReducer = <
         },
 
         snapshot: Effect.gen(function* () {
+          yield* ensureStarted
           const state = yield* Ref.get(stateRef)
           const epoch = yield* Ref.get(versionRef)
           return { state, epoch }
@@ -232,6 +278,7 @@ export const fromReducer = <
 
         stop: Effect.void,
       }
+      return ref
     })
 
   const projection = buildProjectionConfig<State>({

@@ -185,18 +185,18 @@ Relevant skills:
 Changes:
 
 - make `spawn` cold and parent-owned
-- decide command-only vs request-capable refs explicitly
+- keep one honest `ExtensionRef` surface with explicit `void` replies where needed
 - remove eager start from adapters
-- tighten projection/state ownership boundary
+- remove raw `Ref` escape hatches from adapter init hooks; deeper projection ownership lands later
 - add red tests for lifecycle ownership before implementation
 
 Tasks:
 
 1. write or tighten red tests for cold spawn, explicit start, and stop ownership
-2. split the extension ref contract into honest command-only vs request-capable shapes if needed
+2. keep `ask` on the actor boundary, treat unsupported requests as loud protocol/runtime errors, and use explicit `void` replies for command-like requests
 3. remove eager actor start from reducer and machine adapters
 4. make runtime own lifecycle transitions explicitly
-5. replace raw host state reach-through with actor-owned projection/snapshot DTOs where the contract currently leaks
+5. replace raw `Ref` state reach-through with snapshot/update helpers where the adapter contract currently leaks
 6. run `bun run gate`
 7. get independent review on the batch diff
 8. commit only Batch 1 changes

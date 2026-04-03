@@ -1,4 +1,4 @@
-import { Effect, Ref, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { extension, fromReducer } from "./api.js"
 import { TaskCreateTool } from "../tools/task-create.js"
 import { TaskListTool } from "../tools/task-list.js"
@@ -184,13 +184,13 @@ const taskListActor = fromReducer<
           return { state: _state, reply: yield* taskService.getDeps(message.taskId) }
       }
     }),
-  onInit: ({ sessionId, stateRef }) =>
+  onInit: ({ sessionId, replaceState }) =>
     Effect.gen(function* () {
       const storageOpt = yield* Effect.serviceOption(TaskStorage)
       if (storageOpt._tag === "None") return
       const tasks = yield* storageOpt.value.listTasks(sessionId).pipe(Effect.orDie)
       if (tasks.length === 0) return
-      yield* Ref.set(stateRef, {
+      yield* replaceState({
         tasks: tasks.map((t) => ({
           id: t.id,
           subject: t.subject,

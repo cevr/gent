@@ -1,5 +1,5 @@
 import { describe, it, test, expect } from "effect-bun-test"
-import { Effect, Layer, Logger, Schema } from "effect"
+import { Cause, Effect, Layer, Logger, Schema } from "effect"
 import { CurrentLogAnnotations } from "effect/References"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import { SessionStarted, TurnCompleted, EventStore } from "@gent/core/domain/event"
@@ -9,6 +9,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { LoadedExtension } from "@gent/core/domain/extension"
+import { ExtensionMessage, ExtensionProtocolError } from "@gent/core/domain/extension-protocol"
 
 const sessionId = "machine-session" as SessionId
 const branchId = "machine-branch" as BranchId
@@ -189,6 +190,73 @@ describe("fromMachine", () => {
       // After terminate, getState should still return last known state
       const { state } = yield* actor.snapshot
       expect((state as CounterState)._tag).toBe("Idle")
+    }).pipe(Effect.provide(testLayer))
+  })
+
+  it.live("unsupported requests fail loudly instead of no-oping", () => {
+    const GetStatus = ExtensionMessage.reply("terminable", "GetStatus", {}, Schema.Void)
+
+    const { spawn } = fromMachine({
+      id: "terminable",
+      built: counterMachine,
+    })
+
+    return Effect.gen(function* () {
+      const actor = yield* spawn({ sessionId, branchId })
+      yield* actor.start
+
+      const exit = yield* actor.ask(GetStatus()).pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const error = Cause.squash(exit.cause)
+        expect(error).toBeInstanceOf(ExtensionProtocolError)
+        expect((error as ExtensionProtocolError).phase).toBe("request")
+        expect((error as ExtensionProtocolError).message).toContain(
+          'extension "terminable" does not handle request "GetStatus"',
+        )
+      }
+    }).pipe(Effect.provide(testLayer))
+  })
+
+  it.live("spawn is cold until actor.start", () => {
+    const GetStatus = ExtensionMessage.reply("machine-cold", "GetStatus", {}, Schema.Void)
+
+    const { spawn } = fromMachine({
+      id: "machine-cold",
+      built: counterMachine,
+      mapEvent: (event) => {
+        if (event._tag === "SessionStarted") return CounterEvent.Start
+        return undefined
+      },
+      mapMessage: () => CounterEvent.Start,
+      messageSchema: Schema.Struct({ action: Schema.String }),
+    })
+
+    return Effect.gen(function* () {
+      const actor = yield* spawn({ sessionId, branchId })
+      const beforeStart = [
+        actor.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId }),
+        actor.send({ extensionId: "machine-cold", _tag: "Message", action: "start" }),
+        actor.ask(GetStatus()),
+        actor.snapshot,
+      ] as const
+
+      for (const effect of beforeStart) {
+        const exit = yield* effect.pipe(Effect.exit)
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          const error = Cause.squash(exit.cause)
+          expect(error).toBeInstanceOf(ExtensionProtocolError)
+          expect((error as ExtensionProtocolError).phase).toBe("lifecycle")
+          expect((error as ExtensionProtocolError).message).toContain(
+            'extension "machine-cold" actor used before start()',
+          )
+        }
+      }
+
+      yield* actor.start
+      const snapshot = yield* actor.snapshot
+      expect((snapshot.state as CounterState)._tag).toBe("Idle")
     }).pipe(Effect.provide(testLayer))
   })
 

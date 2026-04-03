@@ -7,7 +7,7 @@
  * Prompt injection: compact summary + recall tool for deep dives.
  */
 
-import { Effect, Ref } from "effect"
+import { Effect } from "effect"
 import type { ReduceResult } from "../../domain/extension.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { extension, fromReducer } from "../api.js"
@@ -83,17 +83,17 @@ export const MemoryActorConfig = {
 const memoryActor = fromReducer<MemoryState, MemoryIntent, never, MemoryVault>({
   ...MemoryActorConfig,
   messageSchema: MemoryIntent,
-  onInit: ({ stateRef, sessionCwd }) =>
+  onInit: ({ updateState, sessionCwd }) =>
     Effect.gen(function* () {
       const vault = yield* MemoryVault
       yield* vault.ensureDirs()
 
       const entries = yield* vault.list()
-      yield* Ref.update(stateRef, (s) => updateVaultIndex(s, entries))
+      yield* updateState((s) => updateVaultIndex(s, entries))
 
       if (sessionCwd !== undefined) {
         const key = projectKey(sessionCwd)
-        yield* Ref.update(stateRef, (s) => setProjectKey(s, key))
+        yield* updateState((s) => setProjectKey(s, key))
         yield* vault.ensureDirs(key)
       }
     }),

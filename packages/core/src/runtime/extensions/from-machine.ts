@@ -8,6 +8,7 @@ import type { AgentEvent } from "../../domain/event.js"
 import type {
   ExtensionDeriveContext,
   ExtensionEffect,
+  ExtensionRef,
   ExtensionProjection,
   ExtensionProjectionConfig,
   SpawnExtensionRef,
@@ -16,7 +17,9 @@ import type { BranchId } from "../../domain/ids.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
+  ExtensionProtocolError,
 } from "../../domain/extension-protocol.js"
+import { ExtensionProtocolError as ExtensionProtocolTaggedError } from "../../domain/extension-protocol.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import {
@@ -73,6 +76,27 @@ export const fromMachine = <
         const services = yield* Effect.services<InitR>()
         const versionRef = yield* Ref.make(0)
         const startedRef = yield* Ref.make(false)
+        const protocolError = (
+          tag: string,
+          phase: "command" | "request" | "lifecycle",
+          message: string,
+        ): ExtensionProtocolError =>
+          new ExtensionProtocolTaggedError({
+            extensionId: config.id,
+            tag,
+            phase,
+            message,
+          })
+        const ensureStarted = Effect.gen(function* () {
+          const started = yield* Ref.get(startedRef)
+          if (!started) {
+            return yield* protocolError(
+              "lifecycle",
+              "lifecycle",
+              `extension "${config.id}" actor used before start()`,
+            )
+          }
+        })
 
         const spawnId = `${config.id}-${ctx.sessionId}`
         const codec =
@@ -95,7 +119,7 @@ export const fromMachine = <
           }
         }
 
-        const ref = yield* Machine.spawn(config.built, {
+        const machineRef = yield* Machine.spawn(config.built, {
           id: spawnId,
           ...(hydratedState !== undefined ? { hydrate: hydratedState } : {}),
         })
@@ -103,7 +127,7 @@ export const fromMachine = <
         const persistState = (): Effect.Effect<void> =>
           Effect.gen(function* () {
             if (storage._tag !== "Some" || codec === undefined) return
-            const state = yield* ref.snapshot
+            const state = yield* machineRef.snapshot
             const epoch = yield* Ref.get(versionRef)
             const encoded = codec.encode(state as State)
             yield* storage.value
@@ -136,7 +160,7 @@ export const fromMachine = <
 
         const dispatch = (machineEvent: Event, branchId: BranchId | undefined) =>
           Effect.gen(function* () {
-            const result = yield* ref
+            const result = yield* machineRef
               .call(machineEvent)
               .pipe(
                 Effect.catchDefect((defect) =>
@@ -169,7 +193,7 @@ export const fromMachine = <
         const start = Effect.gen(function* () {
           const started = yield* Ref.get(startedRef)
           if (started) return
-          yield* ref.start
+          yield* machineRef.start
           if (initialEpoch > 0) {
             yield* Ref.set(versionRef, initialEpoch)
           }
@@ -184,7 +208,7 @@ export const fromMachine = <
             yield* config
               .onInit({
                 sessionId: ctx.sessionId,
-                snapshot: ref.snapshot as Effect.Effect<State>,
+                snapshot: machineRef.snapshot as Effect.Effect<State>,
                 send: (event) =>
                   dispatch(event, ctx.branchId).pipe(
                     Effect.catchEager(() => Effect.succeed(false)),
@@ -199,14 +223,13 @@ export const fromMachine = <
           yield* Ref.set(startedRef, true)
         })
 
-        yield* start
-
-        return {
+        const extensionRef: ExtensionRef = {
           id: config.id,
           start,
 
           publish: (event, reduceCtx) =>
             Effect.gen(function* () {
+              yield* ensureStarted
               const mapped = config.mapEvent?.(event)
               if (mapped === undefined) return false
               return yield* dispatch(mapped, reduceCtx.branchId)
@@ -214,33 +237,44 @@ export const fromMachine = <
 
           send: (message: AnyExtensionCommandMessage, branchId?: BranchId) =>
             Effect.gen(function* () {
+              yield* ensureStarted
               const mapMessage = config.mapMessage
               if (mapMessage === undefined) return
               const decoded =
                 config.messageSchema !== undefined
                   ? yield* Schema.decodeUnknownEffect(config.messageSchema as Schema.Any)(
                       message,
-                    ).pipe(Effect.orDie)
+                    ).pipe(
+                      Effect.mapError((error) =>
+                        protocolError(message._tag, "command", error.message),
+                      ),
+                    )
                   : (message as Message)
-              const currentState = yield* ref.snapshot
+              const currentState = yield* machineRef.snapshot
               const mapped = mapMessage(decoded, currentState)
               if (mapped === undefined) return
               yield* dispatch(mapped, branchId)
             }),
-
           ask: (message: AnyExtensionRequestMessage) =>
-            Effect.die(
-              new Error(`extension "${config.id}" does not handle request "${message._tag}"`),
-            ),
-
+            Effect.gen(function* () {
+              yield* ensureStarted
+              return yield* protocolError(
+                message._tag,
+                "request",
+                `extension "${config.id}" does not handle request "${message._tag}"`,
+              )
+            }),
           snapshot: Effect.gen(function* () {
-            const state = yield* ref.snapshot
+            yield* ensureStarted
+            const state = yield* machineRef.snapshot
             const epoch = yield* Ref.get(versionRef)
             return { state, epoch }
           }),
 
-          stop: ref.stop,
+          stop: machineRef.stop,
         }
+
+        return extensionRef
       }),
     )
 

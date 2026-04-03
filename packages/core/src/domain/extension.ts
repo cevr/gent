@@ -10,6 +10,7 @@ import type {
   AnyExtensionCommandMessage,
   AnyExtensionMessageDefinition,
   AnyExtensionRequestMessage,
+  ExtensionProtocolError,
   ExtractExtensionReply,
 } from "./extension-protocol.js"
 
@@ -235,24 +236,34 @@ export interface RequestResult<State, Reply> extends ReduceResult<State> {
   readonly reply: Reply
 }
 
+export interface ExtensionSnapshot {
+  readonly state: unknown
+  readonly epoch: number
+}
+
 /**
  * Session-scoped extension actor/ref.
- * Lifecycle: spawn → start → publish/send/ask → stop
+ * Lifecycle: spawn → start → publish/send/ask → snapshot → stop
  *
- * Extensions own their state and conversation boundary. Host events arrive through
- * `publish`. Cross-boundary conversation happens through protocol messages via
- * `send` / `ask`. `snapshot` is the projection source for UI + turn-time derive.
+ * `ask` is always part of the boundary. Requests with no meaningful payload
+ * reply should use `void` / `null` schemas. Unsupported requests fail loudly.
  */
 export interface ExtensionRef {
   readonly id: string
-  readonly start: Effect.Effect<void>
-  readonly publish: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
-  readonly send: (message: AnyExtensionCommandMessage, branchId?: BranchId) => Effect.Effect<void>
+  readonly start: Effect.Effect<void, ExtensionProtocolError>
+  readonly publish: (
+    event: AgentEvent,
+    ctx: ExtensionReduceContext,
+  ) => Effect.Effect<boolean, ExtensionProtocolError>
+  readonly send: (
+    message: AnyExtensionCommandMessage,
+    branchId?: BranchId,
+  ) => Effect.Effect<void, ExtensionProtocolError>
   readonly ask: <M extends AnyExtensionRequestMessage>(
     message: M,
     branchId?: BranchId,
-  ) => Effect.Effect<ExtractExtensionReply<M>>
-  readonly snapshot: Effect.Effect<{ state: unknown; epoch: number }>
+  ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
+  readonly snapshot: Effect.Effect<ExtensionSnapshot, ExtensionProtocolError>
   readonly stop: Effect.Effect<void>
 }
 

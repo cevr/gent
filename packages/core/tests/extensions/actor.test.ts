@@ -56,6 +56,7 @@ describe("fromReducer", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
+      yield* actor.start
       const changed = yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -176,6 +177,7 @@ describe("fromReducer", () => {
     // Actor itself has no derive — projection is framework-owned
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
+      yield* actor.start
       // getState works
       const snap = yield* actor.snapshot
       expect(snap.state).toEqual({ mode: "normal" })
@@ -200,6 +202,7 @@ describe("fromReducer", () => {
 
       yield* Effect.gen(function* () {
         const actor = yield* spawn({ sessionId, branchId })
+        yield* actor.start
         yield* actor.send({ extensionId: "intent-handler", _tag: "Message", action: "activate" })
         const snap = yield* actor.snapshot
         expect(snap.state).toEqual({ active: true })
@@ -219,6 +222,7 @@ describe("fromReducer", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
+      yield* actor.start
       const ctx: ExtensionReduceContext = { sessionId, branchId }
       yield* actor.publish(new SessionStarted({ sessionId, branchId }), ctx)
       yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), ctx)
@@ -243,6 +247,7 @@ describe("fromReducer", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
+      yield* actor.start
       const ctx: ExtensionReduceContext = { sessionId, branchId }
 
       for (let i = 0; i < 10; i++) {
@@ -268,6 +273,7 @@ describe("fromReducer", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
+      yield* actor.start
       const ctx: ExtensionReduceContext = { sessionId, branchId }
 
       // Defect caught — state unchanged
@@ -277,6 +283,44 @@ describe("fromReducer", () => {
 
       const snap = yield* actor.snapshot
       expect((snap.state as { value: string }).value).toBe("ok")
+    }).pipe(Effect.provide(testLayer))
+  })
+
+  it.live("spawn is cold until actor.start", () => {
+    const Request = ExtensionMessage.reply("cold-start", "Ping", {}, Schema.Void)
+
+    const { spawn } = fromReducer<{ value: string }>({
+      id: "cold-start",
+      initial: { value: "cold" },
+      reduce: (state) => ({ state }),
+    })
+
+    return Effect.gen(function* () {
+      const actor = yield* spawn({ sessionId, branchId })
+      const beforeStart = [
+        actor.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId }),
+        actor.send({ extensionId: "cold-start", _tag: "Message" }),
+        actor.ask(Request()),
+        actor.snapshot,
+      ] as const
+
+      for (const effect of beforeStart) {
+        const exit = yield* effect.pipe(Effect.exit)
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          const error = Cause.squash(exit.cause)
+          expect(error).toBeInstanceOf(ExtensionProtocolError)
+          expect((error as ExtensionProtocolError).phase).toBe("lifecycle")
+          expect((error as ExtensionProtocolError).message).toContain(
+            'extension "cold-start" actor used before start()',
+          )
+        }
+      }
+
+      yield* actor.start
+      const snapshot = yield* actor.snapshot
+      expect(snapshot.state).toEqual({ value: "cold" })
+      expect(snapshot.epoch).toBe(0)
     }).pipe(Effect.provide(testLayer))
   })
 })

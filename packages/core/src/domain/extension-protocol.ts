@@ -25,7 +25,14 @@ export class ExtensionProtocolError extends Schema.TaggedErrorClass<ExtensionPro
   {
     extensionId: Schema.String,
     tag: Schema.String,
-    phase: Schema.Literals(["command", "request", "reply", "client-reply", "registration"]),
+    phase: Schema.Literals([
+      "command",
+      "request",
+      "reply",
+      "client-reply",
+      "registration",
+      "lifecycle",
+    ]),
     message: Schema.String,
   },
 ) {}
