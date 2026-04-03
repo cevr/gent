@@ -1,4 +1,4 @@
-import { createSignal, createEffect, on, For, Show } from "solid-js"
+import { createSignal, createEffect, onMount, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -51,15 +51,7 @@ export function Auth(props: AuthProps) {
 
   useScrollSync(() => `auth-provider-${state().providerIndex}`, { getRef: () => scrollRef })
 
-  createEffect(
-    on(
-      () => props.agentName,
-      () => {
-        loadAuth()
-      },
-      { defer: false },
-    ),
-  )
+  onMount(() => loadAuth())
 
   // ── Side effects ──
 
