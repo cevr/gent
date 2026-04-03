@@ -774,7 +774,7 @@ const makeStorage = Effect.gen(function* () {
         const expandedTags = expandEventTags(tags)
         const rows = yield* sql<{
           event_tag: string
-        }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
+        }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
         const eventTag = rows[0]?.event_tag
         switch (eventTag) {
           case "SubagentSpawned":
@@ -796,7 +796,7 @@ const makeStorage = Effect.gen(function* () {
         const expandedTags = expandEventTags(tags)
         const rows = yield* sql<{
           event_json: string
-        }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
+        }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND (branch_id = ${branchId} OR branch_id IS NULL) AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
         const row = rows[0]
         if (row === undefined) return undefined
         const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)

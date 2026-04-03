@@ -2,8 +2,10 @@ import { describe, test, expect, beforeAll } from "bun:test"
 import { Effect, Layer } from "effect"
 import { extension } from "@gent/core/extensions/api"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
+import { AgentRunSpawned } from "@gent/core/domain/event"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Permission } from "@gent/core/domain/permission"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
 
@@ -392,6 +394,49 @@ describe("extension state", () => {
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.spawn).toBeDefined()
     expect(setup.projection).toBeDefined()
+  })
+
+  test("ext.state() still maps AgentRun events to subagent simple event names", async () => {
+    const ext = extension("state-agent-run-alias", (b) => {
+      b.state({
+        initial: { seen: false },
+        reduce: (state, event) => {
+          if (event.type === "subagent-spawned") return { state: { seen: true } }
+          return { state }
+        },
+      })
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    expect(setup.spawn).toBeDefined()
+
+    const actorLayer = ExtensionTurnControl.Test()
+    const actor = await Effect.runPromise(
+      setup.spawn!({
+        sessionId: "s1" as SessionId,
+        branchId: "b1" as BranchId,
+      }).pipe(Effect.provide(actorLayer)),
+    )
+
+    await Effect.runPromise(actor.start.pipe(Effect.provide(actorLayer)))
+    await Effect.runPromise(
+      actor
+        .publish(
+          new AgentRunSpawned({
+            parentSessionId: "s1" as SessionId,
+            childSessionId: "s2" as SessionId,
+            agentName: "reviewer",
+            prompt: "inspect",
+            branchId: "b1" as BranchId,
+          }),
+          { sessionId: "s1" as SessionId, branchId: "b1" as BranchId },
+        )
+        .pipe(Effect.provide(actorLayer)),
+    )
+
+    const snapshot = await Effect.runPromise(actor.snapshot.pipe(Effect.provide(actorLayer)))
+    expect(snapshot.state).toEqual({ seen: true })
+    await Effect.runPromise(actor.stop.pipe(Effect.provide(actorLayer)))
   })
 
   test("ext.state() throws on second call", async () => {

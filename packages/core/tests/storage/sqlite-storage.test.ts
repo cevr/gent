@@ -732,5 +732,61 @@ describe("Storage", () => {
         expect(latest?._tag).toBe("AgentRunSucceeded")
       }).pipe(Effect.provide(layer)),
     )
+
+    it.live("getLatestEventTag includes branchless legacy subagent rows for branch queries", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        const sessionId = "compat-agent-run-tagless" as SessionId
+        const branchId = "compat-agent-run-tagless-b" as BranchId
+        const childSessionId = "compat-agent-run-tagless-child" as SessionId
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            name: "compat-agent-run-tagless",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: "reviewer" })}, ${Date.now()})`
+
+        const latestTag = yield* storage.getLatestEventTag({
+          sessionId,
+          branchId,
+          tags: ["AgentRunSucceeded"],
+        })
+        expect(latestTag).toBe("AgentRunSucceeded")
+      }).pipe(Effect.provide(layer)),
+    )
+
+    it.live("getLatestEvent includes branchless legacy subagent rows for branch queries", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        const sessionId = "compat-agent-run-branchless" as SessionId
+        const branchId = "compat-agent-run-branchless-b" as BranchId
+        const childSessionId = "compat-agent-run-branchless-child" as SessionId
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            name: "compat-agent-run-branchless",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, NULL, 'SubagentFailed', ${JSON.stringify({ _tag: "SubagentFailed", parentSessionId: sessionId, childSessionId, agentName: "reviewer" })}, ${Date.now()})`
+
+        const latest = yield* storage.getLatestEvent({
+          sessionId,
+          branchId,
+          tags: ["AgentRunFailed"],
+        })
+        expect(latest?._tag).toBe("AgentRunFailed")
+      }).pipe(Effect.provide(layer)),
+    )
   })
 })
