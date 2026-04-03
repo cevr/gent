@@ -243,7 +243,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 - `defineExtension()` deleted — `extension()` is the only way to create extensions
 - `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
 - `ext.layer(layer)` — layers merge into the main extension graph; services that need `SubagentRunnerService` resolve it lazily at call time
-- `ExtensionSetup.onStartup` — one-time startup effect (e.g., cron registration)
+- `ExtensionSetup.onStartup` — one-time startup effect; failures isolate the extension from activation instead of crashing host startup
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send
 

@@ -32,12 +32,7 @@ import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
 import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
-import {
-  resolveAppBootstrap,
-  resolveInitialState,
-  resolveStartupAuthState,
-  type InitialState,
-} from "./app-bootstrap"
+import { resolveInitialState, resolveStartupAuthState, type InitialState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 
@@ -231,37 +226,38 @@ const main = Command.make(
       const requestedAgent: AgentName | undefined =
         Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
 
-      const state = yield* resolveInitialState({
-        client: bundle.client,
-        cwd,
-        session,
-        continue_: continue_ || debug,
-        headless,
-        prompt,
-        promptArg,
-      })
+      if (headless) {
+        yield* bundle.runtime.lifecycle.waitForReady
+        const state = yield* resolveInitialState({
+          client: bundle.client,
+          cwd,
+          session,
+          continue_: continue_ || debug,
+          headless,
+          prompt,
+          promptArg,
+        })
 
-      const startupAuth = yield* resolveStartupAuthState({
-        client: bundle.client,
-        state,
-        ...(requestedAgent !== undefined ? { requestedAgent } : {}),
-      })
-      const missingProviders = startupAuth.missingProviders
+        const startupAuth = yield* resolveStartupAuthState({
+          client: bundle.client,
+          state,
+          ...(requestedAgent !== undefined ? { requestedAgent } : {}),
+        })
+        const missingProviders = startupAuth.missingProviders
 
-      if (missingProviders.length > 0 && headless && !debug) {
-        const hint = formatMissingProviders(missingProviders)
-        yield* Console.error(`Error: missing required API keys: ${hint}`)
-        return yield* Effect.die(hint)
-      }
+        if (missingProviders.length > 0 && !debug) {
+          const hint = formatMissingProviders(missingProviders)
+          yield* Console.error(`Error: missing required API keys: ${hint}`)
+          return yield* Effect.die(hint)
+        }
 
-      if (state._tag === "headless") {
+        if (state._tag !== "headless") {
+          return yield* Effect.die("headless startup resolved an interactive state")
+        }
+
         yield* runHeadlessTurn(bundle, state, agent)
         return
       }
-      const bootstrap = resolveAppBootstrap(state, {
-        missingProviders: missingProviders as readonly ProviderId[],
-        debugMode: debug,
-      })
 
       // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
       // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
@@ -281,14 +277,19 @@ const main = Command.make(
                   client={bundle.client}
                   runtime={bundle.runtime}
                   log={log}
-                  initialSession={bootstrap.initialSession}
-                  initialAgent={startupAuth.initialAgent}
+                  initialSession={undefined}
+                  initialAgent={undefined}
                 >
                   <ExtensionUIProvider>
-                    <RouterProvider initialRoute={bootstrap.initialRoute}>
+                    <RouterProvider initialRoute={{ _tag: "loading" }}>
                       <App
-                        missingAuthProviders={bootstrap.missingAuthProviders}
-                        debugMode={bootstrap.debugMode}
+                        debugMode={debug}
+                        startup={{
+                          cwd,
+                          sessionId: Option.getOrUndefined(session),
+                          continue_: continue_ || debug,
+                          prompt: Option.getOrUndefined(prompt),
+                        }}
                       />
                     </RouterProvider>
                   </ExtensionUIProvider>
@@ -324,6 +325,7 @@ const sessions = Command.make(
       const bundle = yield* Option.isSome(connect)
         ? Gent.connect({ url: connect.value })
         : resolveLocalOptions(process.cwd()).pipe(Effect.flatMap((options) => Gent.local(options)))
+      yield* bundle.runtime.lifecycle.waitForReady
       const allSessions = yield* bundle.client.session.list()
 
       if (allSessions.length === 0) {

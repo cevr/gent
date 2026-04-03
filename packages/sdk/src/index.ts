@@ -9,6 +9,7 @@ export type {
   SessionSnapshot,
   SessionRuntime,
   CreateSessionResult,
+  ExtensionStatusInfo,
   SteerCommand,
   SessionTreeNode,
   SkillInfo,

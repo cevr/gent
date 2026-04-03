@@ -372,6 +372,7 @@ const NoopExtensionStateRuntime: ExtensionStateRuntimeService = {
   send: () => Effect.die("ephemeral agent runs do not support extension command sends"),
   ask: () => Effect.die("ephemeral agent runs do not support extension requests"),
   getUiSnapshots: () => Effect.succeed([]),
+  getActorStatuses: () => Effect.succeed([]),
   terminateAll: () => Effect.void,
   notifyObservers: () => Effect.void,
 }

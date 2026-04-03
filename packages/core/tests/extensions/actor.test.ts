@@ -315,6 +315,159 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.live("spawn failures are isolated and exposed as actor lifecycle state", () => {
+    const { spawn, projection } = fromReducer({
+      id: "healthy-actor",
+      initial: { count: 0 },
+      reduce: (state: { count: number }) => ({ state: { count: state.count + 1 } }),
+      derive: (state: { count: number }) => ({ uiModel: state }),
+    })
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "healthy-actor" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: { spawn, projection },
+      },
+      {
+        manifest: { id: "broken-actor" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          spawn: () =>
+            Effect.sync(() => {
+              throw new Error("spawn boom")
+            }),
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+      const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+      const statuses = yield* runtime.getActorStatuses(sessionId)
+
+      expect(changed).toBe(true)
+      expect(snapshots.map((snapshot) => snapshot.extensionId)).toEqual(["healthy-actor"])
+      expect(statuses).toEqual([
+        {
+          extensionId: "healthy-actor",
+          sessionId,
+          branchId,
+          status: "running",
+        },
+        {
+          extensionId: "broken-actor",
+          sessionId,
+          branchId,
+          status: "failed",
+          error: "Error: spawn boom",
+        },
+      ])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("send normalizes actor command failures to ExtensionProtocolError", () => {
+    const Ping = ExtensionMessage("broken-command", "Ping", {})
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "broken-command" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          protocols: [Ping],
+          spawn: () =>
+            Effect.succeed({
+              id: "broken-command",
+              start: Effect.void,
+              publish: () => Effect.succeed(false),
+              send: () =>
+                Effect.sync(() => {
+                  throw new Error("command boom")
+                }),
+              ask: () => Effect.die("not implemented"),
+              snapshot: Effect.succeed({ state: {}, epoch: 0 }),
+              stop: Effect.void,
+            }),
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      const exit = yield* Effect.exit(runtime.send(sessionId, Ping({}), branchId))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Success") return
+      const failure = Cause.squash(exit.cause)
+      expect(failure).toBeInstanceOf(ExtensionProtocolError)
+      expect((failure as ExtensionProtocolError).phase).toBe("command")
+      expect((failure as ExtensionProtocolError).message).toContain("command boom")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("ask normalizes actor reply failures to ExtensionProtocolError", () => {
+    const Ping = ExtensionMessage.reply("broken-request", "Ping", {}, Schema.String)
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "broken-request" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          protocols: [Ping],
+          spawn: () =>
+            Effect.succeed({
+              id: "broken-request",
+              start: Effect.void,
+              publish: () => Effect.succeed(false),
+              send: () => Effect.void,
+              ask: () =>
+                Effect.sync(() => {
+                  throw new Error("reply boom")
+                }),
+              snapshot: Effect.succeed({ state: {}, epoch: 0 }),
+              stop: Effect.void,
+            }),
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      const exit = yield* Effect.exit(runtime.ask(sessionId, Ping({}), branchId))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Success") return
+      const failure = Cause.squash(exit.cause)
+      expect(failure).toBeInstanceOf(ExtensionProtocolError)
+      expect((failure as ExtensionProtocolError).phase).toBe("reply")
+      expect((failure as ExtensionProtocolError).message).toContain("reply boom")
+    }).pipe(Effect.provide(layer))
+  })
+
   it.live("terminateAll calls actor.stop and removes session", () => {
     const terminated: string[] = []
     const extensions: LoadedExtension[] = [

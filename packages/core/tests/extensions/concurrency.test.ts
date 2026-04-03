@@ -94,6 +94,7 @@ describe("extension concurrency", () => {
         send: () => Effect.void,
         ask: () => Effect.die("not implemented"),
         getUiSnapshots: () => Effect.succeed([]),
+        getActorStatuses: () => Effect.succeed([]),
         terminateAll: () => Effect.void,
       })
 
@@ -138,6 +139,7 @@ describe("extension concurrency", () => {
         send: () => Effect.void,
         ask: () => Effect.die("not implemented"),
         getUiSnapshots: () => Effect.succeed([]),
+        getActorStatuses: () => Effect.succeed([]),
         terminateAll: () => Effect.void,
       })
 

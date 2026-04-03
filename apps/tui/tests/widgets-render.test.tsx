@@ -1,16 +1,62 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, test, expect } from "bun:test"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { SyntaxStyle } from "@opentui/core"
-import type { QueueEntryInfo } from "@gent/sdk"
+import type { ConnectionState, QueueEntryInfo, SessionInfo } from "@gent/sdk"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
-import { renderFrame, renderWithProviders } from "./render-harness"
+import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
+import type { GentRuntime } from "../src/client"
+import type { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const syntaxStyle = () => SyntaxStyle.create()
+
+const testSession: SessionInfo = {
+  id: "session-test" as SessionId,
+  name: "Test Session",
+  cwd: "/tmp/gent-test",
+  reasoningLevel: undefined,
+  branchId: "branch-test" as BranchId,
+  parentSessionId: undefined,
+  parentBranchId: undefined,
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+}
+
+const createMutableRuntime = (initialState: ConnectionState) => {
+  let state = initialState
+  const listeners = new Set<(state: ConnectionState) => void>()
+  const runtime: GentRuntime = {
+    cast: (effect) => {
+      Effect.runFork(effect)
+    },
+    fork: Effect.runFork as never,
+    run: Effect.runPromise as never,
+    lifecycle: {
+      getState: () => state,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        listener(state)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+      restart: Effect.void,
+      waitForReady: Effect.void,
+    },
+  }
+
+  return {
+    runtime,
+    emit: (nextState: ConnectionState) => {
+      state = nextState
+      for (const listener of listeners) listener(nextState)
+    },
+  }
+}
 
 describe("TUI renderer surfaces", () => {
   test("MessageList renders user labels and assistant reasoning", async () => {
@@ -119,6 +165,112 @@ describe("TUI renderer surfaces", () => {
 
     const frame = renderFrame(setup)
     expect(frame).not.toContain("connection")
+  })
+
+  test("ConnectionWidget surfaces failed extension activation", async () => {
+    const setup = await renderWithProviders(() => <ConnectionWidget />, {
+      client: createMockClient({
+        extension: {
+          listStatus: () =>
+            Effect.succeed([
+              {
+                manifest: { id: "@gent/memory" },
+                kind: "builtin",
+                sourcePath: "builtin",
+                status: "failed" as const,
+                phase: "startup" as const,
+                error: "startup boom",
+              },
+            ]),
+        },
+      }),
+    })
+
+    const frame = renderFrame(setup)
+    expect(frame).toContain("connection")
+    expect(frame).toContain("failed extensions")
+    expect(frame).toContain("@gent/memory")
+  })
+
+  test("ConnectionWidget surfaces failed session actors", async () => {
+    const setup = await renderWithProviders(() => <ConnectionWidget />, {
+      initialSession: testSession,
+      client: createMockClient({
+        extension: {
+          listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+            expect(sessionId).toBe(testSession.id)
+            return Effect.succeed([
+              {
+                manifest: { id: "@gent/plan" },
+                kind: "builtin",
+                sourcePath: "builtin",
+                status: "active" as const,
+                actor: {
+                  extensionId: "@gent/plan",
+                  sessionId: testSession.id,
+                  branchId: testSession.branchId,
+                  status: "failed" as const,
+                  error: "actor boom",
+                },
+              },
+            ])
+          },
+        },
+      }),
+    })
+
+    const frame = renderFrame(setup)
+    expect(frame).toContain("connection")
+    expect(frame).toContain("failed session actors")
+    expect(frame).toContain("@gent/plan")
+  })
+
+  test("ConnectionWidget refreshes extension status after reconnect generation changes", async () => {
+    const lifecycle = createMutableRuntime({ _tag: "connected", generation: 0 })
+    let currentStatuses = [
+      {
+        manifest: { id: "@gent/plan" },
+        kind: "builtin" as const,
+        sourcePath: "builtin",
+        status: "active" as const,
+        actor: {
+          extensionId: "@gent/plan",
+          sessionId: testSession.id,
+          branchId: testSession.branchId,
+          status: "failed" as const,
+          error: "actor boom",
+        },
+      },
+    ]
+
+    const setup = await renderWithProviders(() => <ConnectionWidget />, {
+      initialSession: testSession,
+      runtime: lifecycle.runtime,
+      client: createMockClient({
+        extension: {
+          listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+            expect(sessionId).toBe(testSession.id)
+            return Effect.succeed(currentStatuses)
+          },
+        },
+      }),
+    })
+
+    expect(renderFrame(setup)).toContain("failed session actors")
+
+    currentStatuses = []
+    lifecycle.emit({ _tag: "reconnecting", attempt: 1, generation: 1 })
+    await Promise.resolve()
+    await setup.renderOnce()
+    lifecycle.emit({ _tag: "connected", generation: 1 })
+    await Promise.resolve()
+    await setup.renderOnce()
+    await Promise.resolve()
+    await setup.renderOnce()
+
+    const frame = renderFrame(setup)
+    expect(frame).not.toContain("failed session actors")
+    expect(frame).not.toContain("@gent/plan")
   })
 })
 

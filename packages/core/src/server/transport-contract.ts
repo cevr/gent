@@ -398,6 +398,43 @@ export const AskExtensionMessageInput = Schema.Struct({
 })
 export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
 
+export const ListExtensionStatusInput = Schema.Struct({
+  sessionId: Schema.optional(SessionId),
+})
+export type ListExtensionStatusInput = typeof ListExtensionStatusInput.Type
+
+export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
+export type ExtensionActivationPhase = typeof ExtensionActivationPhase.Type
+
+export const ExtensionActorLifecycleStatus = Schema.Literals(["starting", "running", "failed"])
+export type ExtensionActorLifecycleStatus = typeof ExtensionActorLifecycleStatus.Type
+
+export const ExtensionActorStatusInfo = Schema.Struct({
+  extensionId: Schema.String,
+  sessionId: SessionId,
+  branchId: Schema.optional(BranchId),
+  status: ExtensionActorLifecycleStatus,
+  error: Schema.optional(Schema.String),
+})
+export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
+
+export const ExtensionManifestInfo = Schema.Struct({
+  id: Schema.String,
+  version: Schema.optional(Schema.String),
+})
+export type ExtensionManifestInfo = typeof ExtensionManifestInfo.Type
+
+export const ExtensionStatusInfo = Schema.Struct({
+  manifest: ExtensionManifestInfo,
+  kind: Schema.Literals(["builtin", "user", "project"]),
+  sourcePath: Schema.String,
+  status: Schema.Literals(["active", "failed"]),
+  phase: Schema.optional(ExtensionActivationPhase),
+  error: Schema.optional(Schema.String),
+  actor: Schema.optional(ExtensionActorStatusInfo),
+})
+export type ExtensionStatusInfo = typeof ExtensionStatusInfo.Type
+
 export const SkillInfo = Schema.Struct({
   name: Schema.String,
   description: Schema.String,

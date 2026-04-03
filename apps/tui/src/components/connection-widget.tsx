@@ -2,15 +2,40 @@ import { Show } from "solid-js"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
 import { useClient } from "../client/index"
+import { useExtensionUI } from "../extensions/context"
 
 export function ConnectionWidget() {
   const client = useClient()
+  const extensionUI = useExtensionUI()
   const { theme } = useTheme()
+  const disconnectedReason = () => {
+    const state = client.connectionState()
+    if (state?._tag !== "disconnected" || state.reason === "stopped") return null
+    return state.reason
+  }
 
-  const visible = () => client.isReconnecting() || client.connectionIssue() !== null
-  const accent = () => (client.isReconnecting() ? theme.warning : theme.error)
+  const failedExtensions = () =>
+    extensionUI.statuses().filter((status) => status.status === "failed")
+  const failedActors = () =>
+    extensionUI.statuses().filter((status) => status.actor?.status === "failed")
+  const hasFailedExtensions = () => failedExtensions().length > 0
+  const hasFailedActors = () => failedActors().length > 0
+  const visible = () =>
+    client.isReconnecting() ||
+    client.connectionIssue() !== null ||
+    disconnectedReason() !== null ||
+    hasFailedExtensions() ||
+    hasFailedActors()
+  const accent = () => {
+    if (client.isReconnecting()) return theme.warning
+    if (hasFailedExtensions() || hasFailedActors()) return theme.warning
+    return theme.error
+  }
   const subtitle = () => {
     if (client.isReconnecting()) return "worker reconnect in progress"
+    if (hasFailedActors()) return "extension runtime degraded"
+    if (hasFailedExtensions()) return "extension activation degraded"
+    if (disconnectedReason() !== null) return "runtime unavailable"
     return client.connectionIssue() ?? ""
   }
   const restartCount = () => client.connectionGeneration()
@@ -42,6 +67,34 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>{client.connectionIssue()}</span>
+            </text>
+          </Show>
+          <Show when={disconnectedReason() !== null}>
+            <text>
+              <span style={{ fg: accent() }}>{"│ "}</span>
+              <span style={{ fg: theme.text }}>{disconnectedReason()}</span>
+            </text>
+          </Show>
+          <Show when={hasFailedExtensions()}>
+            <text>
+              <span style={{ fg: accent() }}>{"│ "}</span>
+              <span style={{ fg: theme.text }}>
+                failed extensions:{" "}
+                {failedExtensions()
+                  .map((status) => status.manifest.id)
+                  .join(", ")}
+              </span>
+            </text>
+          </Show>
+          <Show when={hasFailedActors()}>
+            <text>
+              <span style={{ fg: accent() }}>{"│ "}</span>
+              <span style={{ fg: theme.text }}>
+                failed session actors:{" "}
+                {failedActors()
+                  .map((status) => status.manifest.id)
+                  .join(", ")}
+              </span>
             </text>
           </Show>
         </InlineChrome.Body>

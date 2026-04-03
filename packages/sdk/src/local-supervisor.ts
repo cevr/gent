@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Ref, Scope, Semaphore } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Ref, Scope, Semaphore } from "effect"
 import type { RpcClient, RpcGroup } from "effect/unstable/rpc"
 import type { GentRpcs } from "@gent/core/server/rpcs.js"
 import {
@@ -52,6 +52,7 @@ export const startLocalSupervisor = <E, R>(
 ): Effect.Effect<LocalSupervisor, GentConnectionError, R | Scope.Scope> =>
   Effect.acquireRelease(
     Effect.gen(function* () {
+      const supervisorScope = yield* Scope.Scope
       const supervisorServices = yield* Effect.services<R>()
       const listeners = new Set<(state: ConnectionState) => void>()
       const transitionLock = yield* Semaphore.make(1)
@@ -59,6 +60,7 @@ export const startLocalSupervisor = <E, R>(
       const stoppedRef = yield* Ref.make(false)
       const scopeRef = yield* Ref.make<Scope.Closeable | undefined>(undefined)
       const clientRef = yield* Ref.make<GentRpcClient | undefined>(undefined)
+      const launchFiberRef = yield* Ref.make<Fiber.Fiber<void, never> | undefined>(undefined)
       const initialReady = yield* Deferred.make<void>()
       const readyRef = yield* Ref.make(initialReady)
       const stateRef = yield* Ref.make<ConnectionState>({ _tag: "connecting" })
@@ -80,39 +82,77 @@ export const startLocalSupervisor = <E, R>(
           }
         })
 
-      const launchGeneration = (generation: number, transition: ConnectionState) =>
+      const interruptLaunch = Ref.getAndSet(launchFiberRef, undefined).pipe(
+        Effect.flatMap((fiber) =>
+          fiber === undefined ? Effect.void : Fiber.interrupt(fiber).pipe(Effect.asVoid),
+        ),
+      )
+
+      const launchGeneration = (generation: number, ready: Deferred.Deferred<void>) =>
         Effect.gen(function* () {
           const stopped = yield* Ref.get(stoppedRef)
           if (stopped) {
             return yield* Effect.fail(new GentConnectionError({ message: "local runtime stopped" }))
           }
 
-          const ready = yield* Deferred.make<void>()
-          yield* Ref.set(readyRef, ready)
-          yield* emit(transition)
-
           const scope = yield* Scope.make()
+          yield* Ref.set(scopeRef, scope)
           const exit = yield* buildClient(scope).pipe(Effect.mapError(mapError), Effect.exit)
           if (Exit.isFailure(exit)) {
             yield* Scope.close(scope, exit)
+            const currentScope = yield* Ref.get(scopeRef)
+            if (currentScope === scope) {
+              yield* Ref.set(scopeRef, undefined)
+            }
             yield* Ref.set(clientRef, undefined)
-            const error = mapError(Cause.squash(exit.cause))
+            const squashed = Cause.squash(exit.cause)
+            const error = squashed instanceof GentConnectionError ? squashed : mapError(squashed)
+            const currentGeneration = yield* Ref.get(generationRef)
+            const stoppedNow = yield* Ref.get(stoppedRef)
+            if (currentGeneration !== generation || stoppedNow) {
+              yield* Deferred.succeed(ready, void 0)
+              return yield* Effect.fail(error)
+            }
             yield* emit({ _tag: "disconnected", reason: error.message })
             yield* Deferred.succeed(ready, void 0)
             return yield* Effect.fail(error)
           }
 
-          yield* Ref.set(scopeRef, scope)
+          const currentGeneration = yield* Ref.get(generationRef)
+          const stoppedNow = yield* Ref.get(stoppedRef)
+          if (currentGeneration !== generation || stoppedNow) {
+            yield* Scope.close(scope, Exit.void)
+            const currentScope = yield* Ref.get(scopeRef)
+            if (currentScope === scope) {
+              yield* Ref.set(scopeRef, undefined)
+            }
+            yield* Deferred.succeed(ready, void 0)
+            return
+          }
+
           yield* Ref.set(clientRef, exit.value)
           yield* emit({ _tag: "connected", generation })
           yield* Deferred.succeed(ready, void 0)
         })
 
+      const startLaunch = (generation: number, transition: ConnectionState) =>
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<void>()
+          yield* Ref.set(readyRef, ready)
+          yield* emit(transition)
+          const fiber = yield* launchGeneration(generation, ready).pipe(
+            Effect.catchEager(() => Effect.void),
+            Effect.forkScoped,
+          )
+          yield* Ref.set(launchFiberRef, fiber)
+        })
+
       const restartInternal = Effect.gen(function* () {
         const nextGeneration = (yield* Ref.get(generationRef)) + 1
         yield* Ref.set(generationRef, nextGeneration)
+        yield* interruptLaunch
         yield* closeCurrentScope(false)
-        yield* launchGeneration(nextGeneration, {
+        yield* startLaunch(nextGeneration, {
           _tag: "reconnecting",
           attempt: nextGeneration,
           generation: nextGeneration,
@@ -120,11 +160,15 @@ export const startLocalSupervisor = <E, R>(
       })
 
       const restart = transitionLock.withPermits(1)(
-        Effect.promise(() => Effect.runPromiseWith(supervisorServices)(restartInternal)),
+        Effect.promise(() =>
+          Effect.runPromiseWith(supervisorServices)(
+            restartInternal.pipe(Effect.provideService(Scope.Scope, supervisorScope)),
+          ),
+        ),
       )
 
       yield* transitionLock.withPermits(1)(
-        launchGeneration(0, {
+        startLaunch(0, {
           _tag: "connecting",
         }),
       )
@@ -151,6 +195,7 @@ export const startLocalSupervisor = <E, R>(
         .withPermits(1)(
           Effect.gen(function* () {
             yield* Ref.set(stoppedRef, true)
+            yield* interruptLaunch
             yield* closeCurrentScope(true)
             yield* emit({ _tag: "disconnected", reason: "stopped" })
             const ready = yield* Ref.get(readyRef)

@@ -26,6 +26,7 @@ import {
   type SessionRuntime,
   type SessionTreeNode,
   type CreateSessionResult,
+  type ExtensionStatusInfo,
 } from "@gent/core/server/transport-contract.js"
 import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
@@ -80,6 +81,7 @@ export type {
   SessionRuntime,
   SessionTreeNode,
   CreateSessionResult,
+  ExtensionStatusInfo,
 }
 export { GentConnectionError }
 export type { GentNamespacedClient, GentRuntime }

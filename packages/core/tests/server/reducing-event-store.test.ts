@@ -32,6 +32,7 @@ describe("ReducingEventStore", () => {
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
+      getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
     })
@@ -69,6 +70,7 @@ describe("ReducingEventStore", () => {
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
+      getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
     })
@@ -110,6 +112,7 @@ describe("ReducingEventStore", () => {
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
+      getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
     })
@@ -144,6 +147,7 @@ describe("ReducingEventStore", () => {
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
+      getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
     })

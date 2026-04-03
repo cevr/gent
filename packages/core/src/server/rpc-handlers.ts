@@ -17,6 +17,7 @@ import { SessionEvents } from "./session-events.js"
 import { SessionSubscriptions } from "./session-subscriptions.js"
 import { InteractionCommands } from "./interaction-commands.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { TaskProtocol } from "../extensions/task-tools-protocol.js"
 
 // ============================================================================
@@ -39,6 +40,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
     const extensionStateRuntime = yield* ExtensionStateRuntime
+    const extensionRegistry = yield* ExtensionRegistry
     const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
 
@@ -253,6 +255,21 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           Effect.map((result) => result ?? { status: "pending" as const, messageCount: 0 }),
           Effect.catchEager(() => Effect.succeed({ status: "pending" as const, messageCount: 0 })),
         ),
+
+      // -- extension --
+      "extension.listStatus": ({ sessionId }) =>
+        Effect.gen(function* () {
+          const activationStatuses = yield* extensionRegistry.listExtensionStatuses()
+          if (sessionId === undefined) return activationStatuses
+          const actorStatuses = yield* extensionStateRuntime.getActorStatuses(sessionId)
+          const actorByExtension = new Map(
+            actorStatuses.map((status) => [status.extensionId, status] as const),
+          )
+          return activationStatuses.map((status) => {
+            const actor = actorByExtension.get(status.manifest.id)
+            return actor === undefined ? status : { ...status, actor }
+          })
+        }),
 
       // -- skill --
       "skill.list": () =>

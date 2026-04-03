@@ -1,7 +1,8 @@
-import { Deferred, Effect, Layer, Ref, Schema, Semaphore, ServiceMap } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, Ref, Schema, Semaphore, ServiceMap } from "effect"
 import type { AgentEvent, ExtensionUiSnapshot } from "../../domain/event.js"
 import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/event.js"
 import type {
+  ExtensionActorStatusInfo,
   ExtensionDeriveContext,
   ExtensionProjection,
   ExtensionProjectionConfig,
@@ -50,6 +51,9 @@ export interface ExtensionStateRuntimeService {
     sessionId: SessionId,
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<ExtensionUiSnapshot>>
+  readonly getActorStatuses: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<ExtensionActorStatusInfo>>
   readonly terminateAll: (sessionId: SessionId) => Effect.Effect<void>
   readonly notifyObservers: (event: AgentEvent) => Effect.Effect<void>
 }
@@ -66,7 +70,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
       Effect.gen(function* () {
         const spawns: Array<{
           extensionId: string
-          spawn: SpawnExtensionRef
+          spawn: SpawnExtensionRef<never>
           projection?: ExtensionProjectionConfig
         }> = []
         const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
@@ -74,7 +78,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           if (ext.setup.spawn !== undefined) {
             spawns.push({
               extensionId: ext.manifest.id,
-              spawn: ext.setup.spawn,
+              spawn: ext.setup.spawn as SpawnExtensionRef<never>,
               projection: ext.setup.projection,
             })
           }
@@ -97,9 +101,30 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           | { readonly _tag: "pending"; readonly gate: Deferred.Deferred<ActorEntry[]> }
 
         const actorsRef = yield* Ref.make<Map<SessionId, ActorSlot>>(new Map())
+        const actorStatusesRef = yield* Ref.make<
+          Map<SessionId, Map<string, ExtensionActorStatusInfo>>
+        >(new Map())
         const spawnSemaphore = yield* Semaphore.make(1)
 
-        const getOrSpawnActors = (sessionId: SessionId, branchId?: BranchId) =>
+        const setActorStatus = (status: ExtensionActorStatusInfo) =>
+          Ref.update(actorStatusesRef, (current) => {
+            const next = new Map(current)
+            const byExtension = new Map(next.get(status.sessionId) ?? new Map())
+            byExtension.set(status.extensionId, status)
+            next.set(status.sessionId, byExtension)
+            return next
+          })
+
+        const formatCause = (cause: Cause.Cause<unknown>) => String(Cause.squash(cause))
+        const logIsolatedFailure = (message: string, fields: Record<string, unknown>) =>
+          Effect.sync(() => {
+            console.warn(message, fields)
+          })
+
+        const getOrSpawnActors = (
+          sessionId: SessionId,
+          branchId?: BranchId,
+        ): Effect.Effect<ActorEntry[]> =>
           Effect.withSpan("ExtensionStateRuntime.spawnActors")(
             Effect.gen(function* () {
               const result = yield* spawnSemaphore.withPermits(1)(
@@ -123,34 +148,105 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               }
 
               const gate = result.gate
-              const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
-              const spawnLayer =
-                turnControl._tag === "Some"
-                  ? Layer.succeed(ExtensionTurnControl, turnControl.value)
-                  : ExtensionTurnControl.Test()
+              const exit = yield* Effect.exit(
+                Effect.gen(function* () {
+                  const turnControl = yield* Effect.serviceOption(ExtensionTurnControl)
+                  const spawnLayer =
+                    turnControl._tag === "Some"
+                      ? Layer.succeed(ExtensionTurnControl, turnControl.value)
+                      : ExtensionTurnControl.Test()
 
-              const entries: ActorEntry[] = []
-              for (const { extensionId, spawn, projection } of spawns) {
-                const spawnEffect: Effect.Effect<ExtensionRef | undefined> = spawn({
-                  sessionId,
-                  branchId,
-                }).pipe(
-                  Effect.tap((ref) => ref.start),
-                  // @effect-diagnostics-next-line strictEffectProvide:off
-                  Effect.provide(spawnLayer),
-                  Effect.catchDefect((defect) =>
-                    Effect.logWarning("extension.start.failed").pipe(
-                      Effect.annotateLogs({ extensionId, error: String(defect) }),
-                      Effect.as(undefined),
-                    ),
-                  ),
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ) as any
-                const ref = yield* spawnEffect
-                if (ref !== undefined) {
-                  entries.push({ ref, projection })
-                }
-              }
+                  const entries: ActorEntry[] = []
+                  for (const { extensionId, spawn, projection } of spawns) {
+                    yield* setActorStatus({
+                      extensionId,
+                      sessionId,
+                      branchId,
+                      status: "starting",
+                    })
+                    const ref = yield* spawn({
+                      sessionId,
+                      branchId,
+                    }).pipe(
+                      Effect.tap((actorRef) =>
+                        Effect.exit(actorRef.start).pipe(
+                          Effect.flatMap((startExit) => {
+                            if (Exit.isSuccess(startExit)) {
+                              return setActorStatus({
+                                extensionId,
+                                sessionId,
+                                branchId,
+                                status: "running",
+                              }).pipe(Effect.as(actorRef))
+                            }
+                            const error = formatCause(startExit.cause)
+                            return setActorStatus({
+                              extensionId,
+                              sessionId,
+                              branchId,
+                              status: "failed",
+                              error,
+                            }).pipe(
+                              Effect.andThen(
+                                Effect.logWarning("extension.start.failed").pipe(
+                                  Effect.annotateLogs({ extensionId, error }),
+                                ),
+                              ),
+                              Effect.as(undefined),
+                            )
+                          }),
+                        ),
+                      ),
+                      // @effect-diagnostics-next-line strictEffectProvide:off
+                      Effect.provide(spawnLayer),
+                      Effect.catchEager((error) =>
+                        setActorStatus({
+                          extensionId,
+                          sessionId,
+                          branchId,
+                          status: "failed",
+                          error: String(error),
+                        }).pipe(
+                          Effect.andThen(
+                            Effect.logWarning("extension.start.failed").pipe(
+                              Effect.annotateLogs({ extensionId, error: String(error) }),
+                            ),
+                          ),
+                          Effect.as(undefined),
+                        ),
+                      ),
+                      Effect.catchDefect((defect) =>
+                        setActorStatus({
+                          extensionId,
+                          sessionId,
+                          branchId,
+                          status: "failed",
+                          error: String(defect),
+                        }).pipe(
+                          Effect.andThen(
+                            Effect.logWarning("extension.start.failed").pipe(
+                              Effect.annotateLogs({ extensionId, error: String(defect) }),
+                            ),
+                          ),
+                          Effect.as(undefined),
+                        ),
+                      ),
+                    )
+                    if (ref !== undefined) {
+                      entries.push({ ref, projection })
+                    }
+                  }
+                  return entries
+                }),
+              )
+
+              const entries =
+                exit._tag === "Success"
+                  ? exit.value
+                  : yield* logIsolatedFailure("extension.spawn.session.failed", {
+                      sessionId,
+                      error: formatCause(exit.cause),
+                    }).pipe(Effect.as([] as ActorEntry[]))
 
               yield* Ref.update(actorsRef, (current) => {
                 const next = new Map(current)
@@ -160,7 +256,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               yield* Deferred.succeed(gate, entries)
               return entries
             }),
-          )
+          ) as Effect.Effect<ActorEntry[]>
 
         const findEntry = (entries: ReadonlyArray<ActorEntry>, extensionId: string) =>
           entries.find((entry) => entry.ref.id === extensionId)
@@ -236,16 +332,14 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 let changed = false
                 const entries = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
                 for (const { ref } of entries) {
-                  const actorChanged = yield* ref
-                    .publish(event, ctx)
-                    .pipe(
-                      Effect.catchDefect((defect) =>
-                        Effect.logWarning("extension.publish.failed").pipe(
-                          Effect.annotateLogs({ actorId: ref.id, error: String(defect) }),
-                          Effect.as(false),
-                        ),
-                      ),
-                    )
+                  const publishExit = yield* Effect.exit(ref.publish(event, ctx))
+                  const actorChanged =
+                    publishExit._tag === "Success"
+                      ? publishExit.value
+                      : yield* logIsolatedFailure("extension.publish.failed", {
+                          actorId: ref.id,
+                          error: formatCause(publishExit.cause),
+                        }).pipe(Effect.as(false))
                   if (actorChanged) changed = true
                 }
                 return changed
@@ -260,13 +354,23 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 for (const { ref, projection } of entries) {
                   const derive = projection?.derive
                   if (derive === undefined) continue
-                  const { state } = yield* ref.snapshot.pipe(
-                    Effect.catchDefect(() => Effect.succeed({ state: undefined, epoch: 0 })),
-                  )
+                  const snapshotExit = yield* Effect.exit(ref.snapshot)
+                  const { state } =
+                    snapshotExit._tag === "Success"
+                      ? snapshotExit.value
+                      : yield* logIsolatedFailure("extension.snapshot.failed", {
+                          actorId: ref.id,
+                          error: formatCause(snapshotExit.cause),
+                        }).pipe(Effect.as({ state: undefined, epoch: 0 }))
                   if (state === undefined) continue
-                  const derived = yield* Effect.sync(() => derive(state, ctx)).pipe(
-                    Effect.catchDefect(() => Effect.as(Effect.void, undefined)),
-                  )
+                  const deriveExit = yield* Effect.exit(Effect.sync(() => derive(state, ctx)))
+                  const derived =
+                    deriveExit._tag === "Success"
+                      ? deriveExit.value
+                      : yield* logIsolatedFailure("extension.derive.failed", {
+                          actorId: ref.id,
+                          error: formatCause(deriveExit.cause),
+                        }).pipe(Effect.as(undefined))
                   if (derived !== undefined) {
                     const { uiModel: _, ...turn } = derived
                     results.push({ extensionId: ref.id, projection: turn })
@@ -288,7 +392,15 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 const decoded = yield* decodeMessage(message, "command")
                 const entry = findEntry(entries, decoded.extensionId)
                 if (entry === undefined) return
-                yield* entry.ref.send(decoded, branchId)
+                const sendExit = yield* Effect.exit(entry.ref.send(decoded, branchId))
+                if (sendExit._tag === "Failure") {
+                  return yield* protocolError(
+                    decoded.extensionId,
+                    decoded._tag,
+                    "command",
+                    formatCause(sendExit.cause),
+                  )
+                }
               }),
             ),
 
@@ -324,12 +436,20 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                     `extension "${decoded.extensionId}" is not loaded`,
                   )
                 }
-                const reply = yield* entry.ref.ask(decoded, branchId)
+                const replyExit = yield* Effect.exit(entry.ref.ask(decoded, branchId))
+                if (replyExit._tag === "Failure") {
+                  return yield* protocolError(
+                    decoded.extensionId,
+                    decoded._tag,
+                    "reply",
+                    formatCause(replyExit.cause),
+                  )
+                }
                 return yield* decodeReply(
                   decoded.extensionId,
                   decoded._tag,
                   definition.replySchema,
-                  reply,
+                  replyExit.value,
                 ).pipe(Effect.map((value) => value as ExtractExtensionReply<M>))
               }),
             ),
@@ -342,13 +462,23 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 for (const { ref, projection } of entries) {
                   const derive = projection?.derive
                   if (derive === undefined) continue
-                  const { state, epoch } = yield* ref.snapshot.pipe(
-                    Effect.catchDefect(() => Effect.succeed({ state: undefined, epoch: 0 })),
-                  )
+                  const snapshotExit = yield* Effect.exit(ref.snapshot)
+                  const { state, epoch } =
+                    snapshotExit._tag === "Success"
+                      ? snapshotExit.value
+                      : yield* logIsolatedFailure("extension.snapshot.failed", {
+                          actorId: ref.id,
+                          error: formatCause(snapshotExit.cause),
+                        }).pipe(Effect.as({ state: undefined, epoch: 0 }))
                   if (state === undefined) continue
-                  const derived = yield* Effect.sync(() => derive(state, undefined)).pipe(
-                    Effect.catchDefect(() => Effect.as(Effect.void, undefined)),
-                  )
+                  const deriveExit = yield* Effect.exit(Effect.sync(() => derive(state, undefined)))
+                  const derived =
+                    deriveExit._tag === "Success"
+                      ? deriveExit.value
+                      : yield* logIsolatedFailure("extension.derive.failed", {
+                          actorId: ref.id,
+                          error: formatCause(deriveExit.cause),
+                        }).pipe(Effect.as(undefined))
                   let uiModel = (derived as ExtensionProjection | undefined)?.uiModel
                   if (uiModel !== undefined && projection?.uiModelSchema !== undefined) {
                     uiModel = yield* Schema.decodeUnknownEffect(
@@ -378,16 +508,26 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               }),
             ),
 
+          getActorStatuses: (sessionId) =>
+            Effect.gen(function* () {
+              return [...((yield* Ref.get(actorStatusesRef)).get(sessionId) ?? new Map()).values()]
+            }),
+
           terminateAll: (sessionId) =>
             Effect.withSpan("ExtensionStateRuntime.terminateAll")(
               Effect.gen(function* () {
                 const slot = (yield* Ref.get(actorsRef)).get(sessionId)
                 if (slot !== undefined && slot._tag === "ready") {
                   for (const { ref } of slot.entries) {
-                    yield* ref.stop.pipe(Effect.catchDefect(() => Effect.void))
+                    yield* Effect.exit(ref.stop).pipe(Effect.asVoid)
                   }
                 }
                 yield* Ref.update(actorsRef, (current) => {
+                  const next = new Map(current)
+                  next.delete(sessionId)
+                  return next
+                })
+                yield* Ref.update(actorStatusesRef, (current) => {
                   const next = new Map(current)
                   next.delete(sessionId)
                   return next

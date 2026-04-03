@@ -260,8 +260,11 @@ describe("resolveExtensions — disabled filtering", () => {
 })
 
 describe("ExtensionRegistry", () => {
-  const buildRegistry = (extensions: LoadedExtension[]) => {
-    const resolved = resolveExtensions(extensions)
+  const buildRegistry = (
+    extensions: LoadedExtension[],
+    failedExtensions: Parameters<typeof resolveExtensions>[1] = [],
+  ) => {
+    const resolved = resolveExtensions(extensions, failedExtensions)
     return ManagedRuntime.make(ExtensionRegistry.fromResolved(resolved)).runPromise(
       Effect.gen(function* () {
         return yield* ExtensionRegistry
@@ -287,6 +290,52 @@ describe("ExtensionRegistry", () => {
     ])
     const tools = await Effect.runPromise(registry.listTools())
     expect(tools.length).toBe(2)
+  })
+
+  test("extension diagnostics expose both active and failed activation state", async () => {
+    const registry = await buildRegistry(
+      [makeExt("healthy", "builtin", { tools: [makeTool("read")] })],
+      [
+        {
+          manifest: { id: "broken" },
+          kind: "builtin",
+          sourcePath: "builtin",
+          phase: "startup",
+          error: "startup boom",
+        },
+      ],
+    )
+
+    const tools = await Effect.runPromise(registry.listTools())
+    const failed = await Effect.runPromise(registry.listFailedExtensions())
+    const statuses = await Effect.runPromise(registry.listExtensionStatuses())
+
+    expect(tools.map((tool) => tool.name)).toEqual(["read"])
+    expect(failed).toEqual([
+      {
+        manifest: { id: "broken" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        phase: "startup",
+        error: "startup boom",
+      },
+    ])
+    expect(statuses).toEqual([
+      {
+        manifest: { id: "healthy" },
+        kind: "builtin",
+        sourcePath: "/test/healthy",
+        status: "active",
+      },
+      {
+        manifest: { id: "broken" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        status: "failed",
+        phase: "startup",
+        error: "startup boom",
+      },
+    ])
   })
 
   test("getAgent returns agent by name", async () => {

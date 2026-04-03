@@ -3,6 +3,8 @@ import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
 import type {
   ExtensionKind,
+  ExtensionStatusInfo,
+  FailedExtension,
   InteractionHandlerContribution,
   InteractionHandlerType,
   TurnProjection,
@@ -28,6 +30,8 @@ export interface ResolvedExtensions {
   readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
+  readonly failedExtensions: ReadonlyArray<FailedExtension>
+  readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
 }
 
 /** Compile a keyed contribution from sorted extensions. Later scope wins; same-scope collisions throw. */
@@ -58,6 +62,7 @@ const compileContributions = <T>(
 /** Compile loaded extensions into an immutable resolved snapshot. Throws on same-scope collisions. */
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
+  failedExtensions: ReadonlyArray<FailedExtension> = [],
 ): ResolvedExtensions => {
   const sorted = [...extensions].sort((a, b) => {
     const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
@@ -107,6 +112,18 @@ export const resolveExtensions = (
   }
 
   const hooks = compileHooks(sorted)
+  const extensionStatuses: ExtensionStatusInfo[] = [
+    ...sorted.map((ext) => ({
+      manifest: ext.manifest,
+      kind: ext.kind,
+      sourcePath: ext.sourcePath,
+      status: "active" as const,
+    })),
+    ...failedExtensions.map((failure) => ({
+      ...failure,
+      status: "failed" as const,
+    })),
+  ]
 
   return {
     tools,
@@ -117,6 +134,8 @@ export const resolveExtensions = (
     tagInjections,
     hooks,
     extensions: sorted,
+    failedExtensions,
+    extensionStatuses,
   }
 }
 
@@ -260,6 +279,10 @@ export interface ExtensionRegistryService {
     type: InteractionHandlerType,
   ) => Effect.Effect<InteractionHandlerContribution | undefined>
 
+  // Diagnostics
+  readonly listFailedExtensions: () => Effect.Effect<ReadonlyArray<FailedExtension>>
+  readonly listExtensionStatuses: () => Effect.Effect<ReadonlyArray<ExtensionStatusInfo>>
+
   // Hooks
   readonly hooks: CompiledHookMap
 }
@@ -331,11 +354,19 @@ export class ExtensionRegistry extends ServiceMap.Service<
         }),
       listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
       getInteractionHandler: (type) => Effect.succeed(resolved.interactionHandlers.get(type)),
+      listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
+      listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       hooks: resolved.hooks,
     })
 
   static Live = (extensions: ReadonlyArray<LoadedExtension>): Layer.Layer<ExtensionRegistry> =>
     ExtensionRegistry.fromResolved(resolveExtensions(extensions))
+
+  static LiveWithFailures = (
+    extensions: ReadonlyArray<LoadedExtension>,
+    failedExtensions: ReadonlyArray<FailedExtension>,
+  ): Layer.Layer<ExtensionRegistry> =>
+    ExtensionRegistry.fromResolved(resolveExtensions(extensions, failedExtensions))
 
   static Test = (): Layer.Layer<ExtensionRegistry> =>
     ExtensionRegistry.fromResolved(resolveExtensions([]))

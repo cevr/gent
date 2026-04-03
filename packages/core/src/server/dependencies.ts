@@ -1,8 +1,12 @@
-import { Effect, FileSystem, Layer, Path, Ref, ServiceMap } from "effect"
+import { Cause, Effect, FileSystem, Layer, Path, Ref, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
-import type { InteractionHandlerType, LoadedExtension } from "../domain/extension.js"
+import type {
+  FailedExtension,
+  InteractionHandlerType,
+  LoadedExtension,
+} from "../domain/extension.js"
 import {
   BaseEventStore,
   EventStore,
@@ -24,11 +28,12 @@ import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
+import { discoverExtensions, setupExtension } from "../runtime/extensions/loader.js"
 import {
-  discoverExtensions,
-  setupExtension,
-  validateExtensions,
-} from "../runtime/extensions/loader.js"
+  activateLoadedExtensions,
+  setupBuiltinExtensions,
+  validateLoadedExtensions,
+} from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
@@ -63,14 +68,6 @@ export interface DependenciesConfig {
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
 }
-
-const loadBuiltinExtensions = (cwd: string, home: string): LoadedExtension[] =>
-  BuiltinExtensions.map((extension) => ({
-    manifest: extension.manifest,
-    kind: "builtin" as const,
-    sourcePath: "builtin",
-    setup: Effect.runSync(extension.setup({ cwd, source: "builtin", home })),
-  }))
 
 import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
 
@@ -108,67 +105,79 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       }
 
       const external: LoadedExtension[] = []
+      const failedExtensions: FailedExtension[] = []
       for (const discoveredExtension of discovery.loaded) {
         if (disabledSet.has(discoveredExtension.extension.manifest.id)) continue
-        const loaded = yield* setupExtension(discoveredExtension, config.cwd, config.home).pipe(
-          Effect.catchEager((error) =>
-            Effect.logWarning("extension.setup.failed").pipe(
-              Effect.annotateLogs({
-                extensionId: discoveredExtension.extension.manifest.id,
-                error: error.message,
-              }),
-              Effect.as(undefined),
-            ),
-          ),
+        const exit = yield* setupExtension(discoveredExtension, config.cwd, config.home).pipe(
+          Effect.exit,
         )
-        if (loaded !== undefined) external.push(loaded)
-      }
-
-      const builtins = loadBuiltinExtensions(config.cwd, config.home).filter(
-        (ext) => !disabledSet.has(ext.manifest.id),
-      )
-      const allExtensions = [...builtins, ...external]
-
-      // Validate — same-scope collisions are fatal
-      yield* validateExtensions(allExtensions)
-
-      // Run extension onStartup hooks (fire-and-forget, no service requirements)
-      for (const ext of allExtensions) {
-        if (ext.setup.onStartup !== undefined) {
-          yield* ext.setup.onStartup.pipe(
-            Effect.catchEager((error) =>
-              Effect.logWarning("extension.onStartup.failed").pipe(
-                Effect.annotateLogs({ extensionId: ext.manifest.id, error: String(error) }),
-              ),
-            ),
+        if (exit._tag === "Failure") {
+          const error = String(Cause.squash(exit.cause))
+          yield* Effect.logWarning("extension.setup.failed").pipe(
+            Effect.annotateLogs({
+              extensionId: discoveredExtension.extension.manifest.id,
+              error,
+            }),
           )
+          failedExtensions.push({
+            manifest: discoveredExtension.extension.manifest,
+            kind: discoveredExtension.kind,
+            sourcePath: discoveredExtension.sourcePath,
+            phase: "setup",
+            error,
+          })
+          continue
         }
+        external.push(exit.value)
       }
 
-      // Register extension onShutdown hooks as scope finalizers
-      for (const ext of allExtensions) {
-        if (ext.setup.onShutdown !== undefined) {
-          const shutdown = ext.setup.onShutdown
-          yield* Effect.addFinalizer(() =>
-            shutdown.pipe(
-              Effect.catchEager((error) =>
-                Effect.logWarning("extension.onShutdown.failed").pipe(
-                  Effect.annotateLogs({ extensionId: ext.manifest.id, error: String(error) }),
-                ),
-              ),
-            ),
-          )
-        }
+      const builtinSetup = yield* setupBuiltinExtensions({
+        extensions: BuiltinExtensions,
+        cwd: config.cwd,
+        home: config.home,
+        disabled: disabledSet,
+      })
+      for (const failed of builtinSetup.failed) {
+        yield* Effect.logWarning("extension.setup.failed").pipe(
+          Effect.annotateLogs({
+            extensionId: failed.manifest.id,
+            error: failed.error,
+          }),
+        )
       }
+      failedExtensions.push(...builtinSetup.failed)
+
+      const allExtensions = [...builtinSetup.active, ...external]
+      const validated = yield* validateLoadedExtensions(allExtensions)
+      for (const failed of validated.failed) {
+        yield* Effect.logWarning("extension.validation.failed").pipe(
+          Effect.annotateLogs({
+            extensionId: failed.manifest.id,
+            error: failed.error,
+          }),
+        )
+      }
+      failedExtensions.push(...validated.failed)
+
+      const activated = yield* activateLoadedExtensions(validated.active)
+      for (const failed of activated.failed) {
+        yield* Effect.logWarning("extension.startup.failed").pipe(
+          Effect.annotateLogs({
+            extensionId: failed.manifest.id,
+            error: failed.error,
+          }),
+        )
+      }
+      failedExtensions.push(...activated.failed)
 
       // Collect extension-provided layers (setup.layer — default phase)
-      const extensionLayers = allExtensions
+      const extensionLayers = activated.active
         .filter((ext) => ext.setup.layer !== undefined)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
       // Collect bus subscriptions from extensions
-      const busSubscriptions = allExtensions.flatMap((ext) =>
+      const busSubscriptions = activated.active.flatMap((ext) =>
         (ext.setup.busSubscriptions ?? []).map((sub) => ({
           pattern: sub.pattern,
           handler: sub.handler as (envelope: {
@@ -181,8 +190,8 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       )
 
       const baseLayers = Layer.mergeAll(
-        ExtensionRegistry.Live(allExtensions),
-        ExtensionStateRuntime.Live(allExtensions),
+        ExtensionRegistry.LiveWithFailures(activated.active, failedExtensions),
+        ExtensionStateRuntime.Live(activated.active),
         ExtensionEventBus.withSubscriptions(busSubscriptions),
       )
 
@@ -251,6 +260,7 @@ export const makeReducingEventStore = Layer.effect(
                           Effect.catchEager(() => Effect.void),
                         )
                       }),
+                      Effect.catchEager(() => Effect.void),
                       Effect.catchDefect(() => Effect.void),
                       // Notify observers after reduction (fire-and-forget)
                       Effect.tap(() => stateRuntime.notifyObservers(event)),

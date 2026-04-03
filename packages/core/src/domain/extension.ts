@@ -29,6 +29,42 @@ export interface LoadedExtension {
   readonly setup: ExtensionSetup
 }
 
+export type FailedExtensionPhase = "setup" | "validation" | "startup"
+
+export interface FailedExtension {
+  readonly manifest: ExtensionManifest
+  readonly kind: ExtensionKind
+  readonly sourcePath: string
+  readonly phase: FailedExtensionPhase
+  readonly error: string
+}
+
+export type ExtensionStatusInfo =
+  | {
+      readonly manifest: ExtensionManifest
+      readonly kind: ExtensionKind
+      readonly sourcePath: string
+      readonly status: "active"
+      readonly actor?: ExtensionActorStatusInfo
+    }
+  | ({
+      readonly manifest: ExtensionManifest
+      readonly kind: ExtensionKind
+      readonly sourcePath: string
+      readonly status: "failed"
+      readonly actor?: ExtensionActorStatusInfo
+    } & FailedExtension)
+
+export type ExtensionActorLifecycleStatus = "starting" | "running" | "failed"
+
+export interface ExtensionActorStatusInfo {
+  readonly extensionId: string
+  readonly sessionId: SessionId
+  readonly branchId?: BranchId
+  readonly status: ExtensionActorLifecycleStatus
+  readonly error?: string
+}
+
 export type ExtensionKind = "builtin" | "user" | "project"
 
 // Extension Load Error

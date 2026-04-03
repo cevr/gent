@@ -475,6 +475,7 @@ describe("AgentRunner", () => {
       send: () => Effect.void,
       ask: () => Effect.die("not used"),
       getUiSnapshots: () => Effect.succeed([]),
+      getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
     }
@@ -559,6 +560,7 @@ describe("AgentRunner", () => {
       send: () => Effect.void,
       ask: () => Effect.die("not used"),
       getUiSnapshots: () => Effect.succeed([]),
+      getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: (event) =>
         Effect.sync(() => {

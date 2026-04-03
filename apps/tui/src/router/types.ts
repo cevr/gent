@@ -6,6 +6,7 @@ import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { BranchInfo } from "../client"
 
 export type AppRoute =
+  | { readonly _tag: "loading" }
   | {
       readonly _tag: "session"
       readonly sessionId: SessionId
@@ -29,6 +30,7 @@ export interface AppRouterState {
 
 // Constructors
 export const Route = {
+  loading: (): AppRoute => ({ _tag: "loading" }),
   session: (sessionId: SessionId, branchId: BranchId, prompt?: string): AppRoute => ({
     _tag: "session",
     sessionId,
@@ -53,6 +55,7 @@ export const Route = {
 
 // Type guards
 export const isRoute = {
+  loading: (r: AppRoute): r is Extract<AppRoute, { _tag: "loading" }> => r._tag === "loading",
   session: (r: AppRoute): r is Extract<AppRoute, { _tag: "session" }> => r._tag === "session",
   branchPicker: (r: AppRoute): r is Extract<AppRoute, { _tag: "branchPicker" }> =>
     r._tag === "branchPicker",

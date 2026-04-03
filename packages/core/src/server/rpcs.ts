@@ -80,6 +80,12 @@ export {
   CallbackAuthInput,
   AuthProviderInfo,
   EventEnvelope,
+  ListExtensionStatusInput,
+  ExtensionActivationPhase,
+  ExtensionActorLifecycleStatus,
+  ExtensionActorStatusInfo,
+  ExtensionManifestInfo,
+  ExtensionStatusInfo,
   SkillInfo,
   SkillContent,
 } from "./transport-contract.js"

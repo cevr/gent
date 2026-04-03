@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { Switch, Match, ErrorBoundary, createEffect, createSignal, on } from "solid-js"
+import { Switch, Match, Show, ErrorBoundary, createEffect, createSignal, on } from "solid-js"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/index"
@@ -10,6 +10,8 @@ import { BranchPicker } from "./routes/branch-picker"
 import { Permissions } from "./routes/permissions"
 import { Auth } from "./routes/auth"
 import { KeyboardScopeProvider } from "./keyboard/context"
+import { resolveInteractiveBootstrap } from "./app-bootstrap"
+import { ConnectionWidget } from "./components/connection-widget"
 
 type SessionRoute = Extract<AppRoute, { _tag: "session" }>
 type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
@@ -18,6 +20,12 @@ type AuthGateState = "checking" | "open" | "closed"
 export interface AppProps {
   missingAuthProviders?: readonly string[]
   debugMode?: boolean
+  startup?: {
+    readonly cwd: string
+    readonly sessionId?: string
+    readonly continue_: boolean
+    readonly prompt?: string
+  }
 }
 
 function AppContent(props: AppProps) {
@@ -27,7 +35,9 @@ function AppContent(props: AppProps) {
     !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0 ? "open" : "closed",
   )
   const [authGateKey, setAuthGateKey] = createSignal<string | null>(null)
+  const [bootError, setBootError] = createSignal<string | null>(null)
   let authGateVersion = 0
+  let bootstrapVersion = 0
 
   const desiredAuthGateKey = (
     routeTag: AppRoute["_tag"] = router.route()._tag,
@@ -96,6 +106,67 @@ function AppContent(props: AppProps) {
     ),
   )
 
+  createEffect(
+    on(
+      () =>
+        [
+          router.route()._tag,
+          client.connectionGeneration(),
+          client.connectionState()?._tag,
+        ] as const,
+      ([routeTag, _generation, connectionTag]) => {
+        if (
+          props.startup === undefined ||
+          routeTag !== "loading" ||
+          connectionTag !== "connected"
+        ) {
+          return
+        }
+
+        const version = ++bootstrapVersion
+        setBootError(null)
+        client.runtime.cast(
+          resolveInteractiveBootstrap({
+            client: client.client,
+            cwd: props.startup.cwd,
+            sessionId: props.startup.sessionId,
+            continue_: props.startup.continue_,
+            prompt: props.startup.prompt,
+            debugMode: props.debugMode ?? false,
+          }).pipe(
+            Effect.exit,
+            Effect.tap((exit) =>
+              Effect.sync(() => {
+                if (version !== bootstrapVersion || router.route()._tag !== "loading") return
+                if (exit._tag === "Failure") {
+                  const error = String(exit.cause)
+                  setBootError(error)
+                  client.log.error("app:bootstrap", { error })
+                  return
+                }
+
+                const { bootstrap, initialAgent } = exit.value
+                const session = bootstrap.initialSession
+                if (session !== undefined) {
+                  client.switchSession(
+                    session.sessionId,
+                    session.branchId,
+                    session.name,
+                    initialAgent,
+                  )
+                } else {
+                  client.clearSession()
+                }
+                router.navigate(bootstrap.initialRoute)
+              }),
+            ),
+          ),
+        )
+      },
+      { defer: false },
+    ),
+  )
+
   createEffect(() => {
     if (authGateState() === "open" && !isRoute.auth(router.route())) {
       router.navigateToAuth()
@@ -110,6 +181,15 @@ function AppContent(props: AppProps) {
   return (
     <box flexDirection="column" width="100%" height="100%">
       <Switch>
+        <Match when={isRoute.loading(router.route())}>
+          <box flexDirection="column" paddingLeft={1} paddingTop={1}>
+            <text>Loading Gent…</text>
+            <Show when={bootError() !== null}>
+              <text>{bootError()}</text>
+            </Show>
+            <ConnectionWidget />
+          </box>
+        </Match>
         <Match when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}>
           {(r) => {
             const route = r()

@@ -29,6 +29,11 @@ export interface StartupAuthState {
   readonly missingProviders: readonly ProviderId[]
 }
 
+export interface InteractiveBootstrapResult {
+  readonly bootstrap: AppBootstrap
+  readonly initialAgent: AgentName | undefined
+}
+
 export const toSession = (session: SessionInfo): Session | undefined => {
   if (session.branchId === undefined) return undefined
   return {
@@ -92,6 +97,43 @@ export const resolveAppBootstrap = (
       }
   }
 }
+
+export const resolveInteractiveBootstrap = (input: {
+  client: Pick<GentNamespacedClient, "auth" | "branch" | "session">
+  cwd: string
+  sessionId?: string
+  continue_: boolean
+  prompt?: string
+  debugMode: boolean
+}): Effect.Effect<InteractiveBootstrapResult, GentRpcError> =>
+  Effect.gen(function* () {
+    const state = yield* resolveInitialState({
+      client: input.client,
+      cwd: input.cwd,
+      session: input.sessionId !== undefined ? Option.some(input.sessionId) : Option.none(),
+      continue_: input.continue_,
+      headless: false,
+      prompt: input.prompt !== undefined ? Option.some(input.prompt) : Option.none(),
+      promptArg: Option.none(),
+    })
+
+    if (state._tag === "headless") {
+      return yield* Effect.die("interactive bootstrap resolved a headless state")
+    }
+
+    const startupAuth = yield* resolveStartupAuthState({
+      client: input.client,
+      state,
+    })
+
+    return {
+      bootstrap: resolveAppBootstrap(state, {
+        missingProviders: startupAuth.missingProviders,
+        debugMode: input.debugMode,
+      }),
+      initialAgent: startupAuth.initialAgent,
+    }
+  })
 
 const resolveSessionRuntimeAgent = (
   client: Pick<GentNamespacedClient, "session">,

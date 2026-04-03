@@ -12,7 +12,7 @@ import { CommandProvider } from "../src/command"
 import { EnvProvider } from "../src/env/context"
 import { WorkspaceProvider } from "../src/workspace"
 import { ClientProvider } from "../src/client"
-import type { GentNamespacedClient, GentRuntime } from "../src/client"
+import type { GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import type { SessionInfo, SessionRuntime } from "@gent/sdk"
@@ -116,6 +116,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     extension: {
       send: () => noRpcError(undefined),
       ask: () => noRpcError(undefined),
+      listStatus: () => noRpcError([]),
     },
     actor: {
       sendUserMessage: () => noRpcError(undefined),
@@ -153,6 +154,18 @@ export const createMockRuntime = (): GentRuntime => ({
     waitForReady: Effect.void,
   },
 })
+
+const toInitialSession = (session: SessionInfo | Session | undefined): Session | undefined => {
+  if (session === undefined) return undefined
+  if ("sessionId" in session) return session
+  if (session.branchId === undefined) return undefined
+  return {
+    sessionId: session.id,
+    branchId: session.branchId,
+    name: session.name ?? "Unnamed",
+    reasoningLevel: session.reasoningLevel,
+  }
+}
 
 const getServices = async () => {
   if (sharedServices !== undefined) return sharedServices
@@ -196,7 +209,7 @@ export const renderWithProviders = async (
                     client={client}
                     runtime={runtime}
                     log={noopLog}
-                    initialSession={options?.initialSession}
+                    initialSession={toInitialSession(options?.initialSession)}
                     initialAgent={options?.initialAgent}
                   >
                     <WorkspaceProvider
