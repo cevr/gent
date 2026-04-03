@@ -46,6 +46,7 @@ import {
   type ExtensionStateRuntimeService,
 } from "../extensions/state-runtime.js"
 import { ExtensionEventBus } from "../extensions/event-bus.js"
+import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
 import type { PromptSection } from "../../server/system-prompt.js"
@@ -411,6 +412,7 @@ const buildEphemeralLoopLayer = (params: {
     eventPublisherLayer,
     Layer.succeed(ExtensionRegistry, params.extensionRegistry),
     stateRuntimeLayer,
+    ExtensionTurnControl.Live,
     Layer.succeed(Provider, params.provider),
     Layer.succeed(ToolRunner, params.toolRunner),
   )

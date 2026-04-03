@@ -68,6 +68,7 @@ import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
 } from "../extensions/state-runtime.js"
+import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
 import {
@@ -1212,6 +1213,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
     | Provider
     | ExtensionRegistry
     | ExtensionStateRuntime
+    | ExtensionTurnControl
     | EventPublisher
     | ToolRunner
   > =>
@@ -1223,6 +1225,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const extensionStateRuntime = yield* ExtensionStateRuntime
+        const extensionTurnControl = yield* ExtensionTurnControl
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
@@ -1998,6 +2001,32 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             }),
           toRuntimeState: runtimeStateFromLoopState,
         }
+
+        yield* extensionTurnControl.bind({
+          queueFollowUp: Effect.fn("AgentLoop.boundQueueFollowUp")(function* (input) {
+            const message = new Message({
+              id: Bun.randomUUIDv7() as MessageId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              kind: "regular",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: input.content })],
+              createdAt: yield* DateTime.nowAsDate,
+              metadata: input.metadata,
+            })
+            yield* service.followUp(message).pipe(Effect.catchEager(() => Effect.void))
+          }),
+          interject: Effect.fn("AgentLoop.boundInterject")(function* (input) {
+            yield* service
+              .steer({
+                _tag: "Interject",
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                message: input.content,
+              })
+              .pipe(Effect.catchEager(() => Effect.void))
+          }),
+        })
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {

@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import {
   Provider,
@@ -115,6 +116,7 @@ describe("Cold interaction lifecycle", () => {
       providerWithToolCall(tool.name),
       makeExtRegistry([tool]),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       HandoffHandler.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
@@ -180,6 +182,7 @@ describe("Cold interaction lifecycle", () => {
       providerWithToolCall(tool.name),
       makeExtRegistry([tool]),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       Permission.Live([], "allow"),
@@ -239,6 +242,7 @@ describe("Cold interaction lifecycle", () => {
       }),
       makeExtRegistry(),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
@@ -313,6 +317,7 @@ describe("Cold interaction lifecycle", () => {
       separateCallProvider,
       makeExtRegistry([tool]),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       Permission.Live([], "allow"),

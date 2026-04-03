@@ -344,7 +344,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     ]
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live(extensions),
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
       EventStore.Memory,
       testLayer,
     )
@@ -388,7 +388,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     ]
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live(extensions),
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
       EventStore.Memory,
       testLayer,
     )
@@ -417,10 +417,159 @@ describe("ExtensionStateRuntime — actor hosting", () => {
           branchId,
           status: "failed",
           error: "Error: spawn boom",
+          failurePhase: "start",
         },
       ])
     }).pipe(Effect.provide(layer))
   })
+
+  it.live("runtime publish failure restarts actor once and retries the event", () => {
+    let spawnCount = 0
+    const stopped: number[] = []
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "flaky-publisher" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          projection: {
+            derive: (state) => ({ uiModel: state }),
+          },
+          spawn: () => {
+            spawnCount++
+            const generation = spawnCount
+            return Effect.succeed({
+              id: "flaky-publisher",
+              start: Effect.void,
+              publish: () =>
+                generation === 1
+                  ? Effect.sync(() => {
+                      throw new Error("publish boom")
+                    })
+                  : Effect.succeed(true),
+              send: () => Effect.void,
+              ask: () => Effect.die("not implemented"),
+              snapshot: Effect.succeed({ state: { generation }, epoch: generation }),
+              stop: Effect.sync(() => {
+                stopped.push(generation)
+              }),
+            })
+          },
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+      const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+      const statuses = yield* runtime.getActorStatuses(sessionId)
+
+      expect(changed).toBe(true)
+      expect(spawnCount).toBe(2)
+      expect(stopped).toEqual([1])
+      expect(snapshots).toHaveLength(1)
+      expect(snapshots[0]!.model).toEqual({ generation: 2 })
+      expect(statuses).toEqual([
+        {
+          extensionId: "flaky-publisher",
+          sessionId,
+          branchId,
+          status: "running",
+          restartCount: 1,
+        },
+      ])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live(
+    "repeated runtime publish failure exhausts restart budget and leaves terminal failed state",
+    () => {
+      let spawnCount = 0
+      const stopped: number[] = []
+
+      const extensions: LoadedExtension[] = [
+        {
+          manifest: { id: "terminal-publisher" },
+          kind: "builtin",
+          sourcePath: "builtin",
+          setup: {
+            projection: {
+              derive: (state) => ({ uiModel: state }),
+            },
+            spawn: () => {
+              spawnCount++
+              const generation = spawnCount
+              return Effect.succeed({
+                id: "terminal-publisher",
+                start: Effect.void,
+                publish: () =>
+                  Effect.sync(() => {
+                    throw new Error(`publish boom ${generation}`)
+                  }),
+                send: () => Effect.void,
+                ask: () => Effect.die("not implemented"),
+                snapshot: Effect.succeed({ state: { generation }, epoch: generation }),
+                stop: Effect.sync(() => {
+                  stopped.push(generation)
+                }),
+              })
+            },
+          },
+        },
+      ]
+
+      const layer = Layer.mergeAll(
+        ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
+        EventStore.Memory,
+        testLayer,
+      )
+
+      return Effect.gen(function* () {
+        const runtime = yield* ExtensionStateRuntime
+
+        const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+        const statuses = yield* runtime.getActorStatuses(sessionId)
+
+        expect(changed).toBe(false)
+        expect(spawnCount).toBe(2)
+        expect(stopped).toEqual([1, 2])
+        expect(snapshots).toEqual([])
+        expect(statuses).toEqual([
+          {
+            extensionId: "terminal-publisher",
+            sessionId,
+            branchId,
+            status: "failed",
+            restartCount: 1,
+            failurePhase: "runtime",
+            error: "Error: publish boom 2",
+          },
+        ])
+
+        const changedAgain = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        expect(changedAgain).toBe(false)
+        expect(spawnCount).toBe(2)
+      }).pipe(Effect.provide(layer))
+    },
+  )
 
   it.live("send normalizes actor command failures to ExtensionProtocolError", () => {
     const Ping = ExtensionMessage("broken-command", "Ping", {})
@@ -450,7 +599,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     ]
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live(extensions),
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
       EventStore.Memory,
       testLayer,
     )
@@ -466,6 +615,150 @@ describe("ExtensionStateRuntime — actor hosting", () => {
       expect((failure as ExtensionProtocolError).message).toContain("command boom")
     }).pipe(Effect.provide(layer))
   })
+
+  it.live("runtime send failure restarts actor once and retries the command", () => {
+    const Ping = ExtensionMessage("flaky-command", "Ping", {})
+    let spawnCount = 0
+    const stopped: number[] = []
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "flaky-command" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          protocols: [Ping],
+          spawn: () => {
+            spawnCount++
+            const generation = spawnCount
+            return Effect.succeed({
+              id: "flaky-command",
+              start: Effect.void,
+              publish: () => Effect.succeed(false),
+              send: () =>
+                generation === 1
+                  ? Effect.sync(() => {
+                      throw new Error("command boom")
+                    })
+                  : Effect.void,
+              ask: () => Effect.die("not implemented"),
+              snapshot: Effect.succeed({ state: { generation }, epoch: generation }),
+              stop: Effect.sync(() => {
+                stopped.push(generation)
+              }),
+            })
+          },
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.send(sessionId, Ping({}), branchId)
+      const statuses = yield* runtime.getActorStatuses(sessionId)
+
+      expect(spawnCount).toBe(2)
+      expect(stopped).toEqual([1])
+      expect(statuses).toEqual([
+        {
+          extensionId: "flaky-command",
+          sessionId,
+          branchId,
+          status: "running",
+          restartCount: 1,
+        },
+      ])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live(
+    "terminal send failure leaves later commands as protocol errors, not silent no-ops",
+    () => {
+      const Ping = ExtensionMessage("terminal-command", "Ping", {})
+      let spawnCount = 0
+      const stopped: number[] = []
+
+      const extensions: LoadedExtension[] = [
+        {
+          manifest: { id: "terminal-command" },
+          kind: "builtin",
+          sourcePath: "builtin",
+          setup: {
+            protocols: [Ping],
+            spawn: () => {
+              spawnCount++
+              const generation = spawnCount
+              return Effect.succeed({
+                id: "terminal-command",
+                start: Effect.void,
+                publish: () => Effect.succeed(false),
+                send: () =>
+                  Effect.sync(() => {
+                    throw new Error(`command boom ${generation}`)
+                  }),
+                ask: () => Effect.die("not implemented"),
+                snapshot: Effect.succeed({ state: { generation }, epoch: generation }),
+                stop: Effect.sync(() => {
+                  stopped.push(generation)
+                }),
+              })
+            },
+          },
+        },
+      ]
+
+      const layer = Layer.mergeAll(
+        ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
+        EventStore.Memory,
+        testLayer,
+      )
+
+      return Effect.gen(function* () {
+        const runtime = yield* ExtensionStateRuntime
+
+        const firstExit = yield* Effect.exit(runtime.send(sessionId, Ping({}), branchId))
+        expect(firstExit._tag).toBe("Failure")
+        if (firstExit._tag === "Failure") {
+          const failure = Cause.squash(firstExit.cause)
+          expect(failure).toBeInstanceOf(ExtensionProtocolError)
+          expect((failure as ExtensionProtocolError).phase).toBe("command")
+          expect((failure as ExtensionProtocolError).message).toContain("command boom 2")
+        }
+
+        const secondExit = yield* Effect.exit(runtime.send(sessionId, Ping({}), branchId))
+        expect(secondExit._tag).toBe("Failure")
+        if (secondExit._tag === "Failure") {
+          const failure = Cause.squash(secondExit.cause)
+          expect(failure).toBeInstanceOf(ExtensionProtocolError)
+          expect((failure as ExtensionProtocolError).phase).toBe("command")
+          expect((failure as ExtensionProtocolError).message).toContain(
+            'extension "terminal-command" is not loaded',
+          )
+        }
+
+        const statuses = yield* runtime.getActorStatuses(sessionId)
+        expect(spawnCount).toBe(2)
+        expect(stopped).toEqual([1, 2])
+        expect(statuses).toEqual([
+          {
+            extensionId: "terminal-command",
+            sessionId,
+            branchId,
+            status: "failed",
+            restartCount: 1,
+            failurePhase: "runtime",
+            error: "Error: command boom 2",
+          },
+        ])
+      }).pipe(Effect.provide(layer))
+    },
+  )
 
   it.live("ask normalizes actor reply failures to ExtensionProtocolError", () => {
     const Ping = ExtensionMessage.reply("broken-request", "Ping", {}, Schema.String)
@@ -495,7 +788,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     ]
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live(extensions),
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
       EventStore.Memory,
       testLayer,
     )
@@ -509,6 +802,151 @@ describe("ExtensionStateRuntime — actor hosting", () => {
       expect(failure).toBeInstanceOf(ExtensionProtocolError)
       expect((failure as ExtensionProtocolError).phase).toBe("reply")
       expect((failure as ExtensionProtocolError).message).toContain("reply boom")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("runtime ask failure restarts actor once and retries the request", () => {
+    const Ping = ExtensionMessage.reply(
+      "flaky-request",
+      "Ping",
+      {},
+      Schema.Struct({ generation: Schema.Number }),
+    )
+    let spawnCount = 0
+    const stopped: number[] = []
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "flaky-request" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          protocols: [Ping],
+          spawn: () => {
+            spawnCount++
+            const generation = spawnCount
+            return Effect.succeed({
+              id: "flaky-request",
+              start: Effect.void,
+              publish: () => Effect.succeed(false),
+              send: () => Effect.void,
+              ask: () =>
+                generation === 1
+                  ? Effect.sync(() => {
+                      throw new Error("reply boom")
+                    })
+                  : Effect.succeed({ generation }),
+              snapshot: Effect.succeed({ state: { generation }, epoch: generation }),
+              stop: Effect.sync(() => {
+                stopped.push(generation)
+              }),
+            })
+          },
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      const reply = yield* runtime.ask(sessionId, Ping({}), branchId)
+      const statuses = yield* runtime.getActorStatuses(sessionId)
+
+      expect(reply).toEqual({ generation: 2 })
+      expect(spawnCount).toBe(2)
+      expect(stopped).toEqual([1])
+      expect(statuses).toEqual([
+        {
+          extensionId: "flaky-request",
+          sessionId,
+          branchId,
+          status: "running",
+          restartCount: 1,
+        },
+      ])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("snapshot restart during deriveAll preserves actor branch identity", () => {
+    let spawnCount = 0
+    const stopped: number[] = []
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "flaky-snapshot" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          projection: {
+            derive: (state: { generation: number }) => ({
+              promptSections: [{ tag: "generation", content: `Generation ${state.generation}` }],
+              uiModel: state,
+            }),
+          },
+          spawn: () => {
+            spawnCount++
+            const generation = spawnCount
+            return Effect.succeed({
+              id: "flaky-snapshot",
+              start: Effect.void,
+              publish: () => Effect.succeed(false),
+              send: () => Effect.void,
+              ask: () => Effect.die("not implemented"),
+              snapshot:
+                generation === 1
+                  ? Effect.sync(() => {
+                      throw new Error("snapshot boom")
+                    })
+                  : Effect.succeed({ state: { generation }, epoch: generation }),
+              stop: Effect.sync(() => {
+                stopped.push(generation)
+              }),
+            })
+          },
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+
+      const projections = yield* runtime.deriveAll(sessionId, {
+        agent: undefined as never,
+        allTools: [],
+      })
+      const statuses = yield* runtime.getActorStatuses(sessionId)
+
+      expect(projections).toEqual([
+        {
+          extensionId: "flaky-snapshot",
+          projection: {
+            promptSections: [{ tag: "generation", content: "Generation 2" }],
+          },
+        },
+      ])
+      expect(spawnCount).toBe(2)
+      expect(stopped).toEqual([1])
+      expect(statuses).toEqual([
+        {
+          extensionId: "flaky-snapshot",
+          sessionId,
+          branchId,
+          status: "running",
+          restartCount: 1,
+        },
+      ])
     }).pipe(Effect.provide(layer))
   })
 
@@ -540,7 +978,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     ]
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live(extensions),
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
       EventStore.Memory,
       testLayer,
     )
@@ -586,7 +1024,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     ]
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live(extensions),
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
       EventStore.Memory,
       testLayer,
     )
@@ -630,7 +1068,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
     ]
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live(extensions),
+      ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
       EventStore.Memory,
       testLayer,
     )

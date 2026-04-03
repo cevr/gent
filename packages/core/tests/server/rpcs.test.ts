@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
-import { SendMessageInput } from "@gent/core/server/rpcs"
+import { ExtensionStatusInfo, SendMessageInput } from "@gent/core/server/rpcs"
 
 describe("SendMessage API", () => {
   test("SendMessageInput decodes required fields", () => {
@@ -21,5 +21,30 @@ describe("SendMessage API", () => {
       branchId: "b1",
     }
     expect(() => Schema.decodeUnknownSync(SendMessageInput)(payload)).toThrow()
+  })
+
+  test("ExtensionStatusInfo round-trips restart supervision fields", () => {
+    const payload = {
+      manifest: { id: "memory" },
+      kind: "builtin",
+      sourcePath: "builtin",
+      status: "active",
+      actor: {
+        extensionId: "memory",
+        sessionId: "s1",
+        branchId: "b1",
+        status: "restarting",
+        restartCount: 1,
+        failurePhase: "runtime",
+      },
+    }
+
+    const decoded = Schema.decodeUnknownSync(ExtensionStatusInfo)(payload)
+    const encoded = Schema.encodeSync(ExtensionStatusInfo)(decoded)
+
+    expect(decoded.actor?.status).toBe("restarting")
+    expect(decoded.actor?.restartCount).toBe(1)
+    expect(decoded.actor?.failurePhase).toBe("runtime")
+    expect(encoded).toEqual(payload)
   })
 })

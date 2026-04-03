@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Provider, ProviderError, ToolCallChunk, FinishChunk } from "@gent/core/providers/provider"
 import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
@@ -55,6 +56,7 @@ describe("AgentLoop actor model", () => {
       providerLayer,
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
@@ -75,6 +77,7 @@ describe("AgentLoop actor model", () => {
       providerLayer,
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,
@@ -183,6 +186,7 @@ describe("AgentLoop actor model", () => {
       providerLayer,
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       ToolRunner.Test(),
@@ -624,6 +628,7 @@ describe("AgentLoop.runOnce", () => {
       Storage.TestWithSql(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       HandoffHandler.Test(),
       BunServices.layer,
       recorderLayer,
@@ -733,6 +738,7 @@ describe("Tool concurrency", () => {
       Provider.Test(providerResponses),
       makeTestExtRegistry([toolA, toolB]),
       ExtensionStateRuntime.Test(),
+      ExtensionTurnControl.Test(),
       EventStore.Test(),
       HandoffHandler.Test(),
       Permission.Test(),

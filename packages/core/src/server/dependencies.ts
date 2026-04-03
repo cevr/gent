@@ -229,13 +229,17 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
         })),
       )
 
+      const extensionRuntimeLive = ExtensionStateRuntime.Live(activated.active).pipe(
+        Layer.provideMerge(ExtensionTurnControl.Live),
+      )
+
       const baseLayers = Layer.mergeAll(
         ExtensionRegistry.LiveWithFailures(
           activated.active,
           failedExtensions,
           scheduledJobFailuresByExtension,
         ),
-        ExtensionStateRuntime.Live(activated.active),
+        extensionRuntimeLive,
         ExtensionEventBus.withSubscriptions(busSubscriptions),
       )
 
@@ -465,11 +469,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
   // client opens a session. No eager wake on startup.
 
-  const turnControlLive = Layer.provide(
-    ExtensionTurnControl.Live,
-    Layer.merge(allDeps, agentRuntimeLive),
-  )
-  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, turnControlLive)
+  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive)
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
   return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)

@@ -87,7 +87,9 @@ const branchId = "test-branch" as BranchId
 
 const makeLayer = (extensions: LoadedExtension[]) => {
   const published = Effect.runSync(Ref.make<AgentEvent[]>([]))
-  const stateRuntimeLayer = ExtensionStateRuntime.Live(extensions)
+  const stateRuntimeLayer = ExtensionStateRuntime.Live(extensions).pipe(
+    Layer.provideMerge(ExtensionTurnControl.Test()),
+  )
   const baseService: EventStoreService = {
     publish: (event) => Ref.update(published, (events) => [...events, event]).pipe(Effect.asVoid),
     subscribe: () => Effect.void as never,
@@ -97,7 +99,7 @@ const makeLayer = (extensions: LoadedExtension[]) => {
     Layer.succeed(BaseEventStore, baseService),
     Layer.succeed(EventStore, baseService),
   )
-  const servicesLayer = Layer.mergeAll(ExtensionTurnControl.Test(), Storage.Test())
+  const servicesLayer = Storage.Test()
   const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer)
   const eventPublisherLayer = Layer.provide(EventPublisherLive, combinedBase)
   const fullLayer = Layer.mergeAll(combinedBase, eventPublisherLayer)

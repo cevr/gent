@@ -330,9 +330,8 @@ describe("fromMachine", () => {
     }
 
     const layer = Layer.mergeAll(
-      ExtensionStateRuntime.Live([ext]),
+      ExtensionStateRuntime.Live([ext]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
       EventStore.Memory,
-      ExtensionTurnControl.Test(),
       Storage.Test(),
     )
 

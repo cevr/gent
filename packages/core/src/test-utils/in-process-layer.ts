@@ -21,6 +21,7 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { resolveExtensions, ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { EventStoreLive } from "../server/event-store.js"
@@ -53,12 +54,15 @@ const sharedInfra = () => {
 
 const buildLayer = (providerLive: Layer.Layer<Provider>) => {
   const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra()
+  const extensionRuntimeLive = ExtensionStateRuntime.Test().pipe(
+    Layer.provideMerge(ExtensionTurnControl.Live),
+  )
 
   const baseDeps = Layer.mergeAll(
     Storage.MemoryWithSql(),
     providerLive,
     extensionRegistryLive,
-    ExtensionStateRuntime.Test(),
+    extensionRuntimeLive,
     Permission.Test(),
     PromptHandler.Test(["yes"]),
     HandoffHandler.Test(["confirm"]),

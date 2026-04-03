@@ -44,9 +44,8 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
 
 const makeLayer = (extensions: LoadedExtension[]) =>
   Layer.mergeAll(
-    ExtensionStateRuntime.Live(extensions),
+    ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     EventStore.Memory,
-    ExtensionTurnControl.Test(),
     Storage.Test(),
   )
 

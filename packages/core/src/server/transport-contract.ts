@@ -406,15 +406,25 @@ export type ListExtensionStatusInput = typeof ListExtensionStatusInput.Type
 export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
 export type ExtensionActivationPhase = typeof ExtensionActivationPhase.Type
 
-export const ExtensionActorLifecycleStatus = Schema.Literals(["starting", "running", "failed"])
+export const ExtensionActorLifecycleStatus = Schema.Literals([
+  "starting",
+  "running",
+  "restarting",
+  "failed",
+])
 export type ExtensionActorLifecycleStatus = typeof ExtensionActorLifecycleStatus.Type
+
+export const ExtensionActorFailurePhase = Schema.Literals(["start", "runtime"])
+export type ExtensionActorFailurePhase = typeof ExtensionActorFailurePhase.Type
 
 export const ExtensionActorStatusInfo = Schema.Struct({
   extensionId: Schema.String,
   sessionId: SessionId,
   branchId: Schema.optional(BranchId),
   status: ExtensionActorLifecycleStatus,
+  restartCount: Schema.optional(Schema.Number),
   error: Schema.optional(Schema.String),
+  failurePhase: Schema.optional(ExtensionActorFailurePhase),
 })
 export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 

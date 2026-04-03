@@ -5,7 +5,13 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer } from "effect"
-import { BaseEventStore, type AgentEvent, SessionStarted } from "@gent/core/domain/event"
+import {
+  BaseEventStore,
+  EventStore,
+  type AgentEvent,
+  SessionStarted,
+  TurnCompleted,
+} from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
@@ -176,5 +182,82 @@ describe("extension concurrency", () => {
         expect(published).toEqual(["SessionStarted", "NestedEvent"])
       }).pipe(Effect.provide(layer))
     })
+
+    it.live("runtime restart preserves same-session delivery ordering", () =>
+      Effect.gen(function* () {
+        const delivered: string[] = []
+        let generation = 0
+
+        const extensions = [
+          {
+            manifest: { id: "ordered-restart", version: "1.0.0" },
+            kind: "builtin" as const,
+            sourcePath: "builtin",
+            setup: {
+              spawn: () => {
+                generation++
+                const currentGeneration = generation
+                return Effect.succeed({
+                  id: "ordered-restart",
+                  start: Effect.void,
+                  publish: (event: AgentEvent) =>
+                    Effect.gen(function* () {
+                      if (currentGeneration === 1 && event._tag === "SessionStarted") {
+                        throw new Error("first delivery boom")
+                      }
+                      if (event._tag === "SessionStarted") {
+                        yield* Effect.sleep("20 millis")
+                      }
+                      delivered.push(`${currentGeneration}:${event._tag}`)
+                      return true
+                    }),
+                  send: () => Effect.void,
+                  ask: () => Effect.die("not implemented"),
+                  snapshot: Effect.succeed({ state: { delivered }, epoch: delivered.length }),
+                  stop: Effect.void,
+                })
+              },
+            },
+          },
+        ] as Parameters<typeof ExtensionStateRuntime.fromExtensions>[0]
+
+        const baseLayer = Layer.mergeAll(
+          ExtensionStateRuntime.fromExtensions(extensions).pipe(
+            Layer.provideMerge(ExtensionTurnControl.Test()),
+          ),
+          EventStore.Memory,
+        )
+        const layer = Layer.merge(baseLayer, Layer.provide(EventPublisherLive, baseLayer))
+
+        yield* Effect.gen(function* () {
+          const publisher = yield* EventPublisher
+          const runtime = yield* ExtensionStateRuntime
+
+          yield* Effect.all(
+            [
+              publisher.publish(new SessionStarted({ sessionId, branchId })),
+              Effect.sleep("1 millis").pipe(
+                Effect.andThen(
+                  publisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 25 })),
+                ),
+              ),
+            ],
+            { concurrency: 2 },
+          )
+
+          const statuses = yield* runtime.getActorStatuses(sessionId)
+          expect(delivered).toEqual(["2:SessionStarted", "2:TurnCompleted"])
+          expect(statuses).toEqual([
+            {
+              extensionId: "ordered-restart",
+              sessionId,
+              branchId,
+              status: "running",
+              restartCount: 1,
+            },
+          ])
+        }).pipe(Effect.provide(layer))
+      }),
+    )
   })
 })

@@ -24,6 +24,7 @@ import { PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
+import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"
@@ -217,6 +218,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     AskUserHandler.Test(askUserResponses),
     PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
+    ExtensionTurnControl.Test(),
     AgentLoop.Test(),
     RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
   )
@@ -248,6 +250,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     ),
     PromptHandler.Test(promptDecisions),
     HandoffHandler.Test(handoffDecisions),
+    ExtensionTurnControl.Test(),
     AgentLoop.Test(),
     RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
   ).pipe(

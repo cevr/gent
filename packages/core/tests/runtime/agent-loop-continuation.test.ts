@@ -3,6 +3,7 @@ import { Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import type { Provider } from "@gent/core/providers/provider"
@@ -96,6 +97,7 @@ const makeLayer = (
     providerLayer,
     makeExtRegistry(tools),
     ExtensionStateRuntime.Test(),
+    ExtensionTurnControl.Test(),
     EventStore.Test(),
     HandoffHandler.Test(),
     ToolRunner.Test(),
@@ -118,6 +120,7 @@ const makeLayerWithEvents = (
     providerLayer,
     makeExtRegistry(tools),
     ExtensionStateRuntime.Test(),
+    ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
     HandoffHandler.Test(),
     ToolRunner.Test(),

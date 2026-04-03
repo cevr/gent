@@ -40,9 +40,10 @@ const planExtension: LoadedExtension = {
 
 const makeLayer = () =>
   Layer.mergeAll(
-    ExtensionStateRuntime.Live([planExtension]),
+    ExtensionStateRuntime.Live([planExtension]).pipe(
+      Layer.provideMerge(ExtensionTurnControl.Test()),
+    ),
     EventStore.Memory,
-    ExtensionTurnControl.Test(),
     Storage.Test(),
   )
 

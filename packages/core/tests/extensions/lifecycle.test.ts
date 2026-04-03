@@ -93,9 +93,8 @@ const makeCounterExtension = (id: string): LoadedExtension => {
 
 const makeLifecycleLayer = (extensions: LoadedExtension[]) =>
   Layer.mergeAll(
-    ExtensionStateRuntime.Live(extensions),
+    ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     EventStore.Memory,
-    ExtensionTurnControl.Test(),
     Storage.Test(),
   )
 

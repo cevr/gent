@@ -135,6 +135,9 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
   const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
+  const extensionRuntimeLive = ExtensionStateRuntime.Live(resolvedExtensions).pipe(
+    Layer.provideMerge(ExtensionTurnControl.Live),
+  )
 
   // Base services — everything that doesn't depend on reducing event store
   const baseDeps = Layer.mergeAll(
@@ -142,7 +145,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     storageLayer,
     config.providerLayer,
     extensionRegistryLive,
-    ExtensionStateRuntime.Live(resolvedExtensions),
+    extensionRuntimeLive,
     Permission.Test(),
     PromptHandler.Test(["yes"]),
     HandoffHandler.Test(["confirm"]),
@@ -180,9 +183,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     agentLoopDeps,
   )
 
-  // Turn control — real follow-up queuing (backed by real AgentLoop)
-  const turnControlLive = Layer.provide(ExtensionTurnControl.Live, agentLoopLive)
-
   // Actor process
   const actorProcessLive = Layer.provide(
     LocalActorProcessLive,
@@ -197,7 +197,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       eventPublisherLive,
       toolRunnerLive,
       agentLoopLive,
-      turnControlLive,
       actorProcessLive,
     ),
   )

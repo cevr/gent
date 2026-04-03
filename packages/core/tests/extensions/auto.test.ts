@@ -540,9 +540,10 @@ const autoExtension: LoadedExtension = {
 
 const makeLayer = () =>
   Layer.mergeAll(
-    ExtensionStateRuntime.Live([autoExtension]),
+    ExtensionStateRuntime.Live([autoExtension]).pipe(
+      Layer.provideMerge(ExtensionTurnControl.Test()),
+    ),
     EventStore.Memory,
-    ExtensionTurnControl.Test(),
     Storage.Test(),
   )
 
@@ -849,9 +850,10 @@ describe("Auto JSONL replay via onInit", () => {
 
   const makeReplayLayer = (rows: JournalRow[], originSessionId?: string) =>
     Layer.mergeAll(
-      ExtensionStateRuntime.Live([autoExtension]),
+      ExtensionStateRuntime.Live([autoExtension]).pipe(
+        Layer.provideMerge(ExtensionTurnControl.Test()),
+      ),
       EventStore.Memory,
-      ExtensionTurnControl.Test(),
       Storage.Test(),
       mockJournal(rows, originSessionId),
     )

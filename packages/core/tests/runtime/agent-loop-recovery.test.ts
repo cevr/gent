@@ -23,6 +23,7 @@ import {
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventStoreLive } from "@gent/core/server/event-store"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -129,6 +130,7 @@ const makeRecoveryLayer = (params: {
     eventStoreLayer,
     extensionLayer,
     ExtensionStateRuntime.Test(),
+    ExtensionTurnControl.Test(),
     providerLayer,
     toolRunnerLayer,
     handoffLayer,

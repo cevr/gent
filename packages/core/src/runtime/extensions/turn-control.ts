@@ -1,76 +1,83 @@
 /**
- * Extension turn-control service — wraps existing agent loop queue paths.
+ * Extension turn-control service — shared bridge into agent-loop queue paths.
  *
- * Extensions use this to schedule follow-up messages or urgent interjections
- * without reaching into the loop internals directly.
+ * No hidden mailbox here. If the loop has not bound handlers yet, that is a
+ * wiring bug and should fail loudly through actor supervision.
  */
 
-import { ServiceMap, DateTime, Effect, Layer } from "effect"
-import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
-import { Message, type MessageMetadata, TextPart } from "../../domain/message.js"
-import { AgentLoop } from "../agent/agent-loop.js"
+import { Effect, Layer, Ref, Semaphore, ServiceMap } from "effect"
+import type { BranchId, SessionId } from "../../domain/ids.js"
+import type { MessageMetadata } from "../../domain/message.js"
+
+export interface QueueFollowUpInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly content: string
+  readonly metadata?: MessageMetadata
+}
+
+export interface InterjectInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly content: string
+}
+
+interface ExtensionTurnControlHandlers {
+  readonly queueFollowUp: (input: QueueFollowUpInput) => Effect.Effect<void>
+  readonly interject: (input: InterjectInput) => Effect.Effect<void>
+}
 
 export interface ExtensionTurnControlService {
   /** Queue a follow-up message after the current turn completes */
-  readonly queueFollowUp: (input: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly content: string
-    readonly metadata?: MessageMetadata
-  }) => Effect.Effect<void>
+  readonly queueFollowUp: (input: QueueFollowUpInput) => Effect.Effect<void>
 
   /** Interject urgently — interrupts the current turn */
-  readonly interject: (input: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly content: string
-  }) => Effect.Effect<void>
+  readonly interject: (input: InterjectInput) => Effect.Effect<void>
+  /** Bind the live agent-loop handlers once the loop exists. */
+  readonly bind: (handlers: ExtensionTurnControlHandlers) => Effect.Effect<void>
 }
 
 export class ExtensionTurnControl extends ServiceMap.Service<
   ExtensionTurnControl,
   ExtensionTurnControlService
 >()("@gent/core/src/runtime/extensions/turn-control/ExtensionTurnControl") {
-  static Live: Layer.Layer<ExtensionTurnControl, never, AgentLoop> = Layer.effect(
+  static Live: Layer.Layer<ExtensionTurnControl> = Layer.effect(
     ExtensionTurnControl,
     Effect.gen(function* () {
-      const agentLoop = yield* AgentLoop
+      const handlersRef = yield* Ref.make<ExtensionTurnControlHandlers | undefined>(undefined)
+      const lock = yield* Semaphore.make(1)
+
+      const withHandlers = <A>(
+        operation: string,
+        run: (handlers: ExtensionTurnControlHandlers) => Effect.Effect<A>,
+      ) =>
+        Effect.gen(function* () {
+          const handlers = yield* lock.withPermits(1)(Ref.get(handlersRef))
+          if (handlers === undefined) {
+            return yield* Effect.die(
+              new Error(`ExtensionTurnControl.${operation} called before AgentLoop bound handlers`),
+            )
+          }
+          return yield* run(handlers)
+        })
 
       return {
-        queueFollowUp: Effect.fn("ExtensionTurnControl.queueFollowUp")(function* (input: {
-          sessionId: SessionId
-          branchId: BranchId
-          content: string
-          metadata?: MessageMetadata
-        }) {
-          const message = new Message({
-            id: Bun.randomUUIDv7() as MessageId,
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            kind: "regular",
-            role: "user",
-            parts: [new TextPart({ type: "text", text: input.content })],
-            createdAt: yield* DateTime.nowAsDate,
-            metadata: input.metadata,
-          })
-          yield* agentLoop.followUp(message).pipe(Effect.catchEager(() => Effect.void))
+        queueFollowUp: Effect.fn("ExtensionTurnControl.queueFollowUp")(function* (
+          input: QueueFollowUpInput,
+        ) {
+          yield* withHandlers("queueFollowUp", (handlers) => handlers.queueFollowUp(input))
         }),
 
-        interject: Effect.fn("ExtensionTurnControl.interject")(function* (input: {
-          sessionId: SessionId
-          branchId: BranchId
-          content: string
-        }) {
-          yield* agentLoop
-            .steer({
-              _tag: "Interject",
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              message: input.content,
-            })
-            .pipe(Effect.catchEager(() => Effect.void))
+        interject: Effect.fn("ExtensionTurnControl.interject")(function* (input: InterjectInput) {
+          yield* withHandlers("interject", (handlers) => handlers.interject(input))
         }),
-      }
+
+        bind: Effect.fn("ExtensionTurnControl.bind")(function* (
+          handlers: ExtensionTurnControlHandlers,
+        ) {
+          yield* lock.withPermits(1)(Ref.set(handlersRef, handlers))
+        }),
+      } satisfies ExtensionTurnControlService
     }),
   )
 
@@ -78,5 +85,6 @@ export class ExtensionTurnControl extends ServiceMap.Service<
     Layer.succeed(ExtensionTurnControl, {
       queueFollowUp: () => Effect.void,
       interject: () => Effect.void,
+      bind: () => Effect.void,
     })
 }

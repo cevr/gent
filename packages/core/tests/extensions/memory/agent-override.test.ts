@@ -63,8 +63,7 @@ const makeTestLayer = (logs: {
     EventStore.Test(),
     agentLoopLayer,
     ExtensionRegistry.fromResolved(testExtensions),
-    ExtensionStateRuntime.Live([]),
-    ExtensionTurnControl.Test(),
+    ExtensionStateRuntime.Live([]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     ToolRunner.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)

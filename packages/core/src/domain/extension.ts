@@ -63,14 +63,18 @@ export type ExtensionStatusInfo =
       readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     } & FailedExtension)
 
-export type ExtensionActorLifecycleStatus = "starting" | "running" | "failed"
+export type ExtensionActorLifecycleStatus = "starting" | "running" | "restarting" | "failed"
+
+export type ExtensionActorFailurePhase = "start" | "runtime"
 
 export interface ExtensionActorStatusInfo {
   readonly extensionId: string
   readonly sessionId: SessionId
   readonly branchId?: BranchId
   readonly status: ExtensionActorLifecycleStatus
+  readonly restartCount?: number
   readonly error?: string
+  readonly failurePhase?: ExtensionActorFailurePhase
 }
 
 export type ExtensionKind = "builtin" | "user" | "project"

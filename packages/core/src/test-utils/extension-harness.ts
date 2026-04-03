@@ -293,11 +293,13 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     config.subagentRunner ?? defaultRunner,
   )
 
+  const turnControlLayer = ExtensionTurnControl.Test()
+
   const baseLayer = Layer.mergeAll(
     Storage.TestWithSql(),
     EventStore.Memory,
     ExtensionRegistry.fromResolved(resolveExtensions(allExtensions)),
-    ExtensionTurnControl.Test(),
+    turnControlLayer,
     subagentRunnerLayer,
     PromptPresenter.Test(),
     Permission.Test(),
@@ -308,7 +310,9 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Skills.Test(),
   )
-  const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(allExtensions)
+  const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(allExtensions).pipe(
+    Layer.provideMerge(turnControlLayer),
+  )
   const runtimeDeps = Layer.merge(baseLayer, stateRuntimeLayer)
   const eventPublisherLayer = Layer.provide(EventPublisherLive, runtimeDeps)
   const baseLayerAny: Layer.Layer<never, never, object> = Layer.merge(
