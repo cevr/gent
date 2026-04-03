@@ -217,6 +217,18 @@ export interface ExtensionProjection extends TurnProjection {
   readonly uiModel?: unknown
 }
 
+export interface ExtensionActorSnapshotConfig {
+  /** Optional runtime validation for the public snapshot payload. */
+  readonly schema?: Schema.Schema<unknown>
+  /** If omitted, runtime uses actor state as the public snapshot. */
+  readonly project?: (state: unknown) => unknown
+}
+
+export interface ExtensionActorTurnConfig {
+  /** Derive turn directives from actor state. Pure projection only. */
+  readonly project: (state: unknown, ctx: ExtensionDeriveContext) => TurnProjection
+}
+
 // Extension Actor — OTP-inspired unified state model
 
 /** Typed effect union interpreted by the framework after actor transitions */
@@ -269,6 +281,12 @@ export interface ExtensionRef {
   ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
   readonly snapshot: Effect.Effect<ExtensionSnapshot, ExtensionProtocolError>
   readonly stop: Effect.Effect<void>
+}
+
+export interface ExtensionActorDefinition {
+  readonly spawn: SpawnExtensionRef
+  readonly snapshot?: ExtensionActorSnapshotConfig
+  readonly turn?: ExtensionActorTurnConfig
 }
 
 /**
@@ -345,9 +363,11 @@ export interface ExtensionSetup {
   readonly protocols?: ReadonlyArray<AnyExtensionMessageDefinition>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Layer<never, never, object>
-  /** Spawn a session-scoped extension ref */
+  /** Session-scoped stateful actor. Omit for stateless extensions. */
+  readonly actor?: ExtensionActorDefinition
+  /** @deprecated Transitional compatibility for old runtime/tests. */
   readonly spawn?: SpawnExtensionRef
-  /** Projection config — derive function externalized from actor (framework-owned) */
+  /** @deprecated Transitional compatibility for old runtime/tests. */
   readonly projection?: ExtensionProjectionConfig
   /** Declarative tag-conditional tool injections */
   readonly tagInjections?: ReadonlyArray<TagInjection>
@@ -356,6 +376,8 @@ export interface ExtensionSetup {
   /** Interaction handler implementations — replaces default handlers when provided */
   readonly interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */
+  readonly jobs?: ReadonlyArray<ScheduledJobContribution>
+  /** @deprecated Transitional compatibility for old activation/tests. */
   readonly scheduledJobs?: ReadonlyArray<ScheduledJobContribution>
   /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
   readonly promptSections?: ReadonlyArray<PromptSection>

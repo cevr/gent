@@ -5,6 +5,7 @@
 import { Effect, Ref, Schema, Semaphore } from "effect"
 import type { AgentEvent } from "../../domain/event.js"
 import type {
+  ExtensionActorDefinition,
   ExtensionDeriveContext,
   ExtensionEffect,
   ExtensionProjection,
@@ -67,6 +68,8 @@ export interface FromReducerConfig<
 
 export interface FromReducerResult {
   readonly spawn: SpawnExtensionRef
+  readonly snapshot?: ExtensionActorDefinition["snapshot"]
+  readonly turn?: ExtensionActorDefinition["turn"]
   readonly projection?: ExtensionProjectionConfig
 }
 
@@ -285,10 +288,28 @@ export const fromReducer = <
       return ref
     })
 
+  const deriveFn = config.derive
+  const snapshot =
+    deriveFn === undefined
+      ? undefined
+      : {
+          schema: config.uiModelSchema,
+          project: (state: unknown) => deriveFn(state as State, undefined).uiModel,
+        }
+  const turn =
+    deriveFn === undefined
+      ? undefined
+      : {
+          project: (state: unknown, ctx: ExtensionDeriveContext) => {
+            const { uiModel: _, ...projection } = deriveFn(state as State, ctx)
+            return projection
+          },
+        }
+
   const projection = buildProjectionConfig<State>({
     derive: config.derive,
     uiModelSchema: config.uiModelSchema,
   })
 
-  return { spawn, projection }
+  return { spawn, snapshot, turn, projection }
 }

@@ -2,10 +2,9 @@ import { Cause, Deferred, Effect, Layer, Ref, Schema, Semaphore, ServiceMap } fr
 import type { AgentEvent, ExtensionUiSnapshot } from "../../domain/event.js"
 import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/event.js"
 import type {
+  ExtensionActorDefinition,
   ExtensionActorStatusInfo,
   ExtensionDeriveContext,
-  ExtensionProjection,
-  ExtensionProjectionConfig,
   ExtensionReduceContext,
   ExtensionRef,
   ExtensionSnapshot,
@@ -29,13 +28,12 @@ interface ExtensionProtocolRegistry {
 
 interface ActorEntry {
   readonly ref: ExtensionRef
-  readonly projection?: ExtensionProjectionConfig
+  readonly actor?: ExtensionActorDefinition
 }
 
 interface ActorSpawnSpec {
   readonly extensionId: string
-  readonly spawn: SpawnExtensionRef<never>
-  readonly projection?: ExtensionProjectionConfig
+  readonly actor: ExtensionActorDefinition
 }
 
 const ACTOR_RESTART_LIMIT = 1
@@ -81,11 +79,42 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
         const spawnByExtension = new Map<string, ActorSpawnSpec>()
         const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
         for (const ext of extensions) {
-          if (ext.setup.spawn !== undefined) {
+          const legacyProjection = ext.setup.projection
+          let legacySnapshot: ExtensionActorDefinition["snapshot"] | undefined
+          let legacyTurn: ExtensionActorDefinition["turn"] | undefined
+          if (legacyProjection !== undefined) {
+            const legacyDerive = legacyProjection.derive
+            if (legacyProjection.uiModelSchema !== undefined || legacyDerive !== undefined) {
+              legacySnapshot = {
+                schema: legacyProjection.uiModelSchema,
+                project:
+                  legacyDerive === undefined
+                    ? undefined
+                    : (state: unknown) => legacyDerive(state, undefined).uiModel,
+              }
+            }
+            if (legacyDerive !== undefined) {
+              legacyTurn = {
+                project: (state: unknown, ctx: ExtensionDeriveContext) => {
+                  const { uiModel: _, ...turn } = legacyDerive(state, ctx)
+                  return turn
+                },
+              }
+            }
+          }
+          const actor =
+            ext.setup.actor ??
+            (ext.setup.spawn !== undefined
+              ? {
+                  spawn: ext.setup.spawn as SpawnExtensionRef<never>,
+                  ...(legacySnapshot === undefined ? {} : { snapshot: legacySnapshot }),
+                  ...(legacyTurn === undefined ? {} : { turn: legacyTurn }),
+                }
+              : undefined)
+          if (actor !== undefined) {
             const spec = {
               extensionId: ext.manifest.id,
-              spawn: ext.setup.spawn as SpawnExtensionRef<never>,
-              projection: ext.setup.projection,
+              actor,
             }
             spawnSpecs.push(spec)
             spawnByExtension.set(ext.manifest.id, spec)
@@ -203,9 +232,9 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
             })
 
             const spawnExit = yield* Effect.exit(
-              spec
-                .spawn({ sessionId, branchId })
-                .pipe(Effect.provideService(ExtensionTurnControl, turnControl)),
+              (spec.actor.spawn as SpawnExtensionRef<never>)({ sessionId, branchId }).pipe(
+                Effect.provideService(ExtensionTurnControl, turnControl),
+              ),
             )
 
             if (spawnExit._tag === "Failure") {
@@ -227,7 +256,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
             const startExit = yield* Effect.exit(spawnExit.value.start)
             if (startExit._tag === "Failure") {
               const error = formatCause(startExit.cause)
-              yield* stopActor({ ref: spawnExit.value, projection: spec.projection })
+              yield* stopActor({ ref: spawnExit.value, actor: spec.actor })
               yield* markActorFailed(
                 spec.extensionId,
                 sessionId,
@@ -249,7 +278,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               status: "running",
               ...(restartCount > 0 ? { restartCount } : {}),
             })
-            return { ref: spawnExit.value, projection: spec.projection }
+            return { ref: spawnExit.value, actor: spec.actor }
           })
 
         const restartActor = (
@@ -512,9 +541,9 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 const entries = yield* getOrSpawnActors(sessionId)
                 const results: Array<{ extensionId: string; projection: TurnProjection }> = []
                 for (const entry of entries) {
-                  const { ref, projection } = entry
-                  const derive = projection?.derive
-                  if (derive === undefined) continue
+                  const { ref, actor } = entry
+                  const turnProject = actor?.turn?.project
+                  if (turnProject === undefined) continue
                   const snapshotResult = yield* runSupervised(
                     sessionId,
                     undefined,
@@ -533,17 +562,16 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   }
                   const { state } = snapshot
                   if (state === undefined) continue
-                  const deriveExit = yield* Effect.exit(Effect.sync(() => derive(state, ctx)))
+                  const turnExit = yield* Effect.exit(Effect.sync(() => turnProject(state, ctx)))
                   const derived =
-                    deriveExit._tag === "Success"
-                      ? deriveExit.value
+                    turnExit._tag === "Success"
+                      ? turnExit.value
                       : yield* logIsolatedFailure("extension.derive.failed", {
                           actorId: ref.id,
-                          error: formatCause(deriveExit.cause),
+                          error: formatCause(turnExit.cause),
                         }).pipe(Effect.as(undefined))
                   if (derived !== undefined) {
-                    const { uiModel: _, ...turn } = derived
-                    results.push({ extensionId: ref.id, projection: turn })
+                    results.push({ extensionId: ref.id, projection: derived })
                   }
                 }
                 return results
@@ -647,9 +675,9 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 const snapshots: ExtensionUiSnapshot[] = []
                 const entries = yield* getOrSpawnActors(sessionId, branchId)
                 for (const entry of entries) {
-                  const { ref, projection } = entry
-                  const derive = projection?.derive
-                  if (derive === undefined) continue
+                  const { ref, actor } = entry
+                  const snapshotConfig = actor?.snapshot
+                  if (snapshotConfig === undefined) continue
                   const snapshotResult = yield* runSupervised(
                     sessionId,
                     branchId,
@@ -668,35 +696,35 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   }
                   const { state, epoch } = snapshot
                   if (state === undefined) continue
-                  const deriveExit = yield* Effect.exit(Effect.sync(() => derive(state, undefined)))
-                  const derived =
-                    deriveExit._tag === "Success"
-                      ? deriveExit.value
-                      : yield* logIsolatedFailure("extension.derive.failed", {
+                  const project = snapshotConfig.project ?? ((value: unknown) => value)
+                  const snapshotProjectExit = yield* Effect.exit(Effect.sync(() => project(state)))
+                  let model =
+                    snapshotProjectExit._tag === "Success"
+                      ? snapshotProjectExit.value
+                      : yield* logIsolatedFailure("extension.snapshot.project.failed", {
                           actorId: ref.id,
-                          error: formatCause(deriveExit.cause),
+                          error: formatCause(snapshotProjectExit.cause),
                         }).pipe(Effect.as(undefined))
-                  let uiModel = (derived as ExtensionProjection | undefined)?.uiModel
-                  if (uiModel !== undefined && projection?.uiModelSchema !== undefined) {
-                    uiModel = yield* Schema.decodeUnknownEffect(
-                      projection.uiModelSchema as Schema.Any,
-                    )(uiModel).pipe(
+                  if (model !== undefined && snapshotConfig.schema !== undefined) {
+                    model = yield* Schema.decodeUnknownEffect(snapshotConfig.schema as Schema.Any)(
+                      model,
+                    ).pipe(
                       Effect.catchEager(() =>
-                        Effect.logWarning("extension.uiModel.schemaValidation.failed").pipe(
+                        Effect.logWarning("extension.snapshot.schemaValidation.failed").pipe(
                           Effect.annotateLogs({ actorId: ref.id }),
                           Effect.as(undefined),
                         ),
                       ),
                     )
                   }
-                  if (uiModel !== undefined) {
+                  if (model !== undefined) {
                     snapshots.push(
                       new ExtensionUiSnapshotClass({
                         sessionId,
                         branchId,
                         extensionId: ref.id,
                         epoch,
-                        model: uiModel,
+                        model,
                       }),
                     )
                   }

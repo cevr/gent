@@ -214,51 +214,46 @@ describe("extension tools through ToolRunner.run", () => {
 })
 
 describe("state-backed extension api", () => {
-  test("state derive exposes projection output", async () => {
-    const ext = extension("state-derive", (b) => {
-      b.state({
-        initial: { turns: 0 },
-        reduce: (state, event) => {
-          if (event.type === "turn-completed") return { state: { turns: state.turns + 1 } }
-          return { state }
-        },
-        derive: (state) => ({
-          promptSections: [{ id: "turns", content: `Turns: ${state.turns}`, priority: 50 }],
+  test("stateful actor extensions expose actor plus compatibility spawn/projection", async () => {
+    const { fromReducer } = await import("@gent/core/runtime/extensions/from-reducer")
+    const ext = extension("state-agent-run-alias", (b) => {
+      b.actor(
+        fromReducer({
+          initial: { seenType: false, seenTag: false, seenRawTag: false },
+          id: "state-agent-run-alias",
+          reduce: (state, event) => {
+            if (event._tag === "AgentRunSpawned") {
+              return {
+                state: {
+                  seenType: true,
+                  seenTag: event._tag === "AgentRunSpawned",
+                  seenRawTag: true,
+                },
+              }
+            }
+            return { state }
+          },
+          derive: (state) => ({
+            promptSections: state.seenType
+              ? [{ id: "seen", content: "seen", priority: 50 }]
+              : undefined,
+          }),
         }),
-      })
+      )
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    expect(setup.actor).toBeDefined()
     expect(setup.spawn).toBeDefined()
     expect(setup.projection).toBeDefined()
-  })
-
-  test("state reducer still maps AgentRun events to subagent simple event names", async () => {
-    const ext = extension("state-agent-run-alias", (b) => {
-      b.state({
-        initial: { seenType: false, seenTag: false, seenRawTag: false },
-        reduce: (state, event) => {
-          if (event.type === "subagent-spawned") {
-            return {
-              state: {
-                seenType: true,
-                seenTag: event._tag === "SubagentSpawned",
-                seenRawTag: event.raw._tag === "SubagentSpawned",
-              },
-            }
-          }
-          return { state }
-        },
-      })
-    })
-
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     const actorLayer = ExtensionTurnControl.Test()
     const actor = await Effect.runPromise(
-      setup.spawn!({
-        sessionId: "s1" as SessionId,
-        branchId: "b1" as BranchId,
-      }).pipe(Effect.provide(actorLayer)),
+      setup
+        .actor!.spawn({
+          sessionId: "s1" as SessionId,
+          branchId: "b1" as BranchId,
+        })
+        .pipe(Effect.provide(actorLayer)),
     )
 
     await Effect.runPromise(actor.start.pipe(Effect.provide(actorLayer)))
@@ -282,31 +277,21 @@ describe("state-backed extension api", () => {
     await Effect.runPromise(actor.stop.pipe(Effect.provide(actorLayer)))
   })
 
-  test("malformed persist config and mixed state/actor wiring fail setup", async () => {
-    const badPersist = extension("bad-persist", (b) => {
-      b.state({
-        initial: { x: 1 },
-        reduce: (state) => ({ state }),
-        // @ts-expect-error testing malformed JS author config
-        persist: {},
+  test("jobs register through the minimal surface", async () => {
+    const ext = extension("jobs-test", (b) => {
+      b.jobs({
+        id: "reflect",
+        schedule: "0 9 * * *",
+        target: {
+          kind: "headless-agent",
+          agent: "explore",
+          prompt: "hello",
+        },
       })
     })
 
-    const { fromReducer } = await import("@gent/core/runtime/extensions/from-reducer")
-    const actor = fromReducer({ id: "x", initial: {}, reduce: (state: object) => ({ state }) })
-    const mixed = extension("mutex-test", (b) => {
-      b.state({ initial: { a: 1 }, reduce: (state) => ({ state }) })
-      b.actor(actor)
-    })
-
-    const badPersistExit = await Effect.runPromiseExit(
-      badPersist.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
-    )
-    const mixedExit = await Effect.runPromiseExit(
-      mixed.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
-    )
-
-    expect(badPersistExit._tag).toBe("Failure")
-    expect(mixedExit._tag).toBe("Failure")
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    expect(setup.jobs?.map((job) => job.id)).toEqual(["reflect"])
+    expect(setup.scheduledJobs?.map((job) => job.id)).toEqual(["reflect"])
   })
 })

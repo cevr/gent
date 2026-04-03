@@ -327,7 +327,7 @@ describe("fromReducer", () => {
 
 describe("ExtensionStateRuntime — actor hosting", () => {
   it.live("actor state changes return changed=true from reduce", () => {
-    const { spawn, projection } = fromReducer({
+    const actor = fromReducer({
       id: "test-actor",
       initial: { count: 0 },
       reduce: (state: { count: number }) => ({ state: { count: state.count + 1 } }),
@@ -339,7 +339,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
         manifest: { id: "test-actor" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { spawn, projection },
+        setup: { actor },
       },
     ]
 
@@ -360,7 +360,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
   })
 
   it.live("spawn failures are isolated and exposed as actor lifecycle state", () => {
-    const { spawn, projection } = fromReducer({
+    const actor = fromReducer({
       id: "healthy-actor",
       initial: { count: 0 },
       reduce: (state: { count: number }) => ({ state: { count: state.count + 1 } }),
@@ -372,7 +372,7 @@ describe("ExtensionStateRuntime — actor hosting", () => {
         manifest: { id: "healthy-actor" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { spawn, projection },
+        setup: { actor },
       },
       {
         manifest: { id: "broken-actor" },

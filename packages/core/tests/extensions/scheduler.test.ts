@@ -17,7 +17,7 @@ const makeLoaded = (
   kind: "builtin",
   sourcePath: "builtin",
   setup: {
-    scheduledJobs: jobs,
+    jobs,
   },
 })
 

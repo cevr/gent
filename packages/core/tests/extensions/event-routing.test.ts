@@ -41,8 +41,7 @@ const recorderExtension: LoadedExtension = {
   kind: "builtin",
   sourcePath: "builtin",
   setup: {
-    spawn: recorderReducer.spawn,
-    projection: recorderReducer.projection,
+    actor: recorderReducer,
   },
 }
 
@@ -77,8 +76,7 @@ const snapshotCounterExtension: LoadedExtension = {
   kind: "builtin",
   sourcePath: "builtin",
   setup: {
-    spawn: snapshotCounterReducer.spawn,
-    projection: snapshotCounterReducer.projection,
+    actor: snapshotCounterReducer,
   },
 }
 
@@ -177,7 +175,7 @@ describe("EventPublisher — event routing", () => {
   it.live("invalid uiModel is dropped when uiModelSchema validation fails", () => {
     // Extension with a strict schema that rejects what deriveUi actually returns
     const strictSchema = Schema.Struct({ count: Schema.Number, label: Schema.String })
-    const { spawn, projection } = fromReducer({
+    const badModelActor = fromReducer({
       id: "bad-model",
       initial: { count: 0 },
       reduce: (state: { count: number }, event): ReduceResult<{ count: number }> => {
@@ -193,7 +191,7 @@ describe("EventPublisher — event routing", () => {
       manifest: { id: "bad-model" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { spawn, ...projection },
+      setup: { actor: badModelActor },
     }
 
     const { fullLayer } = makeLayer([badModelExtension])
@@ -246,7 +244,7 @@ describe("EventPublisher — event routing", () => {
         manifest: { id: "crashing-derive" },
         kind: "builtin",
         sourcePath: "test",
-        setup: { spawn: crashingDerive.spawn, projection: crashingDerive.projection },
+        setup: { actor: crashingDerive },
       }
       const { fullLayer } = makeLayer([recorderExtension, crashingExtension])
 

@@ -13,9 +13,9 @@ describe("memory scheduled jobs", () => {
 
       expect(setup.onStartup).toBeUndefined()
       expect(setup.onShutdown).toBeUndefined()
-      expect(setup.scheduledJobs?.map((job) => job.id)).toEqual(["reflect", "meditate"])
-      expect(setup.scheduledJobs?.every((job) => job.target.kind === "headless-agent")).toBe(true)
-      expect(setup.scheduledJobs?.every((job) => job.target.cwd === undefined)).toBe(true)
+      expect(setup.jobs?.map((job) => job.id)).toEqual(["reflect", "meditate"])
+      expect(setup.jobs?.every((job) => job.target.kind === "headless-agent")).toBe(true)
+      expect(setup.jobs?.every((job) => job.target.cwd === undefined)).toBe(true)
     }),
   )
 })

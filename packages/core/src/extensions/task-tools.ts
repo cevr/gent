@@ -202,7 +202,7 @@ const taskListActor = fromReducer<
 
 // ── Extension ──
 
-export const TaskToolsExtension = extension("@gent/task-tools", (ext) => {
+export const TaskExtension = extension("@gent/task-tools", (ext) => {
   ext.protocol(TaskProtocol)
   ext.tool(TaskCreateTool)
   ext.tool(TaskListTool)
@@ -214,3 +214,6 @@ export const TaskToolsExtension = extension("@gent/task-tools", (ext) => {
   ext.layer(TaskService.Live)
   ext.actor(taskListActor)
 })
+
+/** @deprecated Use TaskExtension. */
+export const TaskToolsExtension = TaskExtension

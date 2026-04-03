@@ -133,90 +133,47 @@ ext.onShutdown(async () => {
 })
 ```
 
-### ext.state(config)
+### ext.actor(actor)
 
-Stateful extensions via reducer pattern. **One call per extension.**
+Stateful extensions register one actor. Stateless extensions can omit this entirely.
+
+Current helpers like `fromReducer()` / `fromMachine()` still exist during the migration, but the extension surface is `ext.actor(...)`.
 
 ```ts
-ext.state({
-  initial: { turns: 0, lastTool: "" },
+import { extension, fromReducer } from "@gent/core/extensions/api"
+
+const turnCounterActor = fromReducer({
+  id: "turn-counter",
+  initial: { turns: 0 },
   reduce: (state, event) => {
-    if (event.type === "turn-completed") {
-      return { state: { ...state, turns: state.turns + 1 } }
-    }
-    if (event.type === "tool-call-succeeded") {
-      return { state: { ...state, lastTool: event.raw._tag } }
+    if (event._tag === "TurnCompleted") {
+      return { state: { turns: state.turns + 1 } }
     }
     return { state }
   },
   derive: (state) => ({
-    promptSections: [{ id: "turn-count", content: `Turns so far: ${state.turns}`, priority: 80 }],
+    promptSections: [
+      {
+        id: "turn-count",
+        content: `Turns so far: ${state.turns}`,
+        priority: 80,
+      },
+    ],
+    uiModel: state,
   }),
 })
-```
 
-**State is `Readonly<S>`** in the reducer — returning the same reference means "no change" (efficient ref equality check).
-
-**Events** are `SimpleEvent` objects with kebab-case `type`:
-
-| type                       | When                           |
-| -------------------------- | ------------------------------ |
-| `session-started`          | New session created            |
-| `session-name-updated`     | Session name changed           |
-| `session-settings-updated` | Session settings changed       |
-| `message-received`         | User message received          |
-| `stream-started`           | LLM streaming begins           |
-| `stream-chunk`             | LLM streaming chunk received   |
-| `stream-ended`             | LLM streaming ends             |
-| `turn-completed`           | Turn finished                  |
-| `turn-recovery-applied`    | Turn recovered from checkpoint |
-| `tool-call-started`        | Tool execution begins          |
-| `tool-call-succeeded`      | Tool execution succeeded       |
-| `tool-call-failed`         | Tool execution failed          |
-| `agent-switched`           | Active agent changed           |
-| `agent-restarted`          | Agent restarted                |
-| `subagent-spawned`         | Subagent launched              |
-| `subagent-succeeded`       | Subagent completed             |
-| `subagent-failed`          | Subagent failed                |
-| `task-created`             | Task created                   |
-| `task-updated`             | Task updated                   |
-| `task-completed`           | Task completed                 |
-| `task-failed`              | Task failed                    |
-| `task-stopped`             | Task stopped                   |
-| `task-deleted`             | Task deleted                   |
-| `branch-created`           | Branch created                 |
-| `branch-switched`          | Branch switched                |
-| `questions-asked`          | Agent asked questions          |
-| `error-occurred`           | Error in the agent loop        |
-
-Internal/diagnostic events (machine inspection, interaction flow, provider retries) are filtered out before reaching your reducer.
-
-**Effects** — trigger side effects from the reducer:
-
-```ts
-return {
-  state: newState,
-  effects: [{ type: "queue-follow-up", content: "Please review the changes." }],
-}
-```
-
-**Persistence** — opt-in via discriminated config:
-
-```ts
-import { Schema } from "effect"
-
-ext.state({
-  initial: { count: 0 },
-  reduce: (state, event) => {
-    /* ... */
-  },
-  persist: {
-    schema: Schema.Struct({ count: Schema.Number }),
-  },
+extension("turn-counter", (ext) => {
+  ext.actor(turnCounterActor)
 })
 ```
 
-Omit `persist` for memory-only state. Missing `schema` with `persist` is a setup-time error.
+Rules:
+
+- one actor per extension
+- actor optional for stateless extensions
+- actor owns state, snapshot, and turn projection
+- helper adapters are transitional; plan removes them in favor of one actor-shaped substrate
 
 ### Imperative Side Effects
 
@@ -299,9 +256,9 @@ extension("my-ext", (ext) => {
 })
 ```
 
-### ext.actor(result)
+### ext.actor(actor)
 
-Register a stateful actor from `fromReducer()` or `fromMachine()`. Mutually exclusive with `ext.state()`.
+Register a stateful actor from `fromReducer()` or `fromMachine()`.
 
 ```ts
 import { extension, fromReducer } from "@gent/core/extensions/api"
@@ -315,6 +272,24 @@ const myActor = fromReducer({
 
 extension("my-ext", (ext) => {
   ext.actor(myActor)
+})
+```
+
+### ext.jobs(...jobs)
+
+Register durable host-owned scheduled jobs.
+
+```ts
+extension("memory-jobs", (ext) => {
+  ext.jobs({
+    id: "reflect",
+    schedule: "0 21 * * 1-5",
+    target: {
+      kind: "headless-agent",
+      agent: "memory:reflect",
+      prompt: "Reflect on recent sessions.",
+    },
+  })
 })
 ```
 

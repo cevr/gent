@@ -238,8 +238,8 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 ### Server Extensions
 
 - `extension()` is the unified authoring API — all builtins and external extensions use it
-- Simple path: `ext.tool()`, `ext.on()`, `ext.state()` — no Effect knowledge needed
-- Full-power path: `ext.actor()`, `ext.interceptor()`, `ext.layer()`, `ext.provider()` — Effect-aware
+- Stateless path: `ext.tool()`, `ext.on()`, `ext.jobs()` — no actor required
+- Stateful path: `ext.actor()`, `ext.interceptor()`, `ext.layer()`, `ext.provider()` — actor-backed, Effect-aware
 - `defineExtension()` deleted — `extension()` is the only way to create extensions
 - `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
 - `ext.layer(layer)` — layers merge into the main extension graph; services that need `SubagentRunnerService` resolve it lazily at call time

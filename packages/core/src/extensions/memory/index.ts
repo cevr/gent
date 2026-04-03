@@ -110,7 +110,5 @@ export const MemoryExtension = extension("@gent/memory", (ext) => {
   }
   ext.actor(memoryActor)
   ext.layer(MemoryVaultLive())
-  for (const job of MemoryDreamJobs()) {
-    ext.scheduledJob(job)
-  }
+  ext.jobs(...MemoryDreamJobs())
 })

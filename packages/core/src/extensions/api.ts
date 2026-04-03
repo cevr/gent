@@ -11,14 +11,14 @@
  * export default extension("my-ext", async (ext, ctx) => {
  *   ext.tool({ name: "greet", description: "Say hello", execute: async (p) => `Hi ${p.name}!` })
  *   ext.on("prompt.system", async (input, next) => (await next(input)) + "\nBe nice.")
- *   ext.state({ initial: { n: 0 }, reduce: (s, e) => ({ state: s }) })
+ *   ext.actor(MyActor)
  * })
  *
  * // Full-power path — same builder, Effect-aware
  * export default extension("@gent/my-builtin", (ext) => {
  *   ext.tool(MyFullToolDefinition)
  *   ext.interceptor("prompt.system", (input, next) => next(input).pipe(Effect.map(...)))
- *   ext.actor(fromReducer({ id: "...", initial: ..., reduce: ... }))
+ *   ext.actor(MyActor)
  *   ext.layer(MyService.Live)
  *   ext.provider(myProvider)
  * })
@@ -44,6 +44,7 @@ import {
   type ExtensionDeriveContext,
   type ExtensionProjection,
   type ExtensionProjectionConfig,
+  type ExtensionActorDefinition,
   type ExtensionReduceContext,
   type ReduceResult,
   type ExtensionEffect,
@@ -244,91 +245,6 @@ type LegacySimpleAgentRunEvent =
 
 type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 
-/** Maps AgentEvent._tag to SimpleEventType. Diagnostic/internal events are intentionally omitted:
- *  MachineInspected, MachineTaskSucceeded, MachineTaskFailed, ExtensionUiSnapshot,
- *  PromptPresented, PromptConfirmed, PromptRejected, PromptEdited,
- *  HandoffPresented, HandoffConfirmed, HandoffRejected, InteractionDismissed,
- *  ProviderRetrying, BranchSummarized */
-const EVENT_TAG_MAP: Record<string, SimpleEventType> = {
-  SessionStarted: "session-started",
-  SessionNameUpdated: "session-name-updated",
-  SessionSettingsUpdated: "session-settings-updated",
-  MessageReceived: "message-received",
-  StreamStarted: "stream-started",
-  StreamChunk: "stream-chunk",
-  StreamEnded: "stream-ended",
-  TurnCompleted: "turn-completed",
-  TurnRecoveryApplied: "turn-recovery-applied",
-  ToolCallStarted: "tool-call-started",
-  ToolCallSucceeded: "tool-call-succeeded",
-  ToolCallFailed: "tool-call-failed",
-  AgentSwitched: "agent-switched",
-  AgentRestarted: "agent-restarted",
-  AgentRunSpawned: "subagent-spawned",
-  AgentRunSucceeded: "subagent-succeeded",
-  AgentRunFailed: "subagent-failed",
-  TaskCreated: "task-created",
-  TaskUpdated: "task-updated",
-  TaskCompleted: "task-completed",
-  TaskFailed: "task-failed",
-  TaskStopped: "task-stopped",
-  TaskDeleted: "task-deleted",
-  BranchCreated: "branch-created",
-  BranchSwitched: "branch-switched",
-  QuestionsAsked: "questions-asked",
-  ErrorOccurred: "error-occurred",
-}
-
-const mapEventType = (tag: string): SimpleEventType | undefined => EVENT_TAG_MAP[tag]
-
-const toLegacySimpleEventRaw = (
-  event: AgentEvent,
-): { readonly tag: string; readonly raw: SimpleEventRaw } => {
-  switch (event._tag) {
-    case "AgentRunSpawned":
-      return {
-        tag: "SubagentSpawned",
-        raw: { ...event, _tag: "SubagentSpawned" },
-      }
-    case "AgentRunSucceeded":
-      return {
-        tag: "SubagentSucceeded",
-        raw: { ...event, _tag: "SubagentSucceeded" },
-      }
-    case "AgentRunFailed":
-      return {
-        tag: "SubagentFailed",
-        raw: { ...event, _tag: "SubagentFailed" },
-      }
-    default:
-      return { tag: event._tag, raw: event }
-  }
-}
-
-// ── Simple State Config ──
-
-export interface SimpleStateConfig<S> {
-  readonly initial: S
-  readonly reduce: (
-    state: Readonly<S>,
-    event: SimpleEvent,
-  ) => { readonly state: S; readonly effects?: ReadonlyArray<SimpleEffect> }
-  readonly derive?: (state: Readonly<S>) => {
-    readonly promptSections?: ReadonlyArray<PromptSection>
-    readonly toolPolicy?: {
-      readonly include?: ReadonlyArray<string>
-      readonly exclude?: ReadonlyArray<string>
-    }
-    readonly uiModel?: unknown
-  }
-  readonly persist?: { readonly schema: Schema.Schema<S> }
-}
-
-export interface SimpleEffect {
-  readonly type: "queue-follow-up"
-  readonly content: string
-}
-
 // ── Hook Types for ext.on() ──
 
 type TransformHandler<I, O> = (input: I, next: (input: I) => Promise<O>) => O | Promise<O>
@@ -345,11 +261,6 @@ interface SimpleHookHandlers {
 
 // ── Actor Result (from fromReducer/fromMachine) ──
 
-export interface ActorResult {
-  readonly spawn: SpawnExtensionRef
-  readonly projection?: ExtensionProjectionConfig
-}
-
 // ── Extension Builder ──
 
 export interface ExtensionBuilder {
@@ -363,8 +274,6 @@ export interface ExtensionBuilder {
   promptSection(section: PromptSection): void
   /** Register a hook using plain async handlers. */
   on<K extends keyof SimpleHookHandlers>(key: K, handler: SimpleHookHandlers[K]): void
-  /** Register stateful extension via simplified reducer. Mutually exclusive with actor(). */
-  state<S>(config: SimpleStateConfig<S>): void
   /** Register a startup hook. Multiple calls compose in order. */
   onStartup(fn: () => void | Promise<void>): void
   /** Register a shutdown hook. Multiple calls compose in order. */
@@ -389,8 +298,8 @@ export interface ExtensionBuilder {
   /** Register a raw Effect interceptor. */
   interceptor(descriptor: ExtensionInterceptorDescriptor): void
   interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
-  /** Register an actor from fromReducer() or fromMachine(). Mutually exclusive with state(). */
-  actor(result: ActorResult): void
+  /** Register a stateful actor. Stateless extensions can omit this. */
+  actor(actor: ExtensionActorDefinition): void
   /** Register public protocol definitions for this extension boundary. */
   protocol(protocol: ExtensionProtocol): void
   /** Provide a service Layer. Multiple calls merge. */
@@ -399,8 +308,8 @@ export interface ExtensionBuilder {
   provider(provider: ProviderContribution): void
   /** Register an interaction handler. */
   interactionHandler(handler: InteractionHandlerContribution): void
-  /** Register a durable host-owned scheduled job. */
-  scheduledJob(job: ScheduledJobContribution): void
+  /** Register durable host-owned scheduled jobs. */
+  jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): void
   /** Register a tag-conditional tool injection. */
   tagInjection(injection: TagInjection): void
   /** Register an Effect-based startup hook. Composes with onStartup(). */
@@ -584,61 +493,6 @@ const wrapFireAndForgetHandler =
       yield* drainEffects(effects, hookKey, input)
     })
 
-const convertSimpleEffect = (effect: SimpleEffect): ExtensionEffect => {
-  switch (effect.type) {
-    case "queue-follow-up":
-      return { _tag: "QueueFollowUp", content: effect.content }
-  }
-}
-
-/** Convert SimpleStateConfig to fromReducer result. Extracted to reduce factory generator complexity. */
-const resolveSimpleState = (
-  id: string,
-  sc: SimpleStateConfig<unknown>,
-): { error: string } | { spawn: SpawnExtensionRef; projection?: ExtensionProjectionConfig } => {
-  if (sc.persist !== undefined && sc.persist.schema === undefined) {
-    return { error: `ext.state() persist requires a schema: { persist: { schema } }` } as const
-  }
-  const reducerResult = fromReducer({
-    id,
-    initial: sc.initial,
-    reduce: (
-      state: unknown,
-      event: AgentEvent,
-      _ctx: ExtensionReduceContext,
-    ): ReduceResult<unknown> => {
-      const simpleType = mapEventType(event._tag)
-      if (simpleType === undefined) return { state }
-      const normalized = toLegacySimpleEventRaw(event)
-      const simpleEvent: SimpleEvent = {
-        type: simpleType,
-        _tag: normalized.tag,
-        raw: normalized.raw,
-      }
-      const result = sc.reduce(state as Readonly<typeof sc.initial>, simpleEvent)
-      return { state: result.state, effects: result.effects?.map(convertSimpleEffect) }
-    },
-    derive: (() => {
-      const deriveFn = sc.derive
-      if (deriveFn === undefined) return undefined
-      return (state: unknown): ExtensionProjection => {
-        const derived = deriveFn(state as Readonly<typeof sc.initial>)
-        return {
-          promptSections: derived.promptSections,
-          toolPolicy: derived.toolPolicy,
-          uiModel: derived.uiModel,
-        }
-      }
-    })(),
-    stateSchema: sc.persist?.schema,
-    persist: sc.persist !== undefined,
-  })
-  return {
-    spawn: reducerResult.spawn,
-    projection: reducerResult.projection,
-  } as const
-}
-
 // ── Public API ──
 
 /** Setup context passed to the factory function. */
@@ -707,7 +561,7 @@ export const extension = (
       const shutdownEffects: Array<Effect.Effect<void>> = []
       const providers: ProviderContribution[] = []
       const interactionHandlers: InteractionHandlerContribution[] = []
-      const scheduledJobs: ScheduledJobContribution[] = []
+      const jobs: ScheduledJobContribution[] = []
       const tagInjections: TagInjection[] = []
       const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
       const busSubscriptions: BusSubscriptionEntry[] = []
@@ -716,9 +570,7 @@ export const extension = (
         string,
         ReturnType<typeof listExtensionProtocolDefinitions>[number]
       >()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let stateConfig: SimpleStateConfig<any> | undefined
-      let actorResult: ActorResult | undefined
+      let actorResult: ExtensionActorDefinition | undefined
 
       // Stack-based effect buffer for imperative side effects.
       // Stack is necessary because interceptor chains nest via next() — an outer
@@ -818,15 +670,6 @@ export const extension = (
           top.effects.push({ _tag: "Interject", content })
         },
 
-        state: (config) => {
-          if (stateConfig !== undefined || actorResult !== undefined) {
-            throw new Error(
-              `extension "${id}": state() and actor() are mutually exclusive, and each can only be called once`,
-            )
-          }
-          stateConfig = config
-        },
-
         onStartup: (fn) => startupFns.push(fn),
         onShutdown: (fn) => shutdownFns.push(fn),
 
@@ -845,13 +688,11 @@ export const extension = (
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         }) as any,
 
-        actor: (result) => {
-          if (actorResult !== undefined || stateConfig !== undefined) {
-            throw new Error(
-              `extension "${id}": actor() and state() are mutually exclusive, and each can only be called once`,
-            )
+        actor: (actor) => {
+          if (actorResult !== undefined) {
+            throw new Error(`extension "${id}": actor() can only be called once`)
           }
-          actorResult = result
+          actorResult = actor
         },
 
         protocol: (protocol) => {
@@ -878,7 +719,7 @@ export const extension = (
         },
         provider: (p) => providers.push(p),
         interactionHandler: (h) => interactionHandlers.push(h),
-        scheduledJob: (job) => scheduledJobs.push(job),
+        jobs: (...entries) => jobs.push(...entries),
         tagInjection: (t) => tagInjections.push(t),
         onStartupEffect: (e) => startupEffects.push(e),
         onShutdownEffect: (e) => shutdownEffects.push(e),
@@ -902,22 +743,6 @@ export const extension = (
         })
       }
 
-      // Resolve actor from state() or actor()
-      let spawn: ExtensionSetup["spawn"]
-      let projection: ExtensionSetup["projection"]
-
-      if (stateConfig !== undefined) {
-        const resolved = resolveSimpleState(id, stateConfig)
-        if ("error" in resolved) {
-          return yield* Effect.fail(new ExtensionLoadError(id, resolved.error))
-        }
-        spawn = resolved.spawn
-        projection = resolved.projection
-      } else if (actorResult !== undefined) {
-        spawn = actorResult.spawn
-        projection = actorResult.projection
-      }
-
       let mergedLayer: Layer.Layer<never, never, object> | undefined
       const [firstLayer, ...remainingLayers] = layers
       if (firstLayer !== undefined) {
@@ -929,6 +754,24 @@ export const extension = (
 
       const onStartup = mergeStartupHooks(startupFns, startupEffects)
       const onShutdown = mergeShutdownHooks(shutdownFns, shutdownEffects)
+      const compatibilityProjection: ExtensionSetup["projection"] | undefined = (() => {
+        const actor = actorResult
+        if (actor === undefined) return undefined
+        if (actor.turn === undefined && actor.snapshot === undefined) return undefined
+        return {
+          derive: (state, ctx) => ({
+            ...(ctx !== undefined ? (actor.turn?.project(state, ctx) ?? {}) : {}),
+            ...(() => {
+              const snapshot = actor.snapshot
+              if (snapshot === undefined) return {}
+              const project = snapshot.project ?? ((value: unknown) => value)
+              const uiModel = project(state)
+              return uiModel === undefined ? {} : { uiModel }
+            })(),
+          }),
+          uiModelSchema: actor.snapshot?.schema,
+        }
+      })()
 
       return {
         ...(tools.length > 0 ? { tools } : {}),
@@ -939,12 +782,18 @@ export const extension = (
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
         ...(providers.length > 0 ? { providers } : {}),
         ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
-        ...(scheduledJobs.length > 0 ? { scheduledJobs } : {}),
+        ...(jobs.length > 0 ? { jobs, scheduledJobs: jobs } : {}),
         ...(tagInjections.length > 0 ? { tagInjections } : {}),
         ...(observers.length > 0 ? { observers } : {}),
         ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),
-        spawn,
-        projection,
+        ...(actorResult !== undefined
+          ? {
+              actor: actorResult,
+              // Transitional compatibility for older runtime/tests.
+              spawn: actorResult.spawn,
+              projection: compatibilityProjection,
+            }
+          : {}),
         onStartup,
         onShutdown,
       } satisfies ExtensionSetup
