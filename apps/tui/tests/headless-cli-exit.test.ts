@@ -48,6 +48,20 @@ const seedAuth = async (authFilePath: string, authKeyPath: string) => {
   )
 }
 
+const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) => {
+  const childEnv = { ...Bun.env }
+  delete childEnv.FORCE_COLOR
+  delete childEnv.NO_COLOR
+
+  return {
+    ...childEnv,
+    HOME: homeDir,
+    GENT_PERSISTENCE_MODE: "memory",
+    GENT_PROVIDER_MODE: "debug-scripted",
+    ...env,
+  }
+}
+
 describe("headless CLI", () => {
   test("exits after a successful headless turn", async () => {
     const appDir = path.resolve(import.meta.dir, "..")
@@ -67,13 +81,7 @@ describe("headless CLI", () => {
       ],
       {
         cwd: appDir,
-        env: {
-          ...Bun.env,
-          HOME: homeDir,
-          GENT_PERSISTENCE_MODE: "memory",
-          GENT_PROVIDER_MODE: "debug-scripted",
-          ...env,
-        },
+        env: makeChildEnv(homeDir, env),
         stdout: "pipe",
         stderr: "pipe",
       },

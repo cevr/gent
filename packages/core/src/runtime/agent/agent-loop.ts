@@ -86,6 +86,7 @@ import {
   buildRunningState,
   clearQueueState,
   countQueuedFollowUps,
+  emptyLoopQueueState,
   queueSnapshotFromState,
   runtimeStateFromLoopState,
   takeNextQueuedTurn,
@@ -998,9 +999,39 @@ type SemaphoreType = Semaphore.Semaphore
 type LoopHandle = {
   actor: LoopActor
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
+  pendingQueueRef: Ref.Ref<LoopState["queue"]>
   bashSemaphore: SemaphoreType
   scope: Scope.Closeable
 }
+
+const mergePendingQueue = (
+  queue: LoopState["queue"],
+  pending: LoopState["queue"],
+): LoopState["queue"] => {
+  let merged = queue
+  for (const item of pending.steering) {
+    merged = appendSteeringItem(merged, item)
+  }
+  for (const item of pending.followUp) {
+    merged = appendFollowUpQueueState(merged, item)
+  }
+  return merged
+}
+
+const queueWithPending = (
+  pendingQueueRef: Ref.Ref<LoopState["queue"]>,
+  queue: LoopState["queue"],
+) => Ref.get(pendingQueueRef).pipe(Effect.map((pending) => mergePendingQueue(queue, pending)))
+
+const consumeQueueWithPending = (
+  pendingQueueRef: Ref.Ref<LoopState["queue"]>,
+  queue: LoopState["queue"],
+) =>
+  Effect.gen(function* () {
+    const pending = yield* Ref.get(pendingQueueRef)
+    yield* Ref.set(pendingQueueRef, emptyLoopQueueState())
+    return mergePendingQueue(queue, pending)
+  })
 
 const interruptActiveStream = (activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>) =>
   Effect.gen(function* () {
@@ -1229,11 +1260,37 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
+        const pendingQueuesRef = yield* Ref.make<Map<string, LoopState["queue"]>>(new Map())
         const loopsSemaphore = yield* Semaphore.make(1)
 
         const stateKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
+        const getPendingQueue = (sessionId: SessionId, branchId: BranchId) =>
+          Ref.get(pendingQueuesRef).pipe(
+            Effect.map(
+              (queues) => queues.get(stateKey(sessionId, branchId)) ?? emptyLoopQueueState(),
+            ),
+          )
+        const setPendingQueue = (
+          sessionId: SessionId,
+          branchId: BranchId,
+          queue: LoopState["queue"],
+        ) =>
+          Ref.update(pendingQueuesRef, (queues) => {
+            const next = new Map(queues)
+            const key = stateKey(sessionId, branchId)
+            if (queue.steering.length === 0 && queue.followUp.length === 0) {
+              next.delete(key)
+            } else {
+              next.set(key, queue)
+            }
+            return next
+          })
 
-        const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
+        const makeLoop = (
+          sessionId: SessionId,
+          branchId: BranchId,
+          initialQueue: LoopState["queue"],
+        ) =>
           Effect.gen(function* () {
             const publishEvent = (event: AgentEvent) =>
               eventPublisher.publish(event).pipe(
@@ -1250,6 +1307,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const loopScope = yield* Scope.make()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
+            const pendingQueueRef = yield* Ref.make(emptyLoopQueueState())
             const turnToolsRef = yield* Ref.make<ReadonlyArray<AnyToolDefinition>>([])
             const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
             const interruptedRef = yield* Ref.make(false)
@@ -1498,7 +1556,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const loopMachine = Machine.make({
               state: AgentLoopState,
               event: AgentLoopEvent,
-              initial: buildIdleState({ currentAgent }),
+              initial: buildIdleState({ currentAgent, queue: initialQueue }),
             })
               // Idle → Running
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
@@ -1553,15 +1611,21 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               )
               // Running → Idle (turn done), or re-enter Running (queued follow-up)
               // Use state.queue (live, includes follow-ups queued during turn) not event.queue (stale)
-              .reenter(AgentLoopState.Running, AgentLoopEvent.TurnDone, ({ state }) => {
-                const { queue, nextItem } = takeNextQueuedTurn(state.queue)
-                if (nextItem !== undefined) {
-                  return buildRunningState({ queue, currentAgent: state.currentAgent }, nextItem)
-                }
-                return buildIdleState({ queue, currentAgent: state.currentAgent })
-              })
+              .reenter(AgentLoopState.Running, AgentLoopEvent.TurnDone, ({ state }) =>
+                Effect.gen(function* () {
+                  const mergedQueue = yield* consumeQueueWithPending(pendingQueueRef, state.queue)
+                  const { queue, nextItem } = takeNextQueuedTurn(mergedQueue)
+                  if (nextItem !== undefined) {
+                    return buildRunningState({ queue, currentAgent: state.currentAgent }, nextItem)
+                  }
+                  return buildIdleState({ queue, currentAgent: state.currentAgent })
+                }),
+              )
               .on(AgentLoopState.Running, AgentLoopEvent.TurnFailed, ({ state }) =>
-                buildIdleState({ queue: state.queue, currentAgent: state.currentAgent }),
+                Effect.gen(function* () {
+                  const mergedQueue = yield* consumeQueueWithPending(pendingQueueRef, state.queue)
+                  return buildIdleState({ queue: mergedQueue, currentAgent: state.currentAgent })
+                }),
               )
               // Running → WaitingForInteraction
               .on(AgentLoopState.Running, AgentLoopEvent.InteractionRequested, ({ state, event }) =>
@@ -1694,6 +1758,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             return {
               actor: loopActor,
               activeStreamRef,
+              pendingQueueRef,
               bashSemaphore,
               scope: loopScope,
             }
@@ -1714,12 +1779,15 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               Effect.gen(function* () {
                 const existing = (yield* Ref.get(loopsRef)).get(key)
                 if (existing !== undefined) return undefined
-                const handle = yield* makeLoop(sessionId, branchId)
+                const initialQueue =
+                  (yield* Ref.get(pendingQueuesRef)).get(key) ?? emptyLoopQueueState()
+                const handle = yield* makeLoop(sessionId, branchId, initialQueue)
                 yield* Ref.update(loopsRef, (loops) => {
                   const next = new Map(loops)
                   next.set(key, handle)
                   return next
                 })
+                yield* setPendingQueue(sessionId, branchId, emptyLoopQueueState())
                 return handle
               }),
             ),
@@ -1915,9 +1983,24 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
           followUp: (message) =>
             Effect.gen(function* () {
-              const loop = yield* getLoop(message.sessionId, message.branchId)
+              const loop = yield* findLoop(message.sessionId, message.branchId)
+              if (loop === undefined) {
+                const pendingQueue = yield* getPendingQueue(message.sessionId, message.branchId)
+                if (countQueuedFollowUps(pendingQueue) >= DEFAULTS.followUpQueueMax) {
+                  return yield* new AgentLoopError({
+                    message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+                  })
+                }
+                yield* setPendingQueue(
+                  message.sessionId,
+                  message.branchId,
+                  appendFollowUpQueueState(pendingQueue, { message }),
+                )
+                return
+              }
               const loopState = yield* loop.actor.snapshot
-              if (countQueuedFollowUps(loopState.queue) >= DEFAULTS.followUpQueueMax) {
+              const effectiveQueue = yield* queueWithPending(loop.pendingQueueRef, loopState.queue)
+              if (countQueuedFollowUps(effectiveQueue) >= DEFAULTS.followUpQueueMax) {
                 return yield* new AgentLoopError({
                   message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
                 })
@@ -1928,6 +2011,12 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   loopState._tag === "Running" || loopState._tag === "WaitingForInteraction",
               })
               if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+                if (loopState._tag === "Running") {
+                  yield* Ref.update(loop.pendingQueueRef, (pending) =>
+                    appendFollowUpQueueState(pending, event.item),
+                  )
+                  return
+                }
                 yield* loop.actor.cast(event)
                 return
               }
@@ -1938,11 +2027,17 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
-                return { steering: [], followUp: [] }
+                const pendingQueue = yield* getPendingQueue(input.sessionId, input.branchId)
+                yield* setPendingQueue(input.sessionId, input.branchId, emptyLoopQueueState())
+                return queueSnapshotFromState(buildIdleState({ queue: pendingQueue }))
               }
 
               const loopState = yield* loop.actor.snapshot
-              const snapshot = queueSnapshotFromState(loopState)
+              const mergedState = updateQueueOnState(
+                loopState,
+                yield* consumeQueueWithPending(loop.pendingQueueRef, loopState.queue),
+              )
+              const snapshot = queueSnapshotFromState(mergedState)
               yield* loop.actor.call(AgentLoopEvent.ClearQueue)
               return snapshot
             }),
@@ -1951,10 +2046,19 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
-                return { steering: [], followUp: [] }
+                return queueSnapshotFromState(
+                  buildIdleState({
+                    queue: yield* getPendingQueue(input.sessionId, input.branchId),
+                  }),
+                )
               }
 
-              return queueSnapshotFromState(yield* loop.actor.snapshot)
+              const loopState = yield* loop.actor.snapshot
+              const mergedState = updateQueueOnState(
+                loopState,
+                yield* queueWithPending(loop.pendingQueueRef, loopState.queue),
+              )
+              return queueSnapshotFromState(mergedState)
             }),
 
           isRunning: (input) =>
@@ -1985,18 +2089,25 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop !== undefined) {
-                return runtimeStateFromLoopState(yield* loop.actor.snapshot)
+                const loopState = yield* loop.actor.snapshot
+                return runtimeStateFromLoopState({
+                  ...loopState,
+                  queue: yield* queueWithPending(loop.pendingQueueRef, loopState.queue),
+                })
               }
 
+              const pendingQueue = yield* getPendingQueue(input.sessionId, input.branchId)
               return {
-                phase: "idle" as const,
-                status: "idle" as const,
-                agent: yield* resolveStoredAgent({
-                  storage,
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                }),
-                queue: { steering: [], followUp: [] },
+                ...runtimeStateFromLoopState(
+                  buildIdleState({
+                    currentAgent: yield* resolveStoredAgent({
+                      storage,
+                      sessionId: input.sessionId,
+                      branchId: input.branchId,
+                    }),
+                    queue: pendingQueue,
+                  }),
+                ),
               }
             }),
           toRuntimeState: runtimeStateFromLoopState,

@@ -20,6 +20,11 @@ export class CurrentExtensionSession extends ServiceMap.Service<
   { readonly sessionId: SessionId }
 >()("@gent/core/src/runtime/extensions/CurrentExtensionSession") {}
 
+export class CurrentMailboxSession extends ServiceMap.Service<
+  CurrentMailboxSession,
+  { readonly sessionId: SessionId }
+>()("@gent/core/src/runtime/extensions/CurrentMailboxSession") {}
+
 /**
  * Typed persistence codec — wraps Schema.fromJsonString preserving the State type.
  * Eliminates `as Schema.Any` + `as State` cast pairs in from-machine and from-reducer.

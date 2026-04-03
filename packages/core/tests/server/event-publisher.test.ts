@@ -55,7 +55,7 @@ describe("EventPublisher", () => {
     expect(delivered).toEqual(["OuterEvent"])
   })
 
-  test("nested publish from extension context queues delivery instead of deadlocking", async () => {
+  test("nested publish from extension context completes without deadlocking", async () => {
     const delivered: string[] = []
     const nestedDelivered = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
@@ -187,7 +187,7 @@ describe("EventPublisher", () => {
     expect(delivered).toBe(0)
   })
 
-  test("observer-triggered same-session publish is queued instead of deadlocking", async () => {
+  test("observer-triggered same-session publish completes without deadlocking", async () => {
     const delivered: string[] = []
     const observedNested = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
@@ -231,7 +231,7 @@ describe("EventPublisher", () => {
     expect(delivered).toEqual(["OuterEvent", "ObservedNestedEvent"])
   })
 
-  test("bus-triggered same-session publish is queued instead of deadlocking", async () => {
+  test("bus-triggered same-session publish completes without deadlocking", async () => {
     const delivered: string[] = []
     const busNested = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
