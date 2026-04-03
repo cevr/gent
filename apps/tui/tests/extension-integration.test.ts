@@ -8,6 +8,8 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { Schema } from "effect"
+import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { loadTuiExtensions } from "../src/extensions/loader"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ExtensionClientContext } from "@gent/core/domain/extension-client.js"
@@ -68,6 +70,25 @@ const createRecordingCtx = () => {
     }),
   }
   return { ctx, calls }
+}
+
+const createProtocolRecordingCtx = () => {
+  const sent: unknown[] = []
+  const ctx: ExtensionClientContext = {
+    openOverlay: () => {},
+    closeOverlay: () => {},
+    send: (message) => sent.push(message),
+    ask: async () => undefined,
+    getSnapshot: () => undefined,
+    sendMessage: () => {},
+    composerState: () => ({
+      draft: "",
+      mode: "editing",
+      inputFocused: false,
+      autocompleteOpen: false,
+    }),
+  }
+  return { ctx, sent }
 }
 
 beforeAll(() => {
@@ -256,6 +277,54 @@ describe("loadTuiExtensions integration", () => {
 
     // The overlay should also be registered
     expect(resolved.overlays.has("ctx-overlay")).toBe(true)
+  })
+
+  test("client extension can import a shared protocol module and send a branded message", async () => {
+    const protocolDir = join(TEST_DIR, "protocol-ext")
+    mkdirSync(protocolDir, { recursive: true })
+    writeFileSync(
+      join(protocolDir, "shared-protocol.ts"),
+      `import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
+import { Schema } from "effect"
+
+export const SharedProtocol = {
+  Ping: ExtensionMessage("@test/shared", "Ping", {
+    value: Schema.String,
+  }),
+}`,
+    )
+    writeFileSync(
+      join(protocolDir, "protocol.client.ts"),
+      `import { defineClientExtension } from "@gent/core/domain/extension-client.js"
+import { SharedProtocol } from "./shared-protocol"
+
+export default defineClientExtension({
+  id: "@test/shared-client",
+  protocol: SharedProtocol,
+  setup: (ctx) => ({
+    commands: [
+      {
+        id: "shared.ping",
+        title: "Shared Ping",
+        onSelect: () => ctx.send(SharedProtocol.Ping({ value: "pong" })),
+      },
+    ],
+  }),
+})`,
+    )
+
+    const { ctx, sent } = createProtocolRecordingCtx()
+    const resolved = await loadTuiExtensions(
+      { builtins: BUILTINS, userDir: protocolDir, projectDir: join(TEST_DIR, "no-project") },
+      ctx,
+    )
+
+    const command = resolved.commands.find((entry) => entry.id === "shared.ping")
+    expect(command).toBeDefined()
+    command!.onSelect()
+    expect(sent).toEqual([{ extensionId: "@test/shared", _tag: "Ping", value: "pong" }])
+
+    rmSync(protocolDir, { recursive: true, force: true })
   })
 
   test("nonexistent directories are handled gracefully", async () => {
@@ -566,6 +635,40 @@ describe("same-scope collision detection", () => {
     ).rejects.toThrow("Same-scope TUI overlay collision")
 
     rmSync(collisionDir, { recursive: true, force: true })
+  })
+})
+
+describe("protocol resolution", () => {
+  test("higher-scope protocol overrides merge by tag instead of dropping sibling tags", () => {
+    const BaseProtocol = {
+      Alpha: ExtensionMessage.reply("@test/shared", "Alpha", {}, Schema.String),
+      Beta: ExtensionMessage.reply("@test/shared", "Beta", {}, Schema.String),
+    }
+    const OverrideProtocol = {
+      Beta: ExtensionMessage.reply("@test/shared", "Beta", {}, Schema.Number),
+    }
+
+    const resolved = resolveTuiExtensions([
+      {
+        id: "@test/shared-builtin",
+        kind: "builtin",
+        filePath: "builtin:@test/shared-builtin",
+        protocols: [BaseProtocol.Alpha, BaseProtocol.Beta],
+        setup: {},
+      } satisfies LoadedTuiExtension,
+      {
+        id: "@test/shared-project",
+        kind: "project",
+        filePath: "project:@test/shared-project",
+        protocols: [OverrideProtocol.Beta],
+        setup: {},
+      } satisfies LoadedTuiExtension,
+    ])
+
+    const byTag = resolved.protocols.get("@test/shared")
+    expect(byTag).toBeDefined()
+    expect(byTag?.get("Alpha")).toBe(BaseProtocol.Alpha)
+    expect(byTag?.get("Beta")).toBe(OverrideProtocol.Beta)
   })
 })
 

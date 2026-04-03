@@ -224,21 +224,20 @@ const resolveComposerSurface = (
 const resolveProtocols = (
   sorted: ReadonlyArray<LoadedTuiExtension>,
 ): ReadonlyMap<string, ReadonlyMap<string, AnyExtensionMessageDefinition>> => {
-  const protocols = new Map<string, ReadonlyMap<string, AnyExtensionMessageDefinition>>()
+  const protocols = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
+  const scopes = new Map<string, ScopeEntry>()
 
   for (const ext of sorted) {
     if (ext.protocols === undefined || ext.protocols.length === 0) continue
 
-    const grouped = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
     for (const definition of ext.protocols) {
+      const collisionKey = `${definition.extensionId}:${definition._tag}`
+      checkCollision(scopes.get(collisionKey), ext, "protocol message", collisionKey)
       const byTag =
-        grouped.get(definition.extensionId) ?? new Map<string, AnyExtensionMessageDefinition>()
+        protocols.get(definition.extensionId) ?? new Map<string, AnyExtensionMessageDefinition>()
       byTag.set(definition._tag, definition)
-      grouped.set(definition.extensionId, byTag)
-    }
-
-    for (const [extensionId, byTag] of grouped) {
-      protocols.set(extensionId, byTag)
+      protocols.set(definition.extensionId, byTag)
+      scopes.set(collisionKey, { kind: ext.kind, source: ext.filePath })
     }
   }
 

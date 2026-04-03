@@ -114,7 +114,7 @@ export interface ExtensionClientContext {
     message: M,
   ) => Promise<ExtractExtensionReply<M>>
   /** Read the current server-projected snapshot for an extension */
-  readonly getSnapshot: (extensionId: string) => { epoch: number; model: unknown } | undefined
+  readonly getSnapshot: (extensionId: string) => { model: unknown } | undefined
   /** Send a user message to the active session */
   readonly sendMessage: (content: string) => void
   /** Reactive composer state */

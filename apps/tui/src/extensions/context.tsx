@@ -41,7 +41,6 @@ const disabledRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, Bun
 /** Server-projected UI snapshot from extension state machines */
 export interface ExtensionSnapshot {
   readonly extensionId: string
-  readonly epoch: number
   readonly model: unknown
 }
 
@@ -211,7 +210,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           getSnapshot: (extensionId) => {
             const snap = snapshots().get(extensionId)
             if (snap === undefined) return undefined
-            return { epoch: snap.epoch, model: snap.model }
+            return { model: snap.model }
           },
           sendMessage: (content) => clientCtx.sendMessage(content),
           composerState: () => {
