@@ -309,12 +309,11 @@ Use the smallest honest boundary:
 
 ### Commands
 
-| Command                    | Scope                                        | Target   |
-| -------------------------- | -------------------------------------------- | -------- |
-| `bun run test`             | core + tui + sdk unit/integration            | ~2s      |
-| `bun run test:integration` | tui integration + e2e direct-transport       | ~2s      |
-| `bun run test:e2e`         | PTY e2e + supervisor + worker-http transport | ~60-120s |
-| `bun run gate`             | typecheck + lint + fmt + build + test        | ~15s     |
+| Command            | Scope                                          | Target   |
+| ------------------ | ---------------------------------------------- | -------- |
+| `bun run test`     | core + tui + sdk + fast in-process integration | ~2-4s    |
+| `bun run test:e2e` | PTY e2e + supervisor + worker-http transport   | ~60-120s |
+| `bun run gate`     | typecheck + lint + fmt + build + test          | ~15s     |
 
 ### Test structure
 
@@ -335,9 +334,9 @@ tests/
 
 One test file per source file. No god tests. Names match source owners.
 
-`packages/e2e/tests/` separates integration from e2e:
+`packages/e2e/tests/` separates fast in-process contracts from slow end-to-end:
 
-- `test:integration` — direct-transport contract tests (in-process, no subprocess)
+- `test` — direct-transport contract tests (in-process, no subprocess)
 - `test:e2e` — PTY TUI tests, supervisor lifecycle, worker-http transport
 
 ### Important files

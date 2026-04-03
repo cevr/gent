@@ -95,7 +95,6 @@ apps/server/             # BunHttpServer
 
 ```bash
 bun run test              # unit/integration (~2s)
-bun run test:integration  # direct-transport seam tests (~2s)
 bun run test:e2e          # PTY + supervisor + worker-http (slow)
 bun run gate              # typecheck + lint + fmt + build + test
 ```

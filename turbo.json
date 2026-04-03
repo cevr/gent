@@ -29,19 +29,6 @@
       "outputs": [],
       "cache": false
     },
-    "test:integration": {
-      "inputs": [
-        "src/**/*.ts",
-        "src/**/*.tsx",
-        "tests/**/*.ts",
-        "tests/**/*.tsx",
-        "integration/**/*.ts",
-        "integration/**/*.tsx",
-        "package.json"
-      ],
-      "outputs": [],
-      "cache": false
-    },
     "test:e2e": {
       "inputs": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "package.json"],
       "outputs": [],
