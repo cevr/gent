@@ -398,6 +398,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
               log.info("ctx.snapshot.fetch", { sessionId, branchId })
               const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+              if (!isActiveSession()) return
               const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
               log.info("ctx.snapshot.hydrated", {
                 sessionId,
