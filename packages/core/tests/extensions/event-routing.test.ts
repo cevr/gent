@@ -39,7 +39,7 @@ const recorderExtension: LoadedExtension = {
   kind: "builtin",
   sourcePath: "builtin",
   setup: {
-    spawnActor: recorderReducer.spawnActor,
+    spawn: recorderReducer.spawn,
     projection: recorderReducer.projection,
   },
 }
@@ -75,7 +75,7 @@ const snapshotCounterExtension: LoadedExtension = {
   kind: "builtin",
   sourcePath: "builtin",
   setup: {
-    spawnActor: snapshotCounterReducer.spawnActor,
+    spawn: snapshotCounterReducer.spawn,
     projection: snapshotCounterReducer.projection,
   },
 }
@@ -102,7 +102,7 @@ const makeTestReducingStore = (publishedRef: Ref.Ref<AgentEvent[]>) =>
               const branchId =
                 "branchId" in event ? (event.branchId as BranchId | undefined) : undefined
 
-              return stateRuntime.reduce(event, { sessionId, branchId }).pipe(
+              return stateRuntime.publish(event, { sessionId, branchId }).pipe(
                 Effect.tap((changed) => {
                   if (!changed || branchId === undefined) return Effect.void
                   return stateRuntime.getUiSnapshots(sessionId, branchId).pipe(
@@ -217,7 +217,7 @@ describe("ReducingEventStore — event routing", () => {
   it.live("invalid uiModel is dropped when uiModelSchema validation fails", () => {
     // Extension with a strict schema that rejects what deriveUi actually returns
     const strictSchema = Schema.Struct({ count: Schema.Number, label: Schema.String })
-    const { spawnActor, projection } = fromReducer({
+    const { spawn, projection } = fromReducer({
       id: "bad-model",
       initial: { count: 0 },
       reduce: (state: { count: number }, event): ReduceResult<{ count: number }> => {
@@ -233,7 +233,7 @@ describe("ReducingEventStore — event routing", () => {
       manifest: { id: "bad-model" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { spawnActor, ...projection },
+      setup: { spawn, ...projection },
     }
 
     const { fullLayer } = makeLayer([badModelExtension])
@@ -286,7 +286,7 @@ describe("ReducingEventStore — event routing", () => {
         manifest: { id: "crashing-derive" },
         kind: "builtin",
         sourcePath: "test",
-        setup: { spawnActor: crashingDerive.spawnActor, projection: crashingDerive.projection },
+        setup: { spawn: crashingDerive.spawn, projection: crashingDerive.projection },
       }
       const { fullLayer } = makeLayer([recorderExtension, crashingExtension])
 
@@ -314,7 +314,7 @@ describe("ReducingEventStore — event routing", () => {
       const stateRuntime = yield* ExtensionStateRuntime
 
       // Directly call reduce with a branchless context to verify it works
-      const changed = yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+      const changed = yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId: undefined,
       })

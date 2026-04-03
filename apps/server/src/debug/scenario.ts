@@ -24,7 +24,8 @@ import {
 } from "@gent/core/domain/message.js"
 import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
-import { TaskService } from "@gent/core/runtime/task-service.js"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime.js"
+import { TaskProtocol } from "@gent/core/extensions/task-tools-protocol.js"
 
 export interface DebugScenarioParams {
   sessionId: SessionId
@@ -565,46 +566,92 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
 
 const runTaskLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
-    const taskServiceOpt = yield* Effect.serviceOption(TaskService)
-    if (taskServiceOpt._tag === "None") return
-    const taskService = taskServiceOpt.value
+    const extensionRuntime = yield* ExtensionStateRuntime
 
     while (true) {
-      const existing = yield* taskService.list(params.sessionId, params.branchId)
+      const existing = yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.ListTasks({ sessionId: params.sessionId, branchId: params.branchId }),
+        params.branchId,
+      )
       for (const task of existing) {
-        yield* taskService.remove(task.id)
+        yield* extensionRuntime
+          .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: task.id }), params.branchId)
+          .pipe(Effect.catchEager(() => Effect.void))
       }
 
-      const inspect = yield* taskService.create({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        subject: "Inspect codebase",
-      })
-      const verify = yield* taskService.create({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        subject: "Run verification",
-      })
-      const summarize = yield* taskService.create({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        subject: "Summarize outcome",
-      })
+      const inspect = yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.CreateTask({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          subject: "Inspect codebase",
+        }),
+        params.branchId,
+      )
+      const verify = yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.CreateTask({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          subject: "Run verification",
+        }),
+        params.branchId,
+      )
+      const summarize = yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.CreateTask({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          subject: "Summarize outcome",
+        }),
+        params.branchId,
+      )
 
-      yield* taskService.update(inspect.id, { status: "in_progress" })
+      yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.UpdateTask({ taskId: inspect.id, status: "in_progress" }),
+        params.branchId,
+      )
       yield* Effect.sleep("2 seconds")
-      yield* taskService.update(inspect.id, { status: "completed" })
-      yield* taskService.update(verify.id, { status: "in_progress" })
+      yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.UpdateTask({ taskId: inspect.id, status: "completed" }),
+        params.branchId,
+      )
+      yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.UpdateTask({ taskId: verify.id, status: "in_progress" }),
+        params.branchId,
+      )
       yield* Effect.sleep("2 seconds")
-      yield* taskService.update(verify.id, { status: "completed" })
-      yield* taskService.update(summarize.id, { status: "in_progress" })
+      yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.UpdateTask({ taskId: verify.id, status: "completed" }),
+        params.branchId,
+      )
+      yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.UpdateTask({ taskId: summarize.id, status: "in_progress" }),
+        params.branchId,
+      )
       yield* Effect.sleep("2 seconds")
-      yield* taskService.update(summarize.id, { status: "completed" })
+      yield* extensionRuntime.ask(
+        params.sessionId,
+        TaskProtocol.UpdateTask({ taskId: summarize.id, status: "completed" }),
+        params.branchId,
+      )
       yield* Effect.sleep("2 seconds")
 
-      yield* taskService.remove(inspect.id)
-      yield* taskService.remove(verify.id)
-      yield* taskService.remove(summarize.id)
+      yield* extensionRuntime
+        .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: inspect.id }), params.branchId)
+        .pipe(Effect.catchEager(() => Effect.void))
+      yield* extensionRuntime
+        .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: verify.id }), params.branchId)
+        .pipe(Effect.catchEager(() => Effect.void))
+      yield* extensionRuntime
+        .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: summarize.id }), params.branchId)
+        .pipe(Effect.catchEager(() => Effect.void))
       yield* Effect.sleep("2 seconds")
     }
   })

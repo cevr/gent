@@ -39,6 +39,7 @@ import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 
 // ── Constants ──
 
+export const AUTO_EXTENSION_ID = "@gent/auto"
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
 const COUNSEL_TOOL = "counsel"
 const DEFAULT_MAX_ITERATIONS = 10
@@ -412,22 +413,22 @@ const mapEvent = (event: AgentEvent): MachineEvent | undefined => {
   return undefined
 }
 
-// ── Map Intent → Machine Event ──
+// ── Map Message → Machine Event ──
 
-const mapIntent = (intent: AutoIntent, state: MachineState): MachineEvent | undefined => {
-  switch (intent._tag) {
+const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | undefined => {
+  switch (message._tag) {
     case "StartAuto":
       return MachineEvent.StartAuto({
-        goal: intent.goal,
-        maxIterations: intent.maxIterations,
+        goal: message.goal,
+        maxIterations: message.maxIterations,
       })
     case "CancelAuto":
       return MachineEvent.CancelAuto
     case "ToggleAuto":
       if (state._tag === "Inactive") {
         return MachineEvent.StartAuto({
-          goal: intent.goal ?? "Continue working autonomously",
-          maxIterations: intent.maxIterations,
+          goal: message.goal ?? "Continue working autonomously",
+          maxIterations: message.maxIterations,
         })
       }
       return MachineEvent.CancelAuto
@@ -437,7 +438,7 @@ const mapIntent = (intent: AutoIntent, state: MachineState): MachineEvent | unde
 // ── Actor Config (exported for test harness — pure reducer compat) ──
 
 export const AutoActorConfig = {
-  id: "auto" as const,
+  id: AUTO_EXTENSION_ID,
   initial: { _tag: "Inactive" as const } satisfies AutoState,
   reduce: (state: AutoState, event: AgentEvent): { state: AutoState } => {
     const mapped = mapEvent(event)
@@ -553,16 +554,16 @@ export const AutoActorConfig = {
     return { state }
   },
   derive: derive as (state: AutoState, ctx?: ExtensionDeriveContext) => ExtensionProjection,
-  handleIntent: (state: AutoState, intent: AutoIntent): { state: AutoState } => {
-    switch (intent._tag) {
+  receive: (state: AutoState, message: AutoIntent): { state: AutoState } => {
+    switch (message._tag) {
       case "StartAuto": {
         if (state._tag !== "Inactive") return { state }
         return {
           state: {
             _tag: "Working",
             iteration: 1,
-            maxIterations: intent.maxIterations ?? DEFAULT_MAX_ITERATIONS,
-            goal: intent.goal,
+            maxIterations: message.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+            goal: message.goal,
             learnings: [],
             metrics: [],
             turnsSinceCheckpoint: 0,
@@ -579,8 +580,8 @@ export const AutoActorConfig = {
             state: {
               _tag: "Working",
               iteration: 1,
-              maxIterations: intent.maxIterations ?? DEFAULT_MAX_ITERATIONS,
-              goal: intent.goal ?? "Continue working autonomously",
+              maxIterations: message.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+              goal: message.goal ?? "Continue working autonomously",
               learnings: [],
               metrics: [],
               turnsSinceCheckpoint: 0,
@@ -596,11 +597,11 @@ export const AutoActorConfig = {
 // ── Actor (effect-machine based) ──
 
 const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent, never, AutoJournal>({
-  id: "auto",
+  id: AUTO_EXTENSION_ID,
   built: autoMachine,
   mapEvent,
-  mapIntent,
-  intentSchema: AutoIntent,
+  mapMessage,
+  messageSchema: AutoIntent,
   derive,
   stateSchema: MachineState.plain as Schema.Schema<MachineState>,
   uiModelSchema: AutoUiModel,
@@ -679,11 +680,11 @@ const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent, never, Aut
     }).pipe(Effect.catchEager(() => Effect.void)),
 })
 
-export const AutoSpawnActor = autoActor.spawnActor
+export const AutoSpawnActor = autoActor.spawn
 
 // ── tool.result interceptor — JSONL append on checkpoint/counsel ──
 
-const EXTENSION_ID = "auto"
+const EXTENSION_ID = AUTO_EXTENSION_ID
 
 const journalInterceptorImpl = (
   input: ToolResultInput,

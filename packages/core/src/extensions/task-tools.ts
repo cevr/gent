@@ -6,12 +6,14 @@ import { TaskGetTool } from "../tools/task-get.js"
 import { TaskUpdateTool } from "../tools/task-update.js"
 import { TaskStopTool } from "../tools/task-stop.js"
 import { TaskOutputTool } from "../tools/task-output.js"
-import { TaskStorage } from "../storage/task-storage.js"
-import { TaskService } from "../runtime/task-service.js"
+import { TaskStorage } from "./task-tools-storage.js"
+import { TaskService, type TaskRuntimeDeps } from "./task-tools-service.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { TaskStatus } from "../domain/task.js"
 import type { TaskId } from "../domain/ids.js"
 import type { ExtensionReduceContext, ReduceResult } from "../domain/extension.js"
+import type { TaskOutputSummary, TaskProtocol } from "./task-tools-protocol.js"
+import { TASK_TOOLS_EXTENSION_ID } from "./task-tools-protocol.js"
 
 // ── Task list actor — projects task state as extension UI snapshot ──
 
@@ -97,15 +99,92 @@ const derive = (state: TaskListState) => ({
 
 /** Exported for pure test harness access */
 export const TaskListActorConfig = {
-  id: "@gent/task-tools" as const,
+  id: TASK_TOOLS_EXTENSION_ID,
   initial: { tasks: [] } satisfies TaskListState,
   reduce,
   derive,
 }
 
-const taskListActor = fromReducer<TaskListState, never, TaskStorage>({
+type TaskRequest =
+  | ReturnType<typeof TaskProtocol.CreateTask>
+  | ReturnType<typeof TaskProtocol.GetTask>
+  | ReturnType<typeof TaskProtocol.ListTasks>
+  | ReturnType<typeof TaskProtocol.UpdateTask>
+  | ReturnType<typeof TaskProtocol.RunTask>
+  | ReturnType<typeof TaskProtocol.StopTask>
+  | ReturnType<typeof TaskProtocol.DeleteTask>
+  | ReturnType<typeof TaskProtocol.GetTaskOutput>
+  | ReturnType<typeof TaskProtocol.AddDependency>
+  | ReturnType<typeof TaskProtocol.RemoveDependency>
+  | ReturnType<typeof TaskProtocol.GetDependencies>
+
+const taskListActor = fromReducer<
+  TaskListState,
+  never,
+  TaskRequest,
+  TaskStorage,
+  TaskService | TaskRuntimeDeps
+>({
   ...TaskListActorConfig,
   uiModelSchema: TaskListUiModel,
+  request: (_state, message) =>
+    Effect.gen(function* () {
+      const taskService = yield* TaskService
+      switch (message._tag) {
+        case "CreateTask":
+          return { state: _state, reply: yield* taskService.create(message) }
+        case "GetTask":
+          return { state: _state, reply: yield* taskService.get(message.taskId) }
+        case "ListTasks":
+          return {
+            state: _state,
+            reply: yield* taskService.list(message.sessionId, message.branchId),
+          }
+        case "UpdateTask": {
+          const { taskId, ...fields } = message
+          return {
+            state: _state,
+            reply: yield* taskService.update(taskId, fields).pipe(Effect.orDie),
+          }
+        }
+        case "RunTask":
+          return { state: _state, reply: yield* taskService.run(message.taskId) }
+        case "StopTask":
+          return { state: _state, reply: yield* taskService.stop(message.taskId) }
+        case "DeleteTask":
+          yield* taskService.remove(message.taskId)
+          return { state: _state, reply: null }
+        case "GetTaskOutput": {
+          const output = yield* taskService.getOutput(message.taskId)
+          const reply: typeof TaskOutputSummary.Type | null =
+            output === undefined
+              ? null
+              : {
+                  status: output.status,
+                  messageCount: output.messages.length,
+                  messages: output.messages.map((m) => {
+                    const excerpt = m.parts
+                      .filter(
+                        (part): part is { type: "text"; text: string } => part.type === "text",
+                      )
+                      .map((part) => part.text)
+                      .join("\n")
+                      .slice(0, 200)
+                    return { role: m.role, excerpt }
+                  }),
+                }
+          return { state: _state, reply }
+        }
+        case "AddDependency":
+          yield* taskService.addDep(message.taskId, message.blockedById)
+          return { state: _state, reply: null }
+        case "RemoveDependency":
+          yield* taskService.removeDep(message.taskId, message.blockedById)
+          return { state: _state, reply: null }
+        case "GetDependencies":
+          return { state: _state, reply: yield* taskService.getDeps(message.taskId) }
+      }
+    }),
   onInit: ({ sessionId, stateRef }) =>
     Effect.gen(function* () {
       const storageOpt = yield* Effect.serviceOption(TaskStorage)
@@ -134,13 +213,4 @@ export const TaskToolsExtension = extension("@gent/task-tools", (ext) => {
   ext.layer(TaskStorage.Live)
   ext.layer(TaskService.Live)
   ext.actor(taskListActor)
-
-  // Handle StopTask via bus — full service access for calling TaskService.stop()
-  ext.bus.on("@gent/task-tools:StopTask", (envelope) =>
-    Effect.gen(function* () {
-      const taskService = yield* TaskService
-      const { taskId } = envelope.payload as { taskId: string }
-      yield* taskService.stop(taskId as TaskId)
-    }).pipe(Effect.catchEager(() => Effect.void)),
-  )
 })

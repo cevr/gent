@@ -26,7 +26,6 @@ import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { EventStoreLive } from "../server/event-store.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { TaskService } from "../runtime/task-service.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
@@ -67,7 +66,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     ConfigService.Test(),
     ModelRegistry.Test(),
     ToolRunner.Test(),
-    TaskService.Test(),
     authStoreLive,
     authGuardLive,
     providerAuthLive,

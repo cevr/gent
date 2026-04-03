@@ -5,6 +5,11 @@
 // imports them, and resolves contributions with scope precedence (project > user > builtin).
 
 import type { InteractionEventTag, ActiveInteractionOf, InteractionResolution } from "./event"
+import type {
+  AnyExtensionCommandMessage,
+  AnyExtensionRequestMessage,
+  ExtractExtensionReply,
+} from "./extension-protocol.js"
 
 /** Widget placement slots in the session view */
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
@@ -101,8 +106,12 @@ export interface ExtensionClientContext {
   readonly sessionId?: string
   /** Current branch ID (reactive — may be undefined before session is active) */
   readonly branchId?: string
-  /** Dispatch a typed intent to a server-side extension actor (fire-and-forget) */
-  readonly sendIntent: (extensionId: string, intent: unknown) => void
+  /** Send a protocol command to a server-side extension actor (fire-and-forget) */
+  readonly send: (message: AnyExtensionCommandMessage) => void
+  /** Ask a protocol request of a server-side extension actor */
+  readonly ask: <M extends AnyExtensionRequestMessage>(
+    message: M,
+  ) => Promise<ExtractExtensionReply<M>>
   /** Read the current server-projected snapshot for an extension */
   readonly getSnapshot: (extensionId: string) => { epoch: number; model: unknown } | undefined
   /** Send a user message to the active session */

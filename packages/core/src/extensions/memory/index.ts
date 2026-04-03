@@ -28,16 +28,18 @@ import { MemoryAgents } from "./agents.js"
 import { MemoryVault, Live as MemoryVaultLive, projectKey } from "./vault.js"
 import { registerDreamJobs, removeDreamJobs } from "./dreaming.js"
 
-// ── Handle Intent ──
+export const MEMORY_EXTENSION_ID = "@gent/memory"
 
-const handleIntent = (state: MemoryState, intent: MemoryIntent): ReduceResult<MemoryState> => {
-  switch (intent._tag) {
+// ── Receive ──
+
+const receive = (state: MemoryState, message: MemoryIntent): ReduceResult<MemoryState> => {
+  switch (message._tag) {
     case "AddMemory": {
-      if (intent.scope === "session") {
+      if (message.scope === "session") {
         const memory: SessionMemory = {
-          title: intent.title,
-          content: intent.content,
-          tags: intent.tags ?? [],
+          title: message.title,
+          content: message.content,
+          tags: message.tags ?? [],
           created: new Date().toISOString(),
         }
         return { state: addSessionMemory(state, memory) }
@@ -49,18 +51,18 @@ const handleIntent = (state: MemoryState, intent: MemoryIntent): ReduceResult<Me
       // Search is read-only — handled by tool, intent is no-op for state
       return { state }
     case "ForgetMemory": {
-      if (intent.scope === "session") {
-        return { state: removeSessionMemory(state, intent.title) }
+      if (message.scope === "session") {
+        return { state: removeSessionMemory(state, message.title) }
       }
       // project/global removals happen via tool
       return { state }
     }
     case "PromoteMemory": {
       // Find the session memory to promote
-      const found = state.sessionMemories.find((m) => m.title === intent.title)
+      const found = state.sessionMemories.find((m) => m.title === message.title)
       if (found === undefined) return { state }
       // Remove from session (the tool handles vault write)
-      return { state: removeSessionMemory(state, intent.title) }
+      return { state: removeSessionMemory(state, message.title) }
     }
     case "ListMemories":
       // Read-only — no state change
@@ -71,16 +73,16 @@ const handleIntent = (state: MemoryState, intent: MemoryIntent): ReduceResult<Me
 // ── Actor config ──
 
 export const MemoryActorConfig = {
-  id: "memory" as const,
+  id: MEMORY_EXTENSION_ID,
   initial: initialMemoryState,
   reduce,
   derive: deriveProjection,
-  handleIntent,
+  receive,
 }
 
-const memoryActor = fromReducer<MemoryState, MemoryIntent, MemoryVault>({
+const memoryActor = fromReducer<MemoryState, MemoryIntent, never, MemoryVault>({
   ...MemoryActorConfig,
-  intentSchema: MemoryIntent,
+  messageSchema: MemoryIntent,
   onInit: ({ stateRef, sessionCwd }) =>
     Effect.gen(function* () {
       const vault = yield* MemoryVault

@@ -60,8 +60,6 @@ export type { WideEventContext, WideEventEnvelope, LogEvent } from "./wide-event
 
 export { formatSchemaError } from "./format-schema-error"
 
-export { TaskService, type TaskServiceApi } from "./task-service"
-
 export {
   type ChildSessionTrackerService,
   type ChildSessionEntry,

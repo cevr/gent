@@ -239,7 +239,7 @@ export const makeReducingEventStore = Layer.effect(
                 const branchId = getEventBranchId(event)
                 return Ref.update(reduceDepth, (d: number) => d + 1).pipe(
                   Effect.andThen(
-                    stateRuntime.reduce(event, { sessionId, branchId }).pipe(
+                    stateRuntime.publish(event, { sessionId, branchId }).pipe(
                       Effect.tap((changed) => {
                         if (!changed || branchId === undefined) return Effect.void
                         return stateRuntime.getUiSnapshots(sessionId, branchId).pipe(
@@ -312,7 +312,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     claudeSkillsDir: `${config.home}/.claude/skills`,
     extraDirs: config.skillsDirs,
   })
-  // Extension registry needs storageLive for SqlClient (extension layers like TaskStorage.Live need it)
+  // Extension registry needs storageLive for SqlClient (extension task layers use it)
   const extensionRegistryLive = Layer.provide(makeExtensionLayers(config), storageLive)
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,
@@ -505,7 +505,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
   // client opens a session. No eager wake on startup.
 
-  // TaskService.Live is contributed by @gent/task-tools via ext.layer(TaskService.Live)
   const turnControlLive = Layer.provide(
     ExtensionTurnControl.Live,
     Layer.merge(allDeps, agentRuntimeLive),

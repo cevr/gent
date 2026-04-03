@@ -9,12 +9,14 @@ import {
 import type { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import {
+  AUTO_EXTENSION_ID,
   AutoActorConfig,
   AutoExtension,
   type AutoState,
   type AutoUiModel,
 } from "@gent/core/extensions/auto"
 import { AutoJournal, type JournalRow } from "@gent/core/extensions/auto-journal"
+import { AutoProtocol } from "@gent/core/extensions/auto-protocol"
 import { Session } from "@gent/core/domain/message"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
@@ -547,15 +549,33 @@ const makeLayer = () =>
 const getSnapshot = (runtime: ExtensionStateRuntime) =>
   Effect.gen(function* () {
     const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
-    return snapshots.find((s) => s.extensionId === "auto")
+    return snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
   })
 
-const sendIntent = (runtime: ExtensionStateRuntime, intent: unknown) =>
-  Effect.gen(function* () {
-    const snap = yield* getSnapshot(runtime)
-    const epoch = snap?.epoch ?? 0
-    yield* runtime.handleIntent(sessionId, "auto", intent, epoch, branchId)
-  })
+const sendAuto = (
+  runtime: ExtensionStateRuntime,
+  intent:
+    | { readonly _tag: "StartAuto"; readonly goal: string; readonly maxIterations?: number }
+    | { readonly _tag: "CancelAuto" }
+    | { readonly _tag: "ToggleAuto"; readonly goal?: string; readonly maxIterations?: number },
+) => {
+  switch (intent._tag) {
+    case "StartAuto":
+      return runtime.send(
+        sessionId,
+        AutoProtocol.StartAuto({ goal: intent.goal, maxIterations: intent.maxIterations }),
+        branchId,
+      )
+    case "CancelAuto":
+      return runtime.send(sessionId, AutoProtocol.CancelAuto(), branchId)
+    case "ToggleAuto":
+      return runtime.send(
+        sessionId,
+        AutoProtocol.ToggleAuto({ goal: intent.goal, maxIterations: intent.maxIterations }),
+        branchId,
+      )
+  }
+}
 
 const checkpointSignal = (output: Record<string, unknown>) =>
   new ToolCallSucceeded({
@@ -580,13 +600,13 @@ describe("Auto runtime integration", () => {
   it.live("full lifecycle: start → checkpoint → counsel → iterate → complete", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
       // Start auto
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "fix all bugs", maxIterations: 3 })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "fix all bugs", maxIterations: 3 })
 
       const snap1 = yield* getSnapshot(runtime)
       const ui1 = snap1!.model as AutoUiModel
@@ -595,7 +615,7 @@ describe("Auto runtime integration", () => {
       expect(ui1.iteration).toBe(1)
 
       // Checkpoint with continue → AwaitingCounsel
-      yield* runtime.reduce(
+      yield* runtime.publish(
         checkpointSignal({ status: "continue", summary: "Found issues", learnings: "auth bad" }),
         { sessionId, branchId },
       )
@@ -606,7 +626,7 @@ describe("Auto runtime integration", () => {
       expect(ui2.learningsCount).toBe(1)
 
       // Counsel → Working (iteration 2)
-      yield* runtime.reduce(counselSignal(), { sessionId, branchId })
+      yield* runtime.publish(counselSignal(), { sessionId, branchId })
 
       const snap3 = yield* getSnapshot(runtime)
       const ui3 = snap3!.model as AutoUiModel
@@ -614,7 +634,7 @@ describe("Auto runtime integration", () => {
       expect(ui3.iteration).toBe(2)
 
       // Complete
-      yield* runtime.reduce(checkpointSignal({ status: "complete", summary: "All fixed" }), {
+      yield* runtime.publish(checkpointSignal({ status: "complete", summary: "All fixed" }), {
         sessionId,
         branchId,
       })
@@ -628,15 +648,15 @@ describe("Auto runtime integration", () => {
   it.live("TurnCompleted does not advance the loop, only increments watchdog", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
 
       // TurnCompleted should not change UI iteration
-      yield* runtime.reduce(turnCompleted(), { sessionId, branchId })
+      yield* runtime.publish(turnCompleted(), { sessionId, branchId })
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoUiModel
@@ -647,15 +667,15 @@ describe("Auto runtime integration", () => {
   it.live("cancel mid-working returns to Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: true })
 
-      yield* sendIntent(runtime, { _tag: "CancelAuto" })
+      yield* sendAuto(runtime, { _tag: "CancelAuto" })
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
     }).pipe(Effect.provide(makeLayer())),
   )
@@ -663,21 +683,21 @@ describe("Auto runtime integration", () => {
   it.live("cancel from AwaitingCounsel returns to Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
 
       // Move to AwaitingCounsel
-      yield* runtime.reduce(checkpointSignal({ status: "continue", summary: "x" }), {
+      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "x" }), {
         sessionId,
         branchId,
       })
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-counsel" })
 
-      yield* sendIntent(runtime, { _tag: "CancelAuto" })
+      yield* sendAuto(runtime, { _tag: "CancelAuto" })
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
     }).pipe(Effect.provide(makeLayer())),
   )
@@ -685,16 +705,16 @@ describe("Auto runtime integration", () => {
   it.live("wedge prevention: 5 turns without checkpoint → auto-cancel", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
 
       // 5 turns without checkpoint
       for (let i = 0; i < 5; i++) {
-        yield* runtime.reduce(turnCompleted(), { sessionId, branchId })
+        yield* runtime.publish(turnCompleted(), { sessionId, branchId })
       }
 
       const snap = yield* getSnapshot(runtime)
@@ -706,22 +726,22 @@ describe("Auto runtime integration", () => {
   it.live("maxIterations reached after counsel → Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 1 })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 1 })
 
       // Checkpoint continue at iteration 1/1
-      yield* runtime.reduce(checkpointSignal({ status: "continue", summary: "done" }), {
+      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "done" }), {
         sessionId,
         branchId,
       })
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-counsel" })
 
       // Counsel at max → should go Inactive, not Working
-      yield* runtime.reduce(counselSignal(), { sessionId, branchId })
+      yield* runtime.publish(counselSignal(), { sessionId, branchId })
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoUiModel
@@ -747,13 +767,13 @@ describe("Auto runtime integration", () => {
       }
       yield* storage.saveExtensionState({
         sessionId,
-        extensionId: "auto",
+        extensionId: AUTO_EXTENSION_ID,
         stateJson: JSON.stringify(autoState),
         version: 5,
       })
 
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -772,15 +792,15 @@ describe("Auto runtime integration", () => {
   it.live("derive injects learnings into prompt sections", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
-      yield* sendIntent(runtime, { _tag: "StartAuto", goal: "audit" })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "audit" })
 
       // Checkpoint with learnings
-      yield* runtime.reduce(
+      yield* runtime.publish(
         checkpointSignal({
           status: "continue",
           summary: "found issues",
@@ -790,14 +810,14 @@ describe("Auto runtime integration", () => {
       )
 
       // Move to next iteration
-      yield* runtime.reduce(counselSignal(), { sessionId, branchId })
+      yield* runtime.publish(counselSignal(), { sessionId, branchId })
 
       // Check prompt sections have the learning
       const projections = yield* runtime.deriveAll(sessionId, {
         agent: undefined as never,
         allTools: [],
       })
-      const pm = projections.find((p) => p.extensionId === "auto")
+      const pm = projections.find((p) => p.extensionId === AUTO_EXTENSION_ID)
       const section = pm!.projection.promptSections![0]!
       expect(section.content).toContain("SQL injection in user service")
     }).pipe(Effect.provide(makeLayer())),
@@ -839,7 +859,7 @@ describe("Auto JSONL replay via onInit", () => {
   const getAutoSnapshot = (runtime: ExtensionStateRuntime) =>
     Effect.gen(function* () {
       const snapshots = yield* runtime.getUiSnapshots(childId, childBranchId)
-      return snapshots.find((s) => s.extensionId === "auto")
+      return snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
     })
 
   it.live("replays config + checkpoint + counsel → correct iteration", () =>
@@ -854,7 +874,7 @@ describe("Auto JSONL replay via onInit", () => {
       )
 
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
       })
@@ -896,13 +916,13 @@ describe("Auto JSONL replay via onInit", () => {
       yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
 
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId: parentId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId: parentId, branchId }), {
         sessionId: parentId,
         branchId,
       })
 
       const snapshots = yield* runtime.getUiSnapshots(parentId, branchId)
-      const autoSnap = snapshots.find((s) => s.extensionId === "auto")
+      const autoSnap = snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
       expect(autoSnap).toBeDefined()
       const ui = autoSnap!.model as AutoUiModel
       expect(ui.active).toBe(false) // Not replayed — root session
@@ -935,7 +955,7 @@ describe("Auto JSONL replay via onInit", () => {
       )
 
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
       })
@@ -964,7 +984,7 @@ describe("Auto JSONL replay via onInit", () => {
       )
 
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
       })

@@ -1,5 +1,5 @@
 /**
- * TaskStorage — extracted task persistence service.
+ * TaskStorage — task-tools extension persistence service.
  *
  * Contributed by @gent/task-tools extension via setup.layer.
  * When the extension is disabled, TaskStorage is absent and callers degrade gracefully.
@@ -9,7 +9,7 @@ import { Clock, ServiceMap, Effect, Layer, Schema } from "effect"
 import { Task } from "../domain/task.js"
 import type { SessionId, BranchId, TaskId } from "../domain/ids.js"
 import { SqlClient } from "effect/unstable/sql"
-import { Storage, StorageError } from "./sqlite-storage.js"
+import { Storage, StorageError } from "../storage/sqlite-storage.js"
 
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
@@ -82,7 +82,7 @@ export interface TaskStorageService {
 }
 
 export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageService>()(
-  "@gent/core/src/storage/task-storage/TaskStorage",
+  "@gent/core/src/extensions/task-tools-storage/TaskStorage",
 ) {
   /** Requires Storage to ensure DDL (CREATE TABLE tasks/task_deps) has been initialized */
   static Live: Layer.Layer<TaskStorage, never, SqlClient.SqlClient | Storage> = Layer.effect(

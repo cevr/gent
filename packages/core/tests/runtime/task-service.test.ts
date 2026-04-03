@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer, Ref, Stream } from "effect"
-import { TaskService } from "@gent/core/runtime/task-service"
-import { TaskStorage } from "@gent/core/storage/task-storage"
+import { TaskService } from "@gent/core/extensions/task-tools-service"
+import { TaskStorage } from "@gent/core/extensions/task-tools-storage"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   Agents,
@@ -27,7 +27,6 @@ const makeLayerWithInterruptFlag = (
   interruptedRef: Ref.Ref<boolean>,
 ) => {
   const storageLayer = Storage.MemoryWithSql()
-  const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
   const registryLayer = ExtensionRegistry.fromResolved(
     resolveExtensions([
       {
@@ -45,19 +44,20 @@ const makeLayerWithInterruptFlag = (
 
   const baseDeps = Layer.mergeAll(
     storageLayer,
-    taskStorageLayer,
     EventStore.Memory,
     registryLayer,
     runnerLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
-
-  return Layer.provideMerge(TaskService.Live, baseDeps)
+  const taskExtensionLayer = Layer.provide(
+    Layer.mergeAll(TaskStorage.Live, TaskService.Live),
+    baseDeps,
+  )
+  return Layer.mergeAll(baseDeps, taskExtensionLayer)
 }
 
 const makeLayer = (runnerDeferred: Deferred.Deferred<SubagentResult>) => {
   const storageLayer = Storage.MemoryWithSql()
-  const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
   const registryLayer = ExtensionRegistry.fromResolved(
     resolveExtensions([
       {
@@ -74,19 +74,20 @@ const makeLayer = (runnerDeferred: Deferred.Deferred<SubagentResult>) => {
 
   const baseDeps = Layer.mergeAll(
     storageLayer,
-    taskStorageLayer,
     EventStore.Memory,
     registryLayer,
     runnerLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
-
-  return Layer.provideMerge(TaskService.Live, baseDeps)
+  const taskExtensionLayer = Layer.provide(
+    Layer.mergeAll(TaskStorage.Live, TaskService.Live),
+    baseDeps,
+  )
+  return Layer.mergeAll(baseDeps, taskExtensionLayer)
 }
 
 const makeLayerWithoutRunner = () => {
   const storageLayer = Storage.MemoryWithSql()
-  const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
   const registryLayer = ExtensionRegistry.fromResolved(
     resolveExtensions([
       {
@@ -100,16 +101,37 @@ const makeLayerWithoutRunner = () => {
 
   const baseDeps = Layer.mergeAll(
     storageLayer,
-    taskStorageLayer,
     EventStore.Memory,
     registryLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
-
-  return Layer.provideMerge(TaskService.Live, baseDeps)
+  const taskExtensionLayer = Layer.provide(
+    Layer.mergeAll(TaskStorage.Live, TaskService.Live),
+    baseDeps,
+  )
+  return Layer.mergeAll(baseDeps, taskExtensionLayer)
 }
 
 describe("TaskService", () => {
+  it.live("supports sibling layer composition used by extensions", () =>
+    Effect.gen(function* () {
+      const deferred = yield* Deferred.make<SubagentResult>()
+      const layer = makeLayer(deferred)
+
+      yield* Effect.gen(function* () {
+        const taskService = yield* TaskService
+        const created = yield* taskService.create({
+          sessionId,
+          branchId,
+          subject: "Sibling layer task",
+        })
+        expect(created.subject).toBe("Sibling layer task")
+        const loaded = yield* taskService.get(created.id)
+        expect(loaded?.id).toBe(created.id)
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
   it.live("resolves runner lazily and fails the task when it is unavailable", () =>
     Effect.gen(function* () {
       const layer = makeLayerWithoutRunner()
@@ -229,7 +251,6 @@ describe("TaskService", () => {
         const callCount = yield* Ref.make(0)
 
         const storageLayer = Storage.MemoryWithSql()
-        const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
         const registryLayer = ExtensionRegistry.fromResolved(
           resolveExtensions([
             {
@@ -266,13 +287,16 @@ describe("TaskService", () => {
 
         const baseDeps = Layer.mergeAll(
           storageLayer,
-          taskStorageLayer,
           EventStore.Memory,
           registryLayer,
           runnerLayer,
           RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         )
-        const layer = Layer.provideMerge(TaskService.Live, baseDeps)
+        const taskExtensionLayer = Layer.provide(
+          Layer.mergeAll(TaskStorage.Live, TaskService.Live),
+          baseDeps,
+        )
+        const layer = Layer.mergeAll(baseDeps, taskExtensionLayer)
 
         yield* Effect.gen(function* () {
           const taskService = yield* TaskService

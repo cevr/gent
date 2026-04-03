@@ -6,6 +6,11 @@ import type { Message, MessageMetadata } from "./message"
 import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { PromptSection } from "./prompt.js"
+import type {
+  AnyExtensionCommandMessage,
+  AnyExtensionRequestMessage,
+  ExtractExtensionReply,
+} from "./extension-protocol.js"
 
 // Extension Manifest — authored by extension author
 
@@ -164,7 +169,7 @@ export interface ExtensionProjection extends TurnProjection {
 
 // Extension Actor — OTP-inspired unified state model
 
-/** Typed effect union interpreted by the framework after reduce/handleIntent */
+/** Typed effect union interpreted by the framework after actor transitions */
 export type ExtensionEffect =
   | {
       readonly _tag: "QueueFollowUp"
@@ -174,29 +179,36 @@ export type ExtensionEffect =
   | { readonly _tag: "Interject"; readonly content: string }
   | { readonly _tag: "Persist" }
 
-/** Result of a reduce or handleIntent call — always object form */
+/** Result of a reducer/message handler call — always object form */
 export interface ReduceResult<State> {
   readonly state: State
   readonly effects?: ReadonlyArray<ExtensionEffect>
 }
 
+/** Result of a request handler call — can reply and optionally transition state. */
+export interface RequestResult<State, Reply> extends ReduceResult<State> {
+  readonly reply: Reply
+}
+
 /**
- * Unified actor interface for stateful extensions.
- * Lifecycle: spawn → init → handleEvent/handleIntent → terminate
+ * Session-scoped extension actor/ref.
+ * Lifecycle: spawn → start → publish/send/ask → stop
  *
- * OTP GenServer-inspired: process owns state privately, framework owns observation.
- * handleEvent/handleIntent return boolean (changed) — no snapshot-for-change-detection.
- *
- * Supervision: handleEvent wrapped with catchDefect — crashing actor logs and continues.
- * Init failure → actor skipped with warning.
+ * Extensions own their state and conversation boundary. Host events arrive through
+ * `publish`. Cross-boundary conversation happens through protocol messages via
+ * `send` / `ask`. `snapshot` is the projection source for UI + turn-time derive.
  */
-export interface ExtensionActor {
+export interface ExtensionRef {
   readonly id: string
-  readonly init: Effect.Effect<void>
-  readonly handleEvent: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
-  readonly handleIntent?: (intent: unknown, branchId?: BranchId) => Effect.Effect<boolean>
-  readonly getState: Effect.Effect<{ state: unknown; version: number }>
-  readonly terminate: Effect.Effect<void>
+  readonly start: Effect.Effect<void>
+  readonly publish: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
+  readonly send: (message: AnyExtensionCommandMessage, branchId?: BranchId) => Effect.Effect<void>
+  readonly ask: <M extends AnyExtensionRequestMessage>(
+    message: M,
+    branchId?: BranchId,
+  ) => Effect.Effect<ExtractExtensionReply<M>>
+  readonly snapshot: Effect.Effect<{ state: unknown; epoch: number }>
+  readonly stop: Effect.Effect<void>
 }
 
 /**
@@ -211,14 +223,14 @@ export interface ExtensionProjectionConfig {
   readonly uiModelSchema?: Schema.Schema<unknown>
 }
 
-/** Factory function that spawns an actor instance for a session.
+/** Factory function that spawns an extension ref for a session.
  *  May require services from context — the runtime provides them at spawn time.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type SpawnActor<R = any> = (ctx: {
+export type SpawnExtensionRef<R = any> = (ctx: {
   readonly sessionId: SessionId
   readonly branchId?: BranchId
-}) => Effect.Effect<ExtensionActor, never, R>
+}) => Effect.Effect<ExtensionRef, never, R>
 
 /** Tag-conditional tool injection — declarative replacement for old tools.visible interceptor */
 export interface TagInjection {
@@ -246,7 +258,7 @@ export type InteractionHandlerType = "permission" | "prompt" | "handoff" | "ask-
 export interface InteractionHandlerContribution {
   readonly type: InteractionHandlerType
   /** Handler layer — requires EventStore | Storage. Materialized by dependencies.ts at the right point in the chain. */
-  readonly layer: Layer.Any
+  readonly layer: Layer.Layer<never, never, object>
 }
 
 // Extension Setup — what an extension provides
@@ -255,9 +267,9 @@ export interface ExtensionSetup {
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ExtensionHooks
-  readonly layer?: Layer.Any
-  /** Spawn an actor for this extension — unified lifecycle model */
-  readonly spawnActor?: SpawnActor
+  readonly layer?: Layer.Layer<never, never, object>
+  /** Spawn a session-scoped extension ref */
+  readonly spawn?: SpawnExtensionRef
   /** Projection config — derive function externalized from actor (framework-owned) */
   readonly projection?: ExtensionProjectionConfig
   /** Declarative tag-conditional tool injections */

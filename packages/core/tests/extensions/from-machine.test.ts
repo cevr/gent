@@ -43,7 +43,7 @@ const counterMachine = Machine.make({
 
 describe("fromMachine", () => {
   it.live("handleEvent returns true on state change, false when unchanged", () => {
-    const { spawnActor: spawn } = fromMachine({
+    const { spawn } = fromMachine({
       id: "counter",
       built: counterMachine,
       mapEvent: (event) => {
@@ -55,20 +55,20 @@ describe("fromMachine", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
-      yield* actor.init
+      yield* actor.start
 
       // SessionStarted → Start → Idle→Counting (changed)
-      const changed1 = yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+      const changed1 = yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
       expect(changed1).toBe(true)
 
-      const { state } = yield* actor.getState
+      const { state } = yield* actor.snapshot
       expect((state as CounterState)._tag).toBe("Counting")
 
       // Unmapped event → no change
-      const changed2 = yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+      const changed2 = yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -79,45 +79,40 @@ describe("fromMachine", () => {
     }).pipe(Effect.provide(testLayer))
   })
 
-  it.live("handleIntent dispatches intent as machine event", () => {
+  it.live("send dispatches protocol message as machine event", () => {
     const IntentSchema = Schema.Struct({ action: Schema.Literals(["start", "increment"]) })
     type Intent = typeof IntentSchema.Type
 
-    const { spawnActor: spawn } = fromMachine<CounterState, CounterEvent, Intent>({
+    const { spawn } = fromMachine<CounterState, CounterEvent, Intent>({
       id: "intent-counter",
       built: counterMachine,
-      mapIntent: (intent) => {
+      mapMessage: (intent) => {
         if (intent.action === "start") return CounterEvent.Start
         return CounterEvent.Increment
       },
-      intentSchema: IntentSchema,
+      messageSchema: IntentSchema,
     })
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
-      yield* actor.init
+      yield* actor.start
 
-      expect(actor.handleIntent).toBeDefined()
+      yield* actor.send({ extensionId: "intent-counter", _tag: "Message", action: "start" })
 
-      // Start → Idle→Counting
-      const changed1 = yield* actor.handleIntent!({ action: "start" })
-      expect(changed1).toBe(true)
-
-      const { state: s1 } = yield* actor.getState
+      const { state: s1 } = yield* actor.snapshot
       expect((s1 as CounterState)._tag).toBe("Counting")
 
       // Increment → Counting.count 0→1
-      const changed2 = yield* actor.handleIntent!({ action: "increment" })
-      expect(changed2).toBe(true)
+      yield* actor.send({ extensionId: "intent-counter", _tag: "Message", action: "increment" })
 
-      const { state: s2 } = yield* actor.getState
+      const { state: s2 } = yield* actor.snapshot
       const counting = s2 as Extract<CounterState, { _tag: "Counting" }>
       expect(counting.count).toBe(1)
     }).pipe(Effect.provide(testLayer))
   })
 
-  it.live("version tracking is atomic via Ref", () => {
-    const { spawnActor: spawn } = fromMachine({
+  it.live("epoch tracking is atomic via Ref", () => {
+    const { spawn } = fromMachine({
       id: "versioned",
       built: counterMachine,
       mapEvent: (event) => {
@@ -129,31 +124,31 @@ describe("fromMachine", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
-      yield* actor.init
+      yield* actor.start
 
-      const { version: v0 } = yield* actor.getState
+      const { epoch: v0 } = yield* actor.snapshot
       expect(v0).toBe(0)
 
-      // Start → version 1
-      yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+      // Start → epoch 1
+      yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
-      const { version: v1 } = yield* actor.getState
+      const { epoch: v1 } = yield* actor.snapshot
       expect(v1).toBe(1)
 
-      // Increment → version 2
-      yield* actor.handleEvent(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      // Increment → epoch 2
+      yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
-      const { version: v2 } = yield* actor.getState
+      const { epoch: v2 } = yield* actor.snapshot
       expect(v2).toBe(2)
     }).pipe(Effect.provide(testLayer))
   })
 
-  it.live("getState returns current state and version", () => {
-    const { spawnActor: spawn } = fromMachine({
+  it.live("snapshot returns current state and epoch", () => {
+    const { spawn } = fromMachine({
       id: "state-getter",
       built: counterMachine,
       mapEvent: (event) => {
@@ -164,35 +159,35 @@ describe("fromMachine", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
-      yield* actor.init
+      yield* actor.start
 
-      const initial = yield* actor.getState
+      const initial = yield* actor.snapshot
       expect((initial.state as CounterState)._tag).toBe("Idle")
-      expect(initial.version).toBe(0)
+      expect(initial.epoch).toBe(0)
 
-      yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+      yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
-      const after = yield* actor.getState
+      const after = yield* actor.snapshot
       expect((after.state as CounterState)._tag).toBe("Counting")
-      expect(after.version).toBe(1)
+      expect(after.epoch).toBe(1)
     }).pipe(Effect.provide(testLayer))
   })
 
   it.live("terminate stops the machine actor", () => {
-    const { spawnActor: spawn } = fromMachine({
+    const { spawn } = fromMachine({
       id: "terminable",
       built: counterMachine,
     })
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
-      yield* actor.init
-      yield* actor.terminate
+      yield* actor.start
+      yield* actor.stop
       // After terminate, getState should still return last known state
-      const { state } = yield* actor.getState
+      const { state } = yield* actor.snapshot
       expect((state as CounterState)._tag).toBe("Idle")
     }).pipe(Effect.provide(testLayer))
   })
@@ -251,7 +246,7 @@ describe("fromMachine", () => {
   it.live("persistence: state hydrated on init", () => {
     const CounterStateSchema = CounterState
 
-    const { spawnActor, projection } = fromMachine({
+    const { spawn, projection } = fromMachine({
       id: "persist-counter",
       built: counterMachine,
       stateSchema: CounterStateSchema,
@@ -263,7 +258,7 @@ describe("fromMachine", () => {
       manifest: { id: "persist-counter" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { spawnActor, projection },
+      setup: { spawn, projection },
     }
 
     const layer = Layer.mergeAll(
@@ -285,7 +280,7 @@ describe("fromMachine", () => {
       })
 
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -311,7 +306,7 @@ describe("fromMachine", () => {
       throw new Error("boom")
     })
 
-    const { spawnActor: spawn } = fromMachine({
+    const { spawn } = fromMachine({
       id: "bomb",
       built: bombMachine,
       mapEvent: (event) => {
@@ -334,9 +329,9 @@ describe("fromMachine", () => {
 
     return Effect.gen(function* () {
       const actor = yield* spawn({ sessionId, branchId })
-      yield* actor.init
+      yield* actor.start
 
-      const changed = yield* actor.handleEvent(new SessionStarted({ sessionId, branchId }), {
+      const changed = yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })

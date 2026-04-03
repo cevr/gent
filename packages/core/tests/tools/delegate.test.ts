@@ -1,10 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { DelegateTool } from "@gent/core/tools/delegate"
 import type { ToolContext } from "@gent/core/domain/tool"
-import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 
 const ctx: ToolContext = {
   sessionId: "test-session",
@@ -12,36 +10,19 @@ const ctx: ToolContext = {
   toolCallId: "test-call",
 }
 
-const TestExtRegistry = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "agents" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { agents: Object.values(Agents) },
-    },
-  ]),
-)
-
-const RuntimePlatformLayer = RuntimePlatform.Test({
-  cwd: process.cwd(),
-  home: "/tmp/test-home",
-  platform: "test",
-})
-
 describe("Delegate Tool", () => {
   it.live("delegates to subagent and returns output", () => {
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
-      run: (params) =>
-        Effect.succeed({
-          _tag: "success" as const,
-          text: `${params.agent.name}:${params.prompt}`,
-          sessionId: "child-session",
-          agentName: params.agent.name,
-        }),
+    const layer = createToolTestLayer({
+      subagentRunner: {
+        run: (params) =>
+          Effect.succeed({
+            _tag: "success" as const,
+            text: `${params.agent.name}:${params.prompt}`,
+            sessionId: "child-session",
+            agentName: params.agent.name,
+          }),
+      },
     })
-
-    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry, RuntimePlatformLayer)
 
     return DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(
       Effect.map((result) => {
@@ -53,18 +34,19 @@ describe("Delegate Tool", () => {
 
   it.live("chain mode appends session refs for all steps", () => {
     let stepIdx = 0
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        const idx = stepIdx++
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: `step-${idx}`,
-          sessionId: `session-${idx}`,
-          agentName: params.agent.name,
-        })
+    const layer = createToolTestLayer({
+      subagentRunner: {
+        run: (params) => {
+          const idx = stepIdx++
+          return Effect.succeed({
+            _tag: "success" as const,
+            text: `step-${idx}`,
+            sessionId: `session-${idx}`,
+            agentName: params.agent.name,
+          })
+        },
       },
     })
-    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry, RuntimePlatformLayer)
     return DelegateTool.execute(
       {
         chain: [
@@ -83,18 +65,19 @@ describe("Delegate Tool", () => {
 
   it.live("parallel mode appends session refs for successes", () => {
     let callIdx = 0
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
-      run: (params) => {
-        const idx = callIdx++
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: `result-${idx}`,
-          sessionId: `session-${idx}`,
-          agentName: params.agent.name,
-        })
+    const layer = createToolTestLayer({
+      subagentRunner: {
+        run: (params) => {
+          const idx = callIdx++
+          return Effect.succeed({
+            _tag: "success" as const,
+            text: `result-${idx}`,
+            sessionId: `session-${idx}`,
+            agentName: params.agent.name,
+          })
+        },
       },
     })
-    const layer = Layer.mergeAll(runnerLayer, TestExtRegistry, RuntimePlatformLayer)
     return DelegateTool.execute(
       {
         tasks: [

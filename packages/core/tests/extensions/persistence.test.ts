@@ -18,7 +18,7 @@ interface CounterState {
 const CounterSchema = Schema.Struct({ count: Schema.Number })
 
 const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
-  const { spawnActor, projection } = fromReducer<CounterState>({
+  const { spawn, projection } = fromReducer<CounterState>({
     id,
     initial: { count: 0 },
     stateSchema: CounterSchema,
@@ -38,7 +38,7 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
     manifest: { id },
     kind: "builtin",
     sourcePath: "builtin",
-    setup: { spawnActor, projection },
+    setup: { spawn, projection },
   }
 }
 
@@ -60,7 +60,7 @@ describe("Extension state persistence", () => {
       const storage = yield* Storage
 
       // Trigger state change + Persist effect
-      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 100 }), {
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 100 }), {
         sessionId,
         branchId,
       })
@@ -95,7 +95,7 @@ describe("Extension state persistence", () => {
       const runtime = yield* ExtensionStateRuntime
 
       // Trigger a no-op event to spawn the actor (lazy)
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
 
       // Get snapshot — should have hydrated state
       const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
@@ -114,11 +114,11 @@ describe("Extension state persistence", () => {
       const storage = yield* Storage
 
       // Two turns → two Persist effects
-      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
-      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
@@ -138,7 +138,7 @@ describe("Extension state persistence", () => {
     "persist: true auto-persists on every state change without explicit Persist effect",
     () => {
       // Auto-persist extension: no Persist effect emitted, but persist: true
-      const { spawnActor: autoPersistSpawn } = fromReducer<CounterState>({
+      const { spawn: autoPersistSpawn } = fromReducer<CounterState>({
         id: "auto-persist",
         initial: { count: 0 },
         stateSchema: CounterSchema,
@@ -155,7 +155,7 @@ describe("Extension state persistence", () => {
         manifest: { id: "auto-persist" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { spawnActor: autoPersistSpawn },
+        setup: { spawn: autoPersistSpawn },
       }
 
       const layer = makeLayer([autoPersistExt])
@@ -164,7 +164,7 @@ describe("Extension state persistence", () => {
         const runtime = yield* ExtensionStateRuntime
         const storage = yield* Storage
 
-        yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+        yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
           sessionId,
           branchId,
         })
@@ -181,7 +181,7 @@ describe("Extension state persistence", () => {
   )
 
   it.live("non-persistent actor does not write to storage", () => {
-    const { spawnActor: ephemeralSpawn } = fromReducer<{ value: number }>({
+    const { spawn: ephemeralSpawn } = fromReducer<{ value: number }>({
       id: "ephemeral",
       initial: { value: 0 },
       reduce: (state) => ({ state: { value: state.value + 1 } }),
@@ -190,7 +190,7 @@ describe("Extension state persistence", () => {
       manifest: { id: "ephemeral" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { spawnActor: ephemeralSpawn },
+      setup: { spawn: ephemeralSpawn },
     }
 
     const layer = makeLayer([nonPersistent])
@@ -199,7 +199,7 @@ describe("Extension state persistence", () => {
       const runtime = yield* ExtensionStateRuntime
       const storage = yield* Storage
 
-      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
@@ -275,7 +275,7 @@ describe("Extension state storage", () => {
 
 describe("Persistence edge cases", () => {
   it.live("corrupted persisted state falls back to initial", () => {
-    const { spawnActor, projection } = fromReducer<CounterState>({
+    const { spawn, projection } = fromReducer<CounterState>({
       id: "corrupt-test",
       initial: { count: 0 },
       stateSchema: CounterSchema,
@@ -291,7 +291,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "corrupt-test" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { spawnActor, projection },
+      setup: { spawn, projection },
     }
 
     const layer = makeLayer([ext])
@@ -310,7 +310,7 @@ describe("Persistence edge cases", () => {
       const runtime = yield* ExtensionStateRuntime
 
       // Actor should init with fallback to initial state, not crash
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -326,7 +326,7 @@ describe("Persistence edge cases", () => {
   })
 
   it.live("hydration failure does not prevent actor from functioning", () => {
-    const { spawnActor, projection } = fromReducer<CounterState>({
+    const { spawn, projection } = fromReducer<CounterState>({
       id: "resilient",
       initial: { count: 0 },
       stateSchema: CounterSchema,
@@ -342,7 +342,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "resilient" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { spawnActor, projection },
+      setup: { spawn, projection },
     }
 
     const layer = makeLayer([ext])
@@ -361,13 +361,13 @@ describe("Persistence edge cases", () => {
       const runtime = yield* ExtensionStateRuntime
 
       // Init should survive
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
       // Actor should work normally after failed hydration
-      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })

@@ -24,12 +24,13 @@ describe("ReducingEventStore", () => {
     })
 
     const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-      reduce: () => {
+      publish: () => {
         reduceCount.value++
         return Effect.succeed(false)
       },
       deriveAll: () => Effect.succeed([]),
-      handleIntent: () => Effect.void,
+      send: () => Effect.void,
+      ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
@@ -56,7 +57,7 @@ describe("ReducingEventStore", () => {
     })
 
     const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-      reduce: () => {
+      publish: () => {
         reduceCount.value++
         // Re-enter: publish another event from inside reduce
         if (reduceCount.value === 1 && publishFn !== undefined) {
@@ -65,7 +66,8 @@ describe("ReducingEventStore", () => {
         return Effect.succeed(false)
       },
       deriveAll: () => Effect.succeed([]),
-      handleIntent: () => Effect.void,
+      send: () => Effect.void,
+      ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
@@ -98,14 +100,15 @@ describe("ReducingEventStore", () => {
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
     const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-      reduce: () => {
+      publish: () => {
         if (published.length === 1 && publishFn !== undefined) {
           return publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(Effect.as(false))
         }
         return Effect.succeed(false)
       },
       deriveAll: () => Effect.succeed([]),
-      handleIntent: () => Effect.void,
+      send: () => Effect.void,
+      ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
@@ -133,12 +136,13 @@ describe("ReducingEventStore", () => {
     })
 
     const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-      reduce: () => {
+      publish: () => {
         reduceCount.value++
         return Effect.succeed(false)
       },
       deriveAll: () => Effect.succeed([]),
-      handleIntent: () => Effect.void,
+      send: () => Effect.void,
+      ask: () => Effect.die("not implemented"),
       getUiSnapshots: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,

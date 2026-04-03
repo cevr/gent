@@ -359,7 +359,7 @@ describe("extension state", () => {
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
-    expect(setup.spawnActor).toBeDefined()
+    expect(setup.spawn).toBeDefined()
   })
 
   test("ext.state() with derive produces projection", async () => {
@@ -377,7 +377,7 @@ describe("extension state", () => {
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
-    expect(setup.spawnActor).toBeDefined()
+    expect(setup.spawn).toBeDefined()
     expect(setup.projection).toBeDefined()
   })
 
@@ -469,7 +469,7 @@ describe("extension full-power methods", () => {
     expect(setup.hooks!.interceptors![0]!.key).toBe("turn.after")
   })
 
-  test("ext.actor() wires spawnActor and projection", async () => {
+  test("ext.actor() wires spawn and projection", async () => {
     const { fromReducer } = await import("@gent/core/runtime/extensions/from-reducer")
     const actor = fromReducer({
       id: "test-actor",
@@ -482,7 +482,7 @@ describe("extension full-power methods", () => {
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
-    expect(setup.spawnActor).toBeDefined()
+    expect(setup.spawn).toBeDefined()
   })
 
   test("ext.layer() registers a service layer", async () => {

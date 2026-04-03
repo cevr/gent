@@ -380,14 +380,19 @@ export { AuthProviderInfo }
 export { EventEnvelope }
 export { QueueSnapshot }
 
-export const SendExtensionIntentInput = Schema.Struct({
+export const SendExtensionMessageInput = Schema.Struct({
   sessionId: SessionId,
-  extensionId: Schema.String,
-  intent: Schema.Unknown,
-  epoch: Schema.Number,
+  message: Schema.Unknown,
   branchId: Schema.optional(BranchId),
 })
-export type SendExtensionIntentInput = typeof SendExtensionIntentInput.Type
+export type SendExtensionMessageInput = typeof SendExtensionMessageInput.Type
+
+export const AskExtensionMessageInput = Schema.Struct({
+  sessionId: SessionId,
+  message: Schema.Unknown,
+  branchId: Schema.optional(BranchId),
+})
+export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
 
 export const SkillInfo = Schema.Struct({
   name: Schema.String,

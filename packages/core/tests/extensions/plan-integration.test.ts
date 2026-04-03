@@ -1,16 +1,26 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { SessionStarted, ToolCallSucceeded } from "@gent/core/domain/event"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { EventStore, SessionStarted, ToolCallSucceeded } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import type { PlanUiModel } from "@gent/core/extensions/plan"
+import { PLAN_EXTENSION_ID, PlanExtension, type PlanUiModel } from "@gent/core/extensions/plan"
+import { PlanProtocol } from "@gent/core/extensions/plan-protocol"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const sessionId = "plan-e2e-session" as SessionId
 const branchId = "plan-e2e-branch" as BranchId
+
+const planExtension = {
+  manifest: PlanExtension.manifest,
+  kind: "builtin" as const,
+  sourcePath: "builtin",
+  setup: Effect.runSync(PlanExtension.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
+}
 
 const makeMessage = (text: string) =>
   new Message({
@@ -26,7 +36,7 @@ const makeMessage = (text: string) =>
 const getPlanSnapshot = (stateRuntime: ExtensionStateRuntime["Type"]) =>
   Effect.gen(function* () {
     const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-    const planSnapshot = snapshots.find((s) => s.extensionId === "plan")
+    const planSnapshot = snapshots.find((s) => s.extensionId === PLAN_EXTENSION_ID)
     if (planSnapshot === undefined) throw new Error("plan snapshot not found")
     return planSnapshot.model as PlanUiModel
   })
@@ -48,13 +58,13 @@ describe("Plan extension E2E", () => {
         const stateRuntime = yield* ExtensionStateRuntime
 
         // Initialize extension actors
-        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
         // Toggle plan mode
-        yield* stateRuntime.handleIntent(sessionId, "plan", { _tag: "TogglePlan" }, 0, branchId)
+        yield* stateRuntime.send(sessionId, PlanProtocol.TogglePlan(), branchId)
 
         // Verify plan mode is active
         const before = yield* getPlanSnapshot(stateRuntime)
@@ -83,22 +93,22 @@ describe("Plan extension E2E", () => {
     "plan tool observation: ToolCallSucceeded(plan, decision=yes) → executing with steps",
     () =>
       Effect.gen(function* () {
-        // Reducer-level integration: inject synthetic ToolCallSucceeded and verify
-        // the actor transitions to executing mode with extracted steps.
-        // A full E2E test driving the plan tool through AgentLoop would require
-        // mocking SubagentRunner + PromptPresenter; pure reducer coverage is in plan.test.ts.
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
-        const e2eLayer = createE2ELayer({ providerLayer })
+        const layer = Layer.mergeAll(
+          ExtensionStateRuntime.Live([planExtension]),
+          EventStore.Memory,
+          ExtensionTurnControl.Test(),
+          Storage.Test(),
+        )
 
         yield* Effect.gen(function* () {
           const stateRuntime = yield* ExtensionStateRuntime
 
-          yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+          yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
             sessionId,
             branchId,
           })
 
-          yield* stateRuntime.reduce(
+          yield* stateRuntime.publish(
             new ToolCallSucceeded({
               sessionId,
               branchId,
@@ -119,7 +129,7 @@ describe("Plan extension E2E", () => {
           expect(after.steps.length).toBe(2)
           expect(after.steps[0]?.text).toBe("Fix auth")
           expect(after.steps[1]?.text).toBe("Add tests")
-        }).pipe(Effect.provide(e2eLayer))
+        }).pipe(Effect.provide(layer))
       }),
   )
 })

@@ -20,6 +20,8 @@ import type { AgentEvent } from "../domain/event.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { extension, fromReducer } from "./api.js"
 
+export const PLAN_EXTENSION_ID = "@gent/plan"
+
 // ── State ──
 
 export const PlanStatus = Schema.Literals(["normal", "plan", "executing"])
@@ -412,10 +414,10 @@ const reduce = (
   return { state }
 }
 
-// ── Handle Intent ──
+// ── Receive ──
 
-const handleIntent = (state: PlanState, intent: PlanIntent): ReduceResult<PlanState> => {
-  switch (intent._tag) {
+const receive = (state: PlanState, message: PlanIntent): ReduceResult<PlanState> => {
+  switch (message._tag) {
     case "TogglePlan": {
       if (state.mode === "normal") {
         return {
@@ -443,22 +445,22 @@ const handleIntent = (state: PlanState, intent: PlanIntent): ReduceResult<PlanSt
 
 /** Exported for pure test harness access */
 export const PlanActorConfig = {
-  id: "plan" as const,
+  id: PLAN_EXTENSION_ID,
   initial: { mode: "normal" as const, steps: [] as readonly never[] } satisfies PlanState,
   reduce,
   derive: deriveProjection,
-  handleIntent,
+  receive,
 }
 
 const planActor = fromReducer<PlanState, PlanIntent>({
   ...PlanActorConfig,
   stateSchema: PlanState,
-  intentSchema: PlanIntent,
+  messageSchema: PlanIntent,
   uiModelSchema: PlanUiModel,
   persist: true,
 })
 
-export const PlanSpawnActor = planActor.spawnActor
+export const PlanSpawnActor = planActor.spawn
 
 // ── Extension ──
 

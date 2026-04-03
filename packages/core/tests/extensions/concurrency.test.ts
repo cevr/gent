@@ -24,7 +24,7 @@ describe("extension concurrency", () => {
   describe("getOrSpawnActors Deferred readiness", () => {
     it.live("concurrent reduce calls for same session share actors", () => {
       let spawnCount = 0
-      const { spawnActor: spawn } = fromReducer<{ count: number }>({
+      const { spawn } = fromReducer<{ count: number }>({
         id: "counter",
         initial: { count: 0 },
         reduce: (state, event) =>
@@ -39,7 +39,7 @@ describe("extension concurrency", () => {
       const extensions = [
         {
           manifest: { id: "counter", version: "1.0.0" },
-          setup: { spawnActor: wrappedSpawn },
+          setup: { spawn: wrappedSpawn },
         },
       ] as Parameters<typeof ExtensionStateRuntime.fromExtensions>[0]
 
@@ -55,7 +55,7 @@ describe("extension concurrency", () => {
 
         // Fire two reduces concurrently for the same session
         const [r1, r2] = yield* Effect.all(
-          [runtime.reduce(event, ctx), runtime.reduce(event, ctx)],
+          [runtime.publish(event, ctx), runtime.publish(event, ctx)],
           { concurrency: 2 },
         )
 
@@ -79,7 +79,7 @@ describe("extension concurrency", () => {
       })
 
       const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-        reduce: () => {
+        publish: () => {
           reduceCount.value++
           // On first reduce, re-enter by publishing another event
           if (reduceCount.value === 1 && publishFromReduce !== undefined) {
@@ -91,7 +91,8 @@ describe("extension concurrency", () => {
         },
         notifyObservers: () => Effect.void,
         deriveAll: () => Effect.succeed([]),
-        handleIntent: () => Effect.void,
+        send: () => Effect.void,
+        ask: () => Effect.die("not implemented"),
         getUiSnapshots: () => Effect.succeed([]),
         terminateAll: () => Effect.void,
       })
@@ -122,7 +123,7 @@ describe("extension concurrency", () => {
       })
 
       const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-        reduce: () => {
+        publish: () => {
           if (published.length === 1 && publishFromReduce !== undefined) {
             return publishFromReduce({
               _tag: "NestedEvent",
@@ -134,7 +135,8 @@ describe("extension concurrency", () => {
         },
         notifyObservers: () => Effect.void,
         deriveAll: () => Effect.succeed([]),
-        handleIntent: () => Effect.void,
+        send: () => Effect.void,
+        ask: () => Effect.die("not implemented"),
         getUiSnapshots: () => Effect.succeed([]),
         terminateAll: () => Effect.void,
       })

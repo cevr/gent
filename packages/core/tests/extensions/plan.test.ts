@@ -19,8 +19,10 @@ import {
   extractSteps,
   PlanActorConfig,
   PlanExtension,
+  PLAN_EXTENSION_ID,
   type PlanState,
 } from "@gent/core/extensions/plan"
+import { PlanProtocol } from "@gent/core/extensions/plan-protocol"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
@@ -48,16 +50,22 @@ const makeLayer = () =>
 const getPlanSnapshot = (runtime: ExtensionStateRuntime) =>
   Effect.gen(function* () {
     const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
-    return snapshots.find((s) => s.extensionId === "plan")
+    return snapshots.find((s) => s.extensionId === PLAN_EXTENSION_ID)
   })
 
-/** Helper: send intent with current epoch (reads snapshot first) */
-const sendIntent = (runtime: ExtensionStateRuntime, intent: unknown) =>
-  Effect.gen(function* () {
-    const snap = yield* getPlanSnapshot(runtime)
-    const epoch = snap?.epoch ?? 0
-    yield* runtime.handleIntent(sessionId, "plan", intent, epoch, branchId)
-  })
+const sendPlan = (
+  runtime: ExtensionStateRuntime,
+  intent: { readonly _tag: "TogglePlan" | "ExecutePlan" | "RefinePlan" },
+) => {
+  switch (intent._tag) {
+    case "TogglePlan":
+      return runtime.send(sessionId, PlanProtocol.TogglePlan(), branchId)
+    case "ExecutePlan":
+      return runtime.send(sessionId, PlanProtocol.ExecutePlan(), branchId)
+    case "RefinePlan":
+      return runtime.send(sessionId, PlanProtocol.RefinePlan(), branchId)
+  }
+}
 
 describe("Plan actor", () => {
   describe("initial state", () => {
@@ -65,7 +73,7 @@ describe("Plan actor", () => {
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         // Trigger actor spawn
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -82,7 +90,7 @@ describe("Plan actor", () => {
     it.live("normal mode — no tool policy, no prompt sections", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -91,7 +99,7 @@ describe("Plan actor", () => {
           agent: undefined as never,
           allTools: [],
         })
-        const pm = projections.find((p) => p.extensionId === "plan")
+        const pm = projections.find((p) => p.extensionId === PLAN_EXTENSION_ID)
         expect(pm).toBeDefined()
         expect(pm!.projection.toolPolicy).toBeUndefined()
         expect(pm!.projection.promptSections).toBeUndefined()
@@ -101,19 +109,19 @@ describe("Plan actor", () => {
     it.live("plan mode — restricts tools to read-only set", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
         // Toggle to plan mode
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
 
         const projections = yield* runtime.deriveAll(sessionId, {
           agent: undefined as never,
           allTools: [],
         })
-        const pm = projections.find((p) => p.extensionId === "plan")
+        const pm = projections.find((p) => p.extensionId === PLAN_EXTENSION_ID)
         expect(pm!.projection.toolPolicy).toBeDefined()
         expect(pm!.projection.toolPolicy!.overrideSet).toEqual(["read", "bash", "grep", "glob"])
       }).pipe(Effect.provide(makeLayer())),
@@ -122,17 +130,17 @@ describe("Plan actor", () => {
     it.live("plan mode — injects prompt section", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
 
         const projections = yield* runtime.deriveAll(sessionId, {
           agent: undefined as never,
           allTools: [],
         })
-        const pm = projections.find((p) => p.extensionId === "plan")
+        const pm = projections.find((p) => p.extensionId === PLAN_EXTENSION_ID)
         expect(pm!.projection.promptSections).toBeDefined()
         expect(pm!.projection.promptSections!.length).toBe(1)
         expect(pm!.projection.promptSections![0]!.id).toBe("plan-restrictions")
@@ -146,7 +154,7 @@ describe("Plan actor", () => {
     it.live("executing mode — marks first pending as in-progress on StreamStarted", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -154,10 +162,10 @@ describe("Plan actor", () => {
         // Toggle to plan, then manually get into executing state via intent
         // Since we can't easily set steps through the actor, we'll verify through
         // the full event flow — the actor's reduce is the same pure function
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
 
         // Send stream started — in plan mode, this is a no-op (no steps to mark)
-        yield* runtime.reduce(new StreamStarted({ sessionId, branchId }), { sessionId, branchId })
+        yield* runtime.publish(new StreamStarted({ sessionId, branchId }), { sessionId, branchId })
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
@@ -165,10 +173,10 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("normal mode — events are no-ops (version stable)", () =>
+    it.live("normal mode — events are no-ops (epoch stable)", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -177,7 +185,7 @@ describe("Plan actor", () => {
         const epoch1 = snap1!.epoch
 
         // Events in normal mode should not change state
-        const changed = yield* runtime.reduce(
+        const changed = yield* runtime.publish(
           new TurnCompleted({ sessionId, branchId, durationMs: 100 }),
           { sessionId, branchId },
         )
@@ -191,13 +199,13 @@ describe("Plan actor", () => {
     it.live("executing mode — edit tool success advances progress", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
         // In normal mode, tool calls should not affect state
-        const changed = yield* runtime.reduce(
+        const changed = yield* runtime.publish(
           new ToolCallSucceeded({
             sessionId,
             branchId,
@@ -215,12 +223,12 @@ describe("Plan actor", () => {
     it.live("togglePlan — normal → plan", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
@@ -232,13 +240,13 @@ describe("Plan actor", () => {
     it.live("togglePlan — plan → normal", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
@@ -249,13 +257,13 @@ describe("Plan actor", () => {
     it.live("executePlan — plan with no steps → no-op", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
-        yield* sendIntent(runtime, { _tag: "ExecutePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "ExecutePlan" })
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
@@ -266,12 +274,12 @@ describe("Plan actor", () => {
     it.live("executePlan — normal mode → no-op", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
-        yield* sendIntent(runtime, { _tag: "ExecutePlan" })
+        yield* sendPlan(runtime, { _tag: "ExecutePlan" })
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
@@ -282,13 +290,13 @@ describe("Plan actor", () => {
     it.live("refinePlan — plan mode → resets steps", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
-        yield* sendIntent(runtime, { _tag: "TogglePlan" })
-        yield* sendIntent(runtime, { _tag: "RefinePlan" })
+        yield* sendPlan(runtime, { _tag: "TogglePlan" })
+        yield* sendPlan(runtime, { _tag: "RefinePlan" })
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
@@ -300,12 +308,12 @@ describe("Plan actor", () => {
     it.live("refinePlan — normal mode → no-op", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
-        yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
 
-        yield* sendIntent(runtime, { _tag: "RefinePlan" })
+        yield* sendPlan(runtime, { _tag: "RefinePlan" })
 
         const snap = yield* getPlanSnapshot(runtime)
         const model = snap!.model as PlanState
@@ -668,49 +676,6 @@ describe("Plan pure reducer — task integration", () => {
     const result = reduce(state, taskCreated("t-1", "something"))
     expect(result.state).toBe(state)
   })
-})
-
-describe("Stale intent rejection", () => {
-  it.live("handleIntent rejects stale epoch for actors", () =>
-    Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
-      // Spawn actor
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
-      // Toggle plan mode — bumps version to 1
-      yield* sendIntent(runtime, { _tag: "TogglePlan" })
-
-      // Toggle back — bumps version to 2
-      yield* sendIntent(runtime, { _tag: "TogglePlan" })
-
-      // Send intent with stale epoch (0) — should be rejected
-      const result = yield* runtime
-        .handleIntent(sessionId, "plan", { _tag: "TogglePlan" }, 0)
-        .pipe(Effect.result)
-
-      // Result should be a failure with StaleIntentError
-      expect(result._tag).toBe("Failure")
-    }).pipe(Effect.provide(makeLayer())),
-  )
-
-  it.live("handleIntent accepts current epoch for actors", () =>
-    Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
-        sessionId,
-        branchId,
-      })
-
-      // Version is 0 after init, send with epoch 0
-      yield* sendIntent(runtime, { _tag: "TogglePlan" })
-
-      const snap = yield* getPlanSnapshot(runtime)
-      expect((snap!.model as PlanState).mode).toBe("plan")
-    }).pipe(Effect.provide(makeLayer())),
-  )
 })
 
 describe("extractSteps", () => {

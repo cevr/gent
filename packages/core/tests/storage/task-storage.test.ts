@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { TaskStorage } from "@gent/core/storage/task-storage"
+import { TaskStorage } from "@gent/core/extensions/task-tools-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
 import type { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"

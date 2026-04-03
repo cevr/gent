@@ -11,6 +11,7 @@ import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
 import { estimateContextPercent } from "../runtime/context-estimation.js"
 import { DEFAULTS } from "../domain/defaults.js"
 import { extension, fromReducer } from "./api.js"
+import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
 
 // Cooldown state — per session, managed by actor lifecycle
 interface CooldownState {
@@ -20,12 +21,12 @@ interface CooldownState {
 const CooldownIntent = Schema.TaggedStruct("Suppress", { count: Schema.Number })
 type CooldownIntent = typeof CooldownIntent.Type
 
-const EXTENSION_ID = "@gent/handoff"
+const EXTENSION_ID = HANDOFF_EXTENSION_ID
 
 const cooldownActor = fromReducer<CooldownState, CooldownIntent>({
   id: EXTENSION_ID,
   initial: { cooldown: 0 },
-  intentSchema: CooldownIntent,
+  messageSchema: CooldownIntent,
   reduce: (state, event) => {
     // Decrement cooldown on each completed turn
     if (event._tag === "TurnCompleted" && state.cooldown > 0) {
@@ -33,9 +34,9 @@ const cooldownActor = fromReducer<CooldownState, CooldownIntent>({
     }
     return { state }
   },
-  handleIntent: (state, intent) => {
-    if (intent._tag === "Suppress") {
-      return { state: { cooldown: intent.count } }
+  receive: (state: CooldownState, message: CooldownIntent) => {
+    if (message._tag === "Suppress") {
+      return { state: { cooldown: message.count } }
     }
     return { state }
   },
@@ -74,14 +75,12 @@ const autoHandoffImpl = (
       .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
-    const autoSnap = snapshots.find((s) => s.extensionId === "auto")
+    const autoSnap = snapshots.find((s) => s.extensionId === "@gent/auto")
     const autoActive = (autoSnap?.model as { active?: boolean } | undefined)?.active === true
     if (autoActive) return
 
     const handoffSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
     const cooldown = (handoffSnap?.model as CooldownState | undefined)?.cooldown ?? 0
-    const epoch = handoffSnap?.epoch ?? 0
-
     if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
     const storage = yield* Storage
@@ -114,9 +113,8 @@ const autoHandoffImpl = (
       .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
 
     if (decision === "reject") {
-      // Set cooldown via actor intent — epoch ensures non-stale write
       yield* stateRuntime
-        .handleIntent(input.sessionId, EXTENSION_ID, { _tag: "Suppress", count: 5 }, epoch)
+        .send(input.sessionId, HandoffProtocol.Suppress({ count: 5 }))
         .pipe(Effect.catchEager(() => Effect.void))
     }
   }).pipe(Effect.catchEager(() => Effect.void))

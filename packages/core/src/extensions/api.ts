@@ -50,7 +50,7 @@ import {
   type ProviderContribution,
   type InteractionHandlerContribution,
   type TagInjection,
-  type SpawnActor,
+  type SpawnExtensionRef,
 } from "../domain/extension.js"
 import {
   defineTool,
@@ -102,7 +102,7 @@ export {
   type ProviderContribution,
   type InteractionHandlerContribution,
   type TagInjection,
-  type SpawnActor,
+  type SpawnExtensionRef,
   type ExtensionProjectionConfig,
   type ExtensionEffect,
   type ReduceResult,
@@ -116,6 +116,19 @@ export {
   type TurnAfterInput,
   type ToolResultInput,
 } from "../domain/extension.js"
+export {
+  ExtensionMessage,
+  getExtensionMessageMetadata,
+  getExtensionReplySchema,
+  isExtensionRequestMessage,
+  type ExtensionCommandDefinition,
+  type ExtensionCommandMessage,
+  type ExtensionRequestDefinition,
+  type ExtensionRequestMessage,
+  type AnyExtensionCommandMessage,
+  type AnyExtensionRequestMessage,
+  type ExtractExtensionReply,
+} from "../domain/extension-protocol.js"
 export type { PromptSection } from "../domain/prompt.js"
 export type { AgentEvent } from "../domain/event.js"
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
@@ -288,7 +301,7 @@ interface SimpleHookHandlers {
 // ── Actor Result (from fromReducer/fromMachine) ──
 
 export interface ActorResult {
-  readonly spawnActor: SpawnActor
+  readonly spawn: SpawnExtensionRef
   readonly projection?: ExtensionProjectionConfig
 }
 
@@ -334,7 +347,7 @@ export interface ExtensionBuilder {
   /** Register an actor from fromReducer() or fromMachine(). Mutually exclusive with state(). */
   actor(result: ActorResult): void
   /** Provide a service Layer. Multiple calls merge. */
-  layer(layer: Layer.Any): void
+  layer(layer: Layer.Layer<never, never, object>): void
   /** Register an AI model provider. */
   provider(provider: ProviderContribution): void
   /** Register an interaction handler. */
@@ -537,7 +550,7 @@ const convertSimpleEffect = (effect: SimpleEffect): ExtensionEffect => {
 const resolveSimpleState = (
   id: string,
   sc: SimpleStateConfig<unknown>,
-): { error: string } | { spawnActor: SpawnActor; projection?: ExtensionProjectionConfig } => {
+): { error: string } | { spawn: SpawnExtensionRef; projection?: ExtensionProjectionConfig } => {
   if (sc.persist !== undefined && sc.persist.schema === undefined) {
     return { error: `ext.state() persist requires a schema: { persist: { schema } }` } as const
   }
@@ -571,7 +584,7 @@ const resolveSimpleState = (
     persist: sc.persist !== undefined,
   })
   return {
-    spawnActor: reducerResult.spawnActor,
+    spawn: reducerResult.spawn,
     projection: reducerResult.projection,
   } as const
 }
@@ -647,7 +660,7 @@ export const extension = (
       const tagInjections: TagInjection[] = []
       const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
       const busSubscriptions: BusSubscriptionEntry[] = []
-      const layers: Layer.Any[] = []
+      const layers: Array<Layer.Layer<never, never, object>> = []
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let stateConfig: SimpleStateConfig<any> | undefined
       let actorResult: ActorResult | undefined
@@ -815,7 +828,7 @@ export const extension = (
       }
 
       // Resolve actor from state() or actor()
-      let spawnActor: ExtensionSetup["spawnActor"]
+      let spawn: ExtensionSetup["spawn"]
       let projection: ExtensionSetup["projection"]
 
       if (stateConfig !== undefined) {
@@ -823,20 +836,20 @@ export const extension = (
         if ("error" in resolved) {
           return yield* Effect.fail(new ExtensionLoadError(id, resolved.error))
         }
-        spawnActor = resolved.spawnActor
+        spawn = resolved.spawn
         projection = resolved.projection
       } else if (actorResult !== undefined) {
-        spawnActor = actorResult.spawnActor
+        spawn = actorResult.spawn
         projection = actorResult.projection
       }
 
-      // Merge layers — cast through Layer<never> to satisfy Layer.mergeAll variance
-      type NarrowLayer = Layer.Layer<never>
-      let mergedLayer: Layer.Any | undefined
-      if (layers.length === 1) {
-        mergedLayer = layers[0]
-      } else if (layers.length > 1) {
-        mergedLayer = Layer.mergeAll(...(layers as [NarrowLayer, NarrowLayer, ...NarrowLayer[]]))
+      let mergedLayer: Layer.Layer<never, never, object> | undefined
+      const [firstLayer, ...remainingLayers] = layers
+      if (firstLayer !== undefined) {
+        mergedLayer = remainingLayers.reduce<Layer.Layer<never, never, object>>(
+          (current, layer) => Layer.merge(current, layer),
+          firstLayer,
+        )
       }
 
       const onStartup = mergeStartupHooks(startupFns, startupEffects)
@@ -853,7 +866,7 @@ export const extension = (
         ...(tagInjections.length > 0 ? { tagInjections } : {}),
         ...(observers.length > 0 ? { observers } : {}),
         ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),
-        spawnActor,
+        spawn,
         projection,
         onStartup,
         onShutdown,

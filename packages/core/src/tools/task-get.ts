@@ -1,7 +1,8 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import type { TaskId } from "../domain/ids.js"
-import { TaskService } from "../runtime/task-service.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { TaskProtocol } from "../extensions/task-tools-protocol.js"
 
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),
@@ -14,15 +15,22 @@ export const TaskGetTool = defineTool({
   idempotent: true,
   description: "Get full details of a task including description, dependencies, and owner session.",
   params: TaskGetParams,
-  execute: Effect.fn("TaskGetTool.execute")(function* (params) {
-    const taskService = yield* TaskService
-
-    const task = yield* taskService.get(params.taskId as TaskId)
-    if (task === undefined) {
+  execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {
+    const runtime = yield* ExtensionStateRuntime
+    const task = yield* runtime.ask(
+      ctx.sessionId,
+      TaskProtocol.GetTask({ taskId: params.taskId as TaskId }),
+      ctx.branchId,
+    )
+    if (task == null) {
       return { error: `Task not found: ${params.taskId}` }
     }
 
-    const deps = yield* taskService.getDeps(params.taskId as TaskId)
+    const deps = yield* runtime.ask(
+      ctx.sessionId,
+      TaskProtocol.GetDependencies({ taskId: params.taskId as TaskId }),
+      ctx.branchId,
+    )
 
     return {
       id: task.id,

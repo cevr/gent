@@ -1,25 +1,22 @@
 /**
- * fromMachine — wraps an effect-machine Machine into an ExtensionActor.
- *
- * Parity with fromReducer: handleEvent, handleIntent, persistence,
- * version tracking via Ref, projection externalization.
- *
- * Uses ActorRef.call for atomic change detection — sends event through
- * the queue and gets back a ProcessEventResult receipt. No more before/yield/after.
+ * fromMachine — adapts an effect-machine actor to ExtensionRef.
  */
 
 import { Effect, Ref, Schema } from "effect"
 import { Machine } from "effect-machine"
 import type { AgentEvent } from "../../domain/event.js"
 import type {
-  ExtensionActor,
   ExtensionDeriveContext,
   ExtensionEffect,
   ExtensionProjection,
   ExtensionProjectionConfig,
-  SpawnActor,
+  SpawnExtensionRef,
 } from "../../domain/extension.js"
 import type { BranchId } from "../../domain/ids.js"
+import type {
+  AnyExtensionCommandMessage,
+  AnyExtensionRequestMessage,
+} from "../../domain/extension-protocol.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import {
@@ -31,36 +28,21 @@ import {
 export interface FromMachineConfig<
   State extends { readonly _tag: string },
   Event extends { readonly _tag: string },
-  Intent = void,
+  Message = never,
   R = never,
   InitR = never,
 > {
-  /** Actor/extension id */
   readonly id: string
-  /** The built machine to wrap */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly built: Machine.Machine<State, Event, R, any, any, any>
-  /** Map AgentEvent to machine event. Return undefined to skip. */
   readonly mapEvent?: (event: AgentEvent) => Event | undefined
-  /** Map intent to machine event for handleIntent support. Receives current state for conditional mapping. Return undefined to skip. */
-  readonly mapIntent?: (intent: Intent, state: State) => Event | undefined
-  /** Intent schema for validation */
-  readonly intentSchema?: Schema.Schema<Intent>
-  /** Derive projection from state. ctx is provided for turn-time, undefined for UI snapshots. */
+  readonly mapMessage?: (message: Message, state: State) => Event | undefined
+  readonly messageSchema?: Schema.Schema<Message>
   readonly derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
-  /** Schema for the uiModel returned by derive/deriveUi */
   readonly uiModelSchema?: Schema.Schema<unknown>
-  /** Schema for serializing/deserializing state to/from JSON.
-   *  For machine-backed extensions, use MachineState.plain (phantom brand cast is safe). */
   readonly stateSchema?: Schema.Schema<State>
-  /** If true, state is persisted on state change and hydrated on init */
   readonly persist?: boolean
-  /** Compute extension effects after a state transition. Called with (before, after). */
   readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
-  /** Custom init logic — runs after persistence hydration and machine spawn.
-   *  Use to reconstruct state from external sources (e.g. JSONL files).
-   *  Send machine events via `send` to drive state transitions during init.
-   *  Extension layer services (from setup.layer) are available via InitR. */
   readonly onInit?: (ctx: {
     readonly sessionId: string
     readonly snapshot: Effect.Effect<State>
@@ -70,36 +52,34 @@ export interface FromMachineConfig<
 }
 
 export interface FromMachineResult {
-  readonly spawnActor: SpawnActor
+  readonly spawn: SpawnExtensionRef
   readonly projection?: ExtensionProjectionConfig
 }
 
-/**
- * Create a SpawnActor factory + projection config from an effect-machine Machine.
- */
 export const fromMachine = <
   State extends { readonly _tag: string },
   Event extends { readonly _tag: string },
-  Intent = void,
+  Message = never,
   R = never,
   InitR = never,
 >(
-  config: FromMachineConfig<State, Event, Intent, R, InitR>,
+  config: FromMachineConfig<State, Event, Message, R, InitR>,
 ): FromMachineResult => {
-  const spawnActor: SpawnActor = (ctx) =>
-    Effect.withSpan("fromMachine.spawnActor", { attributes: { "extension.id": config.id } })(
+  const spawn: SpawnExtensionRef = (ctx) =>
+    Effect.withSpan("fromMachine.spawn", { attributes: { "extension.id": config.id } })(
       Effect.gen(function* () {
         const turnControl = yield* ExtensionTurnControl
         const storage = yield* Effect.serviceOption(Storage)
+        const services = yield* Effect.services<InitR>()
         const versionRef = yield* Ref.make(0)
+        const startedRef = yield* Ref.make(false)
 
         const spawnId = `${config.id}-${ctx.sessionId}`
-
-        // Load persisted state before spawn so we can hydrate
         const codec =
           config.stateSchema !== undefined ? makePersistCodec(config.stateSchema) : undefined
+
         let hydratedState: State | undefined
-        let initialVersion = 0
+        let initialEpoch = 0
         if (config.persist === true && storage._tag === "Some" && codec !== undefined) {
           const loaded = yield* storage.value
             .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
@@ -110,7 +90,7 @@ export const fromMachine = <
               .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
             if (decoded !== undefined) {
               hydratedState = decoded
-              initialVersion = loaded.version
+              initialEpoch = loaded.version
             }
           }
         }
@@ -119,24 +99,19 @@ export const fromMachine = <
           id: spawnId,
           ...(hydratedState !== undefined ? { hydrate: hydratedState } : {}),
         })
-        yield* ref.start
-        if (initialVersion > 0) {
-          yield* Ref.set(versionRef, initialVersion)
-        }
 
-        // Persistence: save state to storage
         const persistState = (): Effect.Effect<void> =>
           Effect.gen(function* () {
             if (storage._tag !== "Some" || codec === undefined) return
             const state = yield* ref.snapshot
-            const version = yield* Ref.get(versionRef)
+            const epoch = yield* Ref.get(versionRef)
             const encoded = codec.encode(state as State)
             yield* storage.value
               .saveExtensionState({
                 sessionId: ctx.sessionId,
                 extensionId: config.id,
                 stateJson: encoded,
-                version,
+                version: epoch,
               })
               .pipe(Effect.catchEager(() => Effect.void))
           })
@@ -144,7 +119,7 @@ export const fromMachine = <
         const runEffects = (
           effects: ReadonlyArray<ExtensionEffect>,
           branchId: BranchId | undefined,
-        ): Effect.Effect<void> =>
+        ) =>
           interpretEffects(
             effects,
             ctx.sessionId,
@@ -159,7 +134,6 @@ export const fromMachine = <
             ),
           )
 
-        // Dispatch event through actor, handle version + persist + afterTransition
         const dispatch = (machineEvent: Event, branchId: BranchId | undefined) =>
           Effect.gen(function* () {
             const result = yield* ref
@@ -173,7 +147,7 @@ export const fromMachine = <
                 ),
               )
             if (result === undefined || !result.transitioned) return false
-            yield* Ref.update(versionRef, (v) => v + 1)
+            yield* Ref.update(versionRef, (epoch) => epoch + 1)
             if (config.persist === true) {
               yield* persistState().pipe(
                 Effect.catchDefect((defect) =>
@@ -192,71 +166,81 @@ export const fromMachine = <
             return true
           })
 
-        const actor: ExtensionActor = {
-          id: config.id,
-
-          // onInit runs after hydration + spawn — InitR services available in ambient context
-          init: (config.onInit !== undefined
-            ? Effect.gen(function* () {
-                let sessionCwd: string | undefined
-                if (storage._tag === "Some") {
-                  const session = yield* storage.value
-                    .getSession(ctx.sessionId)
-                    .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
-                  sessionCwd = session?.cwd ?? undefined
-                }
-                const onInit = config.onInit
-                if (onInit === undefined) return
-                yield* onInit({
-                  sessionId: ctx.sessionId,
-                  snapshot: ref.snapshot as Effect.Effect<State>,
-                  send: (event: Event) =>
-                    dispatch(event, ctx.branchId).pipe(
-                      Effect.catchEager(() => Effect.succeed(false)),
-                    ),
-                  sessionCwd,
-                }).pipe(Effect.catchEager(() => Effect.void))
+        const start = Effect.gen(function* () {
+          const started = yield* Ref.get(startedRef)
+          if (started) return
+          yield* ref.start
+          if (initialEpoch > 0) {
+            yield* Ref.set(versionRef, initialEpoch)
+          }
+          if (config.onInit !== undefined) {
+            let sessionCwd: string | undefined
+            if (storage._tag === "Some") {
+              const session = yield* storage.value
+                .getSession(ctx.sessionId)
+                .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+              sessionCwd = session?.cwd ?? undefined
+            }
+            yield* config
+              .onInit({
+                sessionId: ctx.sessionId,
+                snapshot: ref.snapshot as Effect.Effect<State>,
+                send: (event) =>
+                  dispatch(event, ctx.branchId).pipe(
+                    Effect.catchEager(() => Effect.succeed(false)),
+                  ),
+                sessionCwd,
               })
-            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              Effect.void) as any as Effect.Effect<void>,
+              .pipe(
+                Effect.provideServices(services),
+                Effect.catchEager(() => Effect.void),
+              )
+          }
+          yield* Ref.set(startedRef, true)
+        })
 
-          handleEvent: (event: AgentEvent, reduceCtx) =>
+        yield* start
+
+        return {
+          id: config.id,
+          start,
+
+          publish: (event, reduceCtx) =>
             Effect.gen(function* () {
-              const mapped = config.mapEvent !== undefined ? config.mapEvent(event) : undefined
+              const mapped = config.mapEvent?.(event)
               if (mapped === undefined) return false
               return yield* dispatch(mapped, reduceCtx.branchId)
             }),
 
-          handleIntent: (() => {
-            const mapIntent = config.mapIntent
-            if (mapIntent === undefined) return undefined
-            const intentDecoder =
-              config.intentSchema !== undefined
-                ? Schema.decodeUnknownEffect(config.intentSchema as Schema.Any)
-                : undefined
-            return (intent: unknown, branchId?: BranchId) =>
-              Effect.gen(function* () {
-                const validated: Intent =
-                  intentDecoder !== undefined
-                    ? ((yield* intentDecoder(intent).pipe(Effect.orDie)) as Intent)
-                    : (intent as Intent)
-                const currentState = yield* ref.snapshot
-                const mapped = mapIntent(validated, currentState)
-                if (mapped === undefined) return false
-                return yield* dispatch(mapped, branchId)
-              })
-          })(),
+          send: (message: AnyExtensionCommandMessage, branchId?: BranchId) =>
+            Effect.gen(function* () {
+              const mapMessage = config.mapMessage
+              if (mapMessage === undefined) return
+              const decoded =
+                config.messageSchema !== undefined
+                  ? yield* Schema.decodeUnknownEffect(config.messageSchema as Schema.Any)(
+                      message,
+                    ).pipe(Effect.orDie)
+                  : (message as Message)
+              const currentState = yield* ref.snapshot
+              const mapped = mapMessage(decoded, currentState)
+              if (mapped === undefined) return
+              yield* dispatch(mapped, branchId)
+            }),
 
-          getState: Effect.gen(function* () {
+          ask: (message: AnyExtensionRequestMessage) =>
+            Effect.die(
+              new Error(`extension "${config.id}" does not handle request "${message._tag}"`),
+            ),
+
+          snapshot: Effect.gen(function* () {
             const state = yield* ref.snapshot
-            const version = yield* Ref.get(versionRef)
-            return { state, version }
+            const epoch = yield* Ref.get(versionRef)
+            return { state, epoch }
           }),
 
-          terminate: ref.stop,
+          stop: ref.stop,
         }
-
-        return actor
       }),
     )
 
@@ -265,5 +249,5 @@ export const fromMachine = <
     uiModelSchema: config.uiModelSchema,
   })
 
-  return { spawnActor, projection }
+  return { spawn, projection }
 }

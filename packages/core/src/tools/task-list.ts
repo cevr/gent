@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { TaskService } from "../runtime/task-service.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { TaskProtocol } from "../extensions/task-tools-protocol.js"
 
 export const TaskListParams = Schema.Struct({})
 
@@ -12,9 +13,12 @@ export const TaskListTool = defineTool({
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,
   execute: Effect.fn("TaskListTool.execute")(function* (_params, ctx) {
-    const taskService = yield* TaskService
-
-    const tasks = yield* taskService.list(ctx.sessionId, ctx.branchId)
+    const runtime = yield* ExtensionStateRuntime
+    const tasks = yield* runtime.ask(
+      ctx.sessionId,
+      TaskProtocol.ListTasks({ sessionId: ctx.sessionId, branchId: ctx.branchId }),
+      ctx.branchId,
+    )
 
     if (tasks.length === 0) {
       return { tasks: [], summary: "No tasks" }

@@ -22,7 +22,7 @@ describe("createExtensionHarness", () => {
   test("WorkflowToolsExtension provides audit tool", () => {
     const harness = createExtensionHarness(WorkflowToolsExtension)
     expect(harness.tools.has("audit")).toBe(true)
-    expect(harness.spawnActor).toBeUndefined()
+    expect(harness.spawn).toBeUndefined()
   })
 
   test("SubagentToolsExtension provides delegate tools (handoff in @gent/handoff)", () => {
@@ -30,12 +30,12 @@ describe("createExtensionHarness", () => {
     expect(harness.tools.has("delegate")).toBe(true)
     expect(harness.tools.has("handoff")).toBe(false)
     expect(harness.tools.has("code_review")).toBe(true)
-    expect(harness.spawnActor).toBeUndefined()
+    expect(harness.spawn).toBeUndefined()
   })
 
-  test("PlanExtension provides spawnActor and plan tool", () => {
+  test("PlanExtension provides spawn and plan tool", () => {
     const harness = createExtensionHarness(PlanExtension)
-    expect(harness.spawnActor).toBeDefined()
+    expect(harness.spawn).toBeDefined()
     expect(harness.tools.has("plan")).toBe(true)
   })
 })
@@ -74,7 +74,7 @@ const sessionId = "lifecycle-session" as SessionId
 const branchId = "lifecycle-branch" as BranchId
 
 const makeCounterExtension = (id: string): LoadedExtension => {
-  const { spawnActor, projection } = fromReducer({
+  const { spawn, projection } = fromReducer({
     id,
     initial: { count: 0 },
     reduce: (state: { count: number }, event) => {
@@ -87,7 +87,7 @@ const makeCounterExtension = (id: string): LoadedExtension => {
     manifest: { id },
     kind: "builtin",
     sourcePath: "builtin",
-    setup: { spawnActor, projection },
+    setup: { spawn, projection },
   }
 }
 
@@ -107,7 +107,7 @@ describe("Actor lifecycle", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
-      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
@@ -132,7 +132,7 @@ describe("Actor lifecycle", () => {
       const runtime = yield* ExtensionStateRuntime
 
       // Spawn via reduce
-      yield* runtime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -143,7 +143,7 @@ describe("Actor lifecycle", () => {
       yield* runtime.terminateAll(sessionId)
 
       // After terminate + re-spawn, actor starts fresh
-      yield* runtime.reduce(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })

@@ -13,6 +13,7 @@ import { Effect } from "effect"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { Task } from "@gent/core/domain/task.js"
 import type { TaskId } from "@gent/core/domain/ids.js"
+import { TaskProtocol } from "@gent/core/extensions/task-tools-protocol.js"
 import { ChromePanel } from "./chrome-panel"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useClient } from "../client/context"
@@ -64,20 +65,20 @@ export function BackgroundTasksDialog(props: {
     if (sid === undefined) return
     cast(
       clientCtx.client.extension
-        .sendIntent({
+        .ask({
           sessionId: sid,
-          extensionId: "@gent/task-tools",
-          intent: { _tag: "StopTask", taskId },
-          epoch: 0, // bus handler doesn't check epoch
+          message: TaskProtocol.StopTask({ taskId }),
         })
         .pipe(Effect.catchEager(() => Effect.void)),
     )
   }
 
   const loadOutput = (taskId: TaskId) => {
+    const sid = clientCtx.session()?.sessionId
+    if (sid === undefined) return
     setDetailError(false)
     cast(
-      clientCtx.client.task.output({ taskId }).pipe(
+      clientCtx.client.task.output({ sessionId: sid, taskId }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
             setDetailMessages(result.messages ?? [])

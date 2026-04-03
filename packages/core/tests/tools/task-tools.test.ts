@@ -1,28 +1,20 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Stream } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect, Fiber, Stream } from "effect"
 import { TaskCreateTool } from "@gent/core/tools/task-create"
 import { TaskListTool } from "@gent/core/tools/task-list"
 import { TaskGetTool } from "@gent/core/tools/task-get"
 import { TaskUpdateTool } from "@gent/core/tools/task-update"
 import { DelegateTool } from "@gent/core/tools/delegate"
-import { SubagentRunnerService, Agents } from "@gent/core/domain/agent"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { TaskStorage } from "@gent/core/storage/task-storage"
-import { TaskService } from "@gent/core/runtime/task-service"
+import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
+import { TaskService } from "@gent/core/extensions/task-tools-service"
+import { TaskToolsExtension } from "@gent/core/extensions/task-tools"
 
-const platformLayer = Layer.merge(
-  BunServices.layer,
-  RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
-)
-
-const mockRunnerSuccess = Layer.succeed(SubagentRunnerService, {
+const mockRunnerSuccess = {
   run: (params) =>
     Effect.succeed({
       _tag: "success" as const,
@@ -30,7 +22,7 @@ const mockRunnerSuccess = Layer.succeed(SubagentRunnerService, {
       sessionId: "child-session" as SessionId,
       agentName: params.agent.name,
     }),
-})
+}
 
 const ctx: ToolContext = {
   sessionId: "s1" as SessionId,
@@ -38,29 +30,10 @@ const ctx: ToolContext = {
   toolCallId: "tc1",
 }
 
-// Build a full layer with real Storage + TaskService
-const TestExtRegistry = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "agents" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { agents: Object.values(Agents) },
-    },
-  ]),
-)
-const storageWithSql = Storage.TestWithSql()
-const taskStorageLayer = Layer.provide(TaskStorage.Live, storageWithSql)
-const baseDeps = Layer.mergeAll(
-  storageWithSql,
-  taskStorageLayer,
-  EventStore.Memory,
-  TestExtRegistry,
-  mockRunnerSuccess,
-  platformLayer,
-)
-const taskServiceLayer = Layer.provide(TaskService.Live, baseDeps)
-const layer = Layer.mergeAll(baseDeps, taskServiceLayer)
+const layer = createToolTestLayer({
+  extensions: [TaskToolsExtension],
+  subagentRunner: mockRunnerSuccess,
+})
 
 const setup = Effect.gen(function* () {
   const storage = yield* Storage
@@ -178,13 +151,19 @@ describe("TaskUpdateTool", () => {
     Effect.gen(function* () {
       yield* setup
       const eventStore = yield* EventStore
+      const eventsFiber = yield* Effect.forkChild(
+        eventStore.subscribe({ sessionId: "s1" as SessionId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "TaskCompleted"),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+      )
+      yield* Effect.yieldNow
       const created = yield* TaskCreateTool.execute({ subject: "Ship it" }, ctx)
       // Valid transition: pending → in_progress → completed
       yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
       yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "completed" }, ctx)
-      const envelopes = yield* eventStore
-        .subscribe({ sessionId: "s1" as SessionId })
-        .pipe(Stream.take(3), Stream.runCollect)
+      const envelopes = yield* Fiber.join(eventsFiber)
       const events = Array.from(envelopes, (envelope) => envelope.event._tag)
       expect(events).toContain("TaskCompleted")
     }).pipe(Effect.provide(layer)),
@@ -197,15 +176,21 @@ describe("TaskService.remove", () => {
       yield* setup
       const eventStore = yield* EventStore
       const taskService = yield* TaskService
+      const eventsFiber = yield* Effect.forkChild(
+        eventStore.subscribe({ sessionId: "s1" as SessionId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "TaskDeleted"),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+      )
+      yield* Effect.yieldNow
       const created = yield* taskService.create({
         sessionId: "s1" as SessionId,
         branchId: "b1",
         subject: "Ephemeral debug task",
       })
       yield* taskService.remove(created.id)
-      const envelopes = yield* eventStore
-        .subscribe({ sessionId: "s1" as SessionId })
-        .pipe(Stream.take(2), Stream.runCollect)
+      const envelopes = yield* Fiber.join(eventsFiber)
       const events = Array.from(envelopes, (envelope) => envelope.event._tag)
       expect(events).toContain("TaskDeleted")
     }).pipe(Effect.provide(layer)),

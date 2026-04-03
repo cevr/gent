@@ -1,4 +1,6 @@
 import { defineClientExtension } from "@gent/core/domain/extension-client.js"
+import { AUTO_EXTENSION_ID } from "@gent/core/extensions/auto.js"
+import { AutoProtocol } from "@gent/core/extensions/auto-protocol.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
 
 export default defineClientExtension({
@@ -9,7 +11,7 @@ export default defineClientExtension({
         position: "top-left" as const,
         priority: 20,
         produce: () => {
-          const snap = ctx.getSnapshot("auto")
+          const snap = ctx.getSnapshot(AUTO_EXTENSION_ID)
           const model = snap?.model as
             | { active?: boolean; phase?: string; iteration?: number; maxIterations?: number }
             | undefined
@@ -41,10 +43,10 @@ export default defineClientExtension({
         slash: "auto",
         onSelect: () => {
           // If auto is active → cancel. If inactive → open goal input overlay.
-          const snap = ctx.getSnapshot("auto")
+          const snap = ctx.getSnapshot(AUTO_EXTENSION_ID)
           const model = snap?.model as { active?: boolean } | undefined
           if (model?.active) {
-            ctx.sendIntent("auto", { _tag: "CancelAuto" })
+            ctx.send(AutoProtocol.CancelAuto())
           } else {
             ctx.openOverlay("auto-goal")
           }

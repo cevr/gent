@@ -105,7 +105,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   const resolved = resolveExtensions(resolvedExtensions)
 
   // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts).
-  // Extension layers may require SqlClient (e.g. TaskStorage.Live), so provide it via storageLayer.
+  // Extension layers may require SqlClient, so provide it via storageLayer.
   const storageLayer = Storage.MemoryWithSql()
   const extensionLayers: Layer.Layer<never>[] = resolvedExtensions
     .filter((ext) => ext.setup.layer !== undefined)

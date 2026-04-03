@@ -6,7 +6,7 @@
  */
 
 import { createContext, useContext, createSignal, onMount, type Accessor, type JSX } from "solid-js"
-import { Layer, ManagedRuntime } from "effect"
+import { Layer, ManagedRuntime, type Effect } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
 // @effect-diagnostics nodeBuiltinImport:off
@@ -21,6 +21,10 @@ import builtinConnection from "./builtins/connection.client"
 import builtinInteractions from "./builtins/interactions.client"
 import builtinHandoff from "./builtins/handoff.client"
 import type { InteractionEventTag } from "@gent/core/domain/event.js"
+import type {
+  AnyExtensionRequestMessage,
+  ExtractExtensionReply,
+} from "@gent/core/domain/extension-protocol.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
@@ -163,20 +167,30 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           get branchId() {
             return clientCtx.session()?.branchId
           },
-          sendIntent: (extensionId, intent) => {
+          send: (message) => {
             const sid = clientCtx.session()?.sessionId
             const bid = clientCtx.session()?.branchId
             if (sid === undefined) return
-            const snap = snapshots().get(extensionId)
-            const epoch = snap?.epoch ?? 0
             clientCtx.runtime.cast(
-              clientCtx.client.extension.sendIntent({
+              clientCtx.client.extension.send({
                 sessionId: sid,
-                extensionId,
-                intent,
-                epoch,
+                message,
                 branchId: bid,
               }),
+            )
+          },
+          ask: async <M extends AnyExtensionRequestMessage>(message: M) => {
+            const sid = clientCtx.session()?.sessionId
+            const bid = clientCtx.session()?.branchId
+            if (sid === undefined) {
+              throw new Error("Cannot ask extension without an active session")
+            }
+            return clientCtx.runtime.run(
+              clientCtx.client.extension.ask({
+                sessionId: sid,
+                message,
+                branchId: bid,
+              }) as Effect.Effect<ExtractExtensionReply<M>>,
             )
           },
           getSnapshot: (extensionId) => {

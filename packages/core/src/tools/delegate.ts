@@ -6,10 +6,11 @@ import {
   type SubagentResult,
   type SubagentError,
 } from "../domain/agent.js"
+import type { Task } from "../domain/task.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { TaskProtocol } from "../extensions/task-tools-protocol.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { TaskService } from "../runtime/task-service.js"
-import type { Task } from "../domain/task.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
@@ -95,29 +96,36 @@ export const DelegateTool = defineTool({
     }
 
     const backgroundSingle = Effect.fn("DelegateTool.backgroundSingle")(function* () {
-      const taskService = yield* TaskService
+      const extensionRuntime = yield* ExtensionStateRuntime
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const task = yield* taskService
-        .create({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          subject: params.description ?? params.task ?? "background task",
-          agentType: resolved.agent.name,
-          prompt: params.task,
-          cwd: platform.cwd,
-        })
+      const task = yield* extensionRuntime
+        .ask(
+          ctx.sessionId,
+          TaskProtocol.CreateTask({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            subject: params.description ?? params.task ?? "background task",
+            agentType: resolved.agent.name,
+            prompt: params.task,
+            cwd: platform.cwd,
+          }),
+          ctx.branchId,
+        )
         .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
-      if (task === undefined) {
+      if (task === undefined)
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
-      }
-      const result = yield* taskService.run(task.id)
+      const result = yield* extensionRuntime.ask(
+        ctx.sessionId,
+        TaskProtocol.RunTask({ taskId: task.id }),
+        ctx.branchId,
+      )
       return { taskId: result.taskId, status: result.status }
     })
 
     const backgroundParallel = Effect.fn("DelegateTool.backgroundParallel")(function* () {
-      const taskService = yield* TaskService
+      const extensionRuntime = yield* ExtensionStateRuntime
       const tasks = params.tasks ?? []
       if (tasks.length > MAX_PARALLEL_TASKS) {
         return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
@@ -127,20 +135,28 @@ export const DelegateTool = defineTool({
       for (const item of tasks) {
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
-        const task = yield* taskService
-          .create({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            subject: summarizeTaskSubject(item.task),
-            agentType: resolved.agent.name,
-            prompt: item.task,
-            cwd: platform.cwd,
-          })
+        const task = yield* extensionRuntime
+          .ask(
+            ctx.sessionId,
+            TaskProtocol.CreateTask({
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+              subject: summarizeTaskSubject(item.task),
+              agentType: resolved.agent.name,
+              prompt: item.task,
+              cwd: platform.cwd,
+            }),
+            ctx.branchId,
+          )
           .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
         if (task === undefined) {
           return { error: "Background tasks unavailable — task-tools extension is disabled" }
         }
-        yield* taskService.run(task.id)
+        yield* extensionRuntime.ask(
+          ctx.sessionId,
+          TaskProtocol.RunTask({ taskId: task.id }),
+          ctx.branchId,
+        )
         taskIds.push(task.id)
       }
       return { taskIds, status: "running" as const, count: taskIds.length }

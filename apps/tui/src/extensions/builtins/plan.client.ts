@@ -1,4 +1,6 @@
 import { defineClientExtension } from "@gent/core/domain/extension-client.js"
+import { PLAN_EXTENSION_ID } from "@gent/core/extensions/plan.js"
+import { PlanProtocol } from "@gent/core/extensions/plan-protocol.js"
 import { PlanWidget } from "../plan-widget"
 
 export default defineClientExtension({
@@ -9,7 +11,7 @@ export default defineClientExtension({
         position: "top-left" as const,
         priority: 30,
         produce: () => {
-          const snap = ctx.getSnapshot("plan")
+          const snap = ctx.getSnapshot(PLAN_EXTENSION_ID)
           const model = snap?.model as
             | { mode?: string; progress?: { total: number; completed: number; inProgress: number } }
             | undefined
@@ -26,7 +28,7 @@ export default defineClientExtension({
         position: "bottom-left" as const,
         priority: 40,
         produce: () => {
-          const snap = ctx.getSnapshot("plan")
+          const snap = ctx.getSnapshot(PLAN_EXTENSION_ID)
           const model = snap?.model as
             | { mode?: string; progress?: { total: number; completed: number; inProgress: number } }
             | undefined
@@ -56,7 +58,7 @@ export default defineClientExtension({
         keybind: "ctrl+shift+p",
         slash: "plan",
         onSelect: () => {
-          ctx.sendIntent("plan", { _tag: "TogglePlan" })
+          ctx.send(PlanProtocol.TogglePlan())
         },
         onSlash: (args) => {
           if (args.trim().length > 0) {
@@ -66,7 +68,7 @@ export default defineClientExtension({
             )
           } else {
             // /plan → toggle plan mode (same as palette)
-            ctx.sendIntent("plan", { _tag: "TogglePlan" })
+            ctx.send(PlanProtocol.TogglePlan())
           }
         },
       },
@@ -75,7 +77,7 @@ export default defineClientExtension({
         title: "Execute Plan",
         category: "Plan",
         onSelect: () => {
-          ctx.sendIntent("plan", { _tag: "ExecutePlan" })
+          ctx.send(PlanProtocol.ExecutePlan())
         },
       },
       {
@@ -83,7 +85,7 @@ export default defineClientExtension({
         title: "Refine Plan",
         category: "Plan",
         onSelect: () => {
-          ctx.sendIntent("plan", { _tag: "RefinePlan" })
+          ctx.send(PlanProtocol.RefinePlan())
         },
       },
       {

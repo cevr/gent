@@ -30,7 +30,7 @@ import type {
   GentExtension,
   LoadedExtension,
   ReduceResult,
-  SpawnActor,
+  SpawnExtensionRef,
 } from "../domain/extension.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -42,7 +42,6 @@ import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/regi
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { TaskService } from "../runtime/task-service.js"
 import { Skills } from "../domain/skills.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -108,7 +107,7 @@ export const expectNoChange = <T>(before: T, after: T): void => {
 /**
  * Create a pure synchronous harness for testing fromReducer-based actors.
  *
- * Wraps the reduce/derive/handleIntent functions so tests can call them
+ * Wraps the reduce/derive/receive functions so tests can call them
  * without Effect runtime — useful for pure state transition testing.
  */
 export interface ActorHarnessResult<State, Intent = void> {
@@ -136,6 +135,7 @@ export interface ActorHarnessConfig<State, Intent = void> {
     ctx: ExtensionReduceContext,
   ) => ReduceResult<State>
   readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
+  readonly receive?: (state: State, intent: Intent) => ReduceResult<State>
   readonly handleIntent?: (state: State, intent: Intent) => ReduceResult<State>
 }
 
@@ -177,7 +177,7 @@ export function createActorHarness<State, Intent = void>(
   const derive = (state: State): ExtensionProjection =>
     config.derive !== undefined ? config.derive(state, deriveCtx) : {}
 
-  const handler = config.handleIntent
+  const handler = config.receive ?? config.handleIntent
   const intent =
     handler !== undefined
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -202,7 +202,7 @@ export interface ExtensionHarnessResult {
   readonly setup: ExtensionSetup
   readonly tools: Map<string, AnyToolDefinition>
   readonly agents: Map<string, AgentDefinition>
-  readonly spawnActor: SpawnActor | undefined
+  readonly spawn: SpawnExtensionRef | undefined
   readonly projection: ExtensionProjectionConfig | undefined
   readonly tagInjections: ExtensionSetup["tagInjections"]
   readonly hooks: ExtensionSetup["hooks"]
@@ -211,7 +211,7 @@ export interface ExtensionHarnessResult {
 /**
  * Load an extension through the full lifecycle and return its resolved setup.
  *
- * Runs setup() via Effect.runSync, extracts tools/agents/spawnActor/tag injections/hooks.
+ * Runs setup() via Effect.runSync, extracts tools/agents/spawn/tag injections/hooks.
  */
 export const createExtensionHarness = (
   extension: GentExtension,
@@ -235,7 +235,7 @@ export const createExtensionHarness = (
     setup,
     tools,
     agents,
-    spawnActor: setup.spawnActor,
+    spawn: setup.spawn,
     projection: setup.projection,
     tagInjections: setup.tagInjections,
     hooks: setup.hooks,
@@ -296,26 +296,10 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     config.subagentRunner ?? defaultRunner,
   )
 
-  // @effect-diagnostics effectSucceedWithVoid:off
-  const taskServiceLayer = Layer.succeed(TaskService, {
-    create: () => Effect.die("TaskService.create not implemented in test"),
-    get: () => Effect.succeed(undefined),
-    list: () => Effect.succeed([]),
-    update: () => Effect.succeed(undefined),
-    remove: () => Effect.void,
-    run: () => Effect.succeed({ taskId: "t-0" as never, status: "pending" }),
-    stop: () => Effect.succeed(undefined),
-    getOutput: () => Effect.succeed(undefined),
-    addDep: () => Effect.void,
-    removeDep: () => Effect.void,
-    getDeps: () => Effect.succeed([]),
-  })
-
-  return Layer.mergeAll(
-    Storage.Test(),
-    EventStore.Test(),
+  const baseLayer = Layer.mergeAll(
+    Storage.TestWithSql(),
+    EventStore.Memory,
     ExtensionRegistry.fromResolved(resolveExtensions(allExtensions)),
-    ExtensionStateRuntime.fromExtensions(allExtensions),
     ExtensionTurnControl.Test(),
     subagentRunnerLayer,
     PromptPresenter.Test(),
@@ -324,8 +308,25 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     HandoffHandler.Test(["confirm"]),
     AskUserHandler.Test([["yes"]]),
     AgentLoop.Test(),
-    taskServiceLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Skills.Test(),
   )
+  const baseLayerAny: Layer.Layer<never, never, object> = baseLayer
+
+  const contributedLayers: Array<Layer.Layer<never, never, object>> = extensionSetups.flatMap(
+    (ext) =>
+      ext.setup.layer === undefined ? [] : [Layer.provideMerge(ext.setup.layer, baseLayerAny)],
+  )
+
+  let extensionLayer: Layer.Layer<never, never, object> | undefined
+  for (const layer of contributedLayers) {
+    extensionLayer = extensionLayer === undefined ? layer : Layer.merge(extensionLayer, layer)
+  }
+
+  return extensionLayer === undefined
+    ? Layer.merge(baseLayerAny, ExtensionStateRuntime.fromExtensions(allExtensions))
+    : Layer.merge(
+        Layer.merge(baseLayerAny, extensionLayer),
+        ExtensionStateRuntime.fromExtensions(allExtensions),
+      )
 }

@@ -16,6 +16,8 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { AUTO_EXTENSION_ID } from "@gent/core/extensions/auto"
+import { AutoProtocol } from "@gent/core/extensions/auto-protocol"
 
 const sessionId = "auto-e2e-session" as SessionId
 const branchId = "auto-e2e-branch" as BranchId
@@ -47,17 +49,11 @@ const runE2ETest = (
 
     yield* Effect.gen(function* () {
       const stateRuntime = yield* ExtensionStateRuntime
-      yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+      yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
-      yield* stateRuntime.handleIntent(
-        sessionId,
-        "auto",
-        { _tag: "StartAuto", goal: "Fix the bug" },
-        0,
-        branchId,
-      )
+      yield* stateRuntime.send(sessionId, AutoProtocol.StartAuto({ goal: "Fix the bug" }), branchId)
       yield* test(controls)
     }).pipe(Effect.provide(e2eLayer))
   })
@@ -82,7 +78,7 @@ describe("Auto extension E2E", () => {
           yield* agentLoop.run(makeMessage("begin"))
 
           const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-          const autoSnapshot = snapshots.find((s) => s.extensionId === "auto")
+          const autoSnapshot = snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
           if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
           expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
           expect(yield* controls.callCount).toBe(3)
@@ -126,7 +122,7 @@ describe("Auto extension E2E", () => {
           yield* agentLoop.run(makeMessage("begin"))
 
           const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-          const autoSnapshot = snapshots.find((s) => s.extensionId === "auto")
+          const autoSnapshot = snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
           if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
           expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
           expect(yield* controls.callCount).toBe(7)
@@ -208,15 +204,13 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* ExtensionStateRuntime
 
-        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
-        yield* stateRuntime.handleIntent(
+        yield* stateRuntime.send(
           sessionId,
-          "auto",
-          { _tag: "StartAuto", goal: "Fix the bug" },
-          0,
+          AutoProtocol.StartAuto({ goal: "Fix the bug" }),
           branchId,
         )
 
@@ -230,7 +224,7 @@ describe("Auto extension E2E", () => {
         }
 
         const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-        const autoSnapshot = snapshots.find((s) => s.extensionId === "auto")
+        const autoSnapshot = snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
         if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
         expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
@@ -255,15 +249,13 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* ExtensionStateRuntime
 
-        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
-        yield* stateRuntime.handleIntent(
+        yield* stateRuntime.send(
           sessionId,
-          "auto",
-          { _tag: "StartAuto", goal: "Verify phases" },
-          0,
+          AutoProtocol.StartAuto({ goal: "Verify phases" }),
           branchId,
         )
 
@@ -275,7 +267,7 @@ describe("Auto extension E2E", () => {
 
         // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked
         const midSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-        const midAuto = midSnapshots.find((s) => s.extensionId === "auto")
+        const midAuto = midSnapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
         if (midAuto === undefined) throw new Error("mid-sequence auto snapshot not found")
         const midModel = midAuto.model as { active: boolean; phase?: string }
         expect(midModel.active).toBe(true)
@@ -289,7 +281,7 @@ describe("Auto extension E2E", () => {
 
         // Final state: auto is inactive
         const finalSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-        const finalAuto = finalSnapshots.find((s) => s.extensionId === "auto")
+        const finalAuto = finalSnapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
         if (finalAuto === undefined) throw new Error("final auto snapshot not found")
         expect((finalAuto.model as { active: boolean }).active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
@@ -323,15 +315,13 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* ExtensionStateRuntime
 
-        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
-        yield* stateRuntime.handleIntent(
+        yield* stateRuntime.send(
           sessionId,
-          "auto",
-          { _tag: "StartAuto", goal: "Test handoff dedup" },
-          0,
+          AutoProtocol.StartAuto({ goal: "Test handoff dedup" }),
           branchId,
         )
 
@@ -376,15 +366,13 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* ExtensionStateRuntime
 
-        yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
-        yield* stateRuntime.handleIntent(
+        yield* stateRuntime.send(
           sessionId,
-          "auto",
-          { _tag: "StartAuto", goal: "Verify no direct handoff" },
-          0,
+          AutoProtocol.StartAuto({ goal: "Verify no direct handoff" }),
           branchId,
         )
 
@@ -420,15 +408,13 @@ describe("Auto extension E2E", () => {
             const agentLoop = yield* AgentLoop
             const stateRuntime = yield* ExtensionStateRuntime
 
-            yield* stateRuntime.reduce(new SessionStarted({ sessionId, branchId }), {
+            yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
               sessionId,
               branchId,
             })
-            yield* stateRuntime.handleIntent(
+            yield* stateRuntime.send(
               sessionId,
-              "auto",
-              { _tag: "StartAuto", goal: "Threshold handoff test" },
-              0,
+              AutoProtocol.StartAuto({ goal: "Threshold handoff test" }),
               branchId,
             )
 

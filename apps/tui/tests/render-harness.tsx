@@ -113,7 +113,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       getContent: () => noRpcError(null),
     },
     extension: {
-      sendIntent: () => noRpcError(undefined),
+      send: () => noRpcError(undefined),
+      ask: () => noRpcError(undefined),
     },
     actor: {
       sendUserMessage: () => noRpcError(undefined),

@@ -1,7 +1,9 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import type { TaskStatus } from "../domain/task.js"
-import { TaskService } from "../runtime/task-service.js"
+import type { TaskId } from "../domain/ids.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { TaskProtocol } from "../extensions/task-tools-protocol.js"
 
 export const TaskUpdateParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to update" }),
@@ -20,19 +22,19 @@ export const TaskUpdateTool = defineTool({
   description:
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TaskUpdateParams,
-  execute: Effect.fn("TaskUpdateTool.execute")(function* (params) {
-    const taskService = yield* TaskService
-
-    const fields: Partial<{ status: TaskStatus; description: string | null }> = {}
-    if (params.status !== undefined) fields.status = params.status
-    if (params.description !== undefined) fields.description = params.description
-
-    const updated = yield* taskService.update(
-      params.taskId as Parameters<typeof taskService.update>[0],
-      fields,
+  execute: Effect.fn("TaskUpdateTool.execute")(function* (params, ctx) {
+    const runtime = yield* ExtensionStateRuntime
+    const updated = yield* runtime.ask(
+      ctx.sessionId,
+      TaskProtocol.UpdateTask({
+        taskId: params.taskId as TaskId,
+        status: params.status as TaskStatus | undefined,
+        description: params.description,
+      }),
+      ctx.branchId,
     )
 
-    if (updated === undefined) {
+    if (updated == null) {
       return { error: `Task not found: ${params.taskId}` }
     }
 

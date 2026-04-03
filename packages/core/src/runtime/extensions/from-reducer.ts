@@ -1,24 +1,24 @@
 /**
- * fromReducer — wraps a pure reducer into an ExtensionActor.
- *
- * This is the simple-path constructor for extensions that don't need
- * full effect-machine actors. The reducer is pure (state, event, ctx) → ReduceResult,
- * and effects are interpreted by the framework.
+ * fromReducer — wraps a pure reducer into a mailbox-backed ExtensionRef.
  */
 
-import { Effect, Ref, Schema } from "effect"
+import { Effect, Ref, Schema, Semaphore } from "effect"
 import type { AgentEvent } from "../../domain/event.js"
 import type {
-  ExtensionActor,
   ExtensionDeriveContext,
   ExtensionEffect,
   ExtensionProjection,
   ExtensionProjectionConfig,
   ExtensionReduceContext,
   ReduceResult,
-  SpawnActor,
+  RequestResult,
+  SpawnExtensionRef,
 } from "../../domain/extension.js"
 import type { SessionId, BranchId } from "../../domain/ids.js"
+import type {
+  AnyExtensionCommandMessage,
+  AnyExtensionRequestMessage,
+} from "../../domain/extension-protocol.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import {
@@ -27,7 +27,13 @@ import {
   makePersistCodec,
 } from "./extension-actor-shared.js"
 
-export interface FromReducerConfig<State, Intent = void, InitR = never> {
+export interface FromReducerConfig<
+  State,
+  Message = never,
+  Request = never,
+  InitR = never,
+  RequestR = never,
+> {
   readonly id: string
   readonly initial: State
   readonly reduce: (
@@ -35,20 +41,17 @@ export interface FromReducerConfig<State, Intent = void, InitR = never> {
     event: AgentEvent,
     ctx: ExtensionReduceContext,
   ) => ReduceResult<State>
-  /** Derive projection from state. ctx is provided for turn-time (prompt assembly),
-   *  undefined for UI snapshots. Extensions can check ctx to return different projections. */
   readonly derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
-  readonly handleIntent?: (state: State, intent: Intent) => ReduceResult<State>
-  readonly intentSchema?: Schema.Schema<Intent>
-  /** Schema for the uiModel returned by derive — used for transport encoding/validation */
+  readonly receive?: (state: State, message: Message) => ReduceResult<State>
+  readonly messageSchema?: Schema.Schema<Message>
+  readonly request?: (
+    state: State,
+    message: Request,
+  ) => Effect.Effect<RequestResult<State, unknown>, never, RequestR>
+  readonly requestSchema?: Schema.Schema<Request>
   readonly uiModelSchema?: Schema.Schema<unknown>
-  /** Schema for serializing/deserializing state to/from JSON (required for persistence) */
   readonly stateSchema?: Schema.Schema<State>
-  /** If true, state is persisted on Persist effect and hydrated on init */
   readonly persist?: boolean
-  /** Custom init logic — runs after persistence hydration, receives stateRef for mutation.
-   *  Runs in the ambient runtime context — extension layer services (from setup.layer) are available.
-   *  Use the InitR generic to declare required services (e.g. fromReducer<S, I, MyService>). */
   readonly onInit?: (ctx: {
     sessionId: SessionId
     stateRef: Ref.Ref<State>
@@ -57,25 +60,28 @@ export interface FromReducerConfig<State, Intent = void, InitR = never> {
 }
 
 export interface FromReducerResult {
-  readonly spawnActor: SpawnActor
+  readonly spawn: SpawnExtensionRef
   readonly projection?: ExtensionProjectionConfig
 }
 
-/**
- * Create a SpawnActor factory + projection config from a pure reducer config.
- *
- * Services (ExtensionTurnControl) are acquired at spawn
- * time and closed over — the returned actor's methods have no service requirements.
- */
-export const fromReducer = <State, Intent = void, InitR = never>(
-  config: FromReducerConfig<State, Intent, InitR>,
+export const fromReducer = <
+  State,
+  Message = never,
+  Request = never,
+  InitR = never,
+  RequestR = never,
+>(
+  config: FromReducerConfig<State, Message, Request, InitR, RequestR>,
 ): FromReducerResult => {
-  const spawnActor: SpawnActor = (ctx) =>
+  const spawn: SpawnExtensionRef = (ctx) =>
     Effect.gen(function* () {
       const turnControl = yield* ExtensionTurnControl
       const storage = yield* Effect.serviceOption(Storage)
+      const services = yield* Effect.services<InitR | RequestR>()
       const stateRef = yield* Ref.make<State>(config.initial)
       const versionRef = yield* Ref.make(0)
+      const startedRef = yield* Ref.make(false)
+      const mailbox = yield* Semaphore.make(1)
 
       const codec =
         config.stateSchema !== undefined ? makePersistCodec(config.stateSchema) : undefined
@@ -107,12 +113,30 @@ export const fromReducer = <State, Intent = void, InitR = never>(
           config.persist === true ? persistState : undefined,
         ).pipe(Effect.catchDefect(() => Effect.void))
 
-      const actor: ExtensionActor = {
-        id: config.id,
+      const applyResult = (
+        current: State,
+        result: ReduceResult<State>,
+        branchId: BranchId | undefined,
+      ) =>
+        Effect.gen(function* () {
+          const changed = result.state !== current
+          if (changed) {
+            yield* Ref.set(stateRef, result.state)
+            yield* Ref.update(versionRef, (version) => version + 1)
+            if (config.persist === true) {
+              yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
+            }
+          }
+          if (result.effects !== undefined && result.effects.length > 0) {
+            yield* runEffects(result.effects, branchId)
+          }
+          return changed
+        })
 
-        // Hydrate persisted state on init.
-        // InitR services are provided in the ambient runtime (from extension's setup.layer).
-        init: Effect.gen(function* () {
+      const start = mailbox.withPermits(1)(
+        Effect.gen(function* () {
+          const started = yield* Ref.get(startedRef)
+          if (started) return
           if (config.persist === true && storage._tag === "Some" && codec !== undefined) {
             const loaded = yield* storage.value
               .loadExtensionState({ sessionId: ctx.sessionId, extensionId: config.id })
@@ -127,7 +151,6 @@ export const fromReducer = <State, Intent = void, InitR = never>(
               }
             }
           }
-          // Custom init hook — InitR services available in ambient context
           if (config.onInit !== undefined) {
             let sessionCwd: string | undefined
             if (storage._tag === "Some") {
@@ -136,76 +159,79 @@ export const fromReducer = <State, Intent = void, InitR = never>(
                 .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
               sessionCwd = session?.cwd ?? undefined
             }
-            yield* config
-              .onInit({ sessionId: ctx.sessionId, stateRef, sessionCwd })
-              .pipe(Effect.catchEager(() => Effect.void))
+            yield* config.onInit({ sessionId: ctx.sessionId, stateRef, sessionCwd }).pipe(
+              Effect.provideServices(services),
+              Effect.catchEager(() => Effect.void),
+            )
           }
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as any as Effect.Effect<void>,
+          yield* Ref.set(startedRef, true)
+        }),
+      )
 
-        handleEvent: (event: AgentEvent, reduceCtx: ExtensionReduceContext) =>
-          Effect.gen(function* () {
-            // Atomic read-reduce-write: Ref.modify returns the result, writes the new state
-            const { changed, effects } = yield* Ref.modify(stateRef, (current) => {
-              const result = config.reduce(current, event, reduceCtx)
-              const didChange = result.state !== current
-              return [{ changed: didChange, effects: result.effects }, result.state]
-            })
-            if (changed) {
-              yield* Ref.update(versionRef, (v) => v + 1)
-              // Auto-persist on state change when persist: true
-              if (config.persist === true) {
-                yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
-              }
-            }
-            if (effects !== undefined && effects.length > 0) {
-              // Use current call-time branchId, not spawn-time branchId
-              yield* runEffects(effects, reduceCtx.branchId)
-            }
-            return changed
-          }),
+      yield* start
 
-        handleIntent: (() => {
-          const handler = config.handleIntent
-          if (handler === undefined) return undefined
-          return (intent: unknown, branchId?: BranchId) =>
+      return {
+        id: config.id,
+        start,
+
+        publish: (event, reduceCtx) =>
+          mailbox.withPermits(1)(
             Effect.gen(function* () {
-              let validated: Intent = intent as Intent
-              if (config.intentSchema !== undefined) {
-                validated = yield* Schema.decodeUnknownEffect(config.intentSchema as Schema.Any)(
-                  intent,
-                ).pipe(Effect.orDie)
-              }
+              const current = yield* Ref.get(stateRef)
+              const result = config.reduce(current, event, reduceCtx)
+              return yield* applyResult(current, result, reduceCtx.branchId)
+            }),
+          ),
 
-              const { changed, effects } = yield* Ref.modify(stateRef, (current) => {
-                const result = handler(current, validated)
-                const didChange = result.state !== current
-                return [{ changed: didChange, effects: result.effects }, result.state]
-              })
-              if (changed) {
-                yield* Ref.update(versionRef, (v) => v + 1)
-                if (config.persist === true) {
-                  yield* persistState().pipe(Effect.catchDefect(() => Effect.void))
-                }
-              }
-              if (effects !== undefined && effects.length > 0) {
-                // Use call-time branchId, not spawn-time branchId
-                yield* runEffects(effects, branchId)
-              }
-              return changed
-            })
-        })(),
+        send: (message: AnyExtensionCommandMessage, branchId?: BranchId) => {
+          const receive = config.receive
+          if (receive === undefined) return Effect.void
+          return mailbox.withPermits(1)(
+            Effect.gen(function* () {
+              const decoded =
+                config.messageSchema !== undefined
+                  ? yield* Schema.decodeUnknownEffect(config.messageSchema as Schema.Any)(
+                      message,
+                    ).pipe(Effect.orDie)
+                  : (message as Message)
+              const current = yield* Ref.get(stateRef)
+              const result = receive(current, decoded)
+              yield* applyResult(current, result, branchId)
+            }),
+          )
+        },
 
-        getState: Effect.gen(function* () {
+        ask: (message: AnyExtensionRequestMessage, branchId?: BranchId) => {
+          const request = config.request
+          if (request === undefined) {
+            return Effect.die(
+              new Error(`extension "${config.id}" does not handle request "${message._tag}"`),
+            )
+          }
+          return mailbox.withPermits(1)(
+            Effect.gen(function* () {
+              const decoded =
+                config.requestSchema !== undefined
+                  ? yield* Schema.decodeUnknownEffect(config.requestSchema as Schema.Any)(
+                      message,
+                    ).pipe(Effect.orDie)
+                  : (message as Request)
+              const current = yield* Ref.get(stateRef)
+              const result = yield* request(current, decoded).pipe(Effect.provideServices(services))
+              yield* applyResult(current, result, branchId)
+              return result.reply as never
+            }),
+          )
+        },
+
+        snapshot: Effect.gen(function* () {
           const state = yield* Ref.get(stateRef)
-          const version = yield* Ref.get(versionRef)
-          return { state, version }
+          const epoch = yield* Ref.get(versionRef)
+          return { state, epoch }
         }),
 
-        terminate: Effect.void,
+        stop: Effect.void,
       }
-
-      return actor
     })
 
   const projection = buildProjectionConfig<State>({
@@ -213,5 +239,5 @@ export const fromReducer = <State, Intent = void, InitR = never>(
     uiModelSchema: config.uiModelSchema,
   })
 
-  return { spawnActor, projection }
+  return { spawn, projection }
 }

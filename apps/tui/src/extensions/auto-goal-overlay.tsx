@@ -7,9 +7,9 @@
 
 import { createSignal } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
+import { AutoProtocol } from "@gent/core/extensions/auto-protocol.js"
 import { ChromePanel } from "../components/chrome-panel"
 import { useScopedKeyboard } from "../keyboard/context"
-import { useExtensionUI } from "./context"
 import { useClient } from "../client/context"
 import { useTheme } from "../theme/context"
 
@@ -17,7 +17,6 @@ const PANEL_WIDTH = 60
 const PANEL_HEIGHT = 5
 
 export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
-  const ext = useExtensionUI()
   const clientCtx = useClient()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -29,14 +28,10 @@ export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
     const sid = clientCtx.session()?.sessionId
     const bid = clientCtx.session()?.branchId
     if (sid === undefined) return
-    const snap = ext.snapshots().get("auto")
-    const epoch = snap?.epoch ?? 0
     clientCtx.runtime.cast(
-      clientCtx.client.extension.sendIntent({
+      clientCtx.client.extension.send({
         sessionId: sid,
-        extensionId: "auto",
-        intent: { _tag: "StartAuto", goal: text },
-        epoch,
+        message: AutoProtocol.StartAuto({ goal: text }),
         branchId: bid,
       }),
     )
