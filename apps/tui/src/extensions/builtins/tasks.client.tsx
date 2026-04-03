@@ -3,10 +3,11 @@ import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import { createSignal, createMemo } from "solid-js"
 import type { Task } from "@gent/core/domain/task.js"
+import { TASK_TOOLS_EXTENSION_ID } from "@gent/core/extensions/task-tools-protocol.js"
 import { useScopedKeyboard } from "../../keyboard/context"
 import { useExtensionUI } from "../context"
 
-const EXTENSION_ID = "@gent/task-tools"
+const EXTENSION_ID = TASK_TOOLS_EXTENSION_ID
 
 export default {
   id: "@gent/tasks",

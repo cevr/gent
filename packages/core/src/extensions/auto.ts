@@ -27,6 +27,7 @@ import type { AgentEvent } from "../domain/event.js"
 import type { SessionId } from "../domain/ids.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { extension, fromMachine } from "./api.js"
+import { AUTO_EXTENSION_ID, AutoProtocol } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "../tools/auto-checkpoint.js"
 import { AutoJournal, type CheckpointRow } from "./auto-journal.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
@@ -39,7 +40,7 @@ import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 
 // ── Constants ──
 
-export const AUTO_EXTENSION_ID = "@gent/auto"
+export { AUTO_EXTENSION_ID } from "./auto-protocol.js"
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
 const COUNSEL_TOOL = "counsel"
 const DEFAULT_MAX_ITERATIONS = 10
@@ -838,6 +839,7 @@ const autoHandoffInterceptor = defineInterceptor(
 // ── Extension ──
 
 export const AutoExtension = extension("@gent/auto", (ext) => {
+  ext.protocol(AutoProtocol)
   ext.actor(autoActor)
   ext.tool(AutoCheckpointTool)
   ext.interceptor(journalInterceptor)

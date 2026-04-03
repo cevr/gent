@@ -4,6 +4,7 @@ import { AgentName, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import { AuthProviderInfo } from "../domain/auth-guard.js"
 import { EventEnvelope, HandoffDecision, PromptDecision } from "../domain/event.js"
+import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
@@ -382,14 +383,14 @@ export { QueueSnapshot }
 
 export const SendExtensionMessageInput = Schema.Struct({
   sessionId: SessionId,
-  message: Schema.Unknown,
+  message: ExtensionMessageEnvelope,
   branchId: Schema.optional(BranchId),
 })
 export type SendExtensionMessageInput = typeof SendExtensionMessageInput.Type
 
 export const AskExtensionMessageInput = Schema.Struct({
   sessionId: SessionId,
-  message: Schema.Unknown,
+  message: ExtensionMessageEnvelope,
   branchId: Schema.optional(BranchId),
 })
 export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type

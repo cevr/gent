@@ -12,8 +12,7 @@ import type { AgentEvent } from "../domain/event.js"
 import type { TaskStatus } from "../domain/task.js"
 import type { TaskId } from "../domain/ids.js"
 import type { ExtensionReduceContext, ReduceResult } from "../domain/extension.js"
-import type { TaskOutputSummary, TaskProtocol } from "./task-tools-protocol.js"
-import { TASK_TOOLS_EXTENSION_ID } from "./task-tools-protocol.js"
+import { TASK_TOOLS_EXTENSION_ID, TaskProtocol } from "./task-tools-protocol.js"
 
 // ── Task list actor — projects task state as extension UI snapshot ──
 
@@ -134,7 +133,7 @@ const taskListActor = fromReducer<
         case "CreateTask":
           return { state: _state, reply: yield* taskService.create(message) }
         case "GetTask":
-          return { state: _state, reply: yield* taskService.get(message.taskId) }
+          return { state: _state, reply: (yield* taskService.get(message.taskId)) ?? null }
         case "ListTasks":
           return {
             state: _state,
@@ -144,19 +143,19 @@ const taskListActor = fromReducer<
           const { taskId, ...fields } = message
           return {
             state: _state,
-            reply: yield* taskService.update(taskId, fields).pipe(Effect.orDie),
+            reply: (yield* taskService.update(taskId, fields).pipe(Effect.orDie)) ?? null,
           }
         }
         case "RunTask":
           return { state: _state, reply: yield* taskService.run(message.taskId) }
         case "StopTask":
-          return { state: _state, reply: yield* taskService.stop(message.taskId) }
+          return { state: _state, reply: (yield* taskService.stop(message.taskId)) ?? null }
         case "DeleteTask":
           yield* taskService.remove(message.taskId)
           return { state: _state, reply: null }
         case "GetTaskOutput": {
           const output = yield* taskService.getOutput(message.taskId)
-          const reply: typeof TaskOutputSummary.Type | null =
+          const reply =
             output === undefined
               ? null
               : {
@@ -204,6 +203,7 @@ const taskListActor = fromReducer<
 // ── Extension ──
 
 export const TaskToolsExtension = extension("@gent/task-tools", (ext) => {
+  ext.protocol(TaskProtocol)
   ext.tool(TaskCreateTool)
   ext.tool(TaskListTool)
   ext.tool(TaskGetTool)

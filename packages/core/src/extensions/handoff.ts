@@ -129,6 +129,7 @@ const autoHandoffInterceptor = defineInterceptor(
 )
 
 export const HandoffExtension = extension(EXTENSION_ID, (ext) => {
+  ext.protocol(HandoffProtocol)
   ext.tool(HandoffTool)
   ext.interactionHandler({ type: "handoff" as const, layer: HandoffHandler.Live })
   ext.interceptor(autoHandoffInterceptor)

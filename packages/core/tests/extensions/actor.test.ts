@@ -7,6 +7,7 @@ import type {
   LoadedExtension,
   ReduceResult,
 } from "@gent/core/domain/extension"
+import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
@@ -112,7 +113,7 @@ describe("fromReducer", () => {
     }),
   )
 
-  it.live("handleIntent effects target correct branch", () =>
+  it.live("send effects target correct branch", () =>
     Effect.gen(function* () {
       const followUps = yield* Ref.make<string[]>([])
       const spawnBranch = "branch-spawn" as BranchId
@@ -181,7 +182,7 @@ describe("fromReducer", () => {
     }).pipe(Effect.provide(testLayer))
   })
 
-  it.live("handleIntent validates schema and updates state", () =>
+  it.live("send validates schema and updates state", () =>
     Effect.gen(function* () {
       const IntentSchema = Schema.Struct({
         action: Schema.Literals(["activate", "deactivate"]),
@@ -353,6 +354,97 @@ describe("ExtensionStateRuntime — actor hosting", () => {
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
       yield* runtime.terminateAll(sessionId)
       expect(terminated).toContain("terminable")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("ask decodes request and reply via registered protocol", () => {
+    const Increment = ExtensionMessage.reply(
+      "counter",
+      "Increment",
+      { delta: Schema.Number },
+      Schema.Struct({ count: Schema.Number }),
+    )
+
+    const { spawn } = fromReducer<{ count: number }, never, ReturnType<typeof Increment>>({
+      id: "counter",
+      initial: { count: 0 },
+      reduce: (state) => ({ state }),
+      request: (state, message) =>
+        Effect.succeed({
+          state: { count: state.count + message.delta },
+          reply: { count: state.count + message.delta },
+        }),
+    })
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "counter" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          spawn,
+          protocols: [Increment],
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      const reply = yield* runtime.ask(sessionId, Increment({ delta: 2 }), branchId)
+      expect(reply).toEqual({ count: 2 })
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("ask rejects invalid replies against the registered protocol", () => {
+    const GetCount = ExtensionMessage.reply(
+      "counter",
+      "GetCount",
+      {},
+      Schema.Struct({ count: Schema.Number }),
+    )
+
+    const { spawn } = fromReducer<{ count: number }, never, ReturnType<typeof GetCount>>({
+      id: "counter",
+      initial: { count: 0 },
+      reduce: (state) => ({ state }),
+      request: (state) =>
+        Effect.succeed({
+          state,
+          reply: { count: "not-a-number" } as unknown,
+        }),
+    })
+
+    const extensions: LoadedExtension[] = [
+      {
+        manifest: { id: "counter" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        setup: {
+          spawn,
+          protocols: [GetCount],
+        },
+      },
+    ]
+
+    const layer = Layer.mergeAll(
+      ExtensionStateRuntime.Live(extensions),
+      EventStore.Memory,
+      testLayer,
+    )
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      const exit = yield* runtime.ask(sessionId, GetCount(), branchId).pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(String(exit.cause)).toContain("Expected number")
+      }
     }).pipe(Effect.provide(layer))
   })
 })

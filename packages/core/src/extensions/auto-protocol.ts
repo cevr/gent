@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { ExtensionMessage } from "../domain/extension-protocol.js"
-import { AUTO_EXTENSION_ID } from "./auto.js"
+
+export const AUTO_EXTENSION_ID = "@gent/auto"
 
 export const AutoProtocol = {
   StartAuto: ExtensionMessage(AUTO_EXTENSION_ID, "StartAuto", {

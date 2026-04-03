@@ -53,6 +53,10 @@ import {
   type SpawnExtensionRef,
 } from "../domain/extension.js"
 import {
+  type ExtensionProtocol,
+  listExtensionProtocolDefinitions,
+} from "../domain/extension-protocol.js"
+import {
   defineTool,
   ToolDefinitionBrand,
   type ToolAction,
@@ -118,9 +122,12 @@ export {
 } from "../domain/extension.js"
 export {
   ExtensionMessage,
+  ExtensionMessageEnvelope,
   getExtensionMessageMetadata,
   getExtensionReplySchema,
   isExtensionRequestMessage,
+  listExtensionProtocolDefinitions,
+  type ExtensionProtocol,
   type ExtensionCommandDefinition,
   type ExtensionCommandMessage,
   type ExtensionRequestDefinition,
@@ -346,6 +353,8 @@ export interface ExtensionBuilder {
   interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
   /** Register an actor from fromReducer() or fromMachine(). Mutually exclusive with state(). */
   actor(result: ActorResult): void
+  /** Register public protocol definitions for this extension boundary. */
+  protocol(protocol: ExtensionProtocol): void
   /** Provide a service Layer. Multiple calls merge. */
   layer(layer: Layer.Layer<never, never, object>): void
   /** Register an AI model provider. */
@@ -661,6 +670,10 @@ export const extension = (
       const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
       const busSubscriptions: BusSubscriptionEntry[] = []
       const layers: Array<Layer.Layer<never, never, object>> = []
+      const protocols = new Map<
+        string,
+        ReturnType<typeof listExtensionProtocolDefinitions>[number]
+      >()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let stateConfig: SimpleStateConfig<any> | undefined
       let actorResult: ActorResult | undefined
@@ -799,6 +812,17 @@ export const extension = (
           actorResult = result
         },
 
+        protocol: (protocol) => {
+          for (const definition of listExtensionProtocolDefinitions(protocol)) {
+            if (definition.extensionId !== id) {
+              throw new Error(
+                `extension "${id}": protocol definition "${definition._tag}" belongs to "${definition.extensionId}"`,
+              )
+            }
+            protocols.set(definition._tag, definition)
+          }
+        },
+
         layer: (l) => {
           layers.push(l)
         },
@@ -858,6 +882,7 @@ export const extension = (
       return {
         ...(tools.length > 0 ? { tools } : {}),
         ...(agents.length > 0 ? { agents } : {}),
+        ...(protocols.size > 0 ? { protocols: [...protocols.values()] } : {}),
         ...(promptSections.length > 0 ? { promptSections } : {}),
         ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),

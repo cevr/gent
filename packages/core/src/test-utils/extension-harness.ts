@@ -110,23 +110,23 @@ export const expectNoChange = <T>(before: T, after: T): void => {
  * Wraps the reduce/derive/receive functions so tests can call them
  * without Effect runtime — useful for pure state transition testing.
  */
-export interface ActorHarnessResult<State, Intent = void> {
+export interface ActorHarnessResult<State, Message = void> {
   readonly reduce: (
     state: State,
     event: AgentEvent,
     ctx?: ExtensionReduceContext,
   ) => ReduceResult<State>
   readonly derive: (state: State) => ExtensionProjection
-  readonly intent: Intent extends void
+  readonly receive: Message extends void
     ? undefined
-    : (state: State, i: Intent) => ReduceResult<State>
+    : (state: State, message: Message) => ReduceResult<State>
   readonly ctx: ExtensionReduceContext
   readonly deriveCtx: ExtensionDeriveContext
   readonly events: EventFactories
   readonly initial: State
 }
 
-export interface ActorHarnessConfig<State, Intent = void> {
+export interface ActorHarnessConfig<State, Message = void> {
   readonly id: string
   readonly initial: State
   readonly reduce: (
@@ -135,22 +135,19 @@ export interface ActorHarnessConfig<State, Intent = void> {
     ctx: ExtensionReduceContext,
   ) => ReduceResult<State>
   readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
-  readonly receive?: (state: State, intent: Intent) => ReduceResult<State>
-  readonly handleIntent?: (state: State, intent: Intent) => ReduceResult<State>
+  readonly receive?: (state: State, message: Message) => ReduceResult<State>
 }
 
-export function createActorHarness<State, Intent>(
-  config: ActorHarnessConfig<State, Intent> & {
-    handleIntent: (state: State, intent: Intent) => ReduceResult<State>
-  },
+export function createActorHarness<State, Message>(
+  config: ActorHarnessConfig<State, Message>,
   options?: ActorHarnessOptions,
-): ActorHarnessResult<State, Intent>
+): ActorHarnessResult<State, Message>
 export function createActorHarness<State>(
   config: ActorHarnessConfig<State>,
   options?: ActorHarnessOptions,
 ): ActorHarnessResult<State>
-export function createActorHarness<State, Intent = void>(
-  config: ActorHarnessConfig<State, Intent>,
+export function createActorHarness<State, Message = void>(
+  config: ActorHarnessConfig<State, Message>,
   options?: ActorHarnessOptions,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): ActorHarnessResult<State, any> {
@@ -177,17 +174,17 @@ export function createActorHarness<State, Intent = void>(
   const derive = (state: State): ExtensionProjection =>
     config.derive !== undefined ? config.derive(state, deriveCtx) : {}
 
-  const handler = config.receive ?? config.handleIntent
-  const intent =
-    handler !== undefined
+  const receiveHandler = config.receive
+  const receive =
+    receiveHandler !== undefined
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (state: State, i: any): ReduceResult<State> => handler(state, i)
+        (state: State, message: any): ReduceResult<State> => receiveHandler(state, message)
       : undefined
 
   return {
     reduce,
     derive,
-    intent,
+    receive,
     ctx,
     deriveCtx,
     events,

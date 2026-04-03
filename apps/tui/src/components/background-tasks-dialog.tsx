@@ -9,7 +9,7 @@
  */
 
 import { createSignal, createEffect, Show, For } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { Task } from "@gent/core/domain/task.js"
 import type { TaskId } from "@gent/core/domain/ids.js"
@@ -78,19 +78,29 @@ export function BackgroundTasksDialog(props: {
     if (sid === undefined) return
     setDetailError(false)
     cast(
-      clientCtx.client.task.output({ sessionId: sid, taskId }).pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            setDetailMessages(result.messages ?? [])
-          }),
+      clientCtx.client.extension
+        .ask({
+          sessionId: sid,
+          message: TaskProtocol.GetTaskOutput({ taskId }),
+        })
+        .pipe(
+          Effect.flatMap((reply) =>
+            Effect.sync(() =>
+              Schema.decodeUnknownSync(TaskProtocol.GetTaskOutput.replyDecoder)(reply),
+            ),
+          ),
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              setDetailMessages(result?.messages ?? [])
+            }),
+          ),
+          Effect.catchEager(() =>
+            Effect.sync(() => {
+              setDetailError(true)
+              setDetailMessages([])
+            }),
+          ),
         ),
-        Effect.catchEager(() =>
-          Effect.sync(() => {
-            setDetailError(true)
-            setDetailMessages([])
-          }),
-        ),
-      ),
     )
   }
 

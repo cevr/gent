@@ -9,10 +9,11 @@
 import { Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import type { RGBA } from "@opentui/core"
+import { PLAN_EXTENSION_ID } from "@gent/core/extensions/plan.js"
 import { useExtensionUI } from "./context"
 import { useTheme } from "../theme/context"
 
-const EXTENSION_ID = "plan"
+const EXTENSION_ID = PLAN_EXTENSION_ID
 
 const PlanUiModel = Schema.Struct({
   mode: Schema.Literals(["normal", "plan", "executing"]),

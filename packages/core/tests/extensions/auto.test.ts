@@ -26,7 +26,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 // ── Pure reducer tests ──
 
 describe("Auto pure reducer", () => {
-  const { reduce, derive, intent, events } = createActorHarness(AutoActorConfig)
+  const { reduce, derive, receive, events } = createActorHarness(AutoActorConfig)
 
   // ── State machine contracts ──
 
@@ -35,8 +35,8 @@ describe("Auto pure reducer", () => {
       expect(AutoActorConfig.initial._tag).toBe("Inactive")
     })
 
-    test("StartAuto intent → Working { iteration: 1 }", () => {
-      const result = intent!({ _tag: "Inactive" }, { _tag: "StartAuto", goal: "fix all bugs" })
+    test("StartAuto receive → Working { iteration: 1 }", () => {
+      const result = receive!({ _tag: "Inactive" }, { _tag: "StartAuto", goal: "fix all bugs" })
       expect(result.state._tag).toBe("Working")
       if (result.state._tag === "Working") {
         expect(result.state.iteration).toBe(1)
@@ -49,7 +49,7 @@ describe("Auto pure reducer", () => {
     })
 
     test("StartAuto with custom maxIterations", () => {
-      const result = intent!(
+      const result = receive!(
         { _tag: "Inactive" },
         { _tag: "StartAuto", goal: "audit", maxIterations: 5 },
       )
@@ -68,7 +68,7 @@ describe("Auto pure reducer", () => {
         metrics: [],
         turnsSinceCheckpoint: 0,
       }
-      const result = intent!(state, { _tag: "StartAuto", goal: "new goal" })
+      const result = receive!(state, { _tag: "StartAuto", goal: "new goal" })
       expect(result.state).toBe(state)
     })
 
@@ -189,7 +189,7 @@ describe("Auto pure reducer", () => {
         metrics: [],
         turnsSinceCheckpoint: 0,
       }
-      const result = intent!(state, { _tag: "CancelAuto" })
+      const result = receive!(state, { _tag: "CancelAuto" })
       expect(result.state._tag).toBe("Inactive")
     })
 
@@ -202,13 +202,13 @@ describe("Auto pure reducer", () => {
         learnings: [],
         metrics: [],
       }
-      const result = intent!(state, { _tag: "CancelAuto" })
+      const result = receive!(state, { _tag: "CancelAuto" })
       expect(result.state._tag).toBe("Inactive")
     })
 
     test("CancelAuto when Inactive → no-op", () => {
       const state: AutoState = { _tag: "Inactive" }
-      const result = intent!(state, { _tag: "CancelAuto" })
+      const result = receive!(state, { _tag: "CancelAuto" })
       expect(result.state).toBe(state)
     })
   })

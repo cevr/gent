@@ -8,6 +8,7 @@ import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { PromptSection } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
+  AnyExtensionMessageDefinition,
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "./extension-protocol.js"
@@ -266,6 +267,7 @@ export interface InteractionHandlerContribution {
 export interface ExtensionSetup {
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   readonly agents?: ReadonlyArray<AgentDefinition>
+  readonly protocols?: ReadonlyArray<AnyExtensionMessageDefinition>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Layer<never, never, object>
   /** Spawn a session-scoped extension ref */

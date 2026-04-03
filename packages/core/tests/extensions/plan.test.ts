@@ -219,7 +219,7 @@ describe("Plan actor", () => {
     )
   })
 
-  describe("handleIntent", () => {
+  describe("send", () => {
     it.live("togglePlan — normal → plan", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
@@ -324,7 +324,7 @@ describe("Plan actor", () => {
 })
 
 describe("Plan pure reducer — executing behavior", () => {
-  const { reduce, derive, intent, events } = createActorHarness(PlanActorConfig)
+  const { reduce, derive, receive, events } = createActorHarness(PlanActorConfig)
 
   test("executing mode — unmatched events preserve state", () => {
     const state: PlanState = {
@@ -394,7 +394,7 @@ describe("Plan pure reducer — executing behavior", () => {
       mode: "plan",
       steps: [{ id: 1, text: "A", status: "pending" }],
     }
-    const result = intent!(state, { _tag: "ExecutePlan" })
+    const result = receive!(state, { _tag: "ExecutePlan" })
     expect(result.state.mode).toBe("executing")
   })
 
@@ -403,7 +403,7 @@ describe("Plan pure reducer — executing behavior", () => {
       mode: "executing",
       steps: [{ id: 1, text: "A", status: "pending" }],
     }
-    const result = intent!(state, { _tag: "TogglePlan" })
+    const result = receive!(state, { _tag: "TogglePlan" })
     expect(result.state.mode).toBe("normal")
   })
 
@@ -418,7 +418,7 @@ describe("Plan pure reducer — executing behavior", () => {
       taskMap: { "t-1": 0, "t-2": 1 },
       planFilePath: "/tmp/plan.md",
     }
-    const result = intent!(state, { _tag: "RefinePlan" })
+    const result = receive!(state, { _tag: "RefinePlan" })
     expect(result.state.mode).toBe("plan")
     expect(result.state.steps).toEqual([])
     expect(result.state.taskMap).toBeUndefined()

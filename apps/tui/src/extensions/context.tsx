@@ -6,7 +6,7 @@
  */
 
 import { createContext, useContext, createSignal, onMount, type Accessor, type JSX } from "solid-js"
-import { Layer, ManagedRuntime, type Effect } from "effect"
+import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
 // @effect-diagnostics nodeBuiltinImport:off
@@ -25,6 +25,7 @@ import type {
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "@gent/core/domain/extension-protocol.js"
+import { getExtensionReplyDecoder } from "@gent/core/domain/extension-protocol.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
@@ -185,12 +186,21 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             if (sid === undefined) {
               throw new Error("Cannot ask extension without an active session")
             }
+            const replyDecoder = getExtensionReplyDecoder(message)
             return clientCtx.runtime.run(
-              clientCtx.client.extension.ask({
-                sessionId: sid,
-                message,
-                branchId: bid,
-              }) as Effect.Effect<ExtractExtensionReply<M>>,
+              clientCtx.client.extension
+                .ask({
+                  sessionId: sid,
+                  message,
+                  branchId: bid,
+                })
+                .pipe(
+                  Effect.flatMap((reply) =>
+                    replyDecoder === undefined
+                      ? Effect.succeed(reply as ExtractExtensionReply<M>)
+                      : Effect.sync(() => Schema.decodeUnknownSync(replyDecoder)(reply)),
+                  ),
+                ),
             )
           },
           getSnapshot: (extensionId) => {

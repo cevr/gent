@@ -282,35 +282,23 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       // -- extension --
       "extension.send": ({ sessionId, message, branchId }) =>
-        extensionStateRuntime
-          .send(sessionId, message as Parameters<typeof extensionStateRuntime.send>[1], branchId)
-          .pipe(
-            Effect.orDie,
-            Effect.tap(() => {
-              if (bus === undefined) return Effect.void
-              const extensionId =
-                typeof message === "object" && message !== null && "extensionId" in message
-                  ? (message as { extensionId: string }).extensionId
-                  : "extension"
-              const messageTag =
-                typeof message === "object" && message !== null && "_tag" in message
-                  ? (message as { _tag: string })._tag
-                  : "message"
-              return bus
-                .emit({
-                  channel: `${extensionId}:${messageTag}`,
-                  payload: message,
-                  sessionId,
-                  branchId,
-                })
-                .pipe(Effect.catchEager(() => Effect.void))
-            }),
-          ),
+        extensionStateRuntime.send(sessionId, message, branchId).pipe(
+          Effect.orDie,
+          Effect.tap(() => {
+            if (bus === undefined) return Effect.void
+            return bus
+              .emit({
+                channel: `${message.extensionId}:${message._tag}`,
+                payload: message,
+                sessionId,
+                branchId,
+              })
+              .pipe(Effect.catchEager(() => Effect.void))
+          }),
+        ),
 
       "extension.ask": ({ sessionId, message, branchId }) =>
-        extensionStateRuntime
-          .ask(sessionId, message as Parameters<typeof extensionStateRuntime.ask>[1], branchId)
-          .pipe(Effect.orDie),
+        extensionStateRuntime.ask(sessionId, message, branchId).pipe(Effect.orDie),
 
       // -- actor --
       "actor.sendUserMessage": (input) => actorProcess.sendUserMessage(input),

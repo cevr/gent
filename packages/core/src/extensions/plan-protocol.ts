@@ -1,5 +1,6 @@
 import { ExtensionMessage } from "../domain/extension-protocol.js"
-import { PLAN_EXTENSION_ID } from "./plan.js"
+
+export const PLAN_EXTENSION_ID = "@gent/plan"
 
 export const PlanProtocol = {
   TogglePlan: ExtensionMessage(PLAN_EXTENSION_ID, "TogglePlan", {}),

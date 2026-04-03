@@ -19,8 +19,8 @@ import type {
 import type { AgentEvent } from "../domain/event.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { extension, fromReducer } from "./api.js"
-
-export const PLAN_EXTENSION_ID = "@gent/plan"
+import { PLAN_EXTENSION_ID, PlanProtocol } from "./plan-protocol.js"
+export { PLAN_EXTENSION_ID } from "./plan-protocol.js"
 
 // ── State ──
 
@@ -468,6 +468,7 @@ import { PlanTool } from "../tools/plan.js"
 export { PlanTool, PlanParams } from "../tools/plan.js"
 
 export const PlanExtension = extension("@gent/plan", (ext) => {
+  ext.protocol(PlanProtocol)
   ext.actor(planActor)
   ext.tool(PlanTool)
 })

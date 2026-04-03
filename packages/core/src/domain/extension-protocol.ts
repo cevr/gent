@@ -20,6 +20,8 @@ export interface ExtensionReplyTypeBrand<R> extends Brand<ExtensionReplyTypeId> 
 
 export type ExtractExtensionReply<M> = M extends ExtensionReplyTypeBrand<infer R> ? R : never
 
+type ExtensionEnvelopeRecord = Readonly<Record<string, unknown>>
+
 export type ExtensionCommandMessage<
   Id extends string,
   Tag extends string,
@@ -28,6 +30,7 @@ export type ExtensionCommandMessage<
   readonly extensionId: Id
   readonly _tag: Tag
 }> &
+  ExtensionEnvelopeRecord &
   PayloadType<F> &
   ExtensionMessageBrand &
   ExtensionProtocolSchemaBrand<F>
@@ -65,7 +68,8 @@ export type ExtensionRequestDefinition<
   readonly _tag: Tag
   readonly kind: "request"
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
-  readonly replySchema: Schema.Schema<R>
+  readonly replySchema: Schema.Codec<R, unknown, never, never>
+  readonly replyDecoder: Schema.Decoder<R>
   readonly schema: Schema.Schema<ExtensionRequestMessage<Id, Tag, F, R>>
 }
 
@@ -90,12 +94,14 @@ type ExtensionEnvelope = Readonly<{
   readonly extensionId: string
   readonly _tag: string
 }> &
-  object
+  ExtensionEnvelopeRecord
 
 export type AnyExtensionCommandMessage = ExtensionEnvelope
 export type AnyExtensionRequestMessage = ExtensionEnvelope
 
 export type AnyExtensionMessage = AnyExtensionCommandMessage | AnyExtensionRequestMessage
+
+export type ExtensionProtocol = Readonly<Record<string, unknown>>
 
 interface ExtensionCommandMetadata {
   readonly extensionId: string
@@ -111,7 +117,8 @@ interface ExtensionRequestMetadata {
   readonly kind: "request"
   readonly payloadSchema: Schema.Schema<unknown>
   readonly schema: Schema.Schema<unknown>
-  readonly replySchema: Schema.Schema<unknown>
+  readonly replySchema: Schema.Codec<unknown, unknown, never, never>
+  readonly replyDecoder: Schema.Decoder<unknown>
 }
 
 export type ExtensionMessageMetadata = ExtensionCommandMetadata | ExtensionRequestMetadata
@@ -178,7 +185,7 @@ const createRequest = <
   Id extends string,
   Tag extends string,
   F extends ExtensionFields,
-  RS extends Schema.Schema<unknown>,
+  RS extends Schema.Codec<unknown, unknown, never, never>,
 >(
   extensionId: Id,
   tag: Tag,
@@ -200,6 +207,7 @@ const createRequest = <
     payloadSchema,
     schema,
     replySchema,
+    replyDecoder: replySchema as Schema.Decoder<Schema.Schema.Type<RS>>,
   }
 
   const make = ((payload?: PayloadType<F>) =>
@@ -218,6 +226,7 @@ const createRequest = <
     kind: "request" as const,
     payloadSchema,
     replySchema,
+    replyDecoder: metadata.replyDecoder,
     schema,
   })
 }
@@ -243,7 +252,37 @@ export const getExtensionReplySchema = <M>(
   return metadata.replySchema as Schema.Schema<ExtractExtensionReply<M>>
 }
 
+export const getExtensionReplyDecoder = <M>(
+  message: M,
+): Schema.Decoder<ExtractExtensionReply<M>> | undefined => {
+  const metadata = getExtensionMessageMetadata(message)
+  if (metadata?.kind !== "request") return undefined
+  return metadata.replyDecoder as Schema.Decoder<ExtractExtensionReply<M>>
+}
+
 export const isExtensionRequestMessage = (
   message: unknown,
 ): message is ExtensionRequestMessage<string, string, ExtensionFields, unknown> =>
   getExtensionMessageMetadata(message)?.kind === "request"
+
+export const listExtensionProtocolDefinitions = (
+  protocol: ExtensionProtocol,
+): ReadonlyArray<AnyExtensionMessageDefinition> =>
+  Object.values(protocol).filter((value): value is AnyExtensionMessageDefinition => {
+    if (typeof value !== "function") return false
+    const definition = value as Partial<AnyExtensionMessageDefinition>
+    return (
+      typeof definition.extensionId === "string" &&
+      typeof definition._tag === "string" &&
+      (definition.kind === "command" || definition.kind === "request")
+    )
+  })
+
+export const ExtensionMessageEnvelope = Schema.StructWithRest(
+  Schema.Struct({
+    extensionId: Schema.String,
+    _tag: Schema.String,
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
+)
+export type ExtensionMessageEnvelope = typeof ExtensionMessageEnvelope.Type

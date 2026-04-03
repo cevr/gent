@@ -14,10 +14,15 @@ import type {
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type {
   AnyExtensionCommandMessage,
+  AnyExtensionMessageDefinition,
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "../../domain/extension-protocol.js"
 import { ExtensionTurnControl } from "./turn-control.js"
+
+interface ExtensionProtocolRegistry {
+  readonly get: (extensionId: string, tag: string) => AnyExtensionMessageDefinition | undefined
+}
 
 interface ActorEntry {
   readonly ref: ExtensionRef
@@ -63,6 +68,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           spawn: SpawnExtensionRef
           projection?: ExtensionProjectionConfig
         }> = []
+        const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
         for (const ext of extensions) {
           if (ext.setup.spawn !== undefined) {
             spawns.push({
@@ -70,6 +76,11 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               spawn: ext.setup.spawn,
               projection: ext.setup.projection,
             })
+          }
+          for (const definition of ext.setup.protocols ?? []) {
+            const byTag = protocolMap.get(definition.extensionId) ?? new Map()
+            byTag.set(definition._tag, definition)
+            protocolMap.set(definition.extensionId, byTag)
           }
         }
 
@@ -153,6 +164,46 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
         const findEntry = (entries: ReadonlyArray<ActorEntry>, extensionId: string) =>
           entries.find((entry) => entry.ref.id === extensionId)
 
+        const protocols: ExtensionProtocolRegistry = {
+          get: (extensionId, tag) => protocolMap.get(extensionId)?.get(tag),
+        }
+
+        const decodeWithSchema = <A>(schema: Schema.Schema<A>, value: unknown): Effect.Effect<A> =>
+          Effect.sync(() => {
+            const decoder = Schema.decodeUnknownSync(schema as Schema.Decoder<A, never>)
+            try {
+              return decoder(value)
+            } catch {
+              const encoded = Schema.encodeSync(schema as Schema.Encoder<unknown, never>)(
+                value as never,
+              )
+              return decoder(encoded)
+            }
+          })
+
+        const decodeMessage = <M extends AnyExtensionCommandMessage | AnyExtensionRequestMessage>(
+          message: M,
+          expectedKind: "command" | "request",
+        ): Effect.Effect<M> =>
+          Effect.gen(function* () {
+            const definition = protocols.get(message.extensionId, message._tag)
+            if (definition === undefined) {
+              return yield* Effect.die(
+                new Error(
+                  `extension "${message.extensionId}" has no protocol definition for "${message._tag}"`,
+                ),
+              )
+            }
+            if (definition.kind !== expectedKind) {
+              return yield* Effect.die(
+                new Error(
+                  `extension "${message.extensionId}" message "${message._tag}" is registered as a ${definition.kind}, not a ${expectedKind}`,
+                ),
+              )
+            }
+            return yield* decodeWithSchema(definition.schema as Schema.Schema<M>, message)
+          })
+
         return {
           publish: (event, ctx) =>
             Effect.withSpan("ExtensionStateRuntime.publish", {
@@ -211,13 +262,18 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
             })(
               Effect.gen(function* () {
                 const entries = yield* getOrSpawnActors(sessionId, branchId)
-                const entry = findEntry(entries, message.extensionId)
+                const decoded = yield* decodeMessage(message, "command")
+                const entry = findEntry(entries, decoded.extensionId)
                 if (entry === undefined) return
-                yield* entry.ref.send(message, branchId)
+                yield* entry.ref.send(decoded, branchId)
               }),
             ),
 
-          ask: (sessionId, message, branchId) =>
+          ask: <M extends AnyExtensionRequestMessage>(
+            sessionId: SessionId,
+            message: M,
+            branchId?: BranchId,
+          ) =>
             Effect.withSpan("ExtensionStateRuntime.ask", {
               attributes: {
                 "extension.id": message.extensionId,
@@ -226,13 +282,26 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
             })(
               Effect.gen(function* () {
                 const entries = yield* getOrSpawnActors(sessionId, branchId)
-                const entry = findEntry(entries, message.extensionId)
-                if (entry === undefined) {
+                const decoded = yield* decodeMessage(message, "request")
+                const definition = protocols.get(decoded.extensionId, decoded._tag)
+                if (definition === undefined || definition.kind !== "request") {
                   return yield* Effect.die(
-                    new Error(`extension "${message.extensionId}" is not loaded`),
+                    new Error(
+                      `extension "${decoded.extensionId}" request "${decoded._tag}" is not registered`,
+                    ),
                   )
                 }
-                return yield* entry.ref.ask(message, branchId)
+                const entry = findEntry(entries, decoded.extensionId)
+                if (entry === undefined) {
+                  return yield* Effect.die(
+                    new Error(`extension "${decoded.extensionId}" is not loaded`),
+                  )
+                }
+                const reply = yield* entry.ref.ask(decoded, branchId)
+                return yield* decodeWithSchema(
+                  definition.replySchema as Schema.Schema<ExtractExtensionReply<M>>,
+                  reply,
+                )
               }),
             ),
 
