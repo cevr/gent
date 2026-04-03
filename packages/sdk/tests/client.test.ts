@@ -5,43 +5,23 @@ import {
   extractImages,
   extractToolCalls,
   buildToolResultMap,
-  type GentClientBundle,
   type MessageInfoReadonly,
 } from "../src/index"
 
-describe("Gent constructors", () => {
-  test("Gent.spawn, Gent.connect, Gent.local, and Gent.test are functions", () => {
+describe("sdk client helpers", () => {
+  test("sdk entrypoint exports the public constructors", () => {
     expect(typeof Gent.spawn).toBe("function")
     expect(typeof Gent.connect).toBe("function")
     expect(typeof Gent.local).toBe("function")
     expect(typeof Gent.test).toBe("function")
   })
-})
 
-describe("GentClientBundle shape", () => {
-  test("has client (namespaced), runtime (cast/fork/run/lifecycle)", () => {
-    // Verify the type at compile time — if this compiles, the shape is correct
-    const assertShape = (_bundle: GentClientBundle) => {
-      expect(typeof _bundle.client).toBe("object")
-      expect(typeof _bundle.runtime.cast).toBe("function")
-      expect(typeof _bundle.runtime.fork).toBe("function")
-      expect(typeof _bundle.runtime.run).toBe("function")
-      expect(typeof _bundle.runtime.lifecycle).toBe("object")
-      expect(typeof _bundle.runtime.lifecycle.getState).toBe("function")
-      expect(typeof _bundle.runtime.lifecycle.subscribe).toBe("function")
-    }
-    // Just a type check — we can't easily construct a full client without layers
-    void assertShape
-  })
-})
-
-describe("utility functions", () => {
-  test("extractText extracts text from parts", () => {
+  test("extractText extracts text from message parts", () => {
     const parts = [{ type: "text" as const, text: "Hello world" }]
     expect(extractText(parts)).toBe("Hello world")
   })
 
-  test("extractImages extracts image info", () => {
+  test("extractImages extracts image metadata", () => {
     const parts = [{ type: "image" as const, image: "base64data", mediaType: "image/png" }]
     const images = extractImages(parts)
     expect(images.length).toBe(1)
@@ -58,7 +38,7 @@ describe("utility functions", () => {
     expect(calls[0]?.toolName).toBe("read")
   })
 
-  test("buildToolResultMap builds map from messages", () => {
+  test("buildToolResultMap indexes tool outputs by call id", () => {
     const messages: MessageInfoReadonly[] = [
       {
         id: "m1",

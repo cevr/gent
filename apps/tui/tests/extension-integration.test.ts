@@ -127,6 +127,33 @@ export default { manifest: { id: "custom-read" }, setup: () => ({ tools: [] }) }
 }`,
   )
 
+  // Discovery fixtures that should or should not survive the public seam
+  writeFileSync(
+    join(USER_DIR, "alpha.client.ts"),
+    "export default { id: '@test/alpha', setup: () => ({ commands: [{ id: 'alpha', title: 'Alpha', onSelect: () => {} }] }) }",
+  )
+  writeFileSync(
+    join(USER_DIR, "zeta.client.ts"),
+    "export default { id: '@test/zeta', setup: () => ({ commands: [{ id: 'zeta', title: 'Zeta', onSelect: () => {} }] }) }",
+  )
+  writeFileSync(
+    join(USER_DIR, ".hidden.client.tsx"),
+    "export default { id: '@test/hidden', setup: () => ({ commands: [{ id: 'hidden', title: 'Hidden', onSelect: () => {} }] }) }",
+  )
+  writeFileSync(
+    join(USER_DIR, "_internal.client.tsx"),
+    "export default { id: '@test/internal', setup: () => ({ commands: [{ id: 'internal', title: 'Internal', onSelect: () => {} }] }) }",
+  )
+  mkdirSync(join(USER_DIR, "__tests__"), { recursive: true })
+  writeFileSync(
+    join(USER_DIR, "__tests__", "test.client.tsx"),
+    "export default { id: '@test/spec-only', setup: () => ({ commands: [{ id: 'spec-only', title: 'Spec Only', onSelect: () => {} }] }) }",
+  )
+  writeFileSync(
+    join(PROJECT_DIR, "prebuilt.client.mjs"),
+    "export default { id: '@test/prebuilt', setup: () => ({ commands: [{ id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} }] }) }",
+  )
+
   // Extension that uses ctx.openOverlay in a command
   const ctxDir = join(TEST_DIR, "ctx-ext")
   mkdirSync(ctxDir, { recursive: true })
@@ -218,6 +245,31 @@ describe("loadTuiExtensions integration", () => {
     )
 
     expect(resolved.overlays.has("test-overlay")).toBe(true)
+  })
+
+  test("discovery filters hidden and test-only files while still loading prebuilt mjs files", async () => {
+    const resolved = await loadTuiExtensions(
+      { builtins: [], userDir: USER_DIR, projectDir: PROJECT_DIR },
+      noopCtx,
+    )
+
+    const commandIds = resolved.commands.map((command) => command.id)
+    expect(commandIds).toContain("prebuilt")
+    expect(commandIds).not.toContain("hidden")
+    expect(commandIds).not.toContain("internal")
+    expect(commandIds).not.toContain("spec-only")
+  })
+
+  test("user-scope discovery is deterministic within scope", async () => {
+    const resolved = await loadTuiExtensions(
+      { builtins: [], userDir: USER_DIR, projectDir: join(TEST_DIR, "no-project") },
+      noopCtx,
+    )
+
+    const userCommandIds = resolved.commands
+      .map((command) => command.id)
+      .filter((id) => id === "alpha" || id === "zeta")
+    expect(userCommandIds).toEqual(["alpha", "zeta"])
   })
 
   test("project extension overrides builtin tool renderer", async () => {
@@ -753,6 +805,145 @@ describe("border label resolution", () => {
     const resolved = resolveTuiExtensions(extensions)
     // Should be sorted: priority 10, 50, 200
     expect(resolved.borderLabels.map((l) => l.priority)).toEqual([10, 50, 200])
+  })
+})
+
+describe("resolution semantics", () => {
+  test("higher scope wins keybind and lower scope keeps the command without the keybind", () => {
+    const resolved = resolveTuiExtensions([
+      {
+        id: "@test/user",
+        kind: "user",
+        filePath: "/test/user",
+        setup: {
+          commands: [{ id: "cmd-u", title: "User", keybind: "ctrl+k", onSelect: () => {} }],
+        },
+      } satisfies LoadedTuiExtension,
+      {
+        id: "@test/project",
+        kind: "project",
+        filePath: "/test/project",
+        setup: {
+          commands: [{ id: "cmd-p", title: "Project", keybind: "ctrl+k", onSelect: () => {} }],
+        },
+      } satisfies LoadedTuiExtension,
+    ])
+
+    const userCommand = resolved.commands.find((command) => command.id === "cmd-u")
+    const projectCommand = resolved.commands.find((command) => command.id === "cmd-p")
+    expect(userCommand?.keybind).toBeUndefined()
+    expect(projectCommand?.keybind).toBe("ctrl+k")
+  })
+
+  test("higher scope wins slash and lower scope keeps the command without the slash", () => {
+    const resolved = resolveTuiExtensions([
+      {
+        id: "@test/user",
+        kind: "user",
+        filePath: "/test/user",
+        setup: {
+          commands: [{ id: "cmd-u", title: "User", slash: "deploy", onSelect: () => {} }],
+        },
+      } satisfies LoadedTuiExtension,
+      {
+        id: "@test/project",
+        kind: "project",
+        filePath: "/test/project",
+        setup: {
+          commands: [{ id: "cmd-p", title: "Project", slash: "deploy", onSelect: () => {} }],
+        },
+      } satisfies LoadedTuiExtension,
+    ])
+
+    const userCommand = resolved.commands.find((command) => command.id === "cmd-u")
+    const projectCommand = resolved.commands.find((command) => command.id === "cmd-p")
+    expect(userCommand?.slash).toBeUndefined()
+    expect(projectCommand?.slash).toBe("deploy")
+  })
+
+  test("higher scope wins composer surface", () => {
+    const resolved = resolveTuiExtensions([
+      {
+        id: "@test/user",
+        kind: "user",
+        filePath: "/test/user",
+        setup: {
+          composerSurface: () => "user-composer",
+        },
+      } satisfies LoadedTuiExtension,
+      {
+        id: "@test/project",
+        kind: "project",
+        filePath: "/test/project",
+        setup: {
+          composerSurface: () => "project-composer",
+        },
+      } satisfies LoadedTuiExtension,
+    ])
+
+    expect(resolved.composerSurface?.()).toBe("project-composer")
+  })
+
+  test("same-scope composer surface collision throws", () => {
+    expect(() =>
+      resolveTuiExtensions([
+        {
+          id: "@test/a",
+          kind: "user",
+          filePath: "/test/a",
+          setup: { composerSurface: () => "a" },
+        } satisfies LoadedTuiExtension,
+        {
+          id: "@test/b",
+          kind: "user",
+          filePath: "/test/b",
+          setup: { composerSurface: () => "b" },
+        } satisfies LoadedTuiExtension,
+      ]),
+    ).toThrow("Same-scope TUI composer surface collision")
+  })
+
+  test("interaction renderers resolve with precedence and collide within scope", () => {
+    const resolved = resolveTuiExtensions([
+      {
+        id: "@test/builtin",
+        kind: "builtin",
+        filePath: "builtin:@test/builtin",
+        setup: {
+          interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "builtin" }],
+        },
+      } satisfies LoadedTuiExtension,
+      {
+        id: "@test/project",
+        kind: "project",
+        filePath: "/test/project",
+        setup: {
+          interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "project" }],
+        },
+      } satisfies LoadedTuiExtension,
+    ])
+
+    expect(resolved.interactionRenderers.get("QuestionsAsked")?.()).toBe("project")
+    expect(() =>
+      resolveTuiExtensions([
+        {
+          id: "@test/a",
+          kind: "user",
+          filePath: "/test/a",
+          setup: {
+            interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "a" }],
+          },
+        } satisfies LoadedTuiExtension,
+        {
+          id: "@test/b",
+          kind: "user",
+          filePath: "/test/b",
+          setup: {
+            interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "b" }],
+          },
+        } satisfies LoadedTuiExtension,
+      ]),
+    ).toThrow("Same-scope TUI interaction renderer collision")
   })
 })
 
