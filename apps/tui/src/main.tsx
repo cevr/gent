@@ -143,6 +143,10 @@ const runHeadlessTurn = (
 const main = Command.make(
   "gent",
   {
+    connect: Flag.string("connect").pipe(
+      Flag.withDescription("Connect to an existing gent server"),
+      Flag.optional,
+    ),
     session: Flag.string("session").pipe(
       Flag.withAlias("s"),
       Flag.withDescription("Session ID to continue"),
@@ -177,7 +181,7 @@ const main = Command.make(
       Flag.optional,
     ),
   },
-  ({ session, continue_, headless, debug, prompt, promptArg, agent }) =>
+  ({ connect, session, continue_, headless, debug, prompt, promptArg, agent }) =>
     Effect.gen(function* () {
       const cwd = process.cwd()
       const scope = yield* Effect.scope
@@ -209,9 +213,21 @@ const main = Command.make(
         }
       }
 
-      const bundle = yield* headless
-        ? resolveLocalOptions(cwd).pipe(Effect.flatMap((options) => Gent.local(options)))
-        : Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
+      const localOptions = yield* resolveLocalOptions(cwd).pipe(
+        Effect.map((options) =>
+          debug
+            ? {
+                ...options,
+                persistenceMode: "memory" as const,
+                providerMode: "debug-scripted" as const,
+              }
+            : options,
+        ),
+      )
+
+      const bundle = yield* (Option.isSome(connect)
+        ? Gent.connect({ url: connect.value })
+        : Gent.local(localOptions))
       const requestedAgent: AgentName | undefined =
         Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
 
@@ -288,12 +304,6 @@ const main = Command.make(
         Effect.onInterrupt(() =>
           Effect.sync(() => {
             shutdownLog("shutdown.interrupted")
-            // Safety: if scope finalizers hang, force exit after 3s.
-            const watchdog = setTimeout(() => {
-              shutdownLog("shutdown.watchdog-fired")
-              process.exit(0)
-            }, 3_000)
-            if (typeof watchdog === "object" && "unref" in watchdog) watchdog.unref()
           }),
         ),
       )
@@ -301,9 +311,19 @@ const main = Command.make(
 )
 
 // Sessions subcommand
-const sessions = Command.make("sessions", {}, () =>
+const sessions = Command.make(
+  "sessions",
+  {
+    connect: Flag.string("connect").pipe(
+      Flag.withDescription("Connect to an existing gent server"),
+      Flag.optional,
+    ),
+  },
+  ({ connect }) =>
   Effect.gen(function* () {
-    const bundle = yield* Gent.spawn({ cwd: process.cwd() })
+    const bundle = yield* (Option.isSome(connect)
+      ? Gent.connect({ url: connect.value })
+      : resolveLocalOptions(process.cwd()).pipe(Effect.flatMap((options) => Gent.local(options))))
     const allSessions = yield* bundle.client.session.list()
 
     if (allSessions.length === 0) {

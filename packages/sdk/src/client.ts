@@ -42,7 +42,11 @@ import type {
 } from "@gent/core/domain/message.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import type { SkillScope } from "@gent/core/domain/skills.js"
-import { startWorkerSupervisor, waitForWorkerRunning, type WorkerSupervisor } from "./supervisor.js"
+import {
+  startWorkerSupervisor,
+  waitForWorkerRunning,
+  type WorkerSupervisor,
+} from "./supervisor.js"
 import {
   makeNamespacedClient,
   type GentNamespacedClient,

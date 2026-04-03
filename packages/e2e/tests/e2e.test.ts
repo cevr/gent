@@ -22,6 +22,13 @@ const CTRL_C = "\x03"
 const _SHIFT_TAB = "\x1b[Z"
 const UP = "\x1b[A"
 const DOWN = "\x1b[B"
+const CLIENT_LOG_PATH = path.join(
+  os.homedir(),
+  ".gent",
+  "logs",
+  "Users-cvr-Developer-personal-gent-apps-tui",
+  "gent-client.log",
+)
 
 interface TestContext {
   pty: IPty
@@ -72,7 +79,13 @@ function spawnWithDir(
     cols: 120,
     rows: 40,
     cwd: tuiDir,
-    env: { ...Bun.env, GENT_DATA_DIR: tempDir, ...extraEnv },
+    env: {
+      ...Bun.env,
+      GENT_DATA_DIR: tempDir,
+      GENT_AUTH_FILE_PATH: path.join(tempDir, "auth.json.enc"),
+      GENT_AUTH_KEY_PATH: path.join(tempDir, "auth.key"),
+      ...extraEnv,
+    },
   })
 
   pty.onData((data) => {
@@ -99,6 +112,22 @@ function spawnWithDir(
     },
     tempDir,
     cleanup,
+  }
+}
+
+const resetClientLog = () => {
+  try {
+    fs.rmSync(CLIENT_LOG_PATH, { force: true })
+  } catch {
+    /* ignore */
+  }
+}
+
+const readClientLog = (): string => {
+  try {
+    return fs.readFileSync(CLIENT_LOG_PATH, "utf8")
+  } catch {
+    return ""
   }
 }
 
@@ -326,6 +355,30 @@ describe("E2E: Session", () => {
       await new Promise((r) => setTimeout(r, 3_000))
       expect(testContext.output.length).toBeGreaterThan(2000)
       testContext.pty.write(CTRL_C)
+    },
+    TEST_TIMEOUT,
+  )
+
+  test(
+    "double ESC after session activity exits without watchdog fallback",
+    async () => {
+      resetClientLog()
+      testContext = await seedAndSpawn()
+      await testContext.pty.waitFor("❯", { timeout: 10_000 })
+      testContext.pty.write("hi")
+      await new Promise((r) => setTimeout(r, 300))
+      testContext.pty.write(ENTER)
+      await new Promise((r) => setTimeout(r, 3_000))
+      testContext.pty.write(ESC)
+      await new Promise((r) => setTimeout(r, 200))
+      testContext.pty.write(ESC)
+      const code = await Promise.race([
+        testContext.pty.exited,
+        new Promise<null>((r) => setTimeout(() => r(null), 8_000)),
+      ])
+      const log = readClientLog()
+      expect(code).toBe(0)
+      expect(log).not.toContain("shutdown.watchdog-fired")
     },
     TEST_TIMEOUT,
   )
