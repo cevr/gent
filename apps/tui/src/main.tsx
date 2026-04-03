@@ -225,9 +225,9 @@ const main = Command.make(
         ),
       )
 
-      const bundle = yield* (Option.isSome(connect)
+      const bundle = yield* Option.isSome(connect)
         ? Gent.connect({ url: connect.value })
-        : Gent.local(localOptions))
+        : Gent.local(localOptions)
       const requestedAgent: AgentName | undefined =
         Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
 
@@ -320,24 +320,24 @@ const sessions = Command.make(
     ),
   },
   ({ connect }) =>
-  Effect.gen(function* () {
-    const bundle = yield* (Option.isSome(connect)
-      ? Gent.connect({ url: connect.value })
-      : resolveLocalOptions(process.cwd()).pipe(Effect.flatMap((options) => Gent.local(options))))
-    const allSessions = yield* bundle.client.session.list()
+    Effect.gen(function* () {
+      const bundle = yield* Option.isSome(connect)
+        ? Gent.connect({ url: connect.value })
+        : resolveLocalOptions(process.cwd()).pipe(Effect.flatMap((options) => Gent.local(options)))
+      const allSessions = yield* bundle.client.session.list()
 
-    if (allSessions.length === 0) {
-      yield* Console.log("No sessions found.")
-      return
-    }
+      if (allSessions.length === 0) {
+        yield* Console.log("No sessions found.")
+        return
+      }
 
-    yield* Console.log("Sessions:")
-    for (const s of allSessions) {
-      // @effect-diagnostics-next-line *:off
-      const date = new Date(s.updatedAt).toISOString()
-      yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
-    }
-  }),
+      yield* Console.log("Sessions:")
+      for (const s of allSessions) {
+        // @effect-diagnostics-next-line *:off
+        const date = new Date(s.updatedAt).toISOString()
+        yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
+      }
+    }),
 )
 
 // Root command with subcommands

@@ -19,6 +19,7 @@ import {
 } from "./seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
+const tuiDir = path.join(repoRoot, "apps", "tui")
 const makeTempDir = createTempDirFixture("gent-worker-")
 
 const waitForRunning = async (
@@ -48,6 +49,53 @@ const waitForRunning = async (
   })
 
 describe("worker supervisor", () => {
+  test("headless cli can attach via --connect", async () => {
+    const dataDir = makeTempDir()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const worker = yield* startWorkerWithSupervisor({
+            cwd: repoRoot,
+            mode: "debug",
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const proc = Bun.spawn(
+            [
+              "bun",
+              "--preload",
+              "./node_modules/@opentui/solid/scripts/preload.ts",
+              "src/main.tsx",
+              "--connect",
+              worker.url,
+              "-H",
+              "Say hi in 3 words",
+            ],
+            {
+              cwd: tuiDir,
+              env: { ...Bun.env, GENT_DATA_DIR: dataDir },
+              stdout: "pipe",
+              stderr: "pipe",
+            },
+          )
+
+          const [exitCode, stdout, stderr] = yield* Effect.promise(() =>
+            Promise.all([
+              proc.exited,
+              new Response(proc.stdout).text(),
+              new Response(proc.stderr).text(),
+            ]),
+          )
+
+          expect(exitCode).toBe(0)
+          expect(stderr).toBe("")
+          expect(stdout.length).toBeGreaterThan(0)
+        }),
+      ),
+    )
+  }, 20_000)
+
   test("compiled binary launch resolves bun runtime and on-disk server entry", async () => {
     const launch = await WorkerSupervisorInternal.resolveWorkerLaunch({
       sourceEntryPath: "/$bunfs/root/apps/server/src/main.ts",

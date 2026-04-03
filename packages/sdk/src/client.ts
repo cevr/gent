@@ -42,11 +42,8 @@ import type {
 } from "@gent/core/domain/message.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import type { SkillScope } from "@gent/core/domain/skills.js"
-import {
-  startWorkerSupervisor,
-  waitForWorkerRunning,
-  type WorkerSupervisor,
-} from "./supervisor.js"
+import { startWorkerSupervisor, waitForWorkerRunning, type WorkerSupervisor } from "./supervisor.js"
+import { startLocalSupervisor } from "./local-supervisor.js"
 import {
   makeNamespacedClient,
   type GentNamespacedClient,
@@ -436,10 +433,28 @@ export const Gent = {
         Layer.provide(GentTracerLive),
       )
 
-      return yield* Gent.test(Layer.provideMerge(AppServicesLive, depsLive)).pipe(
-        Effect.provide(LocalPlatformLayer),
-        Effect.mapError(toConnectionError),
+      const supervisor = yield* startLocalSupervisor(
+        (scope) =>
+          Effect.gen(function* () {
+            const handlersContext = yield* Layer.buildWithScope(
+              Layer.provide(
+                Layer.provide(RpcHandlersLive, Layer.provideMerge(AppServicesLive, depsLive)),
+                LocalPlatformLayer,
+              ),
+              scope,
+            )
+
+            return yield* RpcTest.makeClient(GentRpcs).pipe(
+              Effect.provide(handlersContext),
+            ) as Effect.Effect<GentRpcClient>
+          }),
+        toConnectionError,
       )
+      const services = yield* Effect.services<never>()
+      return {
+        client: supervisor.client,
+        runtime: makeRuntime(services as ServiceMap.ServiceMap<unknown>, supervisor.lifecycle),
+      }
     }),
 
   /** In-process client for tests and embedding. Fast, less isolation than spawn. */

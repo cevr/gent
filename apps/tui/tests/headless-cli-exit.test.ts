@@ -71,6 +71,7 @@ describe("headless CLI", () => {
           ...Bun.env,
           HOME: homeDir,
           GENT_PERSISTENCE_MODE: "memory",
+          GENT_PROVIDER_MODE: "debug-scripted",
           ...env,
         },
         stdout: "pipe",

@@ -10,9 +10,10 @@ import {
 } from "../src/index"
 
 describe("Gent constructors", () => {
-  test("Gent.spawn, Gent.connect, and Gent.test are functions", () => {
+  test("Gent.spawn, Gent.connect, Gent.local, and Gent.test are functions", () => {
     expect(typeof Gent.spawn).toBe("function")
     expect(typeof Gent.connect).toBe("function")
+    expect(typeof Gent.local).toBe("function")
     expect(typeof Gent.test).toBe("function")
   })
 })

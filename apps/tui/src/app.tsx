@@ -33,7 +33,7 @@ function AppContent(props: AppProps) {
     routeTag: AppRoute["_tag"] = router.route()._tag,
     agentName = client.agent(),
   ): string | null => {
-    if (props.debugMode || routeTag === "branchPicker") return null
+    if (props.debugMode || (routeTag !== "session" && routeTag !== "auth")) return null
     return `${routeTag}:${agentName ?? "pending"}`
   }
 
