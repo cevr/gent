@@ -138,4 +138,44 @@ describe("App auth gate", () => {
     expect(frame).toContain("API Keys")
     setup.renderer.destroy()
   })
+
+  test("branch picker does not trigger auth gating before a branch is selected", async () => {
+    const calls: Array<{ agentName?: string }> = []
+    const client = createMockClient({
+      auth: {
+        listProviders: (input: { agentName?: string }) => {
+          calls.push(input)
+          return Effect.succeed([])
+        },
+      },
+      branch: {
+        getTree: () =>
+          Effect.succeed([
+            { id: "branch-a" as BranchId, name: "Main", messageCount: 3, children: [] },
+            { id: "branch-b" as BranchId, name: "Side", messageCount: 1, children: [] },
+          ]),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(() => <App missingAuthProviders={[]} />, {
+      client,
+      runtime,
+      initialSession: {
+        id: "session-a" as SessionId,
+        branchId: "branch-a" as BranchId,
+        name: "Session A",
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      initialRoute: Route.branchPicker("session-a" as SessionId, "Session A", [
+        { id: "branch-a" as BranchId, sessionId: "session-a" as SessionId, createdAt: 0 },
+        { id: "branch-b" as BranchId, sessionId: "session-a" as SessionId, createdAt: 1 },
+      ]),
+    })
+
+    await waitForFrame(setup, (next) => next.includes("Resume: Session A"))
+    expect(calls).toEqual([])
+    setup.renderer.destroy()
+  })
 })

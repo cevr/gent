@@ -27,8 +27,11 @@ function AppContent(props: AppProps) {
   )
   let authGateVersion = 0
 
-  const refreshAuthGate = (agentName = client.agent()) => {
-    if (props.debugMode) {
+  const refreshAuthGate = (
+    agentName = client.agent(),
+    routeTag: AppRoute["_tag"] = router.route()._tag,
+  ) => {
+    if (props.debugMode || routeTag === "branchPicker" || agentName === undefined) {
       authGateVersion += 1
       setAuthGateActive(false)
       return
@@ -59,9 +62,9 @@ function AppContent(props: AppProps) {
 
   createEffect(
     on(
-      () => client.agent(),
-      (agentName) => {
-        refreshAuthGate(agentName)
+      () => [client.agent(), router.route()._tag] as const,
+      ([agentName, routeTag]) => {
+        refreshAuthGate(agentName, routeTag)
       },
       { defer: false },
     ),

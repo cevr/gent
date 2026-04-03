@@ -118,7 +118,7 @@ export interface ClientContextValue {
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string) => void
   createSession: (onCreated?: (sessionId: SessionId, branchId: BranchId) => void) => void
-  switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
+  switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
   clearSession: () => void
   updateSessionReasoningLevel: (
     reasoningLevel: ReasoningEffort | undefined,
@@ -561,9 +561,9 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    switchSession: (sessionId, branchId, name) => {
+    switchSession: (sessionId, branchId, name, agent = defaultAgent) => {
       // Reset agent state and activate new session
-      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
+      setAgentStore({ agent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
       dispatchSession({

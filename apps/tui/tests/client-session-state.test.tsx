@@ -115,6 +115,37 @@ describe("ClientProvider session lifecycle", () => {
     })
   })
 
+  test("switchSession seeds the target agent when provided", async () => {
+    let ctx: ClientContextValue | undefined
+    const setup = await renderWithProviders(
+      () => <ClientProbe onReady={(value) => (ctx = value)} />,
+      {
+        initialSession: {
+          id: "session-a" as SessionId,
+          branchId: "branch-a" as BranchId,
+          name: "A",
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      },
+    )
+    if (ctx === undefined) throw new Error("client context not ready")
+
+    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B", "deepwork")
+    await setup.renderOnce()
+
+    expect(ctx.agent()).toBe("deepwork")
+    expect(ctx.sessionState()).toEqual({
+      status: "active",
+      session: {
+        sessionId: "session-b",
+        branchId: "branch-b",
+        name: "B",
+        reasoningLevel: undefined,
+      },
+    })
+  })
+
   test("clearSession returns to none", async () => {
     let ctx: ClientContextValue | undefined
     const setup = await renderWithProviders(
