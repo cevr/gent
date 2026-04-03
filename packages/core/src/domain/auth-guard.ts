@@ -1,6 +1,5 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { ServiceMap, Effect, Exit, Layer, Schema } from "effect"
 import { AuthStore, AuthType } from "./auth-store"
-import { resolveAgentModel } from "./agent"
 import { ProviderId, parseModelProvider } from "./model"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 
@@ -31,16 +30,13 @@ export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()
       const authStore = yield* AuthStore
       const extensionRegistry = yield* ExtensionRegistry
 
-      // Derive required providers from all modeled agents' model prefixes,
-      // intersected with registered provider IDs (supports extension-contributed agents)
-      const agents = yield* extensionRegistry.listAgents()
       const registeredProviders = yield* extensionRegistry.listProviders()
       const registeredIds = new Set(registeredProviders.map((p) => p.id))
+      const modelPairExit = yield* Effect.exit(extensionRegistry.resolveDualModelPair())
       const requiredProviders: ProviderId[] = []
       const seen = new Set<string>()
-      for (const agent of agents) {
-        if (agent.model === undefined) continue
-        const modelId = resolveAgentModel(agent)
+      const modelIds = Exit.isSuccess(modelPairExit) ? modelPairExit.value : []
+      for (const modelId of modelIds) {
         const provider = parseModelProvider(modelId)
         if (provider !== undefined && registeredIds.has(provider) && !seen.has(provider)) {
           requiredProviders.push(provider)

@@ -41,6 +41,26 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
   ]),
 )
 
+const helperAgentRegistryLayer = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: "test-providers" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: {
+        providers: testProviders,
+        agents: [
+          ...testAgents,
+          new AgentDefinition({
+            name: "helper:google" as never,
+            model: "google/gemini-2.5-flash" as never,
+          }),
+        ],
+      },
+    } satisfies LoadedExtension,
+  ]),
+)
+
 describe("AuthGuard", () => {
   it.live("requiredProviders include cowork + reviewer (deepwork) providers", () => {
     const layer = AuthGuard.Live.pipe(
@@ -109,4 +129,22 @@ describe("AuthGuard", () => {
       expect(openai?.hasKey).toBe(false)
     }).pipe(Effect.provide(layer))
   })
+
+  it.live(
+    "helper-only modeled agents do not widen required providers beyond the runtime pair",
+    () => {
+      const layer = AuthGuard.Live.pipe(
+        Layer.provide(AuthStore.Live),
+        Layer.provide(AuthStorage.Test()),
+        Layer.provide(helperAgentRegistryLayer),
+      )
+      return Effect.gen(function* () {
+        const guard = yield* AuthGuard
+        const result = yield* guard.requiredProviders()
+        expect(result).toContain("anthropic")
+        expect(result).toContain("openai")
+        expect(result).not.toContain("google")
+      }).pipe(Effect.provide(layer))
+    },
+  )
 })
