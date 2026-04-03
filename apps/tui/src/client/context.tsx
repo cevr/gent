@@ -140,7 +140,9 @@ export interface ClientContextValue {
   steer: (command: SteerCommandInput) => void
 
   // Extension state snapshot callback (wired by ExtensionUIProvider)
-  onExtensionSnapshot: (cb: (snapshot: { extensionId: string; model: unknown }) => void) => void
+  onExtensionSnapshot: (
+    cb: (snapshot: { extensionId: string; epoch: number; model: unknown }) => void,
+  ) => void
 }
 
 const ClientContext = createContext<ClientContextValue>()
@@ -169,7 +171,9 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   // Extension state snapshot callback — wired by ExtensionUIProvider
-  let extensionSnapshotCb: ((s: { extensionId: string; model: unknown }) => void) | undefined
+  let extensionSnapshotCb:
+    | ((s: { extensionId: string; epoch: number; model: unknown }) => void)
+    | undefined
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
     props.initialSession !== undefined
@@ -279,6 +283,7 @@ export function ClientProvider(props: ClientProviderProps) {
         if (event._tag === "ExtensionUiSnapshot" && extensionSnapshotCb !== undefined) {
           extensionSnapshotCb({
             extensionId: event.extensionId,
+            epoch: event.epoch,
             model: event.model,
           })
         }

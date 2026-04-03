@@ -41,7 +41,21 @@ const disabledRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, Bun
 /** Server-projected UI snapshot from extension state machines */
 export interface ExtensionSnapshot {
   readonly extensionId: string
+  readonly epoch: number
   readonly model: unknown
+}
+
+export const applyExtensionSnapshot = (
+  prev: ReadonlyMap<string, ExtensionSnapshot>,
+  snapshot: ExtensionSnapshot,
+): ReadonlyMap<string, ExtensionSnapshot> => {
+  const current = prev.get(snapshot.extensionId)
+  if (current !== undefined && current.epoch > snapshot.epoch) {
+    return prev
+  }
+  const next = new Map(prev)
+  next.set(snapshot.extensionId, snapshot)
+  return next
 }
 
 export interface ExtensionUIContextValue {
@@ -94,11 +108,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const [snapshots, setSnapshots] = createSignal<ReadonlyMap<string, ExtensionSnapshot>>(new Map())
 
   const updateSnapshot = (snapshot: ExtensionSnapshot) => {
-    setSnapshots((prev) => {
-      const next = new Map(prev)
-      next.set(snapshot.extensionId, snapshot)
-      return next
-    })
+    setSnapshots((prev) => applyExtensionSnapshot(prev, snapshot))
   }
 
   // Mutable overlay dispatch — wired by session controller after mount

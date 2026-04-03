@@ -11,6 +11,7 @@ import { join } from "node:path"
 import { Schema } from "effect"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { loadTuiExtensions } from "../src/extensions/loader"
+import { applyExtensionSnapshot } from "../src/extensions/context"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ExtensionClientContext } from "@gent/core/domain/extension-client.js"
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
@@ -669,6 +670,29 @@ describe("protocol resolution", () => {
     expect(byTag).toBeDefined()
     expect(byTag?.get("Alpha")).toBe(BaseProtocol.Alpha)
     expect(byTag?.get("Beta")).toBe(OverrideProtocol.Beta)
+  })
+})
+
+describe("snapshot ordering", () => {
+  test("older extension snapshots do not overwrite newer ones", () => {
+    const latest = applyExtensionSnapshot(new Map(), {
+      extensionId: "@test/shared",
+      epoch: 2,
+      model: { status: "latest" },
+    })
+
+    const merged = applyExtensionSnapshot(latest, {
+      extensionId: "@test/shared",
+      epoch: 1,
+      model: { status: "stale" },
+    })
+
+    expect(merged).toBe(latest)
+    expect(merged.get("@test/shared")).toEqual({
+      extensionId: "@test/shared",
+      epoch: 2,
+      model: { status: "latest" },
+    })
   })
 })
 
