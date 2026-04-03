@@ -8,10 +8,10 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { loadTuiExtensions } from "../src/extensions/loader"
-import { applyExtensionSnapshot } from "../src/extensions/context"
+import { applyExtensionSnapshot, decodeExtensionAskReply } from "../src/extensions/context"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ExtensionClientContext } from "@gent/core/domain/extension-client.js"
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
@@ -301,7 +301,6 @@ import { SharedProtocol } from "./shared-protocol"
 
 export default defineClientExtension({
   id: "@test/shared-client",
-  protocol: SharedProtocol,
   setup: (ctx) => ({
     commands: [
       {
@@ -326,6 +325,12 @@ export default defineClientExtension({
     expect(sent).toEqual([{ extensionId: "@test/shared", _tag: "Ping", value: "pong" }])
 
     rmSync(protocolDir, { recursive: true, force: true })
+  })
+
+  test("decodeExtensionAskReply decodes replies from request message metadata without client protocol registration", async () => {
+    const GetCount = ExtensionMessage.reply("@test/shared", "GetCount", {}, Schema.NumberFromString)
+
+    await expect(Effect.runPromise(decodeExtensionAskReply(GetCount(), "42"))).resolves.toBe(42)
   })
 
   test("nonexistent directories are handled gracefully", async () => {
@@ -636,40 +641,6 @@ describe("same-scope collision detection", () => {
     ).rejects.toThrow("Same-scope TUI overlay collision")
 
     rmSync(collisionDir, { recursive: true, force: true })
-  })
-})
-
-describe("protocol resolution", () => {
-  test("higher-scope protocol overrides merge by tag instead of dropping sibling tags", () => {
-    const BaseProtocol = {
-      Alpha: ExtensionMessage.reply("@test/shared", "Alpha", {}, Schema.String),
-      Beta: ExtensionMessage.reply("@test/shared", "Beta", {}, Schema.String),
-    }
-    const OverrideProtocol = {
-      Beta: ExtensionMessage.reply("@test/shared", "Beta", {}, Schema.Number),
-    }
-
-    const resolved = resolveTuiExtensions([
-      {
-        id: "@test/shared-builtin",
-        kind: "builtin",
-        filePath: "builtin:@test/shared-builtin",
-        protocols: [BaseProtocol.Alpha, BaseProtocol.Beta],
-        setup: {},
-      } satisfies LoadedTuiExtension,
-      {
-        id: "@test/shared-project",
-        kind: "project",
-        filePath: "project:@test/shared-project",
-        protocols: [OverrideProtocol.Beta],
-        setup: {},
-      } satisfies LoadedTuiExtension,
-    ])
-
-    const byTag = resolved.protocols.get("@test/shared")
-    expect(byTag).toBeDefined()
-    expect(byTag?.get("Alpha")).toBe(BaseProtocol.Alpha)
-    expect(byTag?.get("Beta")).toBe(OverrideProtocol.Beta)
   })
 })
 

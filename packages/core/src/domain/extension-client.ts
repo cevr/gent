@@ -7,7 +7,6 @@
 import type { InteractionEventTag, ActiveInteractionOf, InteractionResolution } from "./event"
 import type {
   AnyExtensionCommandMessage,
-  ExtensionProtocol,
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "./extension-protocol.js"
@@ -129,7 +128,6 @@ export interface ExtensionClientContext {
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */
 export interface ExtensionClientModule<TComponent = unknown> {
   readonly id: string
-  readonly protocol?: ExtensionProtocol
   readonly setup: (ctx: ExtensionClientContext) => ExtensionClientSetup<TComponent>
 }
 

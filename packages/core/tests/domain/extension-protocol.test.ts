@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import {
   ExtensionMessage,
   getExtensionMessageMetadata,
+  getExtensionReplyDecoder,
   getExtensionReplySchema,
   isExtensionRequestMessage,
   type ExtractExtensionReply,
@@ -46,6 +47,7 @@ describe("extension protocol branding", () => {
     expect(isExtensionRequestMessage(request)).toBe(true)
     expect(getExtensionMessageMetadata(request)?.kind).toBe("request")
     expect(getExtensionReplySchema(request)).toBe(GetTask.replySchema)
+    expect(getExtensionReplyDecoder(request)).toBe(GetTask.replyDecoder)
     expect(Object.keys(request)).toEqual(["extensionId", "_tag", "taskId"])
   })
 

@@ -76,6 +76,16 @@ export const applyExtensionSnapshot = (
   return next
 }
 
+export const decodeExtensionAskReply = <M extends AnyExtensionRequestMessage>(
+  message: M,
+  reply: unknown,
+) => {
+  const replyDecoder = getExtensionReplyDecoder(message)
+  return replyDecoder === undefined
+    ? Effect.succeed(reply as ExtractExtensionReply<M>)
+    : Schema.decodeUnknownEffect(replyDecoder)(reply)
+}
+
 export interface ExtensionUIContextValue {
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
@@ -116,7 +126,6 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   interactionRenderers: new Map(),
   composerSurface: undefined,
   borderLabels: [],
-  protocols: new Map(),
 }
 
 const EMPTY_HEALTH: ExtensionHealthSnapshot = {
@@ -264,11 +273,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             if (sid === undefined) {
               throw new Error("Cannot ask extension without an active session")
             }
-            const registered = resolved().protocols.get(message.extensionId)?.get(message._tag)
-            const replyDecoder =
-              registered?.kind === "request"
-                ? (registered.replyDecoder as Schema.Decoder<ExtractExtensionReply<M>>)
-                : getExtensionReplyDecoder(message)
             return clientCtx.runtime.run(
               clientCtx.client.extension
                 .ask({
@@ -276,13 +280,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                   message,
                   branchId: bid,
                 })
-                .pipe(
-                  Effect.flatMap((reply) =>
-                    replyDecoder === undefined
-                      ? Effect.succeed(reply as ExtractExtensionReply<M>)
-                      : Schema.decodeUnknownEffect(replyDecoder)(reply),
-                  ),
-                ),
+                .pipe(Effect.flatMap((reply) => decodeExtensionAskReply(message, reply))),
             )
           },
           getSnapshot: (extensionId) => {

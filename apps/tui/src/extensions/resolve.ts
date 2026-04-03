@@ -6,7 +6,6 @@
  */
 
 import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
-import type { AnyExtensionMessageDefinition } from "@gent/core/domain/extension-protocol.js"
 import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
@@ -23,7 +22,6 @@ export interface LoadedTuiExtension {
   readonly id: string
   readonly kind: ExtensionKind
   readonly filePath: string
-  readonly protocols?: ReadonlyArray<AnyExtensionMessageDefinition>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly setup: ExtensionClientSetup<any>
 }
@@ -49,7 +47,6 @@ export interface ResolvedTuiExtensions {
   readonly interactionRenderers: Map<InteractionEventTag, SolidComponent>
   readonly composerSurface: SolidComponent | undefined
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
-  readonly protocols: ReadonlyMap<string, ReadonlyMap<string, AnyExtensionMessageDefinition>>
 }
 
 interface ScopeEntry {
@@ -221,29 +218,6 @@ const resolveComposerSurface = (
   return winner
 }
 
-const resolveProtocols = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-): ReadonlyMap<string, ReadonlyMap<string, AnyExtensionMessageDefinition>> => {
-  const protocols = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
-  const scopes = new Map<string, ScopeEntry>()
-
-  for (const ext of sorted) {
-    if (ext.protocols === undefined || ext.protocols.length === 0) continue
-
-    for (const definition of ext.protocols) {
-      const collisionKey = `${definition.extensionId}:${definition._tag}`
-      checkCollision(scopes.get(collisionKey), ext, "protocol message", collisionKey)
-      const byTag =
-        protocols.get(definition.extensionId) ?? new Map<string, AnyExtensionMessageDefinition>()
-      byTag.set(definition._tag, definition)
-      protocols.set(definition.extensionId, byTag)
-      scopes.set(collisionKey, { kind: ext.kind, source: ext.filePath })
-    }
-  }
-
-  return protocols
-}
-
 /**
  * Resolve all TUI extension contributions with scope precedence.
  * Higher scope wins for same key. Same-scope collisions throw.
@@ -279,6 +253,5 @@ export const resolveTuiExtensions = (
     interactionRenderers: resolveInteractionRenderers(sorted),
     composerSurface: resolveComposerSurface(sorted),
     borderLabels,
-    protocols: resolveProtocols(sorted),
   }
 }
