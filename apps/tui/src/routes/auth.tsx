@@ -249,10 +249,12 @@ export function Auth(props: AuthProps) {
             }),
           ),
           Effect.tap((authorization) => {
+            if (!isCurrentRouteVersion(currentRouteVersion)) return Effect.void
             if (authorization === null || authorization.method === "done") return Effect.void
             return openAuthorization(authorization.url)
           }),
           Effect.tap((authorization) => {
+            if (!isCurrentRouteVersion(currentRouteVersion)) return Effect.void
             if (authorization === null || authorization.method === "done") return Effect.void
             if (authorization.method === "auto") {
               return Effect.sync(() =>

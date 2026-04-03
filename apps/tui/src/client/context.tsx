@@ -165,10 +165,11 @@ interface ClientProviderProps extends ParentProps {
   runtime: GentRuntime
   log: ClientLog
   initialSession: Session | undefined
+  initialAgent?: AgentName
 }
 
 export function ClientProvider(props: ClientProviderProps) {
-  const defaultAgent: AgentName = "cowork"
+  const defaultAgent: AgentName = props.initialAgent ?? "cowork"
   const client = props.client
   const runtime = props.runtime
   const log = props.log

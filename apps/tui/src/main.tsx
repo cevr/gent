@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Fiber, Layer, Logger, Option, Tracer } from "effect"
+import { Config, Console, Effect, Fiber, Layer, Logger, Option, Schema, Tracer } from "effect"
 import { makeClientTraceLogger } from "./utils/client-trace-logger"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
@@ -9,6 +9,7 @@ import { RegistryProvider } from "./atom-solid/solid"
 import { LinkOpener } from "@gent/core/domain/link-opener.js"
 import { OsService } from "@gent/core/domain/os-service.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
+import { AgentName as AgentNameSchema, type AgentName } from "@gent/core/domain/agent.js"
 
 import { render } from "@opentui/solid"
 import { App } from "./app"
@@ -98,9 +99,11 @@ const main = Command.make(
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => shutdownLog("shutdown.finalizer.post-spawn")),
       )
+      const initialAgent: AgentName | undefined =
+        Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
 
       const authProviders = yield* bundle.client.auth.listProviders({
-        ...(Option.isSome(agent) ? { agentName: agent.value } : {}),
+        ...(initialAgent !== undefined ? { agentName: initialAgent } : {}),
       })
       const missingProviders = authProviders
         .filter((provider) => provider.required && !provider.hasKey)
@@ -185,6 +188,7 @@ const main = Command.make(
                   runtime={bundle.runtime}
                   log={log}
                   initialSession={bootstrap.initialSession}
+                  initialAgent={initialAgent}
                 >
                   <ExtensionUIProvider>
                     <RouterProvider initialRoute={bootstrap.initialRoute}>

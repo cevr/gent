@@ -215,4 +215,102 @@ describe("Auth route", () => {
     expect(frame).not.toContain("API key saved for anthropic")
     setup.renderer.destroy()
   })
+
+  test("ignores stale oauth callbacks after the selected agent changes", async () => {
+    let setAgentName: ((value: string) => void) | undefined
+    let resolveAuthorize:
+      | ((authorization: {
+          authorizationId: string
+          url: string
+          method: "auto"
+          instructions?: string
+        }) => void)
+      | undefined
+    const callbackCalls: Array<{ provider: string; authorizationId: string }> = []
+
+    const client = createMockClient({
+      auth: {
+        listProviders: (input: { agentName?: string }) =>
+          Effect.succeed(
+            input.agentName === "deepwork"
+              ? [
+                  {
+                    provider: "openai",
+                    hasKey: false,
+                    required: false,
+                    source: "none",
+                    authType: undefined,
+                  },
+                ]
+              : [
+                  {
+                    provider: "anthropic",
+                    hasKey: false,
+                    required: false,
+                    source: "none",
+                    authType: undefined,
+                  },
+                ],
+          ),
+        listMethods: () =>
+          Effect.succeed({
+            anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+        authorize: ({ provider }: { provider: string; method: number; sessionId: string }) => {
+          if (provider !== "anthropic") return Effect.succeed(null)
+          return Effect.promise(
+            () =>
+              new Promise<{
+                authorizationId: string
+                url: string
+                method: "auto"
+                instructions?: string
+              }>((resolve) => {
+                resolveAuthorize = resolve
+              }),
+          )
+        },
+        callback: ({ provider, authorizationId }: { provider: string; authorizationId: string }) =>
+          Effect.sync(() => {
+            callbackCalls.push({ provider, authorizationId })
+          }),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(
+      () => {
+        const [agentName, setAgent] = createSignal("cowork")
+        setAgentName = setAgent
+        return <Auth client={client} runtime={runtime} log={log} agentName={agentName()} />
+      },
+      {
+        client,
+        runtime,
+        initialRoute: Route.auth(),
+      },
+    )
+
+    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+
+    setAgentName?.("deepwork")
+    await waitForFrame(setup, (frame) => frame.includes("openai"))
+
+    resolveAuthorize?.({
+      authorizationId: "auth-old",
+      url: "https://example.com/oauth",
+      method: "auto",
+    })
+    await setup.renderOnce()
+    await setup.renderOnce()
+
+    expect(callbackCalls).toEqual([])
+    setup.renderer.destroy()
+  })
 })

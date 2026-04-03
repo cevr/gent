@@ -97,4 +97,45 @@ describe("App auth gate", () => {
     expect(frame).toContain("API Keys")
     setup.renderer.destroy()
   })
+
+  test("seeds startup auth gating from the initial selected agent", async () => {
+    const calls: Array<{ agentName?: string }> = []
+    const client = createMockClient({
+      auth: {
+        listProviders: (input: { agentName?: string }) => {
+          calls.push(input)
+          if (input.agentName === "deepwork") {
+            return Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: "none",
+                authType: undefined,
+              },
+            ])
+          }
+          return Effect.succeed([])
+        },
+        listMethods: () =>
+          Effect.succeed({
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+      client,
+      runtime,
+      initialAgent: "deepwork",
+      initialRoute: Route.auth(),
+    })
+
+    const frame = await waitForFrame(setup, (next) => next.includes("API Keys"))
+
+    expect(calls[0]).toEqual({ agentName: "deepwork" })
+    expect(frame).toContain("API Keys")
+    setup.renderer.destroy()
+  })
 })

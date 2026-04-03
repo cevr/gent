@@ -17,6 +17,7 @@ import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import type { SessionInfo, SessionRuntime } from "@gent/sdk"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import type { AgentName } from "@gent/core/domain/agent"
 import type { ClientLog } from "../src/utils/client-logger"
 
 const noop = () => {}
@@ -167,6 +168,7 @@ export const renderWithProviders = async (
     client?: GentNamespacedClient
     runtime?: GentRuntime
     initialSession?: SessionInfo
+    initialAgent?: AgentName
     initialRoute?: AppRoute
     width?: number
     height?: number
@@ -195,6 +197,7 @@ export const renderWithProviders = async (
                     runtime={runtime}
                     log={noopLog}
                     initialSession={options?.initialSession}
+                    initialAgent={options?.initialAgent}
                   >
                     <WorkspaceProvider
                       cwd={options?.cwd ?? defaultWorkspaceCwd}
