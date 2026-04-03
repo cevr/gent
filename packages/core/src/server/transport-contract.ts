@@ -424,6 +424,12 @@ export const ExtensionManifestInfo = Schema.Struct({
 })
 export type ExtensionManifestInfo = typeof ExtensionManifestInfo.Type
 
+export const ScheduledJobFailureInfo = Schema.Struct({
+  jobId: Schema.String,
+  error: Schema.String,
+})
+export type ScheduledJobFailureInfo = typeof ScheduledJobFailureInfo.Type
+
 export const ExtensionStatusInfo = Schema.Struct({
   manifest: ExtensionManifestInfo,
   kind: Schema.Literals(["builtin", "user", "project"]),
@@ -432,6 +438,7 @@ export const ExtensionStatusInfo = Schema.Struct({
   phase: Schema.optional(ExtensionActivationPhase),
   error: Schema.optional(Schema.String),
   actor: Schema.optional(ExtensionActorStatusInfo),
+  scheduledJobFailures: Schema.optional(Schema.Array(ScheduledJobFailureInfo)),
 })
 export type ExtensionStatusInfo = typeof ExtensionStatusInfo.Type
 

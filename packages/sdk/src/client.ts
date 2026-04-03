@@ -340,6 +340,7 @@ export interface GentLocalOptions {
   readonly persistenceMode?: DependenciesConfig["persistenceMode"]
   readonly providerMode?: DependenciesConfig["providerMode"]
   readonly disabledExtensions?: DependenciesConfig["disabledExtensions"]
+  readonly scheduledJobCommand?: DependenciesConfig["scheduledJobCommand"]
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -379,6 +380,9 @@ const resolveLocalDependenciesConfig = (options: GentLocalOptions): Dependencies
   if (options.shell !== undefined) config.shell = options.shell
   if (options.authFilePath !== undefined) config.authFilePath = options.authFilePath
   if (options.authKeyPath !== undefined) config.authKeyPath = options.authKeyPath
+  if (options.scheduledJobCommand !== undefined) {
+    config.scheduledJobCommand = options.scheduledJobCommand
+  }
 
   return config
 }

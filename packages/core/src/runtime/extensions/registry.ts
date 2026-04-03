@@ -11,6 +11,7 @@ import type {
   ProviderAuthInfo,
   ProviderContribution,
   RunContext,
+  ScheduledJobFailureInfo,
   TagInjection,
 } from "../../domain/extension.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -33,6 +34,8 @@ export interface ResolvedExtensions {
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
 }
+
+type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<ScheduledJobFailureInfo>>
 
 /** Compile a keyed contribution from sorted extensions. Later scope wins. */
 const compileContributions = <T>(
@@ -57,6 +60,7 @@ const failureKey = (failure: FailedExtension) =>
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
   failedExtensions: ReadonlyArray<FailedExtension> = [],
+  scheduledJobFailures: ScheduledJobFailureByExtension = new Map(),
 ): ResolvedExtensions => {
   const validationFailures = collectValidationFailures(extensions)
   const validationFailed = [...validationFailures.values()].map(({ ext, errors }) => ({
@@ -125,10 +129,16 @@ export const resolveExtensions = (
       kind: ext.kind,
       sourcePath: ext.sourcePath,
       status: "active" as const,
+      ...(scheduledJobFailures.has(ext.manifest.id)
+        ? { scheduledJobFailures: scheduledJobFailures.get(ext.manifest.id) }
+        : {}),
     })),
     ...mergedFailures.map((failure) => ({
       ...failure,
       status: "failed" as const,
+      ...(scheduledJobFailures.has(failure.manifest.id)
+        ? { scheduledJobFailures: scheduledJobFailures.get(failure.manifest.id) }
+        : {}),
     })),
   ]
 
@@ -372,8 +382,11 @@ export class ExtensionRegistry extends ServiceMap.Service<
   static LiveWithFailures = (
     extensions: ReadonlyArray<LoadedExtension>,
     failedExtensions: ReadonlyArray<FailedExtension>,
+    scheduledJobFailures: ScheduledJobFailureByExtension = new Map(),
   ): Layer.Layer<ExtensionRegistry> =>
-    ExtensionRegistry.fromResolved(resolveExtensions(extensions, failedExtensions))
+    ExtensionRegistry.fromResolved(
+      resolveExtensions(extensions, failedExtensions, scheduledJobFailures),
+    )
 
   static Test = (): Layer.Layer<ExtensionRegistry> =>
     ExtensionRegistry.fromResolved(resolveExtensions([]))

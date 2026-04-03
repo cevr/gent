@@ -39,6 +39,11 @@ export interface FailedExtension {
   readonly error: string
 }
 
+export interface ScheduledJobFailureInfo {
+  readonly jobId: string
+  readonly error: string
+}
+
 export type ExtensionStatusInfo =
   | {
       readonly manifest: ExtensionManifest
@@ -46,6 +51,7 @@ export type ExtensionStatusInfo =
       readonly sourcePath: string
       readonly status: "active"
       readonly actor?: ExtensionActorStatusInfo
+      readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     }
   | ({
       readonly manifest: ExtensionManifest
@@ -53,6 +59,7 @@ export type ExtensionStatusInfo =
       readonly sourcePath: string
       readonly status: "failed"
       readonly actor?: ExtensionActorStatusInfo
+      readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     } & FailedExtension)
 
 export type ExtensionActorLifecycleStatus = "starting" | "running" | "failed"
@@ -299,6 +306,22 @@ export interface InteractionHandlerContribution {
   readonly layer: Layer.Layer<never, never, object>
 }
 
+export interface ScheduledJobHeadlessAgentTarget {
+  readonly kind: "headless-agent"
+  readonly agent: AgentName
+  readonly prompt: string
+  readonly cwd?: string
+}
+
+export type ScheduledJobTarget = ScheduledJobHeadlessAgentTarget
+
+export interface ScheduledJobContribution {
+  /** Extension-local id. Host namespaces with extension id when installing. */
+  readonly id: string
+  readonly schedule: string
+  readonly target: ScheduledJobTarget
+}
+
 // Extension Setup — what an extension provides
 
 export interface ExtensionSetup {
@@ -317,6 +340,8 @@ export interface ExtensionSetup {
   readonly providers?: ReadonlyArray<ProviderContribution>
   /** Interaction handler implementations — replaces default handlers when provided */
   readonly interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
+  /** Durable host-owned scheduled jobs contributed by the extension. */
+  readonly scheduledJobs?: ReadonlyArray<ScheduledJobContribution>
   /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
   readonly promptSections?: ReadonlyArray<PromptSection>
   /** Fire-and-forget event observers. Receive raw AgentEvent after reduction.

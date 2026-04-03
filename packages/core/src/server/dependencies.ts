@@ -6,6 +6,7 @@ import type {
   FailedExtension,
   InteractionHandlerType,
   LoadedExtension,
+  ScheduledJobFailureInfo,
 } from "../domain/extension.js"
 import {
   BaseEventStore,
@@ -38,6 +39,10 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
+import {
+  reconcileScheduledJobs,
+  type ScheduledJobCommand,
+} from "../runtime/extensions/scheduler.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -67,9 +72,22 @@ export interface DependenciesConfig {
   persistenceMode?: "disk" | "memory"
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
+  scheduledJobCommand?: ScheduledJobCommand
 }
 
 import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
+
+const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, string>> => ({
+  HOME: config.home,
+  ...(config.shell !== undefined ? { SHELL: config.shell } : {}),
+  ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
+  ...(config.authFilePath !== undefined ? { GENT_AUTH_FILE_PATH: config.authFilePath } : {}),
+  ...(config.authKeyPath !== undefined ? { GENT_AUTH_KEY_PATH: config.authKeyPath } : {}),
+  ...(config.persistenceMode !== undefined
+    ? { GENT_PERSISTENCE_MODE: config.persistenceMode }
+    : {}),
+  ...(config.providerMode !== undefined ? { GENT_PROVIDER_MODE: config.providerMode } : {}),
+})
 
 const makeExtensionLayers = (config: DependenciesConfig) =>
   Layer.unwrap(
@@ -170,6 +188,33 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       }
       failedExtensions.push(...activated.failed)
 
+      const scheduledJobFailures = yield* reconcileScheduledJobs({
+        extensions: activated.active,
+        home: config.home,
+        command: config.scheduledJobCommand,
+        env: scheduledJobEnv(config),
+      })
+      for (const failure of scheduledJobFailures) {
+        yield* Effect.logWarning("extension.scheduled-job.failed").pipe(
+          Effect.annotateLogs({
+            extensionId: failure.extensionId,
+            jobId: failure.jobId,
+            error: failure.error,
+          }),
+        )
+      }
+      const scheduledJobFailuresByExtension = new Map<
+        string,
+        ReadonlyArray<ScheduledJobFailureInfo>
+      >()
+      for (const failure of scheduledJobFailures) {
+        const existing = scheduledJobFailuresByExtension.get(failure.extensionId) ?? []
+        scheduledJobFailuresByExtension.set(failure.extensionId, [
+          ...existing,
+          { jobId: failure.jobId, error: failure.error },
+        ])
+      }
+
       // Collect extension-provided layers (setup.layer — default phase)
       const extensionLayers = activated.active
         .filter((ext) => ext.setup.layer !== undefined)
@@ -190,7 +235,11 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       )
 
       const baseLayers = Layer.mergeAll(
-        ExtensionRegistry.LiveWithFailures(activated.active, failedExtensions),
+        ExtensionRegistry.LiveWithFailures(
+          activated.active,
+          failedExtensions,
+          scheduledJobFailuresByExtension,
+        ),
         ExtensionStateRuntime.Live(activated.active),
         ExtensionEventBus.withSubscriptions(busSubscriptions),
       )

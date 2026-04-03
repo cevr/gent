@@ -27,6 +27,13 @@ const resolveProviderMode = (value: string | undefined) => {
   return "live" as const
 }
 
+const resolveScheduledJobCommand = (): readonly [string, ...ReadonlyArray<string>] | undefined => {
+  const runtimePath = process.execPath
+  if (!runtimePath.includes("bun")) return undefined
+  const cliEntryUrl = new URL("../../tui/src/main.tsx", import.meta.url)
+  return [runtimePath, cliEntryUrl.pathname]
+}
+
 const resolveRuntimeConfig = Effect.gen(function* () {
   const portRaw = yield* Config.option(Config.string("GENT_PORT"))
   const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
@@ -134,6 +141,7 @@ const program = Effect.scoped(
       authKeyPath: config.authKeyPath,
       persistenceMode: config.persistenceMode,
       providerMode: config.providerMode,
+      scheduledJobCommand: resolveScheduledJobCommand(),
     }).pipe(
       Layer.provide(PlatformLayer),
       Layer.provide(GentLogger),

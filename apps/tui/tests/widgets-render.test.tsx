@@ -225,6 +225,30 @@ describe("TUI renderer surfaces", () => {
     expect(frame).toContain("@gent/plan")
   })
 
+  test("ConnectionWidget surfaces failed scheduled jobs", async () => {
+    const setup = await renderWithProviders(() => <ConnectionWidget />, {
+      client: createMockClient({
+        extension: {
+          listStatus: () =>
+            Effect.succeed([
+              {
+                manifest: { id: "@gent/memory" },
+                kind: "builtin",
+                sourcePath: "builtin",
+                status: "active" as const,
+                scheduledJobFailures: [{ jobId: "reflect", error: "launchd registration failed" }],
+              },
+            ]),
+        },
+      }),
+    })
+
+    const frame = renderFrame(setup)
+    expect(frame).toContain("connection")
+    expect(frame).toContain("failed scheduled jobs")
+    expect(frame).toContain("@gent/memory:reflect")
+  })
+
   test("ConnectionWidget refreshes extension status after reconnect generation changes", async () => {
     const lifecycle = createMutableRuntime({ _tag: "connected", generation: 0 })
     let currentStatuses = [

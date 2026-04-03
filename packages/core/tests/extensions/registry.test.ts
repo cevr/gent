@@ -214,6 +214,24 @@ describe("resolveExtensions", () => {
       "ext-b",
     ])
   })
+
+  test("merges scheduled job failures into extension statuses", () => {
+    const resolved = resolveExtensions(
+      [makeExt("@gent/memory", "builtin")],
+      [],
+      new Map([["@gent/memory", [{ jobId: "reflect", error: "launchd registration failed" }]]]),
+    )
+
+    expect(resolved.extensionStatuses).toEqual([
+      {
+        manifest: { id: "@gent/memory" },
+        kind: "builtin",
+        sourcePath: "/test/@gent/memory",
+        status: "active",
+        scheduledJobFailures: [{ jobId: "reflect", error: "launchd registration failed" }],
+      },
+    ])
+  })
 })
 
 describe("resolveExtensions — disabled filtering", () => {

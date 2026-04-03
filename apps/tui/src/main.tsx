@@ -83,6 +83,7 @@ const resolveLocalOptions = (cwd: string) =>
 
     return {
       cwd,
+      scheduledJobCommand: resolveScheduledJobCommand(),
       ...(Option.isSome(homeOpt) ? { home: homeOpt.value } : {}),
       ...(Option.isSome(shellOpt) ? { shell: shellOpt.value } : {}),
       ...(Option.isSome(dataDirOpt) ? { dataDir: dataDirOpt.value } : {}),
@@ -93,6 +94,22 @@ const resolveLocalOptions = (cwd: string) =>
       ...(providerMode !== undefined ? { providerMode } : {}),
     }
   })
+
+const resolveScheduledJobCommand = (): readonly [string, ...ReadonlyArray<string>] => {
+  const runtimePath = process.execPath
+  const mainEntry = typeof Bun !== "undefined" ? Bun.main : undefined
+  if (
+    mainEntry !== undefined &&
+    mainEntry.length > 0 &&
+    (mainEntry.endsWith(".ts") ||
+      mainEntry.endsWith(".tsx") ||
+      mainEntry.endsWith(".js") ||
+      mainEntry.endsWith(".mjs"))
+  ) {
+    return [runtimePath, mainEntry]
+  }
+  return [runtimePath]
+}
 
 const resolveParentSpan = () =>
   Effect.gen(function* () {

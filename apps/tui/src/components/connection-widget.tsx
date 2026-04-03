@@ -18,21 +18,31 @@ export function ConnectionWidget() {
     extensionUI.statuses().filter((status) => status.status === "failed")
   const failedActors = () =>
     extensionUI.statuses().filter((status) => status.actor?.status === "failed")
+  const failedScheduledJobs = () =>
+    extensionUI.statuses().flatMap((status) =>
+      (status.scheduledJobFailures ?? []).map((failure) => ({
+        extensionId: status.manifest.id,
+        jobId: failure.jobId,
+      })),
+    )
   const hasFailedExtensions = () => failedExtensions().length > 0
   const hasFailedActors = () => failedActors().length > 0
+  const hasFailedScheduledJobs = () => failedScheduledJobs().length > 0
   const visible = () =>
     client.isReconnecting() ||
     client.connectionIssue() !== null ||
     disconnectedReason() !== null ||
     hasFailedExtensions() ||
-    hasFailedActors()
+    hasFailedActors() ||
+    hasFailedScheduledJobs()
   const accent = () => {
     if (client.isReconnecting()) return theme.warning
-    if (hasFailedExtensions() || hasFailedActors()) return theme.warning
+    if (hasFailedExtensions() || hasFailedActors() || hasFailedScheduledJobs()) return theme.warning
     return theme.error
   }
   const subtitle = () => {
     if (client.isReconnecting()) return "worker reconnect in progress"
+    if (hasFailedScheduledJobs()) return "scheduled jobs degraded"
     if (hasFailedActors()) return "extension runtime degraded"
     if (hasFailedExtensions()) return "extension activation degraded"
     if (disconnectedReason() !== null) return "runtime unavailable"
@@ -93,6 +103,17 @@ export function ConnectionWidget() {
                 failed session actors:{" "}
                 {failedActors()
                   .map((status) => status.manifest.id)
+                  .join(", ")}
+              </span>
+            </text>
+          </Show>
+          <Show when={hasFailedScheduledJobs()}>
+            <text>
+              <span style={{ fg: accent() }}>{"│ "}</span>
+              <span style={{ fg: theme.text }}>
+                failed scheduled jobs:{" "}
+                {failedScheduledJobs()
+                  .map((failure) => `${failure.extensionId}:${failure.jobId}`)
                   .join(", ")}
               </span>
             </text>

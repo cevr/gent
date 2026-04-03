@@ -1,38 +1,35 @@
-// @effect-diagnostics nodeBuiltinImport:off
+import type { AgentName } from "../../domain/agent.js"
+import type { ScheduledJobContribution } from "../../domain/extension.js"
+
 /**
- * Dream scheduling — registers Bun.cron jobs for memory consolidation.
+ * Durable host-owned jobs for memory consolidation.
  *
- * Registered via extension onStartup hook during dependency initialization.
- * Idempotent — same title overwrites the launchd plist.
- * The dream worker shells out to gent headless with the appropriate memory agent.
+ * The extension declares these jobs. Host startup installs/removes them.
+ * No scheduler side effects happen during extension setup or actor startup.
  */
 
-import * as Path from "node:path"
-import { Effect } from "effect"
+const MEMORY_REFLECT_AGENT = "memory:reflect" as AgentName
+const MEMORY_MEDITATE_AGENT = "memory:meditate" as AgentName
 
-const WORKER_PATH = Path.resolve(import.meta.dir, "dream-worker.ts")
-
-/**
- * Register dream cron jobs. Idempotent — same title overwrites.
- */
-export const registerDreamJobs = Effect.sync(() => {
-  if (typeof Bun === "undefined" || typeof Bun.cron !== "function") {
-    // Not running in Bun or cron not available — skip silently
-    return
-  }
-
-  // Daily reflect: weekdays 9pm — review today's sessions
-  Bun.cron(WORKER_PATH, "0 21 * * 1-5", "gent-memory-reflect")
-
-  // Weekly meditate: Sunday 9am — consolidate vault
-  Bun.cron(WORKER_PATH, "0 9 * * 0", "gent-memory-meditate")
-})
-
-/**
- * Remove dream cron jobs.
- */
-export const removeDreamJobs = Effect.sync(() => {
-  if (typeof Bun === "undefined" || typeof Bun.cron !== "function") return
-  Bun.cron.remove("gent-memory-reflect")
-  Bun.cron.remove("gent-memory-meditate")
-})
+export const MemoryDreamJobs = (): ReadonlyArray<ScheduledJobContribution> => [
+  {
+    id: "reflect",
+    schedule: "0 21 * * 1-5",
+    target: {
+      kind: "headless-agent",
+      agent: MEMORY_REFLECT_AGENT,
+      prompt:
+        "Review today's sessions and extract memories worth keeping. Focus on corrections, preferences, decisions, and gotchas.",
+    },
+  },
+  {
+    id: "meditate",
+    schedule: "0 9 * * 0",
+    target: {
+      kind: "headless-agent",
+      agent: MEMORY_MEDITATE_AGENT,
+      prompt:
+        "Review all stored memories. Merge duplicates, prune noise, and promote recurring project patterns to global principles.",
+    },
+  },
+]

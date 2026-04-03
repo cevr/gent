@@ -49,6 +49,7 @@ import {
   type ExtensionEffect,
   type ProviderContribution,
   type InteractionHandlerContribution,
+  type ScheduledJobContribution,
   type TagInjection,
   type SpawnExtensionRef,
 } from "../domain/extension.js"
@@ -106,6 +107,7 @@ export {
   type ExtensionInterceptorMap,
   type ProviderContribution,
   type InteractionHandlerContribution,
+  type ScheduledJobContribution,
   type TagInjection,
   type SpawnExtensionRef,
   type ExtensionProjectionConfig,
@@ -397,6 +399,8 @@ export interface ExtensionBuilder {
   provider(provider: ProviderContribution): void
   /** Register an interaction handler. */
   interactionHandler(handler: InteractionHandlerContribution): void
+  /** Register a durable host-owned scheduled job. */
+  scheduledJob(job: ScheduledJobContribution): void
   /** Register a tag-conditional tool injection. */
   tagInjection(injection: TagInjection): void
   /** Register an Effect-based startup hook. Composes with onStartup(). */
@@ -705,6 +709,7 @@ export const extension = (
       const shutdownEffects: Array<Effect.Effect<void>> = []
       const providers: ProviderContribution[] = []
       const interactionHandlers: InteractionHandlerContribution[] = []
+      const scheduledJobs: ScheduledJobContribution[] = []
       const tagInjections: TagInjection[] = []
       const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
       const busSubscriptions: BusSubscriptionEntry[] = []
@@ -875,6 +880,7 @@ export const extension = (
         },
         provider: (p) => providers.push(p),
         interactionHandler: (h) => interactionHandlers.push(h),
+        scheduledJob: (job) => scheduledJobs.push(job),
         tagInjection: (t) => tagInjections.push(t),
         onStartupEffect: (e) => startupEffects.push(e),
         onShutdownEffect: (e) => shutdownEffects.push(e),
@@ -935,6 +941,7 @@ export const extension = (
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
         ...(providers.length > 0 ? { providers } : {}),
         ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
+        ...(scheduledJobs.length > 0 ? { scheduledJobs } : {}),
         ...(tagInjections.length > 0 ? { tagInjections } : {}),
         ...(observers.length > 0 ? { observers } : {}),
         ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),

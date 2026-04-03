@@ -3,7 +3,7 @@
  *
  * Three-tier: global, per-project, session-local.
  * Flat .md files at ~/.gent/memory/ for durability.
- * Agent tools (remember, recall, forget) + intent API.
+ * Agent tools (remember, recall, forget) + durable dream job declarations.
  * Prompt injection: compact summary + recall tool for deep dives.
  */
 
@@ -26,7 +26,7 @@ import { MemoryIntent } from "./intents.js"
 import { deriveProjection } from "./projection.js"
 import { MemoryAgents } from "./agents.js"
 import { MemoryVault, Live as MemoryVaultLive, projectKey } from "./vault.js"
-import { registerDreamJobs, removeDreamJobs } from "./dreaming.js"
+import { MemoryDreamJobs } from "./dreaming.js"
 
 export const MEMORY_EXTENSION_ID = "@gent/memory"
 
@@ -110,6 +110,7 @@ export const MemoryExtension = extension("@gent/memory", (ext) => {
   }
   ext.actor(memoryActor)
   ext.layer(MemoryVaultLive())
-  ext.onStartupEffect(registerDreamJobs)
-  ext.onShutdownEffect(removeDreamJobs)
+  for (const job of MemoryDreamJobs()) {
+    ext.scheduledJob(job)
+  }
 })
