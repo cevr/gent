@@ -5,7 +5,7 @@
  * largest shared pieces between the two actor constructors.
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Schema, ServiceMap } from "effect"
 import type {
   ExtensionDeriveContext,
   ExtensionEffect,
@@ -14,6 +14,11 @@ import type {
 } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
+
+export class CurrentExtensionSession extends ServiceMap.Service<
+  CurrentExtensionSession,
+  { readonly sessionId: SessionId }
+>()("@gent/core/src/runtime/extensions/CurrentExtensionSession") {}
 
 /**
  * Typed persistence codec — wraps Schema.fromJsonString preserving the State type.

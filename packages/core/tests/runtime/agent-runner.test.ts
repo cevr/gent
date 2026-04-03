@@ -23,8 +23,8 @@ import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
 } from "@gent/core/runtime/extensions/state-runtime"
-import { makeReducingEventStore } from "@gent/core/server/dependencies"
 import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 
 const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -36,6 +36,11 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
     },
   ]),
 )
+
+const withEventPublisher = (
+  baseEventStoreLayer: Layer.Layer<EventStore>,
+  stateRuntimeLayer: Layer.Layer<ExtensionStateRuntime> = ExtensionStateRuntime.Test(),
+) => Layer.provide(EventPublisherLive, Layer.merge(baseEventStoreLayer, stateRuntimeLayer))
 
 describe("AgentExecutionOverrides", () => {
   test("resolveDualModelPair returns cowork/deepwork models from registry", () => {
@@ -70,6 +75,7 @@ describe("AgentExecutionOverrides", () => {
       | undefined
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
@@ -90,6 +96,7 @@ describe("AgentExecutionOverrides", () => {
       }),
       recorderLayer,
       eventStoreLayer,
+      eventPublisherLayer,
     )
     const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -140,6 +147,7 @@ describe("AgentRunner", () => {
   test("publishes spawn and complete events", async () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
@@ -157,6 +165,7 @@ describe("AgentRunner", () => {
       }),
       recorderLayer,
       eventStoreLayer,
+      eventPublisherLayer,
     )
     const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -204,6 +213,7 @@ describe("AgentRunner", () => {
   test("propagates failures without retry (no maxAttempts)", async () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
@@ -221,6 +231,7 @@ describe("AgentRunner", () => {
       }),
       recorderLayer,
       eventStoreLayer,
+      eventPublisherLayer,
     )
     const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -262,6 +273,8 @@ describe("AgentRunner", () => {
   })
 
   test("fails with timeout", async () => {
+    const eventStoreLayer = EventStore.Test()
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
@@ -277,7 +290,8 @@ describe("AgentRunner", () => {
         getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
         isRunning: () => Effect.succeed(false),
       }),
-      EventStore.Test(),
+      eventStoreLayer,
+      eventPublisherLayer,
     )
     const runnerLayer = InProcessRunner({ timeoutMs: 5 }).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -319,9 +333,12 @@ describe("AgentRunner", () => {
   })
 
   test("ephemeral helper runs do not persist child sessions", async () => {
+    const eventStoreLayer = EventStore.Test()
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
-      EventStore.Test(),
+      eventStoreLayer,
+      eventPublisherLayer,
       testRegistryLayer,
       Provider.Test([
         [new TextChunk({ text: "ephemeral response" }), new FinishChunk({ finishReason: "stop" })],
@@ -385,9 +402,12 @@ describe("AgentRunner", () => {
 
   test("ephemeral helper runs mirror child tool events into the parent store", async () => {
     const storageLayer = Storage.TestWithSql()
+    const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       storageLayer,
-      EventStoreLive.pipe(Layer.provide(storageLayer)),
+      eventStoreLayer,
+      eventPublisherLayer,
       testRegistryLayer,
       Provider.Test([
         [
@@ -479,14 +499,14 @@ describe("AgentRunner", () => {
       terminateAll: () => Effect.void,
       notifyObservers: () => Effect.void,
     }
-    const reducingEventStoreLayer = Layer.provide(
-      makeReducingEventStore,
+    const eventPublisherLayer = Layer.provide(
+      EventPublisherLive,
       Layer.merge(baseEventStoreLayer, Layer.succeed(ExtensionStateRuntime, stateRuntime)),
     )
     const deps = Layer.mergeAll(
       storageLayer,
       baseEventStoreLayer,
-      reducingEventStoreLayer,
+      eventPublisherLayer,
       testRegistryLayer,
       Provider.Test([
         [
@@ -567,6 +587,10 @@ describe("AgentRunner", () => {
           observedTags.push(event._tag)
         }),
     }
+    const eventPublisherLayer = Layer.provide(
+      EventPublisherLive,
+      Layer.merge(baseEventStoreLayer, Layer.succeed(ExtensionStateRuntime, stateRuntime)),
+    )
     const bus = {
       emit: (envelope: { channel: string }) =>
         Effect.sync(() => {
@@ -577,6 +601,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       storageLayer,
       baseEventStoreLayer,
+      eventPublisherLayer,
       testRegistryLayer,
       Provider.Test([
         [
@@ -644,6 +669,8 @@ describe("AgentRunner", () => {
   })
 
   test("durable override persists child sessions for helper agents", async () => {
+    const eventStoreLayer = EventStore.Test()
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
@@ -659,7 +686,8 @@ describe("AgentRunner", () => {
         getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
         isRunning: () => Effect.succeed(false),
       }),
-      EventStore.Test(),
+      eventStoreLayer,
+      eventPublisherLayer,
     )
     const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)

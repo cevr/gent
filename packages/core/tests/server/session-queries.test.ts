@@ -7,6 +7,7 @@ import type { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionQueries } from "@gent/core/server/session-queries"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess } from "@gent/core/runtime/actor-process"
@@ -46,12 +47,14 @@ describe("Session Snapshot", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(
       baseWithEventStore,
+      eventPublisherLayer,
       AgentLoop.Test(),
       AskUserHandler.Test([["yes"]]),
-      Layer.provide(PromptHandler.Live, baseWithEventStore),
-      Layer.provide(HandoffHandler.Live, baseWithEventStore),
+      Layer.provide(PromptHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
+      Layer.provide(HandoffHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
     )
     const testLayer = Layer.provideMerge(AppServicesLive, deps)
 
@@ -91,12 +94,14 @@ describe("Session Tree", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(
       baseWithEventStore,
+      eventPublisherLayer,
       AgentLoop.Test(),
       AskUserHandler.Test([["yes"]]),
-      Layer.provide(PromptHandler.Live, baseWithEventStore),
-      Layer.provide(HandoffHandler.Live, baseWithEventStore),
+      Layer.provide(PromptHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
+      Layer.provide(HandoffHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
     )
     return Layer.provideMerge(AppServicesLive, deps)
   }

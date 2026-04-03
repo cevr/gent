@@ -26,6 +26,7 @@ import { Storage } from "../../storage/sqlite-storage.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import {
   buildProjectionConfig,
+  CurrentExtensionSession,
   interpretEffects,
   makePersistCodec,
 } from "./extension-actor-shared.js"
@@ -262,7 +263,10 @@ export const fromReducer = <
                     )
                   : (message as Request)
               const current = yield* Ref.get(stateRef)
-              const result = yield* request(current, decoded).pipe(Effect.provideServices(services))
+              const result = yield* request(current, decoded).pipe(
+                Effect.provideServices(services),
+                Effect.provideService(CurrentExtensionSession, { sessionId: ctx.sessionId }),
+              )
               yield* applyResult(current, result, branchId)
               return result.reply as never
             }),

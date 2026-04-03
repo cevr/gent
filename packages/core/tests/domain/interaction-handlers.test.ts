@@ -2,7 +2,9 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 // ============================================================================
@@ -66,10 +68,15 @@ describe("HandoffHandler", () => {
   })
 
   describe("Live layer", () => {
+    const baseLayer = Layer.mergeAll(
+      EventStore.Live,
+      Storage.MemoryWithSql(),
+      ExtensionStateRuntime.Test(),
+    )
     const liveTest = it.live.layer(
       Layer.provideMerge(
         HandoffHandler.Live,
-        Layer.mergeAll(EventStore.Live, Storage.MemoryWithSql()),
+        Layer.merge(baseLayer, Layer.provide(EventPublisherLive, baseLayer)),
       ),
     )
 

@@ -24,6 +24,7 @@ import { ExtensionTurnControl } from "./turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import {
   buildProjectionConfig,
+  CurrentExtensionSession,
   interpretEffects,
   makePersistCodec,
 } from "./extension-actor-shared.js"
@@ -162,6 +163,7 @@ export const fromMachine = <
           Effect.gen(function* () {
             const result = yield* machineRef
               .call(machineEvent)
+              .pipe(Effect.provideService(CurrentExtensionSession, { sessionId: ctx.sessionId }))
               .pipe(
                 Effect.catchDefect((defect) =>
                   Effect.logWarning("machine transition defect").pipe(

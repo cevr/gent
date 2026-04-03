@@ -228,7 +228,7 @@ export const AgentLoopEvent = Event({
     draft: AssistantDraftSchema,
   },
   InteractionResponded: { requestId: Schema.String },
-  QueueFollowUp: { item: QueuedTurnItemSchema },
+  QueueFollowUp: { item: QueuedTurnItemSchema, resumeIfIdle: Schema.Boolean },
   QueueSteering: { item: QueuedTurnItemSchema, urgent: Schema.Boolean },
   ClearQueue: {},
   SwitchAgent: { agent: AgentName },

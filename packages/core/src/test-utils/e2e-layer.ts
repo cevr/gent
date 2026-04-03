@@ -1,8 +1,8 @@
 /**
- * E2E test layer with real extension actors, reducing event store, and tool execution.
+ * E2E test layer with real extension actors, queued event publishing, and tool execution.
  *
  * Unlike baseLocalLayerWithProvider (which stubs everything), this layer wires the
- * prod-shaped reducing event store, real ExtensionStateRuntime.Live, real ToolRunner.Live,
+ * prod-shaped event publisher, real ExtensionStateRuntime.Live, real ToolRunner.Live,
  * and real ExtensionTurnControl.Live — so QueueFollowUp actually drives multi-turn loops.
  *
  * Import from @gent/core/test-utils/e2e-layer
@@ -40,7 +40,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { EventStoreLive } from "../server/event-store.js"
-import { makeReducingEventStore } from "../server/dependencies.js"
+import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -63,11 +63,11 @@ export interface E2ELayerConfig {
 }
 
 /**
- * Build a complete E2E test layer with real extension actors and reducing event store.
+ * Build a complete E2E test layer with real extension actors and queued event publishing.
  *
  * Key differences from baseLocalLayerWithProvider:
  * - ExtensionStateRuntime.Live(extensions) — spawns real actors
- * - makeReducingEventStore — wraps EventStore so publish() feeds extension reducers
+ * - EventPublisherLive — appends events, then delivers them through the queued extension runtime
  * - ToolRunner.Live — executes tools for real
  * - ExtensionTurnControl.Live — QueueFollowUp calls agentLoop.followUp()
  */
@@ -160,13 +160,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     ...(config.extraLayers ?? []),
   )
 
-  // Base event store (raw storage, provides BaseEventStore tag)
+  // Base event store (raw storage, provides BaseEventStore and EventStore tags)
   const baseEventStoreLive = Layer.provide(EventStoreLive, baseDeps)
 
-  // Reducing event store: wraps BaseEventStore with extension state reduction
-  // This replaces the EventStore tag with a wrapper that feeds events to ExtensionStateRuntime.reduce
-  const reducingEventStoreLive = Layer.provide(
-    makeReducingEventStore,
+  const eventPublisherLive = Layer.provide(
+    EventPublisherLive,
     Layer.merge(baseDeps, baseEventStoreLive),
   )
 
@@ -174,7 +172,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   const toolRunnerLive = Layer.provide(ToolRunner.Live, baseDeps)
 
   // Agent loop — real turn lifecycle
-  const agentLoopDeps = Layer.mergeAll(baseDeps, reducingEventStoreLive, toolRunnerLive)
+  const agentLoopDeps = Layer.mergeAll(baseDeps, eventPublisherLive, toolRunnerLive)
   const agentLoopLive = Layer.provide(
     AgentLoop.Live({
       baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
@@ -195,7 +193,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     AppServicesLive,
     Layer.mergeAll(
       baseDeps,
-      reducingEventStoreLive,
+      baseEventStoreLive,
+      eventPublisherLive,
       toolRunnerLive,
       agentLoopLive,
       turnControlLive,

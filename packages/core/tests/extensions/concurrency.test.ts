@@ -1,21 +1,18 @@
 /**
  * Tests for extension concurrency safety:
  * - Deferred readiness in getOrSpawnActors
- * - Re-entrance guard in ReducingEventStore
+ * - Queued nested delivery in EventPublisher
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import {
-  BaseEventStore,
-  EventStore,
-  type AgentEvent,
-  SessionStarted,
-} from "@gent/core/domain/event"
+import { Deferred, Effect, Layer } from "effect"
+import { BaseEventStore, type AgentEvent, SessionStarted } from "@gent/core/domain/event"
+import { EventPublisher } from "@gent/core/domain/event-publisher"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
 import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { makeReducingEventStore } from "@gent/core/server/dependencies"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 
 const sessionId = "test-session" as SessionId
 const branchId = "test-branch" as BranchId
@@ -67,9 +64,10 @@ describe("extension concurrency", () => {
     })
   })
 
-  describe("ReducingEventStore re-entrance guard", () => {
-    it.live("nested publish during reduce skips reduction", () => {
-      const reduceCount = { value: 0 }
+  describe("EventPublisher queued delivery", () => {
+    it.live("nested publish from extension context is queued and eventually reduced", () => {
+      const delivered: string[] = []
+      const nestedDelivered = Effect.runSync(Deferred.make<void>())
       let publishFromReduce: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
       const baseLayer = Layer.succeed(BaseEventStore, {
@@ -79,16 +77,29 @@ describe("extension concurrency", () => {
       })
 
       const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-        publish: () => {
-          reduceCount.value++
-          // On first reduce, re-enter by publishing another event
-          if (reduceCount.value === 1 && publishFromReduce !== undefined) {
-            return publishFromReduce(new SessionStarted({ sessionId, branchId })).pipe(
-              Effect.as(false),
-            )
-          }
-          return Effect.succeed(false)
-        },
+        publish: (event) =>
+          Effect.gen(function* () {
+            delivered.push(event._tag)
+            if (
+              event._tag === "SessionStarted" &&
+              delivered.length === 1 &&
+              publishFromReduce !== undefined
+            ) {
+              yield* publishFromReduce({
+                _tag: "NestedEvent",
+                sessionId,
+                branchId,
+              } as unknown as AgentEvent).pipe(
+                Effect.provideService(CurrentExtensionSession, {
+                  sessionId,
+                }),
+              )
+            }
+            if (event._tag === "NestedEvent") {
+              yield* Deferred.succeed(nestedDelivered, void 0)
+            }
+            return false
+          }),
         notifyObservers: () => Effect.void,
         deriveAll: () => Effect.succeed([]),
         send: () => Effect.void,
@@ -98,20 +109,20 @@ describe("extension concurrency", () => {
         terminateAll: () => Effect.void,
       })
 
-      const layer = Layer.provide(makeReducingEventStore, Layer.merge(baseLayer, stateRuntimeLayer))
+      const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
 
       return Effect.gen(function* () {
-        const store = yield* EventStore
-        publishFromReduce = store.publish
-        yield* store.publish(new SessionStarted({ sessionId, branchId }))
-
-        // Only 1 reduce call — the nested publish was skipped
-        expect(reduceCount.value).toBe(1)
+        const publisher = yield* EventPublisher
+        publishFromReduce = publisher.publish
+        yield* publisher.publish(new SessionStarted({ sessionId, branchId }))
+        yield* Deferred.await(nestedDelivered)
+        expect(delivered).toEqual(["SessionStarted", "NestedEvent"])
       }).pipe(Effect.provide(layer))
     })
 
-    it.live("re-entrant publish still persists to base store", () => {
+    it.live("nested publish from extension context still appends to base store", () => {
       const published: string[] = []
+      const nestedDelivered = Effect.runSync(Deferred.make<void>())
       let publishFromReduce: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
       const baseLayer = Layer.succeed(BaseEventStore, {
@@ -124,16 +135,28 @@ describe("extension concurrency", () => {
       })
 
       const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-        publish: () => {
-          if (published.length === 1 && publishFromReduce !== undefined) {
-            return publishFromReduce({
-              _tag: "NestedEvent",
-              sessionId,
-              branchId,
-            } as unknown as AgentEvent).pipe(Effect.as(false))
-          }
-          return Effect.succeed(false)
-        },
+        publish: (event) =>
+          Effect.gen(function* () {
+            if (
+              event._tag === "SessionStarted" &&
+              published.length === 1 &&
+              publishFromReduce !== undefined
+            ) {
+              yield* publishFromReduce({
+                _tag: "NestedEvent",
+                sessionId,
+                branchId,
+              } as unknown as AgentEvent).pipe(
+                Effect.provideService(CurrentExtensionSession, {
+                  sessionId,
+                }),
+              )
+            }
+            if (event._tag === "NestedEvent") {
+              yield* Deferred.succeed(nestedDelivered, void 0)
+            }
+            return false
+          }),
         notifyObservers: () => Effect.void,
         deriveAll: () => Effect.succeed([]),
         send: () => Effect.void,
@@ -143,14 +166,13 @@ describe("extension concurrency", () => {
         terminateAll: () => Effect.void,
       })
 
-      const layer = Layer.provide(makeReducingEventStore, Layer.merge(baseLayer, stateRuntimeLayer))
+      const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
 
       return Effect.gen(function* () {
-        const store = yield* EventStore
-        publishFromReduce = store.publish
-        yield* store.publish(new SessionStarted({ sessionId, branchId }))
-
-        // Both events persisted to base store
+        const publisher = yield* EventPublisher
+        publishFromReduce = publisher.publish
+        yield* publisher.publish(new SessionStarted({ sessionId, branchId }))
+        yield* Deferred.await(nestedDelivered)
         expect(published).toEqual(["SessionStarted", "NestedEvent"])
       }).pipe(Effect.provide(layer))
     })

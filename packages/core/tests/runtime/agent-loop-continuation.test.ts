@@ -4,6 +4,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import type { Provider } from "@gent/core/providers/provider"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/core/domain/agent"
@@ -100,7 +101,11 @@ const makeLayer = (
     ToolRunner.Test(),
     BunServices.layer,
   )
-  return Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  return Layer.provideMerge(
+    AgentLoop.Live({ baseSections: [] }),
+    Layer.merge(deps, eventPublisherLayer),
+  )
 }
 
 const makeLayerWithEvents = (
@@ -118,7 +123,11 @@ const makeLayerWithEvents = (
     ToolRunner.Test(),
     BunServices.layer,
   )
-  return Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  return Layer.provideMerge(
+    AgentLoop.Live({ baseSections: [] }),
+    Layer.merge(deps, eventPublisherLayer),
+  )
 }
 
 describe("Agent loop tool continuation", () => {

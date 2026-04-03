@@ -42,6 +42,7 @@ import { ExtensionRegistry, resolveExtensions } from "../runtime/extensions/regi
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { EventPublisherLive } from "../server/event-publisher.js"
 import { Skills } from "../domain/skills.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -307,7 +308,13 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Skills.Test(),
   )
-  const baseLayerAny: Layer.Layer<never, never, object> = baseLayer
+  const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(allExtensions)
+  const runtimeDeps = Layer.merge(baseLayer, stateRuntimeLayer)
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, runtimeDeps)
+  const baseLayerAny: Layer.Layer<never, never, object> = Layer.merge(
+    runtimeDeps,
+    eventPublisherLayer,
+  )
 
   const contributedLayers: Array<Layer.Layer<never, never, object>> = extensionSetups.flatMap(
     (ext) =>
@@ -319,10 +326,5 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     extensionLayer = extensionLayer === undefined ? layer : Layer.merge(extensionLayer, layer)
   }
 
-  return extensionLayer === undefined
-    ? Layer.merge(baseLayerAny, ExtensionStateRuntime.fromExtensions(allExtensions))
-    : Layer.merge(
-        Layer.merge(baseLayerAny, extensionLayer),
-        ExtensionStateRuntime.fromExtensions(allExtensions),
-      )
+  return extensionLayer === undefined ? baseLayerAny : Layer.merge(baseLayerAny, extensionLayer)
 }

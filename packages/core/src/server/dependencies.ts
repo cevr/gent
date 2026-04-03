@@ -1,4 +1,4 @@
-import { Cause, Effect, FileSystem, Layer, Path, Ref, ServiceMap } from "effect"
+import { Cause, Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -8,13 +8,7 @@ import type {
   LoadedExtension,
   ScheduledJobFailureInfo,
 } from "../domain/extension.js"
-import {
-  BaseEventStore,
-  EventStore,
-  type AgentEvent,
-  getEventBranchId,
-  getEventSessionId,
-} from "../domain/event.js"
+import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
 import { Permission, PermissionRule } from "../domain/permission.js"
@@ -49,6 +43,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
+import { EventPublisherLive } from "./event-publisher.js"
 import { buildBasePromptSections } from "./system-prompt.js"
 import type { InteractionRequestType } from "../domain/interaction-request.js"
 
@@ -249,96 +244,6 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
     }),
   )
 
-/**
- * ReducingEventStore wraps the BaseEventStore with extension state machine reduction.
- * On every publish, it:
- * 1. Delegates to BaseEventStore.publish (raw storage)
- * 2. Feeds the event to ExtensionStateRuntime.reduce
- * 3. If any machine changed state, publishes UI snapshots through BaseEventStore
- *
- * Re-entrance guard: a Ref tracks whether any reduce is in progress. If publish
- * is called while reduce is running, the nested publish skips reduce. This
- * prevents deadlocks from re-entrant semaphore acquisition in getOrSpawnActors.
- *
- * Note: this is a process-wide guard, not fiber-scoped. The inspector's
- * combineInspectors fans out to child fibers (concurrency: "unbounded"), so the
- * re-entrant MachineInspected publish comes from a different fiber than the
- * parent reduce. A fiber-ID guard misses this. The process-wide Ref is correct
- * because:
- * - Extension reduction is already serialized per session via spawnSemaphore
- * - Cross-session reduce suppression is safe (reduce is idempotent — the
- *   next publish for that session will catch up)
- * - This guard is temporary — Batch 4 decouples reduce from publish entirely
- */
-export const makeReducingEventStore = Layer.effect(
-  EventStore,
-  Effect.gen(function* () {
-    const base = yield* BaseEventStore
-    const stateRuntime = yield* ExtensionStateRuntime
-    const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
-    const bus = busOpt._tag === "Some" ? busOpt.value : undefined
-    const reduceDepth = yield* Ref.make(0)
-
-    return {
-      publish: (event: AgentEvent) =>
-        base.publish(event).pipe(
-          Effect.tap(() => {
-            const sessionId = getEventSessionId(event)
-            if (sessionId === undefined) return Effect.void
-
-            return Ref.get(reduceDepth).pipe(
-              Effect.flatMap((depth) => {
-                if (depth > 0) {
-                  return Effect.logDebug("re-entrant reduce skipped").pipe(
-                    Effect.annotateLogs({ event: event._tag, depth }),
-                  )
-                }
-
-                const branchId = getEventBranchId(event)
-                return Ref.update(reduceDepth, (d: number) => d + 1).pipe(
-                  Effect.andThen(
-                    stateRuntime.publish(event, { sessionId, branchId }).pipe(
-                      Effect.tap((changed) => {
-                        if (!changed || branchId === undefined) return Effect.void
-                        return stateRuntime.getUiSnapshots(sessionId, branchId).pipe(
-                          Effect.tap((snapshots) =>
-                            Effect.forEach(snapshots, (snapshot) => base.publish(snapshot), {
-                              concurrency: "unbounded",
-                            }),
-                          ),
-                          Effect.catchEager(() => Effect.void),
-                        )
-                      }),
-                      Effect.catchEager(() => Effect.void),
-                      Effect.catchDefect(() => Effect.void),
-                      // Notify observers after reduction (fire-and-forget)
-                      Effect.tap(() => stateRuntime.notifyObservers(event)),
-                      // Publish agent event to bus
-                      Effect.tap(() => {
-                        if (bus === undefined) return Effect.void
-                        return bus
-                          .emit({
-                            channel: `agent:${event._tag}`,
-                            payload: event,
-                            sessionId,
-                            branchId,
-                          })
-                          .pipe(Effect.catchEager(() => Effect.void))
-                      }),
-                    ),
-                  ),
-                  Effect.ensuring(Ref.update(reduceDepth, (d: number) => d - 1)),
-                )
-              }),
-            )
-          }),
-        ),
-      subscribe: base.subscribe,
-      removeSession: base.removeSession,
-    }
-  }),
-)
-
 export const createDependencies = (config: DependenciesConfig) => {
   const runtimePlatformLive = RuntimePlatform.Live({
     cwd: config.cwd,
@@ -353,7 +258,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     persistenceMode === "memory"
       ? Storage.MemoryWithSql()
       : Storage.LiveWithSql(config.dbPath ?? ".gent/data.db")
-  // Base event store: raw storage-backed publisher (provides both BaseEventStore and EventStore initially)
+  // Base event store: raw storage-backed publish/subscribe storage
   const baseEventStoreLive =
     persistenceMode === "memory" ? EventStore.Memory : Layer.provide(EventStoreLive, storageLive)
 
@@ -387,10 +292,8 @@ export const createDependencies = (config: DependenciesConfig) => {
   else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
   else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 10 })
 
-  // ReducingEventStore wraps BaseEventStore with extension reduce.
-  // It requires BaseEventStore + ExtensionStateRuntime (from extensionRegistryLive).
-  const reducingEventStoreLive = Layer.provide(
-    makeReducingEventStore,
+  const eventPublisherLive = Layer.provide(
+    EventPublisherLive,
     Layer.merge(baseEventStoreLive, extensionRegistryLive),
   )
 
@@ -398,7 +301,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     runtimePlatformLive,
     storageLive,
     baseEventStoreLive,
-    reducingEventStoreLive,
+    eventPublisherLive,
     authStorageLive,
     authStoreLive,
     authGuardLive,

@@ -24,6 +24,7 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { EventStoreLive } from "../server/event-store.js"
+import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
@@ -72,19 +73,23 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
   )
 
   const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)
+  const eventPublisherLive = Layer.provide(
+    EventPublisherLive,
+    Layer.merge(baseDeps, eventStoreLive),
+  )
 
   const agentLoopLive = Layer.provide(
     AgentLoop.Live({ baseSections: [{ id: "base", content: "test system prompt", priority: 0 }] }),
-    Layer.merge(baseDeps, eventStoreLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
   )
   const actorProcessLive = Layer.provide(
     LocalActorProcessLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, agentLoopLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive),
   )
 
   return Layer.provideMerge(
     AppServicesLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, agentLoopLive, actorProcessLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive, actorProcessLive),
   )
 }
 

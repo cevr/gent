@@ -18,6 +18,7 @@ import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
@@ -121,7 +122,11 @@ describe("Cold interaction lifecycle", () => {
       eventStoreLayer,
     )
     const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-    const loopLayer = Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const loopLayer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
 
     await Effect.runPromise(
       Effect.scoped(
@@ -181,7 +186,11 @@ describe("Cold interaction lifecycle", () => {
       BunServices.layer,
     )
     const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-    const loopLayer = Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const loopLayer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
 
     await Effect.runPromise(
       Effect.scoped(
@@ -235,7 +244,11 @@ describe("Cold interaction lifecycle", () => {
       ToolRunner.Test(),
       BunServices.layer,
     )
-    const loopLayer = Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const loopLayer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
 
     await Effect.runPromise(
       Effect.scoped(
@@ -306,7 +319,11 @@ describe("Cold interaction lifecycle", () => {
       BunServices.layer,
     )
     const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-    const loopLayer = Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const loopLayer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
 
     await Effect.runPromise(
       Effect.scoped(

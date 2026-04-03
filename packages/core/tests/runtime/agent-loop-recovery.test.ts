@@ -24,6 +24,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { EventStoreLive } from "@gent/core/server/event-store"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
@@ -132,12 +133,14 @@ const makeRecoveryLayer = (params: {
     toolRunnerLayer,
     handoffLayer,
   )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, base)
 
   return Layer.mergeAll(
     base,
+    eventPublisherLayer,
     Layer.provide(
       AgentLoop.Live({ baseSections: [{ id: "base", content: systemPrompt, priority: 0 }] }),
-      base,
+      Layer.merge(base, eventPublisherLayer),
     ),
   )
 }

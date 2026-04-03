@@ -31,7 +31,6 @@ import {
 } from "../../domain/agent.js"
 import { type QueueSnapshot } from "../../domain/queue.js"
 import {
-  EventStore,
   AgentSwitched,
   StreamStarted,
   StreamChunk as EventStreamChunk,
@@ -47,6 +46,7 @@ import {
   MachineInspected,
   type AgentEvent,
 } from "../../domain/event.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId, type ToolCallId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolAction, type ToolContext } from "../../domain/tool.js"
@@ -1212,7 +1212,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
     | Provider
     | ExtensionRegistry
     | ExtensionStateRuntime
-    | EventStore
+    | EventPublisher
     | ToolRunner
   > =>
     Layer.effect(
@@ -1223,7 +1223,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const extensionStateRuntime = yield* ExtensionStateRuntime
-        const eventStore = yield* EventStore
+        const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const loopsSemaphore = yield* Semaphore.make(1)
@@ -1233,7 +1233,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         const makeLoop = (sessionId: SessionId, branchId: BranchId) =>
           Effect.gen(function* () {
             const publishEvent = (event: AgentEvent) =>
-              eventStore.publish(event).pipe(
+              eventPublisher.publish(event).pipe(
                 Effect.mapError(
                   (error) =>
                     new AgentLoopError({
@@ -1502,8 +1502,18 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 buildRunningState(state, event.item),
               )
               // Queue/steer/switch accepted in all states
+              .on(AgentLoopState.Idle, AgentLoopEvent.QueueFollowUp, ({ state, event }) => {
+                const queued = appendFollowUpQueueState(state.queue, event.item)
+                if (event.resumeIfIdle) {
+                  const { queue, nextItem } = takeNextQueuedTurn(queued)
+                  if (nextItem !== undefined) {
+                    return buildRunningState({ queue, currentAgent: state.currentAgent }, nextItem)
+                  }
+                }
+                return updateQueueOnState(state, queued)
+              })
               .on(
-                [AgentLoopState.Idle, AgentLoopState.Running, AgentLoopState.WaitingForInteraction],
+                [AgentLoopState.Running, AgentLoopState.WaitingForInteraction],
                 AgentLoopEvent.QueueFollowUp,
                 ({ state, event }) =>
                   updateQueueOnState(state, appendFollowUpQueueState(state.queue, event.item)),
@@ -1787,7 +1797,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   }),
               ),
             )
-            yield* eventStore
+            yield* eventPublisher
               .publish(
                 new MessageReceived({
                   sessionId: input.sessionId,
@@ -1836,7 +1846,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const item = buildQueuedTurnItem(message, options)
 
             if (initialState._tag !== "Idle") {
-              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))
+              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item, resumeIfIdle: true }))
               return
             }
 
@@ -1856,7 +1866,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
             const item = buildQueuedTurnItem(message, options)
 
             if (initialState._tag !== "Idle") {
-              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))
+              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item, resumeIfIdle: true }))
               return
             }
 
@@ -1909,7 +1919,16 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
                 })
               }
-              yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item: { message } }))
+              const event = AgentLoopEvent.QueueFollowUp({
+                item: { message },
+                resumeIfIdle:
+                  loopState._tag === "Running" || loopState._tag === "WaitingForInteraction",
+              })
+              if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+                yield* loop.actor.cast(event)
+                return
+              }
+              yield* loop.actor.call(event)
             }),
 
           drainQueue: (input) =>

@@ -4,6 +4,8 @@ import { BunServices } from "@effect/platform-bun"
 import { AskUserTool, AskUserHandler } from "@gent/core/tools/ask-user"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { EventStore } from "@gent/core/domain/event"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
@@ -23,8 +25,14 @@ const PlatformLayer = Layer.merge(
 )
 
 describe("AskUser Handler (integration)", () => {
-  const deps = Layer.mergeAll(EventStore.Memory, Storage.TestWithSql())
-  const handlerLayer = AskUserHandler.Live.pipe(Layer.provideMerge(deps))
+  const deps = Layer.mergeAll(
+    EventStore.Memory,
+    Storage.TestWithSql(),
+    ExtensionStateRuntime.Test(),
+  )
+  const handlerLayer = AskUserHandler.Live.pipe(
+    Layer.provideMerge(Layer.merge(deps, Layer.provide(EventPublisherLive, deps))),
+  )
 
   it.live("askMany throws InteractionPendingError and persists request", () =>
     Effect.gen(function* () {

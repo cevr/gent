@@ -2,8 +2,10 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import type { Message, TextPart } from "@gent/core/domain/message"
 import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/core/domain/agent"
@@ -41,11 +43,13 @@ describe("ActorProcess", () => {
       Storage.Test(),
       agentLoopLayer,
       makeTestExtRegistry(),
+      ExtensionStateRuntime.Test(),
       eventStoreLayer,
       recorderLayer,
       ToolRunner.Test(),
     )
-    return Layer.provideMerge(LocalActorProcessLive, deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    return Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))
   }
 
   test("steerAgent delegates to AgentLoop.steer", async () => {
@@ -175,17 +179,17 @@ describe("ActorProcess", () => {
         ),
     })
 
-    const layer = Layer.provideMerge(
-      LocalActorProcessLive,
-      Layer.mergeAll(
-        Storage.Test(),
-        agentLoopLayer,
-        makeTestExtRegistry(),
-        eventStoreLayer,
-        recorderLayer,
-        toolRunnerLayer,
-      ),
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      agentLoopLayer,
+      makeTestExtRegistry(),
+      ExtensionStateRuntime.Test(),
+      eventStoreLayer,
+      recorderLayer,
+      toolRunnerLayer,
     )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const layer = Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))
 
     await Effect.runPromise(
       Effect.gen(function* () {

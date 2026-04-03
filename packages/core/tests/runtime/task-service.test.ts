@@ -3,6 +3,7 @@ import { Deferred, Effect, Layer, Ref, Stream } from "effect"
 import { TaskService } from "@gent/core/extensions/task-tools-service"
 import { TaskStorage } from "@gent/core/extensions/task-tools-storage"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import {
   Agents,
   AgentRunnerService,
@@ -11,6 +12,7 @@ import {
 } from "@gent/core/domain/agent"
 import { EventStore, AgentRunSpawned, type EventEnvelope } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import type { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 
@@ -47,13 +49,15 @@ const makeLayerWithInterruptFlag = (
     EventStore.Memory,
     registryLayer,
     runnerLayer,
+    ExtensionStateRuntime.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const taskExtensionLayer = Layer.provide(
     Layer.mergeAll(TaskStorage.Live, TaskService.Live),
-    baseDeps,
+    Layer.merge(baseDeps, eventPublisherLayer),
   )
-  return Layer.mergeAll(baseDeps, taskExtensionLayer)
+  return Layer.mergeAll(baseDeps, eventPublisherLayer, taskExtensionLayer)
 }
 
 const makeLayer = (runnerDeferred: Deferred.Deferred<AgentRunResult>) => {
@@ -77,13 +81,15 @@ const makeLayer = (runnerDeferred: Deferred.Deferred<AgentRunResult>) => {
     EventStore.Memory,
     registryLayer,
     runnerLayer,
+    ExtensionStateRuntime.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const taskExtensionLayer = Layer.provide(
     Layer.mergeAll(TaskStorage.Live, TaskService.Live),
-    baseDeps,
+    Layer.merge(baseDeps, eventPublisherLayer),
   )
-  return Layer.mergeAll(baseDeps, taskExtensionLayer)
+  return Layer.mergeAll(baseDeps, eventPublisherLayer, taskExtensionLayer)
 }
 
 const makeLayerWithoutRunner = () => {
@@ -103,13 +109,15 @@ const makeLayerWithoutRunner = () => {
     storageLayer,
     EventStore.Memory,
     registryLayer,
+    ExtensionStateRuntime.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const taskExtensionLayer = Layer.provide(
     Layer.mergeAll(TaskStorage.Live, TaskService.Live),
-    baseDeps,
+    Layer.merge(baseDeps, eventPublisherLayer),
   )
-  return Layer.mergeAll(baseDeps, taskExtensionLayer)
+  return Layer.mergeAll(baseDeps, eventPublisherLayer, taskExtensionLayer)
 }
 
 describe("TaskService", () => {
@@ -162,6 +170,67 @@ describe("TaskService", () => {
     }),
   )
 
+  it.live("runner-missing failure still delivers TaskFailed through extension delivery", () =>
+    Effect.gen(function* () {
+      const deliveredRef = yield* Ref.make<ReadonlyArray<string>>([])
+
+      const storageLayer = Storage.MemoryWithSql()
+      const registryLayer = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "test-agents" },
+            kind: "builtin",
+            sourcePath: "test",
+            setup: { agents: Object.values(Agents), tools: [] },
+          },
+        ]),
+      )
+      const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
+        publish: (event) =>
+          Ref.update(deliveredRef, (current) => [...current, event._tag]).pipe(Effect.as(false)),
+        deriveAll: () => Effect.succeed([]),
+        send: () => Effect.void,
+        ask: () => Effect.die("not implemented"),
+        getUiSnapshots: () => Effect.succeed([]),
+        getActorStatuses: () => Effect.succeed([]),
+        terminateAll: () => Effect.void,
+        notifyObservers: () => Effect.void,
+      })
+      const baseDeps = Layer.mergeAll(
+        storageLayer,
+        EventStore.Memory,
+        registryLayer,
+        stateRuntimeLayer,
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+      const taskExtensionLayer = Layer.provide(
+        Layer.mergeAll(TaskStorage.Live, TaskService.Live),
+        Layer.merge(baseDeps, eventPublisherLayer),
+      )
+      const layer = Layer.mergeAll(baseDeps, eventPublisherLayer, taskExtensionLayer)
+
+      yield* Effect.gen(function* () {
+        const taskService = yield* TaskService
+
+        const task = yield* taskService.create({
+          sessionId,
+          branchId,
+          subject: "Task without runner",
+          prompt: "Do something",
+          agentType: "explore" as AgentName,
+        })
+
+        const runResult = yield* taskService.run(task.id)
+        expect(runResult.status).toBe("running")
+
+        yield* Effect.sleep("50 millis")
+
+        expect(yield* Ref.get(deliveredRef)).toContain("TaskFailed")
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
   it.live("forces durable agent-run persistence for task execution", () =>
     Effect.gen(function* () {
       const persistenceRef = yield* Ref.make<ReadonlyArray<string>>([])
@@ -195,13 +264,15 @@ describe("TaskService", () => {
         EventStore.Memory,
         registryLayer,
         runnerLayer,
+        ExtensionStateRuntime.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
+      const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
       const taskExtensionLayer = Layer.provide(
         Layer.mergeAll(TaskStorage.Live, TaskService.Live),
-        baseDeps,
+        Layer.merge(baseDeps, eventPublisherLayer),
       )
-      const layer = Layer.mergeAll(baseDeps, taskExtensionLayer)
+      const layer = Layer.mergeAll(baseDeps, eventPublisherLayer, taskExtensionLayer)
 
       yield* Effect.gen(function* () {
         const taskService = yield* TaskService
@@ -349,13 +420,15 @@ describe("TaskService", () => {
           EventStore.Memory,
           registryLayer,
           runnerLayer,
+          ExtensionStateRuntime.Test(),
           RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
         const taskExtensionLayer = Layer.provide(
           Layer.mergeAll(TaskStorage.Live, TaskService.Live),
-          baseDeps,
+          Layer.merge(baseDeps, eventPublisherLayer),
         )
-        const layer = Layer.mergeAll(baseDeps, taskExtensionLayer)
+        const layer = Layer.mergeAll(baseDeps, eventPublisherLayer, taskExtensionLayer)
 
         yield* Effect.gen(function* () {
           const taskService = yield* TaskService

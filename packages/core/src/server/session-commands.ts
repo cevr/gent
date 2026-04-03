@@ -1,4 +1,5 @@
 import { DateTime, Effect, Layer, ServiceMap, Stream } from "effect"
+import { EventPublisher } from "../domain/event-publisher.js"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
@@ -62,6 +63,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
       const storage = yield* Storage
       const actorProcess = yield* ActorProcess
       const eventStore = yield* EventStore
+      const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
       const extensionStateRuntime = yield* ExtensionStateRuntime
 
@@ -151,7 +153,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
 
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
-        yield* eventStore.publish(new SessionStarted({ sessionId, branchId }))
+        yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
         yield* Effect.logInfo("session.created").pipe(
           Effect.annotateLogs({
             sessionId,
@@ -183,7 +185,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           createdAt: yield* DateTime.nowAsDate,
         })
         yield* storage.createBranch(branch)
-        yield* eventStore.publish(
+        yield* eventPublisher.publish(
           new BranchCreated({
             sessionId: branch.sessionId,
             branchId: branch.id,
@@ -216,7 +218,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           )
           if (summary !== "") {
             yield* storage.updateBranchSummary(input.fromBranchId, summary)
-            yield* eventStore.publish(
+            yield* eventPublisher.publish(
               new BranchSummarized({
                 sessionId: input.sessionId,
                 branchId: input.fromBranchId,
@@ -238,7 +240,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           )
         }
 
-        yield* eventStore.publish(
+        yield* eventPublisher.publish(
           new BranchSwitched({
             sessionId: input.sessionId,
             fromBranchId: input.fromBranchId,
@@ -290,7 +292,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
           )
         }
 
-        yield* eventStore.publish(
+        yield* eventPublisher.publish(
           new BranchCreated({
             sessionId: branch.sessionId,
             branchId: branch.id,
@@ -331,6 +333,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
         deleteSession: (sessionId) =>
           extensionStateRuntime.terminateAll(sessionId).pipe(
             Effect.catchDefect(() => Effect.void),
+            Effect.tap(() => eventPublisher.terminateSession(sessionId)),
             Effect.tap(() => eventStore.removeSession(sessionId)),
             Effect.tap(() => storage.deleteSession(sessionId)),
             Effect.tap(() =>
@@ -359,7 +362,7 @@ export class SessionCommands extends ServiceMap.Service<SessionCommands, Session
                 updatedAt: yield* DateTime.nowAsDate,
               }),
             )
-            yield* eventStore.publish(
+            yield* eventPublisher.publish(
               new SessionSettingsUpdated({
                 sessionId: input.sessionId,
                 reasoningLevel: input.reasoningLevel,

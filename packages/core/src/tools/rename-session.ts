@@ -1,7 +1,8 @@
 import { DateTime, Effect, Schema } from "effect"
+import { EventPublisher } from "../domain/event-publisher.js"
 import { defineTool } from "../domain/tool.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { EventStore, SessionNameUpdated } from "../domain/event.js"
+import { SessionNameUpdated } from "../domain/event.js"
 import { Session } from "../domain/message.js"
 
 const MAX_NAME_LENGTH = 80
@@ -25,7 +26,7 @@ export const RenameSessionTool = defineTool({
     ctx,
   ) {
     const storage = yield* Storage
-    const eventStore = yield* EventStore
+    const eventPublisher = yield* EventPublisher
 
     const trimmed = params.name.trim().slice(0, MAX_NAME_LENGTH)
     if (trimmed.length === 0) return { renamed: false, reason: "empty name" }
@@ -36,7 +37,9 @@ export const RenameSessionTool = defineTool({
 
     const updated = new Session({ ...session, name: trimmed, updatedAt: yield* DateTime.nowAsDate })
     yield* storage.updateSession(updated)
-    yield* eventStore.publish(new SessionNameUpdated({ sessionId: ctx.sessionId, name: trimmed }))
+    yield* eventPublisher.publish(
+      new SessionNameUpdated({ sessionId: ctx.sessionId, name: trimmed }),
+    )
 
     return { renamed: true, name: trimmed }
   }),

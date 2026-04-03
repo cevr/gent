@@ -1,6 +1,5 @@
 import { ServiceMap, Effect, Layer } from "effect"
 import {
-  EventStore,
   InteractionDismissed,
   type EventStoreError,
   PromptConfirmed,
@@ -13,6 +12,7 @@ import {
   HandoffRejected,
   type HandoffDecision,
 } from "./event"
+import { EventPublisher } from "./event-publisher.js"
 import type { BranchId, SessionId } from "./ids"
 import {
   makeInteractionService,
@@ -55,87 +55,88 @@ export interface PromptHandlerService {
 export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandlerService>()(
   "@gent/core/src/domain/interaction-handlers/PromptHandler",
 ) {
-  static Live: Layer.Layer<PromptHandler, never, EventStore | InteractionStorage> = Layer.effect(
-    PromptHandler,
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      const storageCallbacks = yield* makeStorageCallbacks
+  static Live: Layer.Layer<PromptHandler, never, EventPublisher | InteractionStorage> =
+    Layer.effect(
+      PromptHandler,
+      Effect.gen(function* () {
+        const eventPublisher = yield* EventPublisher
+        const storageCallbacks = yield* makeStorageCallbacks
 
-      const interaction = makeInteractionService<PromptParams, PromptDecision>({
-        type: "prompt",
-        autoResolve: (params) =>
-          params.mode === "present" ? ("yes" as PromptDecision) : undefined,
-        onPresent: (requestId, params) =>
-          eventStore.publish(
-            new PromptPresented({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-              mode: params.mode,
-              ...(params.path !== undefined ? { path: params.path } : {}),
-              ...(params.content !== undefined ? { content: params.content } : {}),
-              ...(params.title !== undefined ? { title: params.title } : {}),
-            }),
-          ),
-        onRespond: (requestId, params, decision, content) => {
-          const dismissed = eventStore.publish(
-            new InteractionDismissed({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-            }),
-          )
-          if (decision === "yes") {
-            return eventStore
-              .publish(
-                new PromptConfirmed({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  requestId,
-                  ...(params.path !== undefined ? { path: params.path } : {}),
-                }),
-              )
-              .pipe(Effect.andThen(dismissed))
-          }
-          if (decision === "edit") {
-            return eventStore
-              .publish(
-                new PromptEdited({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  requestId,
-                  ...(params.path !== undefined ? { path: params.path } : {}),
-                }),
-              )
-              .pipe(Effect.andThen(dismissed))
-          }
-          return eventStore
-            .publish(
-              new PromptRejected({
+        const interaction = makeInteractionService<PromptParams, PromptDecision>({
+          type: "prompt",
+          autoResolve: (params) =>
+            params.mode === "present" ? ("yes" as PromptDecision) : undefined,
+          onPresent: (requestId, params) =>
+            eventPublisher.publish(
+              new PromptPresented({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
                 requestId,
+                mode: params.mode,
                 ...(params.path !== undefined ? { path: params.path } : {}),
-                ...(content !== undefined ? { reason: content } : {}),
+                ...(params.content !== undefined ? { content: params.content } : {}),
+                ...(params.title !== undefined ? { title: params.title } : {}),
+              }),
+            ),
+          onRespond: (requestId, params, decision, content) => {
+            const dismissed = eventPublisher.publish(
+              new InteractionDismissed({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
               }),
             )
-            .pipe(Effect.andThen(dismissed))
-        },
-        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
-        storage: storageCallbacks,
-      })
+            if (decision === "yes") {
+              return eventPublisher
+                .publish(
+                  new PromptConfirmed({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    requestId,
+                    ...(params.path !== undefined ? { path: params.path } : {}),
+                  }),
+                )
+                .pipe(Effect.andThen(dismissed))
+            }
+            if (decision === "edit") {
+              return eventPublisher
+                .publish(
+                  new PromptEdited({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    requestId,
+                    ...(params.path !== undefined ? { path: params.path } : {}),
+                  }),
+                )
+                .pipe(Effect.andThen(dismissed))
+            }
+            return eventPublisher
+              .publish(
+                new PromptRejected({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  requestId,
+                  ...(params.path !== undefined ? { path: params.path } : {}),
+                  ...(content !== undefined ? { reason: content } : {}),
+                }),
+              )
+              .pipe(Effect.andThen(dismissed))
+          },
+          getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+          storage: storageCallbacks,
+        })
 
-      return {
-        present: (params) => interaction.present(params),
-        respond: (requestId, decision, content) =>
-          interaction.respond(requestId, decision, content),
-        storeResolution: (sessionId, branchId, decision) =>
-          interaction.storeResolution(sessionId, branchId, decision),
-        rehydrate: (record) =>
-          interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as PromptParams),
-      }
-    }),
-  )
+        return {
+          present: (params) => interaction.present(params),
+          respond: (requestId, decision, content) =>
+            interaction.respond(requestId, decision, content),
+          storeResolution: (sessionId, branchId, decision) =>
+            interaction.storeResolution(sessionId, branchId, decision),
+          rehydrate: (record) =>
+            interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as PromptParams),
+        }
+      }),
+    )
 
   static Test = (
     decisions: ReadonlyArray<PromptDecision> = ["yes"],
@@ -184,94 +185,95 @@ export interface HandoffHandlerService {
 export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHandlerService>()(
   "@gent/core/src/domain/interaction-handlers/HandoffHandler",
 ) {
-  static Live: Layer.Layer<HandoffHandler, never, EventStore | InteractionStorage> = Layer.effect(
-    HandoffHandler,
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      const claimed = new Set<string>()
-      /** Params stash for cold interaction peek/claim — indexed by requestId */
-      const paramsStash = new Map<string, HandoffParams>()
-      const storageCallbacks = yield* makeStorageCallbacks
+  static Live: Layer.Layer<HandoffHandler, never, EventPublisher | InteractionStorage> =
+    Layer.effect(
+      HandoffHandler,
+      Effect.gen(function* () {
+        const eventPublisher = yield* EventPublisher
+        const claimed = new Set<string>()
+        /** Params stash for cold interaction peek/claim — indexed by requestId */
+        const paramsStash = new Map<string, HandoffParams>()
+        const storageCallbacks = yield* makeStorageCallbacks
 
-      const interaction = makeInteractionService<HandoffParams, HandoffDecision>({
-        type: "handoff",
-        onPresent: (requestId, params) => {
-          paramsStash.set(requestId, params)
-          return eventStore.publish(
-            new HandoffPresented({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-              summary: params.summary,
-              ...(params.reason !== undefined ? { reason: params.reason } : {}),
-            }),
-          )
-        },
-        onRespond: (requestId, params, decision, extra) => {
-          const dismissed = eventStore.publish(
-            new InteractionDismissed({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-            }),
-          )
-          if (decision === "confirm") {
-            return eventStore
-              .publish(
-                new HandoffConfirmed({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  requestId,
-                  ...(extra !== undefined ? { childSessionId: extra as SessionId } : {}),
-                }),
-              )
-              .pipe(Effect.andThen(dismissed))
-          }
-          return eventStore
-            .publish(
-              new HandoffRejected({
+        const interaction = makeInteractionService<HandoffParams, HandoffDecision>({
+          type: "handoff",
+          onPresent: (requestId, params) => {
+            paramsStash.set(requestId, params)
+            return eventPublisher.publish(
+              new HandoffPresented({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
                 requestId,
-                ...(extra !== undefined ? { reason: extra } : {}),
+                summary: params.summary,
+                ...(params.reason !== undefined ? { reason: params.reason } : {}),
               }),
             )
-            .pipe(Effect.andThen(dismissed))
-        },
-        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
-        storage: storageCallbacks,
-      })
-
-      return {
-        present: (params) => interaction.present(params),
-
-        peek: (requestId) => Effect.succeed(paramsStash.get(requestId)),
-
-        claim: (requestId) => {
-          const params = paramsStash.get(requestId)
-          if (params === undefined || claimed.has(requestId)) {
-            return Effect.sync(() => undefined as HandoffParams | undefined)
-          }
-          claimed.add(requestId)
-          return Effect.succeed(params)
-        },
-
-        respond: Effect.fn("HandoffHandler.respond")(
-          function* (requestId, decision, childSessionId, reason) {
-            const extra = decision === "confirm" ? childSessionId : reason
-            yield* interaction.respond(requestId, decision, extra)
-            return paramsStash.get(requestId)
           },
-        ),
+          onRespond: (requestId, params, decision, extra) => {
+            const dismissed = eventPublisher.publish(
+              new InteractionDismissed({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+              }),
+            )
+            if (decision === "confirm") {
+              return eventPublisher
+                .publish(
+                  new HandoffConfirmed({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    requestId,
+                    ...(extra !== undefined ? { childSessionId: extra as SessionId } : {}),
+                  }),
+                )
+                .pipe(Effect.andThen(dismissed))
+            }
+            return eventPublisher
+              .publish(
+                new HandoffRejected({
+                  sessionId: params.sessionId,
+                  branchId: params.branchId,
+                  requestId,
+                  ...(extra !== undefined ? { reason: extra } : {}),
+                }),
+              )
+              .pipe(Effect.andThen(dismissed))
+          },
+          getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+          storage: storageCallbacks,
+        })
 
-        storeResolution: (sessionId, branchId, decision) =>
-          interaction.storeResolution(sessionId, branchId, decision),
+        return {
+          present: (params) => interaction.present(params),
 
-        rehydrate: (record) =>
-          interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as HandoffParams),
-      }
-    }),
-  )
+          peek: (requestId) => Effect.succeed(paramsStash.get(requestId)),
+
+          claim: (requestId) => {
+            const params = paramsStash.get(requestId)
+            if (params === undefined || claimed.has(requestId)) {
+              return Effect.sync(() => undefined as HandoffParams | undefined)
+            }
+            claimed.add(requestId)
+            return Effect.succeed(params)
+          },
+
+          respond: Effect.fn("HandoffHandler.respond")(
+            function* (requestId, decision, childSessionId, reason) {
+              const extra = decision === "confirm" ? childSessionId : reason
+              yield* interaction.respond(requestId, decision, extra)
+              return paramsStash.get(requestId)
+            },
+          ),
+
+          storeResolution: (sessionId, branchId, decision) =>
+            interaction.storeResolution(sessionId, branchId, decision),
+
+          rehydrate: (record) =>
+            interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as HandoffParams),
+        }
+      }),
+    )
 
   static Test = (
     decisions: ReadonlyArray<HandoffDecision> = ["confirm"],

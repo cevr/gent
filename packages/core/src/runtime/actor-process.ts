@@ -4,10 +4,10 @@ import { QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
   ErrorOccurred,
-  EventStore,
   ToolCallFailed,
   ToolCallSucceeded,
 } from "../domain/event.js"
+import { EventPublisher } from "../domain/event-publisher.js"
 import { ActorCommandId, BranchId, SessionId, ToolCallId, type MessageId } from "../domain/ids.js"
 import { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
@@ -163,13 +163,13 @@ const followUpMessageIdForCommand = (commandId: ActorCommandId) =>
 const LocalActorTransportLive: Layer.Layer<
   ActorTransport,
   never,
-  AgentLoop | Storage | EventStore | ToolRunner | ExtensionRegistry
+  AgentLoop | Storage | EventPublisher | ToolRunner | ExtensionRegistry
 > = Layer.effect(
   ActorTransport,
   Effect.gen(function* () {
     const agentLoop = yield* AgentLoop
     const storage = yield* Storage
-    const eventStore = yield* EventStore
+    const eventPublisher = yield* EventPublisher
     const toolRunner = yield* ToolRunner
     const extensionRegistry = yield* ExtensionRegistry
     const bashSemaphore = yield* Semaphore.make(1)
@@ -198,7 +198,7 @@ const LocalActorTransportLive: Layer.Layer<
                 if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
                 return Effect.gen(function* () {
                   if (Cause.hasDies(cause)) {
-                    yield* eventStore.publish(
+                    yield* eventPublisher.publish(
                       new AgentRestarted({
                         sessionId: input.sessionId,
                         branchId: input.branchId,
@@ -207,7 +207,7 @@ const LocalActorTransportLive: Layer.Layer<
                       }),
                     )
                   }
-                  yield* eventStore.publish(
+                  yield* eventPublisher.publish(
                     new ErrorOccurred({
                       sessionId: input.sessionId,
                       branchId: input.branchId,
@@ -257,7 +257,7 @@ const LocalActorTransportLive: Layer.Layer<
             summary: summarizeToolOutput(part),
             output: stringifyOutput(part.output.value),
           }
-          yield* eventStore.publish(
+          yield* eventPublisher.publish(
             isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
           )
         }).pipe(
@@ -277,7 +277,7 @@ const LocalActorTransportLive: Layer.Layer<
             toolName: input.toolName,
             input: input.input,
             publishEvent: (event) =>
-              eventStore.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+              eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
             sessionId: input.sessionId,
             branchId: input.branchId,
             currentTurnAgent,
@@ -305,7 +305,7 @@ const LocalActorTransportLive: Layer.Layer<
           yield* agentLoop.submit(followUpMessage).pipe(
             Effect.catchCause((cause) => {
               if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-              return eventStore
+              return eventPublisher
                 .publish(
                   new ErrorOccurred({
                     sessionId: input.sessionId,
@@ -438,5 +438,5 @@ const ActorProcessFromTransportLive: Layer.Layer<ActorProcess, never, ActorTrans
 export const LocalActorProcessLive: Layer.Layer<
   ActorProcess,
   never,
-  AgentLoop | Storage | EventStore | ToolRunner | ExtensionRegistry
+  AgentLoop | Storage | EventPublisher | ToolRunner | ExtensionRegistry
 > = Layer.provide(ActorProcessFromTransportLive, LocalActorTransportLive)

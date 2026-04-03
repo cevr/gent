@@ -9,6 +9,7 @@ import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
@@ -36,7 +37,10 @@ describe("SessionCommands → ActorProcess integration", () => {
       never,
       never
     >,
-  ) => Layer.provide(LocalActorProcessLive, storageDeps)
+  ) => {
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+    return Layer.provide(LocalActorProcessLive, Layer.merge(storageDeps, eventPublisherLayer))
+  }
 
   const makeIntegrationLayer = (runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>) => {
     const agentLoopLayer = Layer.effect(
@@ -80,9 +84,11 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
     )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
     const actorProcessLayer = makeActorProcessLayer(storageDeps)
     const baseWithActorProcess = Layer.mergeAll(
       storageDeps,
+      eventPublisherLayer,
       actorProcessLayer,
       Provider.Test([]),
       Permission.Live([], "allow"),
@@ -175,9 +181,14 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
     )
-    const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+    const actorProcessLayer = Layer.provide(
+      LocalActorProcessLive,
+      Layer.merge(storageDeps, eventPublisherLayer),
+    )
     const baseWithActorProcess = Layer.mergeAll(
       storageDeps,
+      eventPublisherLayer,
       actorProcessLayer,
       Provider.Test([]),
       Permission.Live([], "allow"),
@@ -235,8 +246,13 @@ describe("SessionCommands → ActorProcess integration", () => {
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
+      ExtensionStateRuntime.Test(),
     )
-    const layer = Layer.provide(LocalActorProcessLive, storageDeps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+    const layer = Layer.provide(
+      LocalActorProcessLive,
+      Layer.merge(storageDeps, eventPublisherLayer),
+    )
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {

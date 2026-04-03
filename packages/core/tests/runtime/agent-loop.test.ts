@@ -11,6 +11,7 @@ import { defineTool, type AnyToolDefinition } from "@gent/core/domain/tool"
 import { Permission } from "@gent/core/domain/permission"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { EventStore } from "@gent/core/domain/event"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
@@ -59,7 +60,11 @@ describe("AgentLoop actor model", () => {
       ToolRunner.Test(),
       BunServices.layer,
     )
-    return Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    return Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
   }
 
   const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
@@ -76,7 +81,11 @@ describe("AgentLoop actor model", () => {
       recorderLayer,
       eventStoreLayer,
     )
-    return Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    return Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
   }
 
   test("runs sessions concurrently", async () => {
@@ -179,7 +188,11 @@ describe("AgentLoop actor model", () => {
       ToolRunner.Test(),
       BunServices.layer,
     )
-    const layer = Layer.provideMerge(AgentLoop.Live({ baseSections: [] }), deps)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
 
     await Effect.runPromise(
       Effect.scoped(
@@ -618,8 +631,11 @@ describe("AgentLoop.runOnce", () => {
       toolDeps,
       toolRunnerLayer,
     )
-    const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(Layer.provide(deps))
-    const layer = Layer.mergeAll(deps, loopLayer)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(
+      Layer.provide(Layer.merge(deps, eventPublisherLayer)),
+    )
+    const layer = Layer.mergeAll(deps, eventPublisherLayer, loopLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -724,8 +740,11 @@ describe("Tool concurrency", () => {
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const actorDeps = Layer.mergeAll(deps, toolRunnerLayer)
-    const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(Layer.provide(actorDeps))
-    const layer = Layer.mergeAll(actorDeps, loopLayer)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, actorDeps)
+    const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(
+      Layer.provide(Layer.merge(actorDeps, eventPublisherLayer)),
+    )
+    const layer = Layer.mergeAll(actorDeps, eventPublisherLayer, loopLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {

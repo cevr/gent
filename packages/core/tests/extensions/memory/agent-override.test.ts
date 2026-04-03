@@ -8,6 +8,7 @@ import type { AgentName } from "@gent/core/domain/agent"
 import { Agents } from "@gent/core/domain/agent"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { AppServicesLive } from "@gent/core/server/index"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
@@ -66,9 +67,14 @@ const makeTestLayer = (logs: {
     ExtensionTurnControl.Test(),
     ToolRunner.Test(),
   )
-  const actorProcessLayer = Layer.provide(LocalActorProcessLive, storageDeps)
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+  const actorProcessLayer = Layer.provide(
+    LocalActorProcessLive,
+    Layer.merge(storageDeps, eventPublisherLayer),
+  )
   const baseWithActorProcess = Layer.mergeAll(
     storageDeps,
+    eventPublisherLayer,
     actorProcessLayer,
     Provider.Test([]),
     Permission.Live([], "allow"),
@@ -77,8 +83,8 @@ const makeTestLayer = (logs: {
   const deps = Layer.mergeAll(
     baseWithActorProcess,
     AskUserHandler.Test([["yes"]]),
-    Layer.provide(PromptHandler.Live, baseWithActorProcess),
-    Layer.provide(HandoffHandler.Live, baseWithActorProcess),
+    Layer.provide(PromptHandler.Live, Layer.merge(baseWithActorProcess, eventPublisherLayer)),
+    Layer.provide(HandoffHandler.Live, Layer.merge(baseWithActorProcess, eventPublisherLayer)),
   )
   return Layer.provideMerge(AppServicesLive, deps)
 }

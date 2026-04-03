@@ -1,4 +1,5 @@
 import { ServiceMap, DateTime, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { EventPublisher } from "../domain/event-publisher.js"
 import {
   Task,
   TaskTransitionError,
@@ -25,7 +26,12 @@ import type { Message } from "../domain/message.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
 
-export type TaskRuntimeDeps = EventStore | ExtensionRegistry | RuntimePlatform | Storage
+export type TaskRuntimeDeps =
+  | EventPublisher
+  | EventStore
+  | ExtensionRegistry
+  | RuntimePlatform
+  | Storage
 type TaskServiceFallbackApi = {
   readonly create: (params: {
     sessionId: SessionId
@@ -167,6 +173,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
 
       const getRuntimeDeps = Effect.gen(function* () {
         return {
+          eventPublisher: yield* EventPublisher,
           eventStore: yield* EventStore,
           extensionRegistry: yield* ExtensionRegistry,
           platform: yield* RuntimePlatform,
@@ -200,13 +207,13 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
         task: Task,
       ) => Effect.Effect<void, never, TaskRuntimeDeps> = (storage, taskId, task) =>
         Effect.gen(function* () {
-          const { eventStore, extensionRegistry, platform } = yield* getRuntimeDeps
+          const { eventPublisher, eventStore, extensionRegistry, platform } = yield* getRuntimeDeps
           const agent = yield* extensionRegistry.getAgent(task.agentType ?? "explore")
           if (agent === undefined) {
             yield* storage
               .updateTask(taskId, { status: "failed" })
               .pipe(Effect.catchEager(() => Effect.void))
-            yield* eventStore
+            yield* eventPublisher
               .publish(
                 new TaskFailed({
                   sessionId: task.sessionId,
@@ -231,7 +238,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 metadata: mergeMetadata(task.metadata, { error }),
               })
               .pipe(Effect.catchEager(() => Effect.void))
-            yield* eventStore
+            yield* eventPublisher
               .publish(
                 new TaskFailed({
                   sessionId: parentSessionId,
@@ -335,7 +342,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 metadata: mergeMetadata(existingMeta, { childSessionId: result.sessionId }),
               })
               .pipe(Effect.catchEager(() => Effect.void))
-            yield* eventStore
+            yield* eventPublisher
               .publish(
                 new TaskCompleted({
                   sessionId: parentSessionId,
@@ -355,7 +362,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 metadata: mergeMetadata(currentTask?.metadata, { error: result.error }),
               })
               .pipe(Effect.catchEager(() => Effect.void))
-            yield* eventStore
+            yield* eventPublisher
               .publish(
                 new TaskFailed({
                   sessionId: parentSessionId,
@@ -369,7 +376,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
         }).pipe(
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
-              const { eventStore } = yield* getRuntimeDeps
+              const { eventPublisher } = yield* getRuntimeDeps
               // Determine if this was a user-initiated stop or a shutdown interrupt
               const current = yield* storage
                 .getTask(taskId)
@@ -380,7 +387,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 yield* storage
                   .updateTask(taskId, { status: "stopped" })
                   .pipe(Effect.catchEager(() => Effect.void))
-                yield* eventStore
+                yield* eventPublisher
                   .publish(
                     new TaskStopped({
                       sessionId: task.sessionId,
@@ -412,7 +419,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
         completedTaskId: TaskId,
       ) => Effect.Effect<void, never, TaskRuntimeDeps> = (storage, completedTaskId) =>
         Effect.gen(function* () {
-          const { eventStore } = yield* getRuntimeDeps
+          const { eventPublisher } = yield* getRuntimeDeps
           const dependents = yield* storage.getTaskDependents(completedTaskId)
           for (const depTaskId of dependents) {
             const depTask = yield* storage.getTask(depTaskId)
@@ -440,7 +447,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 .claimTask(depTaskId)
                 .pipe(Effect.catchEager(() => Effect.sync(() => undefined as Task | undefined)))
               if (claimed === undefined) continue
-              yield* eventStore
+              yield* eventPublisher
                 .publish(
                   new TaskUpdated({
                     sessionId: claimed.sessionId,
@@ -463,7 +470,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 onNone: () => TaskService.Noop.create(params),
                 onSome: (storage: TaskStorageService) =>
                   Effect.gen(function* () {
-                    const { eventStore } = yield* getRuntimeDeps
+                    const { eventPublisher } = yield* getRuntimeDeps
                     const id = Bun.randomUUIDv7() as TaskId
                     const now = yield* DateTime.nowAsDate
                     const task = new Task({
@@ -481,7 +488,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                       updatedAt: now,
                     })
                     yield* storage.createTask(task)
-                    yield* eventStore.publish(
+                    yield* eventPublisher.publish(
                       new TaskCreated({
                         sessionId: params.sessionId,
                         branchId: params.branchId,
@@ -523,7 +530,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 onNone: () => TaskService.Noop.update(id, fields),
                 onSome: (storage: TaskStorageService) =>
                   Effect.gen(function* () {
-                    const { eventStore } = yield* getRuntimeDeps
+                    const { eventPublisher } = yield* getRuntimeDeps
                     // Validate status transition if status is being changed
                     if (fields.status !== undefined) {
                       const existing = yield* storage.getTask(id)
@@ -541,7 +548,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                     const updated = yield* storage.updateTask(id, fields)
                     if (updated !== undefined && fields.status !== undefined) {
                       if (fields.status === "completed") {
-                        yield* eventStore.publish(
+                        yield* eventPublisher.publish(
                           new TaskCompleted({
                             sessionId: updated.sessionId,
                             branchId: updated.branchId,
@@ -558,7 +565,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                           typeof updated.metadata.error === "string"
                             ? updated.metadata.error
                             : undefined
-                        yield* eventStore.publish(
+                        yield* eventPublisher.publish(
                           new TaskFailed({
                             sessionId: updated.sessionId,
                             branchId: updated.branchId,
@@ -567,7 +574,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                           }),
                         )
                       } else {
-                        yield* eventStore.publish(
+                        yield* eventPublisher.publish(
                           new TaskUpdated({
                             sessionId: updated.sessionId,
                             branchId: updated.branchId,
@@ -590,14 +597,14 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 onNone: () => TaskService.Noop.remove(id),
                 onSome: (storage: TaskStorageService) =>
                   Effect.gen(function* () {
-                    const { eventStore } = yield* getRuntimeDeps
+                    const { eventPublisher } = yield* getRuntimeDeps
                     const existing = yield* storage.getTask(id).pipe(Effect.orDie)
                     if (existing === undefined) {
                       yield* storage.deleteTask(id).pipe(Effect.orDie)
                       return
                     }
                     yield* storage.deleteTask(id).pipe(Effect.orDie)
-                    yield* eventStore
+                    yield* eventPublisher
                       .publish(
                         new TaskDeleted({
                           sessionId: existing.sessionId,
@@ -618,7 +625,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 onNone: () => TaskService.Noop.run(id),
                 onSome: (storage: TaskStorageService) =>
                   Effect.gen(function* () {
-                    const { eventStore } = yield* getRuntimeDeps
+                    const { eventPublisher } = yield* getRuntimeDeps
                     const task = yield* storage.getTask(id).pipe(Effect.orDie)
                     if (task === undefined) {
                       return { taskId: id, status: "not_found" }
@@ -632,7 +639,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                     if (claimed === undefined) {
                       return { taskId: id, status: task.status }
                     }
-                    yield* eventStore
+                    yield* eventPublisher
                       .publish(
                         new TaskUpdated({
                           sessionId: claimed.sessionId,
@@ -657,7 +664,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                 onNone: () => TaskService.Noop.stop(id),
                 onSome: (storage: TaskStorageService) =>
                   Effect.gen(function* () {
-                    const { eventStore } = yield* getRuntimeDeps
+                    const { eventPublisher } = yield* getRuntimeDeps
                     const task = yield* storage.getTask(id).pipe(Effect.orDie)
                     if (task === undefined) return undefined
                     if (task.status !== "in_progress" && task.status !== "pending") return task
@@ -667,7 +674,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
                       .updateTask(id, { status: "stopped" })
                       .pipe(Effect.orDie)
 
-                    yield* eventStore
+                    yield* eventPublisher
                       .publish(
                         new TaskStopped({
                           sessionId: task.sessionId,

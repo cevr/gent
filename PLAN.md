@@ -222,7 +222,7 @@ Why:
 
 - current reduction runs inline on the `EventStore.publish` call stack
 - nested delivery currently gets skipped instead of queued
-- one slow extension can block host publish
+- the storage boundary should not own extension reduction at all
 
 Justification:
 
@@ -256,7 +256,8 @@ Changes:
 - no synchronous extension reduction from event-store publish
 - no nested publish skip path
 - queued processing per session/extension
-- define backpressure/error policy explicitly
+- define caller wait policy explicitly
+- keep storage append separate from delivery; ordinary command paths may still await delivery for causal consistency
 
 Tasks:
 

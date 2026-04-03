@@ -1,7 +1,7 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { defineTool, type ToolContext } from "../domain/tool.js"
+import { EventPublisher } from "../domain/event-publisher.js"
 import {
-  EventStore,
   type EventStoreError,
   InteractionDismissed,
   QuestionsAsked,
@@ -86,70 +86,74 @@ export interface AskUserHandlerService {
 export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
   "@gent/core/src/tools/ask-user/AskUserHandler",
 ) {
-  static Live: Layer.Layer<AskUserHandler, never, EventStore | InteractionStorage> = Layer.effect(
-    AskUserHandler,
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      const interactionStore = yield* InteractionStorage
+  static Live: Layer.Layer<AskUserHandler, never, EventPublisher | InteractionStorage> =
+    Layer.effect(
+      AskUserHandler,
+      Effect.gen(function* () {
+        const eventPublisher = yield* EventPublisher
+        const interactionStore = yield* InteractionStorage
 
-      const storageCallbacks: InteractionStorageConfig = {
-        persist: (record) =>
-          interactionStore.persist(record).pipe(
-            Effect.asVoid,
-            Effect.catchEager(() => Effect.void),
-          ),
-        resolve: (requestId) =>
-          interactionStore.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-      }
+        const storageCallbacks: InteractionStorageConfig = {
+          persist: (record) =>
+            interactionStore.persist(record).pipe(
+              Effect.asVoid,
+              Effect.catchEager(() => Effect.void),
+            ),
+          resolve: (requestId) =>
+            interactionStore.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+        }
 
-      const interaction = makeInteractionService<AskUserParams_, AskUserDecision>({
-        type: "ask-user",
-        onPresent: (requestId, params) =>
-          eventStore.publish(
-            new QuestionsAsked({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-              questions: [...params.questions],
-            }),
-          ),
-        onRespond: (requestId, params) =>
-          eventStore.publish(
-            new InteractionDismissed({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              requestId,
-            }),
-          ),
-        getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
-        storage: storageCallbacks,
-      })
+        const interaction = makeInteractionService<AskUserParams_, AskUserDecision>({
+          type: "ask-user",
+          onPresent: (requestId, params) =>
+            eventPublisher.publish(
+              new QuestionsAsked({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+                questions: [...params.questions],
+              }),
+            ),
+          onRespond: (requestId, params) =>
+            eventPublisher.publish(
+              new InteractionDismissed({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                requestId,
+              }),
+            ),
+          getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
+          storage: storageCallbacks,
+        })
 
-      return {
-        askMany: Effect.fn("AskUserHandler.askMany")(function* (
-          questions: ReadonlyArray<Question>,
-          ctx: ToolContext,
-        ) {
-          return yield* interaction.present({
-            questions,
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-          })
-        }),
-        respond: (requestId, answers, cancelled) =>
-          interaction
-            .respond(
-              requestId,
-              cancelled === true ? { _tag: "cancelled" } : { _tag: "answered", answers },
-            )
-            .pipe(Effect.asVoid),
-        storeResolution: (sessionId, branchId, decision) =>
-          interaction.storeResolution(sessionId, branchId, decision),
-        rehydrate: (record) =>
-          interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as AskUserParams_),
-      }
-    }),
-  )
+        return {
+          askMany: Effect.fn("AskUserHandler.askMany")(function* (
+            questions: ReadonlyArray<Question>,
+            ctx: ToolContext,
+          ) {
+            return yield* interaction.present({
+              questions,
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+            })
+          }),
+          respond: (requestId, answers, cancelled) =>
+            interaction
+              .respond(
+                requestId,
+                cancelled === true ? { _tag: "cancelled" } : { _tag: "answered", answers },
+              )
+              .pipe(Effect.asVoid),
+          storeResolution: (sessionId, branchId, decision) =>
+            interaction.storeResolution(sessionId, branchId, decision),
+          rehydrate: (record) =>
+            interaction.rehydrate(
+              record.requestId,
+              JSON.parse(record.paramsJson) as AskUserParams_,
+            ),
+        }
+      }),
+    )
 
   static Test = (responses: ReadonlyArray<ReadonlyArray<string>>): Layer.Layer<AskUserHandler> => {
     let callIndex = 0
