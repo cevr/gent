@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { EventStoreError } from "../domain/event.js"
 import { ProviderError } from "../providers/provider.js"
 import { ProviderAuthError } from "../providers/provider-auth.js"
@@ -26,6 +27,7 @@ export type GentRpcError =
   | AgentLoopError
   | ProviderError
   | ProviderAuthError
+  | ExtensionProtocolError
   | PlatformErrorSchema
   | EventStoreError
   | NotFoundError
@@ -38,6 +40,7 @@ export const GentRpcError = Schema.Union([
   AgentLoopError,
   ProviderError,
   ProviderAuthError,
+  ExtensionProtocolError,
   PlatformErrorSchema,
   EventStoreError,
   NotFoundError,

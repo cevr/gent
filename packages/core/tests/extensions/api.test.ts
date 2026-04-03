@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll } from "bun:test"
 import { Effect, Layer } from "effect"
 import { extension } from "@gent/core/extensions/api"
+import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Permission } from "@gent/core/domain/permission"
@@ -136,6 +137,18 @@ describe("extension", () => {
     expect(setup.tools).toBeUndefined()
     expect(setup.agents).toBeUndefined()
     expect(setup.promptSections).toBeUndefined()
+  })
+
+  test("duplicate protocol tags fail at setup time", async () => {
+    const TogglePlan = ExtensionMessage("test-dup-protocol", "TogglePlan", {})
+    const ext = extension("test-dup-protocol", (b) => {
+      b.protocol({ TogglePlan })
+      b.protocol({ TogglePlan })
+    })
+
+    await expect(
+      Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
+    ).rejects.toThrow("ExtensionProtocolError")
   })
 })
 

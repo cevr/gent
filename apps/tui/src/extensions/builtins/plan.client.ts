@@ -5,6 +5,7 @@ import { PlanWidget } from "../plan-widget"
 
 export default defineClientExtension({
   id: "@gent/plan",
+  protocol: PlanProtocol,
   setup: (ctx) => ({
     borderLabels: [
       {

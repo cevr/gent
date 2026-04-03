@@ -10,6 +10,7 @@ import type {
   ExtensionClientModule,
   ExtensionClientContext,
 } from "@gent/core/domain/extension-client.js"
+import { listExtensionProtocolDefinitions } from "@gent/core/domain/extension-protocol.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,
@@ -75,6 +76,8 @@ export const loadTuiExtensions = async (
       id: ext.id,
       kind: "builtin" as const,
       filePath: `builtin:${ext.id}`,
+      protocols:
+        ext.protocol === undefined ? undefined : listExtensionProtocolDefinitions(ext.protocol),
       setup: ext.setup(ctx),
     }))
 
@@ -82,6 +85,10 @@ export const loadTuiExtensions = async (
     id: ext.module.id,
     kind: ext.kind,
     filePath: ext.filePath,
+    protocols:
+      ext.module.protocol === undefined
+        ? undefined
+        : listExtensionProtocolDefinitions(ext.module.protocol),
     setup: ext.module.setup(ctx),
   }))
 

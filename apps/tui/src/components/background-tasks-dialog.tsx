@@ -84,11 +84,7 @@ export function BackgroundTasksDialog(props: {
           message: TaskProtocol.GetTaskOutput({ taskId }),
         })
         .pipe(
-          Effect.flatMap((reply) =>
-            Effect.sync(() =>
-              Schema.decodeUnknownSync(TaskProtocol.GetTaskOutput.replyDecoder)(reply),
-            ),
-          ),
+          Effect.flatMap(Schema.decodeUnknownEffect(TaskProtocol.GetTaskOutput.replyDecoder)),
           Effect.tap((result) =>
             Effect.sync(() => {
               setDetailMessages(result?.messages ?? [])

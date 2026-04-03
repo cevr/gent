@@ -283,7 +283,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       // -- extension --
       "extension.send": ({ sessionId, message, branchId }) =>
         extensionStateRuntime.send(sessionId, message, branchId).pipe(
-          Effect.orDie,
           Effect.tap(() => {
             if (bus === undefined) return Effect.void
             return bus
@@ -298,7 +297,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         ),
 
       "extension.ask": ({ sessionId, message, branchId }) =>
-        extensionStateRuntime.ask(sessionId, message, branchId).pipe(Effect.orDie),
+        extensionStateRuntime.ask(sessionId, message, branchId),
 
       // -- actor --
       "actor.sendUserMessage": (input) => actorProcess.sendUserMessage(input),

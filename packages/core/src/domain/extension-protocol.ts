@@ -20,6 +20,16 @@ export interface ExtensionReplyTypeBrand<R> extends Brand<ExtensionReplyTypeId> 
 
 export type ExtractExtensionReply<M> = M extends ExtensionReplyTypeBrand<infer R> ? R : never
 
+export class ExtensionProtocolError extends Schema.TaggedErrorClass<ExtensionProtocolError>()(
+  "ExtensionProtocolError",
+  {
+    extensionId: Schema.String,
+    tag: Schema.String,
+    phase: Schema.Literals(["command", "request", "reply", "client-reply", "registration"]),
+    message: Schema.String,
+  },
+) {}
+
 type ExtensionEnvelopeRecord = Readonly<Record<string, unknown>>
 
 export type ExtensionCommandMessage<
@@ -55,7 +65,7 @@ export type ExtensionCommandDefinition<
   readonly _tag: Tag
   readonly kind: "command"
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
-  readonly schema: Schema.Schema<ExtensionCommandMessage<Id, Tag, F>>
+  readonly schema: Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
 }
 
 export type ExtensionRequestDefinition<
@@ -70,7 +80,7 @@ export type ExtensionRequestDefinition<
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
   readonly replySchema: Schema.Codec<R, unknown, never, never>
   readonly replyDecoder: Schema.Decoder<R>
-  readonly schema: Schema.Schema<ExtensionRequestMessage<Id, Tag, F, R>>
+  readonly schema: Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, R>>
 }
 
 export type AnyExtensionCommandDefinition = ExtensionCommandDefinition<
@@ -108,7 +118,7 @@ interface ExtensionCommandMetadata {
   readonly tag: string
   readonly kind: "command"
   readonly payloadSchema: Schema.Schema<unknown>
-  readonly schema: Schema.Schema<unknown>
+  readonly schema: Schema.Decoder<unknown>
 }
 
 interface ExtensionRequestMetadata {
@@ -116,7 +126,7 @@ interface ExtensionRequestMetadata {
   readonly tag: string
   readonly kind: "request"
   readonly payloadSchema: Schema.Schema<unknown>
-  readonly schema: Schema.Schema<unknown>
+  readonly schema: Schema.Decoder<unknown>
   readonly replySchema: Schema.Codec<unknown, unknown, never, never>
   readonly replyDecoder: Schema.Decoder<unknown>
 }
@@ -152,7 +162,7 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
     ...fields,
-  }) as unknown as Schema.Schema<ExtensionCommandMessage<Id, Tag, F>>
+  }) as unknown as Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
 
   const metadata: ExtensionCommandMetadata = {
     extensionId,
@@ -198,7 +208,7 @@ const createRequest = <
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
     ...fields,
-  }) as unknown as Schema.Schema<ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>>>
+  }) as unknown as Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>>>
 
   const metadata: ExtensionRequestMetadata = {
     extensionId,
@@ -268,14 +278,38 @@ export const isExtensionRequestMessage = (
 export const listExtensionProtocolDefinitions = (
   protocol: ExtensionProtocol,
 ): ReadonlyArray<AnyExtensionMessageDefinition> =>
-  Object.values(protocol).filter((value): value is AnyExtensionMessageDefinition => {
-    if (typeof value !== "function") return false
+  Object.entries(protocol).map(([key, value]) => {
+    if (typeof value !== "function") {
+      throw new ExtensionProtocolError({
+        extensionId: "(unknown)",
+        tag: key,
+        phase: "registration",
+        message: `protocol entry "${key}" is not a message definition`,
+      })
+    }
     const definition = value as Partial<AnyExtensionMessageDefinition>
-    return (
-      typeof definition.extensionId === "string" &&
-      typeof definition._tag === "string" &&
-      (definition.kind === "command" || definition.kind === "request")
-    )
+    if (
+      typeof definition.extensionId !== "string" ||
+      typeof definition._tag !== "string" ||
+      (definition.kind !== "command" && definition.kind !== "request") ||
+      definition.schema === undefined
+    ) {
+      throw new ExtensionProtocolError({
+        extensionId: definition.extensionId ?? "(unknown)",
+        tag: definition._tag ?? key,
+        phase: "registration",
+        message: `protocol entry "${key}" is not a valid message definition`,
+      })
+    }
+    if (definition.kind === "request" && definition.replySchema === undefined) {
+      throw new ExtensionProtocolError({
+        extensionId: definition.extensionId,
+        tag: definition._tag,
+        phase: "registration",
+        message: `request protocol entry "${key}" is missing a reply schema`,
+      })
+    }
+    return definition as AnyExtensionMessageDefinition
   })
 
 export const ExtensionMessageEnvelope = Schema.StructWithRest(

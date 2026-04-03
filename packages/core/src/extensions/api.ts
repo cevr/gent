@@ -53,6 +53,7 @@ import {
   type SpawnExtensionRef,
 } from "../domain/extension.js"
 import {
+  ExtensionProtocolError,
   type ExtensionProtocol,
   listExtensionProtocolDefinitions,
 } from "../domain/extension-protocol.js"
@@ -818,6 +819,14 @@ export const extension = (
               throw new Error(
                 `extension "${id}": protocol definition "${definition._tag}" belongs to "${definition.extensionId}"`,
               )
+            }
+            if (protocols.has(definition._tag)) {
+              throw new ExtensionProtocolError({
+                extensionId: id,
+                tag: definition._tag,
+                phase: "registration",
+                message: `duplicate protocol definition for "${definition._tag}"`,
+              })
             }
             protocols.set(definition._tag, definition)
           }

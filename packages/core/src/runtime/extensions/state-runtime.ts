@@ -18,6 +18,7 @@ import type {
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "../../domain/extension-protocol.js"
+import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 
 interface ExtensionProtocolRegistry {
@@ -39,12 +40,12 @@ export interface ExtensionStateRuntimeService {
     sessionId: SessionId,
     message: AnyExtensionCommandMessage,
     branchId?: BranchId,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, ExtensionProtocolError>
   readonly ask: <M extends AnyExtensionRequestMessage>(
     sessionId: SessionId,
     message: M,
     branchId?: BranchId,
-  ) => Effect.Effect<ExtractExtensionReply<M>>
+  ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
   readonly getUiSnapshots: (
     sessionId: SessionId,
     branchId: BranchId,
@@ -168,40 +169,62 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           get: (extensionId, tag) => protocolMap.get(extensionId)?.get(tag),
         }
 
-        const decodeWithSchema = <A>(schema: Schema.Schema<A>, value: unknown): Effect.Effect<A> =>
-          Effect.sync(() => {
-            const decoder = Schema.decodeUnknownSync(schema as Schema.Decoder<A, never>)
-            try {
-              return decoder(value)
-            } catch {
-              const encoded = Schema.encodeSync(schema as Schema.Encoder<unknown, never>)(
-                value as never,
-              )
-              return decoder(encoded)
-            }
+        const protocolError = (
+          extensionId: string,
+          tag: string,
+          phase: "command" | "request" | "reply",
+          message: string,
+        ) =>
+          new ExtensionProtocolError({
+            extensionId,
+            tag,
+            phase,
+            message,
           })
+
+        const decodeReply = <A>(
+          extensionId: string,
+          tag: string,
+          schema: Schema.Codec<A, unknown, never, never>,
+          value: unknown,
+        ): Effect.Effect<A, ExtensionProtocolError> =>
+          Schema.decodeUnknownEffect(schema)(value).pipe(
+            Effect.catchIf(Schema.isSchemaError, () =>
+              Schema.encodeUnknownEffect(schema)(value).pipe(
+                Effect.flatMap((encoded) => Schema.decodeUnknownEffect(schema)(encoded)),
+              ),
+            ),
+            Effect.mapError((error) => protocolError(extensionId, tag, "reply", error.message)),
+          )
 
         const decodeMessage = <M extends AnyExtensionCommandMessage | AnyExtensionRequestMessage>(
           message: M,
           expectedKind: "command" | "request",
-        ): Effect.Effect<M> =>
+        ): Effect.Effect<M, ExtensionProtocolError> =>
           Effect.gen(function* () {
             const definition = protocols.get(message.extensionId, message._tag)
             if (definition === undefined) {
-              return yield* Effect.die(
-                new Error(
-                  `extension "${message.extensionId}" has no protocol definition for "${message._tag}"`,
-                ),
+              return yield* protocolError(
+                message.extensionId,
+                message._tag,
+                expectedKind,
+                `extension "${message.extensionId}" has no protocol definition for "${message._tag}"`,
               )
             }
             if (definition.kind !== expectedKind) {
-              return yield* Effect.die(
-                new Error(
-                  `extension "${message.extensionId}" message "${message._tag}" is registered as a ${definition.kind}, not a ${expectedKind}`,
-                ),
+              return yield* protocolError(
+                message.extensionId,
+                message._tag,
+                expectedKind,
+                `extension "${message.extensionId}" message "${message._tag}" is registered as a ${definition.kind}, not a ${expectedKind}`,
               )
             }
-            return yield* decodeWithSchema(definition.schema as Schema.Schema<M>, message)
+            return yield* Schema.decodeUnknownEffect(definition.schema)(message).pipe(
+              Effect.map((value) => value as M),
+              Effect.mapError((error) =>
+                protocolError(message.extensionId, message._tag, expectedKind, error.message),
+              ),
+            )
           })
 
         return {
@@ -285,23 +308,29 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 const decoded = yield* decodeMessage(message, "request")
                 const definition = protocols.get(decoded.extensionId, decoded._tag)
                 if (definition === undefined || definition.kind !== "request") {
-                  return yield* Effect.die(
-                    new Error(
-                      `extension "${decoded.extensionId}" request "${decoded._tag}" is not registered`,
-                    ),
+                  return yield* protocolError(
+                    decoded.extensionId,
+                    decoded._tag,
+                    "request",
+                    `extension "${decoded.extensionId}" request "${decoded._tag}" is not registered`,
                   )
                 }
                 const entry = findEntry(entries, decoded.extensionId)
                 if (entry === undefined) {
-                  return yield* Effect.die(
-                    new Error(`extension "${decoded.extensionId}" is not loaded`),
+                  return yield* protocolError(
+                    decoded.extensionId,
+                    decoded._tag,
+                    "request",
+                    `extension "${decoded.extensionId}" is not loaded`,
                   )
                 }
                 const reply = yield* entry.ref.ask(decoded, branchId)
-                return yield* decodeWithSchema(
-                  definition.replySchema as Schema.Schema<ExtractExtensionReply<M>>,
+                return yield* decodeReply(
+                  decoded.extensionId,
+                  decoded._tag,
+                  definition.replySchema,
                   reply,
-                )
+                ).pipe(Effect.map((value) => value as ExtractExtensionReply<M>))
               }),
             ),
 

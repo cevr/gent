@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Ref, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Ref, Schema } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type {
@@ -7,7 +7,7 @@ import type {
   LoadedExtension,
   ReduceResult,
 } from "@gent/core/domain/extension"
-import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
+import { ExtensionMessage, ExtensionProtocolError } from "@gent/core/domain/extension-protocol"
 import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
@@ -443,7 +443,13 @@ describe("ExtensionStateRuntime — actor hosting", () => {
       const exit = yield* runtime.ask(sessionId, GetCount(), branchId).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        expect(String(exit.cause)).toContain("Expected number")
+        const error = Cause.findErrorOption(exit.cause)
+        expect(Option.isSome(error)).toBe(true)
+        if (Option.isSome(error)) {
+          expect(error.value).toBeInstanceOf(ExtensionProtocolError)
+          expect(error.value.phase).toBe("reply")
+          expect(error.value.message).toContain("Expected number")
+        }
       }
     }).pipe(Effect.provide(layer))
   })

@@ -83,6 +83,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   interactionRenderers: new Map(),
   composerSurface: undefined,
   borderLabels: [],
+  protocols: new Map(),
 }
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
@@ -186,7 +187,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             if (sid === undefined) {
               throw new Error("Cannot ask extension without an active session")
             }
-            const replyDecoder = getExtensionReplyDecoder(message)
+            const registered = resolved().protocols.get(message.extensionId)?.get(message._tag)
+            const replyDecoder =
+              registered?.kind === "request"
+                ? (registered.replyDecoder as Schema.Decoder<ExtractExtensionReply<M>>)
+                : getExtensionReplyDecoder(message)
             return clientCtx.runtime.run(
               clientCtx.client.extension
                 .ask({
@@ -198,7 +203,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                   Effect.flatMap((reply) =>
                     replyDecoder === undefined
                       ? Effect.succeed(reply as ExtractExtensionReply<M>)
-                      : Effect.sync(() => Schema.decodeUnknownSync(replyDecoder)(reply)),
+                      : Schema.decodeUnknownEffect(replyDecoder)(reply),
                   ),
                 ),
             )

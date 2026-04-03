@@ -3,7 +3,7 @@ import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import { createSignal, createMemo } from "solid-js"
 import type { Task } from "@gent/core/domain/task.js"
-import { TASK_TOOLS_EXTENSION_ID } from "@gent/core/extensions/task-tools-protocol.js"
+import { TASK_TOOLS_EXTENSION_ID, TaskProtocol } from "@gent/core/extensions/task-tools-protocol.js"
 import { useScopedKeyboard } from "../../keyboard/context"
 import { useExtensionUI } from "../context"
 
@@ -11,6 +11,7 @@ const EXTENSION_ID = TASK_TOOLS_EXTENSION_ID
 
 export default {
   id: "@gent/tasks",
+  protocol: TaskProtocol,
   setup: (ctx) => {
     /** Read task list from extension snapshot (populated by server-side task-tools actor). */
     function useTasksFromSnapshot(): () => Task[] {

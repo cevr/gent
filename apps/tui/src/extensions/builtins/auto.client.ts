@@ -5,6 +5,7 @@ import { AutoGoalOverlay } from "../auto-goal-overlay"
 
 export default defineClientExtension({
   id: "@gent/auto",
+  protocol: AutoProtocol,
   setup: (ctx) => ({
     borderLabels: [
       {
