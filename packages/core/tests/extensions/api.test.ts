@@ -399,9 +399,17 @@ describe("extension state", () => {
   test("ext.state() still maps AgentRun events to subagent simple event names", async () => {
     const ext = extension("state-agent-run-alias", (b) => {
       b.state({
-        initial: { seen: false },
+        initial: { seenType: false, seenTag: false, seenRawTag: false },
         reduce: (state, event) => {
-          if (event.type === "subagent-spawned") return { state: { seen: true } }
+          if (event.type === "subagent-spawned") {
+            return {
+              state: {
+                seenType: true,
+                seenTag: event._tag === "SubagentSpawned",
+                seenRawTag: event.raw._tag === "SubagentSpawned",
+              },
+            }
+          }
           return { state }
         },
       })
@@ -435,7 +443,7 @@ describe("extension state", () => {
     )
 
     const snapshot = await Effect.runPromise(actor.snapshot.pipe(Effect.provide(actorLayer)))
-    expect(snapshot.state).toEqual({ seen: true })
+    expect(snapshot.state).toEqual({ seenType: true, seenTag: true, seenRawTag: true })
     await Effect.runPromise(actor.stop.pipe(Effect.provide(actorLayer)))
   })
 

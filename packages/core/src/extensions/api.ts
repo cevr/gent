@@ -226,8 +226,21 @@ export type SimpleEventType =
 export interface SimpleEvent {
   readonly type: SimpleEventType
   readonly _tag: string
-  readonly raw: AgentEvent
+  readonly raw: SimpleEventRaw
 }
+
+type LegacySimpleAgentRunEvent =
+  | (Omit<Extract<AgentEvent, { readonly _tag: "AgentRunSpawned" }>, "_tag"> & {
+      readonly _tag: "SubagentSpawned"
+    })
+  | (Omit<Extract<AgentEvent, { readonly _tag: "AgentRunSucceeded" }>, "_tag"> & {
+      readonly _tag: "SubagentSucceeded"
+    })
+  | (Omit<Extract<AgentEvent, { readonly _tag: "AgentRunFailed" }>, "_tag"> & {
+      readonly _tag: "SubagentFailed"
+    })
+
+type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 
 /** Maps AgentEvent._tag to SimpleEventType. Diagnostic/internal events are intentionally omitted:
  *  MachineInspected, MachineTaskSucceeded, MachineTaskFailed, ExtensionUiSnapshot,
@@ -265,6 +278,30 @@ const EVENT_TAG_MAP: Record<string, SimpleEventType> = {
 }
 
 const mapEventType = (tag: string): SimpleEventType | undefined => EVENT_TAG_MAP[tag]
+
+const toLegacySimpleEventRaw = (
+  event: AgentEvent,
+): { readonly tag: string; readonly raw: SimpleEventRaw } => {
+  switch (event._tag) {
+    case "AgentRunSpawned":
+      return {
+        tag: "SubagentSpawned",
+        raw: { ...event, _tag: "SubagentSpawned" },
+      }
+    case "AgentRunSucceeded":
+      return {
+        tag: "SubagentSucceeded",
+        raw: { ...event, _tag: "SubagentSucceeded" },
+      }
+    case "AgentRunFailed":
+      return {
+        tag: "SubagentFailed",
+        raw: { ...event, _tag: "SubagentFailed" },
+      }
+    default:
+      return { tag: event._tag, raw: event }
+  }
+}
 
 // ── Simple State Config ──
 
@@ -570,7 +607,12 @@ const resolveSimpleState = (
     ): ReduceResult<unknown> => {
       const simpleType = mapEventType(event._tag)
       if (simpleType === undefined) return { state }
-      const simpleEvent: SimpleEvent = { type: simpleType, _tag: event._tag, raw: event }
+      const normalized = toLegacySimpleEventRaw(event)
+      const simpleEvent: SimpleEvent = {
+        type: simpleType,
+        _tag: normalized.tag,
+        raw: normalized.raw,
+      }
       const result = sc.reduce(state as Readonly<typeof sc.initial>, simpleEvent)
       return { state: result.state, effects: result.effects?.map(convertSimpleEffect) }
     },
