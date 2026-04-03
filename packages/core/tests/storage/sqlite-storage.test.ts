@@ -679,5 +679,58 @@ describe("Storage", () => {
         expect(latest).toBeUndefined()
       }).pipe(Effect.provide(layer)),
     )
+
+    it.live("listEvents rewrites legacy subagent rows to AgentRun events", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        const sessionId = "compat-agent-run" as SessionId
+        const branchId = "compat-agent-run-b" as BranchId
+        const childSessionId = "compat-agent-run-child" as SessionId
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            name: "compat-agent-run",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSpawned', ${JSON.stringify({ _tag: "SubagentSpawned", parentSessionId: sessionId, childSessionId, agentName: "reviewer", prompt: "inspect", branchId })}, ${Date.now()})`
+
+        const events = yield* storage.listEvents({ sessionId, branchId })
+        expect(events).toHaveLength(1)
+        expect(events[0]?.event._tag).toBe("AgentRunSpawned")
+      }).pipe(Effect.provide(layer)),
+    )
+
+    it.live("getLatestEvent resolves legacy subagent tags when queried by AgentRun tag", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        const sessionId = "compat-agent-run-latest" as SessionId
+        const branchId = "compat-agent-run-latest-b" as BranchId
+        const childSessionId = "compat-agent-run-latest-child" as SessionId
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            name: "compat-agent-run-latest",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+
+        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: "reviewer", branchId })}, ${Date.now()})`
+
+        const latest = yield* storage.getLatestEvent({
+          sessionId,
+          branchId,
+          tags: ["AgentRunSucceeded"],
+        })
+        expect(latest?._tag).toBe("AgentRunSucceeded")
+      }).pipe(Effect.provide(layer)),
+    )
   })
 })

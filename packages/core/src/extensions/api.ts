@@ -205,9 +205,9 @@ export type SimpleEventType =
   | "agent-switched"
   | "agent-restarted"
   // Subagent lifecycle
-  | "subagent-spawned"
-  | "subagent-succeeded"
-  | "subagent-failed"
+  | "agent-run-spawned"
+  | "agent-run-succeeded"
+  | "agent-run-failed"
   // Tasks
   | "task-created"
   | "task-updated"
@@ -249,9 +249,9 @@ const EVENT_TAG_MAP: Record<string, SimpleEventType> = {
   ToolCallFailed: "tool-call-failed",
   AgentSwitched: "agent-switched",
   AgentRestarted: "agent-restarted",
-  AgentRunSpawned: "subagent-spawned",
-  AgentRunSucceeded: "subagent-succeeded",
-  AgentRunFailed: "subagent-failed",
+  AgentRunSpawned: "agent-run-spawned",
+  AgentRunSucceeded: "agent-run-succeeded",
+  AgentRunFailed: "agent-run-failed",
   TaskCreated: "task-created",
   TaskUpdated: "task-updated",
   TaskCompleted: "task-completed",

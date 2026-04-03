@@ -14,11 +14,43 @@ import { SearchStorage } from "./search-storage.js"
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
 const decodeMessageParts = Schema.decodeUnknownEffect(MessagePartsJson)
 const encodeMessageParts = Schema.encodeEffect(MessagePartsJson)
-const EventJson = Schema.fromJsonString(AgentEvent)
-const decodeEvent = Schema.decodeUnknownEffect(EventJson)
+const EventJson = Schema.fromJsonString(Schema.Unknown)
 const encodeEvent = Schema.encodeEffect(EventJson)
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
+
+const LEGACY_EVENT_TAGS = {
+  AgentRunSpawned: ["AgentRunSpawned", "SubagentSpawned"],
+  AgentRunSucceeded: ["AgentRunSucceeded", "SubagentSucceeded"],
+  AgentRunFailed: ["AgentRunFailed", "SubagentFailed"],
+} as const satisfies Record<string, readonly string[]>
+
+const normalizeLegacyAgentEvent = (value: unknown): unknown => {
+  if (typeof value !== "object" || value === null) return value
+  const record = value as Record<string, unknown>
+  switch (record["_tag"]) {
+    case "SubagentSpawned":
+      return { ...record, _tag: "AgentRunSpawned" }
+    case "SubagentSucceeded":
+      return { ...record, _tag: "AgentRunSucceeded" }
+    case "SubagentFailed":
+      return { ...record, _tag: "AgentRunFailed" }
+    default:
+      return value
+  }
+}
+
+const decodeEvent = (json: string) =>
+  Schema.decodeUnknownEffect(EventJson)(json).pipe(
+    Effect.map(normalizeLegacyAgentEvent),
+    Effect.flatMap(Schema.decodeUnknownEffect(AgentEvent)),
+  )
+
+const expandEventTags = (tags: ReadonlyArray<string>) => [
+  ...new Set(
+    tags.flatMap((tag) => LEGACY_EVENT_TAGS[tag as keyof typeof LEGACY_EVENT_TAGS] ?? [tag]),
+  ),
+]
 // Storage Error
 
 export class StorageError extends Schema.TaggedErrorClass<StorageError>()("StorageError", {
@@ -739,10 +771,21 @@ const makeStorage = Effect.gen(function* () {
     getLatestEventTag: Effect.fn("Storage.getLatestEventTag")(
       function* ({ sessionId, branchId, tags }) {
         if (tags.length === 0) return undefined
+        const expandedTags = expandEventTags(tags)
         const rows = yield* sql<{
           event_tag: string
-        }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
-        return rows[0]?.event_tag
+        }>`SELECT event_tag FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
+        const eventTag = rows[0]?.event_tag
+        switch (eventTag) {
+          case "SubagentSpawned":
+            return "AgentRunSpawned"
+          case "SubagentSucceeded":
+            return "AgentRunSucceeded"
+          case "SubagentFailed":
+            return "AgentRunFailed"
+          default:
+            return eventTag
+        }
       },
       Effect.mapError(mapError("Failed to get latest event tag")),
     ),
@@ -750,9 +793,10 @@ const makeStorage = Effect.gen(function* () {
     getLatestEvent: Effect.fn("Storage.getLatestEvent")(
       function* ({ sessionId, branchId, tags }) {
         if (tags.length === 0) return undefined
+        const expandedTags = expandEventTags(tags)
         const rows = yield* sql<{
           event_json: string
-        }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(tags)} ORDER BY id DESC LIMIT 1`
+        }>`SELECT event_json FROM events WHERE session_id = ${sessionId} AND branch_id = ${branchId} AND event_tag IN ${sql.in(expandedTags)} ORDER BY id DESC LIMIT 1`
         const row = rows[0]
         if (row === undefined) return undefined
         const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
