@@ -1,4 +1,5 @@
 import { Console, Effect, Option } from "effect"
+import type { AgentName } from "@gent/core/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
 import type { GentNamespacedClient, GentRpcError, BranchInfo, SessionInfo } from "@gent/sdk"
@@ -21,6 +22,11 @@ export interface AppBootstrap {
   readonly initialRoute: AppRoute
   readonly debugMode: boolean
   readonly missingAuthProviders: readonly ProviderId[] | undefined
+}
+
+export interface StartupAuthState {
+  readonly initialAgent: AgentName | undefined
+  readonly missingProviders: readonly ProviderId[]
 }
 
 export const toSession = (session: SessionInfo): Session | undefined => {
@@ -86,6 +92,47 @@ export const resolveAppBootstrap = (
       }
   }
 }
+
+const resolveSessionRuntimeAgent = (
+  client: Pick<GentNamespacedClient, "session">,
+  session: SessionInfo,
+): Effect.Effect<AgentName | undefined, GentRpcError> => {
+  if (session.branchId === undefined) return Effect.succeed(undefined)
+  return client.session
+    .getSnapshot({
+      sessionId: session.id,
+      branchId: session.branchId,
+    })
+    .pipe(Effect.map((snapshot) => snapshot.runtime.agent))
+}
+
+export const resolveStartupAuthState = (input: {
+  client: Pick<GentNamespacedClient, "auth" | "session">
+  state: InitialState
+  requestedAgent?: AgentName
+}): Effect.Effect<StartupAuthState, GentRpcError> =>
+  Effect.gen(function* () {
+    const sessionAgent =
+      input.state._tag === "session" ||
+      input.state._tag === "branchPicker" ||
+      input.state._tag === "headless"
+        ? yield* resolveSessionRuntimeAgent(input.client, input.state.session)
+        : undefined
+
+    const authAgent =
+      input.state._tag === "headless" ? (input.requestedAgent ?? sessionAgent) : sessionAgent
+
+    const providers = yield* input.client.auth.listProviders(
+      authAgent !== undefined ? { agentName: authAgent } : {},
+    )
+
+    return {
+      initialAgent: input.state._tag === "headless" ? undefined : authAgent,
+      missingProviders: providers
+        .filter((provider) => provider.required && !provider.hasKey)
+        .map((provider) => provider.provider),
+    }
+  })
 
 export const resolveInitialState = (input: {
   client: Pick<GentNamespacedClient, "session" | "branch">

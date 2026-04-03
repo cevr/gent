@@ -105,7 +105,7 @@ export function Auth(props: AuthProps) {
     )
   }
 
-  const openAuthorization = (url: string) =>
+  const openAuthorization = (currentRouteVersion: number, url: string) =>
     Effect.gen(function* () {
       props.log.info("auth:open-authorization", { url })
       const opener = yield* LinkOpener
@@ -113,6 +113,7 @@ export function Auth(props: AuthProps) {
     }).pipe(
       Effect.catchEager((err) =>
         Effect.sync(() => {
+          if (!isCurrentRouteVersion(currentRouteVersion)) return
           send({ _tag: "ActionFailed", error: formatError(ClientError(err.message)) })
         }),
       ),
@@ -251,7 +252,7 @@ export function Auth(props: AuthProps) {
           Effect.tap((authorization) => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return Effect.void
             if (authorization === null || authorization.method === "done") return Effect.void
-            return openAuthorization(authorization.url)
+            return openAuthorization(currentRouteVersion, authorization.url)
           }),
           Effect.tap((authorization) => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return Effect.void

@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { createSignal } from "solid-js"
+import { LinkOpener, LinkOpenerError } from "@gent/core/domain/link-opener"
 import type { ClientLog } from "../src/utils/client-logger"
 import { Auth } from "../src/routes/auth"
 import { Route } from "../src/router"
@@ -19,6 +20,29 @@ const log: ClientLog = {
   info: noop,
   warn: noop,
   error: noop,
+}
+
+const runtimeWithLinkOpener = (open: (url: string) => Effect.Effect<void, LinkOpenerError>) => {
+  const base = createMockRuntime()
+  const provideLinkOpener = <A, E>(effect: Effect.Effect<A, E, LinkOpener>) =>
+    effect.pipe(
+      Effect.provide(
+        LinkOpener.Test({
+          open,
+        }),
+      ),
+    )
+
+  return {
+    ...base,
+    cast: (effect: Effect.Effect<unknown, unknown, never>) => {
+      Effect.runFork(provideLinkOpener(effect))
+    },
+    fork: (effect: Effect.Effect<unknown, unknown, never>) =>
+      Effect.runFork(provideLinkOpener(effect)),
+    run: (effect: Effect.Effect<unknown, unknown, never>) =>
+      Effect.runPromise(provideLinkOpener(effect)),
+  }
 }
 
 const waitForFrame = async (
@@ -311,6 +335,97 @@ describe("Auth route", () => {
     await setup.renderOnce()
 
     expect(callbackCalls).toEqual([])
+    setup.renderer.destroy()
+  })
+
+  test("ignores stale oauth opener failures after the selected agent changes", async () => {
+    let setAgentName: ((value: string) => void) | undefined
+    let rejectOpen: ((error: LinkOpenerError) => void) | undefined
+    const calls: Array<{ agentName?: string }> = []
+
+    const client = createMockClient({
+      auth: {
+        listProviders: (input: { agentName?: string }) =>
+          Effect.sync(() => {
+            calls.push(input)
+            return input.agentName === "deepwork"
+              ? [
+                  {
+                    provider: "openai",
+                    hasKey: false,
+                    required: false,
+                    source: "none",
+                    authType: undefined,
+                  },
+                ]
+              : [
+                  {
+                    provider: "anthropic",
+                    hasKey: false,
+                    required: false,
+                    source: "none",
+                    authType: undefined,
+                  },
+                ]
+          }),
+        listMethods: () =>
+          Effect.succeed({
+            anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+        authorize: ({ provider }: { provider: string; method: number; sessionId: string }) => {
+          if (provider !== "anthropic") return Effect.succeed(null)
+          return Effect.succeed({
+            authorizationId: "auth-old",
+            url: "https://example.com/oauth",
+            method: "code" as const,
+          })
+        },
+      },
+    })
+    const runtime = runtimeWithLinkOpener(() =>
+      Effect.promise<void, LinkOpenerError>(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectOpen = (error) => reject(error)
+          }),
+      ),
+    )
+
+    const setup = await renderWithProviders(
+      () => {
+        const [agentName, setAgent] = createSignal("cowork")
+        setAgentName = setAgent
+        return <Auth client={client} runtime={runtime} log={log} agentName={agentName()} />
+      },
+      {
+        client,
+        runtime,
+        initialRoute: Route.auth(),
+      },
+    )
+
+    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    await waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
+
+    setAgentName?.("deepwork")
+    await Promise.resolve()
+    await setup.renderOnce()
+    expect(calls.at(-1)).toEqual({ agentName: "deepwork" })
+
+    rejectOpen?.(new LinkOpenerError({ message: "open failed" }))
+    const frame = await waitForFrame(
+      setup,
+      (next) => next.includes("openai") && !next.includes("open failed"),
+    )
+
+    expect(frame).toContain("openai")
+    expect(frame).not.toContain("open failed")
     setup.renderer.destroy()
   })
 })

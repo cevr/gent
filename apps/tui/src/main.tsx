@@ -19,7 +19,7 @@ import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
 import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
-import { resolveAppBootstrap, resolveInitialState } from "./app-bootstrap"
+import { resolveAppBootstrap, resolveInitialState, resolveStartupAuthState } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent } from "@gent/sdk"
 
@@ -99,21 +99,8 @@ const main = Command.make(
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => shutdownLog("shutdown.finalizer.post-spawn")),
       )
-      const initialAgent: AgentName | undefined =
+      const requestedAgent: AgentName | undefined =
         Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
-
-      const authProviders = yield* bundle.client.auth.listProviders({
-        ...(initialAgent !== undefined ? { agentName: initialAgent } : {}),
-      })
-      const missingProviders = authProviders
-        .filter((provider) => provider.required && !provider.hasKey)
-        .map((provider) => provider.provider)
-
-      if (missingProviders.length > 0 && headless && !debug) {
-        const hint = formatMissingProviders(missingProviders)
-        yield* Console.error(`Error: missing required API keys: ${hint}`)
-        return yield* Effect.die(hint)
-      }
 
       const state = yield* resolveInitialState({
         client: bundle.client,
@@ -124,6 +111,19 @@ const main = Command.make(
         prompt,
         promptArg,
       })
+
+      const startupAuth = yield* resolveStartupAuthState({
+        client: bundle.client,
+        state,
+        ...(requestedAgent !== undefined ? { requestedAgent } : {}),
+      })
+      const missingProviders = startupAuth.missingProviders
+
+      if (missingProviders.length > 0 && headless && !debug) {
+        const hint = formatMissingProviders(missingProviders)
+        yield* Console.error(`Error: missing required API keys: ${hint}`)
+        return yield* Effect.die(hint)
+      }
 
       if (state._tag === "headless") {
         const branchId = state.session.branchId
@@ -188,7 +188,7 @@ const main = Command.make(
                   runtime={bundle.runtime}
                   log={log}
                   initialSession={bootstrap.initialSession}
-                  initialAgent={initialAgent}
+                  initialAgent={startupAuth.initialAgent}
                 >
                   <ExtensionUIProvider>
                     <RouterProvider initialRoute={bootstrap.initialRoute}>
