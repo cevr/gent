@@ -14,7 +14,6 @@ import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { ChromePanel } from "../components/chrome-panel"
 import type { BranchInfo, BranchTreeNode } from "../client"
-import type { AgentName } from "@gent/core/domain/agent.js"
 import type { SessionId } from "@gent/core/domain/ids.js"
 import { formatError } from "../utils/format-error"
 import { truncate } from "../utils/truncate"
@@ -137,41 +136,8 @@ export function BranchPicker(props: BranchPickerProps) {
     if (e.name === "return") {
       const branch = props.branches[current.selectedIndex]
       if (branch !== undefined) {
-        cast(
-          client.client.session
-            .getSnapshot({ sessionId: props.sessionId, branchId: branch.id })
-            .pipe(
-              Effect.tap((snapshot) =>
-                Effect.sync(() => {
-                  client.switchSession(
-                    props.sessionId,
-                    branch.id,
-                    props.sessionName,
-                    snapshot.runtime?.agent as AgentName | undefined,
-                  )
-                  router.navigateToSession(props.sessionId, branch.id, props.prompt)
-                }),
-              ),
-              Effect.catchEager((error) =>
-                Effect.sync(() => {
-                  setState((prev) => {
-                    const nextError = formatError(error)
-                    switch (prev._tag) {
-                      case "loading":
-                        return { _tag: "loading", error: nextError }
-                      case "ready":
-                        return {
-                          _tag: "ready",
-                          selectedIndex: prev.selectedIndex,
-                          messageCounts: prev.messageCounts,
-                          error: nextError,
-                        }
-                    }
-                  })
-                }),
-              ),
-            ),
-        )
+        client.switchSession(props.sessionId, branch.id, props.sessionName)
+        router.navigateToSession(props.sessionId, branch.id, props.prompt)
       }
       return true
     }

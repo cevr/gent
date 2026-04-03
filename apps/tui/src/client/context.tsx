@@ -48,7 +48,11 @@ type SteerCommandInput =
   | { _tag: "Interject"; message: string; agent?: AgentName }
   | { _tag: "SwitchAgent"; agent: AgentName }
 
-const resolveModelInfo = (models: Record<string, Model>, agent: AgentName): Model | undefined => {
+const resolveModelInfo = (
+  models: Record<string, Model>,
+  agent: AgentName | undefined,
+): Model | undefined => {
+  if (agent === undefined) return undefined
   const agentDef = (Agents as Record<string, typeof Agents.cowork>)[agent]
   return agentDef !== undefined ? models[resolveAgentModel(agentDef)] : undefined
 }
@@ -71,7 +75,7 @@ export const AgentStatus = {
 } as const
 
 export interface AgentState {
-  agent: AgentName
+  agent: AgentName | undefined
   status: AgentStatus
   cost: number
 }
@@ -95,7 +99,7 @@ export interface ClientContextValue {
   isLoading: () => boolean
 
   // Agent state (derived from events)
-  agent: () => AgentName
+  agent: () => AgentName | undefined
   agentStatus: () => AgentStatus
   cost: () => number
   model: () => string
@@ -221,7 +225,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
-    agent: defaultAgent,
+    agent: props.initialSession !== undefined ? props.initialAgent : defaultAgent,
     status: AgentStatus.idle(),
     cost: 0,
   })
@@ -341,7 +345,7 @@ export function ClientProvider(props: ClientProviderProps) {
           if (Schema.is(AgentNameSchema)(lifecycle.preferredAgent)) {
             setAgentStore({ agent: lifecycle.preferredAgent })
           } else {
-            setAgentStore({ agent: defaultAgent })
+            setAgentStore({ agent: undefined })
           }
         }
         if (lifecycle.status !== undefined) {
@@ -477,6 +481,7 @@ export function ClientProvider(props: ClientProviderProps) {
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
     model: () => {
+      if (agentStore.agent === undefined) return resolveAgentModel(Agents.cowork)
       const agentDef = (Agents as Record<string, typeof Agents.cowork>)[agentStore.agent]
       return agentDef !== undefined ? resolveAgentModel(agentDef) : resolveAgentModel(Agents.cowork)
     },
@@ -561,7 +566,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    switchSession: (sessionId, branchId, name, agent = defaultAgent) => {
+    switchSession: (sessionId, branchId, name, agent) => {
       // Reset agent state and activate new session
       setAgentStore({ agent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)

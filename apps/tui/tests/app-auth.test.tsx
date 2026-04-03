@@ -92,8 +92,8 @@ describe("App auth gate", () => {
 
     const frame = await waitForFrame(setup, (next) => next.includes("API Keys"))
 
-    expect(calls.slice(0, 2)).toEqual([{ agentName: "cowork" }, { agentName: "deepwork" }])
-    expect(calls.at(-1)).toEqual({ agentName: "deepwork" })
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.every((call) => call.agentName === "deepwork")).toBe(true)
     expect(frame).toContain("API Keys")
     setup.renderer.destroy()
   })

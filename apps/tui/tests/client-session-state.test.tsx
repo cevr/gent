@@ -113,6 +113,7 @@ describe("ClientProvider session lifecycle", () => {
         reasoningLevel: undefined,
       },
     })
+    expect(ctx.agent()).toBeUndefined()
   })
 
   test("switchSession seeds the target agent when provided", async () => {
