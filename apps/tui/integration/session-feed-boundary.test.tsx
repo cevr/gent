@@ -5,7 +5,13 @@ import { Effect } from "effect"
 import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
-import { destroyRenderSetup, renderFrame, renderWithProviders } from "../tests/render-harness"
+import {
+  createMockClient,
+  createMockRuntime,
+  destroyRenderSetup,
+  renderFrame,
+  renderWithProviders,
+} from "../tests/render-harness"
 import { createSignalProvider, DebugFailingProvider } from "@gent/core/debug/provider.js"
 import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { Gent } from "@gent/sdk"
@@ -224,4 +230,43 @@ describe("session feed boundary", () => {
       ),
     )
   }, 10_000)
+
+  test("interrupts the feed fiber through runtime cleanup on unmount", async () => {
+    const interrupted: Array<Effect.Effect<void>> = []
+    const runtime = (() => {
+      const base = createMockRuntime()
+      return {
+        ...base,
+        fork: () => Effect.runFork(Effect.never),
+        cast: (effect: Effect.Effect<void>) => {
+          interrupted.push(effect)
+          Effect.runFork(effect)
+        },
+      }
+    })()
+
+    const setup = await renderWithProviders(
+      () => <Session sessionId={"session-test" as never} branchId={"branch-test" as never} />,
+      {
+        client: createMockClient(),
+        runtime,
+        initialSession: {
+          id: "session-test" as never,
+          branchId: "branch-test" as never,
+          name: "Test Session",
+          createdAt: 0,
+          updatedAt: 0,
+        },
+        initialRoute: Route.session("session-test" as never, "branch-test" as never),
+        cwd: repoRoot,
+        width: 100,
+        height: 32,
+      },
+    )
+
+    const castCountBeforeDestroy = interrupted.length
+    destroyRenderSetup(setup)
+
+    expect(interrupted.length).toBeGreaterThan(castCountBeforeDestroy)
+  })
 })

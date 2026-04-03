@@ -57,8 +57,10 @@ export class SequenceRecorder extends ServiceMap.Service<
       const ref = yield* Ref.make<CallRecord[]>([])
       return {
         record: (call) =>
-          // @effect-diagnostics-next-line *:off
-          Ref.update(ref, (calls) => [...calls, { ...call, timestamp: Date.now() }]),
+          Effect.gen(function* () {
+            const timestamp = yield* Clock.currentTimeMillis
+            yield* Ref.update(ref, (calls) => [...calls, { ...call, timestamp }])
+          }),
         getCalls: () => Ref.get(ref),
         clear: () => Ref.set(ref, []),
       }

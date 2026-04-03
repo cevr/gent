@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer } from "effect"
+import { ServiceMap, Effect, Layer, Schema } from "effect"
 import {
   InteractionDismissed,
   type EventStoreError,
@@ -13,8 +13,9 @@ import {
   type HandoffDecision,
 } from "./event"
 import { EventPublisher } from "./event-publisher.js"
-import type { BranchId, SessionId } from "./ids"
+import { BranchId, SessionId } from "./ids"
 import {
+  decodeInteractionParams,
   makeInteractionService,
   type InteractionPendingError,
   type InteractionStorageConfig,
@@ -34,6 +35,15 @@ interface PromptParams {
   content?: string
   title?: string
 }
+
+const PromptParamsSchema = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  mode: Schema.Literals(["present", "confirm", "review"]),
+  path: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+})
 
 export interface PromptHandlerService {
   readonly present: (
@@ -64,6 +74,7 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
 
         const interaction = makeInteractionService<PromptParams, PromptDecision>({
           type: "prompt",
+          paramsSchema: PromptParamsSchema,
           autoResolve: (params) =>
             params.mode === "present" ? ("yes" as PromptDecision) : undefined,
           onPresent: (requestId, params) =>
@@ -133,7 +144,9 @@ export class PromptHandler extends ServiceMap.Service<PromptHandler, PromptHandl
           storeResolution: (sessionId, branchId, decision) =>
             interaction.storeResolution(sessionId, branchId, decision),
           rehydrate: (record) =>
-            interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as PromptParams),
+            decodeInteractionParams(PromptParamsSchema, record.paramsJson, "prompt").pipe(
+              Effect.flatMap((params) => interaction.rehydrate(record.requestId, params)),
+            ),
         }
       }),
     )
@@ -161,6 +174,13 @@ interface HandoffParams {
   summary: string
   reason?: string
 }
+
+const HandoffParamsSchema = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  summary: Schema.String,
+  reason: Schema.optional(Schema.String),
+})
 
 export interface HandoffHandlerService {
   readonly present: (
@@ -197,6 +217,7 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
 
         const interaction = makeInteractionService<HandoffParams, HandoffDecision>({
           type: "handoff",
+          paramsSchema: HandoffParamsSchema,
           onPresent: (requestId, params) => {
             paramsStash.set(requestId, params)
             return eventPublisher.publish(
@@ -270,7 +291,9 @@ export class HandoffHandler extends ServiceMap.Service<HandoffHandler, HandoffHa
             interaction.storeResolution(sessionId, branchId, decision),
 
           rehydrate: (record) =>
-            interaction.rehydrate(record.requestId, JSON.parse(record.paramsJson) as HandoffParams),
+            decodeInteractionParams(HandoffParamsSchema, record.paramsJson, "handoff").pipe(
+              Effect.flatMap((params) => interaction.rehydrate(record.requestId, params)),
+            ),
         }
       }),
     )

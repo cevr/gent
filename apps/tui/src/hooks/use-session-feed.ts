@@ -321,87 +321,89 @@ export function useSessionFeed(
       client.log.info("feed.activate", { key })
 
       const streamFiber = client.runtime.fork(
-        runWithReconnect(
-          () =>
-            Effect.gen(function* () {
-              client.log.info("feed.snapshot.fetch", { key })
-              const snapshot = yield* client.client.session.getSnapshot({
-                sessionId: session,
-                branchId: branch,
-              })
-              client.log.info("feed.snapshot.hydrated", {
-                key,
-                messageCount: snapshot.messages.length,
-                lastEventId: snapshot.lastEventId,
-                hasInteraction: snapshot.activeInteraction !== undefined,
-              })
+        Effect.scoped(
+          runWithReconnect(
+            () =>
+              Effect.gen(function* () {
+                client.log.info("feed.snapshot.fetch", { key })
+                const snapshot = yield* client.client.session.getSnapshot({
+                  sessionId: session,
+                  branchId: branch,
+                })
+                client.log.info("feed.snapshot.hydrated", {
+                  key,
+                  messageCount: snapshot.messages.length,
+                  lastEventId: snapshot.lastEventId,
+                  hasInteraction: snapshot.activeInteraction !== undefined,
+                })
 
-              yield* Effect.sync(() => {
-                if (currentKey !== key) return
-                client.setConnectionIssue(null)
-                setStore("messages", buildMessages(snapshot.messages))
-                // Hydrate pending interaction from snapshot (reconnect scenario)
-                if (snapshot.activeInteraction !== undefined) {
-                  const event = snapshot.activeInteraction.event as ActiveInteraction | undefined
-                  if (event !== undefined) {
-                    callbacks.onInteraction(event)
+                yield* Effect.sync(() => {
+                  if (currentKey !== key) return
+                  client.setConnectionIssue(null)
+                  setStore("messages", buildMessages(snapshot.messages))
+                  // Hydrate pending interaction from snapshot (reconnect scenario)
+                  if (snapshot.activeInteraction !== undefined) {
+                    const event = snapshot.activeInteraction.event as ActiveInteraction | undefined
+                    if (event !== undefined) {
+                      callbacks.onInteraction(event)
+                    }
                   }
+                })
+
+                const eventStream = client.client.session.events({
+                  sessionId: session,
+                  branchId: branch,
+                  ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+                })
+
+                client.log.info("feed.stream.open", { key, after: snapshot.lastEventId })
+                const eventsFiber = yield* eventStream.pipe(
+                  Stream.runForEach((envelope) =>
+                    Effect.sync(() => {
+                      if (currentKey !== key) return
+                      client.setConnectionIssue(null)
+                      processEvent(envelope.event, branch, key)
+                    }),
+                  ),
+                  Effect.forkScoped,
+                )
+
+                // Send the prompt only after the event stream is established.
+                if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
+                  sentPrompts.add(key)
+                  client.log.info("feed.sendInitialPrompt", {
+                    sessionId: session,
+                    branchId: branch,
+                  })
+                  yield* client.client.message.send({
+                    sessionId: session,
+                    branchId: branch,
+                    content: initialPrompt,
+                  })
                 }
-              })
 
-              const eventStream = client.client.session.events({
-                sessionId: session,
-                branchId: branch,
-                ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
-              })
-
-              client.log.info("feed.stream.open", { key, after: snapshot.lastEventId })
-              const eventsFiber = yield* eventStream.pipe(
-                Stream.runForEach((envelope) =>
-                  Effect.sync(() => {
-                    if (currentKey !== key) return
-                    client.setConnectionIssue(null)
-                    processEvent(envelope.event, branch, key)
-                  }),
-                ),
-                Effect.forkScoped,
-              )
-
-              // Send the prompt only after the event stream is established.
-              if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
-                sentPrompts.add(key)
-                client.log.info("feed.sendInitialPrompt", {
-                  sessionId: session,
-                  branchId: branch,
+                return yield* Fiber.join(eventsFiber)
+              }),
+            {
+              label: "feed.events",
+              log: client.log,
+              onError: (err) => {
+                if (currentKey !== key) return
+                client.log.error("feed.error", {
+                  key,
+                  error: formatConnectionIssue(err),
                 })
-                yield* client.client.message.send({
-                  sessionId: session,
-                  branchId: branch,
-                  content: initialPrompt,
-                })
-              }
-
-              return yield* Fiber.join(eventsFiber)
-            }),
-          {
-            label: "feed.events",
-            log: client.log,
-            onError: (err) => {
-              if (currentKey !== key) return
-              client.log.error("feed.error", {
-                key,
-                error: formatConnectionIssue(err),
-              })
-              client.setConnectionIssue(formatConnectionIssue(err))
+                client.setConnectionIssue(formatConnectionIssue(err))
+              },
+              waitForRetry: () => client.waitForTransportReady(),
             },
-            waitForRetry: () => client.waitForTransportReady(),
-          },
+          ),
         ),
       )
 
       onCleanup(() => {
         client.log.info("feed.cleanup", { key })
-        Effect.runFork(Fiber.interrupt(streamFiber))
+        client.runtime.cast(Fiber.interrupt(streamFiber))
       })
     }),
   )

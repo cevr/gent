@@ -5,7 +5,7 @@
 
 // @effect-diagnostics nodeBuiltinImport:off
 import { afterEach } from "bun:test"
-import { Clock, Effect } from "effect"
+import { Clock, Effect, Schema } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -56,24 +56,31 @@ export const createWorkerEnv = (
   return env
 }
 
+class WaitForError extends Schema.TaggedErrorClass<WaitForError>()(
+  "@gent/core/test-utils/fixtures/WaitForError",
+  { message: Schema.String },
+) {}
+
+const toWaitForError = (error: unknown) =>
+  new WaitForError({ message: error instanceof Error ? error.message : String(error) })
+
 /** Poll an effect until predicate passes or timeout */
-// @effect-diagnostics globalErrorInEffectFailure:off
 export const waitFor = <A>(
   effect: Effect.Effect<A, unknown>,
   predicate: (value: A) => boolean,
   timeoutMs = 5_000,
   label = "condition",
-): Effect.Effect<A, Error> => {
-  // @effect-diagnostics-next-line *:off
-  const deadline = Date.now() + timeoutMs
-  const loop: Effect.Effect<A, Error> = Effect.gen(function* () {
-    const value = yield* effect.pipe(Effect.mapError((error) => new Error(String(error))))
-    if (predicate(value)) return value
-    if ((yield* Clock.currentTimeMillis) >= deadline) {
-      return yield* Effect.fail(new Error(`timed out waiting for ${label}`))
-    }
-    yield* Effect.sleep("25 millis")
+): Effect.Effect<A, WaitForError> =>
+  Effect.gen(function* () {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    const loop: Effect.Effect<A, WaitForError> = Effect.gen(function* () {
+      const value = yield* effect.pipe(Effect.mapError(toWaitForError))
+      if (predicate(value)) return value
+      if ((yield* Clock.currentTimeMillis) >= deadline) {
+        return yield* new WaitForError({ message: `timed out waiting for ${label}` })
+      }
+      yield* Effect.sleep("25 millis")
+      return yield* loop
+    })
     return yield* loop
   })
-  return loop
-}

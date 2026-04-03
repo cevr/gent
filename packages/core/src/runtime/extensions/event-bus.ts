@@ -10,7 +10,7 @@
  * - Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId
  * - `ext.bus.on("agent:*", handler)` is the new `ext.observe()`
  * - `ext.bus.on("extensionId:channel", handler)` for targeted side-effects
- * - Handlers run with full service access (unlike pure actor reducers)
+ * - Handlers run as bus-local side effects, not as actor reducers
  * - Errors caught per-handler — one failing handler doesn't affect others
  */
 
@@ -29,6 +29,8 @@ export interface BusEnvelope {
 // ── Handler ──
 
 export type BusHandler = (envelope: BusEnvelope) => Effect.Effect<void>
+
+type SubscriptionHandlerResult = void | Promise<void> | Effect.Effect<void>
 
 // ── Service ──
 
@@ -125,10 +127,7 @@ export class ExtensionEventBus extends ServiceMap.Service<
   static withSubscriptions = (
     subscriptions: ReadonlyArray<{
       readonly pattern: string
-      readonly handler: (
-        envelope: BusEnvelope,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ) => void | Promise<void> | Effect.Effect<void, any, any>
+      readonly handler: (envelope: BusEnvelope) => SubscriptionHandlerResult
     }>,
   ): Layer.Layer<ExtensionEventBus> => {
     if (subscriptions.length === 0) return ExtensionEventBus.Live
@@ -139,9 +138,8 @@ export class ExtensionEventBus extends ServiceMap.Service<
           yield* bus.on(sub.pattern, (envelope) => {
             const result = sub.handler(envelope)
             if (result === undefined) return Effect.void
-            // @effect-diagnostics-next-line *:off
-            if (Effect.isEffect(result)) return result as Effect.Effect<void>
-            return Effect.promise(() => Promise.resolve(result as Promise<void>))
+            if (Effect.isEffect(result)) return result
+            return Effect.promise(() => result)
           })
         }
       }),

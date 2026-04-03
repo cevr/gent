@@ -266,7 +266,6 @@ export const withTinyContextWindow = <A, E, R>(
  * expect(yield* Ref.get(presentCalled)).toBe(false)
  * ```
  */
-// @effect-diagnostics effectSucceedWithVoid:off
 export const trackingHandoffHandler = () =>
   Effect.gen(function* () {
     const presentCalled = yield* Ref.make(false)

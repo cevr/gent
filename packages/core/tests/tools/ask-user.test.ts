@@ -83,6 +83,27 @@ describe("AskUser Handler (integration)", () => {
       }
     }).pipe(Effect.provide(handlerLayer)),
   )
+
+  it.live("rehydrate fails loudly on corrupted persisted params", () =>
+    Effect.gen(function* () {
+      const handler = yield* AskUserHandler
+
+      const error = yield* Effect.flip(
+        handler.rehydrate({
+          requestId: "bad-ask-user",
+          type: "ask-user",
+          sessionId: "test-session" as never,
+          branchId: "test-branch" as never,
+          paramsJson: '{"questions":"wrong"}',
+          status: "pending",
+          createdAt: 0,
+        }),
+      )
+
+      expect(error._tag).toBe("EventStoreError")
+      expect(error.message).toContain("Failed to decode ask-user interaction params")
+    }).pipe(Effect.provide(handlerLayer)),
+  )
 })
 
 describe("AskUser Tool", () => {

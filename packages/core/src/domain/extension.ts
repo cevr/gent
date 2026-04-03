@@ -365,8 +365,7 @@ export interface ExtensionSetup {
   readonly observers?: ReadonlyArray<(event: AgentEvent) => void | Promise<void>>
   /** Bus channel subscriptions — registered at startup time.
    *  Each entry: { pattern, handler } where handler receives BusEnvelope.
-   *  Handler can return void, Promise<void>, or Effect<void, any, any> for service access.
-   *  Effect handlers run in the full service context — all services available. */
+   *  Handler can return void, Promise<void>, or Effect<void>. */
   readonly busSubscriptions?: ReadonlyArray<{
     readonly pattern: string
     readonly handler: (envelope: {
@@ -374,8 +373,7 @@ export interface ExtensionSetup {
       payload: unknown
       sessionId?: string
       branchId?: string
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    }) => void | Promise<void> | Effect.Effect<void, any, any>
+    }) => void | Promise<void> | Effect.Effect<void>
   }>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>

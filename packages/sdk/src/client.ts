@@ -1,6 +1,6 @@
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
-import type { Fiber, ServiceMap, Scope } from "effect"
+import type { ServiceMap, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
@@ -200,17 +200,12 @@ function makeRuntime(
   return {
     // @effect-diagnostics-next-line *:off
     cast: (effect) => {
-      // @effect-diagnostics-next-line *:off
       Effect.runForkWith(services)(effect)
     },
     // @effect-diagnostics-next-line *:off
-    fork: (effect) => {
-      // @effect-diagnostics-next-line *:off
-      const fiber = Effect.runForkWith(services)(effect)
-      return fiber as Fiber.Fiber<unknown, unknown> as never
-    },
+    fork: (effect) => Effect.runForkWith(services)(effect),
     // @effect-diagnostics-next-line *:off
-    run: (effect) => Effect.runPromiseWith(services)(effect) as never,
+    run: (effect) => Effect.runPromiseWith(services)(effect),
     lifecycle,
   }
 }

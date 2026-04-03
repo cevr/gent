@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
-import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { HandoffHandler, PromptHandler } from "@gent/core/domain/interaction-handlers"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
@@ -238,5 +238,59 @@ describe("HandoffHandler", () => {
         expect(decision).toBe("confirm")
       }),
     )
+
+    liveTest("rehydrate fails loudly on corrupted persisted params", () =>
+      Effect.gen(function* () {
+        const handler = yield* HandoffHandler
+        const error = yield* Effect.flip(
+          handler.rehydrate({
+            requestId: "bad-handoff",
+            type: "handoff",
+            sessionId: "s-bad" as SessionId,
+            branchId: "b-bad" as BranchId,
+            paramsJson: '{"summary":42}',
+            status: "pending",
+            createdAt: 0,
+          }),
+        )
+
+        expect(error._tag).toBe("EventStoreError")
+        expect(error.message).toContain("Failed to decode handoff interaction params")
+      }),
+    )
   })
+})
+
+describe("PromptHandler", () => {
+  const baseLayer = Layer.mergeAll(
+    EventStore.Live,
+    Storage.MemoryWithSql(),
+    ExtensionStateRuntime.Test(),
+  )
+  const liveTest = it.live.layer(
+    Layer.provideMerge(
+      PromptHandler.Live,
+      Layer.merge(baseLayer, Layer.provide(EventPublisherLive, baseLayer)),
+    ),
+  )
+
+  liveTest("rehydrate fails loudly on corrupted persisted params", () =>
+    Effect.gen(function* () {
+      const handler = yield* PromptHandler
+      const error = yield* Effect.flip(
+        handler.rehydrate({
+          requestId: "bad-prompt",
+          type: "prompt",
+          sessionId: "s-bad" as SessionId,
+          branchId: "b-bad" as BranchId,
+          paramsJson: '{"mode":"nope"}',
+          status: "pending",
+          createdAt: 0,
+        }),
+      )
+
+      expect(error._tag).toBe("EventStoreError")
+      expect(error.message).toContain("Failed to decode prompt interaction params")
+    }),
+  )
 })

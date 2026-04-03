@@ -11,8 +11,8 @@
  * No Deferred, no blocked fiber. Interactions survive server restarts.
  */
 
-import { Clock, Effect } from "effect"
-import type { EventStoreError } from "./event"
+import { Clock, Effect, Schema } from "effect"
+import { EventStoreError } from "./event"
 import type { BranchId, SessionId } from "./ids"
 
 // ============================================================================
@@ -47,6 +47,39 @@ export interface InteractionRequestRecord {
   readonly createdAt: number
 }
 
+const interactionJsonCodec = <TParams>(schema: Schema.Schema<TParams>) =>
+  Schema.fromJsonString(schema as Schema.Any)
+
+export const encodeInteractionParams = <TParams>(
+  schema: Schema.Schema<TParams>,
+  params: TParams,
+  interactionType: InteractionRequestType,
+): Effect.Effect<string, EventStoreError> =>
+  Schema.encodeEffect(interactionJsonCodec(schema))(params).pipe(
+    Effect.mapError(
+      (cause) =>
+        new EventStoreError({
+          message: `Failed to encode ${interactionType} interaction params`,
+          cause,
+        }),
+    ),
+  )
+
+export const decodeInteractionParams = <TParams>(
+  schema: Schema.Schema<TParams>,
+  paramsJson: string,
+  interactionType: InteractionRequestType,
+): Effect.Effect<TParams, EventStoreError> =>
+  Schema.decodeUnknownEffect(interactionJsonCodec(schema))(paramsJson).pipe(
+    Effect.mapError(
+      (cause) =>
+        new EventStoreError({
+          message: `Failed to decode ${interactionType} interaction params`,
+          cause,
+        }),
+    ),
+  )
+
 // ============================================================================
 // Interaction service
 // ============================================================================
@@ -77,6 +110,7 @@ export interface InteractionStorageConfig {
 
 export interface InteractionServiceConfig<TParams, TDecision> {
   readonly type: InteractionRequestType
+  readonly paramsSchema?: Schema.Schema<TParams>
   readonly onPresent: (requestId: string, params: TParams) => Effect.Effect<void, EventStoreError>
   readonly onRespond: (
     requestId: string,
@@ -130,9 +164,15 @@ export const makeInteractionService = <TParams, TDecision>(
 
       // Persist to storage before publishing event (crash-safe)
       if (config.storage !== undefined && config.getContext !== undefined) {
+        if (config.paramsSchema === undefined) {
+          return yield* Effect.fail(
+            new EventStoreError({
+              message: `${config.type} interaction storage requires paramsSchema`,
+            }),
+          )
+        }
         const storageCtx = config.getContext(params)
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
-        const paramsJson = JSON.stringify(params)
+        const paramsJson = yield* encodeInteractionParams(config.paramsSchema, params, config.type)
         yield* config.storage.persist({
           requestId,
           type: config.type,

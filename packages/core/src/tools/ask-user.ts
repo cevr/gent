@@ -10,8 +10,9 @@ import {
   QuestionSchema,
   QuestionOptionSchema,
 } from "../domain/event.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+import { SessionId, BranchId } from "../domain/ids.js"
 import {
+  decodeInteractionParams,
   makeInteractionService,
   type InteractionPendingError,
   type InteractionRequestRecord,
@@ -65,6 +66,12 @@ interface AskUserParams_ {
   branchId: BranchId
 }
 
+const AskUserPersistedParams = Schema.Struct({
+  questions: Schema.Array(QuestionSchema),
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+
 export interface AskUserHandlerService {
   readonly askMany: (
     questions: ReadonlyArray<Question>,
@@ -105,6 +112,7 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
 
         const interaction = makeInteractionService<AskUserParams_, AskUserDecision>({
           type: "ask-user",
+          paramsSchema: AskUserPersistedParams,
           onPresent: (requestId, params) =>
             eventPublisher.publish(
               new QuestionsAsked({
@@ -147,9 +155,8 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
           storeResolution: (sessionId, branchId, decision) =>
             interaction.storeResolution(sessionId, branchId, decision),
           rehydrate: (record) =>
-            interaction.rehydrate(
-              record.requestId,
-              JSON.parse(record.paramsJson) as AskUserParams_,
+            decodeInteractionParams(AskUserPersistedParams, record.paramsJson, "ask-user").pipe(
+              Effect.flatMap((params) => interaction.rehydrate(record.requestId, params)),
             ),
         }
       }),

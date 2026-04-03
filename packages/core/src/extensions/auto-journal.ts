@@ -88,7 +88,6 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
       const platformOpt = yield* Effect.serviceOption(RuntimePlatform)
       if (platformOpt._tag === "None") {
         // No RuntimePlatform — return no-op journal (tests, headless without cwd)
-        // @effect-diagnostics effectSucceedWithVoid:off
         return {
           start: () => Effect.succeed("") as Effect.Effect<string>,
           appendCheckpoint: () => Effect.void,

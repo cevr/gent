@@ -48,14 +48,11 @@ export type GentNamespacedClient = NamespacedClient<FlatRpcClient>
 
 export interface GentRuntime {
   /** Fire-and-forget — run an effect without awaiting result */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly cast: <A, E>(effect: Effect.Effect<A, E, any>) => void
+  readonly cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => void
   /** Fork with a handle — caller can join/interrupt */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly fork: <A, E>(effect: Effect.Effect<A, E, any>) => Fiber.Fiber<A, E>
+  readonly fork: <A, E, R>(effect: Effect.Effect<A, E, R>) => Fiber.Fiber<A, E>
   /** Await result as a Promise */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly run: <A, E>(effect: Effect.Effect<A, E, any>) => Promise<A>
+  readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Promise<A>
   /** Connection lifecycle */
   readonly lifecycle: GentLifecycle
 }

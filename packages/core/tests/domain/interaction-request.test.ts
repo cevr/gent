@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { InteractionStorage } from "@gent/core/storage/interaction-storage"
 import {
@@ -36,8 +36,15 @@ describe("Interaction Request", () => {
           value: string
         }
 
+        const TestParamsSchema = Schema.Struct({
+          sessionId: Schema.String,
+          branchId: Schema.String,
+          value: Schema.String,
+        })
+
         const interaction = makeInteractionService<TestParams, string>({
           type: "permission",
+          paramsSchema: TestParamsSchema,
           onPresent: () => Effect.void,
           onRespond: () => Effect.void,
           getContext: (p) => ({ sessionId: p.sessionId, branchId: p.branchId }),
@@ -184,8 +191,14 @@ describe("Interaction Request", () => {
           branchId: BranchId
         }
 
+        const TestParamsSchema = Schema.Struct({
+          sessionId: Schema.String,
+          branchId: Schema.String,
+        })
+
         const interaction = makeInteractionService<TestParams, string>({
           type: "prompt",
+          paramsSchema: TestParamsSchema,
           onPresent: () => Effect.void,
           onRespond: () => Effect.void,
           autoResolve: () => "auto-yes",
@@ -202,6 +215,43 @@ describe("Interaction Request", () => {
 
         const pending = yield* is.listPending()
         expect(pending.filter((r) => r.sessionId === "s4").length).toBe(0)
+      }).pipe(Effect.provide(storageLive)),
+    )
+  })
+
+  test("present fails loudly when durable storage has no params schema", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const is = yield* InteractionStorage
+
+        const interaction = makeInteractionService<
+          { sessionId: SessionId; branchId: BranchId },
+          string
+        >({
+          type: "prompt",
+          onPresent: () => Effect.void,
+          onRespond: () => Effect.void,
+          getContext: (p) => ({ sessionId: p.sessionId, branchId: p.branchId }),
+          storage: {
+            persist: (record) =>
+              is.persist(record).pipe(
+                Effect.asVoid,
+                Effect.catchEager(() => Effect.void),
+              ),
+            resolve: (requestId) =>
+              is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+          },
+        })
+
+        const error = yield* Effect.flip(
+          interaction.present({
+            sessionId: "s-schema" as SessionId,
+            branchId: "b-schema" as BranchId,
+          }),
+        )
+
+        expect(error._tag).toBe("EventStoreError")
+        expect(error.message).toContain("requires paramsSchema")
       }).pipe(Effect.provide(storageLive)),
     )
   })

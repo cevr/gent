@@ -419,13 +419,12 @@ export interface ExtensionBuilder {
   // ── Event bus ──
 
   /** Channel-based event bus for extension communication.
-   *  Replaces `observe()` with richer routing and full service access in handlers. */
+   *  Replaces `observe()` with richer routing and effectful side effects. */
   readonly bus: {
-    /** Subscribe to a bus channel. Handlers run with full service access.
+    /** Subscribe to a bus channel.
      *  Pattern: exact match (e.g. `"@gent/task-tools:StopTask"`) or wildcard (`"agent:*"`).
      *  `"agent:*"` matches all agent events — equivalent to `ext.observe()`.
-     *  Handler can return void, Promise<void>, or Effect<void, any, any> for service access.
-     *  Effect handlers run in the full service context — all services available. */
+     *  Handler can return void, Promise<void>, or Effect<void>. */
     on(
       pattern: string,
       handler: (envelope: {
@@ -433,8 +432,7 @@ export interface ExtensionBuilder {
         payload: unknown
         sessionId?: string
         branchId?: string
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }) => void | Promise<void> | Effect.Effect<void, any, any>,
+      }) => void | Promise<void> | Effect.Effect<void>,
     ): void
   }
 }
