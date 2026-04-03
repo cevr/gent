@@ -428,4 +428,77 @@ describe("Auth route", () => {
     expect(frame).not.toContain("open failed")
     setup.renderer.destroy()
   })
+
+  test("ignores stale oauth opener failures after cancelling the same auth flow", async () => {
+    let rejectOpen: ((error: LinkOpenerError) => void) | undefined
+
+    const client = createMockClient({
+      auth: {
+        listProviders: () =>
+          Effect.succeed([
+            {
+              provider: "anthropic",
+              hasKey: false,
+              required: false,
+              source: "none",
+              authType: undefined,
+            },
+          ]),
+        listMethods: () =>
+          Effect.succeed({
+            anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
+          }),
+        authorize: ({ provider }: { provider: string; method: number; sessionId: string }) => {
+          if (provider !== "anthropic") return Effect.succeed(null)
+          return Effect.succeed({
+            authorizationId: "auth-cancelled",
+            url: "https://example.com/oauth",
+            method: "code" as const,
+          })
+        },
+      },
+    })
+    const runtime = runtimeWithLinkOpener(() =>
+      Effect.promise<void, LinkOpenerError>(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectOpen = (error) => reject(error)
+          }),
+      ),
+    )
+
+    const setup = await renderWithProviders(
+      () => <Auth client={client} runtime={runtime} log={log} agentName="cowork" />,
+      {
+        client,
+        runtime,
+        initialRoute: Route.auth(),
+      },
+    )
+
+    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    await waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
+
+    setup.mockInput.pressEscape()
+    await setup.renderOnce()
+    await waitForFrame(
+      setup,
+      (frame) => frame.includes("anthropic") && !frame.includes("open failed"),
+    )
+
+    rejectOpen?.(new LinkOpenerError({ message: "open failed" }))
+    const frame = await waitForFrame(
+      setup,
+      (next) => next.includes("anthropic") && !next.includes("open failed"),
+    )
+
+    expect(frame).toContain("anthropic")
+    expect(frame).not.toContain("open failed")
+    setup.renderer.destroy()
+  })
 })

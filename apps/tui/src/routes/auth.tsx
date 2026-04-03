@@ -49,12 +49,15 @@ export function Auth(props: AuthProps) {
     setSuccessMessage(msg)
     successTimer = setTimeout(() => setSuccessMessage(null), 2000)
   }
-  const nextRouteVersion = () => {
+  const invalidateRouteVersion = () => {
     routeVersion += 1
-    loadVersion = 0
     if (successTimer !== undefined) clearTimeout(successTimer)
     setSuccessMessage(null)
     return routeVersion
+  }
+  const nextRouteVersion = () => {
+    loadVersion = 0
+    return invalidateRouteVersion()
   }
   const isCurrentRouteVersion = (version: number) => version === routeVersion
   let scrollRef: ScrollBoxRenderable | undefined = undefined
@@ -151,7 +154,7 @@ export function Auth(props: AuthProps) {
     if (current._tag !== "List") return
     const provider = current.providers[current.providerIndex]
     if (provider === undefined || provider.source !== "stored") return
-    const currentRouteVersion = routeVersion
+    const currentRouteVersion = invalidateRouteVersion()
     send({ _tag: "DeleteStarted" })
 
     cast(
@@ -179,7 +182,7 @@ export function Auth(props: AuthProps) {
     const provider = current.providers[current.providerIndex]
     const key = current.value.trim()
     if (provider === undefined || key.length === 0) return
-    const currentRouteVersion = routeVersion
+    const currentRouteVersion = invalidateRouteVersion()
     props.log.info("auth:submit-key", { provider: provider.provider })
     send({ _tag: "SubmitKeyStarted" })
 
@@ -210,7 +213,7 @@ export function Auth(props: AuthProps) {
     const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
     const method = methods[current.methodIndex]
     if (provider === undefined || method === undefined) return
-    const currentRouteVersion = routeVersion
+    const currentRouteVersion = invalidateRouteVersion()
     props.log.info("auth:start-method", { provider: provider.provider, method: method.type })
 
     if (method.type === "api") {
@@ -328,7 +331,7 @@ export function Auth(props: AuthProps) {
     const trimmed = current.code.trim()
     const code = trimmed.length > 0 ? trimmed : undefined
     if (needsCode && code === undefined) return
-    const currentRouteVersion = routeVersion
+    const currentRouteVersion = invalidateRouteVersion()
     send({ _tag: "SubmitOAuthStarted" })
 
     cast(
@@ -377,6 +380,7 @@ export function Auth(props: AuthProps) {
   ): boolean | undefined => {
     if (current === undefined) return undefined
     if (e.name === "escape") {
+      invalidateRouteVersion()
       send({ _tag: "Cancel" })
       return true
     }
@@ -406,6 +410,7 @@ export function Auth(props: AuthProps) {
   ): boolean | undefined => {
     if (current === undefined) return undefined
     if (e.name === "escape") {
+      invalidateRouteVersion()
       send({ _tag: "Cancel" })
       return true
     }
@@ -433,6 +438,7 @@ export function Auth(props: AuthProps) {
   ): boolean | undefined => {
     if (current === undefined) return undefined
     if (e.name === "escape") {
+      invalidateRouteVersion()
       send({ _tag: "Cancel" })
       return true
     }

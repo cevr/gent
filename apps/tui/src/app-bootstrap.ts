@@ -112,10 +112,15 @@ export const resolveStartupAuthState = (input: {
   requestedAgent?: AgentName
 }): Effect.Effect<StartupAuthState, GentRpcError> =>
   Effect.gen(function* () {
+    if (input.state._tag === "branchPicker") {
+      return {
+        initialAgent: undefined,
+        missingProviders: [],
+      }
+    }
+
     const sessionAgent =
-      input.state._tag === "session" ||
-      input.state._tag === "branchPicker" ||
-      input.state._tag === "headless"
+      input.state._tag === "session" || input.state._tag === "headless"
         ? yield* resolveSessionRuntimeAgent(input.client, input.state.session)
         : undefined
 

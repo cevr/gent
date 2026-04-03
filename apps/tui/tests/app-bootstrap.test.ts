@@ -123,4 +123,55 @@ describe("resolveStartupAuthState", () => {
     expect(auth.initialAgent).toBeUndefined()
     expect(calls).toEqual([{ agentName: "deepwork" }])
   })
+
+  test("skips pre-auth gating while the user is choosing a branch", async () => {
+    const calls: Array<{ agentName?: AgentName }> = []
+    const client = createMockClient({
+      auth: {
+        listProviders: (input: { agentName?: AgentName }) =>
+          Effect.sync(() => {
+            calls.push(input)
+            return []
+          }),
+      },
+    })
+
+    const state: InitialState = {
+      _tag: "branchPicker",
+      session: {
+        id: "session-a" as SessionId,
+        branchId: "branch-a" as BranchId,
+        name: "Session A",
+        createdAt: 0,
+        updatedAt: 0,
+        cwd: "/tmp",
+        reasoningLevel: undefined,
+        parentSessionId: undefined,
+        parentBranchId: undefined,
+      },
+      branches: [
+        {
+          id: "branch-a" as BranchId,
+          sessionId: "session-a" as SessionId,
+          createdAt: 0,
+        },
+        {
+          id: "branch-b" as BranchId,
+          sessionId: "session-a" as SessionId,
+          createdAt: 1,
+        },
+      ],
+    }
+
+    const auth = await Effect.runPromise(
+      resolveStartupAuthState({
+        client,
+        state,
+      }),
+    )
+
+    expect(auth.initialAgent).toBeUndefined()
+    expect(auth.missingProviders).toEqual([])
+    expect(calls).toEqual([])
+  })
 })
