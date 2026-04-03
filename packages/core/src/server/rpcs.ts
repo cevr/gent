@@ -71,6 +71,7 @@ export {
   RespondHandoffInput,
   RespondHandoffResult,
   DeletePermissionRuleInput,
+  ListAuthProvidersInput,
   SetAuthKeyInput,
   DeleteAuthKeyInput,
   ListAuthMethodsSuccess,

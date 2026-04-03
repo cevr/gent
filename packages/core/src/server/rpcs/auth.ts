@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { GentRpcError } from "../errors.js"
 import {
   AuthProviderInfo,
+  ListAuthProvidersInput,
   SetAuthKeyInput,
   DeleteAuthKeyInput,
   ListAuthMethodsSuccess,
@@ -13,6 +14,7 @@ import {
 
 export class AuthRpcs extends RpcGroup.make(
   Rpc.make("listProviders", {
+    payload: ListAuthProvidersInput.fields,
     success: Schema.Array(AuthProviderInfo),
     error: GentRpcError,
   }),

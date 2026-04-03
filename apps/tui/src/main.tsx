@@ -99,7 +99,9 @@ const main = Command.make(
         Effect.sync(() => shutdownLog("shutdown.finalizer.post-spawn")),
       )
 
-      const authProviders = yield* bundle.client.auth.listProviders()
+      const authProviders = yield* bundle.client.auth.listProviders({
+        ...(Option.isSome(agent) ? { agentName: agent.value } : {}),
+      })
       const missingProviders = authProviders
         .filter((provider) => provider.required && !provider.hasKey)
         .map((provider) => provider.provider)

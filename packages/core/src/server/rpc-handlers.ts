@@ -210,7 +210,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "model.list": () => modelRegistry.list(),
 
       // -- auth --
-      "auth.listProviders": () => authGuard.listProviders(),
+      "auth.listProviders": ({ agentName }) =>
+        authGuard.listProviders({
+          ...(agentName !== undefined ? { agentName } : {}),
+        }),
 
       "auth.setKey": ({ provider, key }) =>
         authStore

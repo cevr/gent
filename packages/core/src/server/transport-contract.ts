@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import type { Effect } from "effect"
 import { AgentName, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
-import { AuthProviderInfo } from "../domain/auth-guard.js"
+import { AuthProviderInfo, AuthProviderQuery } from "../domain/auth-guard.js"
 import { EventEnvelope, HandoffDecision, PromptDecision } from "../domain/event.js"
 import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
@@ -357,6 +357,9 @@ export const DeleteAuthKeyInput = Schema.Struct({
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 
+export const ListAuthProvidersInput = AuthProviderQuery
+export type ListAuthProvidersInput = typeof ListAuthProvidersInput.Type
+
 export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
 export const AuthorizeAuthInput = Schema.Struct({
@@ -377,7 +380,7 @@ export const CallbackAuthInput = Schema.Struct({
 })
 export type CallbackAuthInput = typeof CallbackAuthInput.Type
 
-export { AuthProviderInfo }
+export { AuthProviderInfo, AuthProviderQuery }
 export { EventEnvelope }
 export { QueueSnapshot }
 

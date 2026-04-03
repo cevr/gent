@@ -59,7 +59,7 @@ export function Auth(props: AuthProps) {
     props.log.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
-      Effect.all([props.client.auth.listProviders(), props.client.auth.listMethods()]).pipe(
+      Effect.all([props.client.auth.listProviders({}), props.client.auth.listMethods()]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
             props.log.info("auth:load-complete", { providers: loadedProviders.length })

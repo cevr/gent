@@ -147,4 +147,19 @@ describe("AuthGuard", () => {
       }).pipe(Effect.provide(layer))
     },
   )
+
+  it.live("selected agent widens required providers to match the actual runtime agent", () => {
+    const layer = AuthGuard.Live.pipe(
+      Layer.provide(AuthStore.Live),
+      Layer.provide(AuthStorage.Test()),
+      Layer.provide(helperAgentRegistryLayer),
+    )
+    return Effect.gen(function* () {
+      const guard = yield* AuthGuard
+      const result = yield* guard.requiredProviders({ agentName: "helper:google" })
+      expect(result).toContain("anthropic")
+      expect(result).toContain("openai")
+      expect(result).toContain("google")
+    }).pipe(Effect.provide(layer))
+  })
 })
