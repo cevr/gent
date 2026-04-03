@@ -22,6 +22,7 @@ export {
   Gent,
   type GentSpawnOptions,
   type GentConnectOptions,
+  type GentLocalOptions,
   type RpcHandlersContext,
   type GentRpcClient,
   type GentRpcsClient,

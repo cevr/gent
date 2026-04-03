@@ -12,6 +12,7 @@
     "test": "bun test tests/"
   },
   "dependencies": {
+    "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*"
   },
   "peerDependencies": {

@@ -1,10 +1,16 @@
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import type { Fiber, ServiceMap, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
+import * as os from "node:os"
 import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
+import { createDependencies, type DependenciesConfig } from "@gent/core/server/dependencies.js"
+import { AppServicesLive } from "@gent/core/server/index.js"
+import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
+import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import {
   GentConnectionError,
   type ConnectionState,
@@ -318,6 +324,21 @@ export interface GentConnectOptions {
   readonly url: string
 }
 
+export interface GentLocalOptions {
+  readonly cwd: string
+  readonly home?: string
+  readonly dataDir?: string
+  readonly platform?: string
+  readonly shell?: string
+  readonly osVersion?: string
+  readonly dbPath?: string
+  readonly authFilePath?: string
+  readonly authKeyPath?: string
+  readonly persistenceMode?: DependenciesConfig["persistenceMode"]
+  readonly providerMode?: DependenciesConfig["providerMode"]
+  readonly disabledExtensions?: DependenciesConfig["disabledExtensions"]
+}
+
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
 export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
@@ -325,6 +346,38 @@ export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
 export interface GentClientBundle {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
+}
+
+const toConnectionError = (error: unknown) =>
+  new GentConnectionError({
+    message:
+      typeof error === "object" && error !== null && "message" in error
+        ? String((error as { readonly message: unknown }).message)
+        : String(error),
+  })
+
+const LocalPlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
+
+const resolveLocalDependenciesConfig = (options: GentLocalOptions): DependenciesConfig => {
+  const home = options.home ?? os.homedir()
+  const dataDir = options.dataDir ?? `${home}/.gent`
+
+  const config: DependenciesConfig = {
+    cwd: options.cwd,
+    home,
+    platform: options.platform ?? process.platform,
+    osVersion: options.osVersion ?? os.release(),
+    dbPath: options.dbPath ?? `${dataDir}/data.db`,
+    persistenceMode: options.persistenceMode ?? "disk",
+    providerMode: options.providerMode ?? "live",
+    disabledExtensions: options.disabledExtensions,
+  }
+
+  if (options.shell !== undefined) config.shell = options.shell
+  if (options.authFilePath !== undefined) config.authFilePath = options.authFilePath
+  if (options.authKeyPath !== undefined) config.authKeyPath = options.authKeyPath
+
+  return config
 }
 
 export const Gent = {
@@ -365,6 +418,24 @@ export const Gent = {
           staticLifecycle({ _tag: "connected", generation: 0 }),
         ),
       }
+    }),
+
+  /** Run the live server dependency graph in-process. */
+  local: (
+    options: GentLocalOptions,
+  ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
+    Effect.gen(function* () {
+      const depsLive = createDependencies(resolveLocalDependenciesConfig(options)).pipe(
+        Layer.provide(LocalPlatformLayer),
+        Layer.provide(GentLogger),
+        Layer.provide(GentLogLevel),
+        Layer.provide(GentTracerLive),
+      )
+
+      return yield* Gent.test(Layer.provideMerge(AppServicesLive, depsLive)).pipe(
+        Effect.provide(LocalPlatformLayer),
+        Effect.mapError(toConnectionError),
+      )
     }),
 
   /** In-process client for tests and embedding. Fast, less isolation than spawn. */

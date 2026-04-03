@@ -1,7 +1,20 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
-import { BunFileSystem, BunServices, BunRuntime } from "@effect/platform-bun"
-import { Config, Console, Effect, Fiber, Layer, Logger, Option, Schema, Tracer } from "effect"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import {
+  Cause,
+  Config,
+  Console,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Runtime,
+  Schema,
+  Tracer,
+} from "effect"
 import { makeClientTraceLogger } from "./utils/client-trace-logger"
 import { identity } from "effect/Function"
 import type { ServiceMap } from "effect"
@@ -19,9 +32,14 @@ import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
 import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
-import { resolveAppBootstrap, resolveInitialState, resolveStartupAuthState } from "./app-bootstrap"
+import {
+  resolveAppBootstrap,
+  resolveInitialState,
+  resolveStartupAuthState,
+  type InitialState,
+} from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
-import { Gent } from "@gent/sdk"
+import { Gent, type GentClientBundle } from "@gent/sdk"
 
 // Clear client log on startup
 clearClientLog()
@@ -37,6 +55,89 @@ const PlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
 const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 
 const makeUiLayer = () => Layer.mergeAll(PlatformLayer, LinkLayer)
+
+const parsePersistenceMode = (value: string | undefined): "disk" | "memory" | undefined => {
+  if (value === "memory") return "memory"
+  if (value === "disk") return "disk"
+  return undefined
+}
+
+const parseProviderMode = (
+  value: string | undefined,
+): "live" | "debug-scripted" | "debug-failing" | "debug-slow" | undefined => {
+  if (value === "debug-scripted") return "debug-scripted"
+  if (value === "debug-failing") return "debug-failing"
+  if (value === "debug-slow") return "debug-slow"
+  if (value === "live") return "live"
+  return undefined
+}
+
+const resolveLocalOptions = (cwd: string) =>
+  Effect.gen(function* () {
+    const homeOpt = yield* Config.option(Config.string("HOME"))
+    const shellOpt = yield* Config.option(Config.string("SHELL"))
+    const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
+    const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
+    const authFilePathOpt = yield* Config.option(Config.string("GENT_AUTH_FILE_PATH"))
+    const authKeyPathOpt = yield* Config.option(Config.string("GENT_AUTH_KEY_PATH"))
+    const persistenceModeOpt = yield* Config.option(Config.string("GENT_PERSISTENCE_MODE"))
+    const providerModeOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
+
+    const persistenceMode = parsePersistenceMode(Option.getOrUndefined(persistenceModeOpt))
+    const providerMode = parseProviderMode(Option.getOrUndefined(providerModeOpt))
+
+    return {
+      cwd,
+      ...(Option.isSome(homeOpt) ? { home: homeOpt.value } : {}),
+      ...(Option.isSome(shellOpt) ? { shell: shellOpt.value } : {}),
+      ...(Option.isSome(dataDirOpt) ? { dataDir: dataDirOpt.value } : {}),
+      ...(Option.isSome(dbPathOpt) ? { dbPath: dbPathOpt.value } : {}),
+      ...(Option.isSome(authFilePathOpt) ? { authFilePath: authFilePathOpt.value } : {}),
+      ...(Option.isSome(authKeyPathOpt) ? { authKeyPath: authKeyPathOpt.value } : {}),
+      ...(persistenceMode !== undefined ? { persistenceMode } : {}),
+      ...(providerMode !== undefined ? { providerMode } : {}),
+    }
+  })
+
+const resolveParentSpan = () =>
+  Effect.gen(function* () {
+    const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
+    const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
+
+    if (!Option.isSome(traceIdOpt) || !Option.isSome(parentSpanIdOpt)) return undefined
+
+    return Tracer.externalSpan({
+      traceId: traceIdOpt.value,
+      spanId: parentSpanIdOpt.value,
+      sampled: true,
+    })
+  })
+
+const runHeadlessTurn = (
+  bundle: GentClientBundle,
+  state: Extract<InitialState, { readonly _tag: "headless" }>,
+  agent: Option.Option<string>,
+) =>
+  Effect.gen(function* () {
+    const branchId = state.session.branchId
+    if (branchId === undefined) {
+      yield* Console.error("Error: session has no branch")
+      return yield* Effect.die("session has no branch")
+    }
+
+    const parentSpan = yield* resolveParentSpan()
+
+    yield* runHeadless(
+      bundle.client,
+      state.session.id,
+      branchId,
+      state.prompt,
+      Option.getOrUndefined(agent),
+    ).pipe(
+      Effect.withSpan("Headless.run"),
+      parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
+    )
+  })
 
 // Main command - launches TUI or runs headless
 const main = Command.make(
@@ -94,11 +195,23 @@ const main = Command.make(
       // Create Effect-backed logger from captured services
       const logServices = yield* Effect.services<never>()
       const log = createClientLog(logServices as ServiceMap.ServiceMap<unknown>)
-
-      const bundle = yield* Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => shutdownLog("shutdown.finalizer.post-spawn")),
+      let mainFiber: Fiber.Fiber<unknown, unknown> | undefined
+      yield* Effect.withFiber((fiber) =>
+        Effect.sync(() => {
+          mainFiber = fiber
+        }),
       )
+      const mainServices = yield* Effect.services<never>()
+      const interruptMain = () => {
+        shutdownLog("shutdown.interrupt-fiber")
+        if (mainFiber !== undefined) {
+          Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber))
+        }
+      }
+
+      const bundle = yield* headless
+        ? resolveLocalOptions(cwd).pipe(Effect.flatMap((options) => Gent.local(options)))
+        : Gent.spawn({ cwd, mode: debug ? "debug" : "default" })
       const requestedAgent: AgentName | undefined =
         Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
 
@@ -126,32 +239,7 @@ const main = Command.make(
       }
 
       if (state._tag === "headless") {
-        const branchId = state.session.branchId
-        if (branchId === undefined) {
-          yield* Console.error("Error: session has no branch")
-          return yield* Effect.die("session has no branch")
-        }
-        const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
-        const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
-        const parentSpan =
-          Option.isSome(traceIdOpt) && Option.isSome(parentSpanIdOpt)
-            ? Tracer.externalSpan({
-                traceId: traceIdOpt.value,
-                spanId: parentSpanIdOpt.value,
-                sampled: true,
-              })
-            : undefined
-        const agentOverride = Option.getOrUndefined(agent)
-        yield* runHeadless(
-          bundle.client,
-          state.session.id,
-          branchId,
-          state.prompt,
-          agentOverride,
-        ).pipe(
-          Effect.withSpan("Headless.run"),
-          parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-        )
+        yield* runHeadlessTurn(bundle, state, agent)
         return
       }
       const bootstrap = resolveAppBootstrap(state, {
@@ -161,20 +249,10 @@ const main = Command.make(
 
       // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
       // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
-      let mainFiber: Fiber.Fiber<unknown, unknown> | undefined
-      yield* Effect.withFiber((fiber) =>
-        Effect.sync(() => {
-          mainFiber = fiber
-        }),
-      )
-      const mainServices = yield* Effect.services<never>()
       const envWithShutdown = {
         ...env,
         shutdown: () => {
-          shutdownLog("shutdown.interrupt-fiber")
-          if (mainFiber !== undefined) {
-            Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber))
-          }
+          interruptMain()
         },
       }
 
@@ -204,12 +282,6 @@ const main = Command.make(
           </EnvProvider>
         )),
       )
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => shutdownLog("shutdown.finalizer.post-render")),
-      )
-
-      yield* Effect.addFinalizer(() => Effect.sync(() => shutdownLog("shutdown.finalizer.first")))
-
       // Block until interrupted. Fiber interrupt from env.shutdown() breaks
       // Layer.launch's Effect.never, triggering scope finalization.
       return yield* Effect.never.pipe(
@@ -257,14 +329,46 @@ const command = main.pipe(
 // CLI
 const cli = Command.run(command, {
   version: "0.0.0",
-})
-
-const CliLayer = Layer.effectDiscard(cli)
+}).pipe(Effect.provide(PlatformLayer))
 const TraceLoggerLayer = Layer.unwrap(
   makeClientTraceLogger().pipe(Effect.map((logger) => Logger.layer([logger]))),
 )
-const MainLayer = CliLayer.pipe(
-  Layer.provide(PlatformLayer),
-  Layer.provide(Layer.provide(TraceLoggerLayer, PlatformLayer)),
-)
-BunRuntime.runMain(Effect.scoped(Layer.launch(MainLayer)))
+const mainEffect = cli.pipe(Effect.provide(Layer.provide(TraceLoggerLayer, PlatformLayer)))
+
+const gracefulCliTeardown: Runtime.Teardown = (exit, onExit) => {
+  if (Exit.isSuccess(exit)) {
+    onExit(0)
+    return
+  }
+  if (Cause.hasInterruptsOnly(exit.cause)) {
+    onExit(0)
+    return
+  }
+  Runtime.defaultTeardown(exit, onExit)
+}
+
+const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
+  let receivedSignal = false
+
+  fiber.addObserver((exit) => {
+    if (!receivedSignal) {
+      process.removeListener("SIGINT", onSignal)
+      process.removeListener("SIGTERM", onSignal)
+    }
+    teardown(exit, (code) => {
+      process.exit(code)
+    })
+  })
+
+  function onSignal() {
+    receivedSignal = true
+    process.removeListener("SIGINT", onSignal)
+    process.removeListener("SIGTERM", onSignal)
+    fiber.interruptUnsafe(fiber.id)
+  }
+
+  process.on("SIGINT", onSignal)
+  process.on("SIGTERM", onSignal)
+})
+
+runCliMain(Effect.scoped(mainEffect), { teardown: gracefulCliTeardown })

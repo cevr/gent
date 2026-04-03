@@ -1,4 +1,4 @@
-import { Effect, Ref, Stream } from "effect"
+import { Deferred, Effect, Stream } from "effect"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { GentNamespacedClient, GentRpcError } from "@gent/sdk"
 
@@ -11,12 +11,11 @@ export const runHeadless = (
 ): Effect.Effect<void, GentRpcError, never> =>
   Effect.gen(function* () {
     const eventStream = client.session.events({ sessionId, branchId })
+    const done = yield* Deferred.make<void>()
 
     yield* client.message
       .send({ sessionId, branchId, content: promptText, agentOverride })
       .pipe(Effect.withSpan("Headless.sendMessage"))
-
-    const doneRef = yield* Ref.make(false)
 
     yield* eventStream.pipe(
       Stream.tap((envelope) =>
@@ -40,10 +39,10 @@ export const runHeadless = (
               break
             case "ErrorOccurred":
               process.stderr.write(`\nError: ${event.error}\n`)
-              yield* Ref.set(doneRef, true)
+              yield* Deferred.succeed(done, void 0)
               break
             case "TurnCompleted":
-              yield* Ref.set(doneRef, true)
+              yield* Deferred.succeed(done, void 0)
               break
             case "HandoffPresented":
               process.stdout.write(`\n[handoff: auto-confirming]\n`)
@@ -74,7 +73,7 @@ export const runHeadless = (
           }
         }),
       ),
-      Stream.takeUntilEffect(() => Ref.get(doneRef)),
+      Stream.interruptWhen(Deferred.await(done)),
       Stream.runDrain,
     )
   })
