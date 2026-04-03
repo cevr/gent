@@ -2,7 +2,6 @@ import { ServiceMap, Effect, Layer } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
 import type {
-  ExtensionKind,
   ExtensionStatusInfo,
   FailedExtension,
   InteractionHandlerContribution,
@@ -18,6 +17,7 @@ import type { PromptSection } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { type CompiledHookMap, compileHooks } from "./hooks.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
+import { collectValidationFailures } from "./activation.js"
 
 // Resolved snapshot — the immutable compiled state
 
@@ -34,37 +34,49 @@ export interface ResolvedExtensions {
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
 }
 
-/** Compile a keyed contribution from sorted extensions. Later scope wins; same-scope collisions throw. */
+/** Compile a keyed contribution from sorted extensions. Later scope wins. */
 const compileContributions = <T>(
   sorted: ReadonlyArray<LoadedExtension>,
   extract: (setup: LoadedExtension["setup"]) => ReadonlyArray<T> | undefined,
   getKey: (item: T) => string,
-  label: string,
 ): Map<string, T> => {
   const result = new Map<string, T>()
-  const scopes = new Map<string, { kind: ExtensionKind; extId: string }>()
   for (const ext of sorted) {
     for (const item of extract(ext.setup) ?? []) {
       const key = getKey(item)
-      const prev = scopes.get(key)
-      if (prev !== undefined && prev.kind === ext.kind && prev.extId !== ext.manifest.id) {
-        throw new Error(
-          `Same-scope ${label} collision: "${key}" provided by both "${prev.extId}" and "${ext.manifest.id}" in scope "${ext.kind}"`,
-        )
-      }
       result.set(key, item)
-      scopes.set(key, { kind: ext.kind, extId: ext.manifest.id })
     }
   }
   return result
 }
 
-/** Compile loaded extensions into an immutable resolved snapshot. Throws on same-scope collisions. */
+const failureKey = (failure: FailedExtension) =>
+  `${failure.kind}:${failure.manifest.id}:${failure.sourcePath}:${failure.phase}:${failure.error}`
+
+/** Compile loaded extensions into an immutable resolved snapshot. Same-scope collisions degrade conflicting extensions instead of throwing. */
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
   failedExtensions: ReadonlyArray<FailedExtension> = [],
 ): ResolvedExtensions => {
-  const sorted = [...extensions].sort((a, b) => {
+  const validationFailures = collectValidationFailures(extensions)
+  const validationFailed = [...validationFailures.values()].map(({ ext, errors }) => ({
+    manifest: ext.manifest,
+    kind: ext.kind,
+    sourcePath: ext.sourcePath,
+    phase: "validation" as const,
+    error: errors.join("; "),
+  }))
+  const mergedFailures = [
+    ...failedExtensions,
+    ...validationFailed.filter(
+      (failure) =>
+        !failedExtensions.some((existing) => failureKey(existing) === failureKey(failure)),
+    ),
+  ]
+  const activeExtensions = extensions.filter(
+    (ext) => !validationFailures.has(`${ext.kind}:${ext.manifest.id}:${ext.sourcePath}`),
+  )
+  const sorted = [...activeExtensions].sort((a, b) => {
     const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
@@ -74,26 +86,22 @@ export const resolveExtensions = (
     sorted,
     (s) => s.tools,
     (t) => t.name,
-    "tool",
   )
   const agents = compileContributions(
     sorted,
     (s) => s.agents,
     (a) => a.name,
-    "agent",
   )
   const providers = compileContributions(
     sorted,
     (s) => s.providers,
     (p) => p.id,
-    "provider",
   )
 
   const interactionHandlers = compileContributions(
     sorted,
     (s) => s.interactionHandlers,
     (h) => h.type,
-    "interaction handler",
   )
 
   // Prompt sections: last scope wins by section id
@@ -101,7 +109,6 @@ export const resolveExtensions = (
     sorted,
     (s) => s.promptSections,
     (p) => p.id,
-    "prompt section",
   )
 
   const tagInjections: TagInjection[] = []
@@ -119,7 +126,7 @@ export const resolveExtensions = (
       sourcePath: ext.sourcePath,
       status: "active" as const,
     })),
-    ...failedExtensions.map((failure) => ({
+    ...mergedFailures.map((failure) => ({
       ...failure,
       status: "failed" as const,
     })),
@@ -134,7 +141,7 @@ export const resolveExtensions = (
     tagInjections,
     hooks,
     extensions: sorted,
-    failedExtensions,
+    failedExtensions: mergedFailures,
     extensionStatuses,
   }
 }

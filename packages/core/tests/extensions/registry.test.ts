@@ -109,22 +109,34 @@ describe("resolveExtensions", () => {
     expect(resolved.agents.get("explore")?.description).toBe("project explore")
   })
 
-  test("throws on same-scope tool collision from different extensions", () => {
-    expect(() =>
-      resolveExtensions([
-        makeExt("ext-a", "builtin", { tools: [makeTool("conflict")] }),
-        makeExt("ext-b", "builtin", { tools: [makeTool("conflict")] }),
-      ]),
-    ).toThrow(/same-scope tool collision.*"conflict"/i)
+  test("same-scope tool collision degrades conflicting extensions instead of throwing", () => {
+    const resolved = resolveExtensions([
+      makeExt("ext-a", "builtin", { tools: [makeTool("conflict")] }),
+      makeExt("ext-b", "builtin", { tools: [makeTool("conflict")] }),
+    ])
+
+    expect(resolved.tools.size).toBe(0)
+    expect(resolved.extensions).toEqual([])
+    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
+      "ext-a",
+      "ext-b",
+    ])
+    expect(resolved.failedExtensions.every((ext) => ext.phase === "validation")).toBe(true)
   })
 
-  test("throws on same-scope agent collision from different extensions", () => {
-    expect(() =>
-      resolveExtensions([
-        makeExt("ext-a", "builtin", { agents: [makeAgent("explore")] }),
-        makeExt("ext-b", "builtin", { agents: [makeAgent("explore")] }),
-      ]),
-    ).toThrow(/same-scope agent collision.*"explore"/i)
+  test("same-scope agent collision degrades conflicting extensions instead of throwing", () => {
+    const resolved = resolveExtensions([
+      makeExt("ext-a", "builtin", { agents: [makeAgent("explore")] }),
+      makeExt("ext-b", "builtin", { agents: [makeAgent("explore")] }),
+    ])
+
+    expect(resolved.agents.size).toBe(0)
+    expect(resolved.extensions).toEqual([])
+    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
+      "ext-a",
+      "ext-b",
+    ])
+    expect(resolved.failedExtensions.every((ext) => ext.phase === "validation")).toBe(true)
   })
 
   test("allows same-name tool/agent from different scopes (override)", () => {
@@ -153,13 +165,17 @@ describe("resolveExtensions", () => {
     expect(resolved.providers.get("anthropic")?.name).toBe("Custom Anthropic")
   })
 
-  test("throws on same-scope provider collision from different extensions", () => {
-    expect(() =>
-      resolveExtensions([
-        makeExt("ext-a", "builtin", { providers: [makeProvider("anthropic")] }),
-        makeExt("ext-b", "builtin", { providers: [makeProvider("anthropic")] }),
-      ]),
-    ).toThrow(/same-scope provider collision.*"anthropic"/i)
+  test("same-scope provider collision degrades conflicting extensions instead of throwing", () => {
+    const resolved = resolveExtensions([
+      makeExt("ext-a", "builtin", { providers: [makeProvider("anthropic")] }),
+      makeExt("ext-b", "builtin", { providers: [makeProvider("anthropic")] }),
+    ])
+
+    expect(resolved.providers.size).toBe(0)
+    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
+      "ext-a",
+      "ext-b",
+    ])
   })
 
   test("collects interaction handlers from extensions", () => {
@@ -186,13 +202,17 @@ describe("resolveExtensions", () => {
     expect(resolved.interactionHandlers.get("permission")).toBe(projectHandler)
   })
 
-  test("throws on same-scope interaction handler collision from different extensions", () => {
-    expect(() =>
-      resolveExtensions([
-        makeExt("ext-a", "builtin", { interactionHandlers: [makeHandler("permission")] }),
-        makeExt("ext-b", "builtin", { interactionHandlers: [makeHandler("permission")] }),
-      ]),
-    ).toThrow(/same-scope interaction handler collision.*"permission"/i)
+  test("same-scope interaction handler collision degrades conflicting extensions instead of throwing", () => {
+    const resolved = resolveExtensions([
+      makeExt("ext-a", "builtin", { interactionHandlers: [makeHandler("permission")] }),
+      makeExt("ext-b", "builtin", { interactionHandlers: [makeHandler("permission")] }),
+    ])
+
+    expect(resolved.interactionHandlers.size).toBe(0)
+    expect(resolved.failedExtensions.map((ext) => ext.manifest.id).sort()).toEqual([
+      "ext-a",
+      "ext-b",
+    ])
   })
 })
 
