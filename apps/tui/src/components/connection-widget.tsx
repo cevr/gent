@@ -13,21 +13,10 @@ export function ConnectionWidget() {
     if (state?._tag !== "disconnected" || state.reason === "stopped") return null
     return state.reason
   }
-
-  const failedExtensions = () =>
-    extensionUI.statuses().filter((status) => status.status === "failed")
-  const failedActors = () =>
-    extensionUI.statuses().filter((status) => status.actor?.status === "failed")
-  const failedScheduledJobs = () =>
-    extensionUI.statuses().flatMap((status) =>
-      (status.scheduledJobFailures ?? []).map((failure) => ({
-        extensionId: status.manifest.id,
-        jobId: failure.jobId,
-      })),
-    )
-  const hasFailedExtensions = () => failedExtensions().length > 0
-  const hasFailedActors = () => failedActors().length > 0
-  const hasFailedScheduledJobs = () => failedScheduledJobs().length > 0
+  const healthSummary = () => extensionUI.health().summary
+  const hasFailedExtensions = () => healthSummary().failedExtensions.length > 0
+  const hasFailedActors = () => healthSummary().failedActors.length > 0
+  const hasFailedScheduledJobs = () => healthSummary().failedScheduledJobs.length > 0
   const visible = () =>
     client.isReconnecting() ||
     client.connectionIssue() !== null ||
@@ -42,9 +31,7 @@ export function ConnectionWidget() {
   }
   const subtitle = () => {
     if (client.isReconnecting()) return "worker reconnect in progress"
-    if (hasFailedScheduledJobs()) return "scheduled jobs degraded"
-    if (hasFailedActors()) return "extension runtime degraded"
-    if (hasFailedExtensions()) return "extension activation degraded"
+    if (healthSummary().subtitle !== undefined) return healthSummary().subtitle
     if (disconnectedReason() !== null) return "runtime unavailable"
     return client.connectionIssue() ?? ""
   }
@@ -89,10 +76,7 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
-                failed extensions:{" "}
-                {failedExtensions()
-                  .map((status) => status.manifest.id)
-                  .join(", ")}
+                failed extensions: {healthSummary().failedExtensions.join(", ")}
               </span>
             </text>
           </Show>
@@ -100,10 +84,7 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
-                failed session actors:{" "}
-                {failedActors()
-                  .map((status) => status.manifest.id)
-                  .join(", ")}
+                failed session actors: {healthSummary().failedActors.join(", ")}
               </span>
             </text>
           </Show>
@@ -111,10 +92,7 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
-                failed scheduled jobs:{" "}
-                {failedScheduledJobs()
-                  .map((failure) => `${failure.extensionId}:${failure.jobId}`)
-                  .join(", ")}
+                failed scheduled jobs: {healthSummary().failedScheduledJobs.join(", ")}
               </span>
             </text>
           </Show>

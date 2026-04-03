@@ -37,7 +37,7 @@ import type {
   SessionInfo,
   BranchInfo,
   BranchTreeNode,
-  ExtensionStatusInfo,
+  ExtensionHealthSnapshot,
   SessionTreeNode,
   SteerCommand,
 } from "@gent/sdk"
@@ -132,9 +132,9 @@ export interface ClientContextValue {
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: () => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
-  listExtensionStatuses: (
+  getExtensionHealth: (
     sessionId?: SessionId,
-  ) => Effect.Effect<readonly ExtensionStatusInfo[], GentRpcError>
+  ) => Effect.Effect<ExtensionHealthSnapshot, GentRpcError>
   listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
   getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
@@ -597,7 +597,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     listSessions: () => client.session.list(),
 
-    listExtensionStatuses: (sessionId) =>
+    getExtensionHealth: (sessionId) =>
       client.extension.listStatus({
         ...(sessionId !== undefined ? { sessionId } : {}),
       }),

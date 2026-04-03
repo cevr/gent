@@ -19,7 +19,7 @@ import {
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
-import type { ExtensionStatusInfo } from "@gent/sdk"
+import type { ExtensionHealthSnapshot } from "@gent/sdk"
 // @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os"
 import type { JSX as _JSX } from "@opentui/solid"
@@ -98,8 +98,8 @@ export interface ExtensionUIContextValue {
   ) => void
   /** Server-projected extension state snapshots, keyed by extensionId */
   readonly snapshots: Accessor<ReadonlyMap<string, ExtensionSnapshot>>
-  /** Host activation status for server extensions */
-  readonly statuses: Accessor<ReadonlyArray<ExtensionStatusInfo>>
+  /** Server-owned extension health snapshot */
+  readonly health: Accessor<ExtensionHealthSnapshot>
   /** Update a server-projected snapshot (called from event stream) */
   readonly updateSnapshot: (snapshot: ExtensionSnapshot) => void
   /** Current session ID (undefined before session is active) */
@@ -119,6 +119,16 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   protocols: new Map(),
 }
 
+const EMPTY_HEALTH: ExtensionHealthSnapshot = {
+  extensions: [],
+  summary: {
+    status: "healthy",
+    failedExtensions: [],
+    failedActors: [],
+    failedScheduledJobs: [],
+  },
+}
+
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
 export function ExtensionUIProvider(props: { children: JSX.Element }) {
@@ -127,7 +137,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loading, setLoading] = createSignal(true)
   const [snapshots, setSnapshots] = createSignal<ReadonlyMap<string, ExtensionSnapshot>>(new Map())
-  const [statuses, setStatuses] = createSignal<ReadonlyArray<ExtensionStatusInfo>>([])
+  const [health, setHealth] = createSignal<ExtensionHealthSnapshot>(EMPTY_HEALTH)
   let statusLoadVersion = 0
 
   const activeSessionKey = createMemo(() => {
@@ -312,20 +322,20 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         ] as const,
       ([, connectionTag, sessionId]) => {
         const version = ++statusLoadVersion
-        setStatuses([])
+        setHealth(EMPTY_HEALTH)
         if (connectionTag !== "connected") return
         clientCtx.runtime.cast(
-          clientCtx.listExtensionStatuses(sessionId).pipe(
-            Effect.tap((nextStatuses) =>
+          clientCtx.getExtensionHealth(sessionId).pipe(
+            Effect.tap((nextHealth) =>
               Effect.sync(() => {
                 if (version !== statusLoadVersion) return
-                setStatuses(nextStatuses)
+                setHealth(nextHealth)
               }),
             ),
             Effect.catchEager((error) =>
               Effect.sync(() => {
                 if (version !== statusLoadVersion) return
-                setStatuses([])
+                setHealth(EMPTY_HEALTH)
                 console.log(`[tui-ext] Extension status refresh failed: ${error}`)
               }),
             ),
@@ -350,7 +360,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         setOverlayDispatch,
         setComposerStateProvider,
         snapshots,
-        statuses,
+        health,
         updateSnapshot,
         sessionId: () => clientCtx.session()?.sessionId,
         branchId: () => clientCtx.session()?.branchId,

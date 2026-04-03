@@ -172,16 +172,29 @@ describe("TUI renderer surfaces", () => {
       client: createMockClient({
         extension: {
           listStatus: () =>
-            Effect.succeed([
-              {
-                manifest: { id: "@gent/memory" },
-                kind: "builtin",
-                sourcePath: "builtin",
-                status: "failed" as const,
-                phase: "startup" as const,
-                error: "startup boom",
+            Effect.succeed({
+              extensions: [
+                {
+                  manifest: { id: "@gent/memory" },
+                  kind: "builtin" as const,
+                  sourcePath: "builtin",
+                  status: "degraded" as const,
+                  activation: {
+                    status: "failed" as const,
+                    phase: "startup" as const,
+                    error: "startup boom",
+                  },
+                  scheduler: { status: "healthy" as const, failures: [] },
+                },
+              ],
+              summary: {
+                status: "degraded" as const,
+                subtitle: "extension activation degraded",
+                failedExtensions: ["@gent/memory"],
+                failedActors: [],
+                failedScheduledJobs: [],
               },
-            ]),
+            }),
         },
       }),
     })
@@ -199,21 +212,32 @@ describe("TUI renderer surfaces", () => {
         extension: {
           listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
             expect(sessionId).toBe(testSession.id)
-            return Effect.succeed([
-              {
-                manifest: { id: "@gent/plan" },
-                kind: "builtin",
-                sourcePath: "builtin",
-                status: "active" as const,
-                actor: {
-                  extensionId: "@gent/plan",
-                  sessionId: testSession.id,
-                  branchId: testSession.branchId,
-                  status: "failed" as const,
-                  error: "actor boom",
+            return Effect.succeed({
+              extensions: [
+                {
+                  manifest: { id: "@gent/plan" },
+                  kind: "builtin" as const,
+                  sourcePath: "builtin",
+                  status: "degraded" as const,
+                  activation: { status: "active" as const },
+                  actor: {
+                    extensionId: "@gent/plan",
+                    sessionId: testSession.id,
+                    branchId: testSession.branchId,
+                    status: "failed" as const,
+                    error: "actor boom",
+                  },
+                  scheduler: { status: "healthy" as const, failures: [] },
                 },
+              ],
+              summary: {
+                status: "degraded" as const,
+                subtitle: "extension runtime degraded",
+                failedExtensions: [],
+                failedActors: ["@gent/plan"],
+                failedScheduledJobs: [],
               },
-            ])
+            })
           },
         },
       }),
@@ -230,15 +254,28 @@ describe("TUI renderer surfaces", () => {
       client: createMockClient({
         extension: {
           listStatus: () =>
-            Effect.succeed([
-              {
-                manifest: { id: "@gent/memory" },
-                kind: "builtin",
-                sourcePath: "builtin",
-                status: "active" as const,
-                scheduledJobFailures: [{ jobId: "reflect", error: "launchd registration failed" }],
+            Effect.succeed({
+              extensions: [
+                {
+                  manifest: { id: "@gent/memory" },
+                  kind: "builtin" as const,
+                  sourcePath: "builtin",
+                  status: "degraded" as const,
+                  activation: { status: "active" as const },
+                  scheduler: {
+                    status: "degraded" as const,
+                    failures: [{ jobId: "reflect", error: "launchd registration failed" }],
+                  },
+                },
+              ],
+              summary: {
+                status: "degraded" as const,
+                subtitle: "scheduled jobs degraded",
+                failedExtensions: [],
+                failedActors: [],
+                failedScheduledJobs: ["@gent/memory:reflect"],
               },
-            ]),
+            }),
         },
       }),
     })
@@ -251,21 +288,32 @@ describe("TUI renderer surfaces", () => {
 
   test("ConnectionWidget refreshes extension status after reconnect generation changes", async () => {
     const lifecycle = createMutableRuntime({ _tag: "connected", generation: 0 })
-    let currentStatuses = [
-      {
-        manifest: { id: "@gent/plan" },
-        kind: "builtin" as const,
-        sourcePath: "builtin",
-        status: "active" as const,
-        actor: {
-          extensionId: "@gent/plan",
-          sessionId: testSession.id,
-          branchId: testSession.branchId,
-          status: "failed" as const,
-          error: "actor boom",
+    let currentHealth = {
+      extensions: [
+        {
+          manifest: { id: "@gent/plan" },
+          kind: "builtin" as const,
+          sourcePath: "builtin",
+          status: "degraded" as const,
+          activation: { status: "active" as const },
+          actor: {
+            extensionId: "@gent/plan",
+            sessionId: testSession.id,
+            branchId: testSession.branchId,
+            status: "failed" as const,
+            error: "actor boom",
+          },
+          scheduler: { status: "healthy" as const, failures: [] },
         },
+      ],
+      summary: {
+        status: "degraded" as const,
+        subtitle: "extension runtime degraded",
+        failedExtensions: [],
+        failedActors: ["@gent/plan"],
+        failedScheduledJobs: [],
       },
-    ]
+    }
 
     const setup = await renderWithProviders(() => <ConnectionWidget />, {
       initialSession: testSession,
@@ -274,7 +322,7 @@ describe("TUI renderer surfaces", () => {
         extension: {
           listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
             expect(sessionId).toBe(testSession.id)
-            return Effect.succeed(currentStatuses)
+            return Effect.succeed(currentHealth)
           },
         },
       }),
@@ -282,7 +330,15 @@ describe("TUI renderer surfaces", () => {
 
     expect(renderFrame(setup)).toContain("failed session actors")
 
-    currentStatuses = []
+    currentHealth = {
+      extensions: [],
+      summary: {
+        status: "healthy" as const,
+        failedExtensions: [],
+        failedActors: [],
+        failedScheduledJobs: [],
+      },
+    }
     lifecycle.emit({ _tag: "reconnecting", attempt: 1, generation: 1 })
     await Promise.resolve()
     await setup.renderOnce()

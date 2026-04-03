@@ -440,17 +440,44 @@ export const ScheduledJobFailureInfo = Schema.Struct({
 })
 export type ScheduledJobFailureInfo = typeof ScheduledJobFailureInfo.Type
 
-export const ExtensionStatusInfo = Schema.Struct({
-  manifest: ExtensionManifestInfo,
-  kind: Schema.Literals(["builtin", "user", "project"]),
-  sourcePath: Schema.String,
+export const ExtensionActivationHealth = Schema.Struct({
   status: Schema.Literals(["active", "failed"]),
   phase: Schema.optional(ExtensionActivationPhase),
   error: Schema.optional(Schema.String),
-  actor: Schema.optional(ExtensionActorStatusInfo),
-  scheduledJobFailures: Schema.optional(Schema.Array(ScheduledJobFailureInfo)),
 })
-export type ExtensionStatusInfo = typeof ExtensionStatusInfo.Type
+export type ExtensionActivationHealth = typeof ExtensionActivationHealth.Type
+
+export const ExtensionSchedulerHealth = Schema.Struct({
+  status: Schema.Literals(["healthy", "degraded"]),
+  failures: Schema.Array(ScheduledJobFailureInfo),
+})
+export type ExtensionSchedulerHealth = typeof ExtensionSchedulerHealth.Type
+
+export const ExtensionHealth = Schema.Struct({
+  manifest: ExtensionManifestInfo,
+  kind: Schema.Literals(["builtin", "user", "project"]),
+  sourcePath: Schema.String,
+  status: Schema.Literals(["healthy", "degraded"]),
+  activation: ExtensionActivationHealth,
+  actor: Schema.optional(ExtensionActorStatusInfo),
+  scheduler: ExtensionSchedulerHealth,
+})
+export type ExtensionHealth = typeof ExtensionHealth.Type
+
+export const ExtensionHealthSummary = Schema.Struct({
+  status: Schema.Literals(["healthy", "degraded"]),
+  subtitle: Schema.optional(Schema.String),
+  failedExtensions: Schema.Array(Schema.String),
+  failedActors: Schema.Array(Schema.String),
+  failedScheduledJobs: Schema.Array(Schema.String),
+})
+export type ExtensionHealthSummary = typeof ExtensionHealthSummary.Type
+
+export const ExtensionHealthSnapshot = Schema.Struct({
+  extensions: Schema.Array(ExtensionHealth),
+  summary: ExtensionHealthSummary,
+})
+export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
 
 export const SkillInfo = Schema.Struct({
   name: Schema.String,

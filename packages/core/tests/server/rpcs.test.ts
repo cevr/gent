@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
-import { ExtensionStatusInfo, SendMessageInput } from "@gent/core/server/rpcs"
+import { ExtensionHealthSnapshot, SendMessageInput } from "@gent/core/server/rpcs"
 
 describe("SendMessage API", () => {
   test("SendMessageInput decodes required fields", () => {
@@ -23,28 +23,45 @@ describe("SendMessage API", () => {
     expect(() => Schema.decodeUnknownSync(SendMessageInput)(payload)).toThrow()
   })
 
-  test("ExtensionStatusInfo round-trips restart supervision fields", () => {
+  test("ExtensionHealthSnapshot round-trips restart supervision fields", () => {
     const payload = {
-      manifest: { id: "memory" },
-      kind: "builtin",
-      sourcePath: "builtin",
-      status: "active",
-      actor: {
-        extensionId: "memory",
-        sessionId: "s1",
-        branchId: "b1",
-        status: "restarting",
-        restartCount: 1,
-        failurePhase: "runtime",
+      extensions: [
+        {
+          manifest: { id: "memory" },
+          kind: "builtin",
+          sourcePath: "builtin",
+          status: "degraded",
+          activation: {
+            status: "active",
+          },
+          actor: {
+            extensionId: "memory",
+            sessionId: "s1",
+            branchId: "b1",
+            status: "restarting",
+            restartCount: 1,
+            failurePhase: "runtime",
+          },
+          scheduler: {
+            status: "healthy",
+            failures: [],
+          },
+        },
+      ],
+      summary: {
+        status: "degraded",
+        failedExtensions: [],
+        failedActors: [],
+        failedScheduledJobs: [],
       },
     }
 
-    const decoded = Schema.decodeUnknownSync(ExtensionStatusInfo)(payload)
-    const encoded = Schema.encodeSync(ExtensionStatusInfo)(decoded)
+    const decoded = Schema.decodeUnknownSync(ExtensionHealthSnapshot)(payload)
+    const encoded = Schema.encodeSync(ExtensionHealthSnapshot)(decoded)
 
-    expect(decoded.actor?.status).toBe("restarting")
-    expect(decoded.actor?.restartCount).toBe(1)
-    expect(decoded.actor?.failurePhase).toBe("runtime")
+    expect(decoded.extensions[0]?.actor?.status).toBe("restarting")
+    expect(decoded.extensions[0]?.actor?.restartCount).toBe(1)
+    expect(decoded.extensions[0]?.actor?.failurePhase).toBe("runtime")
     expect(encoded).toEqual(payload)
   })
 })
