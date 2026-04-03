@@ -3,7 +3,12 @@
 import { describe, expect, test } from "bun:test"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import { onMount } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
+import {
+  AgentSwitched,
+  EventEnvelope as EventEnvelopeClass,
+  type EventEnvelope,
+} from "@gent/core/domain/event"
 import { createMockClient, renderWithProviders } from "./render-harness"
 import { useClient } from "../src/client"
 import { useExtensionUI, type ExtensionUIContextValue } from "../src/extensions/context"
@@ -284,5 +289,151 @@ describe("ClientProvider session lifecycle", () => {
       },
     })
     expect(ext.snapshots().get("@test/shared")?.model).toEqual({ status: "new-branch" })
+  })
+
+  test("stale snapshot failures do not repopulate connection issues after switch", async () => {
+    let ctx: ClientContextValue | undefined
+    let failOldSnapshot: ((error: Error) => void) | undefined
+
+    const client = createMockClient({
+      session: {
+        getSnapshot: ({ sessionId }: { sessionId: SessionId; branchId: BranchId }) => {
+          if (sessionId === ("session-a" as SessionId)) {
+            return Effect.async<never, Error>((resume) => {
+              failOldSnapshot = (error) => resume(Effect.fail(error))
+              return Effect.void
+            })
+          }
+          return Effect.succeed({
+            sessionId: "session-b" as SessionId,
+            branchId: "branch-b" as BranchId,
+            messages: [],
+            lastEventId: null,
+            reasoningLevel: undefined,
+            runtime: {
+              phase: "idle" as const,
+              status: "idle" as const,
+              agent: "cowork" as const,
+              queue: { steering: [], followUp: [] },
+            },
+          })
+        },
+      },
+    })
+
+    const setup = await renderWithProviders(
+      () => <ClientProbe onReady={(value) => (ctx = value)} />,
+      {
+        client,
+        initialSession: {
+          id: "session-a" as SessionId,
+          branchId: "branch-a" as BranchId,
+          name: "A",
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      },
+    )
+    if (ctx === undefined) throw new Error("client context not ready")
+
+    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
+    await setup.renderOnce()
+    await setup.renderOnce()
+    expect(ctx.connectionIssue()).toBeNull()
+
+    failOldSnapshot?.(new Error("stale session failed"))
+    await Promise.resolve()
+    await setup.renderOnce()
+    await setup.renderOnce()
+
+    expect(ctx.connectionIssue()).toBeNull()
+    expect(ctx.sessionState()).toEqual({
+      status: "active",
+      session: {
+        sessionId: "session-b",
+        branchId: "branch-b",
+        name: "B",
+        reasoningLevel: undefined,
+      },
+    })
+  })
+
+  test("old session events are ignored immediately after a session switch", async () => {
+    let ctx: ClientContextValue | undefined
+    let nextEventId = 0
+    const emitters = new Map<string, (envelope: EventEnvelope) => void>()
+
+    const client = createMockClient({
+      session: {
+        getSnapshot: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) =>
+          Effect.succeed({
+            sessionId,
+            branchId,
+            messages: [],
+            lastEventId: null,
+            reasoningLevel: undefined,
+            runtime: {
+              phase: "idle" as const,
+              status: "idle" as const,
+              agent: "cowork" as const,
+              queue: { steering: [], followUp: [] },
+            },
+          }),
+        events: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) =>
+          Stream.async<EventEnvelope>((emit) => {
+            emitters.set(`${sessionId}:${branchId}`, (envelope) => {
+              emit.single(envelope)
+            })
+            return Effect.sync(() => {
+              emitters.delete(`${sessionId}:${branchId}`)
+            })
+          }),
+      },
+    })
+
+    const setup = await renderWithProviders(
+      () => <ClientProbe onReady={(value) => (ctx = value)} />,
+      {
+        client,
+        initialSession: {
+          id: "session-a" as SessionId,
+          branchId: "branch-a" as BranchId,
+          name: "A",
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      },
+    )
+    if (ctx === undefined) throw new Error("client context not ready")
+
+    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
+    emitters.get("session-a:branch-a")?.(
+      new EventEnvelopeClass({
+        id: ++nextEventId as EventEnvelope["id"],
+        event: new AgentSwitched({
+          sessionId: "session-a" as SessionId,
+          branchId: "branch-a" as BranchId,
+          fromAgent: "cowork",
+          toAgent: "deepwork",
+        }),
+        createdAt: Date.now(),
+      }),
+    )
+
+    expect(ctx.agent()).toBe("cowork")
+
+    await setup.renderOnce()
+    await setup.renderOnce()
+
+    expect(ctx.agent()).toBe("cowork")
+    expect(ctx.sessionState()).toEqual({
+      status: "active",
+      session: {
+        sessionId: "session-b",
+        branchId: "branch-b",
+        name: "B",
+        reasoningLevel: undefined,
+      },
+    })
   })
 })

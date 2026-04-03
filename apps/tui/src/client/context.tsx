@@ -462,7 +462,7 @@ export function ClientProvider(props: ClientProviderProps) {
             label: "ctx.events",
             log,
             onError: (err) => {
-              if (cancelled) return
+              if (!isActiveSession()) return
               if (connectionState()?._tag !== "connected") return
               log.error("event.subscription.failed", { error: formatError(err) })
               setConnectionIssue(formatConnectionIssue(err))
