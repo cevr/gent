@@ -40,6 +40,7 @@ export function Auth(props: AuthProps) {
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
   const authSessionId = Bun.randomUUIDv7()
+  let routeVersion = 0
   let loadVersion = 0
   let successTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -48,6 +49,14 @@ export function Auth(props: AuthProps) {
     setSuccessMessage(msg)
     successTimer = setTimeout(() => setSuccessMessage(null), 2000)
   }
+  const nextRouteVersion = () => {
+    routeVersion += 1
+    loadVersion = 0
+    if (successTimer !== undefined) clearTimeout(successTimer)
+    setSuccessMessage(null)
+    return routeVersion
+  }
+  const isCurrentRouteVersion = (version: number) => version === routeVersion
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
   useScrollSync(() => `auth-provider-${state().providerIndex}`, { getRef: () => scrollRef })
@@ -57,7 +66,7 @@ export function Auth(props: AuthProps) {
       () => props.agentName,
       () => {
         setAutoPrompted(false)
-        loadAuth()
+        loadAuth(nextRouteVersion())
       },
       { defer: false },
     ),
@@ -65,8 +74,8 @@ export function Auth(props: AuthProps) {
 
   // ── Side effects ──
 
-  const loadAuth = () => {
-    const version = ++loadVersion
+  const loadAuth = (currentRouteVersion = routeVersion) => {
+    const requestVersion = ++loadVersion
     props.log.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
@@ -78,14 +87,16 @@ export function Auth(props: AuthProps) {
       ]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
-            if (version !== loadVersion) return
+            if (!isCurrentRouteVersion(currentRouteVersion) || requestVersion !== loadVersion)
+              return
             props.log.info("auth:load-complete", { providers: loadedProviders.length })
             send({ _tag: "Loaded", providers: [...loadedProviders], methods: loadedMethods })
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
-            if (version !== loadVersion) return
+            if (!isCurrentRouteVersion(currentRouteVersion) || requestVersion !== loadVersion)
+              return
             props.log.error("auth:load", { error: String(err) })
             send({ _tag: "LoadFailed", error: formatError(err) })
           }),
@@ -139,18 +150,23 @@ export function Auth(props: AuthProps) {
     if (current._tag !== "List") return
     const provider = current.providers[current.providerIndex]
     if (provider === undefined || provider.source !== "stored") return
+    const currentRouteVersion = routeVersion
     send({ _tag: "DeleteStarted" })
 
     cast(
       props.client.auth.deleteKey({ provider: provider.provider }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
+            if (!isCurrentRouteVersion(currentRouteVersion)) return
             send({ _tag: "ActionSucceeded" })
-            loadAuth()
+            loadAuth(currentRouteVersion)
           }),
         ),
         Effect.catchEager((err) =>
-          Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
+          Effect.sync(() => {
+            if (!isCurrentRouteVersion(currentRouteVersion)) return
+            send({ _tag: "ActionFailed", error: formatError(err) })
+          }),
         ),
       ),
     )
@@ -162,6 +178,7 @@ export function Auth(props: AuthProps) {
     const provider = current.providers[current.providerIndex]
     const key = current.value.trim()
     if (provider === undefined || key.length === 0) return
+    const currentRouteVersion = routeVersion
     props.log.info("auth:submit-key", { provider: provider.provider })
     send({ _tag: "SubmitKeyStarted" })
 
@@ -169,13 +186,17 @@ export function Auth(props: AuthProps) {
       props.client.auth.setKey({ provider: provider.provider, key }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
+            if (!isCurrentRouteVersion(currentRouteVersion)) return
             flashSuccess(`API key saved for ${provider.provider}`)
             send({ _tag: "ActionSucceeded" })
-            loadAuth()
+            loadAuth(currentRouteVersion)
           }),
         ),
         Effect.catchEager((err) =>
-          Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
+          Effect.sync(() => {
+            if (!isCurrentRouteVersion(currentRouteVersion)) return
+            send({ _tag: "ActionFailed", error: formatError(err) })
+          }),
         ),
       ),
     )
@@ -188,6 +209,7 @@ export function Auth(props: AuthProps) {
     const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
     const method = methods[current.methodIndex]
     if (provider === undefined || method === undefined) return
+    const currentRouteVersion = routeVersion
     props.log.info("auth:start-method", { provider: provider.provider, method: method.type })
 
     if (method.type === "api") {
@@ -206,6 +228,7 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap((authorization) =>
             Effect.sync(() => {
+              if (!isCurrentRouteVersion(currentRouteVersion)) return
               if (authorization === null) {
                 send({ _tag: "ActionFailed", error: "No authorization available for this method" })
                 return
@@ -213,7 +236,7 @@ export function Auth(props: AuthProps) {
               if (authorization.method === "done") {
                 flashSuccess(`Authenticated ${provider.provider} via keychain`)
                 send({ _tag: "ActionSucceeded" })
-                loadAuth()
+                loadAuth(currentRouteVersion)
                 return
               }
               send({
@@ -234,6 +257,7 @@ export function Auth(props: AuthProps) {
             if (authorization.method === "auto") {
               return Effect.sync(() =>
                 startAutoCallback(
+                  currentRouteVersion,
                   authorization.authorizationId,
                   provider.provider,
                   current.providerIndex,
@@ -244,13 +268,17 @@ export function Auth(props: AuthProps) {
             return Effect.void
           }),
           Effect.catchEager((err) =>
-            Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
+            Effect.sync(() => {
+              if (!isCurrentRouteVersion(currentRouteVersion)) return
+              send({ _tag: "ActionFailed", error: formatError(err) })
+            }),
           ),
         ),
     )
   }
 
   const startAutoCallback = (
+    currentRouteVersion: number,
     authorizationId: string,
     providerName: string,
     _providerIndex: number,
@@ -267,13 +295,17 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {
+              if (!isCurrentRouteVersion(currentRouteVersion)) return
               flashSuccess(`Authenticated ${providerName} via OAuth`)
               send({ _tag: "ActionSucceeded" })
-              loadAuth()
+              loadAuth(currentRouteVersion)
             }),
           ),
           Effect.catchEager((err) =>
-            Effect.sync(() => send({ _tag: "OAuthAutoFailed", error: formatError(err) })),
+            Effect.sync(() => {
+              if (!isCurrentRouteVersion(currentRouteVersion)) return
+              send({ _tag: "OAuthAutoFailed", error: formatError(err) })
+            }),
           ),
         ),
     )
@@ -293,6 +325,7 @@ export function Auth(props: AuthProps) {
     const trimmed = current.code.trim()
     const code = trimmed.length > 0 ? trimmed : undefined
     if (needsCode && code === undefined) return
+    const currentRouteVersion = routeVersion
     send({ _tag: "SubmitOAuthStarted" })
 
     cast(
@@ -307,13 +340,17 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {
+              if (!isCurrentRouteVersion(currentRouteVersion)) return
               flashSuccess(`Authenticated ${provider.provider} via OAuth`)
               send({ _tag: "ActionSucceeded" })
-              loadAuth()
+              loadAuth(currentRouteVersion)
             }),
           ),
           Effect.catchEager((err) =>
-            Effect.sync(() => send({ _tag: "ActionFailed", error: formatError(err) })),
+            Effect.sync(() => {
+              if (!isCurrentRouteVersion(currentRouteVersion)) return
+              send({ _tag: "ActionFailed", error: formatError(err) })
+            }),
           ),
         ),
     )

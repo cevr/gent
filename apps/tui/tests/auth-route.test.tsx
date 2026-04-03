@@ -120,4 +120,99 @@ describe("Auth route", () => {
     expect(frame).not.toContain("anthropic")
     setup.renderer.destroy()
   })
+
+  test("ignores stale auth mutations after the selected agent changes", async () => {
+    let setAgentName: ((value: string) => void) | undefined
+    let resolveOldKeySave: (() => void) | undefined
+
+    const client = createMockClient({
+      auth: {
+        listProviders: (input: { agentName?: string }) =>
+          Effect.succeed(
+            input.agentName === "deepwork"
+              ? [
+                  {
+                    provider: "openai",
+                    hasKey: false,
+                    required: false,
+                    source: "none",
+                    authType: undefined,
+                  },
+                ]
+              : [
+                  {
+                    provider: "anthropic",
+                    hasKey: false,
+                    required: false,
+                    source: "none",
+                    authType: undefined,
+                  },
+                ],
+          ),
+        listMethods: () =>
+          Effect.succeed({
+            anthropic: [{ label: "API key", type: "api" as const }],
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+        setKey: ({ provider }: { provider: string; key: string }) => {
+          if (provider === "anthropic") {
+            return Effect.promise(
+              () =>
+                new Promise<void>((resolve) => {
+                  resolveOldKeySave = resolve
+                }),
+            )
+          }
+          return Effect.succeed(undefined)
+        },
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(
+      () => {
+        const [agentName, setAgent] = createSignal("cowork")
+        setAgentName = setAgent
+        return <Auth client={client} runtime={runtime} log={log} agentName={agentName()} />
+      },
+      {
+        client,
+        runtime,
+        initialRoute: Route.auth(),
+      },
+    )
+
+    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    await waitForFrame(setup, (frame) => frame.includes("Enter API key for anthropic"))
+    await setup.mockInput.typeText("old-key")
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+
+    setAgentName?.("deepwork")
+    const reloaded = await waitForFrame(setup, (frame) => frame.includes("openai"))
+    expect(reloaded).toContain("openai")
+
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    await waitForFrame(setup, (frame) => frame.includes("Enter API key for openai"))
+
+    resolveOldKeySave?.()
+    const frame = await waitForFrame(
+      setup,
+      (next) =>
+        next.includes("Enter API key for openai") && !next.includes("API key saved for anthropic"),
+    )
+
+    expect(frame).toContain("Enter API key for openai")
+    expect(frame).not.toContain("API key saved for anthropic")
+    setup.renderer.destroy()
+  })
 })

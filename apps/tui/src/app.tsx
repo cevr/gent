@@ -1,4 +1,5 @@
-import { Switch, Match, ErrorBoundary, createEffect, createSignal } from "solid-js"
+import { Effect } from "effect"
+import { Switch, Match, ErrorBoundary, createEffect, createSignal, on } from "solid-js"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/index"
@@ -23,6 +24,47 @@ function AppContent(props: AppProps) {
   const client = useClient()
   const [authGateActive, setAuthGateActive] = createSignal(
     !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0,
+  )
+  let authGateVersion = 0
+
+  const refreshAuthGate = (agentName = client.agent()) => {
+    if (props.debugMode) {
+      authGateVersion += 1
+      setAuthGateActive(false)
+      return
+    }
+
+    const version = ++authGateVersion
+    client.runtime.cast(
+      client.client.auth
+        .listProviders({
+          ...(agentName !== undefined ? { agentName } : {}),
+        })
+        .pipe(
+          Effect.tap((providers) =>
+            Effect.sync(() => {
+              if (version !== authGateVersion) return
+              setAuthGateActive(providers.some((provider) => provider.required && !provider.hasKey))
+            }),
+          ),
+          Effect.catchEager((error) =>
+            Effect.sync(() => {
+              if (version !== authGateVersion) return
+              client.log.error("app:auth-gate", { error: String(error), agentName })
+            }),
+          ),
+        ),
+    )
+  }
+
+  createEffect(
+    on(
+      () => client.agent(),
+      (agentName) => {
+        refreshAuthGate(agentName)
+      },
+      { defer: false },
+    ),
   )
 
   createEffect(() => {
@@ -74,7 +116,10 @@ function AppContent(props: AppProps) {
             log={client.log}
             agentName={client.agent()}
             enforceAuth={authGateActive()}
-            onResolved={() => setAuthGateActive(false)}
+            onResolved={() => {
+              setAuthGateActive(false)
+              refreshAuthGate()
+            }}
           />
         </Match>
       </Switch>
