@@ -3,7 +3,7 @@ import { Effect, Exit } from "effect"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { DEFAULT_MAX_AGENT_RUN_DEPTH } from "@gent/core/domain/agent"
-import { getSessionDepth } from "@gent/core/runtime/agent/subagent-runner"
+import { getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 
 const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
@@ -134,7 +134,7 @@ describe("depth guard behavior", () => {
         const storage = yield* Storage
         // Query depth for a session that doesn't exist — ancestry read returns empty
         // The CTE returns no rows, so ancestors.length is 0, depth is 0
-        // But for a truly broken storage, the error should propagate as SubagentError
+        // But for a truly broken storage, the error should propagate as AgentRunError
         yield* getSessionDepth("nonexistent" as SessionId, storage)
       }),
     )

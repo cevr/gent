@@ -7,8 +7,8 @@ import {
   StreamChunk,
   StreamEnded,
   StreamStarted,
-  SubagentSpawned,
-  SubagentSucceeded,
+  AgentRunSpawned,
+  AgentRunSucceeded,
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
@@ -239,7 +239,7 @@ const runDelegateScenario = (
     const childGrepToolCallId = asToolCallId(`dbg-child-grep-${iteration}`)
 
     yield* eventStore.publish(
-      new SubagentSpawned({
+      new AgentRunSpawned({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
         agentName: "reviewer",
@@ -308,7 +308,7 @@ const runDelegateScenario = (
 
     yield* Effect.sleep("300 millis")
     yield* eventStore.publish(
-      new SubagentSucceeded({
+      new AgentRunSucceeded({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
         agentName: "reviewer",

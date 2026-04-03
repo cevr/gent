@@ -4,8 +4,8 @@
 
 import { Effect, Schema } from "effect"
 import type { ModelId } from "../domain/model.js"
-import { SubagentError } from "../domain/agent.js"
-import type { AgentDefinition, SubagentResult, SubagentRunner } from "../domain/agent.js"
+import { AgentRunError } from "../domain/agent.js"
+import type { AgentDefinition, AgentRunResult, AgentRunner } from "../domain/agent.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
@@ -52,13 +52,13 @@ export interface WorkflowRunContext {
 
 /** Spawn same prompt with both models in parallel */
 export const runAdversarialPair = (
-  runner: SubagentRunner,
+  runner: AgentRunner,
   agent: AgentDefinition,
   prompt: string,
   modelA: ModelId,
   modelB: ModelId,
   ctx: WorkflowRunContext,
-): Effect.Effect<readonly [SubagentResult, SubagentResult], SubagentError> =>
+): Effect.Effect<readonly [AgentRunResult, AgentRunResult], AgentRunError> =>
   Effect.all(
     [
       runner.run({ agent, prompt, ...ctx, overrides: { modelId: modelA } }),
@@ -69,14 +69,14 @@ export const runAdversarialPair = (
 
 // ── Require Text ──
 
-/** Extract text from SubagentResult or fail with descriptive error */
+/** Extract text from AgentRunResult or fail with descriptive error */
 export const requireText = (
-  result: SubagentResult,
+  result: AgentRunResult,
   label: string,
-): Effect.Effect<string, SubagentError> => {
+): Effect.Effect<string, AgentRunError> => {
   if (result._tag === "error") {
     return Effect.fail(
-      new SubagentError({
+      new AgentRunError({
         message: `${label} failed: ${result.error}`,
       }),
     )

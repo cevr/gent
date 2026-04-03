@@ -1,6 +1,6 @@
 import { Effect, Schema, FileSystem } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { AgentDefinition, SubagentRunnerService } from "../domain/agent.js"
+import { AgentDefinition, AgentRunnerService } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
@@ -44,7 +44,7 @@ export const CounselTool = defineTool({
     "Get an adversarial peer review from the GPT reviewer model. Spawns a read-only OpenAI subagent for architecture reviews, bug hunts, or second opinions.",
   params: CounselParams,
   execute: Effect.fn("CounselTool.execute")(function* (params, ctx) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const fs = yield* FileSystem.FileSystem
     const platform = yield* RuntimePlatform
 

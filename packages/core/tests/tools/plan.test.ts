@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { PlanTool } from "@gent/core/tools/plan"
-import { Agents, SubagentRunnerService, type SubagentResult } from "@gent/core/domain/agent"
+import { Agents, AgentRunnerService, type AgentRunResult } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
@@ -38,7 +38,7 @@ describe("Plan Tool", () => {
     const calls: Array<{ prompt: string }> = []
     let callIdx = 0
 
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         calls.push({ prompt: params.prompt })
         callIdx++
@@ -47,7 +47,7 @@ describe("Plan Tool", () => {
           text: `phase-${callIdx}-output`,
           sessionId: `session-${callIdx}`,
           agentName: params.agent.name,
-        } as SubagentResult & { _tag: "success" })
+        } as AgentRunResult & { _tag: "success" })
       },
     })
 
@@ -91,7 +91,7 @@ describe("Plan Tool", () => {
   it.live("includes context and files in plan prompt", () => {
     const calls: Array<{ prompt: string }> = []
 
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         calls.push({ prompt: params.prompt })
         return Effect.succeed({
@@ -99,7 +99,7 @@ describe("Plan Tool", () => {
           text: "output",
           sessionId: "s1",
           agentName: params.agent.name,
-        } as SubagentResult & { _tag: "success" })
+        } as AgentRunResult & { _tag: "success" })
       },
     })
 
@@ -131,14 +131,14 @@ describe("Plan Tool", () => {
   })
 
   it.live("returns rejected when user rejects plan", () => {
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) =>
         Effect.succeed({
           _tag: "success" as const,
           text: "output",
           sessionId: "s1",
           agentName: params.agent.name,
-        } as SubagentResult & { _tag: "success" }),
+        } as AgentRunResult & { _tag: "success" }),
     })
 
     const layer = Layer.mergeAll(
@@ -162,7 +162,7 @@ describe("Plan Tool", () => {
   it.live("uses different models for adversarial planning", () => {
     const models: string[] = []
 
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         if (params.overrides?.modelId !== undefined) {
           models.push(params.overrides.modelId)
@@ -172,7 +172,7 @@ describe("Plan Tool", () => {
           text: "output",
           sessionId: "s1",
           agentName: params.agent.name,
-        } as SubagentResult & { _tag: "success" })
+        } as AgentRunResult & { _tag: "success" })
       },
     })
 
@@ -199,7 +199,7 @@ describe("Plan Tool", () => {
   it.live("fix mode runs single plan+execute cycle", () => {
     const calls: string[] = []
 
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) =>
         Effect.sync(() => {
           calls.push(params.prompt)
@@ -213,7 +213,7 @@ describe("Plan Tool", () => {
               text: "Batch 1: update auth\n- Files: src/auth.ts\n- Changes: add validation",
               sessionId: "synth-session",
               agentName: params.agent.name,
-            } as SubagentResult & { _tag: "success" }
+            } as AgentRunResult & { _tag: "success" }
           }
           if (params.prompt.includes("Execute this implementation plan")) {
             return {
@@ -221,14 +221,14 @@ describe("Plan Tool", () => {
               text: "Executed batch 1 successfully.",
               sessionId: "exec-session",
               agentName: params.agent.name,
-            } as SubagentResult & { _tag: "success" }
+            } as AgentRunResult & { _tag: "success" }
           }
           return {
             _tag: "success" as const,
             text: "ok",
             sessionId: "s1",
             agentName: params.agent.name,
-          } as SubagentResult & { _tag: "success" }
+          } as AgentRunResult & { _tag: "success" }
         }),
     })
 

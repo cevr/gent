@@ -1,9 +1,5 @@
 import { Effect, Schema } from "effect"
-import {
-  SubagentRunnerService,
-  type SubagentRunner,
-  type AgentDefinition,
-} from "../domain/agent.js"
+import { AgentRunnerService, type AgentRunner, type AgentDefinition } from "../domain/agent.js"
 import { requireAgent, ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
@@ -118,7 +114,7 @@ const buildExecutePrompt = (plan: string) =>
   ].join("\n")
 
 const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
-  runner: SubagentRunner
+  runner: AgentRunner
   architect: AgentDefinition
   runnerContext: WorkflowRunContext
   mode: "plan-only" | "fix"
@@ -206,7 +202,7 @@ export const PlanTool = defineTool({
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,
   execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolContext) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const presenter = yield* PromptPresenter
     const platform = yield* RuntimePlatform
 

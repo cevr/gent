@@ -226,7 +226,7 @@ export const DEFAULT_MODEL_ID = "openai/gpt-5.4-mini" as ModelId
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
-// Agent Execution Overrides — per-run overrides for subagent dispatch
+// Agent Execution Overrides — per-run overrides for agent dispatch
 
 export interface AgentExecutionOverrides {
   readonly modelId?: ModelId
@@ -241,33 +241,44 @@ export interface AgentExecutionOverrides {
   readonly additionalTools?: ReadonlyArray<AnyToolDefinition>
 }
 
+export const AgentExecutionOverridesSchema = Schema.Struct({
+  modelId: Schema.optional(ModelId),
+  allowedActions: Schema.optional(Schema.Array(ToolAction)),
+  allowedTools: Schema.optional(Schema.Array(Schema.String)),
+  deniedTools: Schema.optional(Schema.Array(Schema.String)),
+  reasoningEffort: Schema.optional(ReasoningEffort),
+  systemPromptAddendum: Schema.optional(Schema.String),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+})
+export type AgentExecutionOverridesSchema = typeof AgentExecutionOverridesSchema.Type
+
 export type BuiltinAgentName = keyof typeof Agents
 
 // Agent run depth
 
 /**
- * Maximum session nesting depth for subagent spawns. Derived from the persisted
+ * Maximum session nesting depth for agent-run spawns. Derived from the persisted
  * parent chain (includes both subagent spawns and handoff sessions). A depth of 3
  * means root → child → grandchild → great-grandchild is blocked.
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
 
-// Subagent runner types
+// Agent runner types
 
-export interface SubagentToolCall {
+export interface AgentRunToolCall {
   toolName: string
   args: Record<string, unknown>
   isError: boolean
 }
 
-export type SubagentResult =
+export type AgentRunResult =
   | {
       _tag: "success"
       text: string
       sessionId: SessionId
       agentName: AgentName
       usage?: { input: number; output: number; cost?: number }
-      toolCalls?: ReadonlyArray<SubagentToolCall>
+      toolCalls?: ReadonlyArray<AgentRunToolCall>
     }
   | {
       _tag: "error"
@@ -276,12 +287,12 @@ export type SubagentResult =
       agentName?: AgentName
     }
 
-export class SubagentError extends Schema.TaggedErrorClass<SubagentError>()("SubagentError", {
+export class AgentRunError extends Schema.TaggedErrorClass<AgentRunError>()("AgentRunError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-export interface SubagentRunner {
+export interface AgentRunner {
   readonly run: (params: {
     agent: AgentDefinition
     prompt: string
@@ -290,10 +301,9 @@ export interface SubagentRunner {
     toolCallId?: ToolCallId
     cwd: string
     overrides?: AgentExecutionOverrides
-  }) => EffectNs.Effect<SubagentResult, SubagentError>
+  }) => EffectNs.Effect<AgentRunResult, AgentRunError>
 }
 
-export class SubagentRunnerService extends ServiceMap.Service<
-  SubagentRunnerService,
-  SubagentRunner
->()("@gent/core/src/domain/agent/SubagentRunnerService") {}
+export class AgentRunnerService extends ServiceMap.Service<AgentRunnerService, AgentRunner>()(
+  "@gent/core/src/domain/agent/AgentRunnerService",
+) {}

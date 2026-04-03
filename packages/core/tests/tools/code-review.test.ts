@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { CodeReviewTool } from "@gent/core/tools/code-review"
-import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
+import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
 import { EventStore } from "@gent/core/domain/event"
@@ -41,7 +41,7 @@ describe("CodeReviewTool", () => {
   it.live("passes description to runner", () => {
     let capturedPrompt = ""
     const capturedOverrides: Array<Record<string, unknown> | undefined> = []
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+    const capturingRunner = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         capturedPrompt = params.prompt
         capturedOverrides.push(params.overrides as Record<string, unknown> | undefined)
@@ -80,7 +80,7 @@ describe("CodeReviewTool", () => {
         text: "Missing null check",
       },
     ])
-    const runner = Layer.succeed(SubagentRunnerService, {
+    const runner = Layer.succeed(AgentRunnerService, {
       run: () =>
         Effect.succeed({
           _tag: "success" as const,
@@ -101,7 +101,7 @@ describe("CodeReviewTool", () => {
   })
 
   it.live("falls back to raw text on parse failure", () => {
-    const runner = Layer.succeed(SubagentRunnerService, {
+    const runner = Layer.succeed(AgentRunnerService, {
       run: () =>
         Effect.succeed({
           _tag: "success" as const,
@@ -122,7 +122,7 @@ describe("CodeReviewTool", () => {
 
   it.live("fix mode runs single review+execute cycle", () => {
     const prompts: string[] = []
-    const runner = Layer.succeed(SubagentRunnerService, {
+    const runner = Layer.succeed(AgentRunnerService, {
       run: (params) =>
         Effect.sync(() => {
           prompts.push(params.prompt)
@@ -182,7 +182,7 @@ describe("CodeReviewTool", () => {
     const jsonOutput = JSON.stringify([
       { file: "a.ts", severity: "low", type: "style", text: "minor" },
     ])
-    const runner = Layer.succeed(SubagentRunnerService, {
+    const runner = Layer.succeed(AgentRunnerService, {
       run: () =>
         Effect.succeed({
           _tag: "success" as const,

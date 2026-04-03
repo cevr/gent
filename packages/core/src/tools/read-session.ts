@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { SubagentRunnerService } from "../domain/agent.js"
+import { AgentRunnerService } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { headTailChars } from "../domain/output-buffer.js"
 import type { Message, MessagePart, Branch } from "../domain/message.js"
@@ -137,7 +137,7 @@ export const ReadSessionTool = defineTool({
 
     // If goal provided, use AI extraction
     if (params.goal !== undefined) {
-      const runner = yield* SubagentRunnerService
+      const runner = yield* AgentRunnerService
       const platform = yield* RuntimePlatform
 
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`

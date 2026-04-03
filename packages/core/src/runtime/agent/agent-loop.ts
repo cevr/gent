@@ -16,22 +16,19 @@ import {
 import {
   type AnyInspectionEvent,
   combineInspectors,
-  Event,
   InspectorService,
   Machine,
-  State,
   makeInspectorEffect,
   tracingInspector,
 } from "effect-machine"
 import {
   AgentDefinition,
   AgentName,
-  ReasoningEffort,
+  AgentRunError,
   resolveAgentModel,
-  SubagentError,
+  type AgentExecutionOverrides,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
-import type { ModelId } from "../../domain/model.js"
 import { type QueueSnapshot } from "../../domain/queue.js"
 import {
   EventStore,
@@ -48,8 +45,6 @@ import {
   TurnCompleted,
   TurnRecoveryApplied,
   MachineInspected,
-  MachineTaskFailed,
-  MachineTaskSucceeded,
   type AgentEvent,
 } from "../../domain/event.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
@@ -62,7 +57,6 @@ import { Storage, type StorageError, type StorageService } from "../../storage/s
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import {
   Provider,
-  type FinishChunk,
   type ProviderError,
   type ProviderService,
   type StreamChunk as ProviderStreamChunk,
@@ -206,6 +200,7 @@ const persistAssistantText = (params: {
 
 const resolveTurnContext = (params: {
   agentOverride?: AgentNameType
+  executionOverrides?: AgentExecutionOverrides
   currentAgent?: AgentNameType
   storage: StorageService
   branchId: BranchId
@@ -234,11 +229,17 @@ const resolveTurnContext = (params: {
         .pipe(Effect.orDie)
       return undefined
     }
+    const effectiveAgent = applyAgentOverrides(agent, params.executionOverrides)
 
     // Run context.messages interceptor — extensions can inject hidden context or filter messages
     const interceptedMessages = yield* params.extensionRegistry.hooks.runInterceptor(
       "context.messages",
-      { messages: rawMessages, agent, sessionId: params.sessionId, branchId: params.branchId },
+      {
+        messages: rawMessages,
+        agent: effectiveAgent,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+      },
       (input) => Effect.succeed(input.messages),
     )
 
@@ -256,21 +257,27 @@ const resolveTurnContext = (params: {
     // Resolve tools + extension prompt sections via ToolPolicy compiler
     const { tools, promptSections: extensionSections } =
       yield* params.extensionRegistry.resolveToolPolicy(
-        agent,
+        effectiveAgent,
         {
           sessionId: params.sessionId,
           branchId: params.branchId,
           agentName: currentAgent,
           interactive: params.interactive,
+          tags: params.executionOverrides?.tags,
         },
         extensionProjections,
       )
 
     // Build tool-aware prompt, then run through prompt.system interceptor
-    const turnPrompt = buildTurnPrompt(params.baseSections, agent, tools, extensionSections)
+    const turnPrompt = buildTurnPrompt(
+      params.baseSections,
+      effectiveAgent,
+      tools,
+      extensionSections,
+    )
     const systemPrompt = yield* params.extensionRegistry.hooks.runInterceptor(
       "prompt.system",
-      { basePrompt: turnPrompt, agent, interactive: params.interactive },
+      { basePrompt: turnPrompt, agent: effectiveAgent, interactive: params.interactive },
       (input) => Effect.succeed(input.basePrompt),
     )
     const session = yield* params.storage
@@ -280,12 +287,12 @@ const resolveTurnContext = (params: {
     return {
       currentTurnAgent: currentAgent,
       messages,
-      agent,
+      agent: effectiveAgent,
       tools,
       systemPrompt,
-      modelId: resolveAgentModel(agent),
-      reasoning: resolveReasoning(agent, session?.reasoningLevel),
-      temperature: agent.temperature,
+      modelId: params.executionOverrides?.modelId ?? resolveAgentModel(effectiveAgent),
+      reasoning: resolveReasoning(effectiveAgent, session?.reasoningLevel),
+      temperature: effectiveAgent.temperature,
     }
   })
 
@@ -506,6 +513,7 @@ const executeToolCalls = (params: {
 export const resolveTurnPhase = (params: {
   message: Message
   agentOverride?: AgentNameType
+  executionOverrides?: AgentExecutionOverrides
   currentAgent?: AgentNameType
   storage: StorageService
   branchId: BranchId
@@ -514,6 +522,7 @@ export const resolveTurnPhase = (params: {
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
+  interactive?: boolean
 }) =>
   Effect.gen(function* () {
     const existing = yield* params.storage.getMessage(params.message.id)
@@ -939,39 +948,47 @@ const resolveStoredAgent = (params: {
     return Schema.is(AgentName)(raw) ? raw : "cowork"
   })
 
-const applyAgentOverrides = (agent: AgentDefinition, input: AgentRunInput): AgentDefinition => {
-  if (
-    input.overrideAllowedActions === undefined &&
-    input.overrideAllowedTools === undefined &&
-    input.overrideDeniedTools === undefined &&
-    input.overrideReasoningEffort === undefined &&
-    input.overrideSystemPromptAddendum === undefined
-  ) {
+const hasAgentOverrides = (overrides: AgentExecutionOverrides | undefined) =>
+  overrides?.allowedActions !== undefined ||
+  overrides?.allowedTools !== undefined ||
+  overrides?.deniedTools !== undefined ||
+  overrides?.reasoningEffort !== undefined ||
+  overrides?.systemPromptAddendum !== undefined
+
+const mergeSystemPromptAddendum = (
+  base: string | undefined,
+  addendum: string | undefined,
+): string | undefined => {
+  if (addendum === undefined) return base
+  return base !== undefined ? `${base}\n\n${addendum}` : addendum
+}
+
+const applyAgentOverrides = (
+  agent: AgentDefinition,
+  overrides: AgentExecutionOverrides | undefined,
+): AgentDefinition => {
+  if (!hasAgentOverrides(overrides)) {
     return agent
   }
 
+  const systemPromptAddendum = mergeSystemPromptAddendum(
+    agent.systemPromptAddendum,
+    overrides?.systemPromptAddendum,
+  )
+
   return new AgentDefinition({
     ...agent,
-    ...(input.overrideAllowedActions !== undefined
+    ...(overrides?.allowedActions !== undefined
       ? {
-          allowedActions: input.overrideAllowedActions as ReadonlyArray<ToolAction>,
+          allowedActions: overrides.allowedActions as ReadonlyArray<ToolAction>,
         }
       : {}),
-    ...(input.overrideAllowedTools !== undefined
-      ? { allowedTools: input.overrideAllowedTools }
+    ...(overrides?.allowedTools !== undefined ? { allowedTools: overrides.allowedTools } : {}),
+    ...(overrides?.deniedTools !== undefined ? { deniedTools: overrides.deniedTools } : {}),
+    ...(overrides?.reasoningEffort !== undefined
+      ? { reasoningEffort: overrides.reasoningEffort }
       : {}),
-    ...(input.overrideDeniedTools !== undefined ? { deniedTools: input.overrideDeniedTools } : {}),
-    ...(input.overrideReasoningEffort !== undefined
-      ? { reasoningEffort: input.overrideReasoningEffort }
-      : {}),
-    ...(input.overrideSystemPromptAddendum !== undefined
-      ? {
-          systemPromptAddendum:
-            agent.systemPromptAddendum !== undefined
-              ? `${agent.systemPromptAddendum}\n\n${input.overrideSystemPromptAddendum}`
-              : input.overrideSystemPromptAddendum,
-        }
-      : {}),
+    ...(systemPromptAddendum !== agent.systemPromptAddendum ? { systemPromptAddendum } : {}),
   })
 }
 
@@ -1126,13 +1143,29 @@ const makeRecoveryDecision = (params: {
 // Agent Loop Service
 
 export interface AgentLoopService {
+  readonly runOnce: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+    agentName: AgentNameType
+    prompt: string
+    interactive?: boolean
+    overrides?: AgentExecutionOverrides
+  }) => Effect.Effect<void, AgentRunError>
   readonly submit: (
     message: Message,
-    options?: { agentOverride?: AgentNameType },
+    options?: {
+      agentOverride?: AgentNameType
+      executionOverrides?: AgentExecutionOverrides
+      interactive?: boolean
+    },
   ) => Effect.Effect<void, AgentLoopError>
   readonly run: (
     message: Message,
-    options?: { agentOverride?: AgentNameType },
+    options?: {
+      agentOverride?: AgentNameType
+      executionOverrides?: AgentExecutionOverrides
+      interactive?: boolean
+    },
   ) => Effect.Effect<void, AgentLoopError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void>
   readonly followUp: (message: Message) => Effect.Effect<void, AgentLoopError>
@@ -1333,6 +1366,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 const resolved = yield* resolveTurnPhase({
                   message: state.message,
                   agentOverride: state.agentOverride,
+                  executionOverrides: state.executionOverrides,
                   currentAgent: state.currentAgent,
                   storage,
                   branchId,
@@ -1341,6 +1375,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   sessionId,
                   publishEvent: publishEventOrDie,
                   baseSections: config.baseSections,
+                  interactive: state.interactive,
                 })
                 if (resolved === undefined) break
 
@@ -1542,6 +1577,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,
+                    executionOverrides: state.executionOverrides,
+                    interactive: state.interactive,
                   })
                 }),
               )
@@ -1554,6 +1591,8 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,
+                    executionOverrides: state.executionOverrides,
+                    interactive: state.interactive,
                   }),
               )
               // Running task — the agentic loop
@@ -1710,19 +1749,91 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
           return yield* getLoop(sessionId, branchId)
         })
 
+        const buildQueuedTurnItem = (
+          message: Message,
+          options?:
+            | {
+                agentOverride?: AgentNameType
+                executionOverrides?: AgentExecutionOverrides
+                interactive?: boolean
+              }
+            | undefined,
+        ): QueuedTurnItem => ({
+          message,
+          ...(options?.agentOverride !== undefined ? { agentOverride: options.agentOverride } : {}),
+          ...(options?.executionOverrides !== undefined
+            ? { executionOverrides: options.executionOverrides }
+            : {}),
+          ...(options?.interactive !== undefined ? { interactive: options.interactive } : {}),
+        })
+
         const service: AgentLoopService = {
+          runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
+            const userMessage = new Message({
+              id: Bun.randomUUIDv7() as MessageId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              role: "user",
+              parts: [new TextPart({ type: "text", text: input.prompt })],
+              createdAt: yield* DateTime.nowAsDate,
+            })
+
+            yield* storage.createMessage(userMessage).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AgentRunError({
+                    message: `Failed to create user message for ${input.sessionId}`,
+                    cause,
+                  }),
+              ),
+            )
+            yield* eventStore
+              .publish(
+                new MessageReceived({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  messageId: userMessage.id,
+                  role: "user",
+                }),
+              )
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AgentRunError({
+                      message: `Failed to publish MessageReceived for ${input.sessionId}`,
+                      cause,
+                    }),
+                ),
+              )
+
+            return yield* service
+              .run(userMessage, {
+                agentOverride: input.agentName,
+                ...(input.overrides !== undefined ? { executionOverrides: input.overrides } : {}),
+                ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AgentRunError({
+                      message: cause.message,
+                      cause,
+                    }),
+                ),
+              )
+          }),
+
           submit: Effect.fn("AgentLoop.submit")(function* (
             message: Message,
-            options?: { agentOverride?: AgentNameType },
+            options?: {
+              agentOverride?: AgentNameType
+              executionOverrides?: AgentExecutionOverrides
+              interactive?: boolean
+            },
           ) {
             const loop = yield* getLoop(message.sessionId, message.branchId)
             const initialState = yield* loop.actor.snapshot
-            const item: QueuedTurnItem = {
-              message,
-              ...(options?.agentOverride !== undefined
-                ? { agentOverride: options.agentOverride }
-                : {}),
-            }
+            const item = buildQueuedTurnItem(message, options)
 
             if (initialState._tag !== "Idle") {
               yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))
@@ -1734,16 +1845,15 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
           run: Effect.fn("AgentLoop.run")(function* (
             message: Message,
-            options?: { agentOverride?: AgentNameType },
+            options?: {
+              agentOverride?: AgentNameType
+              executionOverrides?: AgentExecutionOverrides
+              interactive?: boolean
+            },
           ) {
             const loop = yield* getLoop(message.sessionId, message.branchId)
             const initialState = yield* loop.actor.snapshot
-            const item: QueuedTurnItem = {
-              message,
-              ...(options?.agentOverride !== undefined
-                ? { agentOverride: options.agentOverride }
-                : {}),
-            }
+            const item = buildQueuedTurnItem(message, options)
 
             if (initialState._tag !== "Idle") {
               yield* loop.actor.call(AgentLoopEvent.QueueFollowUp({ item }))
@@ -1887,6 +1997,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
 
   static Test = (): Layer.Layer<AgentLoop> =>
     Layer.succeed(AgentLoop, {
+      runOnce: () => Effect.void,
       submit: () => Effect.void,
       run: () => Effect.void,
       steer: () => Effect.void,
@@ -1905,436 +2016,4 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         }),
       toRuntimeState: runtimeStateFromLoopState,
     })
-}
-
-// ============================================================================
-// Agent Actor (subagent runner)
-// ============================================================================
-
-const AgentRunInputFields = {
-  sessionId: SessionId,
-  branchId: BranchId,
-  agentName: AgentName,
-  prompt: Schema.String,
-  systemPrompt: Schema.String,
-  interactive: Schema.optional(Schema.Boolean),
-  modelId: Schema.optional(Schema.String),
-  overrideAllowedActions: Schema.optional(Schema.Array(Schema.String)),
-  overrideAllowedTools: Schema.optional(Schema.Array(Schema.String)),
-  overrideDeniedTools: Schema.optional(Schema.Array(Schema.String)),
-  overrideReasoningEffort: Schema.optional(ReasoningEffort),
-  overrideSystemPromptAddendum: Schema.optional(Schema.String),
-  tags: Schema.optional(Schema.Array(Schema.String)),
-}
-
-const AgentRunInputSchema = Schema.Struct(AgentRunInputFields)
-
-export type AgentRunInput = typeof AgentRunInputSchema.Type
-
-const AgentActorState = State({
-  Idle: {},
-  Running: { input: AgentRunInputSchema },
-  Completed: {},
-  Failed: { error: Schema.String },
-})
-
-const AgentActorEvent = Event({
-  Start: { input: AgentRunInputSchema },
-  Succeeded: {},
-  Failed: { error: Schema.String },
-})
-
-const makeAgentMachine = (run: (input: AgentRunInput) => Effect.Effect<void, SubagentError>) =>
-  Machine.make({
-    state: AgentActorState,
-    event: AgentActorEvent,
-    initial: AgentActorState.Idle,
-  })
-    .on(AgentActorState.Idle, AgentActorEvent.Start, ({ event }) =>
-      AgentActorState.Running({ input: event.input }),
-    )
-    .on(AgentActorState.Running, AgentActorEvent.Succeeded, () => AgentActorState.Completed)
-    .on(AgentActorState.Running, AgentActorEvent.Failed, ({ event }) =>
-      AgentActorState.Failed({ error: event.error }),
-    )
-    .task(AgentActorState.Running, ({ state }) => run(state.input), {
-      name: "run",
-      onSuccess: () => AgentActorEvent.Succeeded,
-      onFailure: (cause) => AgentActorEvent.Failed({ error: Cause.pretty(cause) }),
-    })
-    .final(AgentActorState.Completed)
-    .final(AgentActorState.Failed)
-
-export interface AgentActorService {
-  readonly run: (input: AgentRunInput) => Effect.Effect<void, SubagentError>
-}
-
-export class AgentActor extends ServiceMap.Service<AgentActor, AgentActorService>()(
-  "@gent/core/src/runtime/agent/agent-loop/AgentActor",
-) {
-  static Live = (config?: {
-    baseSections?: ReadonlyArray<PromptSection>
-  }): Layer.Layer<
-    AgentActor,
-    never,
-    Storage | Provider | ExtensionRegistry | EventStore | ToolRunner
-  > =>
-    Layer.effect(
-      AgentActor,
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const provider = yield* Provider
-        const extensionRegistry = yield* ExtensionRegistry
-        const eventStore = yield* EventStore
-        const toolRunner = yield* ToolRunner
-        const bashSemaphore = yield* Semaphore.make(1)
-
-        const actorIdFor = (input: AgentRunInput) => `agent-${input.sessionId}-${input.branchId}`
-
-        const publishMachineTaskSucceeded = Effect.fn("AgentActor.publishMachineTaskSucceeded")(
-          function* (input: AgentRunInput) {
-            yield* eventStore
-              .publish(
-                new MachineTaskSucceeded({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  actorId: actorIdFor(input),
-                  stateTag: "Running",
-                }),
-              )
-              .pipe(
-                Effect.catchEager((e) =>
-                  Effect.logWarning("failed to publish MachineTaskSucceeded").pipe(
-                    Effect.annotateLogs({ error: String(e) }),
-                  ),
-                ),
-              )
-          },
-        )
-
-        const publishMachineTaskFailed = Effect.fn("AgentActor.publishMachineTaskFailed")(
-          function* (input: AgentRunInput, cause: Cause.Cause<unknown>) {
-            const error = Cause.pretty(cause)
-            yield* eventStore
-              .publish(
-                new MachineTaskFailed({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  actorId: actorIdFor(input),
-                  stateTag: "Running",
-                  error,
-                }),
-              )
-              .pipe(
-                Effect.catchEager((e) =>
-                  Effect.logWarning("failed to publish MachineTaskFailed").pipe(
-                    Effect.annotateLogs({ error: String(e) }),
-                  ),
-                ),
-              )
-          },
-        )
-
-        const runEffect: (input: AgentRunInput) => Effect.Effect<void, SubagentError> = Effect.fn(
-          "AgentActor.runEffect",
-        )((input: AgentRunInput) =>
-          Effect.gen(function* () {
-            const agent = yield* extensionRegistry.getAgent(input.agentName)
-            if (agent === undefined) {
-              yield* eventStore.publish(
-                new ErrorOccurred({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  error: `Unknown agent: ${input.agentName}`,
-                }),
-              )
-              return yield* new SubagentError({ message: `Unknown agent: ${input.agentName}` })
-            }
-
-            const effectiveAgent = applyAgentOverrides(agent, input)
-
-            const { tools, promptSections: extensionSections } =
-              yield* extensionRegistry.resolveToolPolicy(
-                effectiveAgent,
-                {
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  agentName: input.agentName,
-                  tags: input.tags,
-                },
-                [],
-              )
-
-            // Use structured sections from AgentActor config when available,
-            // falling back to wrapping the flat systemPrompt string
-            const baseSections: ReadonlyArray<PromptSection> = config?.baseSections ?? [
-              { id: "base", content: input.systemPrompt, priority: 0 },
-            ]
-            const turnPrompt = buildTurnPrompt(
-              baseSections,
-              effectiveAgent,
-              tools,
-              extensionSections,
-            )
-            const basePrompt = yield* extensionRegistry.hooks.runInterceptor(
-              "prompt.system",
-              { basePrompt: turnPrompt, agent: effectiveAgent, interactive: input.interactive },
-              (i) => Effect.succeed(i.basePrompt),
-            )
-
-            const userMessage = new Message({
-              id: Bun.randomUUIDv7() as MessageId,
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              role: "user",
-              parts: [new TextPart({ type: "text", text: input.prompt })],
-              createdAt: yield* DateTime.nowAsDate,
-            })
-
-            yield* storage.createMessage(userMessage)
-            yield* eventStore.publish(
-              new MessageReceived({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                messageId: userMessage.id,
-                role: "user",
-              }),
-            )
-
-            const messages: Message[] = [userMessage]
-            let continueLoop = true
-
-            while (continueLoop) {
-              yield* eventStore.publish(
-                new StreamStarted({ sessionId: input.sessionId, branchId: input.branchId }),
-              )
-
-              const modelId = (input.modelId as ModelId | undefined) ?? resolveAgentModel(agent)
-              const reasoning = resolveReasoning(effectiveAgent)
-              const streamEffect = yield* withRetry(
-                provider.stream({
-                  model: modelId,
-                  messages: [...messages],
-                  tools: [...tools],
-                  systemPrompt: basePrompt,
-                  ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
-                  ...(reasoning !== undefined ? { reasoning } : {}),
-                }),
-                undefined,
-                {
-                  onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-                    eventStore
-                      .publish(
-                        new ProviderRetrying({
-                          sessionId: input.sessionId,
-                          branchId: input.branchId,
-                          attempt,
-                          maxAttempts,
-                          delayMs,
-                          error: error.message,
-                        }),
-                      )
-                      .pipe(Effect.orDie),
-                },
-              ).pipe(Effect.withSpan("AgentActor.provider.stream"))
-
-              const textParts: string[] = []
-              const reasoningParts: string[] = []
-              const toolCalls: ToolCallPart[] = []
-              let lastFinishChunk: FinishChunk | undefined
-
-              yield* Stream.runForEach(streamEffect, (chunk) =>
-                Effect.gen(function* () {
-                  if (chunk._tag === "TextChunk") {
-                    textParts.push(chunk.text)
-                    yield* eventStore.publish(
-                      new EventStreamChunk({
-                        sessionId: input.sessionId,
-                        branchId: input.branchId,
-                        chunk: chunk.text,
-                      }),
-                    )
-                  } else if (chunk._tag === "ReasoningChunk") {
-                    reasoningParts.push(chunk.text)
-                  } else if (chunk._tag === "ToolCallChunk") {
-                    const toolCall = new ToolCallPart({
-                      type: "tool-call",
-                      toolCallId: chunk.toolCallId,
-                      toolName: chunk.toolName,
-                      input: chunk.input,
-                    })
-                    toolCalls.push(toolCall)
-                  } else if (chunk._tag === "FinishChunk") {
-                    lastFinishChunk = chunk
-                  }
-                }),
-              )
-
-              yield* eventStore.publish(
-                new StreamEnded({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  usage: lastFinishChunk?.usage,
-                }),
-              )
-
-              const assistantParts: Array<TextPart | ReasoningPart | ToolCallPart> = []
-              const reasoningText = reasoningParts.join("")
-              if (reasoningText !== "") {
-                assistantParts.push(new ReasoningPart({ type: "reasoning", text: reasoningText }))
-              }
-              const fullText = textParts.join("")
-              if (fullText !== "") {
-                assistantParts.push(new TextPart({ type: "text", text: fullText }))
-              }
-              assistantParts.push(...toolCalls)
-
-              const assistantMessage = new Message({
-                id: Bun.randomUUIDv7() as MessageId,
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                role: "assistant",
-                parts: assistantParts,
-                createdAt: yield* DateTime.nowAsDate,
-              })
-
-              yield* storage.createMessage(assistantMessage)
-              yield* eventStore.publish(
-                new MessageReceived({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  messageId: assistantMessage.id,
-                  role: "assistant",
-                }),
-              )
-
-              if (toolCalls.length > 0) {
-                const toolResults = yield* Effect.forEach(
-                  toolCalls,
-                  (toolCall) =>
-                    Effect.gen(function* () {
-                      yield* eventStore.publish(
-                        new ToolCallStarted({
-                          sessionId: input.sessionId,
-                          branchId: input.branchId,
-                          toolCallId: toolCall.toolCallId,
-                          toolName: toolCall.toolName,
-                          input: toolCall.input,
-                        }),
-                      )
-
-                      const tool = yield* extensionRegistry.getTool(toolCall.toolName)
-                      const ctx: ToolContext = {
-                        sessionId: input.sessionId,
-                        branchId: input.branchId,
-                        toolCallId: toolCall.toolCallId,
-                        agentName: agent.name,
-                      }
-                      const run = toolRunner.run(toolCall, ctx)
-                      const result = yield* tool?.concurrency === "serial"
-                        ? Effect.withSpan("AgentActor.bashSemaphore")(
-                            bashSemaphore.withPermits(1)(run),
-                          )
-                        : run
-
-                      const outputSummary = summarizeToolOutput(result)
-                      const isError = result.output.type === "error-json"
-                      const toolCallFields = {
-                        sessionId: input.sessionId,
-                        branchId: input.branchId,
-                        toolCallId: toolCall.toolCallId,
-                        toolName: toolCall.toolName,
-                        summary: outputSummary,
-                        output: stringifyOutput(result.output.value),
-                      }
-                      yield* eventStore.publish(
-                        isError
-                          ? new ToolCallFailed(toolCallFields)
-                          : new ToolCallSucceeded(toolCallFields),
-                      )
-
-                      return result
-                    }),
-                  { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
-                )
-
-                const toolResultMessage = new Message({
-                  id: Bun.randomUUIDv7() as MessageId,
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  role: "tool",
-                  parts: toolResults,
-                  createdAt: yield* DateTime.nowAsDate,
-                })
-                yield* storage.createMessage(toolResultMessage)
-                messages.push(toolResultMessage)
-                continueLoop = true
-              } else {
-                continueLoop = false
-              }
-            }
-          }).pipe(
-            Effect.tap(() => publishMachineTaskSucceeded(input)),
-            Effect.tapCause((cause) =>
-              Cause.hasInterruptsOnly(cause) ? Effect.void : publishMachineTaskFailed(input, cause),
-            ),
-            Effect.tapCause((cause) =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.void
-                : eventStore
-                    .publish(
-                      new ErrorOccurred({
-                        sessionId: input.sessionId,
-                        branchId: input.branchId,
-                        error: Cause.pretty(cause),
-                      }),
-                    )
-                    .pipe(
-                      Effect.catchEager((e) =>
-                        Effect.logWarning("failed to publish ErrorOccurred event").pipe(
-                          Effect.annotateLogs({ error: String(e) }),
-                        ),
-                      ),
-                    ),
-            ),
-            Effect.catchCause((cause) =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.interrupt
-                : Effect.fail(new SubagentError({ message: Cause.pretty(cause), cause })),
-            ),
-          ),
-        )
-
-        const run: AgentActorService["run"] = Effect.fn("AgentActor.run")((input) =>
-          Effect.gen(function* () {
-            const inspector = makePublishingInspector({
-              publishEvent: (event) => eventStore.publish(event).pipe(Effect.orDie),
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-            })
-
-            const actorId = actorIdFor(input)
-            const actor = yield* Machine.spawn(makeAgentMachine(runEffect), actorId).pipe(
-              Effect.provideService(InspectorService, inspector),
-              Effect.mapError((error) =>
-                Schema.is(SubagentError)(error)
-                  ? error
-                  : new SubagentError({ message: String(error), cause: error }),
-              ),
-            )
-            yield* actor.start
-
-            const terminal = yield* actor.sendAndWait(AgentActorEvent.Start({ input }))
-
-            yield* actor.stop
-
-            if (terminal._tag === "Failed") {
-              return yield* new SubagentError({ message: terminal.error })
-            }
-          }),
-        )
-
-        return AgentActor.of({ run })
-      }),
-    )
 }

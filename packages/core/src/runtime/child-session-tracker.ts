@@ -1,7 +1,7 @@
 /**
  * Framework-agnostic child session tracking service.
  *
- * Listens for SubagentSpawned/Succeeded/Failed on a parent event stream,
+ * Listens for AgentRunSpawned/Succeeded/Failed on a parent event stream,
  * opens per-child event subscriptions, and tracks child tool call state.
  * Live-only — replays events from EventStore subscription, no durable bootstrap.
  */
@@ -123,7 +123,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
     const handleParentEvent = (event: AgentEvent) =>
       Effect.gen(function* () {
         switch (event._tag) {
-          case "SubagentSpawned": {
+          case "AgentRunSpawned": {
             const childId = event.childSessionId as string
             const toolCallId = event.toolCallId
             if (toolCallId === undefined) return
@@ -145,7 +145,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             break
           }
 
-          case "SubagentSucceeded": {
+          case "AgentRunSucceeded": {
             const childId = event.childSessionId as string
             const current = yield* Ref.get(entries)
             const entry = current.get(childId)
@@ -157,7 +157,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             break
           }
 
-          case "SubagentFailed": {
+          case "AgentRunFailed": {
             const childId = event.childSessionId as string
             const current = yield* Ref.get(entries)
             const entry = current.get(childId)

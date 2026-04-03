@@ -2,7 +2,6 @@ export {
   AgentLoop,
   AgentLoopError,
   SteerCommand,
-  AgentActor,
   InProcessRunner,
   SubprocessRunner,
   ToolRunner,
@@ -52,7 +51,7 @@ export {
   toolBoundary,
   providerStreamBoundary,
   rpcBoundary,
-  subagentBoundary,
+  agentRunBoundary,
   ToolError,
   ToolWarning,
 } from "./wide-event-boundary"

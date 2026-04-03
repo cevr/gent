@@ -13,9 +13,9 @@ import {
   TaskFailed,
   TaskStopped,
   TaskDeleted,
-  type SubagentSpawned,
+  type AgentRunSpawned,
 } from "../domain/event.js"
-import { SubagentRunnerService, type AgentName } from "../domain/agent.js"
+import { AgentRunnerService, type AgentName } from "../domain/agent.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import type { TaskId, SessionId, BranchId, ToolCallId } from "../domain/ids.js"
@@ -222,9 +222,9 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
           // Status already set to in_progress by run() before forking
           const parentSessionId = task.sessionId
           const parentBranchId = task.branchId
-          const runnerOpt = yield* Effect.serviceOption(SubagentRunnerService)
+          const runnerOpt = yield* Effect.serviceOption(AgentRunnerService)
           if (runnerOpt._tag === "None") {
-            const error = "SubagentRunnerService not available"
+            const error = "AgentRunnerService not available"
             yield* storage
               .updateTask(taskId, {
                 status: "failed",
@@ -256,12 +256,12 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
             .pipe(
               Stream.filter(
                 (env) =>
-                  env.event._tag === "SubagentSpawned" &&
-                  (env.event as SubagentSpawned).toolCallId === taskToolCallId,
+                  env.event._tag === "AgentRunSpawned" &&
+                  (env.event as AgentRunSpawned).toolCallId === taskToolCallId,
               ),
               Stream.take(1),
               Stream.runForEach((env) => {
-                const spawned = env.event as SubagentSpawned
+                const spawned = env.event as AgentRunSpawned
                 return Effect.gen(function* () {
                   // Store child sessionId immediately
                   yield* storage
@@ -306,7 +306,7 @@ export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>
 
           const childCaptureFiber = yield* Effect.forkChild(captureAndTrack)
 
-          // Run subagent — toolCallId correlates SubagentSpawned to this specific task
+          // Run subagent — toolCallId correlates AgentRunSpawned to this specific task
           const result = yield* runner.run({
             agent,
             prompt: task.prompt ?? task.subject,

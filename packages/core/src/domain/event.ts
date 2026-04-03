@@ -287,7 +287,7 @@ export class AgentSwitched extends Schema.TaggedClass<AgentSwitched>()("AgentSwi
   toAgent: Schema.String,
 }) {}
 
-export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("SubagentSpawned", {
+export class AgentRunSpawned extends Schema.TaggedClass<AgentRunSpawned>()("AgentRunSpawned", {
   parentSessionId: SessionId,
   childSessionId: SessionId,
   agentName: Schema.String,
@@ -296,8 +296,8 @@ export class SubagentSpawned extends Schema.TaggedClass<SubagentSpawned>()("Suba
   branchId: Schema.optional(BranchId),
 }) {}
 
-export class SubagentSucceeded extends Schema.TaggedClass<SubagentSucceeded>()(
-  "SubagentSucceeded",
+export class AgentRunSucceeded extends Schema.TaggedClass<AgentRunSucceeded>()(
+  "AgentRunSucceeded",
   {
     parentSessionId: SessionId,
     childSessionId: SessionId,
@@ -307,7 +307,7 @@ export class SubagentSucceeded extends Schema.TaggedClass<SubagentSucceeded>()(
   },
 ) {}
 
-export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("SubagentFailed", {
+export class AgentRunFailed extends Schema.TaggedClass<AgentRunFailed>()("AgentRunFailed", {
   parentSessionId: SessionId,
   childSessionId: SessionId,
   agentName: Schema.String,
@@ -454,9 +454,9 @@ export const AgentEvent = Schema.Union([
   BranchSwitched,
   BranchSummarized,
   AgentSwitched,
-  SubagentSpawned,
-  SubagentSucceeded,
-  SubagentFailed,
+  AgentRunSpawned,
+  AgentRunSucceeded,
+  AgentRunFailed,
   TaskCreated,
   TaskUpdated,
   TaskCompleted,

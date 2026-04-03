@@ -3,6 +3,7 @@ import { type ActorRef, Event, State } from "effect-machine"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import {
   AgentName,
+  AgentExecutionOverridesSchema,
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
@@ -17,6 +18,8 @@ import { messageText, getSingleText } from "./agent-loop.utils.js"
 const QueuedTurnItemSchema = Schema.Struct({
   message: Message,
   agentOverride: Schema.optional(AgentName),
+  executionOverrides: Schema.optional(AgentExecutionOverridesSchema),
+  interactive: Schema.optional(Schema.Boolean),
 })
 export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
 
@@ -28,6 +31,10 @@ export type LoopQueueState = typeof LoopQueueState.Type
 
 const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {
   if (existing.agentOverride !== undefined || incoming.agentOverride !== undefined) return false
+  if (existing.executionOverrides !== undefined || incoming.executionOverrides !== undefined) {
+    return false
+  }
+  if (existing.interactive !== undefined || incoming.interactive !== undefined) return false
   if (existing.message.role !== "user" || incoming.message.role !== "user") return false
   if (existing.message.kind === "interjection" || incoming.message.kind === "interjection") {
     return false
@@ -164,6 +171,8 @@ const RunningTurnFields = {
   message: Message,
   startedAtMs: Schema.Number,
   agentOverride: Schema.optional(AgentName),
+  executionOverrides: Schema.optional(AgentExecutionOverridesSchema),
+  interactive: Schema.optional(Schema.Boolean),
 }
 
 // ── Turn types (not persisted in machine state) ──
@@ -273,6 +282,8 @@ export const buildRunningState = (
     message: item.message,
     startedAtMs: Date.now(),
     agentOverride: item.agentOverride,
+    executionOverrides: item.executionOverrides,
+    interactive: item.interactive,
   })
 
 export const toWaitingForInteractionState = (params: {

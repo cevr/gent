@@ -15,7 +15,7 @@ import {
   toolBoundary,
   providerStreamBoundary,
   rpcBoundary,
-  subagentBoundary,
+  agentRunBoundary,
 } from "../../src/runtime/wide-event-boundary"
 import type { LogEvent } from "../../src/runtime/wide-event-boundary"
 import type { SessionId, BranchId, ToolCallId } from "../../src/domain/ids"
@@ -98,17 +98,17 @@ describe("wide-event-boundary", () => {
       }),
     )
 
-    it.live("subagentBoundary produces subagent context", () =>
+    it.live("agentRunBoundary produces agent-run context", () =>
       Effect.gen(function* () {
         const ref = captured()
 
         yield* WideEvent.set({ childSessionId: "child-1" }).pipe(
-          withWideEvent(subagentBoundary("researcher", "parent-1" as SessionId)),
+          withWideEvent(agentRunBoundary("researcher", "parent-1" as SessionId)),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
         const a = getAnnotations(ref)
-        expect(a["service"]).toBe("subagent")
+        expect(a["service"]).toBe("agent-run")
         expect(a["method"]).toBe("run")
         expect(a["actor"]).toBe("researcher")
         expect(a["parentSessionId"]).toBe("parent-1")

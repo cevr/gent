@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { AuditTool } from "@gent/core/tools/audit"
-import { Agents, SubagentRunnerService, type SubagentResult } from "@gent/core/domain/agent"
+import { Agents, AgentRunnerService, type AgentRunResult } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
@@ -36,17 +36,17 @@ const ctx: ToolContext = {
 
 const makeSuccess = (
   text: string,
-  sessionId: SubagentResult & { _tag: "success" } extends { sessionId: infer S }
+  sessionId: AgentRunResult & { _tag: "success" } extends { sessionId: infer S }
     ? S
-    : never = "s1" as SubagentResult & { _tag: "success" } extends { sessionId: infer S }
+    : never = "s1" as AgentRunResult & { _tag: "success" } extends { sessionId: infer S }
     ? S
     : never,
-  agentName: SubagentResult & { _tag: "success" } extends { agentName: infer A }
+  agentName: AgentRunResult & { _tag: "success" } extends { agentName: infer A }
     ? A
-    : never = "architect" as SubagentResult & { _tag: "success" } extends { agentName: infer A }
+    : never = "architect" as AgentRunResult & { _tag: "success" } extends { agentName: infer A }
     ? A
     : never,
-): SubagentResult => ({
+): AgentRunResult => ({
   _tag: "success",
   text,
   sessionId,
@@ -59,7 +59,7 @@ describe("Audit Tool", () => {
     () => {
       const calls: Array<{ agentName: string; prompt: string }> = []
 
-      const runnerLayer = Layer.succeed(SubagentRunnerService, {
+      const runnerLayer = Layer.succeed(AgentRunnerService, {
         run: (params) =>
           Effect.sync(() => {
             const prompt = params.prompt
@@ -130,7 +130,7 @@ describe("Audit Tool", () => {
   it.live("report mode skips execution", () => {
     const calls: Array<{ prompt: string }> = []
 
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         calls.push({ prompt: params.prompt })
         if (params.prompt.includes("Identify audit concerns")) {
@@ -169,7 +169,7 @@ describe("Audit Tool", () => {
   })
 
   it.live("stops when no concerns detected", () => {
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: () => Effect.succeed(makeSuccess("No specific concerns found for this code.")),
     })
 
@@ -195,7 +195,7 @@ describe("Audit Tool", () => {
   it.live("uses primary agent for execution, not architect", () => {
     const executorAgents: string[] = []
 
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) =>
         Effect.sync(() => {
           if (params.prompt.includes("Execute this audit plan")) {
@@ -236,7 +236,7 @@ describe("Audit Tool", () => {
   it.live("auditor subagents run read-only with bash denied", () => {
     const auditOverrides: Array<Record<string, unknown> | undefined> = []
 
-    const runnerLayer = Layer.succeed(SubagentRunnerService, {
+    const runnerLayer = Layer.succeed(AgentRunnerService, {
       run: (params) =>
         Effect.sync(() => {
           if (params.prompt.includes("Audit the code for this concern:")) {

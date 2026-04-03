@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { HandoffTool } from "@gent/core/tools/handoff"
-import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
+import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
 import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
@@ -15,7 +15,7 @@ const ctx: ToolContext = {
   toolCallId: "test-call",
 }
 
-const mockRunnerSuccess = Layer.succeed(SubagentRunnerService, {
+const mockRunnerSuccess = Layer.succeed(AgentRunnerService, {
   run: (params) =>
     Effect.succeed({
       _tag: "success" as const,

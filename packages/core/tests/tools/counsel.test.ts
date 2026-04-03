@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { CounselTool } from "@gent/core/tools/counsel"
-import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
+import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
@@ -14,7 +14,7 @@ const ctx: ToolContext = {
   toolCallId: "test-call",
 }
 
-const mockRunnerErrorWithSession = Layer.succeed(SubagentRunnerService, {
+const mockRunnerErrorWithSession = Layer.succeed(AgentRunnerService, {
   run: () =>
     Effect.succeed({
       _tag: "error" as const,
@@ -45,7 +45,7 @@ const platformLayer = Layer.mergeAll(BunServices.layer, runtimePlatformLayer, Te
 describe("CounselTool", () => {
   it.live("always routes to deepwork reviewer", () => {
     let capturedAgent = ""
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+    const capturingRunner = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         capturedAgent = params.agent.name
         return Effect.succeed({
@@ -71,7 +71,7 @@ describe("CounselTool", () => {
 
   it.live("includes adversarial framing in prompt", () => {
     let capturedPrompt = ""
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+    const capturingRunner = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         capturedPrompt = params.prompt
         return Effect.succeed({
@@ -94,7 +94,7 @@ describe("CounselTool", () => {
 
   it.live("inlines file contents when provided", () => {
     let capturedPrompt = ""
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+    const capturingRunner = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         capturedPrompt = params.prompt
         return Effect.succeed({
@@ -135,7 +135,7 @@ describe("CounselTool", () => {
   it.live("spawns agent with restricted read-only tools", () => {
     let capturedAllowedActions: readonly string[] | undefined
     let capturedDeniedTools: readonly string[] | undefined
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+    const capturingRunner = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         capturedAllowedActions = params.agent.allowedActions
         capturedDeniedTools = params.agent.deniedTools
@@ -163,7 +163,7 @@ describe("CounselTool", () => {
 
   it.live("works from any agent (always routes to deepwork)", () => {
     let capturedAgent = ""
-    const capturingRunner = Layer.succeed(SubagentRunnerService, {
+    const capturingRunner = Layer.succeed(AgentRunnerService, {
       run: (params) => {
         capturedAgent = params.agent.name
         return Effect.succeed({

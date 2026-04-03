@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { SubagentRunnerService } from "../domain/agent.js"
+import { AgentRunnerService } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { HandoffHandler } from "../domain/interaction-handlers.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -41,7 +41,7 @@ export const HandoffTool = defineTool({
   ],
   params: HandoffParams,
   execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const handoffHandler = yield* HandoffHandler
     const platform = yield* RuntimePlatform
 

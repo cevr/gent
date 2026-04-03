@@ -1,9 +1,5 @@
 import { Effect, Schema } from "effect"
-import {
-  SubagentRunnerService,
-  type AgentDefinition,
-  type SubagentRunner,
-} from "../domain/agent.js"
+import { AgentRunnerService, type AgentDefinition, type AgentRunner } from "../domain/agent.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { requireAgent, ExtensionRegistry } from "../runtime/extensions/registry.js"
@@ -175,7 +171,7 @@ Summarize what changed, which findings are resolved, and what remains.`
 }
 
 const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
-  runner: SubagentRunner
+  runner: AgentRunner
   architect: AgentDefinition
   auditor: AgentDefinition
   runnerContext: WorkflowRunContext
@@ -266,7 +262,7 @@ export const AuditTool = defineTool({
   ],
   params: AuditParams,
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolContext) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const presenter = yield* PromptPresenter
     const platform = yield* RuntimePlatform
 

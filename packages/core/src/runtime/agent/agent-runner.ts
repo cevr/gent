@@ -1,36 +1,37 @@
 import { Cause, DateTime, Duration, Effect, Layer } from "effect"
-import { withWideEvent, WideEvent, subagentBoundary } from "../wide-event-boundary"
+import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
+  AgentRunSucceeded,
+  AgentRunFailed,
+  AgentRunSpawned,
   EventStore,
   type EventStoreService,
   type EventEnvelope,
-  SubagentSucceeded,
-  SubagentFailed,
-  SubagentSpawned,
 } from "../../domain/event.js"
 import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
-  SubagentError,
-  SubagentRunnerService,
-  type SubagentToolCall,
+  AgentRunError,
+  AgentRunnerService,
+  type AgentRunResult,
+  type AgentRunToolCall,
   type AgentExecutionOverrides,
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
 import type { SessionId, BranchId, ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
-import { AgentActor } from "./agent-loop"
+import { AgentLoop } from "./agent-loop"
 
 interface ChildMetadata {
   usage?: { input: number; output: number }
-  toolCalls?: ReadonlyArray<SubagentToolCall>
+  toolCalls?: ReadonlyArray<AgentRunToolCall>
 }
 
 interface ChildMetadataAccumulator {
   input: number
   output: number
   started: Map<string, { toolName: string; args: Record<string, unknown> }>
-  toolCalls: SubagentToolCall[]
+  toolCalls: AgentRunToolCall[]
 }
 
 const createChildMetadataAccumulator = (): ChildMetadataAccumulator => ({
@@ -84,10 +85,9 @@ const finalizeChildMetadata = (state: ChildMetadataAccumulator): ChildMetadata =
   ...(state.toolCalls.length > 0 ? { toolCalls: state.toolCalls } : {}),
 })
 
-export interface SubagentRunnerConfig {
+export interface AgentRunnerConfig {
   readonly subprocessBinaryPath?: string
   readonly dbPath?: string
-  readonly systemPrompt: string
   readonly timeoutMs?: number
 }
 
@@ -101,7 +101,7 @@ const latestAssistantText = (messages: ReadonlyArray<Message>) => {
   return ""
 }
 
-const buildSubagentSuccess = (params: {
+const buildAgentRunSuccess = (params: {
   text: string
   sessionId: SessionId
   agentName: string
@@ -115,22 +115,9 @@ const buildSubagentSuccess = (params: {
   toolCalls: params.meta.toolCalls,
 })
 
-const withSubagentFailureHandling = <E, R>(
+const withAgentRunFailureHandling = <E, R>(
   effect: Effect.Effect<
-    | {
-        _tag: "success"
-        text: string
-        sessionId: SessionId
-        agentName: string
-        usage?: { input: number; output: number }
-        toolCalls?: ReadonlyArray<SubagentToolCall>
-      }
-    | {
-        _tag: "error"
-        error: string
-        sessionId: SessionId
-        agentName: string
-      },
+    AgentRunResult | { _tag: "error"; error: string; sessionId: SessionId; agentName: string },
     E,
     R
   >,
@@ -172,25 +159,28 @@ const withSubagentFailureHandling = <E, R>(
 const overrideArray = <A>(values: ReadonlyArray<A> | undefined) =>
   values === undefined ? undefined : [...values]
 
-const buildRunInputOverrides = (overrides: AgentExecutionOverrides | undefined) => ({
-  ...(overrides?.modelId !== undefined ? { modelId: overrides.modelId } : {}),
-  ...(overrides?.allowedActions !== undefined
-    ? { overrideAllowedActions: overrideArray(overrides.allowedActions) }
-    : {}),
-  ...(overrides?.allowedTools !== undefined
-    ? { overrideAllowedTools: overrideArray(overrides.allowedTools) }
-    : {}),
-  ...(overrides?.deniedTools !== undefined
-    ? { overrideDeniedTools: overrideArray(overrides.deniedTools) }
-    : {}),
-  ...(overrides?.reasoningEffort !== undefined
-    ? { overrideReasoningEffort: overrides.reasoningEffort }
-    : {}),
-  ...(overrides?.systemPromptAddendum !== undefined
-    ? { overrideSystemPromptAddendum: overrides.systemPromptAddendum }
-    : {}),
-  ...(overrides?.tags !== undefined ? { tags: overrideArray(overrides.tags) } : {}),
-})
+const normalizeOverrides = (overrides: AgentExecutionOverrides | undefined) =>
+  overrides === undefined
+    ? undefined
+    : {
+        ...(overrides.modelId !== undefined ? { modelId: overrides.modelId } : {}),
+        ...(overrides.allowedActions !== undefined
+          ? { allowedActions: overrideArray(overrides.allowedActions) }
+          : {}),
+        ...(overrides.allowedTools !== undefined
+          ? { allowedTools: overrideArray(overrides.allowedTools) }
+          : {}),
+        ...(overrides.deniedTools !== undefined
+          ? { deniedTools: overrideArray(overrides.deniedTools) }
+          : {}),
+        ...(overrides.reasoningEffort !== undefined
+          ? { reasoningEffort: overrides.reasoningEffort }
+          : {}),
+        ...(overrides.systemPromptAddendum !== undefined
+          ? { systemPromptAddendum: overrides.systemPromptAddendum }
+          : {}),
+        ...(overrides.tags !== undefined ? { tags: overrideArray(overrides.tags) } : {}),
+      }
 
 /** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
 export const getSessionDepth = (sessionId: SessionId, storage: StorageService) =>
@@ -200,8 +190,8 @@ export const getSessionDepth = (sessionId: SessionId, storage: StorageService) =
     // Fail closed: if we can't read ancestry, refuse to spawn rather than allow unbounded recursion
     Effect.mapError(
       () =>
-        new SubagentError({
-          message: `Cannot determine session depth for "${sessionId}" — refusing to spawn subagent.`,
+        new AgentRunError({
+          message: `Cannot determine session depth for "${sessionId}" — refusing to start agent run.`,
         }),
     ),
   )
@@ -215,14 +205,14 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
         return finalizeChildMetadata(state)
       }),
       Effect.catchEager((e) =>
-        Effect.logWarning("failed to collect subagent metadata").pipe(
+        Effect.logWarning("failed to collect agent-run metadata").pipe(
           Effect.annotateLogs({ error: String(e) }),
           Effect.as({}),
         ),
       ),
     )
 
-  const createSubagentSession = (params: {
+  const createAgentRunSession = (params: {
     agent: { name: string }
     prompt: string
     parentSessionId: SessionId
@@ -232,7 +222,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
     Effect.gen(function* () {
       const parentDepth = yield* getSessionDepth(params.parentSessionId, storage)
       if (parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH) {
-        return yield* new SubagentError({
+        return yield* new AgentRunError({
           message: `Agent run depth limit reached (max ${DEFAULT_MAX_AGENT_RUN_DEPTH}). Cannot spawn "${params.agent.name}" — parent session is already at depth ${parentDepth}.`,
         })
       }
@@ -263,7 +253,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
       return { sessionId, branchId }
     })
 
-  const publishSubagentSpawned = (params: {
+  const publishAgentRunSpawned = (params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
     toolCallId?: ToolCallId
@@ -272,7 +262,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
     prompt: string
   }) =>
     eventStore.publish(
-      new SubagentSpawned({
+      new AgentRunSpawned({
         parentSessionId: params.parentSessionId,
         childSessionId: params.sessionId,
         agentName: params.agentName,
@@ -282,7 +272,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
       }),
     )
 
-  const publishSubagentSucceeded = (params: {
+  const publishAgentRunSucceeded = (params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
     toolCallId?: ToolCallId
@@ -290,7 +280,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
     agentName: string
   }) =>
     eventStore.publish(
-      new SubagentSucceeded({
+      new AgentRunSucceeded({
         parentSessionId: params.parentSessionId,
         childSessionId: params.sessionId,
         agentName: params.agentName,
@@ -299,7 +289,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
       }),
     )
 
-  const publishSubagentFailed = (params: {
+  const publishAgentRunFailed = (params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
     toolCallId?: ToolCallId
@@ -308,7 +298,7 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
   }) =>
     eventStore
       .publish(
-        new SubagentFailed({
+        new AgentRunFailed({
           parentSessionId: params.parentSessionId,
           childSessionId: params.sessionId,
           agentName: params.agentName,
@@ -318,39 +308,39 @@ const makeSharedRunnerHelpers = (storage: StorageService, eventStore: EventStore
       )
       .pipe(
         Effect.catchEager((e) =>
-          Effect.logWarning("failed to publish subagent event").pipe(
+          Effect.logWarning("failed to publish agent-run event").pipe(
             Effect.annotateLogs({ error: String(e) }),
           ),
         ),
       )
 
-  const loadSubagentSuccessData = (branchId: BranchId, sessionId: SessionId, agentName: string) =>
+  const loadAgentRunSuccessData = (branchId: BranchId, sessionId: SessionId, agentName: string) =>
     Effect.gen(function* () {
       const messages = yield* storage.listMessages(branchId)
       const text = latestAssistantText(messages)
       const meta = yield* collectChildMetadata(sessionId)
-      return buildSubagentSuccess({ text, sessionId, agentName, meta })
+      return buildAgentRunSuccess({ text, sessionId, agentName, meta })
     })
 
   return {
     collectChildMetadata,
-    createSubagentSession,
-    publishSubagentSpawned,
-    publishSubagentSucceeded,
-    publishSubagentFailed,
-    loadSubagentSuccessData,
+    createAgentRunSession,
+    publishAgentRunSpawned,
+    publishAgentRunSucceeded,
+    publishAgentRunFailed,
+    loadAgentRunSuccessData,
   }
 }
 
 export const InProcessRunner = (
-  runnerConfig: SubagentRunnerConfig,
-): Layer.Layer<SubagentRunnerService, never, Storage | EventStore | AgentActor> =>
+  runnerConfig: AgentRunnerConfig,
+): Layer.Layer<AgentRunnerService, never, Storage | EventStore | AgentLoop> =>
   Layer.effect(
-    SubagentRunnerService,
+    AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
       const eventStore = yield* EventStore
-      const actor = yield* AgentActor
+      const loop = yield* AgentLoop
       const shared = makeSharedRunnerHelpers(storage, eventStore)
       const publishAgentSwitch = (params: {
         sessionId: SessionId
@@ -368,12 +358,12 @@ export const InProcessRunner = (
 
       return {
         run: (params) =>
-          shared.createSubagentSession(params).pipe(
+          shared.createAgentRunSession(params).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
 
-                yield* shared.publishSubagentSpawned({
+                yield* shared.publishAgentRunSpawned({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
@@ -387,14 +377,15 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                 })
 
-                const runSubagent = actor.run({
+                const runSubagent = loop.runOnce({
                   sessionId,
                   branchId,
                   agentName: params.agent.name,
                   prompt: params.prompt,
-                  systemPrompt: runnerConfig.systemPrompt,
                   interactive: false,
-                  ...buildRunInputOverrides(params.overrides),
+                  ...(normalizeOverrides(params.overrides) !== undefined
+                    ? { overrides: normalizeOverrides(params.overrides) }
+                    : {}),
                 })
 
                 // No actor-level retry — replays non-idempotent tool calls.
@@ -407,20 +398,20 @@ export const InProcessRunner = (
                           duration: Duration.millis(runnerConfig.timeoutMs),
                           orElse: () =>
                             Effect.fail(
-                              new SubagentError({
-                                message: `Subagent timed out after ${runnerConfig.timeoutMs}ms`,
+                              new AgentRunError({
+                                message: `Agent run timed out after ${runnerConfig.timeoutMs}ms`,
                               }),
                             ),
                         }),
                       )
 
                 yield* runWithTimeout
-                const result = yield* shared.loadSubagentSuccessData(
+                const result = yield* shared.loadAgentRunSuccessData(
                   branchId,
                   sessionId,
                   params.agent.name,
                 )
-                yield* shared.publishSubagentSucceeded({
+                yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
@@ -434,9 +425,9 @@ export const InProcessRunner = (
                 })
 
                 return result
-              }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
+              }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
-              return withSubagentFailureHandling(
+              return withAgentRunFailureHandling(
                 run,
                 {
                   parentSessionId: params.parentSessionId,
@@ -444,9 +435,9 @@ export const InProcessRunner = (
                   toolCallId: params.toolCallId,
                   sessionId,
                   agentName: params.agent.name,
-                  spanName: "SubagentRunner.inProcess",
+                  spanName: "AgentRunner.inProcess",
                 },
-                shared.publishSubagentFailed,
+                shared.publishAgentRunFailed,
               )
             }),
             Effect.catchCause((cause) => {
@@ -463,10 +454,10 @@ export const InProcessRunner = (
   )
 
 export const SubprocessRunner = (
-  config: SubagentRunnerConfig,
-): Layer.Layer<SubagentRunnerService, never, Storage | EventStore> =>
+  config: AgentRunnerConfig,
+): Layer.Layer<AgentRunnerService, never, Storage | EventStore> =>
   Layer.effect(
-    SubagentRunnerService,
+    AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
       const eventStore = yield* EventStore
@@ -474,12 +465,12 @@ export const SubprocessRunner = (
 
       return {
         run: (params) =>
-          shared.createSubagentSession(params).pipe(
+          shared.createAgentRunSession(params).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
 
-                yield* shared.publishSubagentSpawned({
+                yield* shared.publishAgentRunSpawned({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
@@ -550,7 +541,7 @@ export const SubprocessRunner = (
                 )
 
                 if (exitCode !== 0) {
-                  yield* shared.publishSubagentFailed({
+                  yield* shared.publishAgentRunFailed({
                     parentSessionId: params.parentSessionId,
                     parentBranchId: params.parentBranchId,
                     toolCallId: params.toolCallId,
@@ -569,12 +560,12 @@ export const SubprocessRunner = (
                   }
                 }
 
-                const result = yield* shared.loadSubagentSuccessData(
+                const result = yield* shared.loadAgentRunSuccessData(
                   branchId,
                   sessionId,
                   params.agent.name,
                 )
-                yield* shared.publishSubagentSucceeded({
+                yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
@@ -588,9 +579,9 @@ export const SubprocessRunner = (
                 })
 
                 return result
-              }).pipe(withWideEvent(subagentBoundary(params.agent.name, params.parentSessionId)))
+              }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
-              return withSubagentFailureHandling(
+              return withAgentRunFailureHandling(
                 run,
                 {
                   parentSessionId: params.parentSessionId,
@@ -598,9 +589,9 @@ export const SubprocessRunner = (
                   toolCallId: params.toolCallId,
                   sessionId,
                   agentName: params.agent.name,
-                  spanName: "SubagentRunner.subprocess",
+                  spanName: "AgentRunner.subprocess",
                 },
-                shared.publishSubagentFailed,
+                shared.publishAgentRunFailed,
               )
             }),
             Effect.catchCause((cause) => {

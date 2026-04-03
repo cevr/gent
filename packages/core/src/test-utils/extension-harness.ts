@@ -9,9 +9,9 @@ import { Effect, Layer } from "effect"
 import {
   Agents,
   AgentDefinition,
-  SubagentRunnerService,
+  AgentRunnerService,
   type AgentName,
-  type SubagentRunner,
+  type AgentRunner,
 } from "../domain/agent.js"
 import {
   EventStore,
@@ -245,8 +245,8 @@ export interface ToolTestLayerConfig {
   readonly extensions?: ReadonlyArray<GentExtension>
   /** Extra tools to register */
   readonly tools?: ReadonlyArray<AnyToolDefinition>
-  /** SubagentRunner mock — default returns success with empty text */
-  readonly subagentRunner?: SubagentRunner
+  /** AgentRunner mock — default returns success with empty text */
+  readonly subagentRunner?: AgentRunner
 }
 
 /**
@@ -278,7 +278,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     ...extensionSetups,
   ]
 
-  const defaultRunner: SubagentRunner = {
+  const defaultRunner: AgentRunner = {
     run: () =>
       Effect.succeed({
         _tag: "success" as const,
@@ -288,7 +288,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
       }),
   }
   const subagentRunnerLayer = Layer.succeed(
-    SubagentRunnerService,
+    AgentRunnerService,
     config.subagentRunner ?? defaultRunner,
   )
 

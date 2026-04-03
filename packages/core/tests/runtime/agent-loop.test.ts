@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
-import { AgentLoop, AgentActor } from "@gent/core/runtime/agent/agent-loop"
+import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -600,29 +600,31 @@ describe("AgentLoop actor model", () => {
   })
 })
 
-describe("AgentActor", () => {
-  test("publishes machine inspection + task events", async () => {
+describe("AgentLoop.runOnce", () => {
+  test("publishes machine inspection events", async () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const extRegistry = makeTestExtRegistry()
     const toolDeps = Layer.mergeAll(extRegistry, Permission.Test())
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
-      Storage.Test(),
+      Storage.TestWithSql(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
-
+      ExtensionStateRuntime.Test(),
+      HandoffHandler.Test(),
+      BunServices.layer,
       recorderLayer,
       eventStoreLayer,
       toolDeps,
       toolRunnerLayer,
     )
-    const actorLayer = AgentActor.Live().pipe(Layer.provide(deps))
-    const layer = Layer.mergeAll(deps, actorLayer)
+    const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, loopLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const actor = yield* AgentActor
+        const loop = yield* AgentLoop
         const recorder = yield* SequenceRecorder
 
         const now = new Date()
@@ -641,12 +643,11 @@ describe("AgentActor", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
 
-        yield* actor.run({
+        yield* loop.runOnce({
           sessionId: session.id,
           branchId: branch.id,
           agentName: "cowork",
           prompt: "inspect",
-          systemPrompt: "",
         })
 
         yield* Effect.yieldNow
@@ -657,7 +658,7 @@ describe("AgentActor", () => {
           .map((call) => (call.args as { _tag: string } | undefined)?._tag)
 
         expect(tags.includes("MachineInspected")).toBe(true)
-        expect(tags.includes("MachineTaskSucceeded")).toBe(true)
+        expect(tags.includes("TurnCompleted")).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -712,22 +713,24 @@ describe("Tool concurrency", () => {
     ]
 
     const deps = Layer.mergeAll(
-      Storage.Test(),
+      Storage.TestWithSql(),
       Provider.Test(providerResponses),
       makeTestExtRegistry([toolA, toolB]),
+      ExtensionStateRuntime.Test(),
       EventStore.Test(),
-
+      HandoffHandler.Test(),
       Permission.Test(),
+      BunServices.layer,
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const actorDeps = Layer.mergeAll(deps, toolRunnerLayer)
-    const actorLayer = AgentActor.Live().pipe(Layer.provide(actorDeps))
-    const layer = Layer.mergeAll(actorDeps, actorLayer)
+    const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(Layer.provide(actorDeps))
+    const layer = Layer.mergeAll(actorDeps, loopLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const actor = yield* AgentActor
+        const loop = yield* AgentLoop
 
         const now = new Date()
         const session = new Session({
@@ -745,12 +748,11 @@ describe("Tool concurrency", () => {
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
 
-        yield* actor.run({
+        yield* loop.runOnce({
           sessionId: session.id,
           branchId: branch.id,
           agentName: "cowork",
           prompt: "run serial tools",
-          systemPrompt: "",
         })
       }).pipe(Effect.provide(layer)),
     )

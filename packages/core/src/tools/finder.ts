@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { SubagentRunnerService } from "../domain/agent.js"
+import { AgentRunnerService } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
@@ -30,7 +30,7 @@ export const FinderTool = defineTool({
     "Delegate a multi-step codebase search to a fast sub-agent. Use when you need to find something that requires chaining multiple grep/read/glob calls.",
   params: FinderParams,
   execute: Effect.fn("FinderTool.execute")(function* (params, ctx) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const platform = yield* RuntimePlatform
 
     const agent = yield* requireAgent("finder")

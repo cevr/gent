@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { SubagentRunnerService } from "../domain/agent.js"
+import { AgentRunnerService } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
 import { $ } from "bun"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -89,7 +89,7 @@ export const LibrarianTool = defineTool({
     "Ask questions about external repositories. Fetches/caches the repo, then spawns a sub-agent that reads the code locally to answer your question.",
   params: LibrarianParams,
   execute: Effect.fn("LibrarianTool.execute")(function* (params, ctx) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const runtimePlatform = yield* RuntimePlatform

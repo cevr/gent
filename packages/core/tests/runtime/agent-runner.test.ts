@@ -1,20 +1,21 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { InProcessRunner } from "@gent/core/runtime/agent/subagent-runner"
+import { InProcessRunner } from "@gent/core/runtime/agent/agent-runner"
+import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { Session, Branch } from "@gent/core/domain/message"
 import {
   Agents,
   resolveAgentModel,
-  SubagentRunnerService,
-  SubagentError,
+  AgentRunnerService,
+  AgentRunError,
+  type AgentExecutionOverrides,
 } from "@gent/core/domain/agent"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
-import { AgentActor } from "@gent/core/runtime/agent/agent-loop"
 
 describe("AgentExecutionOverrides", () => {
   test("resolveDualModelPair returns cowork/deepwork models from registry", () => {
@@ -36,29 +37,44 @@ describe("AgentExecutionOverrides", () => {
     }).pipe(Effect.provide(impl), Effect.runPromise)
   })
 
-  test("overrides thread through SubagentRunner to AgentActor", async () => {
-    let capturedInput: Record<string, unknown> | undefined
+  test("overrides thread through AgentRunner to AgentLoop.runOnce", async () => {
+    let capturedInput:
+      | {
+          sessionId: SessionId
+          branchId: BranchId
+          agentName: string
+          prompt: string
+          interactive?: boolean
+          overrides?: AgentExecutionOverrides
+        }
+      | undefined
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
-      Layer.succeed(AgentActor, {
-        run: (input) => {
-          capturedInput = input as unknown as Record<string, unknown>
+      Layer.succeed(AgentLoop, {
+        runOnce: (input) => {
+          capturedInput = input
           return Effect.void
         },
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
       }),
-
       recorderLayer,
       eventStoreLayer,
     )
-    const runnerLayer = InProcessRunner({ systemPrompt: "test" }).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const runner = yield* SubagentRunnerService
+        const runner = yield* AgentRunnerService
 
         const now = new Date()
         yield* storage.createSession(
@@ -84,38 +100,44 @@ describe("AgentExecutionOverrides", () => {
         })
 
         expect(capturedInput).toBeDefined()
-        expect(capturedInput!.modelId).toBe("custom/model")
-        expect(capturedInput!.overrideAllowedActions).toEqual(["read", "edit"])
-        expect(capturedInput!.overrideAllowedTools).toEqual(["bash", "grep"])
-        expect(capturedInput!.overrideDeniedTools).toEqual(["write"])
-        expect(capturedInput!.overrideReasoningEffort).toBe("high")
-        expect(capturedInput!.overrideSystemPromptAddendum).toBe("Extra instructions")
-        expect(capturedInput!.tags).toEqual(["auto-loop"])
+        expect(capturedInput!.overrides?.modelId).toBe("custom/model")
+        expect(capturedInput!.overrides?.allowedActions).toEqual(["read", "edit"])
+        expect(capturedInput!.overrides?.allowedTools).toEqual(["bash", "grep"])
+        expect(capturedInput!.overrides?.deniedTools).toEqual(["write"])
+        expect(capturedInput!.overrides?.reasoningEffort).toBe("high")
+        expect(capturedInput!.overrides?.systemPromptAddendum).toBe("Extra instructions")
+        expect(capturedInput!.overrides?.tags).toEqual(["auto-loop"])
       }).pipe(Effect.provide(layer)),
     )
   })
 })
 
-describe("Subagent Runner", () => {
+describe("AgentRunner", () => {
   test("publishes spawn and complete events", async () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
-      Layer.succeed(AgentActor, {
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.void,
+        submit: () => Effect.void,
         run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
       }),
-
       recorderLayer,
       eventStoreLayer,
     )
-    const runnerLayer = InProcessRunner({ systemPrompt: "" }).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const runner = yield* SubagentRunnerService
+        const runner = yield* AgentRunnerService
         const recorder = yield* SequenceRecorder
 
         const now = new Date()
@@ -144,8 +166,8 @@ describe("Subagent Runner", () => {
 
         const calls = yield* recorder.getCalls()
         assertSequence(calls, [
-          { service: "EventStore", method: "publish", match: { _tag: "SubagentSpawned" } },
-          { service: "EventStore", method: "publish", match: { _tag: "SubagentSucceeded" } },
+          { service: "EventStore", method: "publish", match: { _tag: "AgentRunSpawned" } },
+          { service: "EventStore", method: "publish", match: { _tag: "AgentRunSucceeded" } },
         ])
       }).pipe(Effect.provide(layer)),
     )
@@ -156,20 +178,26 @@ describe("Subagent Runner", () => {
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
-      Layer.succeed(AgentActor, {
-        run: () => Effect.fail(new SubagentError({ message: "permanent failure" })),
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.fail(new AgentRunError({ message: "permanent failure" })),
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
       }),
-
       recorderLayer,
       eventStoreLayer,
     )
-    const runnerLayer = InProcessRunner({ systemPrompt: "" }).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const runner = yield* SubagentRunnerService
+        const runner = yield* AgentRunnerService
 
         const now = new Date()
         const session = new Session({
@@ -204,20 +232,25 @@ describe("Subagent Runner", () => {
   test("fails with timeout", async () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
-      Layer.succeed(AgentActor, {
-        run: () => Effect.sleep("50 millis"),
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.sleep("50 millis"),
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
       }),
       EventStore.Test(),
     )
-    const runnerLayer = InProcessRunner({ systemPrompt: "", timeoutMs: 5 }).pipe(
-      Layer.provide(deps),
-    )
+    const runnerLayer = InProcessRunner({ timeoutMs: 5 }).pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const runner = yield* SubagentRunnerService
+        const runner = yield* AgentRunnerService
 
         const now = new Date()
         const session = new Session({

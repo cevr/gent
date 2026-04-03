@@ -5,11 +5,11 @@ import { TaskStorage } from "@gent/core/extensions/task-tools-storage"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   Agents,
-  SubagentRunnerService,
+  AgentRunnerService,
   type AgentName,
-  type SubagentResult,
+  type AgentRunResult,
 } from "@gent/core/domain/agent"
-import { EventStore, SubagentSpawned, type EventEnvelope } from "@gent/core/domain/event"
+import { EventStore, AgentRunSpawned, type EventEnvelope } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import type { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
@@ -18,12 +18,12 @@ const sessionId = "task-test-session" as SessionId
 const branchId = "task-test-branch" as BranchId
 
 /**
- * Build a test layer for TaskService with a controllable SubagentRunner.
+ * Build a test layer for TaskService with a controllable AgentRunner.
  * The runner blocks on a Deferred — tests resolve it to simulate completion,
  * or leave it pending to test stop/interrupt.
  */
 const makeLayerWithInterruptFlag = (
-  runnerDeferred: Deferred.Deferred<SubagentResult>,
+  runnerDeferred: Deferred.Deferred<AgentRunResult>,
   interruptedRef: Ref.Ref<boolean>,
 ) => {
   const storageLayer = Storage.MemoryWithSql()
@@ -37,7 +37,7 @@ const makeLayerWithInterruptFlag = (
       },
     ]),
   )
-  const runnerLayer = Layer.succeed(SubagentRunnerService, {
+  const runnerLayer = Layer.succeed(AgentRunnerService, {
     run: () =>
       Deferred.await(runnerDeferred).pipe(Effect.onInterrupt(() => Ref.set(interruptedRef, true))),
   })
@@ -56,7 +56,7 @@ const makeLayerWithInterruptFlag = (
   return Layer.mergeAll(baseDeps, taskExtensionLayer)
 }
 
-const makeLayer = (runnerDeferred: Deferred.Deferred<SubagentResult>) => {
+const makeLayer = (runnerDeferred: Deferred.Deferred<AgentRunResult>) => {
   const storageLayer = Storage.MemoryWithSql()
   const registryLayer = ExtensionRegistry.fromResolved(
     resolveExtensions([
@@ -68,7 +68,7 @@ const makeLayer = (runnerDeferred: Deferred.Deferred<SubagentResult>) => {
       },
     ]),
   )
-  const runnerLayer = Layer.succeed(SubagentRunnerService, {
+  const runnerLayer = Layer.succeed(AgentRunnerService, {
     run: () => Deferred.await(runnerDeferred),
   })
 
@@ -115,7 +115,7 @@ const makeLayerWithoutRunner = () => {
 describe("TaskService", () => {
   it.live("supports sibling layer composition used by extensions", () =>
     Effect.gen(function* () {
-      const deferred = yield* Deferred.make<SubagentResult>()
+      const deferred = yield* Deferred.make<AgentRunResult>()
       const layer = makeLayer(deferred)
 
       yield* Effect.gen(function* () {
@@ -156,7 +156,7 @@ describe("TaskService", () => {
         expect(failedTask).toBeDefined()
         expect(failedTask!.status).toBe("failed")
         expect(failedTask!.metadata).toMatchObject({
-          error: "SubagentRunnerService not available",
+          error: "AgentRunnerService not available",
         })
       }).pipe(Effect.provide(layer))
     }),
@@ -165,7 +165,7 @@ describe("TaskService", () => {
   describe("stop lifecycle", () => {
     it.live("stop while running: fiber interrupted, stopped status, TaskStopped event", () =>
       Effect.gen(function* () {
-        const deferred = yield* Deferred.make<SubagentResult>()
+        const deferred = yield* Deferred.make<AgentRunResult>()
         const interruptedRef = yield* Ref.make(false)
         const layer = makeLayerWithInterruptFlag(deferred, interruptedRef)
 
@@ -222,7 +222,7 @@ describe("TaskService", () => {
 
     it.live("stop pending task: no fiber to interrupt, transitions to stopped", () =>
       Effect.gen(function* () {
-        const deferred = yield* Deferred.make<SubagentResult>()
+        const deferred = yield* Deferred.make<AgentRunResult>()
         const layer = makeLayer(deferred)
 
         yield* Effect.gen(function* () {
@@ -244,10 +244,10 @@ describe("TaskService", () => {
 
     it.live("concurrent tasks get distinct child sessions via toolCallId correlation", () =>
       Effect.gen(function* () {
-        // Two deferreds — one per task. Runner publishes SubagentSpawned with
+        // Two deferreds — one per task. Runner publishes AgentRunSpawned with
         // the task's toolCallId before resolving, simulating the real runner.
-        const deferred1 = yield* Deferred.make<SubagentResult>()
-        const deferred2 = yield* Deferred.make<SubagentResult>()
+        const deferred1 = yield* Deferred.make<AgentRunResult>()
+        const deferred2 = yield* Deferred.make<AgentRunResult>()
         const callCount = yield* Ref.make(0)
 
         const storageLayer = Storage.MemoryWithSql()
@@ -262,16 +262,16 @@ describe("TaskService", () => {
           ]),
         )
 
-        const runnerLayer = Layer.succeed(SubagentRunnerService, {
+        const runnerLayer = Layer.succeed(AgentRunnerService, {
           run: (params) =>
             Effect.gen(function* () {
               const n = yield* Ref.getAndUpdate(callCount, (c) => c + 1)
               const childSessionId = n === 0 ? ("child-A" as SessionId) : ("child-B" as SessionId)
 
-              // Publish SubagentSpawned like the real runner does
+              // Publish AgentRunSpawned like the real runner does
               const eventStore = yield* EventStore
               yield* eventStore.publish(
-                new SubagentSpawned({
+                new AgentRunSpawned({
                   parentSessionId: params.parentSessionId,
                   childSessionId,
                   agentName: params.agent.name,
@@ -319,7 +319,7 @@ describe("TaskService", () => {
           yield* taskService.run(task1.id)
           yield* taskService.run(task2.id)
 
-          // Let fibers start — SubagentSpawned events are published by the fake runner
+          // Let fibers start — AgentRunSpawned events are published by the fake runner
           yield* Effect.sleep("50 millis")
 
           // Both tasks should have captured their own child session via captureAndTrack

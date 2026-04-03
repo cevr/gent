@@ -14,9 +14,9 @@ import { BunServices } from "@effect/platform-bun"
 import {
   Agents,
   DEFAULT_MODEL_ID,
-  SubagentRunnerService,
+  AgentRunnerService,
   type AgentName,
-  type SubagentRunner,
+  type AgentRunner,
 } from "../domain/agent.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
@@ -56,8 +56,8 @@ export interface E2ELayerConfig {
   readonly providerLayer: Layer.Layer<Provider>
   /** Extensions to wire. Default: all builtins */
   readonly extensions?: ReadonlyArray<LoadedExtension>
-  /** SubagentRunner mock. Default: returns success with empty text */
-  readonly subagentRunner?: SubagentRunner
+  /** AgentRunner mock. Default: returns success with empty text */
+  readonly subagentRunner?: AgentRunner
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
@@ -115,7 +115,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     )
 
   // Subagent runner
-  const defaultRunner: SubagentRunner = {
+  const defaultRunner: AgentRunner = {
     run: () =>
       Effect.succeed({
         _tag: "success" as const,
@@ -125,7 +125,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       }),
   }
   const subagentRunnerLayer = Layer.succeed(
-    SubagentRunnerService,
+    AgentRunnerService,
     config.subagentRunner ?? defaultRunner,
   )
 

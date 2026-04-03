@@ -2,9 +2,9 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import {
   AgentName,
-  SubagentRunnerService,
-  type SubagentResult,
-  type SubagentError,
+  AgentRunnerService,
+  type AgentRunResult,
+  type AgentRunError,
 } from "../domain/agent.js"
 import type { Task } from "../domain/task.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
@@ -49,7 +49,7 @@ export const DelegateTool = defineTool({
   ],
   params: DelegateParams,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
 
@@ -160,7 +160,7 @@ export const DelegateTool = defineTool({
     })
 
     const foregroundChain = Effect.fn("DelegateTool.foregroundChain")(function* () {
-      const results: SubagentResult[] = []
+      const results: AgentRunResult[] = []
       let previousOutput = ""
 
       for (const step of params.chain ?? []) {
@@ -188,7 +188,7 @@ export const DelegateTool = defineTool({
       }
 
       const chainSessionRefs = results
-        .filter((r): r is Extract<SubagentResult, { _tag: "success" }> => r._tag === "success")
+        .filter((r): r is Extract<AgentRunResult, { _tag: "success" }> => r._tag === "success")
         .map((r) => `session://${r.sessionId}`)
         .join(", ")
       const output =
@@ -209,11 +209,11 @@ export const DelegateTool = defineTool({
 
       const runTask = (
         task: DelegateItemType,
-      ): Effect.Effect<SubagentResult, SubagentError, never> =>
+      ): Effect.Effect<AgentRunResult, AgentRunError, never> =>
         resolveAgent(task.agent).pipe(
           Effect.flatMap((resolved) => {
             if (!resolved.ok) {
-              return Effect.succeed<SubagentResult>({
+              return Effect.succeed<AgentRunResult>({
                 _tag: "error",
                 error: resolved.error,
               })
@@ -231,7 +231,7 @@ export const DelegateTool = defineTool({
 
       const results = yield* Effect.forEach(tasks, runTask, { concurrency: MAX_CONCURRENCY })
       const successes = results.filter(
-        (r): r is Extract<SubagentResult, { _tag: "success" }> => r._tag === "success",
+        (r): r is Extract<AgentRunResult, { _tag: "success" }> => r._tag === "success",
       )
       const parallelSessionRefs = successes.map((r) => `session://${r.sessionId}`).join(", ")
       const output =

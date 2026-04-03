@@ -1,9 +1,5 @@
 import { Effect, Schema } from "effect"
-import {
-  SubagentRunnerService,
-  type AgentDefinition,
-  type SubagentRunner,
-} from "../domain/agent.js"
+import { AgentRunnerService, type AgentDefinition, type AgentRunner } from "../domain/agent.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import { requireAgent, ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -179,7 +175,7 @@ const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?
   ].join("\n")
 
 const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
-  runner: SubagentRunner
+  runner: AgentRunner
   reviewer: AgentDefinition
   runnerContext: WorkflowRunContext
   reviewInput: string
@@ -270,7 +266,7 @@ export const CodeReviewTool = defineTool({
   ],
   params: CodeReviewParams,
   execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: ToolContext) {
-    const runner = yield* SubagentRunnerService
+    const runner = yield* AgentRunnerService
     const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "report"

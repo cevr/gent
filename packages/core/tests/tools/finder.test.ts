@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FinderTool } from "@gent/core/tools/finder"
-import { Agents, SubagentRunnerService } from "@gent/core/domain/agent"
+import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
@@ -14,7 +14,7 @@ const ctx: ToolContext = {
   toolCallId: "test-call",
 }
 
-const mockRunnerSuccess = Layer.succeed(SubagentRunnerService, {
+const mockRunnerSuccess = Layer.succeed(AgentRunnerService, {
   run: (params) =>
     Effect.succeed({
       _tag: "success" as const,
@@ -24,7 +24,7 @@ const mockRunnerSuccess = Layer.succeed(SubagentRunnerService, {
     }),
 })
 
-const mockRunnerError = Layer.succeed(SubagentRunnerService, {
+const mockRunnerError = Layer.succeed(AgentRunnerService, {
   run: () =>
     Effect.succeed({
       _tag: "error" as const,
@@ -32,7 +32,7 @@ const mockRunnerError = Layer.succeed(SubagentRunnerService, {
     }),
 })
 
-const mockRunnerErrorWithSession = Layer.succeed(SubagentRunnerService, {
+const mockRunnerErrorWithSession = Layer.succeed(AgentRunnerService, {
   run: () =>
     Effect.succeed({
       _tag: "error" as const,

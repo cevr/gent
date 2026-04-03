@@ -19,8 +19,8 @@ import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { AgentActor, AgentLoop } from "../runtime/agent/agent-loop.js"
-import { InProcessRunner, SubprocessRunner } from "../runtime/agent/subagent-runner.js"
+import { AgentLoop } from "../runtime/agent/agent-loop.js"
+import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -39,7 +39,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { EventStoreLive } from "./event-store.js"
-import { buildBasePromptSections, compileSystemPrompt } from "./system-prompt.js"
+import { buildBasePromptSections } from "./system-prompt.js"
 import type { InteractionRequestType } from "../domain/interaction-request.js"
 
 /** Marker service — construction triggers recovery of pending interaction requests */
@@ -479,22 +479,19 @@ export const createDependencies = (config: DependenciesConfig) => {
           sectionMap.set(s.id, s)
         }
         const baseSections = [...sectionMap.values()]
-        const systemPrompt = compileSystemPrompt(baseSections)
-
         const runnerConfig = {
-          systemPrompt,
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
             : {}),
           ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
         }
-        const agentActorLive = AgentActor.Live({ baseSections })
-        const subagentRunnerLive =
+        const agentLoopLive = AgentLoop.Live({ baseSections })
+        const agentRunnerLive =
           config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? SubprocessRunner(runnerConfig)
-            : InProcessRunner(runnerConfig).pipe(Layer.provideMerge(agentActorLive))
+            : InProcessRunner(runnerConfig).pipe(Layer.provideMerge(agentLoopLive))
 
-        return Layer.mergeAll(AgentLoop.Live({ baseSections }), agentActorLive, subagentRunnerLive)
+        return Layer.mergeAll(agentLoopLive, agentRunnerLive)
       }),
     ),
     allDeps,
