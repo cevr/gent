@@ -290,6 +290,7 @@ export function ClientProvider(props: ClientProviderProps) {
       const sessionId = key.slice(0, sep) as SessionId
       const branchId = key.slice(sep + 1) as BranchId
       let cancelled = false
+      const isActiveSession = () => !cancelled && sessionKey() === key
 
       const forwardExtensionSnapshot = (event: EventEnvelope["event"]): void => {
         if (event._tag === "ExtensionUiSnapshot" && extensionSnapshotCb !== undefined) {
@@ -304,7 +305,7 @@ export function ClientProvider(props: ClientProviderProps) {
       }
 
       const processEvent = (envelope: EventEnvelope): void => {
-        if (cancelled) return
+        if (!isActiveSession()) return
 
         log.debug("event.received", {
           eventId: envelope.id,
@@ -408,6 +409,7 @@ export function ClientProvider(props: ClientProviderProps) {
               })
 
               yield* Effect.sync(() => {
+                if (!isActiveSession()) return
                 setConnectionIssue(null)
                 if (snapshot.reasoningLevel !== undefined) {
                   dispatchSession({
@@ -444,6 +446,7 @@ export function ClientProvider(props: ClientProviderProps) {
               log.info("ctx.stream.open", { sessionId, branchId, after })
               yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
                 Effect.sync(() => {
+                  if (!isActiveSession()) return
                   try {
                     processEvent(envelope)
                   } catch (err) {
