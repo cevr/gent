@@ -1,34 +1,46 @@
-# Extension Runtime Fidelity Plan
+# Extension Runtime Audit And Simplification Plan
 
-Status: completed on 2026-04-03.
+Status: proposed on 2026-04-03.
+
+## Batch Tracker
+
+- [ ] Batch 1 — Tell The Truth About Ownership
+- [ ] Batch 2 — One Mailbox For All Actor Ingress
+- [ ] Batch 3 — Delete The Adapters And Standardize On One Actor Substrate
+- [ ] Batch 4 — Thin Server/Client Truth
+- [ ] Batch 5 — Consolidate Tests Around Behavior Seams
+- [ ] Batch 6 — Remove High-Value Suppression Debt
+- [ ] Batch 7 — Final Verification
 
 ## Context
 
-The current extension system is good enough to ship, but not honest about what it is.
+The current system is much better than it was. It is still not honest enough.
 
-- It is actor-shaped, not actor-faithful.
-- It isolates startup failures better than before, but supervision is still mostly log-and-degrade.
-- Status and diagnostics are assembled in too many places.
-- The client/runtime seam duplicates protocol and status logic.
-- The test suite mixes strong behavioral regression tests with low-signal shape/inventory tests.
-- `@effect-diagnostics` suppressions are partly justified host-boundary glue and partly real debt.
+- The extension runtime is actor-shaped, not fully actor-faithful.
+- The best mailbox seam is the per-session delivery queue in `EventPublisher`, but `send` / `ask` still bypass it.
+- Some extensions own state. Some only expose tools/hooks/jobs/UI. We blur them together.
+- We dogfood `effect-machine`, but only halfway. Gent still rebuilds mailbox, supervision, and lifecycle semantics around it.
+- The client/runtime split is much healthier now, but server truth still leaks back into SDK/TUI seams.
+- The test suite has strong behavior seams and weak shape/inventory ballast at the same time.
+- Most `nodeBuiltinImport:off` suppressions are fine. Wildcard `*:off` suppressions are real debt.
 
-This plan fixes the foundation first, then deletes scaffolding, then cleans tests and suppressions on a stable architecture.
+This plan fixes the lie first, then deletes scaffolding.
 
 ## Scope
 
 In scope:
 
-- make the extension runtime faithful enough to the actor model to justify the term
-- simplify extension boot, health, projection, and client seams without losing features
-- consolidate and sharpen tests around behavior seams
-- remove high-value suppression debt
+- make the actor story honest
+- simplify the extension model without losing features
+- dogfood `effect-machine` more faithfully
+- consolidate tests around behavior seams
+- remove high-value effect-language-service suppression debt
 
 Out of scope:
 
+- changing local vs remote topology again
 - redesigning provider auth
-- redesigning memory feature semantics beyond its scheduler boundary
-- changing remote/local product topology again
+- changing memory semantics beyond architecture needed by these batches
 
 ## Governing Principles
 
@@ -48,155 +60,105 @@ Out of scope:
 - `effect-v4`
 - `code-style`
 - `tdd`
+- `test`
 - `review`
 - `bun`
 - `opentui`
+- `repo`
 
 ## Global Rules
 
 Every batch must:
 
 1. end with exactly one single-purpose commit
-2. run:
-   - `bun run gate`
-3. run an independent review agent on the batch diff before continuing
-4. stop if the review finds a high-severity issue
-5. only continue after review findings are addressed or explicitly deferred in the plan
-6. do not begin the next batch until the current batch commit exists, verification is green, and review has signed off
+2. run `bun run gate`
+3. get an independent review agent on the batch diff before continuing
+4. stop if review finds a high-severity issue
+5. only continue after review findings are addressed or explicitly deferred here
+6. not begin the next batch until the current batch commit exists, verification is green, and review has signed off
 
-## Outcome
+## Audit Summary
 
-Completed batch commits:
+### Current Truth
 
-- `4421f7b` — Batch 0
-- `f3bc0b5` — Batch 1
-- `87ee015` — Batch 2
-- `024e5b6` — Batch 3
-- `334f917` — Batch 4
-- `89549d8` — Batch 5
-- `c18323b` — Batch 6
-- `1f14684` — Batch 7
-- `14b97da` — Batch 8
+- Actor ownership is split. Some extensions own state. Others are just tools/hooks/jobs/UI around other owned boundaries.
+- `task-tools` should be treated as one owned boundary and named honestly as the task extension. Do not split it into “service vs extension” in the architecture language.
+- `publish` is queued by session. `send` and `ask` still hit refs directly.
+- `fromReducer` is still a custom semaphore-backed pseudo-actor.
+- `fromMachine` uses `effect-machine`, but Gent still rebuilds supervision and lifecycle above it.
+- Health/status is much better, but still more distributed than it should be.
+- Tests are strongest when they hit queue/transport/runtime seams and weakest when they mirror adapters or file layout.
 
-Final audit result:
+### Prior Art: Copy / Reject
 
-- actor lifecycle is parent-owned
-- delivery is queued, not inline on `EventStore.publish`
-- extension health has one server-owned model
-- client-side protocol/status duplication was removed
-- fast integration coverage runs through `bun run test` / `bun run gate`
-- remaining suppressions are boundary glue or low-value warnings, not hidden batch debt
+Copy:
 
-Review prompt baseline for every batch:
+- `opencode`: explicit local vs attach/server topology, race/reconnect/PTY regression posture
+- `pi-mono`: one runtime core with multiple shells, runtime factory for session replacement, source provenance discipline
+- `effect-machine`: mailbox, typed `ask`, supervision, exit/watch, simulation-oriented tests
 
-- audit for behavioral regressions
-- audit for architecture drift against this plan
-- audit for test quality and missing coverage
-- audit for new suppression comments or type escapes
+Reject:
+
+- `opencode` single-flight runners or buses as pretend actors
+- `pi-mono` ambient imperative extension runtime as an end state
+- Gent’s current split-brain actor story: semaphore actors, machine actors, and runtime supervision broker all at once
+
+## Decisions Already Made
+
+1. Keep one unified extension system.
+2. Prefer composition over explicit discriminants or declared capability manifests.
+3. Keep `actor` as the only public stateful extension primitive.
+4. Stateful extensions must provide one actor-shaped definition. Stateless extensions do not need one.
+5. Keep turn influence declarative and actor-owned via public snapshot directives, not imperative derive hooks where avoidable.
+6. Use `.jobs(...)` for durable scheduled work.
+7. The task extension is one owned boundary. Name it `TaskExtension`, not `TaskService`.
+8. Bus stays observation/side-effect plumbing, not command ownership.
+9. Keep explicit local vs remote topology.
+10. `bun run gate` is the batch gate.
+11. Delete both `fromReducer` and `fromMachine` from the target public model.
 
 ## Batches
 
-### Batch 0 — Remove `test:integration` And Fold It Into `test`
+### Batch 1 — Tell The Truth About Ownership
 
 Goal:
 
-- make fast integration tests part of the normal `test` pipeline so `bun run gate` covers them by default
+- keep the public extension surface minimal:
+  - actor optional for stateless extensions
+  - actor required for stateful extensions
+  - actor
+  - tools
+  - jobs
+  - interceptors
+  - client
 
 Why:
 
-- these tests were split out to protect speed, but they are now fast enough to belong in the main path
-- if integration coverage is important enough to gate every batch, it should not require a second human command forever
+- the current model calls too many things “actors”
+- public API is more complicated than it needs to be
+- this is the root lie behind later complexity
 
 Justification:
-
-- scaffold first
-- every later batch benefits from one honest default verification path
-
-Files:
-
-- `/Users/cvr/Developer/personal/gent/package.json`
-- `/Users/cvr/Developer/personal/gent/turbo.json`
-- `/Users/cvr/Developer/personal/gent/packages/core/package.json`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/package.json`
-- `/Users/cvr/Developer/personal/gent/apps/tui/package.json`
-- `/Users/cvr/Developer/personal/gent/packages/e2e/package.json`
-- docs referencing `test:integration`
-
-Brain principles:
 
 - `foundational-thinking`
-- `prove-it-works`
-- `experience-first`
+- `boundary-discipline`
 - `subtract-before-you-add`
-
-Relevant skills:
-
-- `bun`
-- `tdd`
-- `code-style`
-
-Changes:
-
-- fold fast integration suites into `bun run test`
-- remove `test:integration` as a script entirely
-- ensure `bun run gate` executes those suites automatically
-- document the new test contract in repo docs if needed
-
-Tasks:
-
-1. remove `test:integration` from root and workspace package scripts
-2. remove any `test:integration` turbo task wiring
-3. fold fast TUI and e2e integration suites into each package `test` script
-4. update docs, comments, and agent instructions that still mention `test:integration`
-5. run `bun run gate`
-6. get independent review on the batch diff
-7. commit only Batch 0 changes
-
-Verification:
-
-- `bun run gate`
-- prove former integration-only failures now fail `bun run gate`
-- independent review agent on the commit diff
-
-Commit rule:
-
-- one batch, one commit
-- commit only Batch 0 changes before moving on
-
-### Batch 1 — Make The Actor Contract Honest
-
-Goal:
-
-- define the real actor runtime contract and remove lifecycle ambiguity
-
-Why:
-
-- the current system claims `spawn -> start -> ... -> stop`, but adapters eagerly start themselves
-- `ask` is promised uniformly but not actually implemented uniformly
-- raw state access and host-side derive weaken actor ownership
-
-Justification:
-
-- foundational data structures first
-- parent-owned lifecycle before supervision policy
-- no further simplification will stick if the core contract stays muddy
 
 Files:
 
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/from-reducer.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/from-machine.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-actor-shared.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/state-runtime.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/actor.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/lifecycle.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/from-machine.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/task-tools.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/task-tools-service.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/handoff.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/auto.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/plan-integration.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/task-service.test.ts`
 
 Brain principles:
 
 - `foundational-thinking`
 - `boundary-discipline`
-- `serialize-shared-state-mutations`
 - `subtract-before-you-add`
 
 Relevant skills:
@@ -205,67 +167,96 @@ Relevant skills:
 - `effect-v4`
 - `tdd`
 
+Sketch:
+
+```ts
+const TaskExtension = extension("@gent/task")
+  .actor(TaskActor)
+  .tools(TaskCreateTool, TaskListTool, TaskGetTool)
+  .jobs(...)
+  .build()
+
+interface GentExtension {
+  readonly manifest: ExtensionManifest
+  readonly spawn?: SpawnExtensionRef
+  readonly tools?: ReadonlyArray<AnyToolDefinition>
+  readonly jobs?: ReadonlyArray<ScheduledJobContribution>
+  readonly interceptors?: ReadonlyArray<ExtensionInterceptorDescriptor>
+}
+
+const GitExtension = extension("@gent/git")
+  .tools(GitStatusTool, GitDiffTool)
+  .interceptors(GitPromptInterceptor)
+  .build()
+```
+
 Changes:
 
-- make `spawn` cold and parent-owned
-- keep one honest `ExtensionRef` surface with explicit `void` replies where needed
-- remove eager start from adapters
-- remove raw `Ref` escape hatches from adapter init hooks; deeper projection ownership lands later
-- add red tests for lifecycle ownership before implementation
+- keep stateless extensions actorless
+- keep actor as the only public stateful primitive
+- require stateful extensions to provide one actor-shaped definition
+- actor owns public snapshot and declarative turn directives
+- rename scheduled work to `.jobs(...)`
+- delete `fromReducer` and `fromMachine` from the target public surface
+- keep the task extension as one owned boundary, just named honestly
+- preserve feature set; this is a truth-and-boundary batch, not a behavior change batch
 
 Tasks:
 
-1. write or tighten red tests for cold spawn, explicit start, and stop ownership
-2. keep `ask` on the actor boundary, treat unsupported requests as loud protocol/runtime errors, and use explicit `void` replies for command-like requests
-3. remove eager actor start from reducer and machine adapters
-4. make runtime own lifecycle transitions explicitly
-5. replace raw `Ref` state reach-through with snapshot/update helpers where the adapter contract currently leaks
-6. run `bun run gate`
-7. get independent review on the batch diff
-8. commit only Batch 1 changes
+1. write red tests for the intended minimal builder surface where the public seam changes
+2. redesign the extension builder around actor + tools + jobs + interceptors
+3. define the actor-shaped extension contract without `fromReducer` / `fromMachine`
+4. move current `derive(...).uiModel` cases to actor-owned `snapshot`
+5. move current turn-time `derive` cases to declarative actor turn directives where possible
+6. rename the task boundary in code/docs to `TaskExtension` semantics where needed
+7. update current builtins that obviously violate the new public surface
+8. run `bun run gate`
+9. run independent review
+10. commit exactly one Batch 1 commit
 
 Verification:
 
 - `bun run gate`
-- add/keep focused actor lifecycle tests
-- independent review agent on the commit diff
+- focused tests around extension role composition
+- independent review agent
 
 Commit rule:
 
 - one batch, one commit
-- commit only Batch 1 changes before moving on
 
-### Batch 2 — Queue Delivery, Don’t Inline Reduce
+### Batch 2 — One Mailbox For All Actor Ingress
 
 Goal:
 
-- move extension message/event delivery to real per-session queued processing
+- make `publish`, `send`, and `ask` all serialize through the same per-session queue
 
 Why:
 
-- current reduction runs inline on the `EventStore.publish` call stack
-- nested delivery currently gets skipped instead of queued
-- the storage boundary should not own extension reduction at all
+- right now only event delivery is mailboxed
+- direct `send` / `ask` calls weaken the actor claim
 
 Justification:
-
-- this is the main reason “actor model” is currently overstated
-- it is also the main serialization boundary for shared mutable extension state
-
-Files:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/state-runtime.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/turn-control.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/concurrency.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/event-routing.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/reducing-event-store.test.ts`
-
-Brain principles:
 
 - `serialize-shared-state-mutations`
 - `fix-root-causes`
 - `redesign-from-first-principles`
+
+Files:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/event-publisher.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/state-runtime.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/from-reducer.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/from-machine.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/turn-control.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/concurrency.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/event-routing.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/event-publisher.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/e2e/tests/queue-contract.test.ts`
+
+Brain principles:
+
+- `serialize-shared-state-mutations`
+- `fix-root-causes`
 - `boundary-discipline`
 
 Relevant skills:
@@ -274,196 +265,195 @@ Relevant skills:
 - `effect-v4`
 - `tdd`
 
+Sketch:
+
+```ts
+interface QueuedEnvelope {
+  readonly sessionId: SessionId
+  readonly branchId?: BranchId
+  readonly op:
+    | { readonly _tag: "publish"; readonly event: AgentEvent }
+    | { readonly _tag: "send"; readonly message: AnyExtensionCommandMessage }
+    | {
+        readonly _tag: "ask"
+        readonly message: AnyExtensionRequestMessage
+        readonly reply: Deferred.Deferred<unknown>
+      }
+}
+
+interface ExtensionMailbox {
+  readonly offer: (envelope: QueuedEnvelope) => Effect.Effect<void>
+}
+```
+
 Changes:
 
-- no synchronous extension reduction from event-store publish
-- no nested publish skip path
-- queued processing per session/extension
-- define caller wait policy explicitly
-- keep storage append separate from delivery; ordinary command paths may still await delivery for causal consistency
+- no mixed ingress semantics
+- no synchronous direct actor mutation outside the queue
+- nested same-session publishes queue behind current work instead of side-stepping semantics
 
 Tasks:
 
-1. add red tests for nested publish ordering, no-skip delivery, and slow extension isolation
-2. introduce per-session or per-extension queues at the runtime boundary
-3. remove inline reduction from event-store publish paths
-4. define and encode backpressure/error handling semantics in code and tests
-5. verify publish callers still see correct durability/ordering guarantees
-6. run `bun run gate`
-7. get independent review on the batch diff
-8. commit only Batch 2 changes
+1. add red tests for ordered `publish` / `send` / `ask` delivery through one queue
+2. add a red test for slow extension isolation
+3. route all actor ingress through the same queued runtime path
+4. keep caller wait semantics explicit and tested
+5. run `bun run gate`
+6. run independent review
+7. commit exactly one Batch 2 commit
 
 Verification:
 
 - `bun run gate`
-- regression tests for nested publish, ordering, and slow/failing extension delivery
-- independent review agent on the commit diff
+- queue ordering and slow-handler regression coverage
+- independent review agent
 
 Commit rule:
 
 - one batch, one commit
-- commit only Batch 2 changes before moving on
 
-### Batch 3 — Add Real Supervision Policy
+### Batch 3 — Delete The Adapters And Standardize On One Actor Substrate
 
 Goal:
 
-- make extension runtime failures supervised instead of merely logged and marked failed
+- delete `fromReducer` and `fromMachine`
+- make extensions provide one actor-shaped definition backed by `effect-machine`
 
 Why:
 
-- current runtime failure handling is mostly status bookkeeping
-- actor model value here is failure isolation with explicit supervision semantics
+- Gent currently has three stories at once:
+  - custom reducer pseudo-actors
+  - machine adapters
+  - runtime supervision glue
+- that is architectural duplication disguised as flexibility
 
 Justification:
 
-- once delivery is mailbox-based, restart/escalation policy becomes coherent
-- without policy, “actor failure isolation” remains half-true
+- `fix-root-causes`
+- `foundational-thinking`
 
 Files:
 
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/from-reducer.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/from-machine.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/state-runtime.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`
+- `/Users/cvr/Developer/personal/effect-machine/src/actor.ts`
+- `/Users/cvr/Developer/personal/effect-machine/src/internal/runtime.ts`
+- `/Users/cvr/Developer/personal/effect-machine/test/ask.test.ts`
+- `/Users/cvr/Developer/personal/effect-machine/test/supervision.test.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/actor.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/concurrency.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/activation.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/from-machine.test.ts`
 
 Brain principles:
 
 - `fix-root-causes`
 - `foundational-thinking`
-- `experience-first`
+- `migrate-callers-then-delete-legacy-apis`
 
 Relevant skills:
 
-- `architecture`
 - `effect-v4`
+- `architecture`
 - `tdd`
+
+Sketch:
+
+```ts
+type ExtensionActorInput =
+  | {
+      readonly _tag: "Published"
+      readonly event: AgentEvent
+      readonly ctx: ExtensionReduceContext
+    }
+  | {
+      readonly _tag: "Command"
+      readonly message: AnyExtensionCommandMessage
+      readonly branchId?: BranchId
+    }
+  | ReplyEvent<
+      "Request",
+      {
+        readonly message: AnyExtensionRequestMessage
+        readonly branchId?: BranchId
+      },
+      unknown
+    >
+
+interface ExtensionActor<State> {
+  readonly machine: Machine<State, ExtensionActorInput, ExtensionActorRequirements>
+  readonly snapshot: {
+    readonly schema: Schema.Schema<unknown>
+    readonly project?: (state: State) => unknown
+  }
+}
+
+const TaskActor: ExtensionActor<TaskState> = {
+  machine: TaskMachine,
+  snapshot: {
+    schema: TaskListSnapshot,
+    project: (state) => ({ tasks: state.tasks }),
+  },
+}
+```
 
 Changes:
 
-- one-for-one supervision policy
-- bounded restart budget
-- terminal failed state after exhaustion
-- explicit distinction between activation failure and actor runtime failure
+- actor required only for stateful extensions
+- keep one event algebra for publish/send/ask
+- keep one actor substrate for lifecycle, supervision, ask, and snapshots
+- remove Gent-owned adapter runtimes
+- if ergonomic helpers survive, they compile to this actor shape and stay internal/thin
 
 Tasks:
 
-1. add red tests for restart-on-failure, retry budget exhaustion, and terminal failed state
-2. encode supervision policy in runtime state instead of ad hoc failure bookkeeping
-3. distinguish activation failures from runtime failures in types and status
-4. ensure restart does not violate queue ordering or lifecycle ownership from prior batches
-5. run `bun run gate`
-6. get independent review on the batch diff
-7. commit only Batch 3 changes
+1. write red tests for the actor semantics Gent expects from one actor substrate
+2. define the unified extension actor input algebra
+3. migrate `fromReducer` callers onto the actor-shaped contract
+4. migrate `fromMachine` callers onto the same contract
+5. delete both adapter surfaces
+6. collapse duplicated lifecycle/supervision logic where `effect-machine` already owns it
+7. preserve current external behavior while deleting internal substrate duplication
+8. run `bun run gate`
+9. run independent review
+10. commit exactly one Batch 3 commit
 
 Verification:
 
 - `bun run gate`
-- tests for restart, retry exhaustion, and final failed state
-- independent review agent on the commit diff
+- adapter/runtime actor contract tests
+- independent review agent
 
 Commit rule:
 
 - one batch, one commit
-- commit only Batch 3 changes before moving on
 
-### Batch 4 — Collapse Extension Boot Into One Reconciler
+### Batch 4 — Thin Server/Client Truth
 
 Goal:
 
-- replace the multi-pass discovery/setup/validate/startup/scheduler/status assembly with one host reconciliation pipeline
+- keep one server-owned health/protocol truth and delete leftover client-side reassembly
 
 Why:
 
-- validation and health are computed in more than one place
-- registry currently re-derives facts already known by boot
-- scheduler diagnostics are bolted on after activation instead of being part of host truth
+- current system is better, but SDK/TUI still carry more truth than they should
 
 Justification:
 
-- duplicate truth is already producing architecture drag
-- this is a straightforward subtraction batch once actor/runtime rules are stable
-
-Files:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/activation.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/scheduler.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/activation.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/registry.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/scheduler.test.ts`
-
-Brain principles:
-
-- `subtract-before-you-add`
 - `boundary-discipline`
-- `encode-lessons-in-structure`
-- `foundational-thinking`
-
-Relevant skills:
-
-- `architecture`
-- `effect-v4`
-- `tdd`
-
-Changes:
-
-- single host reconciliation result:
-  - active extensions
-  - failed extensions
-  - scheduled job diagnostics
-  - static contribution catalog
-- registry stops re-validating or re-joining status
-
-Tasks:
-
-1. map current multi-pass extension boot/status flow end-to-end before cutting code
-2. create one reconciler result that owns extension activation, validation, scheduler diagnostics, and catalog assembly
-3. delete duplicate validation/status joins from registry and startup wiring
-4. update tests so non-fatal degradation is asserted through the new reconciler output
-5. run `bun run gate`
-6. get independent review on the batch diff
-7. commit only Batch 4 changes
-
-Verification:
-
-- `bun run gate`
-- contract tests for one-pass reconciliation and non-fatal extension degradation
-- independent review agent on the commit diff
-
-Commit rule:
-
-- one batch, one commit
-- commit only Batch 4 changes before moving on
-
-### Batch 5 — Unify Extension Health Surface
-
-Goal:
-
-- replace split activation/actor/scheduler status with one server-owned health model
-
-Why:
-
-- current health data is joined across registry, runtime, RPC, and TUI
-- the TUI widget is compensating for backend fragmentation
-
-Justification:
-
-- health is one product surface and should have one owner
-- this batch deletes both server and client glue
+- `subtract-before-you-add`
 
 Files:
 
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpcs/extension.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/extension-health.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-client.ts`
+- `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
+- `/Users/cvr/Developer/personal/gent/packages/sdk/src/local-supervisor.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/context.tsx`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/components/connection-widget.tsx`
 - `/Users/cvr/Developer/personal/gent/apps/tui/tests/widgets-render.test.tsx`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-health.test.ts`
 
 Brain principles:
 
@@ -478,211 +468,156 @@ Relevant skills:
 - `opentui`
 - `tdd`
 
+Sketch:
+
+```ts
+interface ExtensionHealth {
+  readonly summary: {
+    readonly status: "healthy" | "degraded"
+    readonly subtitle?: string
+  }
+  readonly extensions: ReadonlyArray<{
+    readonly id: string
+    readonly activation: { readonly status: "active" | "failed" }
+    readonly actor?: ExtensionActorStatusInfo
+    readonly scheduler?: { readonly failures: ReadonlyArray<ScheduledJobFailureInfo> }
+  }>
+}
+```
+
 Changes:
 
-- one `ExtensionHealth` model from the server
-- TUI consumes one health feed instead of recomputing categories
-- remove duplicated status joins and refresh glue where possible
+- one health truth from server to client
+- delete client-side protocol/status reconstruction where transport can own it
+- preserve explicit local vs remote topology
 
 Tasks:
 
-1. define one server-owned `ExtensionHealth` model covering activation, actor runtime, and scheduler status
-2. thread that model through transport contract, RPCs, and handlers
-3. simplify TUI extension status context to consume one feed instead of joining categories
-4. update degraded-state and refresh tests around the new health model
+1. identify remaining duplicated truth between server, SDK, and TUI
+2. move it server-side or delete it
+3. simplify SDK/TUI consumers to thin adapters
+4. tighten degraded-state UI tests around the remaining surface
 5. run `bun run gate`
-6. get independent review on the batch diff
-7. commit only Batch 5 changes
+6. run independent review
+7. commit exactly one Batch 4 commit
 
 Verification:
 
 - `bun run gate`
-- TUI tests for degraded activation/runtime/scheduler states and refresh behavior
-- independent review agent on the commit diff
+- degraded health and reconnect tests
+- independent review agent
 
 Commit rule:
 
 - one batch, one commit
-- commit only Batch 5 changes before moving on
 
-### Batch 6 — Remove Client-Side Protocol Duplication
+### Batch 5 — Consolidate Tests Around Behavior Seams
 
 Goal:
 
-- delete duplicate protocol-registration logic in the TUI/client path if message metadata already provides enough typing/decoding information
+- keep the strong behavior tests, delete duplicate shape/inventory ballast, and add missing bug-class coverage
 
 Why:
 
-- current client protocol registry is likely duplicate truth
-- protocol knowledge should live at the boundary, not in two places
+- current suite has real value, but also repeats the same queue/event-publisher story and over-tests adapter state shape
 
 Justification:
 
-- this is pure subtraction if Batch 5 is complete
-- it reduces one more category of drift between server and TUI
-
-Files:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-protocol.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-client.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/loader.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/resolve.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/context.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-discovery.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-resolve.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-integration.test.ts`
-
-Brain principles:
-
+- `prove-it-works`
+- `experience-first`
 - `subtract-before-you-add`
-- `boundary-discipline`
-- `foundational-thinking`
-
-Relevant skills:
-
-- `architecture`
-- `effect-v4`
-- `tdd`
-
-Changes:
-
-- prefer message metadata / shared protocol definitions as single source of truth
-- delete client-side duplicate protocol map if not needed
-- keep type-safe ask/send behavior intact
-
-Tasks:
-
-1. trace every current client-side protocol registration or decode table
-2. remove duplicate client protocol maps where message metadata already carries the truth
-3. preserve typed ask/send behavior through shared protocol definitions or metadata
-4. collapse tests onto the surviving client seam
-5. run `bun run gate`
-6. get independent review on the batch diff
-7. commit only Batch 6 changes
-
-Verification:
-
-- `bun run gate`
-- extension client/TUI protocol tests stay green with fewer moving parts
-- independent review agent on the commit diff
-
-Commit rule:
-
-- one batch, one commit
-- commit only Batch 6 changes before moving on
-
-### Batch 7 — Consolidate Tests Around Behavioral Seams
-
-Goal:
-
-- keep the good regression tests, cut or merge low-signal structural tests
-
-Why:
-
-- current suites include real behavioral guards and also a lot of shape/inventory noise
-- duplicate collision/precedence coverage is spread across too many files
-
-Justification:
-
-- test cleanup should happen after the architecture stabilizes, not before
-- TDD principles say public seam and behavior first
 
 Files:
 
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/api.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/builtins.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/loader.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/registry.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/memory/state.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/memory/dreaming.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/client-context.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-discovery.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-resolve.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/actor.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/concurrency.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/event-routing.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/from-machine.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/event-publisher.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/e2e/tests/core-boundary.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/e2e/tests/queue-contract.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/e2e/tests/watch-state-parity.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/e2e/tests/supervisor.test.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-integration.test.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/tests/widgets-render.test.tsx`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/tests/client.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/tests/supervisor.test.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/integration/session-feed-boundary.test.tsx`
 
 Brain principles:
 
 - `prove-it-works`
-- `boundary-discipline`
 - `subtract-before-you-add`
+- `experience-first`
 
 Relevant skills:
 
 - `tdd`
 - `test`
-- `code-style`
+- `bun`
+
+Sketch:
+
+```ts
+describe("queue contract", () => {
+  test("serializes publish/send/ask in order", ...)
+  test("queues nested same-session work instead of skipping", ...)
+  test("isolates a slow actor without corrupting ordering", ...)
+})
+```
 
 Changes:
 
-- preserve high-value behavior suites:
-  - agent-loop continuation/recovery/interaction
-  - scheduler
-  - memory vault
-  - TUI degraded-state rendering
-  - local supervisor lifecycle
-- collapse duplicate extension collision/precedence coverage
-- replace fake-provider/context tests with real public-seam tests
-- split unrelated concerns jammed into single test files
+- one owner for each behavior seam
+- fewer file-mirror tests
+- more public contract and bug-class tests
 
 Tasks:
 
-1. inventory extension, sdk, and TUI test files by behavior seam vs shape noise
-2. delete or merge low-signal inventory/structure tests
-3. keep and sharpen regression tests around public behavior seams
-4. replace fake provider/context coverage with real public seam tests where still needed
-5. split overloaded files only where it improves ownership and clarity
+1. delete exact duplicates first
+2. collapse the event-publisher / queue overlap into fewer contract files
+3. shrink adapter-shape tests to a minimal contract surface
+4. keep and expand strong transport/queue/reconnect/runtime behavior tests
+5. add any missing slow-handler or race regression found during audit
 6. run `bun run gate`
-7. get independent review on the batch diff
-8. commit only Batch 7 changes
+7. run independent review
+8. commit exactly one Batch 5 commit
 
 Verification:
 
 - `bun run gate`
-- review test diff specifically for behavior-vs-implementation quality
-- independent review agent on the commit diff
+- clear ownership of each major behavior seam in test files
+- independent review agent
 
 Commit rule:
 
 - one batch, one commit
-- commit only Batch 7 changes before moving on
 
-### Batch 8 — Pay Down High-Value Suppression Debt
+### Batch 6 — Remove High-Value Suppression Debt
 
 Goal:
 
-- remove suppressions that hide weak typing or unnecessary abstraction leaks while keeping justified host-boundary suppressions
+- remove or redesign wildcard `@effect-diagnostics-next-line *:off` seams
 
 Why:
 
-- wildcard `*:off` suppressions are mostly real debt
-- many `nodeBuiltinImport:off` suppressions are actually fine and should stay
+- these mark the places where runtime ownership is still not modeled cleanly
+- host-edge `nodeBuiltinImport:off` comments are mostly justified and should not be churned gratuitously
 
 Justification:
 
-- cleanup should target high-value suppressions only
-- don’t churn justified host-boundary seams for ideology points
+- `boundary-discipline`
+- `fix-root-causes`
 
 Files:
 
 - `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-runtime.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/event-bus.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/interaction-request.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/interaction-handlers.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/tools/ask-user.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/index.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/e2e-layer.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/fixtures.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/server/src/main.ts`
+- `/Users/cvr/Developer/personal/gent/apps/server/src/debug/scenario.ts`
+- any newly revealed wildcard suppression seams
 
 Brain principles:
 
 - `boundary-discipline`
 - `fix-root-causes`
-- `subtract-before-you-add`
 
 Relevant skills:
 
@@ -690,125 +625,111 @@ Relevant skills:
 - `code-style`
 - `tdd`
 
+Sketch:
+
+```ts
+interface GentRuntime {
+  readonly cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => void
+  readonly fork: <A, E, R>(effect: Effect.Effect<A, E, R>) => Fiber.Fiber<A, E>
+  readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Promise<A>
+}
+```
+
 Changes:
 
-- remove wildcard runtime-boundary suppressions by tightening types
-- replace raw JSON interaction persistence path with schema-backed encoding/decoding
-- remove trivial no-op/time suppressions
-- leave justified host-boundary `nodeBuiltinImport:off` comments alone unless a stronger boundary appears
+- remove wildcard suppressions where the model can be made honest
+- keep narrow justified host-boundary suppressions
 
 Tasks:
 
-1. inventory remaining suppressions by category: justified boundary, real debt, test noise
-2. remove wildcard suppressions by tightening the underlying types or seams
-3. replace any raw JSON persistence path with schema-backed encoding/decoding
-4. keep justified host-boundary suppressions and document why they survive
-5. run `bun run gate`
-6. get independent review on the batch diff
-7. commit only Batch 8 changes
+1. inventory remaining wildcard suppressions
+2. fix model seams where possible instead of muting diagnostics
+3. keep only narrow justified suppressions with explicit rationale
+4. run `bun run gate`
+5. run independent review
+6. commit exactly one Batch 6 commit
 
 Verification:
 
 - `bun run gate`
-- grep audit of remaining suppressions with explanation for each survivor
-- independent review agent on the commit diff
+- suppression inventory diff
+- independent review agent
 
 Commit rule:
 
 - one batch, one commit
-- commit only Batch 8 changes before moving on
 
-### Batch 9 — Final Verification Against Plan
+### Batch 7 — Final Verification
 
 Goal:
 
-- verify the final system against the architectural claims in this plan
+- verify the implementation against this plan, update docs, and close the work cleanly
 
 Why:
 
-- without a final audit, cleanup batches tend to drift and leave quiet contradictions behind
+- architecture work rots immediately if the docs and plan are left behind
+
+Justification:
+
+- `prove-it-works`
 
 Files:
 
 - `/Users/cvr/Developer/personal/gent/PLAN.md`
 - `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
-- all touched files from Batches 1-8
+- any doc or ADR files touched by the batches
 
 Brain principles:
 
 - `prove-it-works`
-- `fix-root-causes`
-- `experience-first`
+- `encode-lessons-in-structure`
 
 Relevant skills:
 
-- `review`
 - `architecture`
-- `tdd`
+- `review`
 
-Changes:
+Sketch:
 
-- no feature work unless final audit finds a real miss
-- compare end state to each batch goal
-- document intentional deviations
-- update `ARCHITECTURE.md` if the final design diverged
+```md
+- [ ] plan batch goals all satisfied
+- [ ] docs match shipped architecture
+- [ ] `bun run gate` green
+- [ ] worktree clean
+- [ ] final review agent says no findings
+```
 
 Tasks:
 
-1. audit each completed batch against its goal, tasks, and verification claims
-2. fix any real misses found by the audit
-3. update architecture/docs for any intentional divergence from the original bridge design
-4. run `bun run gate`
-5. get independent review on the full stack diff
-6. commit only Batch 9 changes
+1. audit the finished state against every batch goal
+2. update docs to match reality
+3. run `bun run gate`
+4. run independent review
+5. commit exactly one Batch 7 commit
 
 Verification:
 
 - `bun run gate`
-- independent review agent for whole-stack audit
-- final manual checklist:
-  - actor lifecycle is parent-owned
-  - delivery is queued, not inline
-  - health has one owner
-  - client protocol/status duplication is removed or justified
-  - tests describe behavior at public seams
-  - remaining suppressions are justified
+- independent review agent
+- worktree clean
 
 Commit rule:
 
 - one batch, one commit
-- commit only Batch 9 changes before closing the plan
 
-## Decision Tree To Resolve Before Batch 1
+## Open Questions To Resolve Before Batch 1 Starts
 
-1. Should “actor model” mean true queued mailbox delivery?
+1. Should scheduled jobs remain host-global?
    Recommended: yes.
-
-2. Should every extension support `ask`?
-   Recommended: no. Split command-only from request-capable refs if needed.
-
-3. Should the host ever read raw extension state?
-   Recommended: no. Projection/view data only.
-
-4. Should actor runtime failures restart automatically?
-   Recommended: yes, with bounded one-for-one retries.
-
-5. Should activation, actor, and scheduler status unify into one health model?
+2. Should actor public snapshots default to raw state exposure, with `snapshot.project` only when internal state should stay private?
    Recommended: yes.
-
-6. Should the event bus remain available?
-   Recommended: yes, but explicitly as observation/pubsub, not actor ownership.
-
-7. Should scheduled jobs stay global?
-   Recommended: yes. That matches current product intent.
-
-8. Should test cleanup happen before architecture cleanup?
-   Recommended: no. Architecture first, then tests.
-
-## Success Criteria
-
-- extension runtime is honest about its actor semantics
-- one owner per state/health surface
-- less duplicated truth across boot, registry, RPC, and TUI
-- tests emphasize behavior and regressions over structure snapshots
-- high-value suppressions removed, justified ones documented
+3. Should declarative turn directives live inside the actor config, not as top-level extension hooks?
+   Recommended: yes.
+4. Should stateless extensions remain actorless?
+   Recommended: yes.
+5. Should any public reducer/machine adapter survive the redesign?
+   Recommended: no.
+6. Should actor runtime failures auto-restart with bounded retries?
+   Recommended: yes.
+7. Should `publish` / `send` / `ask` all serialize through the same queue?
+   Recommended: yes.
