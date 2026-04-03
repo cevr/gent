@@ -143,8 +143,25 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   }
 
   createEffect(() => {
-    activeSessionKey()
-    setSnapshots(new Map())
+    const key = activeSessionKey()
+    setSnapshots((prev) => {
+      if (key === undefined) {
+        return prev.size === 0 ? prev : new Map()
+      }
+      const sep = key.indexOf(":")
+      const sessionId = key.slice(0, sep)
+      const branchId = key.slice(sep + 1)
+      let changed = false
+      const next = new Map<string, ExtensionSnapshot>()
+      for (const [extensionId, snapshot] of prev) {
+        if (snapshot.sessionId === sessionId && snapshot.branchId === branchId) {
+          next.set(extensionId, snapshot)
+          continue
+        }
+        changed = true
+      }
+      return changed ? next : prev
+    })
   })
 
   // Mutable overlay dispatch — wired by session controller after mount

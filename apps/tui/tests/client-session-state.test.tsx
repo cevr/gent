@@ -351,44 +351,36 @@ describe("ClientProvider session lifecycle", () => {
 
   test("stale snapshot completion does not open an old event stream", async () => {
     let ctx: ClientContextValue | undefined
-    let resolveOldSnapshot:
-      | ((snapshot: {
-          sessionId: SessionId
-          branchId: BranchId
-          messages: []
-          lastEventId: null
-          reasoningLevel: undefined
-          runtime: {
-            phase: "idle"
-            status: "idle"
-            agent: "cowork"
-            queue: { steering: []; followUp: [] }
-          }
-        }) => void)
+    let resumeOldSnapshot:
+      | ((
+          effect: Effect.Effect<
+            {
+              sessionId: SessionId
+              branchId: BranchId
+              messages: []
+              lastEventId: null
+              reasoningLevel: undefined
+              runtime: {
+                phase: "idle"
+                status: "idle"
+                agent: "cowork"
+                queue: { steering: []; followUp: [] }
+              }
+            },
+            never
+          >,
+        ) => void)
       | undefined
     const eventCalls: string[] = []
-
-    const oldSnapshot = new Promise<{
-      sessionId: SessionId
-      branchId: BranchId
-      messages: []
-      lastEventId: null
-      reasoningLevel: undefined
-      runtime: {
-        phase: "idle"
-        status: "idle"
-        agent: "cowork"
-        queue: { steering: []; followUp: [] }
-      }
-    }>((resolve) => {
-      resolveOldSnapshot = resolve
-    })
 
     const client = createMockClient({
       session: {
         getSnapshot: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) => {
           if (sessionId === ("session-a" as SessionId)) {
-            return Effect.promise(() => oldSnapshot)
+            return Effect.async((resume) => {
+              resumeOldSnapshot = resume
+              return Effect.void
+            })
           }
           return Effect.succeed({
             sessionId,
@@ -428,19 +420,21 @@ describe("ClientProvider session lifecycle", () => {
     if (ctx === undefined) throw new Error("client context not ready")
 
     ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
-    resolveOldSnapshot?.({
-      sessionId: "session-a" as SessionId,
-      branchId: "branch-a" as BranchId,
-      messages: [],
-      lastEventId: null,
-      reasoningLevel: undefined,
-      runtime: {
-        phase: "idle",
-        status: "idle",
-        agent: "cowork",
-        queue: { steering: [], followUp: [] },
-      },
-    })
+    resumeOldSnapshot?.(
+      Effect.succeed({
+        sessionId: "session-a" as SessionId,
+        branchId: "branch-a" as BranchId,
+        messages: [],
+        lastEventId: null,
+        reasoningLevel: undefined,
+        runtime: {
+          phase: "idle",
+          status: "idle",
+          agent: "cowork",
+          queue: { steering: [], followUp: [] },
+        },
+      }),
+    )
 
     await Promise.resolve()
     await setup.renderOnce()

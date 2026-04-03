@@ -10,7 +10,7 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { Effect, Fiber, Stream, Schema } from "effect"
+import { Effect, Fiber, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
   Agents,
@@ -25,6 +25,7 @@ import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
 import { reduceAgentLifecycle } from "./agent-lifecycle"
+import { runSessionSubscriptionAttempt } from "./session-subscription"
 
 import type {
   ConnectionState,
@@ -396,68 +397,46 @@ export function ClientProvider(props: ClientProviderProps) {
                 log.info("ctx.ready", { sessionId, branchId })
               }
 
-              log.info("ctx.snapshot.fetch", { sessionId, branchId })
-              const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
-              if (!isActiveSession()) return
-              const after = lastSeenEventId() ?? snapshot.lastEventId ?? undefined
-              log.info("ctx.snapshot.hydrated", {
+              yield* runSessionSubscriptionAttempt({
                 sessionId,
                 branchId,
-                lastEventId: snapshot.lastEventId,
-                after,
-                agent: snapshot.runtime.agent,
-                status: snapshot.runtime.status,
-              })
-
-              yield* Effect.sync(() => {
-                if (!isActiveSession()) return
-                setConnectionIssue(null)
-                if (snapshot.reasoningLevel !== undefined) {
-                  dispatchSession({
-                    _tag: "UpdateReasoningLevel",
-                    reasoningLevel: snapshot.reasoningLevel,
-                  })
-                }
-                // Hydrate agent state from snapshot runtime (eliminates cold-start gap)
-                const rt = snapshot.runtime
-                const status = rt.status === "idle" ? AgentStatus.idle() : AgentStatus.streaming()
-                setAgentStore({ agent: rt.agent, status })
-
-                // Hydrate extension UI snapshots for cold-start (plan widget etc.)
-                if (
-                  snapshot.extensionSnapshots !== undefined &&
-                  extensionSnapshotCb !== undefined
-                ) {
-                  for (const ext of snapshot.extensionSnapshots) {
-                    extensionSnapshotCb({
-                      sessionId,
-                      branchId,
-                      ...ext,
+                lastSeenEventId: lastSeenEventId(),
+                log,
+                isActiveSession,
+                getSnapshot: client.session.getSnapshot({ sessionId, branchId }),
+                hydrateSnapshot: (snapshot) => {
+                  setConnectionIssue(null)
+                  if (snapshot.reasoningLevel !== undefined) {
+                    dispatchSession({
+                      _tag: "UpdateReasoningLevel",
+                      reasoningLevel: snapshot.reasoningLevel,
                     })
                   }
-                }
-              })
+                  const rt = snapshot.runtime
+                  const status = rt.status === "idle" ? AgentStatus.idle() : AgentStatus.streaming()
+                  setAgentStore({ agent: rt.agent, status })
 
-              const events = client.session.events({
-                sessionId,
-                branchId,
-                ...(after !== undefined ? { after } : {}),
-              })
-
-              log.info("ctx.stream.open", { sessionId, branchId, after })
-              yield* Stream.runForEach(events, (envelope: EventEnvelope) =>
-                Effect.sync(() => {
-                  if (!isActiveSession()) return
-                  try {
-                    processEvent(envelope)
-                  } catch (err) {
-                    log.error("event.processing.error", {
-                      error: err instanceof Error ? err.message : String(err),
-                    })
+                  if (
+                    snapshot.extensionSnapshots !== undefined &&
+                    extensionSnapshotCb !== undefined
+                  ) {
+                    for (const ext of snapshot.extensionSnapshots) {
+                      extensionSnapshotCb({
+                        sessionId,
+                        branchId,
+                        ...ext,
+                      })
+                    }
                   }
-                }),
-              )
-              log.info("ctx.stream.closed", { sessionId, branchId })
+                },
+                openEvents: (after) =>
+                  client.session.events({
+                    sessionId,
+                    branchId,
+                    ...(after !== undefined ? { after } : {}),
+                  }),
+                processEvent,
+              })
             }),
           {
             label: "ctx.events",
