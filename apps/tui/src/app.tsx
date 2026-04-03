@@ -13,6 +13,7 @@ import { KeyboardScopeProvider } from "./keyboard/context"
 
 type SessionRoute = Extract<AppRoute, { _tag: "session" }>
 type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
+type AuthGateState = "checking" | "open" | "closed"
 
 export interface AppProps {
   missingAuthProviders?: readonly string[]
@@ -22,22 +23,42 @@ export interface AppProps {
 function AppContent(props: AppProps) {
   const router = useRouter()
   const client = useClient()
-  const [authGateActive, setAuthGateActive] = createSignal(
-    !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0,
+  const [authGateState, setAuthGateState] = createSignal<AuthGateState>(
+    !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0 ? "open" : "closed",
   )
+  const [authGateKey, setAuthGateKey] = createSignal<string | null>(null)
   let authGateVersion = 0
+
+  const desiredAuthGateKey = (
+    routeTag: AppRoute["_tag"] = router.route()._tag,
+    agentName = client.agent(),
+  ): string | null => {
+    if (props.debugMode || routeTag === "branchPicker") return null
+    return `${routeTag}:${agentName ?? "pending"}`
+  }
 
   const refreshAuthGate = (
     agentName = client.agent(),
     routeTag: AppRoute["_tag"] = router.route()._tag,
   ) => {
-    if (props.debugMode || routeTag === "branchPicker" || agentName === undefined) {
+    const key = desiredAuthGateKey(routeTag, agentName)
+    if (props.debugMode || routeTag === "branchPicker") {
       authGateVersion += 1
-      setAuthGateActive(false)
+      setAuthGateKey(key)
+      setAuthGateState("closed")
+      return
+    }
+
+    if (agentName === undefined) {
+      authGateVersion += 1
+      setAuthGateKey(key)
+      setAuthGateState("checking")
       return
     }
 
     const version = ++authGateVersion
+    setAuthGateKey(key)
+    setAuthGateState("checking")
     client.runtime.cast(
       client.client.auth
         .listProviders({
@@ -47,12 +68,17 @@ function AppContent(props: AppProps) {
           Effect.tap((providers) =>
             Effect.sync(() => {
               if (version !== authGateVersion) return
-              setAuthGateActive(providers.some((provider) => provider.required && !provider.hasKey))
+              setAuthGateState(
+                providers.some((provider) => provider.required && !provider.hasKey)
+                  ? "open"
+                  : "closed",
+              )
             }),
           ),
           Effect.catchEager((error) =>
             Effect.sync(() => {
               if (version !== authGateVersion) return
+              setAuthGateState("closed")
               client.log.error("app:auth-gate", { error: String(error), agentName })
             }),
           ),
@@ -71,10 +97,15 @@ function AppContent(props: AppProps) {
   )
 
   createEffect(() => {
-    if (authGateActive() && !isRoute.auth(router.route())) {
+    if (authGateState() === "open" && !isRoute.auth(router.route())) {
       router.navigateToAuth()
     }
   })
+
+  const sessionAuthPending = () =>
+    !props.debugMode &&
+    isRoute.session(router.route()) &&
+    (desiredAuthGateKey() !== authGateKey() || authGateState() === "checking")
 
   return (
     <box flexDirection="column" width="100%" height="100%">
@@ -82,6 +113,13 @@ function AppContent(props: AppProps) {
         <Match when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}>
           {(r) => {
             const route = r()
+            if (sessionAuthPending()) {
+              return (
+                <box flexDirection="column" paddingLeft={1} paddingTop={1}>
+                  <text>Loading session…</text>
+                </box>
+              )
+            }
             return (
               <Session
                 sessionId={route.sessionId}
@@ -118,9 +156,9 @@ function AppContent(props: AppProps) {
             runtime={client.runtime}
             log={client.log}
             agentName={client.agent()}
-            enforceAuth={authGateActive()}
+            enforceAuth={authGateState() === "open"}
             onResolved={() => {
-              setAuthGateActive(false)
+              setAuthGateState("closed")
               refreshAuthGate()
             }}
           />
