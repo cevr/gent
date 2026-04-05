@@ -89,7 +89,6 @@ export interface SessionController {
   onSessionTreeSelect: (sessionId: SessionId) => void
   onForkSelect: (messageId: MessageId) => void
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
-  authGatePending: () => boolean
 }
 
 const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
@@ -273,19 +272,10 @@ export function createSessionController(props: {
         router.navigateToSession(sessionId, branchId)
       },
     },
-    // Never pass initialPrompt to feed — we control prompt sending through the auth gate.
-    undefined,
+    props.initialPrompt,
+    // Gate prompt send on auth resolution — feed waits for stream + this signal
+    () => !authGatePending(),
   )
-
-  // Send initial prompt once auth resolves and feed is ready
-  if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
-    let promptSent = false
-    createEffect(() => {
-      if (promptSent || authGatePending()) return
-      promptSent = true
-      client.sendMessage(props.initialPrompt ?? "")
-    })
-  }
 
   const items = createMemo<SessionItem[]>(() => feed.items())
   const promptSearch = createPromptSearchController({
@@ -627,7 +617,6 @@ export function createSessionController(props: {
     onSessionTreeSelect,
     onForkSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
-    authGatePending,
   }
 }
 

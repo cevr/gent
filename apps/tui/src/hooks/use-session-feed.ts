@@ -259,6 +259,7 @@ export function useSessionFeed(
   cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
   callbacks: SessionFeedCallbacks,
   initialPrompt?: string,
+  canSendPrompt?: () => boolean,
 ): SessionFeed {
   const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
     messages: [],
@@ -380,8 +381,16 @@ export function useSessionFeed(
                   Effect.forkScoped,
                 )
 
-                // Send the prompt only after the event stream is established.
+                // Send the prompt only after the event stream is established
+                // and the caller signals readiness (e.g. auth gate resolved).
                 if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
+                  // Wait for canSendPrompt if provided (polls via short sleep)
+                  if (canSendPrompt !== undefined) {
+                    while (!canSendPrompt()) {
+                      yield* Effect.sleep("50 millis")
+                      if (currentKey !== key) return yield* Fiber.join(eventsFiber)
+                    }
+                  }
                   sentPrompts.add(key)
                   client.log.info("feed.sendInitialPrompt", {
                     sessionId: session,
