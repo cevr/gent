@@ -93,11 +93,11 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
           appendCheckpoint: () => Effect.void,
           appendCounsel: () => Effect.void,
           finish: () => Effect.void,
-          readActive: () =>
-            Effect.succeed(undefined) as Effect.Effect<
-              { rows: ReadonlyArray<JournalRow>; path: string; sessionId?: string } | undefined
-            >,
-          getActivePath: () => Effect.succeed(undefined) as Effect.Effect<string | undefined>,
+          readActive: (): Effect.Effect<
+            { rows: ReadonlyArray<JournalRow>; path: string; sessionId?: string } | undefined
+          > => Effect.void.pipe(Effect.as(undefined)),
+          getActivePath: (): Effect.Effect<string | undefined> =>
+            Effect.void.pipe(Effect.as(undefined)),
         } satisfies AutoJournalService
       }
       const platform = platformOpt.value

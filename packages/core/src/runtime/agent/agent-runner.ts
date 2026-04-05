@@ -533,12 +533,10 @@ const runEphemeralAgent = (params: {
                 localEventStore.subscribe({ sessionId }).pipe(
                   Stream.runForEach((envelope) =>
                     shouldMirrorEphemeralChildEvent(envelope.event)
-                      ? params.parentBaseEventStore
-                          .publish(envelope.event)
-                          .pipe(
-                            Effect.tap(() => params.notifyMirroredEventObservers(envelope.event)),
-                          )
-                          .pipe(Effect.catchEager(() => Effect.void))
+                      ? params.parentBaseEventStore.publish(envelope.event).pipe(
+                          Effect.tap(() => params.notifyMirroredEventObservers(envelope.event)),
+                          Effect.catchEager(() => Effect.void),
+                        )
                       : Effect.void,
                   ),
                   Effect.catchEager(() => Effect.void),

@@ -271,9 +271,9 @@ export const trackingHandoffHandler = () =>
     const presentCalled = yield* Ref.make(false)
     const layer = Layer.succeed(HandoffHandler, {
       present: () => Ref.set(presentCalled, true).pipe(Effect.as("confirm" as const)),
-      peek: () => Effect.succeed(undefined),
-      claim: () => Effect.succeed(undefined),
-      respond: () => Effect.succeed(undefined),
+      peek: () => Effect.void.pipe(Effect.as(undefined)),
+      claim: () => Effect.void.pipe(Effect.as(undefined)),
+      respond: () => Effect.void.pipe(Effect.as(undefined)),
       storeResolution: () => {},
       rehydrate: () => Effect.void,
     })
