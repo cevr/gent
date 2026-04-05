@@ -4,7 +4,8 @@ import { describe, expect, test } from "bun:test"
 import { For } from "solid-js"
 import { Effect } from "effect"
 import type { SkillContent } from "@gent/sdk"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
+import { createMockClient, renderWithProviders } from "./render-harness"
+import { waitForRenderedFrame } from "./helpers"
 import { useSkills } from "../src/hooks/use-skills"
 
 function SkillsProbe() {
@@ -14,20 +15,6 @@ function SkillsProbe() {
       <For each={skills.skills()}>{(skill) => <text>{skill.name}</text>}</For>
     </box>
   )
-}
-
-const waitForFrame = async (
-  setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  predicate: (frame: string) => boolean,
-  remaining = 10,
-): Promise<string> => {
-  await setup.renderOnce()
-  const frame = renderFrame(setup)
-  if (predicate(frame)) return frame
-  if (remaining <= 1) {
-    throw new Error(`skills frame did not reach expected condition; got:\n${frame}`)
-  }
-  return waitForFrame(setup, predicate, remaining - 1)
 }
 
 const skill = (name: string): SkillContent => ({
@@ -49,13 +36,13 @@ describe("useSkills", () => {
     const alpha = await renderWithProviders(() => <SkillsProbe />, {
       client: clientWithSkills([skill("alpha-skill")]),
     })
-    await waitForFrame(alpha, (frame) => frame.includes("alpha-skill"))
+    await waitForRenderedFrame(alpha, (frame) => frame.includes("alpha-skill"))
     alpha.renderer.destroy()
 
     const beta = await renderWithProviders(() => <SkillsProbe />, {
       client: clientWithSkills([skill("beta-skill")]),
     })
-    const frame = await waitForFrame(beta, (next) => next.includes("beta-skill"))
+    const frame = await waitForRenderedFrame(beta, (next) => next.includes("beta-skill"))
 
     expect(frame).toContain("beta-skill")
     expect(frame).not.toContain("alpha-skill")

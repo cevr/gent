@@ -8,12 +8,8 @@ import { App } from "../src/app"
 import { Route, useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
-import {
-  createMockClient,
-  createMockRuntime,
-  renderFrame,
-  renderWithProviders,
-} from "./render-harness"
+import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
+import { waitForRenderedFrame } from "./helpers"
 
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
@@ -29,20 +25,6 @@ function RouterProbe(props: { readonly onReady: (router: RouterContextValue) => 
     props.onReady(router)
   })
   return <box />
-}
-
-const waitForFrame = async (
-  setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  predicate: (frame: string) => boolean,
-  remaining = 10,
-): Promise<string> => {
-  await setup.renderOnce()
-  const frame = renderFrame(setup)
-  if (predicate(frame)) return frame
-  if (remaining <= 1) {
-    throw new Error(`app frame did not reach expected condition; got:\n${frame}`)
-  }
-  return waitForFrame(setup, predicate, remaining - 1)
 }
 
 describe("App auth gate", () => {
@@ -98,7 +80,11 @@ describe("App auth gate", () => {
 
     ctx.steer({ _tag: "SwitchAgent", agent: "deepwork" })
 
-    const frame = await waitForFrame(setup, (next) => next.includes("API Keys"))
+    const frame = await waitForRenderedFrame(
+      setup,
+      (next) => next.includes("API Keys"),
+      "API Keys after agent switch",
+    )
 
     expect(calls.length).toBeGreaterThan(0)
     expect(calls.every((call) => call.agentName === "deepwork")).toBe(true)
@@ -140,7 +126,11 @@ describe("App auth gate", () => {
       initialRoute: Route.auth(),
     })
 
-    const frame = await waitForFrame(setup, (next) => next.includes("API Keys"))
+    const frame = await waitForRenderedFrame(
+      setup,
+      (next) => next.includes("API Keys"),
+      "API Keys from initial agent",
+    )
 
     expect(calls[0]).toEqual({ agentName: "deepwork" })
     expect(frame).toContain("API Keys")
@@ -182,7 +172,7 @@ describe("App auth gate", () => {
       ]),
     })
 
-    await waitForFrame(setup, (next) => next.includes("Resume: Session A"))
+    await waitForRenderedFrame(setup, (next) => next.includes("Resume: Session A"), "branch picker")
     expect(calls).toEqual([])
     setup.renderer.destroy()
   })
@@ -214,9 +204,10 @@ describe("App auth gate", () => {
       },
     )
 
-    const frame = await waitForFrame(
+    const frame = await waitForRenderedFrame(
       setup,
       (next) => next.includes("Loading Gent") && next.includes("runtime unavailable"),
+      "loading with runtime unavailable",
     )
 
     expect(frame).toContain("boot boom")
@@ -317,7 +308,11 @@ describe("App auth gate", () => {
     ctx.switchSession("session-a" as SessionId, "branch-b" as BranchId, "Session A")
     router.navigateToSession("session-a" as SessionId, "branch-b" as BranchId, "ship it")
 
-    const loadingFrame = await waitForFrame(setup, (next) => next.includes("Loading session"))
+    const loadingFrame = await waitForRenderedFrame(
+      setup,
+      (next) => next.includes("Loading session"),
+      "loading session",
+    )
     expect(loadingFrame).toContain("Loading session")
     expect(calls).toEqual([{ agentName: "deepwork" }])
     expect(sentMessages).toEqual([])
@@ -332,7 +327,11 @@ describe("App auth gate", () => {
       },
     ])
 
-    const authFrame = await waitForFrame(setup, (next) => next.includes("API Keys"))
+    const authFrame = await waitForRenderedFrame(
+      setup,
+      (next) => next.includes("API Keys"),
+      "auth gate",
+    )
     expect(authFrame).toContain("API Keys")
     expect(sentMessages).toEqual([])
     setup.renderer.destroy()

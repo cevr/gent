@@ -2,55 +2,18 @@
 
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import * as path from "node:path"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
 import {
   createMockClient,
   createMockRuntime,
   destroyRenderSetup,
-  renderFrame,
   renderWithProviders,
 } from "../tests/render-harness"
 import { createSignalProvider, DebugFailingProvider } from "@gent/core/debug/provider.js"
 import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { Gent } from "@gent/sdk"
-
-const repoRoot = path.resolve(import.meta.dir, "../../..")
-
-const waitForFrame = (
-  setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  predicate: (frame: string) => boolean,
-  label: string,
-  timeoutMs = 5_000,
-): Effect.Effect<string, Error> =>
-  Effect.gen(function* () {
-    const startedAt = Date.now()
-    let lastFrame = ""
-
-    while (Date.now() - startedAt < timeoutMs) {
-      yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => Promise.resolve())
-      yield* Effect.promise(() => setup.renderOnce())
-
-      const frame = renderFrame(setup)
-      lastFrame = frame
-      if (predicate(frame)) return frame
-
-      yield* Effect.sleep("50 millis")
-    }
-
-    return yield* Effect.fail(
-      new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`),
-    )
-  })
-
-const makeSessionState = (created: { sessionId: string; branchId: string; name: string }) => ({
-  sessionId: created.sessionId,
-  branchId: created.branchId,
-  name: created.name,
-  reasoningLevel: undefined,
-})
+import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 
 describe("session feed boundary", () => {
   test("projects streaming state and assistant output", async () => {

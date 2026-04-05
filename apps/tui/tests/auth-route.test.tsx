@@ -7,12 +7,8 @@ import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
 import type { ClientLog } from "../src/utils/client-logger"
 import { Auth } from "../src/routes/auth"
 import { Route } from "../src/router"
-import {
-  createMockClient,
-  createMockRuntime,
-  renderFrame,
-  renderWithProviders,
-} from "./render-harness"
+import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
+import { waitForRenderedFrame } from "./helpers"
 
 const noop = () => {}
 const log: ClientLog = {
@@ -43,20 +39,6 @@ const runtimeWithLinkOpener = (open: (url: string) => Effect.Effect<void, LinkOp
     run: (effect: Effect.Effect<unknown, unknown, never>) =>
       Effect.runPromise(provideLinkOpener(effect)),
   }
-}
-
-const waitForFrame = async (
-  setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  predicate: (frame: string) => boolean,
-  remaining = 10,
-): Promise<string> => {
-  await setup.renderOnce()
-  const frame = renderFrame(setup)
-  if (predicate(frame)) return frame
-  if (remaining <= 1) {
-    throw new Error(`auth frame did not reach expected condition; got:\n${frame}`)
-  }
-  return waitForFrame(setup, predicate, remaining - 1)
 }
 
 describe("Auth route", () => {
@@ -132,10 +114,13 @@ describe("Auth route", () => {
     expect(pending.map((entry) => entry.agentName)).toEqual(["cowork", "deepwork"])
 
     pending[1]?.resolve([{ provider: "openai", hasKey: false, required: false }])
-    await waitForFrame(setup, (frame) => frame.includes("openai") && !frame.includes("anthropic"))
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("openai") && !frame.includes("anthropic"),
+    )
 
     pending[0]?.resolve([{ provider: "anthropic", hasKey: false, required: false }])
-    const frame = await waitForFrame(
+    const frame = await waitForRenderedFrame(
       setup,
       (next) => next.includes("openai") && !next.includes("anthropic"),
     )
@@ -206,30 +191,30 @@ describe("Auth route", () => {
       },
     )
 
-    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))
 
     setup.mockInput.pressEnter()
     await setup.renderOnce()
     setup.mockInput.pressEnter()
     await setup.renderOnce()
-    await waitForFrame(setup, (frame) => frame.includes("Enter API key for anthropic"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("Enter API key for anthropic"))
     await setup.mockInput.typeText("old-key")
     await setup.renderOnce()
     setup.mockInput.pressEnter()
     await setup.renderOnce()
 
     setAgentName?.("deepwork")
-    const reloaded = await waitForFrame(setup, (frame) => frame.includes("openai"))
+    const reloaded = await waitForRenderedFrame(setup, (frame) => frame.includes("openai"))
     expect(reloaded).toContain("openai")
 
     setup.mockInput.pressEnter()
     await setup.renderOnce()
     setup.mockInput.pressEnter()
     await setup.renderOnce()
-    await waitForFrame(setup, (frame) => frame.includes("Enter API key for openai"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("Enter API key for openai"))
 
     resolveOldKeySave?.()
-    const frame = await waitForFrame(
+    const frame = await waitForRenderedFrame(
       setup,
       (next) =>
         next.includes("Enter API key for openai") && !next.includes("API key saved for anthropic"),
@@ -316,7 +301,7 @@ describe("Auth route", () => {
       },
     )
 
-    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))
 
     setup.mockInput.pressEnter()
     await setup.renderOnce()
@@ -324,7 +309,7 @@ describe("Auth route", () => {
     await setup.renderOnce()
 
     setAgentName?.("deepwork")
-    await waitForFrame(setup, (frame) => frame.includes("openai"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("openai"))
 
     resolveAuthorize?.({
       authorizationId: "auth-old",
@@ -405,13 +390,13 @@ describe("Auth route", () => {
       },
     )
 
-    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))
 
     setup.mockInput.pressEnter()
     await setup.renderOnce()
     setup.mockInput.pressEnter()
     await setup.renderOnce()
-    await waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below"))
 
     setAgentName?.("deepwork")
     await Promise.resolve()
@@ -419,7 +404,7 @@ describe("Auth route", () => {
     expect(calls.at(-1)).toEqual({ agentName: "deepwork" })
 
     rejectOpen?.(new LinkOpenerError({ message: "open failed" }))
-    const frame = await waitForFrame(
+    const frame = await waitForRenderedFrame(
       setup,
       (next) => next.includes("openai") && !next.includes("open failed"),
     )
@@ -476,23 +461,23 @@ describe("Auth route", () => {
       },
     )
 
-    await waitForFrame(setup, (frame) => frame.includes("anthropic"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))
 
     setup.mockInput.pressEnter()
     await setup.renderOnce()
     setup.mockInput.pressEnter()
     await setup.renderOnce()
-    await waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
+    await waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below"))
 
     setup.mockInput.pressEscape()
     await setup.renderOnce()
-    await waitForFrame(
+    await waitForRenderedFrame(
       setup,
       (frame) => frame.includes("anthropic") && !frame.includes("open failed"),
     )
 
     rejectOpen?.(new LinkOpenerError({ message: "open failed" }))
-    const frame = await waitForFrame(
+    const frame = await waitForRenderedFrame(
       setup,
       (next) => next.includes("anthropic") && !next.includes("open failed"),
     )
