@@ -175,3 +175,17 @@ describe("isRoute type guards", () => {
     }
   })
 })
+
+describe("route invariants", () => {
+  test("AppRoute union only has session and branchPicker", () => {
+    // Route constructors are the only way to create routes — if this compiles
+    // and these are the only keys, the union is exactly session | branchPicker.
+    const constructors = Object.keys(Route)
+    expect(constructors.sort()).toEqual(["branchPicker", "session"])
+  })
+
+  test("isRoute guards cover all route types", () => {
+    const guards = Object.keys(isRoute)
+    expect(guards.sort()).toEqual(["branchPicker", "session"])
+  })
+})

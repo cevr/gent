@@ -57,29 +57,35 @@ Ported from opencode. Key patterns:
 
 ## Architecture
 
+Startup blocks before render — `main.tsx` calls `waitForReady` + `resolveInteractiveBootstrap` before `render()`. No loading route.
+
 Providers wrap app in `main.tsx`:
 
 ```
-RegistryProvider → WorkspaceProvider → RouterProvider → ClientProvider → App
+RegistryProvider → WorkspaceProvider → RouterProvider → ClientProvider → ExtensionUIProvider → App
 ```
 
-| Provider            | Purpose                                         |
-| ------------------- | ----------------------------------------------- |
-| `WorkspaceProvider` | cwd, gitRoot, gitStatus - static workspace info |
-| `RouterProvider`    | route, navigate - discriminated union routes    |
-| `ClientProvider`    | transport client, session state, event stream   |
+| Provider                   | Purpose                                                |
+| -------------------------- | ------------------------------------------------------ |
+| `WorkspaceProvider`        | cwd, gitRoot, gitStatus - static workspace info        |
+| `RouterProvider`           | route, navigate - routes are `session \| branchPicker` |
+| `ClientProvider`           | transport client, session state, event stream          |
+| `ExtensionUIProvider`      | extension loading, overlay/composer dispatch           |
+| `SessionControllerContext` | session-scoped: auth gate, overlays, composer state    |
 
 State ownership rules:
 
 - One workflow, one owner. If a flow has modes/transitions, give it one reducer or machine.
 - Shared caches live under a provider/registry scope, not module globals.
 - Projections stay local and dumb. Do not promote derived display state into a second writer.
+- Auth and permissions are session overlays, not routes. Auth gate lives in session-controller.
+- `useRuntime()` is zero-arg — reads `useClient()` internally.
+- Composer reads from `SessionControllerContext`, not props.
 
-Routes:
+Routes (only 2):
 
-- `src/routes/home.tsx`
-- `src/routes/session.tsx`
-- `src/routes/session-controller.ts`
+- `src/routes/session.tsx` — provides `SessionControllerContext`
+- `src/routes/session-controller.ts` — `createSessionController()` + context
 
 ## Compound Components
 

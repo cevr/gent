@@ -297,4 +297,90 @@ describe("App auth gate", () => {
     expect(sentMessages).toEqual([])
     setup.renderer.destroy()
   })
+
+  test("cold start with prompt and missing auth defers the prompt until auth resolves", async () => {
+    let resolveProviders:
+      | ((
+          providers: Array<{
+            provider: string
+            hasKey: boolean
+            required: boolean
+            source: "none"
+            authType: undefined
+          }>,
+        ) => void)
+      | undefined
+    const sentMessages: Array<{ content: string }> = []
+    const providersPromise = new Promise<
+      Array<{
+        provider: string
+        hasKey: boolean
+        required: boolean
+        source: "none"
+        authType: undefined
+      }>
+    >((resolve) => {
+      resolveProviders = resolve
+    })
+    const client = createMockClient({
+      auth: {
+        listProviders: () => Effect.promise(() => providersPromise),
+        listMethods: () =>
+          Effect.succeed({
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+      },
+      message: {
+        send: (input: { content: string }) =>
+          Effect.sync(() => {
+            sentMessages.push(input)
+          }),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+      client,
+      runtime,
+      initialAgent: "cowork",
+      initialSession: {
+        id: "session-a" as SessionId,
+        branchId: "branch-a" as BranchId,
+        name: "A",
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      initialRoute: Route.session(
+        "session-a" as SessionId,
+        "branch-a" as BranchId,
+        "build a feature",
+      ),
+    })
+
+    // Auth is pending — prompt must not be sent yet
+    await setup.renderOnce()
+    expect(sentMessages).toEqual([])
+
+    // Resolve auth — keys are required but missing
+    resolveProviders?.([
+      {
+        provider: "openai",
+        hasKey: false,
+        required: true,
+        source: "none",
+        authType: undefined,
+      },
+    ])
+
+    // Auth overlay should appear
+    const authFrame = await waitForRenderedFrame(
+      setup,
+      (next) => next.includes("API Keys"),
+      "auth overlay",
+    )
+    expect(authFrame).toContain("API Keys")
+    // Prompt still not sent while auth overlay is open
+    expect(sentMessages).toEqual([])
+    setup.renderer.destroy()
+  })
 })
