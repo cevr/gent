@@ -229,9 +229,10 @@ Rules:
 - registration shape is structural — builtins, user, and project extensions share the same pipeline
 - dispatch compiles once, then runs from typed hook maps
 - extension hook boundaries are where plugin typing must stay strict
-- `uiModelSchema` is enforced at runtime — invalid models are dropped, not passed through
+- actor snapshot schema is enforced at runtime — invalid public snapshots are dropped, not passed through
 - activation/startup failures degrade the extension instead of crashing host startup
 - `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
+- actor transition side effects cross explicit slots, not ambient service lookup inside machine handlers
 
 For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
 
@@ -239,7 +240,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 - `extension()` is the unified authoring API — all builtins and external extensions use it
 - Stateless path: `ext.tool()`, `ext.on()`, `ext.jobs()` — no actor required
-- Stateful path: `ext.actor()`, `ext.interceptor()`, `ext.layer()`, `ext.provider()` — actor-backed, Effect-aware
+- Stateful path: `ext.actor()` with optional `ext.tool()`, `ext.on()`, `ext.layer()`, `ext.provider()` — one actor-owned boundary, extra facets optional
 - `defineExtension()` deleted — `extension()` is the only way to create extensions
 - `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
 - `ext.layer(layer)` — layers merge into the main extension graph; services that need `SubagentRunnerService` resolve it lazily at call time
@@ -262,7 +263,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 `TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
 
 - Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
-- `task.list` RPC removed — TUI reads from extension actor snapshot (actor reduces task events into UI model)
+- `task.list` RPC removed — TUI reads from extension actor snapshot
 - task mutation flows through the extension boundary, not direct core wiring
 - `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
 - Core `dependencies.ts` no longer imports or wires `TaskService` — it comes through the extension layer graph
@@ -295,7 +296,8 @@ Extension actors (state machines) are managed by `ExtensionStateRuntime`. Key pa
 **effect-machine integration**:
 
 - `Machine.spawn` is cold — no I/O, no inspector, no supervisor before `actor.start`. Recovery (state loading) and supervisor arming happen during `start`.
-- `from-machine.ts` extensions use `Machine.spawn` + `ref.start` with their own persistence hydration separate from effect-machine's `Lifecycle` API.
+- Extension actors use `spawn-machine-ref.ts` to bind one actor-shaped definition onto the runtime boundary.
+- Machine transitions stay explicit: pure state changes in handlers, side effects through declared slots.
 - `AgentLoop` uses effect-machine's `Lifecycle` API: `recovery.resolve` loads checkpoints + runs `makeRecoveryDecision`, `durability.save` persists checkpoints after transitions.
 
 ## Testing

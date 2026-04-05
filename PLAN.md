@@ -1,6 +1,6 @@
 # Extension Runtime Audit And Simplification Plan
 
-Status: active. Batch 6 completed on 2026-04-05.
+Status: closing. Batch 6 completed on 2026-04-05.
 
 ## Batch Tracker
 
@@ -12,7 +12,7 @@ Status: active. Batch 6 completed on 2026-04-05.
 - [x] Batch 6 — Remove High-Value Suppression Debt
 - [ ] Batch 7 — Final Verification
 
-## Context
+## Original Context
 
 The current system is much better than it was. It is still not honest enough.
 
