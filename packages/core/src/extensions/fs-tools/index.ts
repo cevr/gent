@@ -1,0 +1,14 @@
+import { extension } from "../api.js"
+import { ReadTool } from "./read.js"
+import { WriteTool } from "./write.js"
+import { EditTool } from "./edit.js"
+import { GlobTool } from "./glob.js"
+import { GrepTool } from "./grep.js"
+
+export const FsToolsExtension = extension("@gent/fs-tools", (ext) => {
+  ext.tool(ReadTool)
+  ext.tool(WriteTool)
+  ext.tool(EditTool)
+  ext.tool(GlobTool)
+  ext.tool(GrepTool)
+})

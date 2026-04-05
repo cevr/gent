@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
-import { OutputBuffer, saveFullOutput } from "../domain/output-buffer.js"
+import { defineTool } from "../../domain/tool.js"
+import { OutputBuffer, saveFullOutput } from "../../domain/output-buffer.js"
 import { classify } from "./bash-guardrails.js"
 
 // Bash Tool Error

@@ -1,6 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "../domain/tool.js"
-import { FileLockService } from "../domain/file-lock.js"
+import { defineTool } from "../../domain/tool.js"
+import { FileLockService } from "../../domain/file-lock.js"
 
 // Write Tool Error
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { ReadTool } from "@gent/core/tools/read"
+import { ReadTool } from "@gent/core/extensions/fs-tools/read"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 

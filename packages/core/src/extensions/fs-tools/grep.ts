@@ -1,7 +1,7 @@
 import { Effect, Option, Schema, Stream, FileSystem, Path } from "effect"
-import { defineTool } from "../domain/tool.js"
+import { defineTool } from "../../domain/tool.js"
 import { Glob } from "bun"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // Grep Tool Error
 

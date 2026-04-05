@@ -1,8 +1,8 @@
 // Read Tool
-export { ReadTool, ReadParams, ReadResult, ReadError } from "./read"
+export { ReadTool, ReadParams, ReadResult, ReadError } from "../extensions/fs-tools/read"
 
 // Write Tool
-export { WriteTool, WriteParams, WriteResult, WriteError } from "./write"
+export { WriteTool, WriteParams, WriteResult, WriteError } from "../extensions/fs-tools/write"
 
 // Edit Tool
 export {
@@ -16,7 +16,7 @@ export {
   findMatch,
   type MatchResult,
   type MatchStrategy,
-} from "./edit"
+} from "../extensions/fs-tools/edit"
 
 // Bash Tool
 export {
@@ -27,16 +27,20 @@ export {
   splitCdCommand,
   injectGitTrailers,
   stripBackground,
-} from "./bash"
+} from "../extensions/exec-tools/bash"
 
 // Bash Guardrails
-export { classify as classifyBashCommand, type BashRisk, type RiskLevel } from "./bash-guardrails"
+export {
+  classify as classifyBashCommand,
+  type BashRisk,
+  type RiskLevel,
+} from "../extensions/exec-tools/bash-guardrails"
 
 // Glob Tool
-export { GlobTool, GlobParams, GlobResult, GlobError } from "./glob"
+export { GlobTool, GlobParams, GlobResult, GlobError } from "../extensions/fs-tools/glob"
 
 // Grep Tool
-export { GrepTool, GrepParams, GrepResult, GrepMatch, GrepError } from "./grep"
+export { GrepTool, GrepParams, GrepResult, GrepMatch, GrepError } from "../extensions/fs-tools/grep"
 
 // AskUser Tool
 export { AskUserTool, AskUserParams, AskUserResult, AskUserHandler } from "./ask-user"
@@ -50,10 +54,20 @@ export {
 } from "./repo-explorer.js"
 
 // WebFetch Tool
-export { WebFetchTool, WebFetchParams, WebFetchResult, WebFetchError } from "./webfetch"
+export {
+  WebFetchTool,
+  WebFetchParams,
+  WebFetchResult,
+  WebFetchError,
+} from "../extensions/network-tools/webfetch"
 
 // WebSearch Tool
-export { WebSearchTool, WebSearchParams, WebSearchResult, WebSearchError } from "./websearch"
+export {
+  WebSearchTool,
+  WebSearchParams,
+  WebSearchResult,
+  WebSearchError,
+} from "../extensions/network-tools/websearch"
 
 // Prompt Tool
 export { PromptTool, PromptParams, PromptResult } from "./prompt"
