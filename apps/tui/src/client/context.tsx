@@ -620,11 +620,14 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     switchSession: (sessionId, branchId, name, agent) => {
+      const currentSessionId = session()?.sessionId
       // Reset agent state and activate new session
       setAgentStore({ agent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
-      setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+      if (currentSessionId !== sessionId) {
+        setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+      }
       dispatchSession({
         _tag: "Activated",
         session: { sessionId, branchId, name, reasoningLevel: undefined },

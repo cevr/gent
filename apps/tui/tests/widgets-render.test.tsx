@@ -39,7 +39,11 @@ const nextSession: SessionInfo = {
 }
 
 const HealthControlsProbe = (props: {
-  expose: (controls: { switchSession: () => void; clearSession: () => void }) => void
+  expose: (controls: {
+    switchSession: () => void
+    switchBranchSameSession: () => void
+    clearSession: () => void
+  }) => void
 }) => {
   const client = useClient()
   props.expose({
@@ -48,6 +52,12 @@ const HealthControlsProbe = (props: {
         nextSession.id,
         nextSession.branchId as BranchId,
         nextSession.name ?? "Next Session",
+      ),
+    switchBranchSameSession: () =>
+      client.switchSession(
+        testSession.id,
+        "branch-alt" as BranchId,
+        testSession.name ?? "Test Session",
       ),
     clearSession: () => client.clearSession(),
   })
@@ -453,6 +463,83 @@ describe("TUI renderer surfaces", () => {
     const frame = renderFrame(setup)
     expect(frame).not.toContain("failed session actors")
     expect(frame).not.toContain("@gent/plan")
+  })
+
+  test("same-session branch switches preserve session-scoped extension health", async () => {
+    let controls:
+      | {
+          switchSession: () => void
+          switchBranchSameSession: () => void
+          clearSession: () => void
+        }
+      | undefined
+
+    const setup = await renderWithProviders(
+      () => (
+        <>
+          <HealthControlsProbe expose={(value) => (controls = value)} />
+          <ConnectionWidget />
+        </>
+      ),
+      {
+        initialSession: testSession,
+        client: createMockClient({
+          extension: {
+            listStatus: ({ sessionId }: { sessionId?: SessionId }) =>
+              Effect.succeed(
+                sessionId === testSession.id
+                  ? {
+                      extensions: [
+                        {
+                          manifest: { id: "@gent/plan" },
+                          kind: "builtin" as const,
+                          sourcePath: "builtin",
+                          status: "degraded" as const,
+                          activation: { status: "active" as const },
+                          actor: {
+                            extensionId: "@gent/plan",
+                            sessionId: testSession.id,
+                            branchId: testSession.branchId,
+                            status: "failed" as const,
+                            error: "actor boom",
+                          },
+                          scheduler: { status: "healthy" as const, failures: [] },
+                        },
+                      ],
+                      summary: {
+                        status: "degraded" as const,
+                        subtitle: "extension runtime degraded",
+                        failedExtensions: [],
+                        failedActors: ["@gent/plan"],
+                        failedScheduledJobs: [],
+                      },
+                    }
+                  : {
+                      extensions: [],
+                      summary: {
+                        status: "healthy" as const,
+                        failedExtensions: [],
+                        failedActors: [],
+                        failedScheduledJobs: [],
+                      },
+                    },
+              ),
+          },
+        }),
+      },
+    )
+
+    expect(renderFrame(setup)).toContain("@gent/plan")
+
+    controls?.switchBranchSameSession()
+    await Promise.resolve()
+    await setup.renderOnce()
+    await Promise.resolve()
+    await setup.renderOnce()
+
+    const frame = renderFrame(setup)
+    expect(frame).toContain("failed session actors")
+    expect(frame).toContain("@gent/plan")
   })
 })
 
