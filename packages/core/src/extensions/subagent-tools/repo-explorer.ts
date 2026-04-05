@@ -1,7 +1,7 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
+import { defineTool } from "../../domain/tool.js"
 import { $ } from "bun"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // RepoExplorer Tool Error
 

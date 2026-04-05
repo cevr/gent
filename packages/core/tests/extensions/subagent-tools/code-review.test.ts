@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { CodeReviewTool } from "@gent/core/tools/code-review"
+import { CodeReviewTool } from "@gent/core/extensions/subagent-tools/code-review"
 import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"

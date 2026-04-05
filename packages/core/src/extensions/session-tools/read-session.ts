@@ -1,12 +1,12 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
-import { AgentRunnerService } from "../domain/agent.js"
-import { requireAgent } from "../runtime/extensions/registry.js"
-import { headTailChars } from "../domain/output-buffer.js"
-import type { Message, MessagePart, Branch } from "../domain/message.js"
-import type { SessionId } from "../domain/ids.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { defineTool } from "../../domain/tool.js"
+import { AgentRunnerService } from "../../domain/agent.js"
+import { requireAgent } from "../../runtime/extensions/registry.js"
+import { headTailChars } from "../../domain/output-buffer.js"
+import type { Message, MessagePart, Branch } from "../../domain/message.js"
+import type { SessionId } from "../../domain/ids.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
+import { Storage } from "../../storage/sqlite-storage.js"
 
 // Read Session Error
 

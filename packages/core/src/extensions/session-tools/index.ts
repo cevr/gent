@@ -1,8 +1,8 @@
 import type { Effect } from "effect"
-import { extension, defineInterceptor, type SystemPromptInput } from "./api.js"
-import { SearchSessionsTool } from "../tools/search-sessions.js"
-import { ReadSessionTool } from "../tools/read-session.js"
-import { RenameSessionTool } from "../tools/rename-session.js"
+import { extension, defineInterceptor, type SystemPromptInput } from "../api.js"
+import { SearchSessionsTool } from "./search-sessions.js"
+import { ReadSessionTool } from "./read-session.js"
+import { RenameSessionTool } from "./rename-session.js"
 
 const NAMING_INSTRUCTION = `
 ## Session naming

@@ -1,10 +1,10 @@
 import { Effect, Schema } from "effect"
-import { AgentRunnerService, type AgentDefinition, type AgentRunner } from "../domain/agent.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { defineTool, type ToolContext } from "../domain/tool.js"
-import { requireAgent, ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { requireText, runCommand, type WorkflowRunContext } from "../runtime/workflow-helpers.js"
+import { AgentRunnerService, type AgentDefinition, type AgentRunner } from "../../domain/agent.js"
+import { PromptPresenter } from "../../domain/prompt-presenter.js"
+import { defineTool, type ToolContext } from "../../domain/tool.js"
+import { requireAgent, ExtensionRegistry } from "../../runtime/extensions/registry.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
+import { requireText, runCommand, type WorkflowRunContext } from "../../runtime/workflow-helpers.js"
 
 interface AuditConcern {
   name: string

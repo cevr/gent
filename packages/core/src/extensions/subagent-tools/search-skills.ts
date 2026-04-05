@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { Skills } from "../domain/skills.js"
-import { defineTool } from "../domain/tool.js"
+import { Skills } from "../../domain/skills.js"
+import { defineTool } from "../../domain/tool.js"
 
 export class SearchSkillsError extends Schema.TaggedErrorClass<SearchSkillsError>()(
   "SearchSkillsError",

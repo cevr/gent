@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
-import { SearchStorage } from "../storage/search-storage.js"
+import { defineTool } from "../../domain/tool.js"
+import { SearchStorage } from "../../storage/search-storage.js"
 
 // Search Sessions Error
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { CounselTool } from "@gent/core/tools/counsel"
+import { CounselTool } from "@gent/core/extensions/subagent-tools/counsel"
 import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"

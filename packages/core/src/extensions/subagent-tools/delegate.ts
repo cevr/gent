@@ -1,18 +1,18 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
+import { defineTool } from "../../domain/tool.js"
 import {
   AgentName,
   AgentRunnerService,
   getDurableAgentRunSessionId,
   type AgentRunError,
   type AgentRunResult,
-} from "../domain/agent.js"
-import type { SessionId } from "../domain/ids.js"
-import type { Task } from "../domain/task.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
-import { TaskProtocol } from "../extensions/task-tools-protocol.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+} from "../../domain/agent.js"
+import type { SessionId } from "../../domain/ids.js"
+import type { Task } from "../../domain/task.js"
+import { ExtensionStateRuntime } from "../../runtime/extensions/state-runtime.js"
+import { TaskProtocol } from "../task-tools-protocol.js"
+import { ExtensionRegistry } from "../../runtime/extensions/registry.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4

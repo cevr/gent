@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { AuditTool } from "@gent/core/tools/audit"
+import { AuditTool } from "@gent/core/extensions/workflow-tools/audit"
 import { Agents, AgentRunnerService, type AgentRunResult } from "@gent/core/domain/agent"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"

@@ -51,7 +51,7 @@ export {
   RepoExplorerParams,
   RepoExplorerResult,
   RepoExplorerError,
-} from "./repo-explorer.js"
+} from "../extensions/subagent-tools/repo-explorer"
 
 // WebFetch Tool
 export {
@@ -73,19 +73,28 @@ export {
 export { PromptTool, PromptParams, PromptResult } from "./prompt"
 
 // Delegate Tool
-export { DelegateTool, DelegateParams } from "./delegate"
+export { DelegateTool, DelegateParams } from "../extensions/subagent-tools/delegate"
 
 // Librarian Tool
-export { LibrarianTool, LibrarianParams, LibrarianError } from "./librarian"
+export {
+  LibrarianTool,
+  LibrarianParams,
+  LibrarianError,
+} from "../extensions/subagent-tools/librarian"
 
 // Handoff Tool
 export { HandoffTool, HandoffParams, HandoffError } from "./handoff"
 
 // Finder Tool
-export { FinderTool, FinderParams, FinderError } from "./finder"
+export { FinderTool, FinderParams, FinderError } from "../extensions/subagent-tools/finder"
 
 // Code Review Tool
-export { CodeReviewTool, CodeReviewParams, CodeReviewError, ReviewComment } from "./code-review"
+export {
+  CodeReviewTool,
+  CodeReviewParams,
+  CodeReviewError,
+  ReviewComment,
+} from "../extensions/subagent-tools/code-review"
 
 // Search Sessions Tool
 export {
@@ -93,10 +102,14 @@ export {
   SearchSessionsParams,
   SearchSessionsError,
   parseRelativeDate,
-} from "./search-sessions"
+} from "../extensions/session-tools/search-sessions"
 
 // Search Skills Tool
-export { SearchSkillsTool, SearchSkillsParams, SearchSkillsError } from "./search-skills"
+export {
+  SearchSkillsTool,
+  SearchSkillsParams,
+  SearchSkillsError,
+} from "../extensions/subagent-tools/search-skills"
 
 // Read Session Tool
 export {
@@ -106,10 +119,10 @@ export {
   truncate,
   renderMessageParts,
   renderSessionTree,
-} from "./read-session"
+} from "../extensions/session-tools/read-session"
 
 // Counsel Tool
-export { CounselTool, CounselParams, CounselError } from "./counsel"
+export { CounselTool, CounselParams, CounselError } from "../extensions/subagent-tools/counsel"
 
 // Task Management Tools
 export { TaskCreateTool, TaskCreateParams } from "./task-create"
@@ -120,8 +133,8 @@ export { TaskStopTool, TaskStopParams } from "./task-stop"
 export { TaskOutputTool, TaskOutputParams } from "./task-output"
 
 // Session Tools
-export { RenameSessionTool, RenameSessionParams } from "./rename-session"
+export { RenameSessionTool, RenameSessionParams } from "../extensions/session-tools/rename-session"
 
 // Delegate Tools
 export { PlanTool, PlanParams } from "./plan"
-export { AuditTool, AuditParams } from "./audit"
+export { AuditTool, AuditParams } from "../extensions/workflow-tools/audit"

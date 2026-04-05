@@ -1,8 +1,8 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
-import { AgentRunnerService, getDurableAgentRunSessionId } from "../domain/agent.js"
-import { requireAgent } from "../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { defineTool } from "../../domain/tool.js"
+import { AgentRunnerService, getDurableAgentRunSessionId } from "../../domain/agent.js"
+import { requireAgent } from "../../runtime/extensions/registry.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // Finder Tool Error
 

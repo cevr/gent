@@ -1,9 +1,9 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
-import { AgentRunnerService, getDurableAgentRunSessionId } from "../domain/agent.js"
-import { requireAgent } from "../runtime/extensions/registry.js"
+import { defineTool } from "../../domain/tool.js"
+import { AgentRunnerService, getDurableAgentRunSessionId } from "../../domain/agent.js"
+import { requireAgent } from "../../runtime/extensions/registry.js"
 import { $ } from "bun"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // Librarian Tool Error
 

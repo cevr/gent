@@ -1,9 +1,9 @@
 import { DateTime, Effect, Schema } from "effect"
-import { EventPublisher } from "../domain/event-publisher.js"
-import { defineTool } from "../domain/tool.js"
-import { Storage } from "../storage/sqlite-storage.js"
-import { SessionNameUpdated } from "../domain/event.js"
-import { Session } from "../domain/message.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
+import { defineTool } from "../../domain/tool.js"
+import { Storage } from "../../storage/sqlite-storage.js"
+import { SessionNameUpdated } from "../../domain/event.js"
+import { Session } from "../../domain/message.js"
 
 const MAX_NAME_LENGTH = 80
 

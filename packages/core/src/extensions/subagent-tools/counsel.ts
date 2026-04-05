@@ -1,12 +1,12 @@
 import { Effect, Schema, FileSystem } from "effect"
-import { defineTool } from "../domain/tool.js"
+import { defineTool } from "../../domain/tool.js"
 import {
   AgentDefinition,
   AgentRunnerService,
   getDurableAgentRunSessionId,
-} from "../domain/agent.js"
-import { requireAgent } from "../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+} from "../../domain/agent.js"
+import { requireAgent } from "../../runtime/extensions/registry.js"
+import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // Counsel Tool Error
 
