@@ -172,34 +172,29 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     })
   })
 
-  // Mutable overlay dispatch — wired by session controller after mount
-  let overlayOpen: (id: string) => void = () => {}
-  let overlayClose: () => void = () => {}
+  // Overlay dispatch — wired by session controller after mount
+  const [overlayDispatch, setOverlayDispatchSignal] = createSignal<{
+    open: (id: string) => void
+    close: () => void
+  }>({ open: () => {}, close: () => {} })
 
   const setOverlayDispatch = (open: (id: string) => void, close: () => void) => {
-    overlayOpen = open
-    overlayClose = close
+    setOverlayDispatchSignal({ open, close })
   }
 
-  // Mutable composer state provider — wired by session controller
-  let composerStateProvider:
-    | (() => {
-        draft: string
-        mode: "editing" | "shell"
-        inputFocused: boolean
-        autocompleteOpen: boolean
-      })
-    | undefined
+  // Composer state provider — wired by session controller
+  type ComposerStateSnapshot = {
+    draft: string
+    mode: "editing" | "shell"
+    inputFocused: boolean
+    autocompleteOpen: boolean
+  }
+  const [composerStateProvider, setComposerStateProviderSignal] = createSignal<
+    (() => ComposerStateSnapshot) | undefined
+  >(undefined)
 
-  const setComposerStateProvider = (
-    provider: () => {
-      draft: string
-      mode: "editing" | "shell"
-      inputFocused: boolean
-      autocompleteOpen: boolean
-    },
-  ) => {
-    composerStateProvider = provider
+  const setComposerStateProvider = (provider: () => ComposerStateSnapshot) => {
+    setComposerStateProviderSignal(() => provider)
   }
 
   // Wire extension snapshot events from client event stream
@@ -230,8 +225,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           disabled: [...disabledSet],
         },
         {
-          openOverlay: (id) => overlayOpen(id),
-          closeOverlay: () => overlayClose(),
+          openOverlay: (id) => overlayDispatch().open(id),
+          closeOverlay: () => overlayDispatch().close(),
           get sessionId() {
             return clientCtx.session()?.sessionId
           },
@@ -273,7 +268,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           },
           sendMessage: (content) => clientCtx.sendMessage(content),
           composerState: () => {
-            if (composerStateProvider === undefined) {
+            const provider = composerStateProvider()
+            if (provider === undefined) {
               return {
                 draft: "",
                 mode: "editing" as const,
@@ -281,7 +277,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                 autocompleteOpen: false,
               }
             }
-            return composerStateProvider()
+            return provider()
           },
         },
       )
