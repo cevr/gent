@@ -25,8 +25,7 @@ packages/
 │   ├── storage/   # SQLite persistence (focused services: Storage, CheckpointStorage, InteractionStorage, SearchStorage)
 │   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
 │   ├── runtime/   # actor-process, agent-loop, task/runtime services
-│   ├── tools/     # tool definitions + handlers
-│   ├── extensions/# builtin extensions
+│   ├── extensions/# builtin extensions (tool definitions live here)
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
 │   └── test-utils/# test layers, recorders, fixtures
 └── sdk/           # direct + HTTP transports over one client contract
@@ -329,7 +328,6 @@ tests/
 ├── runtime/       # agent-loop, actor-process, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
 ├── storage/       # sqlite-storage, search-storage, task-storage, bypass
-├── tools/         # read, edit, bash, finder, code-review, counsel, delegate, ...
 ├── debug/         # sequence-provider
 └── test-utils/    # sequence
 ```
@@ -379,7 +377,7 @@ Cross-session replay via `onInit`: child sessions verify ancestry includes `acti
 ### Test Utilities
 
 - `withTinyContextWindow(effect)` — patches `MODEL_CONTEXT_WINDOWS` to 5k tokens for threshold tests
-- `trackingHandoffHandler()` — returns `{ layer, presentCalled: Ref<boolean> }` for handoff assertions
+- `trackingApprovalService()` — returns `{ layer, presentCalled: Ref<boolean> }` for approval assertions
 
 Both exported from `@gent/core/test-utils/e2e-layer`.
 
