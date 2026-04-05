@@ -324,27 +324,40 @@ export function useSessionFeed(
                   sessionId: session,
                   branchId: branch,
                 })
+                // Hydrate pending interaction from @gent/interaction-tools actor snapshot
+                const interactionSnap = snapshot.extensionSnapshots?.find(
+                  (s) => s.extensionId === "@gent/interaction-tools",
+                )
+                const interactionModel = interactionSnap?.model as
+                  | { requestId?: string; text?: string; metadata?: unknown }
+                  | undefined
+                const hasPendingInteraction = interactionModel?.requestId !== undefined
+
                 client.log.info("feed.snapshot.hydrated", {
                   key,
                   messageCount: snapshot.messages.length,
                   lastEventId: snapshot.lastEventId,
-                  hasInteraction: snapshot.activeInteraction !== undefined,
+                  hasInteraction: hasPendingInteraction,
                 })
 
                 yield* Effect.sync(() => {
                   if (currentKey !== key) return
                   client.setConnectionIssue(null)
                   setStore("messages", buildMessages(snapshot.messages))
-                  // Hydrate pending interaction from snapshot (reconnect scenario)
-                  if (snapshot.activeInteraction !== undefined) {
-                    const ai = snapshot.activeInteraction
+                  if (
+                    hasPendingInteraction &&
+                    interactionModel !== undefined &&
+                    interactionModel.requestId !== undefined
+                  ) {
                     callbacks.onInteraction({
                       _tag: "InteractionPresented",
                       sessionId: snapshot.sessionId,
                       branchId: snapshot.branchId,
-                      requestId: ai.requestId,
-                      text: ai.text,
-                      ...(ai.metadata !== undefined ? { metadata: ai.metadata } : {}),
+                      requestId: interactionModel.requestId,
+                      text: interactionModel.text ?? "",
+                      ...(interactionModel.metadata !== undefined
+                        ? { metadata: interactionModel.metadata }
+                        : {}),
                     } as ActiveInteraction)
                   }
                 })

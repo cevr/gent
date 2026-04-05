@@ -167,24 +167,6 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
             Effect.catchEager(() => Effect.succeed([] as const)),
           )
 
-        // Active interaction — read from @gent/interaction-tools actor snapshot
-        const interactionSnap = extensionSnapshots.find(
-          (s) => s.extensionId === "@gent/interaction-tools",
-        )
-        const interactionModel = interactionSnap?.model as
-          | { requestId?: string; text?: string; metadata?: unknown }
-          | undefined
-        const activeInteraction =
-          interactionModel?.requestId !== undefined
-            ? {
-                requestId: interactionModel.requestId,
-                text: interactionModel.text ?? "",
-                ...(interactionModel.metadata !== undefined
-                  ? { metadata: interactionModel.metadata }
-                  : {}),
-              }
-            : undefined
-
         return {
           sessionId: input.sessionId,
           branchId: input.branchId,
@@ -195,7 +177,6 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
           activeBranchId: session.activeBranchId,
           runtime,
           extensionSnapshots: extensionSnapshots.length > 0 ? [...extensionSnapshots] : undefined,
-          activeInteraction,
         }
       })
 

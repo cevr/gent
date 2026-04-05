@@ -140,32 +140,36 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 ### Interactions (Cold Pattern)
 
-Tools that need human input (prompt, handoff, ask-user) use a cold interaction pattern instead of blocking fibers:
+One interaction primitive: `ctx.approve({ text, metadata? })` → `{ approved, notes? }`.
+
+Tools that need human input call `ctx.approve()`, which delegates to `ApprovalService`. The pattern is cold — no blocked fibers, survives restarts.
 
 ```text
-tool calls handler.present()
-  → InteractionPendingError thrown
-    → ToolRunner re-raises it
-      → executeToolsPhase propagates it
-        → machine emits InteractionRequested
-          → ExecutingTools → WaitingForInteraction (cold, no task fiber)
+tool calls ctx.approve({ text, metadata? })
+  → ApprovalService.present() checks for stored resolution (cold resume)
+    → if found: returns { approved, notes? }
+    → if not: persists to InteractionStorage, publishes InteractionPresented
+      → InteractionPendingError thrown
+        → machine parks in WaitingForInteraction (cold, no task fiber)
 
-client responds via RPC
-  → InteractionCommands stores resolution in-memory
+client responds via respondInteraction RPC
+  → storeResolution(requestId, { approved, notes? })
     → machine receives InteractionResponded
       → WaitingForInteraction → ExecutingTools
-        → tool re-runs, calls present(), finds stored resolution
+        → tool re-runs, calls ctx.approve(), finds stored resolution
           → continues normally
 ```
+
+**Actor-snapshot-driven UI.** The `@gent/interaction-tools` extension has an actor that tracks `InteractionPresented`/`InteractionResolved` events. Its UI snapshot reflects the pending interaction state (`{ requestId, text, metadata }` or `{}`). The client reads this from `extensionSnapshots` — no dedicated `activeInteraction` field on the transport contract.
 
 Key properties:
 
 - **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no `.task()`, no background work. The machine is checkpointed and survives restarts.
-- **Crash-safe respond ordering.** `storeResolution` (in-memory) → `respondInteraction` (wake machine) → `handler.respond` (resolve in storage). If process dies before wake, request stays pending; `listPending()` re-publishes on recovery.
+- **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listPending()` in `InteractionStorage` provides the pending requests for recovery.
 - **Tool re-execution on resume.** The full `executeToolsPhase` re-runs. Pre-interaction side effects re-execute (idempotent by convention). No continuation payloads.
 - **Permissions are not interactive.** Default-allow with explicit deny rules. `Permission.check` is a synchronous policy check, never blocks.
 
-Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `interaction-handlers.ts` (PromptHandler, HandoffHandler), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
+Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-tools/index.ts` (interaction actor), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
 
 ## Platform Boundaries
 
@@ -347,6 +351,12 @@ One test file per source file. No god tests. Names match source owners.
 - `packages/core/src/debug/provider.ts` — `DebugProvider`, `createSignalProvider`, `createSequenceProvider`
 - `apps/tui/tests/render-harness.tsx` — TUI render test harness
 - `packages/e2e/tests/transport-harness.ts` — shared worker + transport cases
+
+## Interaction Tools Extension
+
+`@gent/interaction-tools` — `ask_user` and `prompt` tools, plus the interaction actor.
+
+The actor tracks `InteractionPresented`/`InteractionResolved` events. Its UI snapshot is the single source of pending interaction state for clients. The client reads the snapshot from `extensionSnapshots` and renders the appropriate interaction UI (routed by `metadata.type`).
 
 ## Auto Loop Extension
 

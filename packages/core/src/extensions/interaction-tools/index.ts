@@ -51,7 +51,8 @@ const InteractionSnapshotSchema = Schema.Struct({
   metadata: Schema.optional(Schema.Unknown),
 })
 
-const interactionActor: ExtensionActorDefinition<
+/** Exported for test harness access */
+export const interactionActor: ExtensionActorDefinition<
   typeof InteractionState.Type,
   typeof InteractionEvent.Type
 > = {
