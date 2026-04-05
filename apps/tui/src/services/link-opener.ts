@@ -34,7 +34,7 @@ const makeOpener = (command: string, argsForUrl: (url: string) => string[]): Lin
 })
 
 export class LinkOpener extends ServiceMap.Service<LinkOpener, LinkOpenerService>()(
-  "@gent/core/src/domain/link-opener/LinkOpener",
+  "@gent/tui/services/link-opener/LinkOpener",
 ) {
   static LiveDarwin: Layer.Layer<LinkOpener> = Layer.succeed(
     LinkOpener,

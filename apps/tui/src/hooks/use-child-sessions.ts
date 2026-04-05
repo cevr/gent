@@ -12,7 +12,7 @@ import {
   make as makeChildSessionTracker,
   type ChildSessionEntry,
   type ChildToolCall,
-} from "@gent/core/runtime/child-session-tracker.js"
+} from "../services/child-session-tracker"
 import type { ClientContextValue } from "../client/context"
 
 // Re-export types for consumers

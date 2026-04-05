@@ -60,14 +60,6 @@ export type { WideEventContext, WideEventEnvelope, LogEvent } from "./wide-event
 export { formatSchemaError } from "./format-schema-error"
 
 export {
-  type ChildSessionTrackerService,
-  type ChildSessionEntry,
-  type ChildToolCall,
-  type ChildSessionChange,
-  make as makeChildSessionTracker,
-} from "./child-session-tracker"
-
-export {
   SqlClientLive,
   SqliteClientLive,
   SqliteClientDefaultLive,

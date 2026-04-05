@@ -143,10 +143,6 @@ export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessS
     })
 }
 
-class ActorTransport extends ServiceMap.Service<ActorTransport, ActorProcessService>()(
-  "@gent/core/src/runtime/actor-process/ActorTransport",
-) {}
-
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new ActorProcessError({ message, cause })
 
@@ -160,12 +156,12 @@ const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
 const followUpMessageIdForCommand = (commandId: ActorCommandId) =>
   `${commandId}:follow-up` as MessageId
 
-const LocalActorTransportLive: Layer.Layer<
-  ActorTransport,
+export const LocalActorProcessLive: Layer.Layer<
+  ActorProcess,
   never,
   AgentLoop | Storage | EventPublisher | ToolRunner | ExtensionRegistry
 > = Layer.effect(
-  ActorTransport,
+  ActorProcess,
   Effect.gen(function* () {
     const agentLoop = yield* AgentLoop
     const storage = yield* Storage
@@ -174,7 +170,7 @@ const LocalActorTransportLive: Layer.Layer<
     const extensionRegistry = yield* ExtensionRegistry
     const bashSemaphore = yield* Semaphore.make(1)
 
-    return ActorTransport.of({
+    return {
       sendUserMessage: (input) =>
         Effect.gen(function* () {
           const commandId = input.commandId ?? makeCommandId()
@@ -423,20 +419,6 @@ const LocalActorTransportLive: Layer.Layer<
             } satisfies ActorProcessMetrics),
           ),
         ),
-    })
+    }
   }),
 )
-
-const ActorProcessFromTransportLive: Layer.Layer<ActorProcess, never, ActorTransport> =
-  Layer.effect(
-    ActorProcess,
-    Effect.gen(function* () {
-      return yield* ActorTransport
-    }),
-  )
-
-export const LocalActorProcessLive: Layer.Layer<
-  ActorProcess,
-  never,
-  AgentLoop | Storage | EventPublisher | ToolRunner | ExtensionRegistry
-> = Layer.provide(ActorProcessFromTransportLive, LocalActorTransportLive)

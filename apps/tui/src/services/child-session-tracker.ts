@@ -7,8 +7,8 @@
  */
 import { Effect, FiberSet, PubSub, Ref, Stream } from "effect"
 import type { Scope } from "effect"
-import { EventStore, type AgentEvent, type EventEnvelope } from "../domain/event.js"
-import type { SessionId, BranchId, ToolCallId } from "../domain/ids.js"
+import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event.js"
+import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids.js"
 
 // =============================================================================
 // Types (live projection — not durable domain schemas)

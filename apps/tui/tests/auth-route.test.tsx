@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { createSignal } from "solid-js"
-import { LinkOpener, LinkOpenerError } from "@gent/core/domain/link-opener"
+import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
 import type { ClientLog } from "../src/utils/client-logger"
 import { Auth } from "../src/routes/auth"
 import { Route } from "../src/router"

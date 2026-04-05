@@ -14,7 +14,7 @@ export interface OsServiceShape {
 }
 
 export class OsService extends ServiceMap.Service<OsService, OsServiceShape>()(
-  "@gent/core/src/domain/os-service/OsService",
+  "@gent/tui/services/os-service/OsService",
 ) {
   static Live: Layer.Layer<OsService> = Layer.succeed(OsService, {
     platform: resolvePlatform(process.platform),
