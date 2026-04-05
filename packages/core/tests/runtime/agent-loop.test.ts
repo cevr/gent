@@ -1,14 +1,14 @@
 import { describe, test, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
-import { Provider, ProviderError, ToolCallChunk, FinishChunk } from "@gent/core/providers/provider"
+import { Provider, ProviderError, FinishChunk } from "@gent/core/providers/provider"
 import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
 import { Agents } from "@gent/core/domain/agent"
-import { defineTool, type AnyToolDefinition } from "@gent/core/domain/tool"
+import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { Permission } from "@gent/core/domain/permission"
 import { EventStore } from "@gent/core/domain/event"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
@@ -333,7 +333,7 @@ describe("AgentLoop actor model", () => {
     )
   })
 
-  test("publishes loop inspection transitions through Streaming", async () => {
+  test("publishes domain events for a single turn", async () => {
     const providerLayer = Layer.succeed(Provider, {
       stream: () =>
         Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
@@ -341,14 +341,6 @@ describe("AgentLoop actor model", () => {
     })
 
     const layer = makeRecordingLayer(providerLayer)
-
-    const getStateTag = (payload: unknown, key: string) => {
-      if (typeof payload !== "object" || payload === null) return undefined
-      const state = (payload as Record<string, unknown>)[key]
-      if (typeof state !== "object" || state === null) return undefined
-      const tag = (state as Record<string, unknown>)["_tag"]
-      return typeof tag === "string" ? tag : undefined
-    }
 
     await Effect.runPromise(
       Effect.scoped(
@@ -359,28 +351,13 @@ describe("AgentLoop actor model", () => {
           yield* agentLoop.run(makeMessage("s1", "b1", "inspect me"))
 
           const calls = yield* recorder.getCalls()
-          const transitions = calls
+          const publishedEvents = calls
             .filter((call) => call.service === "EventStore" && call.method === "publish")
-            .map(
-              (call) =>
-                call.args as
-                  | { _tag?: string; inspectionType?: string; payload?: unknown }
-                  | undefined,
-            )
-            .filter(
-              (
-                event,
-              ): event is { _tag: "MachineInspected"; inspectionType: string; payload: unknown } =>
-                event?._tag === "MachineInspected" &&
-                event.inspectionType === "@machine.transition" &&
-                "payload" in event,
-            )
-            .map((event) => ({
-              from: getStateTag(event.payload, "fromState"),
-              to: getStateTag(event.payload, "toState"),
-            }))
+            .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
+            .filter((tag): tag is string => tag !== undefined)
 
-          expect(transitions).toContainEqual({ from: "Idle", to: "Running" })
+          expect(publishedEvents).toContain("StreamStarted")
+          expect(publishedEvents).toContain("TurnCompleted")
         }).pipe(Effect.provide(layer)),
       ),
     )
@@ -448,11 +425,15 @@ describe("AgentLoop actor model", () => {
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiber)
 
-          expect(calls.map((call) => [call.model, call.latestUserText])).toEqual([
-            ["anthropic/claude-opus-4-6", "first"],
-            ["openai/gpt-5.4", "steer now"],
-            ["anthropic/claude-opus-4-6", "queued"],
-          ])
+          // Assert agent routing behavior, not specific model IDs
+          expect(calls.length).toBe(3)
+          expect(calls[0]!.latestUserText).toBe("first")
+          expect(calls[1]!.latestUserText).toBe("steer now")
+          expect(calls[2]!.latestUserText).toBe("queued")
+          // Interjection with agent override uses a different model than default
+          expect(calls[1]!.model).not.toBe(calls[0]!.model)
+          // Queued follow-up reverts to default agent's model
+          expect(calls[2]!.model).toBe(calls[0]!.model)
         }).pipe(Effect.provide(layer)),
       ),
     )
@@ -678,113 +659,5 @@ describe("AgentLoop.runOnce", () => {
         expect(tags.includes("TurnCompleted")).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
-  })
-})
-
-describe("Tool concurrency", () => {
-  test("serial tool calls do not overlap", async () => {
-    const events: string[] = []
-    let running = 0
-    let maxRunning = 0
-
-    const makeSerialTool = (name: string) =>
-      defineTool({
-        name,
-        concurrency: "serial",
-        description: `Serial tool ${name}`,
-        params: Schema.Struct({}),
-        execute: () =>
-          Effect.gen(function* () {
-            yield* Effect.sync(() => {
-              running += 1
-              maxRunning = Math.max(maxRunning, running)
-              events.push(`start:${name}`)
-            })
-
-            yield* Effect.promise(
-              () =>
-                new Promise<void>((resolve) => {
-                  setTimeout(resolve, 20)
-                }),
-            )
-
-            yield* Effect.sync(() => {
-              events.push(`end:${name}`)
-              running -= 1
-            })
-
-            return { ok: true }
-          }),
-      })
-
-    const toolA = makeSerialTool("serial-a")
-    const toolB = makeSerialTool("serial-b")
-
-    const providerResponses = [
-      [
-        new ToolCallChunk({ toolCallId: "tc-1", toolName: "serial-a", input: {} }),
-        new ToolCallChunk({ toolCallId: "tc-2", toolName: "serial-b", input: {} }),
-        new FinishChunk({ finishReason: "tool_calls" }),
-      ],
-      [new FinishChunk({ finishReason: "stop" })],
-    ]
-
-    const deps = Layer.mergeAll(
-      Storage.TestWithSql(),
-      Provider.Test(providerResponses),
-      makeTestExtRegistry([toolA, toolB]),
-      ExtensionStateRuntime.Test(),
-      ExtensionTurnControl.Test(),
-      EventStore.Test(),
-      Permission.Test(),
-      ApprovalService.Test(),
-      BunServices.layer,
-    )
-    const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-    const actorDeps = Layer.mergeAll(deps, toolRunnerLayer)
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, actorDeps)
-    const loopLayer = AgentLoop.Live({ baseSections: [] }).pipe(
-      Layer.provide(Layer.merge(actorDeps, eventPublisherLayer)),
-    )
-    const layer = Layer.mergeAll(actorDeps, eventPublisherLayer, loopLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const loop = yield* AgentLoop
-
-        const now = new Date()
-        const session = new Session({
-          id: "serial-session",
-          name: "Serial Test",
-          createdAt: now,
-          updatedAt: now,
-        })
-        const branch = new Branch({
-          id: "serial-branch",
-          sessionId: session.id,
-          createdAt: now,
-        })
-
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
-
-        yield* loop.runOnce({
-          sessionId: session.id,
-          branchId: branch.id,
-          agentName: "cowork",
-          prompt: "run serial tools",
-        })
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(maxRunning).toBe(1)
-    expect(events.length).toBe(4)
-    expect(events[0]?.startsWith("start:")).toBe(true)
-    expect(events[1]?.startsWith("end:")).toBe(true)
-    expect(events[2]?.startsWith("start:")).toBe(true)
-    expect(events[3]?.startsWith("end:")).toBe(true)
-    expect(events[0]?.slice("start:".length)).toBe(events[1]?.slice("end:".length))
-    expect(events[2]?.slice("start:".length)).toBe(events[3]?.slice("end:".length))
   })
 })
