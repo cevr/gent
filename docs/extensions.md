@@ -22,7 +22,7 @@ Within each directory:
 
 **Per-file isolation**: One broken file does not suppress siblings. Each file is loaded independently; failures are logged as warnings and the extension is skipped.
 
-**Scope precedence**: Higher scope wins for same-key contributions. Project overrides User overrides Builtin. Same-scope collisions between different extensions are fatal.
+**Scope precedence**: Higher scope wins for same-key contributions. Project overrides User overrides Builtin. Same-scope contribution collisions degrade the conflicting extension instead of crashing host startup.
 
 ## Disabling Extensions
 
@@ -137,31 +137,44 @@ ext.onShutdown(async () => {
 
 Stateful extensions register one actor. Stateless extensions can omit this entirely.
 
-Current helpers like `fromReducer()` / `fromMachine()` still exist during the migration, but the extension surface is `ext.actor(...)`.
-
 ```ts
-import { extension, fromReducer } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
+import { Schema } from "effect"
+import { Event as MEvent, Machine, State as MState } from "effect-machine"
 
-const turnCounterActor = fromReducer({
-  id: "turn-counter",
-  initial: { turns: 0 },
-  reduce: (state, event) => {
-    if (event._tag === "TurnCompleted") {
-      return { state: { turns: state.turns + 1 } }
-    }
-    return { state }
-  },
-  derive: (state) => ({
-    promptSections: [
-      {
-        id: "turn-count",
-        content: `Turns so far: ${state.turns}`,
-        priority: 80,
-      },
-    ],
-    uiModel: state,
-  }),
+const TurnState = MState({
+  Active: { turns: Schema.Number },
 })
+
+const TurnEvent = MEvent({
+  Published: { event: Schema.Unknown },
+})
+
+const turnCounterActor = {
+  machine: Machine.make({
+    state: TurnState,
+    event: TurnEvent,
+    initial: TurnState.Active({ turns: 0 }),
+  }).on(TurnState.Active, TurnEvent.Published, ({ state, event }) =>
+    event.event._tag === "TurnCompleted" ? TurnState.Active({ turns: state.turns + 1 }) : state,
+  ),
+  mapEvent: (event) => TurnEvent.Published({ event }),
+  snapshot: {
+    schema: Schema.Struct({ turns: Schema.Number }),
+    project: (state) => ({ turns: state.turns }),
+  },
+  turn: {
+    project: (state) => ({
+      promptSections: [
+        {
+          id: "turn-count",
+          content: `Turns so far: ${state.turns}`,
+          priority: 80,
+        },
+      ],
+    }),
+  },
+}
 
 extension("turn-counter", (ext) => {
   ext.actor(turnCounterActor)
@@ -173,7 +186,7 @@ Rules:
 - one actor per extension
 - actor optional for stateless extensions
 - actor owns state, snapshot, and turn projection
-- helper adapters are transitional; plan removes them in favor of one actor-shaped substrate
+- actor transitions stay explicit: pure state changes in handlers, side effects through declared slots
 
 ### Imperative Side Effects
 
@@ -225,12 +238,12 @@ Fire-and-forget: errors caught and logged, return value ignored. Runs after redu
 
 The framework validates all loaded extensions before creating the registry:
 
-- **Duplicate IDs** in same scope → fatal
-- **Same-name tools** from different extensions in same scope → fatal
-- **Same-name agents** from different extensions in same scope → fatal
-- **Same-id providers** from different extensions in same scope → fatal
-- **Same-type interaction handlers** from different extensions in same scope → fatal
-- **Same-id prompt sections** from different extensions in same scope → fatal
+- **Duplicate IDs** in same scope → conflicting extension degrades
+- **Same-name tools** from different extensions in same scope → conflicting extension degrades
+- **Same-name agents** from different extensions in same scope → conflicting extension degrades
+- **Same-id providers** from different extensions in same scope → conflicting extension degrades
+- **Same-type interaction handlers** from different extensions in same scope → conflicting extension degrades
+- **Same-id prompt sections** from different extensions in same scope → conflicting extension degrades
 
 Cross-scope: higher scope wins silently (project overrides user overrides builtin).
 
@@ -258,22 +271,62 @@ extension("my-ext", (ext) => {
 
 ### ext.actor(actor)
 
-Register a stateful actor from `fromReducer()` or `fromMachine()`.
+Register one actor-shaped definition.
 
 ```ts
-import { extension, fromReducer } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+import { Event as MEvent, Machine, Slot, State as MState } from "effect-machine"
+import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 
-const myActor = fromReducer({
-  id: "my-actor",
-  initial: { count: 0 },
-  reduce: (state, event) => ({ state }),
-  derive: (state, ctx) => ({ promptSections: [...] }),
+const CounterProtocol = {
+  Increment: ExtensionMessage("my-ext", "Increment", {}),
+}
+
+const CounterState = MState({
+  Active: { count: Schema.Number },
 })
 
+const CounterSlots = Slot.define({
+  writeAudit: Slot.fn({ count: Schema.Number }),
+})
+
+const CounterEvent = MEvent({
+  Increment: {},
+})
+
+const myActor = {
+  machine: Machine.make({
+    state: CounterState,
+    event: CounterEvent,
+    slots: CounterSlots,
+    initial: CounterState.Active({ count: 0 }),
+  }).on(CounterState.Active, CounterEvent.Increment, ({ state, slots }) =>
+    slots
+      .writeAudit({ count: state.count + 1 })
+      .pipe(Effect.as(CounterState.Active({ count: state.count + 1 }))),
+  ),
+  slots: () =>
+    Effect.succeed({
+      writeAudit: () => Effect.void,
+    }),
+  mapCommand: (message) =>
+    message.extensionId === "my-ext" && message._tag === "Increment"
+      ? CounterEvent.Increment({})
+      : undefined,
+  snapshot: {
+    schema: Schema.Struct({ count: Schema.Number }),
+    project: (state) => ({ count: state.count }),
+  },
+}
+
 extension("my-ext", (ext) => {
+  ext.protocol(CounterProtocol)
   ext.actor(myActor)
 })
 ```
+
+`mapCommand()` and `mapRequest()` only run for messages declared through `ext.protocol(...)`. Without a protocol definition, gent rejects the message before actor dispatch.
 
 ### ext.jobs(...jobs)
 
