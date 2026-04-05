@@ -7,18 +7,13 @@ import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { GentNamespacedClient, GentRuntime } from "../client"
+import { useClient } from "../client/index"
 import { ChromePanel } from "../components/chrome-panel"
 import { ClientError, formatError } from "../utils/format-error"
-import type { ClientLog } from "../utils/client-logger"
 import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./auth-state"
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
-  client: GentNamespacedClient
-  runtime: GentRuntime
-  log: ClientLog
-  agentName?: string
   enforceAuth?: boolean
   onResolved?: () => void
 }
@@ -30,8 +25,9 @@ function isPrintableAuthSequence(sequence: string | undefined): sequence is stri
 export function Auth(props: AuthProps) {
   const { theme } = useTheme()
   const router = useRouter()
+  const clientCtx = useClient()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.runtime, props.log)
+  const { cast } = useRuntime()
 
   const [state, setState] = createSignal<AuthRouteState>(AuthState.initial())
   const send = (event: Parameters<typeof transitionAuth>[1]) => {
@@ -66,7 +62,7 @@ export function Auth(props: AuthProps) {
 
   createEffect(
     on(
-      () => props.agentName,
+      () => clientCtx.agent(),
       () => {
         setAutoPrompted(false)
         loadAuth(nextRouteVersion())
@@ -79,20 +75,21 @@ export function Auth(props: AuthProps) {
 
   const loadAuth = (currentRouteVersion = routeVersion) => {
     const requestVersion = ++loadVersion
-    props.log.info("auth:load-start")
+    const agentName = clientCtx.agent()
+    clientCtx.log.info("auth:load-start")
     send({ _tag: "LoadStarted" })
     cast(
       Effect.all([
-        props.client.auth.listProviders({
-          ...(props.agentName !== undefined ? { agentName: props.agentName } : {}),
+        clientCtx.client.auth.listProviders({
+          ...(agentName !== undefined ? { agentName } : {}),
         }),
-        props.client.auth.listMethods(),
+        clientCtx.client.auth.listMethods(),
       ]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion) || requestVersion !== loadVersion)
               return
-            props.log.info("auth:load-complete", { providers: loadedProviders.length })
+            clientCtx.log.info("auth:load-complete", { providers: loadedProviders.length })
             send({ _tag: "Loaded", providers: [...loadedProviders], methods: loadedMethods })
           }),
         ),
@@ -100,7 +97,7 @@ export function Auth(props: AuthProps) {
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion) || requestVersion !== loadVersion)
               return
-            props.log.error("auth:load", { error: String(err) })
+            clientCtx.log.error("auth:load", { error: String(err) })
             send({ _tag: "LoadFailed", error: formatError(err) })
           }),
         ),
@@ -110,7 +107,7 @@ export function Auth(props: AuthProps) {
 
   const openAuthorization = (currentRouteVersion: number, url: string) =>
     Effect.gen(function* () {
-      props.log.info("auth:open-authorization", { url })
+      clientCtx.log.info("auth:open-authorization", { url })
       const opener = yield* LinkOpener
       yield* opener.open(url)
     }).pipe(
@@ -158,7 +155,7 @@ export function Auth(props: AuthProps) {
     send({ _tag: "DeleteStarted" })
 
     cast(
-      props.client.auth.deleteKey({ provider: provider.provider }).pipe(
+      clientCtx.client.auth.deleteKey({ provider: provider.provider }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
@@ -183,11 +180,11 @@ export function Auth(props: AuthProps) {
     const key = current.value.trim()
     if (provider === undefined || key.length === 0) return
     const currentRouteVersion = invalidateRouteVersion()
-    props.log.info("auth:submit-key", { provider: provider.provider })
+    clientCtx.log.info("auth:submit-key", { provider: provider.provider })
     send({ _tag: "SubmitKeyStarted" })
 
     cast(
-      props.client.auth.setKey({ provider: provider.provider, key }).pipe(
+      clientCtx.client.auth.setKey({ provider: provider.provider, key }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
@@ -214,7 +211,7 @@ export function Auth(props: AuthProps) {
     const method = methods[current.methodIndex]
     if (provider === undefined || method === undefined) return
     const currentRouteVersion = invalidateRouteVersion()
-    props.log.info("auth:start-method", { provider: provider.provider, method: method.type })
+    clientCtx.log.info("auth:start-method", { provider: provider.provider, method: method.type })
 
     if (method.type === "api") {
       send({ _tag: "StartKey" })
@@ -223,7 +220,7 @@ export function Auth(props: AuthProps) {
 
     send({ _tag: "StartOAuthAuthorization" })
     cast(
-      props.client.auth
+      clientCtx.client.auth
         .authorize({
           sessionId: authSessionId,
           provider: provider.provider,
@@ -291,7 +288,7 @@ export function Auth(props: AuthProps) {
     methodIndex: number,
   ) => {
     cast(
-      props.client.auth
+      clientCtx.client.auth
         .callback({
           sessionId: authSessionId,
           provider: providerName,
@@ -323,7 +320,7 @@ export function Auth(props: AuthProps) {
     if (current.phase === "waiting") return
     const provider = current.providers[current.providerIndex]
     if (provider === undefined) return
-    props.log.info("auth:submit-oauth", {
+    clientCtx.log.info("auth:submit-oauth", {
       provider: provider.provider,
       method: current.authorization.method,
     })
@@ -335,7 +332,7 @@ export function Auth(props: AuthProps) {
     send({ _tag: "SubmitOAuthStarted" })
 
     cast(
-      props.client.auth
+      clientCtx.client.auth
         .callback({
           sessionId: authSessionId,
           provider: provider.provider,

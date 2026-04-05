@@ -102,7 +102,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   const client = useClient()
   const renderer = useRenderer()
   const env = useEnv()
-  const { cast } = useRuntime(client.runtime, client.log)
+  const { cast } = useRuntime()
   const history = usePromptHistory()
   const skillsHook = useSkills()
   const paste = createPasteManager()

@@ -2,20 +2,20 @@
 
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { createSignal } from "solid-js"
 import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
-import type { ClientLog } from "../src/utils/client-logger"
 import { Auth } from "../src/routes/auth"
 import { Route } from "../src/router"
+import { useClient } from "../src/client"
+import type { ClientContextValue } from "../src/client/context"
+import type { AgentName } from "@gent/core/domain/agent"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { waitForRenderedFrame } from "./helpers"
+import { onMount } from "solid-js"
 
-const noop = () => {}
-const log: ClientLog = {
-  debug: noop,
-  info: noop,
-  warn: noop,
-  error: noop,
+function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => void }) {
+  const client = useClient()
+  onMount(() => props.onReady(client))
+  return <box />
 }
 
 const runtimeWithLinkOpener = (open: (url: string) => Effect.Effect<void, LinkOpenerError>) => {
@@ -55,21 +55,19 @@ describe("Auth route", () => {
     })
     const runtime = createMockRuntime()
 
-    const setup = await renderWithProviders(
-      () => <Auth client={client} runtime={runtime} log={log} agentName="helper:google" />,
-      {
-        client,
-        runtime,
-        initialRoute: Route.auth(),
-      },
-    )
+    const setup = await renderWithProviders(() => <Auth />, {
+      client,
+      runtime,
+      initialRoute: Route.auth(),
+      initialAgent: "helper:google" as AgentName,
+    })
 
     expect(calls).toEqual([{ agentName: "helper:google" }])
     setup.renderer.destroy()
   })
 
   test("ignores stale auth loads after the selected agent changes", async () => {
-    let setAgentName: ((value: string) => void) | undefined
+    let ctx: ClientContextValue | undefined
     const pending: Array<{
       agentName?: string
       resolve: (
@@ -94,21 +92,23 @@ describe("Auth route", () => {
     const runtime = createMockRuntime()
 
     const setup = await renderWithProviders(
-      () => {
-        const [agentName, setAgent] = createSignal("cowork")
-        setAgentName = setAgent
-        return <Auth client={client} runtime={runtime} log={log} agentName={agentName()} />
-      },
+      () => (
+        <>
+          <ClientProbe onReady={(c) => (ctx = c)} />
+          <Auth />
+        </>
+      ),
       {
         client,
         runtime,
         initialRoute: Route.auth(),
+        initialAgent: "cowork" as AgentName,
       },
     )
 
     expect(pending.map((entry) => entry.agentName)).toEqual(["cowork"])
 
-    setAgentName?.("deepwork")
+    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
     await setup.renderOnce()
 
     expect(pending.map((entry) => entry.agentName)).toEqual(["cowork", "deepwork"])
@@ -131,7 +131,7 @@ describe("Auth route", () => {
   })
 
   test("ignores stale auth mutations after the selected agent changes", async () => {
-    let setAgentName: ((value: string) => void) | undefined
+    let ctx: ClientContextValue | undefined
     let resolveOldKeySave: (() => void) | undefined
 
     const client = createMockClient({
@@ -179,15 +179,17 @@ describe("Auth route", () => {
     const runtime = createMockRuntime()
 
     const setup = await renderWithProviders(
-      () => {
-        const [agentName, setAgent] = createSignal("cowork")
-        setAgentName = setAgent
-        return <Auth client={client} runtime={runtime} log={log} agentName={agentName()} />
-      },
+      () => (
+        <>
+          <ClientProbe onReady={(c) => (ctx = c)} />
+          <Auth />
+        </>
+      ),
       {
         client,
         runtime,
         initialRoute: Route.auth(),
+        initialAgent: "cowork" as AgentName,
       },
     )
 
@@ -203,7 +205,7 @@ describe("Auth route", () => {
     setup.mockInput.pressEnter()
     await setup.renderOnce()
 
-    setAgentName?.("deepwork")
+    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
     const reloaded = await waitForRenderedFrame(setup, (frame) => frame.includes("openai"))
     expect(reloaded).toContain("openai")
 
@@ -226,7 +228,7 @@ describe("Auth route", () => {
   })
 
   test("ignores stale oauth callbacks after the selected agent changes", async () => {
-    let setAgentName: ((value: string) => void) | undefined
+    let ctx: ClientContextValue | undefined
     let resolveAuthorize:
       | ((authorization: {
           authorizationId: string
@@ -289,15 +291,17 @@ describe("Auth route", () => {
     const runtime = createMockRuntime()
 
     const setup = await renderWithProviders(
-      () => {
-        const [agentName, setAgent] = createSignal("cowork")
-        setAgentName = setAgent
-        return <Auth client={client} runtime={runtime} log={log} agentName={agentName()} />
-      },
+      () => (
+        <>
+          <ClientProbe onReady={(c) => (ctx = c)} />
+          <Auth />
+        </>
+      ),
       {
         client,
         runtime,
         initialRoute: Route.auth(),
+        initialAgent: "cowork" as AgentName,
       },
     )
 
@@ -308,7 +312,7 @@ describe("Auth route", () => {
     setup.mockInput.pressEnter()
     await setup.renderOnce()
 
-    setAgentName?.("deepwork")
+    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
     await waitForRenderedFrame(setup, (frame) => frame.includes("openai"))
 
     resolveAuthorize?.({
@@ -324,7 +328,7 @@ describe("Auth route", () => {
   })
 
   test("ignores stale oauth opener failures after the selected agent changes", async () => {
-    let setAgentName: ((value: string) => void) | undefined
+    let ctx: ClientContextValue | undefined
     let rejectOpen: ((error: LinkOpenerError) => void) | undefined
     const calls: Array<{ agentName?: string }> = []
 
@@ -378,15 +382,17 @@ describe("Auth route", () => {
     )
 
     const setup = await renderWithProviders(
-      () => {
-        const [agentName, setAgent] = createSignal("cowork")
-        setAgentName = setAgent
-        return <Auth client={client} runtime={runtime} log={log} agentName={agentName()} />
-      },
+      () => (
+        <>
+          <ClientProbe onReady={(c) => (ctx = c)} />
+          <Auth />
+        </>
+      ),
       {
         client,
         runtime,
         initialRoute: Route.auth(),
+        initialAgent: "cowork" as AgentName,
       },
     )
 
@@ -398,7 +404,7 @@ describe("Auth route", () => {
     await setup.renderOnce()
     await waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below"))
 
-    setAgentName?.("deepwork")
+    ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
     await Promise.resolve()
     await setup.renderOnce()
     expect(calls.at(-1)).toEqual({ agentName: "deepwork" })
@@ -452,14 +458,12 @@ describe("Auth route", () => {
       ),
     )
 
-    const setup = await renderWithProviders(
-      () => <Auth client={client} runtime={runtime} log={log} agentName="cowork" />,
-      {
-        client,
-        runtime,
-        initialRoute: Route.auth(),
-      },
-    )
+    const setup = await renderWithProviders(() => <Auth />, {
+      client,
+      runtime,
+      initialRoute: Route.auth(),
+      initialAgent: "cowork" as AgentName,
+    })
 
     await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))
 

@@ -97,7 +97,7 @@ export function useSessionController(props: {
   const command = useCommand()
   const ext = useExtensionUI()
   const router = useRouter()
-  const { cast } = useRuntime(client.runtime, client.log)
+  const { cast } = useRuntime()
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
   const workspace = useWorkspace()

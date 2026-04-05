@@ -10,27 +10,22 @@ import { useTheme } from "../theme/index"
 import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { PermissionRule, GentNamespacedClient, GentRuntime } from "../client"
+import { useClient } from "../client/index"
+import type { PermissionRule } from "../client"
 import { ChromePanel } from "../components/chrome-panel"
 import { formatError } from "../utils/format-error"
-import type { ClientLog } from "../utils/client-logger"
 import { useScopedKeyboard } from "../keyboard/context"
-
-export interface PermissionsProps {
-  client: GentNamespacedClient
-  runtime: GentRuntime
-  log: ClientLog
-}
 
 type PermissionsState =
   | { _tag: "loading"; error?: string }
   | { _tag: "ready"; rules: PermissionRule[]; selectedIndex: number; error?: string }
 
-export function Permissions(props: PermissionsProps) {
+export function Permissions() {
   const { theme } = useTheme()
   const router = useRouter()
+  const clientCtx = useClient()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(props.runtime, props.log)
+  const { cast } = useRuntime()
 
   const [state, setState] = createSignal<PermissionsState>({ _tag: "loading" })
   let scrollRef: ScrollBoxRenderable | undefined = undefined
@@ -46,7 +41,7 @@ export function Permissions(props: PermissionsProps) {
   // Load rules on mount
   createEffect(() => {
     cast(
-      props.client.permission.listRules().pipe(
+      clientCtx.client.permission.listRules().pipe(
         Effect.tap((loaded) =>
           Effect.sync(() => {
             setState((current) => {
@@ -92,7 +87,7 @@ export function Permissions(props: PermissionsProps) {
     if (rule === undefined) return
 
     cast(
-      props.client.permission.deleteRule({ tool: rule.tool, pattern: rule.pattern }).pipe(
+      clientCtx.client.permission.deleteRule({ tool: rule.tool, pattern: rule.pattern }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             setState((prev) => {

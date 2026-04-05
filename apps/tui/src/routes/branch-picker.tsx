@@ -55,7 +55,7 @@ export function BranchPicker(props: BranchPickerProps) {
   const router = useRouter()
   const env = useEnv()
   const dimensions = useTerminalDimensions()
-  const { cast } = useRuntime(client.runtime, client.log)
+  const { cast } = useRuntime()
 
   const [state, setState] = createSignal<BranchPickerState>({
     _tag: "loading",

@@ -40,7 +40,7 @@ export function BackgroundTasksDialog(props: {
   tasks: readonly Task[]
 }) {
   const clientCtx = useClient()
-  const { cast } = useRuntime(clientCtx.runtime, clientCtx.log)
+  const { cast } = useRuntime()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const tick = useSpinnerClock()

@@ -155,14 +155,10 @@ function AppContent(props: AppProps) {
           }}
         </Match>
         <Match when={isRoute.permissions(router.route())}>
-          <Permissions client={client.client} runtime={client.runtime} log={client.log} />
+          <Permissions />
         </Match>
         <Match when={isRoute.auth(router.route())}>
           <Auth
-            client={client.client}
-            runtime={client.runtime}
-            log={client.log}
-            agentName={client.agent()}
             enforceAuth={authGateState() === "open"}
             onResolved={() => {
               setAuthGateState("closed")
