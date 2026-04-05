@@ -1,4 +1,12 @@
-import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import {
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  useContext,
+} from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
 import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
@@ -89,7 +97,7 @@ const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
 const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) =>
   state._tag === "tree" ? state.tree : null
 
-export function useSessionController(props: {
+export function createSessionController(props: {
   sessionId: SessionId
   branchId: BranchId
   initialPrompt?: string
@@ -621,4 +629,15 @@ export function useSessionController(props: {
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
     authGatePending,
   }
+}
+
+// ── Context ──
+
+export const SessionControllerContext = createContext<SessionController>()
+
+export function useSessionController(): SessionController {
+  const ctx = useContext(SessionControllerContext)
+  if (ctx === undefined)
+    throw new Error("useSessionController must be used within SessionControllerContext.Provider")
+  return ctx
 }

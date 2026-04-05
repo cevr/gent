@@ -21,7 +21,7 @@ import {
 } from "../components/bordered-input"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
-import { useSessionController } from "./session-controller"
+import { createSessionController, SessionControllerContext } from "./session-controller"
 import { ExtensionWidgets } from "../components/extension-widgets"
 import { useExtensionUI } from "../extensions/context"
 import { Auth } from "./auth"
@@ -39,7 +39,7 @@ export function Session(props: SessionProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const workspace = useWorkspace()
-  const controller = useSessionController(props)
+  const controller = createSessionController(props)
   const client = controller.client
   const ext = useExtensionUI()
 
@@ -151,104 +151,96 @@ export function Session(props: SessionProps) {
   }
 
   return (
-    <box flexDirection="column" flexGrow={1}>
-      {/* Messages */}
-      <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
-        <box flexDirection="column">
-          <MessageList
-            items={controller.items()}
-            toolsExpanded={controller.toolsExpanded()}
-            syntaxStyle={syntaxStyle}
-            streaming={client.isStreaming()}
-            getChildSessions={controller.getChildren}
-          />
+    <SessionControllerContext.Provider value={controller}>
+      <box flexDirection="column" flexGrow={1}>
+        {/* Messages */}
+        <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+          <box flexDirection="column">
+            <MessageList
+              items={controller.items()}
+              toolsExpanded={controller.toolsExpanded()}
+              syntaxStyle={syntaxStyle}
+              streaming={client.isStreaming()}
+              getChildSessions={controller.getChildren}
+            />
 
-          <ExtensionWidgets slot="below-messages" />
-          {/* QueueWidget stays hardwired — its data comes from session controller state,
+            <ExtensionWidgets slot="below-messages" />
+            {/* QueueWidget stays hardwired — its data comes from session controller state,
               not available via extension context yet (planned for batch 9) */}
-          <QueueWidget
-            queuedMessages={controller.queueState().followUp}
-            steerMessages={controller.queueState().steering}
-          />
-        </box>
-      </scrollbox>
+            <QueueWidget
+              queuedMessages={controller.queueState().followUp}
+              steerMessages={controller.queueState().steering}
+            />
+          </box>
+        </scrollbox>
 
-      <ExtensionWidgets slot="above-input" />
+        <ExtensionWidgets slot="above-input" />
 
-      {/* Bordered input */}
-      <BorderedInput
-        topLeft={topLeftLabels()}
-        topRight={topRightLabels()}
-        bottomLeft={bottomLeftLabels()}
-        bottomRight={bottomRightLabels()}
-        borderColor={borderColor()}
-      >
-        <Composer
-          onSubmit={controller.onSubmit}
-          onSlashCommand={controller.onSlashCommand}
-          clearMessages={controller.clearMessages}
-          onRestoreQueue={controller.onRestoreQueue}
-          suspended={controller.promptSearchOpen()}
-          interactionState={controller.interactionState()}
-          onInteractionEvent={controller.onComposerInteraction}
-          composerState={controller.composerState()}
-          dispatchComposer={controller.dispatchComposer}
+        {/* Bordered input */}
+        <BorderedInput
+          topLeft={topLeftLabels()}
+          topRight={topRightLabels()}
+          bottomLeft={bottomLeftLabels()}
+          bottomRight={bottomRightLabels()}
+          borderColor={borderColor()}
         >
-          <Composer.Autocomplete />
-        </Composer>
-      </BorderedInput>
+          <Composer>
+            <Composer.Autocomplete />
+          </Composer>
+        </BorderedInput>
 
-      <SessionTree
-        open={controller.uiState().overlay._tag === "tree"}
-        tree={controller.treeOverlay()}
-        currentSessionId={props.sessionId}
-        onSelect={controller.onSessionTreeSelect}
-        onClose={controller.closeOverlay}
-      />
+        <SessionTree
+          open={controller.uiState().overlay._tag === "tree"}
+          tree={controller.treeOverlay()}
+          currentSessionId={props.sessionId}
+          onSelect={controller.onSessionTreeSelect}
+          onClose={controller.closeOverlay}
+        />
 
-      <MessagePicker
-        open={controller.uiState().overlay._tag === "fork"}
-        messages={controller.messages()}
-        onSelect={controller.onForkSelect}
-        onClose={controller.closeOverlay}
-      />
+        <MessagePicker
+          open={controller.uiState().overlay._tag === "fork"}
+          messages={controller.messages()}
+          onSelect={controller.onForkSelect}
+          onClose={controller.closeOverlay}
+        />
 
-      <MermaidViewer
-        open={controller.uiState().overlay._tag === "mermaid"}
-        diagrams={mermaidDiagrams()}
-        onClose={controller.closeOverlay}
-      />
+        <MermaidViewer
+          open={controller.uiState().overlay._tag === "mermaid"}
+          diagrams={mermaidDiagrams()}
+          onClose={controller.closeOverlay}
+        />
 
-      <PromptSearchPalette
-        state={controller.promptSearchState()}
-        entries={controller.promptEntries()}
-        onEvent={controller.onPromptSearchEvent}
-      />
+        <PromptSearchPalette
+          state={controller.promptSearchState()}
+          entries={controller.promptEntries()}
+          onEvent={controller.onPromptSearchEvent}
+        />
 
-      {(() => {
-        const overlay = controller.uiState().overlay
-        switch (overlay._tag) {
-          case "auth":
-            return (
-              <Auth
-                enforceAuth={overlay.enforceAuth}
-                onResolved={controller.closeOverlay}
-                onClose={controller.closeOverlay}
-              />
-            )
-          case "permissions":
-            return <Permissions onClose={controller.closeOverlay} />
-          case "extension": {
-            const Overlay = ext.overlays().get(overlay.overlayId)
-            if (Overlay === undefined) return null
-            return <Overlay open={true} onClose={controller.closeOverlay} />
+        {(() => {
+          const overlay = controller.uiState().overlay
+          switch (overlay._tag) {
+            case "auth":
+              return (
+                <Auth
+                  enforceAuth={overlay.enforceAuth}
+                  onResolved={controller.closeOverlay}
+                  onClose={controller.closeOverlay}
+                />
+              )
+            case "permissions":
+              return <Permissions onClose={controller.closeOverlay} />
+            case "extension": {
+              const Overlay = ext.overlays().get(overlay.overlayId)
+              if (Overlay === undefined) return null
+              return <Overlay open={true} onClose={controller.closeOverlay} />
+            }
+            default:
+              return null
           }
-          default:
-            return null
-        }
-      })()}
+        })()}
 
-      <ExtensionWidgets slot="below-input" />
-    </box>
+        <ExtensionWidgets slot="below-input" />
+      </box>
+    </SessionControllerContext.Provider>
   )
 }

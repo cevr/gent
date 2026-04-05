@@ -10,19 +10,14 @@ import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useSkills } from "../hooks/use-skills"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useWorkspace } from "../workspace/index"
+import { useSessionController } from "../routes/session-controller"
 import { executeSlashCommand, parseSlashCommand } from "../commands/slash-commands"
-import type { UiError } from "../utils/format-error"
 import { ClientError, formatError } from "../utils/format-error"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { expandSkillMentions } from "../utils/skill-expansion"
 import { executeShell } from "../utils/shell"
 import type { AutocompleteState } from "./autocomplete-popup"
-import type {
-  ComposerInteractionEvent,
-  ComposerInteractionState,
-} from "./composer-interaction-state"
-import type { ComposerEvent, ComposerState } from "./composer-state"
 import type { ApprovalResult } from "@gent/core/domain/event.js"
 
 const PASTE_THRESHOLD_LINES = 3
@@ -63,18 +58,6 @@ function createPasteManager() {
   }
 }
 
-export interface ComposerControllerProps {
-  onSubmit: (content: string, mode?: "queue" | "interject") => void
-  onSlashCommand?: (cmd: string, args: string) => Effect.Effect<void, UiError>
-  clearMessages?: () => void
-  onRestoreQueue?: () => void
-  suspended?: boolean
-  interactionState: ComposerInteractionState
-  onInteractionEvent: (event: ComposerInteractionEvent) => void
-  composerState?: ComposerState
-  dispatchComposer?: (event: ComposerEvent) => void
-}
-
 export interface ComposerController {
   readonly autocomplete: Accessor<AutocompleteState | null>
   readonly mode: Accessor<"editing" | "shell" | "interaction">
@@ -96,7 +79,8 @@ export interface ComposerController {
   readonly handleAutocompleteClose: () => void
 }
 
-export function useComposerController(props: ComposerControllerProps): ComposerController {
+export function useComposerController(): ComposerController {
+  const sc = useSessionController()
   const workspace = useWorkspace()
   const command = useCommand()
   const client = useClient()
@@ -110,17 +94,17 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   let inputRef: TextareaRenderable | null = null
   let submitMode: "queue" | "interject" = "queue"
 
-  const autocomplete = () => props.interactionState.autocomplete
+  const autocomplete = () => sc.interactionState().autocomplete
   const effectiveMode = (): "editing" | "shell" | "interaction" =>
-    props.composerState?._tag === "interaction" ? "interaction" : props.interactionState.mode
+    sc.composerState()?._tag === "interaction" ? "interaction" : sc.interactionState().mode
 
   const clearInput = () => {
     if (inputRef !== null) inputRef.setText("")
-    props.onInteractionEvent({ _tag: "ClearDraft" })
+    sc.onComposerInteraction({ _tag: "ClearDraft" })
   }
 
   const clearAutocomplete = () => {
-    props.onInteractionEvent({ _tag: "CloseAutocomplete" })
+    sc.onComposerInteraction({ _tag: "CloseAutocomplete" })
   }
 
   const focusTextarea = () => {
@@ -149,7 +133,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     const nextValue = beforeTrigger + insertion
     inputRef.replaceText(nextValue)
     inputRef.cursorOffset = nextValue.length
-    props.onInteractionEvent({ _tag: "RestoreDraft", text: nextValue })
+    sc.onComposerInteraction({ _tag: "RestoreDraft", text: nextValue })
     focusTextarea()
   }
 
@@ -160,7 +144,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
 
   const handleContentChange = () => {
     const value = inputRef?.plainText ?? ""
-    const previousValue = props.interactionState.draft
+    const previousValue = sc.interactionState().draft
     if (value.length > previousValue.length && inputRef !== null) {
       const inserted = value.slice(previousValue.length)
       if (isLargePaste(inserted)) {
@@ -168,11 +152,11 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
         const nextValue = previousValue + placeholder
         inputRef.replaceText(nextValue)
         inputRef.cursorOffset = nextValue.length
-        props.onInteractionEvent({ _tag: "RestoreDraft", text: nextValue })
+        sc.onComposerInteraction({ _tag: "RestoreDraft", text: nextValue })
         return
       }
     }
-    props.onInteractionEvent({ _tag: "DraftChanged", text: value })
+    sc.onComposerInteraction({ _tag: "DraftChanged", text: value })
   }
 
   const submitShellCommand = (text: string) => {
@@ -187,9 +171,9 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
         }),
         Effect.tap((userMessage) =>
           Effect.sync(() => {
-            props.onInteractionEvent({ _tag: "ExitShell" })
+            sc.onComposerInteraction({ _tag: "ExitShell" })
             clearInput()
-            props.onSubmit(userMessage)
+            sc.onSubmit(userMessage)
           }),
         ),
         Effect.catchEager((error: unknown) =>
@@ -210,15 +194,15 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     if (parsed === null) return false
 
     const [cmd, args] = parsed
-    client.log.info("slash-command", { cmd, hasCustomHandler: props.onSlashCommand !== undefined })
+    client.log.info("slash-command", { cmd, hasCustomHandler: sc.onSlashCommand !== undefined })
     clearInput()
 
     const commandEffect =
-      props.onSlashCommand !== undefined
-        ? props.onSlashCommand(cmd, args)
+      sc.onSlashCommand !== undefined
+        ? sc.onSlashCommand(cmd, args)
         : executeSlashCommand(cmd, args, {
             openPalette: () => command.openPalette(),
-            clearMessages: props.clearMessages ?? (() => {}),
+            clearMessages: sc.clearMessages ?? (() => {}),
             navigateToSessions: () => command.openPalette(),
             createBranch: Effect.void,
             openTree: () => {},
@@ -267,7 +251,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
         Effect.tap((expanded) =>
           Effect.sync(() => {
             clearInput()
-            props.onSubmit(expanded, mode)
+            sc.onSubmit(expanded, mode)
           }),
         ),
       ),
@@ -316,7 +300,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
         if (result._tag === "applied" && inputRef !== null) {
           inputRef.replaceText(result.content)
           inputRef.cursorOffset = result.content.length
-          props.onInteractionEvent({ _tag: "RestoreDraft", text: result.content })
+          sc.onComposerInteraction({ _tag: "RestoreDraft", text: result.content })
           return
         }
         if (result._tag === "error") {
@@ -355,21 +339,21 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
       effectiveMode() === "editing" &&
       autocomplete() === null
     ) {
-      props.onInteractionEvent({ _tag: "EnterShell" })
+      sc.onComposerInteraction({ _tag: "EnterShell" })
       return true
     }
 
     if (effectiveMode() !== "shell") return false
 
     if (event.name === "escape") {
-      props.onInteractionEvent({ _tag: "ExitShell" })
+      sc.onComposerInteraction({ _tag: "ExitShell" })
       clearAutocomplete()
       clearInput()
       return true
     }
 
     if (event.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
-      props.onInteractionEvent({ _tag: "ExitShell" })
+      sc.onComposerInteraction({ _tag: "ExitShell" })
       clearAutocomplete()
       return true
     }
@@ -387,7 +371,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
       return false
     }
 
-    props.onInteractionEvent({
+    sc.onComposerInteraction({
       _tag: "OpenAutocomplete",
       autocomplete: { type: "/", filter: "", triggerPos: 0 },
     })
@@ -424,12 +408,12 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
 
     inputRef.replaceText(result.text)
     inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
-    props.onInteractionEvent({ _tag: "RestoreDraft", text: result.text })
+    sc.onComposerInteraction({ _tag: "RestoreDraft", text: result.text })
     return true
   }
 
   useScopedKeyboard((event) => {
-    if (props.suspended === true) return false
+    if (sc.promptSearchOpen() === true) return false
 
     // Shift+Tab toggles auto mode (opens goal overlay when inactive, cancels when active)
     const isShiftTab =
@@ -445,7 +429,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     if (handleExternalEditorKey(event)) return true
 
     if ((event.meta === true || event.super === true) && event.name === "up") {
-      props.onRestoreQueue?.()
+      sc.onRestoreQueue()
       return true
     }
 
@@ -459,7 +443,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
 
   /** Called by textarea onSubmit (keybinding: bare return → submit action). */
   const handleSubmitFromTextarea = () => {
-    if (props.suspended === true || effectiveMode() === "interaction") return
+    if (sc.promptSearchOpen() === true || effectiveMode() === "interaction") return
     if (autocomplete() !== null) return
     submitMode = "queue"
     handleSubmit()
@@ -482,7 +466,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
-    if (props.suspended === true || effectiveMode() === "interaction") {
+    if (sc.promptSearchOpen() === true || effectiveMode() === "interaction") {
       event.preventDefault()
       return
     }
@@ -506,7 +490,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
   }
 
   createEffect(() => {
-    const draft = props.interactionState.draft
+    const draft = sc.interactionState().draft
     if (inputRef === null || inputRef.plainText === draft) return
     inputRef.replaceText(draft)
     inputRef.cursorOffset = draft.length
@@ -527,7 +511,7 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     mode: effectiveMode,
     promptSymbol: () => (effectiveMode() === "shell" ? "$ " : "❯ "),
     inputFocused: () =>
-      !command.paletteOpen() && props.suspended !== true && effectiveMode() !== "interaction",
+      !command.paletteOpen() && sc.promptSearchOpen() !== true && effectiveMode() !== "interaction",
     attachTextarea: (renderable) => {
       inputRef = renderable
       if (renderable !== null) {
@@ -537,10 +521,10 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     handleTextareaKeyDown,
     handleSubmitFromTextarea,
     resolveInteraction: (result: ApprovalResult) => {
-      props.dispatchComposer?.({ _tag: "ResolveInteraction", result })
+      sc.dispatchComposer({ _tag: "ResolveInteraction", result })
     },
     cancelInteraction: () => {
-      props.dispatchComposer?.({ _tag: "CancelInteraction" })
+      sc.dispatchComposer({ _tag: "CancelInteraction" })
     },
     handleAutocompleteSelect,
     handleAutocompleteClose,

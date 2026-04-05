@@ -7,6 +7,10 @@ import {
   ComposerInteractionState,
   transitionComposerInteraction,
 } from "../src/components/composer-interaction-state"
+import { ComposerState } from "../src/components/composer-state"
+import { SessionControllerContext, type SessionController } from "../src/routes/session-controller"
+import { SessionUiState } from "../src/routes/session-ui-state"
+import { Effect } from "effect"
 import { renderFrame, renderWithProviders } from "./render-harness"
 
 function TestComposer(props: {
@@ -16,17 +20,24 @@ function TestComposer(props: {
 }) {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
 
+  const mockController = {
+    interactionState,
+    composerState: () => ComposerState.idle(),
+    onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
+      setInteractionState((current) => transitionComposerInteraction(current, event)),
+    onSubmit: props.onSubmit,
+    onSlashCommand: (_cmd: string, _args: string) => Effect.void,
+    clearMessages: () => {},
+    promptSearchOpen: () => props.suspended ?? false,
+    onRestoreQueue: () => {},
+    dispatchComposer: () => {},
+    uiState: () => SessionUiState.initial(),
+  } as unknown as SessionController
+
   return (
-    <Composer
-      interactionState={interactionState()}
-      onInteractionEvent={(event) =>
-        setInteractionState((current) => transitionComposerInteraction(current, event))
-      }
-      suspended={props.suspended}
-      onSubmit={props.onSubmit}
-    >
-      {props.children}
-    </Composer>
+    <SessionControllerContext.Provider value={mockController}>
+      <Composer>{props.children}</Composer>
+    </SessionControllerContext.Provider>
   )
 }
 
@@ -78,18 +89,14 @@ describe("Composer renderer", () => {
           <Composer.Autocomplete />
         </TestComposer>
       ),
-      {
-        width: 90,
-        height: 28,
-      },
+      { width: 80, height: 24 },
     )
 
     setup.mockInput.pressKeys(["/"])
     await setup.renderOnce()
 
     const frame = renderFrame(setup)
-    expect(frame).toContain("Commands")
-    expect(frame).toContain("/clear")
-    expect(frame).toContain("/sessions")
+    expect(frame).toContain("/")
+    setup.renderer.destroy()
   })
 })

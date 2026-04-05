@@ -6,7 +6,8 @@ import { createContext, Show, useContext, type Accessor, type JSX } from "solid-
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 import { useTheme } from "../theme/index"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
-import { useComposerController, type ComposerControllerProps } from "./use-composer-controller"
+import { useComposerController } from "./use-composer-controller"
+import { useSessionController } from "../routes/session-controller"
 import { useExtensionUI } from "../extensions/context"
 
 interface ComposerContextValue {
@@ -17,13 +18,14 @@ interface ComposerContextValue {
 
 const ComposerContext = createContext<ComposerContextValue>()
 
-export interface ComposerProps extends ComposerControllerProps {
+export interface ComposerProps {
   children?: JSX.Element
 }
 
 export function Composer(props: ComposerProps) {
   const { theme } = useTheme()
-  const controller = useComposerController(props)
+  const sc = useSessionController()
+  const controller = useComposerController()
   const ext = useExtensionUI()
 
   const contextValue: ComposerContextValue = {
@@ -32,8 +34,10 @@ export function Composer(props: ComposerProps) {
     handleAutocompleteClose: controller.handleAutocompleteClose,
   }
 
-  const activeInteraction = (): ActiveInteraction | undefined =>
-    props.composerState?._tag === "interaction" ? props.composerState.interaction : undefined
+  const activeInteraction = (): ActiveInteraction | undefined => {
+    const cs = sc.composerState()
+    return cs?._tag === "interaction" ? cs.interaction : undefined
+  }
 
   const interactionRenderer = () => {
     const interaction = activeInteraction()
@@ -79,8 +83,8 @@ export function Composer(props: ComposerProps) {
       <Show when={controller.mode() !== "interaction" && ext.composerSurface()} keyed>
         {(Surface) =>
           Surface({
-            draft: props.interactionState.draft,
-            setDraft: (text: string) => props.onInteractionEvent({ _tag: "RestoreDraft", text }),
+            draft: sc.interactionState().draft,
+            setDraft: (text: string) => sc.onComposerInteraction({ _tag: "RestoreDraft", text }),
             submit: () => controller.handleSubmitFromTextarea(),
             focused: controller.inputFocused(),
             mode: controller.mode() as "editing" | "shell",
