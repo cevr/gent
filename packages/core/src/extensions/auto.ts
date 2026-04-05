@@ -738,6 +738,7 @@ const autoActor: ExtensionActorDefinition<
         }),
       )
     }),
+  protocols: AutoProtocol,
 }
 
 // ── tool.result interceptor — JSONL append on checkpoint/counsel ──
@@ -896,7 +897,6 @@ const autoHandoffInterceptor = defineInterceptor(
 // ── Extension ──
 
 export const AutoExtension = extension("@gent/auto", (ext) => {
-  ext.protocol(AutoProtocol)
   ext.actor(autoActor)
   ext.tool(AutoCheckpointTool)
   ext.interceptor(journalInterceptor)

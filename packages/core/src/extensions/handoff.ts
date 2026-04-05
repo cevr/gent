@@ -64,6 +64,7 @@ const cooldownActor: ExtensionActorDefinition<
     schema: Schema.Struct({ cooldown: Schema.Number }),
     project: (state) => ({ cooldown: state.cooldown }),
   },
+  protocols: HandoffProtocol,
 }
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
@@ -156,7 +157,6 @@ const autoHandoffInterceptor = defineInterceptor(
 )
 
 export const HandoffExtension = extension(EXTENSION_ID, (ext) => {
-  ext.protocol(HandoffProtocol)
   ext.tool(HandoffTool)
   ext.interceptor(autoHandoffInterceptor)
   ext.actor(cooldownActor)

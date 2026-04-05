@@ -475,12 +475,12 @@ const taskListActor: ExtensionActorDefinition<
         }),
       )
     }),
+  protocols: TaskProtocol,
 }
 
 // ── Extension ──
 
 export const TaskExtension = extension("@gent/task-tools", (ext) => {
-  ext.protocol(TaskProtocol)
   ext.tool(TaskCreateTool)
   ext.tool(TaskListTool)
   ext.tool(TaskGetTool)

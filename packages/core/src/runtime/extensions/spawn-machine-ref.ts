@@ -126,13 +126,10 @@ export const spawnMachineExtensionRef = <
         effects: ReadonlyArray<ExtensionEffect>,
         branchId: BranchId | undefined,
       ) =>
-        interpretEffects(
-          effects,
-          ctx.sessionId,
-          branchId,
+        interpretEffects(effects, ctx.sessionId, branchId, {
           turnControl,
-          actor.persist === true ? persistState : undefined,
-        ).pipe(
+          persistFn: actor.persist === true ? persistState : undefined,
+        }).pipe(
           Effect.catchDefect((defect) =>
             Effect.logWarning("extension effect interpretation defect").pipe(
               Effect.annotateLogs({ extensionId, defect: String(defect) }),

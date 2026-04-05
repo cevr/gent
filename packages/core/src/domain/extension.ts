@@ -235,6 +235,8 @@ export type ExtensionEffect =
     }
   | { readonly _tag: "Interject"; readonly content: string }
   | { readonly _tag: "Persist" }
+  | { readonly _tag: "BusEmit"; readonly channel: string; readonly payload: unknown }
+  | { readonly _tag: "Send"; readonly message: AnyExtensionCommandMessage }
 
 /** Result of a reducer/message handler call — always object form */
 export interface ReduceResult<State> {
@@ -297,6 +299,8 @@ export interface ExtensionActorDefinition<
   readonly turn?: ExtensionActorTurnConfig<State>
   readonly stateSchema?: Schema.Schema<State>
   readonly persist?: boolean
+  /** Protocol definitions owned by this actor. Subsumes ext.protocol(). */
+  readonly protocols?: Readonly<Record<string, unknown>>
   readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
   readonly onInit?: (ctx: {
     readonly sessionId: SessionId

@@ -30,7 +30,10 @@ import type {
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "../../domain/extension-protocol.js"
-import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
+import {
+  ExtensionProtocolError,
+  listExtensionProtocolDefinitions,
+} from "../../domain/extension-protocol.js"
 import { CurrentExtensionSession, CurrentMailboxSession } from "./extension-actor-shared.js"
 import { spawnMachineExtensionRef } from "./spawn-machine-ref.js"
 import { ExtensionTurnControl } from "./turn-control.js"
@@ -132,7 +135,14 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               spawnSpecs.push(spec)
               spawnByExtension.set(ext.manifest.id, spec)
             }
-            for (const definition of ext.setup.protocols ?? []) {
+            // Collect protocols from both setup.protocols (legacy) and actor.protocols (preferred)
+            const allDefs = [
+              ...(ext.setup.protocols ?? []),
+              ...(actor?.protocols !== undefined
+                ? listExtensionProtocolDefinitions(actor.protocols)
+                : []),
+            ]
+            for (const definition of allDefs) {
               const byTag = protocolMap.get(definition.extensionId) ?? new Map()
               byTag.set(definition._tag, definition)
               protocolMap.set(definition.extensionId, byTag)

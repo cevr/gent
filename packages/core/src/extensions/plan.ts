@@ -533,6 +533,7 @@ const planActor: ExtensionActorDefinition<
   },
   stateSchema: PlanMachineState,
   persist: true,
+  protocols: PlanProtocol,
 }
 
 // ── Extension ──
@@ -541,7 +542,6 @@ import { PlanTool } from "../tools/plan.js"
 export { PlanTool, PlanParams } from "../tools/plan.js"
 
 export const PlanExtension = extension("@gent/plan", (ext) => {
-  ext.protocol(PlanProtocol)
   ext.actor(planActor)
   ext.tool(PlanTool)
 })

@@ -2,6 +2,7 @@
 
 import { Effect, Schema, ServiceMap } from "effect"
 import type { ExtensionEffect } from "../../domain/extension.js"
+import type { AnyExtensionCommandMessage } from "../../domain/extension-protocol.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
 
@@ -33,12 +34,18 @@ export const makePersistCodec = <S>(schema: Schema.Schema<S>) => {
  * Each effect is wrapped in catchDefect to prevent one bad effect from
  * crashing the actor.
  */
+export interface InterpretEffectsServices {
+  readonly turnControl: ExtensionTurnControlService
+  readonly persistFn?: () => Effect.Effect<void>
+  readonly busEmit?: (channel: string, payload: unknown) => Effect.Effect<void>
+  readonly send?: (sessionId: SessionId, message: AnyExtensionCommandMessage) => Effect.Effect<void>
+}
+
 export const interpretEffects = (
   effects: ReadonlyArray<ExtensionEffect>,
   sessionId: SessionId,
   branchId: BranchId | undefined,
-  turnControl: ExtensionTurnControlService,
-  persistFn?: () => Effect.Effect<void>,
+  services: InterpretEffectsServices,
 ): Effect.Effect<void> =>
   Effect.withSpan("interpretEffects")(
     Effect.gen(function* () {
@@ -46,7 +53,7 @@ export const interpretEffects = (
         switch (effect._tag) {
           case "QueueFollowUp":
             if (branchId !== undefined) {
-              yield* turnControl
+              yield* services.turnControl
                 .queueFollowUp({
                   sessionId,
                   branchId,
@@ -58,14 +65,28 @@ export const interpretEffects = (
             break
           case "Interject":
             if (branchId !== undefined) {
-              yield* turnControl
+              yield* services.turnControl
                 .interject({ sessionId, branchId, content: effect.content })
                 .pipe(Effect.catchDefect(() => Effect.void))
             }
             break
           case "Persist":
-            if (persistFn !== undefined) {
-              yield* persistFn().pipe(Effect.catchDefect(() => Effect.void))
+            if (services.persistFn !== undefined) {
+              yield* services.persistFn().pipe(Effect.catchDefect(() => Effect.void))
+            }
+            break
+          case "BusEmit":
+            if (services.busEmit !== undefined) {
+              yield* services
+                .busEmit(effect.channel, effect.payload)
+                .pipe(Effect.catchDefect(() => Effect.void))
+            }
+            break
+          case "Send":
+            if (services.send !== undefined) {
+              yield* services
+                .send(sessionId, effect.message)
+                .pipe(Effect.catchDefect(() => Effect.void))
             }
             break
         }

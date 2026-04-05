@@ -53,6 +53,7 @@ import {
 import {
   ExtensionProtocolError,
   type ExtensionProtocol,
+  type AnyExtensionCommandMessage,
   listExtensionProtocolDefinitions,
 } from "../domain/extension-protocol.js"
 import {
@@ -268,6 +269,12 @@ export interface ExtensionBuilder {
   /** Inject a message mid-turn (interrupts the current turn).
    *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
   interject(content: string): void
+  /** Publish a message to the event bus.
+   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  busEmit(channel: string, payload: unknown): void
+  /** Send a command message to another extension's actor (fire-and-forget).
+   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  send(message: AnyExtensionCommandMessage): void
 
   /** File-backed key-value storage, namespaced by extension ID.
    *  Stored at ~/.gent/extensions/<id>/storage/<key>.json.
@@ -421,12 +428,9 @@ const drainEffects = (effects: ExtensionEffect[], hookKey: string, input: unknow
     const ctx = extractContext(hookKey, input)
     const tc = yield* Effect.serviceOption(ExtensionTurnControl)
     if (tc._tag === "Some" && ctx.sessionId !== undefined) {
-      yield* interpretEffects(
-        effects,
-        ctx.sessionId as never,
-        ctx.branchId as never,
-        tc.value,
-      ).pipe(Effect.catchDefect(() => Effect.void))
+      yield* interpretEffects(effects, ctx.sessionId as never, ctx.branchId as never, {
+        turnControl: tc.value,
+      }).pipe(Effect.catchDefect(() => Effect.void))
     }
   })
 
@@ -646,6 +650,40 @@ export const extension = (
             )
           }
           top.effects.push({ _tag: "Interject", content })
+        },
+
+        busEmit: (channel, payload) => {
+          const top = effectStack[effectStack.length - 1]
+          if (top === undefined) {
+            throw new Error(
+              `ext.busEmit() called outside of a hook handler. ` +
+                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
+            )
+          }
+          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
+            throw new Error(
+              `ext.busEmit() is not available in "${top.hookKey}" handlers. ` +
+                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
+            )
+          }
+          top.effects.push({ _tag: "BusEmit", channel, payload })
+        },
+
+        send: (message) => {
+          const top = effectStack[effectStack.length - 1]
+          if (top === undefined) {
+            throw new Error(
+              `ext.send() called outside of a hook handler. ` +
+                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
+            )
+          }
+          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
+            throw new Error(
+              `ext.send() is not available in "${top.hookKey}" handlers. ` +
+                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
+            )
+          }
+          top.effects.push({ _tag: "Send", message })
         },
 
         onStartup: (fn) => startupFns.push(fn),
