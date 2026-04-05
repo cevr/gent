@@ -31,7 +31,10 @@ const makeSwappableClient = (
         const client = Ref.getUnsafe(clientRef)
         if (client === undefined) {
           const state = Ref.getUnsafe(stateRef)
-          const reason = state._tag === "disconnected" ? state.reason : "local runtime unavailable"
+          const reason =
+            state._tag === "disconnected"
+              ? state.reason
+              : `local runtime unavailable (state: ${state._tag})`
           throw new GentConnectionError({ message: reason })
         }
         const method = (client as Record<string, unknown>)[key]
@@ -107,6 +110,13 @@ export const startLocalSupervisor = <E, R>(
             yield* Ref.set(clientRef, undefined)
             const squashed = Cause.squash(exit.cause)
             const error = Schema.is(GentConnectionError)(squashed) ? squashed : mapError(squashed)
+            yield* Effect.logError("local-supervisor.launch.failed").pipe(
+              Effect.annotateLogs({
+                generation,
+                error: error.message,
+                cause: String(squashed),
+              }),
+            )
             const currentGeneration = yield* Ref.get(generationRef)
             const stoppedNow = yield* Ref.get(stoppedRef)
             if (currentGeneration !== generation || stoppedNow) {
