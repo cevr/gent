@@ -62,7 +62,7 @@ function AppContent(props: AppProps) {
     if (agentName === undefined) {
       authGateVersion += 1
       setAuthGateKey(key)
-      setAuthGateState("checking")
+      setAuthGateState("closed")
       return
     }
 
@@ -157,6 +157,9 @@ function AppContent(props: AppProps) {
                 } else {
                   client.clearSession()
                 }
+                // Pre-seed auth gate before navigating so the session Match callback
+                // sees the correct state on its first (non-reactive) evaluation.
+                refreshAuthGate(initialAgent, bootstrap.initialRoute._tag)
                 router.navigate(bootstrap.initialRoute)
               }),
             ),
