@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
 import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
@@ -81,6 +81,7 @@ export interface SessionController {
   onSessionTreeSelect: (sessionId: SessionId) => void
   onForkSelect: (messageId: MessageId) => void
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
+  authGatePending: () => boolean
 }
 
 const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
@@ -92,6 +93,8 @@ export function useSessionController(props: {
   sessionId: SessionId
   branchId: BranchId
   initialPrompt?: string
+  debugMode?: boolean
+  missingAuthProviders?: readonly string[]
 }): SessionController {
   const client = useClient()
   const command = useCommand()
@@ -103,6 +106,49 @@ export function useSessionController(props: {
   const workspace = useWorkspace()
   const history = usePromptHistory()
   const tick = useSpinnerClock()
+
+  // ── Auth gate ──
+  // Moved from App — session owns auth gating so initialPrompt is deferred until auth resolves.
+  type AuthGateState = "checking" | "open" | "closed"
+  const [authGateState, setAuthGateState] = createSignal<AuthGateState>(
+    !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0 ? "open" : "closed",
+  )
+  const [validatedAgent, setValidatedAgent] = createSignal<string | undefined>(client.agent())
+
+  let authCheckVersion = 0
+  createEffect(
+    on(
+      () => client.agent(),
+      (agentName) => {
+        if (props.debugMode || agentName === undefined) return
+        const version = ++authCheckVersion
+        setAuthGateState("checking")
+        client.runtime.cast(
+          client.client.auth.listProviders({ agentName }).pipe(
+            Effect.tap((providers) =>
+              Effect.sync(() => {
+                if (version !== authCheckVersion) return
+                setValidatedAgent(agentName)
+                const missing = providers.some((p) => p.required && !p.hasKey)
+                setAuthGateState(missing ? "open" : "closed")
+              }),
+            ),
+            Effect.catchEager(() =>
+              Effect.sync(() => {
+                if (version !== authCheckVersion) return
+                setValidatedAgent(agentName)
+                setAuthGateState("closed")
+              }),
+            ),
+          ),
+        )
+      },
+      { defer: false },
+    ),
+  )
+
+  const authGatePending = () =>
+    !props.debugMode && (authGateState() !== "closed" || validatedAgent() !== client.agent())
   const { getChildren } = useChildSessions(client)
 
   const [uiState, setUiState] = createSignal(SessionUiState.initial())
@@ -136,6 +182,13 @@ export function useSessionController(props: {
     setUiState(result.state)
     for (const effect of result.effects) handleSessionUiEffect(effect)
   }
+
+  // Open auth overlay when auth gate detects missing keys
+  createEffect(() => {
+    if (authGateState() === "open" && uiState().overlay._tag !== "auth") {
+      dispatchSessionUi({ _tag: "OpenAuth", enforceAuth: true })
+    }
+  })
 
   // Wire extension overlay dispatch to session UI state
   ext.setOverlayDispatch(
@@ -212,8 +265,19 @@ export function useSessionController(props: {
         router.navigateToSession(sessionId, branchId)
       },
     },
-    props.initialPrompt,
+    // Never pass initialPrompt to feed — we control prompt sending through the auth gate.
+    undefined,
   )
+
+  // Send initial prompt once auth resolves and feed is ready
+  if (props.initialPrompt !== undefined && props.initialPrompt !== "") {
+    let promptSent = false
+    createEffect(() => {
+      if (promptSent || authGatePending()) return
+      promptSent = true
+      client.sendMessage(props.initialPrompt ?? "")
+    })
+  }
 
   const items = createMemo<SessionItem[]>(() => feed.items())
   const promptSearch = createPromptSearchController({
@@ -392,8 +456,8 @@ export function useSessionController(props: {
         openTree: openSessionTree,
         openFork: openForkPicker,
         setReasoningLevel: (level) => client.updateSessionReasoningLevel(level),
-        openPermissions: () => router.navigateToPermissions(),
-        openAuth: () => router.navigateToAuth(),
+        openPermissions: () => dispatchSessionUi({ _tag: "OpenPermissions" }),
+        openAuth: () => dispatchSessionUi({ _tag: "OpenAuth", enforceAuth: false }),
         newSession: () =>
           client.client.session
             .create({
@@ -555,5 +619,6 @@ export function useSessionController(props: {
     onSessionTreeSelect,
     onForkSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
+    authGatePending,
   }
 }

@@ -7,7 +7,6 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { useTheme } from "../theme/index"
-import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useClient } from "../client/index"
@@ -20,9 +19,12 @@ type PermissionsState =
   | { _tag: "loading"; error?: string }
   | { _tag: "ready"; rules: PermissionRule[]; selectedIndex: number; error?: string }
 
-export function Permissions() {
+export interface PermissionsProps {
+  onClose?: () => void
+}
+
+export function Permissions(props: PermissionsProps) {
   const { theme } = useTheme()
-  const router = useRouter()
   const clientCtx = useClient()
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime()
@@ -127,7 +129,7 @@ export function Permissions() {
 
   useScopedKeyboard((e) => {
     if (e.name === "escape") {
-      router.back()
+      props.onClose?.()
       return true
     }
 

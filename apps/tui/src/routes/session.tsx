@@ -2,7 +2,7 @@
  * Session route - message list, composer, streaming
  */
 
-import { createMemo, Show } from "solid-js"
+import { createMemo } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList } from "../components/message-list"
@@ -24,12 +24,15 @@ import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { useSessionController } from "./session-controller"
 import { ExtensionWidgets } from "../components/extension-widgets"
 import { useExtensionUI } from "../extensions/context"
+import { Auth } from "./auth"
+import { Permissions } from "./permissions"
 
 export interface SessionProps {
   sessionId: SessionId
   branchId: BranchId
   initialPrompt?: string
   debugMode?: boolean
+  missingAuthProviders?: readonly string[]
 }
 
 export function Session(props: SessionProps) {
@@ -222,15 +225,28 @@ export function Session(props: SessionProps) {
         onEvent={controller.onPromptSearchEvent}
       />
 
-      <Show when={controller.uiState().overlay._tag === "extension"}>
-        {(() => {
-          const overlay = controller.uiState().overlay
-          if (overlay._tag !== "extension") return null
-          const Overlay = ext.overlays().get(overlay.overlayId)
-          if (Overlay === undefined) return null
-          return <Overlay open={true} onClose={controller.closeOverlay} />
-        })()}
-      </Show>
+      {(() => {
+        const overlay = controller.uiState().overlay
+        switch (overlay._tag) {
+          case "auth":
+            return (
+              <Auth
+                enforceAuth={overlay.enforceAuth}
+                onResolved={controller.closeOverlay}
+                onClose={controller.closeOverlay}
+              />
+            )
+          case "permissions":
+            return <Permissions onClose={controller.closeOverlay} />
+          case "extension": {
+            const Overlay = ext.overlays().get(overlay.overlayId)
+            if (Overlay === undefined) return null
+            return <Overlay open={true} onClose={controller.closeOverlay} />
+          }
+          default:
+            return null
+        }
+      })()}
 
       <ExtensionWidgets slot="below-input" />
     </box>

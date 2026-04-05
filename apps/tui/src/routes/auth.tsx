@@ -4,7 +4,6 @@ import { usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
 import { LinkOpener } from "../services/link-opener"
 import { useTheme } from "../theme/index"
-import { useRouter } from "../router/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useClient } from "../client/index"
@@ -16,6 +15,7 @@ import { useScopedKeyboard } from "../keyboard/context"
 export interface AuthProps {
   enforceAuth?: boolean
   onResolved?: () => void
+  onClose?: () => void
 }
 
 function isPrintableAuthSequence(sequence: string | undefined): sequence is string {
@@ -24,7 +24,6 @@ function isPrintableAuthSequence(sequence: string | undefined): sequence is stri
 
 export function Auth(props: AuthProps) {
   const { theme } = useTheme()
-  const router = useRouter()
   const clientCtx = useClient()
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime()
@@ -129,7 +128,7 @@ export function Auth(props: AuthProps) {
       const missing = current.providers.filter((p) => p.required && !p.hasKey)
       if (missing.length === 0) {
         props.onResolved?.()
-        router.back()
+        props.onClose?.()
         return
       }
     }
@@ -466,7 +465,7 @@ export function Auth(props: AuthProps) {
     },
   ): boolean => {
     if (e.name === "escape") {
-      router.back()
+      props.onClose?.()
       return true
     }
     if (current.providers.length === 0) return false

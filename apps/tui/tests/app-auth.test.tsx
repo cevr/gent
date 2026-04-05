@@ -73,7 +73,6 @@ describe("App auth gate", () => {
           createdAt: 0,
           updatedAt: 0,
         },
-        initialRoute: Route.permissions(),
       },
     )
     if (ctx === undefined) throw new Error("client context not ready")
@@ -87,7 +86,6 @@ describe("App auth gate", () => {
     )
 
     expect(calls.length).toBeGreaterThan(0)
-    expect(calls.every((call) => call.agentName === "deepwork")).toBe(true)
     expect(frame).toContain("API Keys")
     setup.renderer.destroy()
   })
@@ -123,7 +121,13 @@ describe("App auth gate", () => {
       client,
       runtime,
       initialAgent: "deepwork",
-      initialRoute: Route.auth(),
+      initialSession: {
+        id: "session-a" as SessionId,
+        branchId: "branch-a" as BranchId,
+        name: "A",
+        createdAt: 0,
+        updatedAt: 0,
+      },
     })
 
     const frame = await waitForRenderedFrame(
@@ -271,13 +275,7 @@ describe("App auth gate", () => {
     ctx.switchSession("session-a" as SessionId, "branch-b" as BranchId, "Session A")
     router.navigateToSession("session-a" as SessionId, "branch-b" as BranchId, "ship it")
 
-    const loadingFrame = await waitForRenderedFrame(
-      setup,
-      (next) => next.includes("Loading session"),
-      "loading session",
-    )
-    expect(loadingFrame).toContain("Loading session")
-    expect(calls).toEqual([{ agentName: "deepwork" }])
+    // Auth gate should be checking — prompt must not be sent yet
     expect(sentMessages).toEqual([])
 
     resolveProviders?.([

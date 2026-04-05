@@ -4,7 +4,6 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
 import { Auth } from "../src/routes/auth"
-import { Route } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import type { AgentName } from "@gent/core/domain/agent"
@@ -58,7 +57,6 @@ describe("Auth route", () => {
     const setup = await renderWithProviders(() => <Auth />, {
       client,
       runtime,
-      initialRoute: Route.auth(),
       initialAgent: "helper:google" as AgentName,
     })
 
@@ -101,7 +99,6 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialRoute: Route.auth(),
         initialAgent: "cowork" as AgentName,
       },
     )
@@ -188,7 +185,6 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialRoute: Route.auth(),
         initialAgent: "cowork" as AgentName,
       },
     )
@@ -300,7 +296,6 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialRoute: Route.auth(),
         initialAgent: "cowork" as AgentName,
       },
     )
@@ -391,7 +386,6 @@ describe("Auth route", () => {
       {
         client,
         runtime,
-        initialRoute: Route.auth(),
         initialAgent: "cowork" as AgentName,
       },
     )
@@ -461,7 +455,6 @@ describe("Auth route", () => {
     const setup = await renderWithProviders(() => <Auth />, {
       client,
       runtime,
-      initialRoute: Route.auth(),
       initialAgent: "cowork" as AgentName,
     })
 

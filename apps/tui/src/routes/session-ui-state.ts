@@ -20,6 +20,8 @@ export type SessionOverlayState =
     }
   | { readonly _tag: "fork" }
   | { readonly _tag: "mermaid" }
+  | { readonly _tag: "auth"; readonly enforceAuth: boolean }
+  | { readonly _tag: "permissions" }
   | { readonly _tag: "extension"; readonly overlayId: string }
   | PromptSearchOverlayState
 
@@ -44,6 +46,8 @@ export type SessionUiEvent =
     }
   | { readonly _tag: "OpenFork" }
   | { readonly _tag: "OpenMermaid" }
+  | { readonly _tag: "OpenAuth"; readonly enforceAuth: boolean }
+  | { readonly _tag: "OpenPermissions" }
   | { readonly _tag: "OpenExtensionOverlay"; readonly overlayId: string }
   | { readonly _tag: "CloseOverlay" }
   | {
@@ -114,6 +118,24 @@ export function transitionSessionUi(
         state: {
           ...state,
           overlay: { _tag: "mermaid" },
+        },
+        effects: [],
+      }
+
+    case "OpenAuth":
+      return {
+        state: {
+          ...state,
+          overlay: { _tag: "auth", enforceAuth: event.enforceAuth },
+        },
+        effects: [],
+      }
+
+    case "OpenPermissions":
+      return {
+        state: {
+          ...state,
+          overlay: { _tag: "permissions" },
         },
         effects: [],
       }

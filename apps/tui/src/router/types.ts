@@ -19,8 +19,6 @@ export type AppRoute =
       readonly branches: readonly BranchInfo[]
       readonly prompt?: string
     }
-  | { readonly _tag: "permissions" }
-  | { readonly _tag: "auth" }
 
 export interface AppRouterState {
   readonly current: AppRoute
@@ -47,8 +45,6 @@ export const Route = {
     branches,
     ...(prompt !== undefined ? { prompt } : {}),
   }),
-  permissions: (): AppRoute => ({ _tag: "permissions" }),
-  auth: (): AppRoute => ({ _tag: "auth" }),
 }
 
 // Type guards
@@ -56,7 +52,4 @@ export const isRoute = {
   session: (r: AppRoute): r is Extract<AppRoute, { _tag: "session" }> => r._tag === "session",
   branchPicker: (r: AppRoute): r is Extract<AppRoute, { _tag: "branchPicker" }> =>
     r._tag === "branchPicker",
-  permissions: (r: AppRoute): r is Extract<AppRoute, { _tag: "permissions" }> =>
-    r._tag === "permissions",
-  auth: (r: AppRoute): r is Extract<AppRoute, { _tag: "auth" }> => r._tag === "auth",
 }
