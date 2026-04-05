@@ -26,7 +26,7 @@ import type { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { BuiltinExtensions } from "../extensions/index.js"
-import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
+import { ApprovalService } from "../runtime/approval-service.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import type { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -170,8 +170,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         extensionRegistryLive,
         extensionRuntimeLive,
         Permission.Test(),
-        PromptHandler.Test(["yes"]),
-        HandoffHandler.Test(["confirm"]),
+        ApprovalService.Test(),
         AskUserHandler.Test([["yes"]]),
         Skills.Test(),
         ConfigService.Test(),
@@ -254,28 +253,29 @@ export const withTinyContextWindow = <A, E, R>(
 }
 
 /**
- * HandoffHandler that tracks whether present() was called.
+ * ApprovalService that tracks whether present() was called.
  *
  * Returns a Layer + a Ref<boolean> that flips to true if present() fires.
- * Always resolves with "confirm" so tests don't hang.
+ * Always resolves with approved=true so tests don't hang.
  *
  * Usage:
  * ```ts
- * const { layer, presentCalled } = yield* trackingHandoffHandler()
+ * const { layer, presentCalled } = yield* trackingApprovalService()
  * // ... provide layer ...
  * expect(yield* Ref.get(presentCalled)).toBe(false)
  * ```
  */
-export const trackingHandoffHandler = () =>
+export const trackingApprovalService = () =>
   Effect.gen(function* () {
     const presentCalled = yield* Ref.make(false)
-    const layer = Layer.succeed(HandoffHandler, {
-      present: () => Ref.set(presentCalled, true).pipe(Effect.as("confirm" as const)),
-      peek: () => Effect.void.pipe(Effect.as(undefined)),
-      claim: () => Effect.void.pipe(Effect.as(undefined)),
-      respond: () => Effect.void.pipe(Effect.as(undefined)),
+    const layer = Layer.succeed(ApprovalService, {
+      present: () => Ref.set(presentCalled, true).pipe(Effect.as({ approved: true })),
       storeResolution: () => {},
+      respond: () => Effect.void,
       rehydrate: () => Effect.void,
     })
     return { layer, presentCalled }
   })
+
+/** @deprecated Use trackingApprovalService instead */
+export const trackingHandoffHandler = trackingApprovalService

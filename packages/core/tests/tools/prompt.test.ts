@@ -5,11 +5,13 @@ import { PromptTool } from "@gent/core/tools/prompt"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
 
 const ctx: ToolContext = {
-  sessionId: "test-session",
-  branchId: "test-branch",
-  toolCallId: "test-call",
+  sessionId: "test-session" as SessionId,
+  branchId: "test-branch" as BranchId,
+  toolCallId: "test-call" as ToolCallId,
+  approve: () => Effect.succeed({ approved: true }),
 }
 
 const PlatformLayer = Layer.merge(

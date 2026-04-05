@@ -1,9 +1,8 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Effect, ManagedRuntime } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type {
   ExtensionHooks,
-  InteractionHandlerContribution,
   LoadedExtension,
   ProviderContribution,
   RunContext,
@@ -29,13 +28,6 @@ const makeProvider = (providerId: string, name?: string): ProviderContribution =
   resolveModel: (modelName) => ({ modelId: `${providerId}/${modelName}` }),
 })
 
-const makeHandler = (
-  type: "permission" | "prompt" | "handoff" | "ask-user",
-): InteractionHandlerContribution => ({
-  type,
-  layer: Layer.empty as Layer.Any,
-})
-
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
@@ -44,7 +36,6 @@ const makeExt = (
     agents?: AgentDefinition[]
     hooks?: ExtensionHooks
     providers?: ProviderContribution[]
-    interactionHandlers?: InteractionHandlerContribution[]
   },
 ): LoadedExtension => ({
   manifest: { id },
@@ -55,7 +46,6 @@ const makeExt = (
     agents: opts?.agents,
     hooks: opts?.hooks,
     providers: opts?.providers,
-    interactionHandlers: opts?.interactionHandlers,
   },
 })
 
@@ -133,30 +123,6 @@ describe("resolveExtensions", () => {
       makeExt("b", "project", { providers: [makeProvider("anthropic", "Custom Anthropic")] }),
     ])
     expect(resolved.providers.get("anthropic")?.name).toBe("Custom Anthropic")
-  })
-
-  test("collects interaction handlers from extensions", () => {
-    const resolved = resolveExtensions([
-      makeExt("a", "builtin", {
-        interactionHandlers: [makeHandler("permission"), makeHandler("prompt")],
-      }),
-    ])
-    expect(resolved.interactionHandlers.size).toBe(2)
-    expect(resolved.interactionHandlers.has("permission")).toBe(true)
-    expect(resolved.interactionHandlers.has("prompt")).toBe(true)
-  })
-
-  test("later scope wins for same-type interaction handler", () => {
-    const builtinHandler = makeHandler("permission")
-    const projectHandler = makeHandler("permission")
-
-    const resolved = resolveExtensions([
-      makeExt("a", "builtin", { interactionHandlers: [builtinHandler] }),
-      makeExt("b", "project", { interactionHandlers: [projectHandler] }),
-    ])
-
-    expect(resolved.interactionHandlers.size).toBe(1)
-    expect(resolved.interactionHandlers.get("permission")).toBe(projectHandler)
   })
 
   test("merges scheduled job failures into extension statuses", () => {

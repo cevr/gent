@@ -329,16 +329,6 @@ export type {
 } from "./provider-contribution.js"
 import type { ProviderContribution } from "./provider-contribution.js"
 
-// Interaction Handler Contributions
-
-export type InteractionHandlerType = "permission" | "prompt" | "handoff" | "ask-user"
-
-export interface InteractionHandlerContribution {
-  readonly type: InteractionHandlerType
-  /** Handler layer — requires EventStore | Storage. Materialized by dependencies.ts at the right point in the chain. */
-  readonly layer: Layer.Layer<never, never, object>
-}
-
 export interface ScheduledJobHeadlessAgentTarget {
   readonly kind: "headless-agent"
   readonly agent: AgentName
@@ -369,8 +359,6 @@ export interface ExtensionSetup {
   readonly tagInjections?: ReadonlyArray<TagInjection>
   /** Provider contributions — register AI provider implementations */
   readonly providers?: ReadonlyArray<ProviderContribution>
-  /** Interaction handler implementations — replaces default handlers when provided */
-  readonly interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */
   readonly jobs?: ReadonlyArray<ScheduledJobContribution>
   /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */

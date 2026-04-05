@@ -14,8 +14,8 @@ export default defineClientExtension({
   id: "@gent/interactions",
   setup: () => ({
     interactionRenderers: [
-      defineInteractionRenderer("PromptPresented", PromptRenderer),
-      defineInteractionRenderer("QuestionsAsked", AskUserRenderer),
+      defineInteractionRenderer(PromptRenderer),
+      defineInteractionRenderer(AskUserRenderer, "ask_user"),
     ],
   }),
 })

@@ -3,7 +3,7 @@ import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import { defineInterceptor } from "../domain/extension.js"
 import type { ExtensionActorDefinition, TurnAfterInput } from "../domain/extension.js"
 import type { Message } from "../domain/message.js"
-import { HandoffHandler } from "../domain/interaction-handlers.js"
+import { ApprovalService } from "../runtime/approval-service.js"
 import { HandoffTool } from "../tools/handoff.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
@@ -125,17 +125,21 @@ const autoHandoffImpl = (
       }),
     )
 
-    const handoffHandler = yield* HandoffHandler
-    const decision = yield* handoffHandler
-      .present({
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        summary: summarizeRecentMessages(allMessages),
-        reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
-      })
-      .pipe(Effect.catchEager(() => Effect.succeed("reject" as const)))
+    const approvalService = yield* ApprovalService
+    const decision = yield* approvalService
+      .present(
+        {
+          text: summarizeRecentMessages(allMessages),
+          metadata: {
+            type: "handoff",
+            reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
+          },
+        },
+        { sessionId: input.sessionId, branchId: input.branchId },
+      )
+      .pipe(Effect.catchEager(() => Effect.succeed({ approved: false })))
 
-    if (decision === "reject") {
+    if (!decision.approved) {
       yield* stateRuntime
         .send(input.sessionId, HandoffProtocol.Suppress({ count: 5 }))
         .pipe(Effect.catchEager(() => Effect.void))
@@ -154,7 +158,6 @@ const autoHandoffInterceptor = defineInterceptor(
 export const HandoffExtension = extension(EXTENSION_ID, (ext) => {
   ext.protocol(HandoffProtocol)
   ext.tool(HandoffTool)
-  ext.interactionHandler({ type: "handoff" as const, layer: HandoffHandler.Live })
   ext.interceptor(autoHandoffInterceptor)
   ext.actor(cooldownActor)
 })

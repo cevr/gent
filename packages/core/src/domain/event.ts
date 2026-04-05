@@ -98,65 +98,29 @@ export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCa
   output: Schema.optional(Schema.String),
 }) {}
 
-export class PromptPresented extends Schema.TaggedClass<PromptPresented>()("PromptPresented", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  mode: Schema.Literals(["present", "confirm", "review"]),
-  path: Schema.optional(Schema.String),
-  content: Schema.optional(Schema.String),
-  title: Schema.optional(Schema.String),
-}) {}
+/** Generic interaction event — replaces PromptPresented, HandoffPresented, QuestionsAsked */
+export class InteractionPresented extends Schema.TaggedClass<InteractionPresented>()(
+  "InteractionPresented",
+  {
+    sessionId: SessionId,
+    branchId: BranchId,
+    requestId: Schema.String,
+    text: Schema.String,
+    metadata: Schema.optional(Schema.Unknown),
+  },
+) {}
 
-export class PromptConfirmed extends Schema.TaggedClass<PromptConfirmed>()("PromptConfirmed", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  path: Schema.optional(Schema.String),
-}) {}
-
-export class PromptRejected extends Schema.TaggedClass<PromptRejected>()("PromptRejected", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  path: Schema.optional(Schema.String),
-  reason: Schema.optional(Schema.String),
-}) {}
-
-export class PromptEdited extends Schema.TaggedClass<PromptEdited>()("PromptEdited", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  path: Schema.optional(Schema.String),
-}) {}
-
-export const PromptDecision = Schema.Literals(["yes", "no", "edit"])
-export type PromptDecision = typeof PromptDecision.Type
-
-export class HandoffPresented extends Schema.TaggedClass<HandoffPresented>()("HandoffPresented", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  summary: Schema.String,
-  reason: Schema.optional(Schema.String),
-}) {}
-
-export class HandoffConfirmed extends Schema.TaggedClass<HandoffConfirmed>()("HandoffConfirmed", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  childSessionId: Schema.optional(SessionId),
-}) {}
-
-export class HandoffRejected extends Schema.TaggedClass<HandoffRejected>()("HandoffRejected", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  reason: Schema.optional(Schema.String),
-}) {}
-
-export const HandoffDecision = Schema.Literals(["confirm", "reject"])
-export type HandoffDecision = typeof HandoffDecision.Type
+/** Generic interaction resolution — replaces all Confirmed/Rejected/Dismissed events */
+export class InteractionResolved extends Schema.TaggedClass<InteractionResolved>()(
+  "InteractionResolved",
+  {
+    sessionId: SessionId,
+    branchId: BranchId,
+    requestId: Schema.String,
+    approved: Schema.Boolean,
+    notes: Schema.optional(Schema.String),
+  },
+) {}
 
 export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOccurred", {
   sessionId: SessionId,
@@ -237,13 +201,6 @@ export const QuestionSchema = Schema.Struct({
   multiple: Schema.optional(Schema.Boolean),
 })
 export type Question = typeof QuestionSchema.Type
-
-export class QuestionsAsked extends Schema.TaggedClass<QuestionsAsked>()("QuestionsAsked", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: Schema.String,
-  questions: Schema.Array(QuestionSchema),
-}) {}
 
 export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()(
   "SessionNameUpdated",
@@ -383,46 +340,14 @@ export class ExtensionUiSnapshot extends Schema.TaggedClass<ExtensionUiSnapshot>
 // Interaction types — shared between server and client
 // ============================================================================
 
-/** Event tags that represent interactive prompts requiring user response */
-export type InteractionEventTag = "QuestionsAsked" | "PromptPresented" | "HandoffPresented"
+/** Active interaction — the generic InteractionPresented event */
+export type ActiveInteraction = typeof InteractionPresented.Type
 
-/** Active interaction — raw event discriminated union for interaction rendering */
-export type ActiveInteraction =
-  | (typeof QuestionsAsked.Type & { readonly _tag: "QuestionsAsked" })
-  | (typeof PromptPresented.Type & { readonly _tag: "PromptPresented" })
-  | (typeof HandoffPresented.Type & { readonly _tag: "HandoffPresented" })
-
-/** Concrete resolution payloads per interaction tag */
-export type InteractionResolutionByTag = {
-  readonly QuestionsAsked:
-    | { readonly _tag: "answered"; readonly answers: ReadonlyArray<ReadonlyArray<string>> }
-    | { readonly _tag: "cancelled" }
-  readonly PromptPresented:
-    | { readonly _tag: "yes" }
-    | { readonly _tag: "no"; readonly reason?: string }
-    | { readonly _tag: "edit" }
-  readonly HandoffPresented:
-    | { readonly _tag: "confirm" }
-    | { readonly _tag: "reject"; readonly reason?: string }
+/** Approval decision — the generic resolution */
+export type ApprovalResult = {
+  readonly approved: boolean
+  readonly notes?: string
 }
-
-/** Resolution payload for a specific interaction tag */
-export type InteractionResolution<T extends InteractionEventTag> = InteractionResolutionByTag[T]
-
-/** Extract the active interaction for a specific tag */
-export type ActiveInteractionOf<T extends InteractionEventTag> = Extract<
-  ActiveInteraction,
-  { readonly _tag: T }
->
-
-export class InteractionDismissed extends Schema.TaggedClass<InteractionDismissed>()(
-  "InteractionDismissed",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    requestId: Schema.String,
-  },
-) {}
 
 export const AgentEvent = Schema.Union([
   SessionStarted,
@@ -435,19 +360,13 @@ export const AgentEvent = Schema.Union([
   ToolCallStarted,
   ToolCallSucceeded,
   ToolCallFailed,
-  PromptPresented,
-  PromptConfirmed,
-  PromptRejected,
-  PromptEdited,
-  HandoffPresented,
-  HandoffConfirmed,
-  HandoffRejected,
+  InteractionPresented,
+  InteractionResolved,
   ErrorOccurred,
   ProviderRetrying,
   MachineInspected,
   MachineTaskSucceeded,
   MachineTaskFailed,
-  QuestionsAsked,
   SessionNameUpdated,
   SessionSettingsUpdated,
   BranchCreated,
@@ -465,7 +384,6 @@ export const AgentEvent = Schema.Union([
   TaskDeleted,
   AgentRestarted,
   ExtensionUiSnapshot,
-  InteractionDismissed,
 ])
 export type AgentEvent = typeof AgentEvent.Type
 

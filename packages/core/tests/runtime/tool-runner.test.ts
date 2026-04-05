@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { defineTool } from "@gent/core/domain/tool"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 
@@ -27,6 +28,7 @@ describe("ToolRunner", () => {
         ]),
       ),
       Permission.Test(),
+      ApprovalService.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -67,6 +69,7 @@ describe("ToolRunner", () => {
         ]),
       ),
       Permission.Test(),
+      ApprovalService.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -113,6 +116,7 @@ describe("ToolRunner", () => {
         ]),
       ),
       denyAllPermission,
+      ApprovalService.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)

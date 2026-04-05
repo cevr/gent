@@ -305,12 +305,6 @@ export const validateExtensions = (
       ),
       checkScopedCollision(
         extensions,
-        (s) => s.interactionHandlers,
-        (h) => h.type,
-        "interaction handler",
-      ),
-      checkScopedCollision(
-        extensions,
         (s) => s.promptSections,
         (p) => p.id,
         "prompt section",

@@ -1,24 +1,7 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
 import { defineTool, type ToolContext } from "../domain/tool.js"
-import { EventPublisher } from "../domain/event-publisher.js"
-import {
-  type EventStoreError,
-  InteractionDismissed,
-  QuestionsAsked,
-  type Question,
-  type InteractionResolutionByTag,
-  QuestionSchema,
-  QuestionOptionSchema,
-} from "../domain/event.js"
-import { SessionId, BranchId } from "../domain/ids.js"
-import {
-  decodeInteractionParams,
-  makeInteractionService,
-  type InteractionPendingError,
-  type InteractionRequestRecord,
-  type InteractionStorageConfig,
-} from "../domain/interaction-request.js"
-import { InteractionStorage } from "../storage/interaction-storage.js"
+import { type Question, QuestionSchema, QuestionOptionSchema } from "../domain/event.js"
+import type { ApprovalDecision } from "../domain/interaction-request.js"
 
 // AskUser Params — canonical questions[] input
 // Reuses QuestionSchema from event.ts with tool-specific length constraints.
@@ -54,122 +37,30 @@ export const AskUserResult = Schema.Struct({
   }),
 })
 
-// AskUser decision — alias to shared interaction resolution type
-
-export type AskUserDecision = InteractionResolutionByTag["QuestionsAsked"]
-
-// AskUser Handler Service
-
-interface AskUserParams_ {
-  questions: ReadonlyArray<Question>
-  sessionId: SessionId
-  branchId: BranchId
-}
-
-const AskUserPersistedParams = Schema.Struct({
-  questions: Schema.Array(QuestionSchema),
-  sessionId: SessionId,
-  branchId: BranchId,
-})
+// ============================================================================
+// AskUser Handler (legacy tag — test stub only)
+// ============================================================================
 
 export interface AskUserHandlerService {
   readonly askMany: (
     questions: ReadonlyArray<Question>,
     ctx: ToolContext,
-  ) => Effect.Effect<AskUserDecision, EventStoreError | InteractionPendingError>
-  readonly respond: (
-    requestId: string,
-    answers: ReadonlyArray<ReadonlyArray<string>>,
-    cancelled?: boolean,
-  ) => Effect.Effect<void, EventStoreError>
-  readonly storeResolution: (
-    sessionId: SessionId,
-    branchId: BranchId,
-    decision: AskUserDecision,
-  ) => void
-  readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
+  ) => Effect.Effect<ApprovalDecision>
+  readonly respond: () => Effect.Effect<void>
+  readonly storeResolution: () => void
+  readonly rehydrate: () => Effect.Effect<void>
 }
 
 export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
   "@gent/core/src/tools/ask-user/AskUserHandler",
 ) {
-  static Live: Layer.Layer<AskUserHandler, never, EventPublisher | InteractionStorage> =
-    Layer.effect(
-      AskUserHandler,
-      Effect.gen(function* () {
-        const eventPublisher = yield* EventPublisher
-        const interactionStore = yield* InteractionStorage
-
-        const storageCallbacks: InteractionStorageConfig = {
-          persist: (record) =>
-            interactionStore.persist(record).pipe(
-              Effect.asVoid,
-              Effect.catchEager(() => Effect.void),
-            ),
-          resolve: (requestId) =>
-            interactionStore.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-        }
-
-        const interaction = makeInteractionService<AskUserParams_, AskUserDecision>({
-          type: "ask-user",
-          paramsSchema: AskUserPersistedParams,
-          onPresent: (requestId, params) =>
-            eventPublisher.publish(
-              new QuestionsAsked({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                requestId,
-                questions: [...params.questions],
-              }),
-            ),
-          onRespond: (requestId, params) =>
-            eventPublisher.publish(
-              new InteractionDismissed({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                requestId,
-              }),
-            ),
-          getContext: (params) => ({ sessionId: params.sessionId, branchId: params.branchId }),
-          storage: storageCallbacks,
-        })
-
-        return {
-          askMany: Effect.fn("AskUserHandler.askMany")(function* (
-            questions: ReadonlyArray<Question>,
-            ctx: ToolContext,
-          ) {
-            return yield* interaction.present({
-              questions,
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-            })
-          }),
-          respond: (requestId, answers, cancelled) =>
-            interaction
-              .respond(
-                requestId,
-                cancelled === true ? { _tag: "cancelled" } : { _tag: "answered", answers },
-              )
-              .pipe(Effect.asVoid),
-          storeResolution: (sessionId, branchId, decision) =>
-            interaction.storeResolution(sessionId, branchId, decision),
-          rehydrate: (record) =>
-            decodeInteractionParams(AskUserPersistedParams, record.paramsJson, "ask-user").pipe(
-              Effect.flatMap((params) => interaction.rehydrate(record.requestId, params)),
-            ),
-        }
-      }),
-    )
-
   static Test = (responses: ReadonlyArray<ReadonlyArray<string>>): Layer.Layer<AskUserHandler> => {
     let callIndex = 0
     return Layer.succeed(AskUserHandler, {
-      askMany: (questions, _ctx) =>
-        Effect.succeed<AskUserDecision>({
-          _tag: "answered",
-          answers: questions.map((_, i) => responses[callIndex * questions.length + i] ?? [""]),
-        }).pipe(Effect.tap(() => Effect.sync(() => callIndex++))),
+      askMany: () => {
+        const _ = responses[callIndex++]
+        return Effect.succeed({ approved: true })
+      },
       respond: () => Effect.void,
       storeResolution: () => {},
       rehydrate: () => Effect.void,
@@ -178,14 +69,24 @@ export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHa
 
   static TestCancelled = (): Layer.Layer<AskUserHandler> =>
     Layer.succeed(AskUserHandler, {
-      askMany: () => Effect.succeed<AskUserDecision>({ _tag: "cancelled" }),
+      askMany: () => Effect.succeed({ approved: false }),
       respond: () => Effect.void,
       storeResolution: () => {},
       rehydrate: () => Effect.void,
     })
 }
 
-// AskUser Tool
+// AskUser Tool — uses ctx.approve() with structured question metadata
+
+const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
+  questions
+    .map((q, i) => {
+      const header = q.header !== undefined ? `[${q.header}] ` : ""
+      const options =
+        q.options !== undefined ? `\nOptions: ${q.options.map((o) => o.label).join(", ")}` : ""
+      return `${i + 1}. ${header}${q.question}${options}`
+    })
+    .join("\n")
 
 export const AskUserTool = defineTool({
   name: "ask_user",
@@ -197,11 +98,15 @@ export const AskUserTool = defineTool({
   promptSnippet: "Ask the user questions with optional predefined options",
   params: AskUserParams,
   execute: Effect.fn("AskUserTool.execute")(function* (params, ctx) {
-    const handler = yield* AskUserHandler
-    const decision = yield* handler.askMany(params.questions, ctx)
-    if (decision._tag === "cancelled") {
+    const decision = yield* ctx.approve({
+      text: formatQuestionsText(params.questions),
+      metadata: { type: "ask-user", questions: params.questions },
+    })
+    if (!decision.approved) {
       return { answers: [], cancelled: true }
     }
-    return { answers: decision.answers }
+    // Parse structured answers from notes if available
+    const answers = decision.notes !== undefined ? [[decision.notes]] : [[]]
+    return { answers }
   }),
 })

@@ -173,31 +173,13 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "queue.get": ({ sessionId, branchId }) => queries.getQueuedMessages({ sessionId, branchId }),
 
       // -- interaction --
-      "interaction.respondQuestions": ({ requestId, sessionId, branchId, answers, cancelled }) =>
-        interactions.respondQuestions({
+      "interaction.respondInteraction": ({ requestId, sessionId, branchId, approved, notes }) =>
+        interactions.respond({
           requestId,
           sessionId,
           branchId,
-          answers,
-          ...(cancelled !== undefined ? { cancelled } : {}),
-        }),
-
-      "interaction.respondPrompt": ({ requestId, sessionId, branchId, decision, content }) =>
-        interactions.respondPrompt({
-          requestId,
-          sessionId,
-          branchId,
-          decision,
-          ...(content !== undefined ? { content } : {}),
-        }),
-
-      "interaction.respondHandoff": ({ requestId, sessionId, branchId, decision, reason }) =>
-        interactions.respondHandoff({
-          requestId,
-          sessionId,
-          branchId,
-          decision,
-          ...(reason !== undefined ? { reason } : {}),
+          approved,
+          ...(notes !== undefined ? { notes } : {}),
         }),
 
       // -- permission --

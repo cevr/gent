@@ -1,69 +1,74 @@
 import { describe, test, expect } from "effect-bun-test"
-import { HandoffPresented, HandoffConfirmed, HandoffRejected } from "@gent/core/domain/event"
+import { InteractionPresented, InteractionResolved } from "@gent/core/domain/event"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 
 // ============================================================================
-// Handoff Events -- schema roundtrip
+// Interaction Events -- schema roundtrip
 // ============================================================================
 
-describe("Handoff Events", () => {
-  test("HandoffPresented has correct _tag and fields", () => {
-    const event = new HandoffPresented({
+describe("Interaction Events", () => {
+  test("InteractionPresented has correct _tag and fields", () => {
+    const event = new InteractionPresented({
       sessionId: "s1" as SessionId,
       branchId: "b1" as BranchId,
       requestId: "req-1",
-      summary: "Context summary",
-      reason: "context pressure",
+      text: "Approve this action?",
+      metadata: { type: "handoff", reason: "context pressure" },
     })
 
-    expect(event._tag).toBe("HandoffPresented")
+    expect(event._tag).toBe("InteractionPresented")
     expect(event.sessionId).toBe("s1")
-    expect(event.summary).toBe("Context summary")
-    expect(event.reason).toBe("context pressure")
+    expect(event.text).toBe("Approve this action?")
+    expect(event.metadata).toEqual({ type: "handoff", reason: "context pressure" })
   })
 
-  test("HandoffConfirmed has correct _tag and fields", () => {
-    const event = new HandoffConfirmed({
+  test("InteractionPresented without optional metadata", () => {
+    const event = new InteractionPresented({
       sessionId: "s1" as SessionId,
       branchId: "b1" as BranchId,
       requestId: "req-1",
-      childSessionId: "child-s1" as SessionId,
+      text: "Approve?",
     })
 
-    expect(event._tag).toBe("HandoffConfirmed")
-    expect(event.childSessionId).toBe("child-s1")
+    expect(event.metadata).toBeUndefined()
   })
 
-  test("HandoffRejected has correct _tag and fields", () => {
-    const event = new HandoffRejected({
+  test("InteractionResolved approved has correct _tag and fields", () => {
+    const event = new InteractionResolved({
       sessionId: "s1" as SessionId,
       branchId: "b1" as BranchId,
       requestId: "req-1",
-      reason: "Not ready",
+      approved: true,
+      notes: "Looks good",
     })
 
-    expect(event._tag).toBe("HandoffRejected")
-    expect(event.reason).toBe("Not ready")
+    expect(event._tag).toBe("InteractionResolved")
+    expect(event.approved).toBe(true)
+    expect(event.notes).toBe("Looks good")
   })
 
-  test("HandoffPresented without optional reason", () => {
-    const event = new HandoffPresented({
+  test("InteractionResolved rejected has correct _tag and fields", () => {
+    const event = new InteractionResolved({
       sessionId: "s1" as SessionId,
       branchId: "b1" as BranchId,
       requestId: "req-1",
-      summary: "Just a summary",
+      approved: false,
+      notes: "Not ready",
     })
 
-    expect(event.reason).toBeUndefined()
+    expect(event._tag).toBe("InteractionResolved")
+    expect(event.approved).toBe(false)
+    expect(event.notes).toBe("Not ready")
   })
 
-  test("HandoffRejected without optional reason", () => {
-    const event = new HandoffRejected({
+  test("InteractionResolved without optional notes", () => {
+    const event = new InteractionResolved({
       sessionId: "s1" as SessionId,
       branchId: "b1" as BranchId,
       requestId: "req-1",
+      approved: true,
     })
 
-    expect(event.reason).toBeUndefined()
+    expect(event.notes).toBeUndefined()
   })
 })

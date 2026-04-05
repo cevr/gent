@@ -6,7 +6,6 @@
  */
 
 import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
-import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"
@@ -44,7 +43,7 @@ export interface ResolvedTuiExtensions {
   readonly widgets: ReadonlyArray<ResolvedWidget>
   readonly commands: ReadonlyArray<Command>
   readonly overlays: Map<string, SolidComponent>
-  readonly interactionRenderers: Map<InteractionEventTag, SolidComponent>
+  readonly interactionRenderers: Map<string | undefined, SolidComponent>
   readonly composerSurface: SolidComponent | undefined
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
 }
@@ -185,15 +184,17 @@ const resolveOverlays = (
 
 const resolveInteractionRenderers = (
   sorted: ReadonlyArray<LoadedTuiExtension>,
-): Map<InteractionEventTag, SolidComponent> => {
-  const renderers = new Map<InteractionEventTag, SolidComponent>()
-  const scopes = new Map<InteractionEventTag, ScopeEntry>()
+): Map<string | undefined, SolidComponent> => {
+  const renderers = new Map<string | undefined, SolidComponent>()
+  const scopes = new Map<string | undefined, ScopeEntry>()
 
   for (const ext of sorted) {
     for (const entry of ext.setup.interactionRenderers ?? []) {
-      checkCollision(scopes.get(entry.eventTag), ext, "interaction renderer", entry.eventTag)
-      renderers.set(entry.eventTag, entry.component as SolidComponent)
-      scopes.set(entry.eventTag, { kind: ext.kind, source: ext.filePath })
+      const key = entry.metadataType
+      const label = key ?? "(default)"
+      checkCollision(scopes.get(key), ext, "interaction renderer", label)
+      renderers.set(key, entry.component as SolidComponent)
+      scopes.set(key, { kind: ext.kind, source: ext.filePath })
     }
   }
 

@@ -3,7 +3,7 @@ import type { Effect } from "effect"
 import { AgentName, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import { AuthProviderInfo, AuthProviderQuery } from "../domain/auth-guard.js"
-import { EventEnvelope, HandoffDecision, PromptDecision } from "../domain/event.js"
+import { EventEnvelope } from "../domain/event.js"
 import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
@@ -220,8 +220,8 @@ export type ExtensionSnapshotInfo = typeof ExtensionSnapshotInfo.Type
 
 export const ActiveInteractionSnapshot = Schema.Struct({
   requestId: Schema.String,
-  tag: Schema.String,
-  event: Schema.Unknown,
+  text: Schema.String,
+  metadata: Schema.optional(Schema.Unknown),
 })
 export type ActiveInteractionSnapshot = typeof ActiveInteractionSnapshot.Type
 
@@ -296,14 +296,15 @@ export type SubscribeEventsInput = typeof SubscribeEventsInput.Type
 export const WatchRuntimeInput = QueueTarget
 export type WatchRuntimeInput = typeof WatchRuntimeInput.Type
 
-export const RespondQuestionsInput = Schema.Struct({
+/** Generic interaction response — replaces RespondPromptInput/RespondHandoffInput/RespondQuestionsInput */
+export const RespondInteractionInput = Schema.Struct({
   requestId: Schema.String,
   sessionId: SessionId,
   branchId: BranchId,
-  answers: Schema.Array(Schema.Array(Schema.String)),
-  cancelled: Schema.optional(Schema.Boolean),
+  approved: Schema.Boolean,
+  notes: Schema.optional(Schema.String),
 })
-export type RespondQuestionsInput = typeof RespondQuestionsInput.Type
+export type RespondInteractionInput = typeof RespondInteractionInput.Type
 
 export const UpdateSessionReasoningLevelInput = Schema.Struct({
   sessionId: SessionId,
@@ -315,30 +316,6 @@ export const UpdateSessionReasoningLevelResult = Schema.Struct({
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 export type UpdateSessionReasoningLevelResult = typeof UpdateSessionReasoningLevelResult.Type
-
-export const RespondPromptInput = Schema.Struct({
-  requestId: Schema.String,
-  sessionId: SessionId,
-  branchId: BranchId,
-  decision: PromptDecision,
-  content: Schema.optional(Schema.String),
-})
-export type RespondPromptInput = typeof RespondPromptInput.Type
-
-export const RespondHandoffInput = Schema.Struct({
-  requestId: Schema.String,
-  sessionId: SessionId,
-  branchId: BranchId,
-  decision: HandoffDecision,
-  reason: Schema.optional(Schema.String),
-})
-export type RespondHandoffInput = typeof RespondHandoffInput.Type
-
-export const RespondHandoffResult = Schema.Struct({
-  childSessionId: Schema.optional(SessionId),
-  childBranchId: Schema.optional(BranchId),
-})
-export type RespondHandoffResult = typeof RespondHandoffResult.Type
 
 export const DeletePermissionRuleInput = Schema.Struct({
   tool: Schema.String,

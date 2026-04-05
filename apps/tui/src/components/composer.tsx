@@ -3,7 +3,7 @@
  */
 
 import { createContext, Show, useContext, type Accessor, type JSX } from "solid-js"
-import type { ActiveInteraction, InteractionEventTag } from "@gent/core/domain/event.js"
+import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 import { useTheme } from "../theme/index"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
 import { useComposerController, type ComposerControllerProps } from "./use-composer-controller"
@@ -38,7 +38,15 @@ export function Composer(props: ComposerProps) {
   const interactionRenderer = () => {
     const interaction = activeInteraction()
     if (interaction === undefined) return undefined
-    return ext.interactionRenderers().get(interaction._tag)
+    // Route by metadata.type if present, fall back to default renderer (undefined key)
+    const metadataType =
+      interaction.metadata !== undefined &&
+      typeof interaction.metadata === "object" &&
+      interaction.metadata !== null &&
+      "type" in interaction.metadata
+        ? String((interaction.metadata as { type: string }).type)
+        : undefined
+    return ext.interactionRenderers().get(metadataType) ?? ext.interactionRenderers().get(undefined)
   }
 
   return (
@@ -61,11 +69,8 @@ export function Composer(props: ComposerProps) {
           }
           return Renderer({
             event: interaction,
-            resolve: (result: unknown) => {
-              controller.resolveInteraction(
-                interaction._tag as InteractionEventTag,
-                result as never,
-              )
+            resolve: (result: ApprovalResult) => {
+              controller.resolveInteraction(result)
             },
           })
         }}

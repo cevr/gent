@@ -29,7 +29,6 @@ import builtinTasks from "./builtins/tasks.client"
 import builtinConnection from "./builtins/connection.client"
 import builtinInteractions from "./builtins/interactions.client"
 import builtinHandoff from "./builtins/handoff.client"
-import type { InteractionEventTag } from "@gent/core/domain/event.js"
 import type {
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
@@ -89,7 +88,7 @@ export interface ExtensionUIContextValue {
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   readonly commands: Accessor<ReadonlyArray<Command>>
   readonly overlays: Accessor<Map<string, SolidComponent>>
-  readonly interactionRenderers: Accessor<Map<InteractionEventTag, SolidComponent>>
+  readonly interactionRenderers: Accessor<Map<string | undefined, SolidComponent>>
   readonly composerSurface: Accessor<SolidComponent | undefined>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly loading: Accessor<boolean>

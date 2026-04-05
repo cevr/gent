@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
-import { PromptHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
 import type { Message } from "@gent/core/domain/message"
 import type { AgentName } from "@gent/core/domain/agent"
 import { Agents } from "@gent/core/domain/agent"
@@ -82,8 +82,7 @@ const makeTestLayer = (logs: {
   const deps = Layer.mergeAll(
     baseWithActorProcess,
     AskUserHandler.Test([["yes"]]),
-    Layer.provide(PromptHandler.Live, Layer.merge(baseWithActorProcess, eventPublisherLayer)),
-    Layer.provide(HandoffHandler.Live, Layer.merge(baseWithActorProcess, eventPublisherLayer)),
+    ApprovalService.Test(),
   )
   return Layer.provideMerge(AppServicesLive, deps)
 }

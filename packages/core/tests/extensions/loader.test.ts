@@ -1,10 +1,6 @@
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import {
-  type LoadedExtension,
-  type InteractionHandlerContribution,
-  type ProviderContribution,
-} from "@gent/core/domain/extension"
+import { type LoadedExtension, type ProviderContribution } from "@gent/core/domain/extension"
 import { extension } from "@gent/core/extensions/api"
 import {
   validateExtensions,
@@ -24,7 +20,6 @@ const makeLoaded = (
     toolNames?: string[]
     agentNames?: string[]
     providers?: ReadonlyArray<ProviderContribution>
-    interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
     promptSections?: ReadonlyArray<PromptSection>
   } = {},
 ): LoadedExtension => ({
@@ -49,7 +44,6 @@ const makeLoaded = (
           )
         : undefined,
     providers: opts.providers,
-    interactionHandlers: opts.interactionHandlers,
     promptSections: opts.promptSections,
   },
 })
@@ -127,21 +121,6 @@ describe("validateExtensions", () => {
       }),
     ]
     return validateExtensions(exts)
-  })
-
-  it.live("fails on same-type interaction handler from two extensions in same scope", () => {
-    const makeHandler = (type: "permission" | "prompt"): InteractionHandlerContribution => ({
-      type,
-      layer: {} as never,
-    })
-    const exts = [
-      makeLoaded("ext-a", "user", { interactionHandlers: [makeHandler("permission")] }),
-      makeLoaded("ext-b", "user", { interactionHandlers: [makeHandler("permission")] }),
-    ]
-    return validateExtensions(exts).pipe(
-      Effect.result,
-      Effect.tap((result) => Effect.sync(() => expect(result._tag).toBe("Failure"))),
-    )
   })
 
   it.live("fails on same-id prompt section from two extensions in same scope", () => {

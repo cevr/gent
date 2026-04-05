@@ -477,6 +477,8 @@ const executeToolCalls = (params: {
           branchId: params.branchId,
           toolCallId: toolCall.toolCallId,
           agentName: params.currentTurnAgent,
+          // Overridden by ToolRunner.Live with the real ApprovalService delegate
+          approve: () => Effect.die("approve() called without ToolRunner wiring"),
         }
         const run = params.toolRunner
           .run(toolCall, ctx)
@@ -1397,7 +1399,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                         completedToolResults: [],
                         pendingRequestId: pending.requestId,
                         pendingToolCallId: toolCallId as string,
-                        interactionType: pending.interactionType,
+
                         currentTurnAgent,
                         draft,
                       })
@@ -1526,7 +1528,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                     completedToolResults: [],
                     pendingRequestId: pending.requestId,
                     pendingToolCallId: toolCallId as string,
-                    interactionType: pending.interactionType,
                     currentTurnAgent: resolved.currentTurnAgent,
                     draft: collected.draft,
                   })
@@ -1636,7 +1637,6 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   completedToolResults: [...event.completedToolResults],
                   pendingRequestId: event.pendingRequestId,
                   pendingToolCallId: event.pendingToolCallId,
-                  interactionType: event.interactionType,
                 }),
               )
               // WaitingForInteraction — cold state, no task fiber

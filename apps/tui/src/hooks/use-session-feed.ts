@@ -243,14 +243,8 @@ const handleToolCallResult = (
 }
 
 const toActiveInteraction = (event: AgentEvent): ActiveInteraction | undefined => {
-  switch (event._tag) {
-    case "QuestionsAsked":
-    case "PromptPresented":
-    case "HandoffPresented":
-      return event as ActiveInteraction
-    default:
-      return undefined
-  }
+  if (event._tag === "InteractionPresented") return event
+  return undefined
 }
 
 const isToolResultEvent = (event: AgentEvent): event is ToolResultEvent =>
@@ -343,10 +337,15 @@ export function useSessionFeed(
                   setStore("messages", buildMessages(snapshot.messages))
                   // Hydrate pending interaction from snapshot (reconnect scenario)
                   if (snapshot.activeInteraction !== undefined) {
-                    const event = snapshot.activeInteraction.event as ActiveInteraction | undefined
-                    if (event !== undefined) {
-                      callbacks.onInteraction(event)
-                    }
+                    const ai = snapshot.activeInteraction
+                    callbacks.onInteraction({
+                      _tag: "InteractionPresented",
+                      sessionId: snapshot.sessionId,
+                      branchId: snapshot.branchId,
+                      requestId: ai.requestId,
+                      text: ai.text,
+                      ...(ai.metadata !== undefined ? { metadata: ai.metadata } : {}),
+                    } as ActiveInteraction)
                   }
                 })
 
@@ -414,7 +413,7 @@ export function useSessionFeed(
 
     client.log.debug("feed.event", { key, tag: event._tag })
 
-    if (event._tag === "InteractionDismissed") {
+    if (event._tag === "InteractionResolved") {
       callbacks.onInteractionDismissed(event.requestId)
       return
     }

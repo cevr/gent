@@ -1,9 +1,9 @@
 import { ServiceMap, Effect, Layer, FileSystem, Path } from "effect"
 import type { PlatformError } from "effect"
 import type { SessionId, BranchId } from "./ids"
-import type { EventStoreError, PromptDecision } from "./event"
+import type { EventStoreError } from "./event"
 import type { InteractionPendingError } from "./interaction-request"
-import { PromptHandler } from "./interaction-handlers"
+import { ApprovalService } from "../runtime/approval-service"
 import { RuntimePlatform } from "../runtime/runtime-platform"
 
 // PromptPresenter — reusable presentation service for delegate tools
@@ -55,35 +55,35 @@ export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptP
   static Live: Layer.Layer<
     PromptPresenter,
     never,
-    PromptHandler | FileSystem.FileSystem | Path.Path | RuntimePlatform
+    ApprovalService | FileSystem.FileSystem | Path.Path | RuntimePlatform
   > = Layer.effect(
     PromptPresenter,
     Effect.gen(function* () {
-      const promptHandler = yield* PromptHandler
+      const approvalService = yield* ApprovalService
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const platform = yield* RuntimePlatform
 
       return PromptPresenter.of({
         present: Effect.fn("PromptPresenter.present")(function* (params) {
-          yield* promptHandler.present({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            mode: "present",
-            content: params.content,
-            title: params.title,
-          })
+          yield* approvalService.present(
+            {
+              text: params.content,
+              metadata: { type: "prompt", mode: "present", title: params.title },
+            },
+            { sessionId: params.sessionId, branchId: params.branchId },
+          )
         }),
 
         confirm: Effect.fn("PromptPresenter.confirm")(function* (params) {
-          const decision = yield* promptHandler.present({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            mode: "confirm",
-            content: params.content,
-            title: params.title,
-          })
-          return decision === "yes" ? ("yes" as const) : ("no" as const)
+          const decision = yield* approvalService.present(
+            {
+              text: params.content,
+              metadata: { type: "prompt", mode: "confirm", title: params.title },
+            },
+            { sessionId: params.sessionId, branchId: params.branchId },
+          )
+          return decision.approved ? ("yes" as const) : ("no" as const)
         }),
 
         review: Effect.fn("PromptPresenter.review")(function* (params) {
@@ -96,16 +96,15 @@ export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptP
           yield* fs.makeDirectory(path.dirname(resolvedPath), { recursive: true })
           yield* fs.writeFileString(resolvedPath, text)
 
-          const decision: PromptDecision = yield* promptHandler.present({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            mode: "review",
-            path: resolvedPath,
-            content: text,
-            title: params.title,
-          })
+          const decision = yield* approvalService.present(
+            {
+              text,
+              metadata: { type: "prompt", mode: "review", path: resolvedPath, title: params.title },
+            },
+            { sessionId: params.sessionId, branchId: params.branchId },
+          )
 
-          if (decision === "edit") {
+          if (decision.notes === "edit") {
             const editedContent = yield* fs
               .readFileString(resolvedPath)
               .pipe(Effect.catchEager(() => Effect.succeed(text)))
@@ -117,7 +116,7 @@ export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptP
           }
 
           return {
-            decision: decision === "yes" ? ("yes" as const) : ("no" as const),
+            decision: decision.approved ? ("yes" as const) : ("no" as const),
             path: resolvedPath,
           }
         }),

@@ -17,8 +17,8 @@ import { Agents } from "@gent/core/domain/agent"
 import { defineTool, type AnyToolDefinition, type ToolContext } from "@gent/core/domain/tool"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
-import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
@@ -71,7 +71,7 @@ const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.De
         if (count === 0) {
           // First call: trigger interaction pending
           return yield* Effect.fail(
-            new InteractionPendingError("req-test-1", "prompt", ctx.sessionId, ctx.branchId),
+            new InteractionPendingError("req-test-1", ctx.sessionId, ctx.branchId),
           )
         }
         // Subsequent calls: interaction resolved, succeed
@@ -117,7 +117,7 @@ describe("Cold interaction lifecycle", () => {
       makeExtRegistry([tool]),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
-      HandoffHandler.Test(),
+      ApprovalService.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
       recorderLayer,
@@ -184,7 +184,7 @@ describe("Cold interaction lifecycle", () => {
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
       EventStore.Test(),
-      HandoffHandler.Test(),
+      ApprovalService.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
     )
@@ -244,7 +244,6 @@ describe("Cold interaction lifecycle", () => {
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
       EventStore.Test(),
-      HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,
     )
@@ -319,7 +318,7 @@ describe("Cold interaction lifecycle", () => {
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
       EventStore.Test(),
-      HandoffHandler.Test(),
+      ApprovalService.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
     )

@@ -211,7 +211,6 @@ export const AgentLoopState = State({
     completedToolResults: Schema.Array(ToolResultPart),
     pendingRequestId: Schema.String,
     pendingToolCallId: Schema.String,
-    interactionType: Schema.Literals(["prompt", "handoff", "ask-user"]),
   },
 })
 
@@ -223,7 +222,6 @@ export const AgentLoopEvent = Event({
     completedToolResults: Schema.Array(ToolResultPart),
     pendingRequestId: Schema.String,
     pendingToolCallId: Schema.String,
-    interactionType: Schema.Literals(["prompt", "handoff", "ask-user"]),
     currentTurnAgent: AgentName,
     draft: AssistantDraftSchema,
   },
@@ -293,7 +291,6 @@ export const toWaitingForInteractionState = (params: {
   completedToolResults: ReadonlyArray<typeof ToolResultPart.Type>
   pendingRequestId: string
   pendingToolCallId: string
-  interactionType: "prompt" | "handoff" | "ask-user"
 }): WaitingForInteractionState =>
   AgentLoopState.WaitingForInteraction.derive(params.state, {
     currentTurnAgent: params.currentTurnAgent,
@@ -301,7 +298,6 @@ export const toWaitingForInteractionState = (params: {
     completedToolResults: [...params.completedToolResults],
     pendingRequestId: params.pendingRequestId,
     pendingToolCallId: params.pendingToolCallId,
-    interactionType: params.interactionType,
   })
 
 // ── Queue helpers on state ──

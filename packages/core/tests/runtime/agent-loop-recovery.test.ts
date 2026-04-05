@@ -28,7 +28,7 @@ import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
-import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
 
 const systemPrompt = "System prompt"
 
@@ -121,10 +121,6 @@ const makeRecoveryLayer = (params: {
         }),
       ),
   })
-  const handoffLayer = Layer.succeed(HandoffHandler, {
-    present: () => Effect.succeed("confirm" as const),
-  })
-
   const base = Layer.mergeAll(
     storageLayer,
     eventStoreLayer,
@@ -133,7 +129,7 @@ const makeRecoveryLayer = (params: {
     ExtensionTurnControl.Test(),
     providerLayer,
     toolRunnerLayer,
-    handoffLayer,
+    ApprovalService.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, base)
 

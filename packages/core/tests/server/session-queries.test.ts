@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { EventStore, AgentSwitched } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
-import { PromptHandler, HandoffHandler } from "@gent/core/domain/interaction-handlers"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
 import type { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
@@ -53,8 +53,7 @@ describe("Session Snapshot", () => {
       eventPublisherLayer,
       AgentLoop.Test(),
       AskUserHandler.Test([["yes"]]),
-      Layer.provide(PromptHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
-      Layer.provide(HandoffHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
+      ApprovalService.Test(),
     )
     const testLayer = Layer.provideMerge(AppServicesLive, deps)
 
@@ -100,8 +99,7 @@ describe("Session Tree", () => {
       eventPublisherLayer,
       AgentLoop.Test(),
       AskUserHandler.Test([["yes"]]),
-      Layer.provide(PromptHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
-      Layer.provide(HandoffHandler.Live, Layer.merge(baseWithEventStore, eventPublisherLayer)),
+      ApprovalService.Test(),
     )
     return Layer.provideMerge(AppServicesLive, deps)
   }

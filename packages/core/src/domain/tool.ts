@@ -1,6 +1,12 @@
 import type { Effect, Schema } from "effect"
 import type { AgentName } from "./agent"
+import type { EventStoreError } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  InteractionPendingError,
+} from "./interaction-request"
 
 // Tool Action — classifies what a tool does for agent filtering
 
@@ -42,6 +48,11 @@ export interface ToolContext {
   readonly branchId: BranchId
   readonly toolCallId: ToolCallId
   readonly agentName?: AgentName
+  /** Request human approval. Cold — throws InteractionPendingError, machine parks, survives restarts.
+   *  Wired by ToolRunner.Live — available in all tool execute() calls. */
+  readonly approve: (
+    params: ApprovalRequest,
+  ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
 }
 
 // Tool Factory

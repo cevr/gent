@@ -1,6 +1,6 @@
 import { Deferred, Effect, Stream } from "effect"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { GentNamespacedClient, GentRpcError } from "@gent/sdk"
+import type { GentNamespacedClient } from "@gent/sdk"
 
 export const runHeadless = (
   client: GentNamespacedClient,
@@ -8,7 +8,7 @@ export const runHeadless = (
   branchId: BranchId,
   promptText: string,
   agentOverride?: string,
-): Effect.Effect<void, GentRpcError, never> =>
+) =>
   Effect.gen(function* () {
     const eventStream = client.session.events({ sessionId, branchId })
     const done = yield* Deferred.make<void>()
@@ -44,31 +44,18 @@ export const runHeadless = (
             case "TurnCompleted":
               yield* Deferred.succeed(done, void 0)
               break
-            case "HandoffPresented":
-              process.stdout.write(`\n[handoff: auto-confirming]\n`)
+            case "InteractionPresented":
+              process.stdout.write(`\n[interaction: auto-approving]\n`)
               yield* client.interaction
-                .respondHandoff({
+                .respondInteraction({
                   requestId: event.requestId,
                   sessionId,
                   branchId,
-                  decision: "confirm",
+                  approved: true,
                 })
                 .pipe(Effect.catchEager(() => Effect.void))
               break
-            case "QuestionsAsked":
-              process.stderr.write(`\n[ask_user: auto-cancelling in headless mode]\n`)
-              yield* client.interaction
-                .respondQuestions({
-                  requestId: event.requestId,
-                  sessionId,
-                  branchId,
-                  answers: [],
-                  cancelled: true,
-                })
-                .pipe(Effect.catchEager(() => Effect.void))
-              break
-            case "HandoffConfirmed":
-            case "HandoffRejected":
+            case "InteractionResolved":
               break
           }
         }),

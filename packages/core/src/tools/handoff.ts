@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { requireAgent } from "../runtime/extensions/registry.js"
-import { HandoffHandler } from "../domain/interaction-handlers.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Handoff Tool Error
@@ -42,7 +41,6 @@ export const HandoffTool = defineTool({
   params: HandoffParams,
   execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
     const runner = yield* AgentRunnerService
-    const handoffHandler = yield* HandoffHandler
     const platform = yield* RuntimePlatform
 
     // Use summarizer agent to refine context if it's large
@@ -61,15 +59,13 @@ export const HandoffTool = defineTool({
       }
     }
 
-    // Present handoff to user — blocks until confirmed or rejected
-    const decision = yield* handoffHandler.present({
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
-      summary,
-      reason: params.reason,
+    // Present handoff to user via ctx.approve() — blocks until confirmed or rejected
+    const decision = yield* ctx.approve({
+      text: summary,
+      metadata: { type: "handoff", reason: params.reason },
     })
 
-    if (decision === "reject") {
+    if (!decision.approved) {
       return {
         handoff: false,
         reason: "User rejected handoff",

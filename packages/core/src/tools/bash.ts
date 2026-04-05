@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
 import { OutputBuffer, saveFullOutput } from "../domain/output-buffer.js"
 import { classify } from "./bash-guardrails.js"
-import { AskUserHandler } from "./ask-user.js"
 
 // Bash Tool Error
 
@@ -127,21 +126,11 @@ export const BashTool = defineTool({
     // Guardrail check — ephemeral, not persisted through Permission service
     const risk = classify(command)
     if (risk.level !== "safe") {
-      const handler = yield* AskUserHandler
-      const decision = yield* handler.askMany(
-        [
-          {
-            question: `This command is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\nAllow execution?`,
-            header: risk.level,
-            options: [
-              { label: "Allow", description: "Execute this command" },
-              { label: "Deny", description: "Block this command" },
-            ],
-          },
-        ],
-        ctx,
-      )
-      if (decision._tag === "cancelled" || decision.answers[0]?.[0] !== "Allow") {
+      const decision = yield* ctx.approve({
+        text: `This command is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\nAllow execution?`,
+        metadata: { type: "bash-guardrail", level: risk.level },
+      })
+      if (!decision.approved) {
         return {
           stdout: `Command blocked: ${risk.reason}`,
           stderr: "",

@@ -14,6 +14,7 @@ import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { DebugProvider } from "../debug/provider.js"
 import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
+import { ApprovalService } from "../runtime/approval-service.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import type { Provider } from "../providers/provider.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
@@ -69,6 +70,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     ConfigService.Test(),
     ModelRegistry.Test(),
     ToolRunner.Test(),
+    ApprovalService.Test(),
     authStoreLive,
     authGuardLive,
     providerAuthLive,

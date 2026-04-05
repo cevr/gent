@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
-import type { ActiveInteraction, InteractionResolutionByTag } from "@gent/core/domain/event.js"
+import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
@@ -161,80 +161,27 @@ export function useSessionController(props: {
   const handleComposerEffect = (effect: ComposerEffect | undefined) => {
     if (effect === undefined) return
     const { interaction, result } = effect
-    const requestId = interaction.requestId
-    const rpcError = (error: UiError) =>
-      Effect.sync(() => {
-        client.setError(formatError(error))
-      })
-
-    switch (interaction._tag) {
-      case "QuestionsAsked": {
-        const r = result as InteractionResolutionByTag["QuestionsAsked"]
-        cast(
-          client.client.interaction
-            .respondQuestions({
-              requestId,
-              sessionId: props.sessionId,
-              branchId: props.branchId,
-              answers:
-                r._tag === "cancelled" ? [] : [...r.answers.map((a: readonly string[]) => [...a])],
-              cancelled: r._tag === "cancelled" ? true : undefined,
-            })
-            .pipe(Effect.tapError(rpcError)),
-        )
-        return
-      }
-      case "HandoffPresented": {
-        const r = result as InteractionResolutionByTag["HandoffPresented"]
-        cast(
-          Effect.gen(function* () {
-            const handoffResult = yield* client.client.interaction.respondHandoff({
-              requestId,
-              sessionId: props.sessionId,
-              branchId: props.branchId,
-              decision: r._tag,
-              ...(r._tag === "reject" && r.reason !== undefined ? { reason: r.reason } : {}),
-            })
-            if (
-              handoffResult.childSessionId === undefined ||
-              handoffResult.childBranchId === undefined
-            )
-              return
-            client.switchSession(
-              handoffResult.childSessionId,
-              handoffResult.childBranchId,
-              "Handoff",
-            )
-          }).pipe(
-            Effect.catchEager((error: unknown) =>
-              Effect.sync(() => {
-                client.setError(
-                  typeof error === "object" && error !== null
-                    ? formatError(error as UiError)
-                    : String(error),
-                )
-              }),
-            ),
+    cast(
+      client.client.interaction
+        .respondInteraction({
+          requestId: interaction.requestId,
+          sessionId: props.sessionId,
+          branchId: props.branchId,
+          approved: result.approved,
+          ...(result.notes !== undefined ? { notes: result.notes } : {}),
+        })
+        .pipe(
+          Effect.tapError((error: unknown) =>
+            Effect.sync(() => {
+              client.setError(
+                typeof error === "object" && error !== null
+                  ? formatError(error as UiError)
+                  : String(error),
+              )
+            }),
           ),
-        )
-        return
-      }
-      case "PromptPresented": {
-        const r = result as InteractionResolutionByTag["PromptPresented"]
-        cast(
-          client.client.interaction
-            .respondPrompt({
-              requestId,
-              sessionId: props.sessionId,
-              branchId: props.branchId,
-              decision: r._tag,
-              ...(r._tag === "no" && r.reason !== undefined ? { content: r.reason } : {}),
-            })
-            .pipe(Effect.tapError(rpcError)),
-        )
-        return
-      }
-    }
+        ),
+    )
   }
 
   const dispatchComposer = (event: ComposerEvent) => {

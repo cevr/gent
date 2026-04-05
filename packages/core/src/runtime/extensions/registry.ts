@@ -4,8 +4,6 @@ import type { ModelId } from "../../domain/model.js"
 import type {
   ExtensionStatusInfo,
   FailedExtension,
-  InteractionHandlerContribution,
-  InteractionHandlerType,
   TurnProjection,
   LoadedExtension,
   ProviderAuthInfo,
@@ -25,7 +23,6 @@ export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly providers: ReadonlyMap<string, ProviderContribution>
-  readonly interactionHandlers: ReadonlyMap<string, InteractionHandlerContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
@@ -81,12 +78,6 @@ export const resolveExtensions = (
     (p) => p.id,
   )
 
-  const interactionHandlers = compileContributions(
-    sorted,
-    (s) => s.interactionHandlers,
-    (h) => h.type,
-  )
-
   // Prompt sections: last scope wins by section id
   const promptSectionsMap = compileContributions(
     sorted,
@@ -125,7 +116,6 @@ export const resolveExtensions = (
     tools,
     agents,
     providers,
-    interactionHandlers,
     promptSections: promptSectionsMap,
     tagInjections,
     hooks,
@@ -270,11 +260,6 @@ export interface ExtensionRegistryService {
   // Prompt sections
   readonly listPromptSections: () => Effect.Effect<ReadonlyArray<PromptSection>>
 
-  // Interaction handlers
-  readonly getInteractionHandler: (
-    type: InteractionHandlerType,
-  ) => Effect.Effect<InteractionHandlerContribution | undefined>
-
   // Diagnostics
   readonly listFailedExtensions: () => Effect.Effect<ReadonlyArray<FailedExtension>>
   readonly listExtensionStatuses: () => Effect.Effect<ReadonlyArray<ExtensionStatusInfo>>
@@ -349,7 +334,6 @@ export class ExtensionRegistry extends ServiceMap.Service<
           )
         }),
       listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
-      getInteractionHandler: (type) => Effect.succeed(resolved.interactionHandlers.get(type)),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       hooks: resolved.hooks,

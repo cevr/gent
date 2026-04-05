@@ -23,7 +23,7 @@ import type {
   ComposerInteractionState,
 } from "./composer-interaction-state"
 import type { ComposerEvent, ComposerState } from "./composer-state"
-import type { InteractionEventTag, InteractionResolutionByTag } from "@gent/core/domain/event.js"
+import type { ApprovalResult } from "@gent/core/domain/event.js"
 
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
@@ -90,10 +90,7 @@ export interface ComposerController {
     preventDefault: () => void
   }) => void
   readonly handleSubmitFromTextarea: () => void
-  readonly resolveInteraction: (
-    tag: InteractionEventTag,
-    result: InteractionResolutionByTag[InteractionEventTag],
-  ) => void
+  readonly resolveInteraction: (result: ApprovalResult) => void
   readonly cancelInteraction: () => void
   readonly handleAutocompleteSelect: (value: string) => void
   readonly handleAutocompleteClose: () => void
@@ -539,11 +536,8 @@ export function useComposerController(props: ComposerControllerProps): ComposerC
     },
     handleTextareaKeyDown,
     handleSubmitFromTextarea,
-    resolveInteraction: (
-      tag: InteractionEventTag,
-      result: InteractionResolutionByTag[InteractionEventTag],
-    ) => {
-      props.dispatchComposer?.({ _tag: "ResolveInteraction", tag, result })
+    resolveInteraction: (result: ApprovalResult) => {
+      props.dispatchComposer?.({ _tag: "ResolveInteraction", result })
     },
     cancelInteraction: () => {
       props.dispatchComposer?.({ _tag: "CancelInteraction" })

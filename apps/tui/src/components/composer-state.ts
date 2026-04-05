@@ -5,11 +5,7 @@
  * This state handles server-driven interaction flows (questions, permissions, prompts, handoffs).
  */
 
-import type {
-  ActiveInteraction,
-  InteractionEventTag,
-  InteractionResolutionByTag,
-} from "@gent/core/domain/event.js"
+import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 
 export type ComposerState =
   | { readonly _tag: "idle" }
@@ -21,18 +17,14 @@ export const ComposerState = {
 
 export type ComposerEvent =
   | { readonly _tag: "EnterInteraction"; readonly interaction: ActiveInteraction }
-  | {
-      readonly _tag: "ResolveInteraction"
-      readonly tag: InteractionEventTag
-      readonly result: InteractionResolutionByTag[InteractionEventTag]
-    }
+  | { readonly _tag: "ResolveInteraction"; readonly result: ApprovalResult }
   | { readonly _tag: "CancelInteraction" }
   | { readonly _tag: "DismissInteraction"; readonly requestId: string }
 
 export type ComposerEffect = {
   readonly _tag: "DispatchInteractionResult"
   readonly interaction: ActiveInteraction
-  readonly result: InteractionResolutionByTag[InteractionEventTag]
+  readonly result: ApprovalResult
 }
 
 export interface TransitionResult {
@@ -71,33 +63,12 @@ export function transition(state: ComposerState, event: ComposerEvent): Transiti
 }
 
 function cancelInteraction(interaction: ActiveInteraction): TransitionResult {
-  switch (interaction._tag) {
-    case "QuestionsAsked":
-      return {
-        state: ComposerState.idle(),
-        effect: {
-          _tag: "DispatchInteractionResult",
-          interaction,
-          result: { _tag: "cancelled" },
-        },
-      }
-    case "PromptPresented":
-      return {
-        state: ComposerState.idle(),
-        effect: {
-          _tag: "DispatchInteractionResult",
-          interaction,
-          result: { _tag: "no" },
-        },
-      }
-    case "HandoffPresented":
-      return {
-        state: ComposerState.idle(),
-        effect: {
-          _tag: "DispatchInteractionResult",
-          interaction,
-          result: { _tag: "reject" },
-        },
-      }
+  return {
+    state: ComposerState.idle(),
+    effect: {
+      _tag: "DispatchInteractionResult",
+      interaction,
+      result: { approved: false },
+    },
   }
 }

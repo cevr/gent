@@ -7,7 +7,7 @@ import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 export default defineClientExtension({
   id: "@gent/handoff",
   setup: (ctx) => ({
-    interactionRenderers: [defineInteractionRenderer("HandoffPresented", HandoffRenderer)],
+    interactionRenderers: [defineInteractionRenderer(HandoffRenderer, "handoff")],
     commands: [
       {
         id: "handoff.trigger",

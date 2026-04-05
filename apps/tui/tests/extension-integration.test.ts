@@ -910,7 +910,7 @@ describe("resolution semantics", () => {
         kind: "builtin",
         filePath: "builtin:@test/builtin",
         setup: {
-          interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "builtin" }],
+          interactionRenderers: [{ metadataType: "ask-user", component: () => "builtin" }],
         },
       } satisfies LoadedTuiExtension,
       {
@@ -918,12 +918,12 @@ describe("resolution semantics", () => {
         kind: "project",
         filePath: "/test/project",
         setup: {
-          interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "project" }],
+          interactionRenderers: [{ metadataType: "ask-user", component: () => "project" }],
         },
       } satisfies LoadedTuiExtension,
     ])
 
-    expect(resolved.interactionRenderers.get("QuestionsAsked")?.()).toBe("project")
+    expect(resolved.interactionRenderers.get("ask-user")?.()).toBe("project")
     expect(() =>
       resolveTuiExtensions([
         {
@@ -931,7 +931,7 @@ describe("resolution semantics", () => {
           kind: "user",
           filePath: "/test/a",
           setup: {
-            interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "a" }],
+            interactionRenderers: [{ metadataType: "ask-user", component: () => "a" }],
           },
         } satisfies LoadedTuiExtension,
         {
@@ -939,7 +939,7 @@ describe("resolution semantics", () => {
           kind: "user",
           filePath: "/test/b",
           setup: {
-            interactionRenderers: [{ eventTag: "QuestionsAsked", component: () => "b" }],
+            interactionRenderers: [{ metadataType: "ask-user", component: () => "b" }],
           },
         } satisfies LoadedTuiExtension,
       ]),

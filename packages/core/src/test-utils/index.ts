@@ -14,13 +14,11 @@ import {
   EventStore,
   EventEnvelope,
   matchesEventFilter,
-  type PromptDecision,
-  type HandoffDecision,
   type EventStoreService,
 } from "../domain/event.js"
 import { Permission } from "../domain/permission.js"
-import { PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { ApprovalService } from "../runtime/approval-service.js"
 import { AskUserHandler } from "../tools/ask-user.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
@@ -163,17 +161,15 @@ export const RecordingAskUserHandler = (
             args: { questions, ctx },
           })
           const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
-          return { _tag: "answered" as const, answers: [responses[idx] ?? [""]] }
+          const answers = responses[idx] ?? [""]
+          return { approved: true, notes: answers.join("\n") }
         }),
-        respond: Effect.fn("RecordingAskUserHandler.respond")(
-          function* (requestId, answers, cancelled) {
-            yield* recorder.record({
-              service: "AskUserHandler",
-              method: "respond",
-              args: { requestId, answers, cancelled },
-            })
-          },
-        ),
+        respond: Effect.fn("RecordingAskUserHandler.respond")(function* () {
+          yield* recorder.record({
+            service: "AskUserHandler",
+            method: "respond",
+          })
+        }),
         storeResolution: () => {},
         rehydrate: () => Effect.void,
       }
@@ -187,8 +183,7 @@ export interface TestLayerConfig {
   askUserResponses?: ReadonlyArray<ReadonlyArray<string>>
   tools?: ReadonlyArray<AnyToolDefinition>
   recording?: boolean
-  promptDecisions?: ReadonlyArray<PromptDecision>
-  handoffDecisions?: ReadonlyArray<HandoffDecision>
+  approvalDecisions?: ReadonlyArray<{ approved: boolean; notes?: string }>
 }
 
 // Create Test Layer (no recording)
@@ -198,8 +193,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? [["yes"]]
-  const promptDecisions = config.promptDecisions ?? ["yes"]
-  const handoffDecisions = config.handoffDecisions ?? ["confirm"]
+  const approvalDecisions = config.approvalDecisions ?? [{ approved: true }]
   const tools = config.tools ?? []
 
   return Layer.mergeAll(
@@ -216,8 +210,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     EventStore.Test(),
     Permission.Test(),
     AskUserHandler.Test(askUserResponses),
-    PromptHandler.Test(promptDecisions),
-    HandoffHandler.Test(handoffDecisions),
+    ApprovalService.Test(approvalDecisions),
     ExtensionTurnControl.Test(),
     AgentLoop.Test(),
     RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
@@ -231,8 +224,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
     [new FinishChunk({ finishReason: "stop" })],
   ]
   const askUserResponses = config.askUserResponses ?? [["yes"]]
-  const promptDecisions = config.promptDecisions ?? ["yes"]
-  const handoffDecisions = config.handoffDecisions ?? ["confirm"]
+  const approvalDecisions = config.approvalDecisions ?? [{ approved: true }]
   const tools = config.tools ?? []
 
   return Layer.mergeAll(
@@ -246,8 +238,7 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
         setup: { agents: Object.values(Agents), tools: [...tools] },
       },
     ]),
-    PromptHandler.Test(promptDecisions),
-    HandoffHandler.Test(handoffDecisions),
+    ApprovalService.Test(approvalDecisions),
     ExtensionTurnControl.Test(),
     AgentLoop.Test(),
     RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
@@ -328,6 +319,7 @@ export {
   createE2ELayer,
   type E2ELayerConfig,
   withTinyContextWindow,
+  trackingApprovalService,
   trackingHandoffHandler,
 } from "./e2e-layer.js"
 

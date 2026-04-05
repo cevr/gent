@@ -8,6 +8,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Permission } from "@gent/core/domain/permission"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
 import { reducerActor } from "./helpers/reducer-actor"
 
@@ -166,6 +167,7 @@ describe("extension tools through ToolRunner.run", () => {
         resolveExtensions([{ manifest: ext.manifest, kind: "user", sourcePath: "test", setup }]),
       ),
       Permission.Test(),
+      ApprovalService.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(baseDeps))
     layer = Layer.mergeAll(baseDeps, runnerLayer)

@@ -1,23 +1,20 @@
 import { Effect, Layer, ServiceMap } from "effect"
-import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
-import { AskUserHandler } from "../tools/ask-user.js"
+import { ApprovalService } from "../runtime/approval-service.js"
+import { InteractionResolved, type EventStoreError } from "../domain/event.js"
+import { EventPublisher } from "../domain/event-publisher.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
-import { SessionCommands } from "./session-commands.js"
-import { SessionQueries } from "./session-queries.js"
-import { type AppServiceError } from "./errors.js"
-import type {
-  RespondHandoffInput,
-  RespondHandoffResult,
-  RespondPromptInput,
-  RespondQuestionsInput,
-} from "./transport-contract.js"
+import type { BranchId, SessionId } from "../domain/ids.js"
+
+export interface RespondInteractionInput {
+  readonly requestId: string
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly approved: boolean
+  readonly notes?: string
+}
 
 export interface InteractionCommandsService {
-  readonly respondPrompt: (input: RespondPromptInput) => Effect.Effect<void, AppServiceError>
-  readonly respondHandoff: (
-    input: RespondHandoffInput,
-  ) => Effect.Effect<RespondHandoffResult, AppServiceError>
-  readonly respondQuestions: (input: RespondQuestionsInput) => Effect.Effect<void, AppServiceError>
+  readonly respond: (input: RespondInteractionInput) => Effect.Effect<void, EventStoreError>
 }
 
 export class InteractionCommands extends ServiceMap.Service<
@@ -27,19 +24,19 @@ export class InteractionCommands extends ServiceMap.Service<
   static Live = Layer.effect(
     InteractionCommands,
     Effect.gen(function* () {
-      const promptHandler = yield* PromptHandler
-      const handoffHandler = yield* HandoffHandler
-      const askUserHandler = yield* AskUserHandler
+      const approvalService = yield* ApprovalService
       const agentLoop = yield* AgentLoop
-      const queries = yield* SessionQueries
-      const commands = yield* SessionCommands
+      const eventPublisher = yield* EventPublisher
 
       return {
-        respondPrompt: Effect.fn("InteractionCommands.respondPrompt")(function* (
-          input: RespondPromptInput,
+        respond: Effect.fn("InteractionCommands.respond")(function* (
+          input: RespondInteractionInput,
         ) {
           // 1. Store resolution so re-entering present() finds it
-          promptHandler.storeResolution(input.sessionId, input.branchId, input.decision)
+          approvalService.storeResolution(input.requestId, {
+            approved: input.approved,
+            ...(input.notes !== undefined ? { notes: input.notes } : {}),
+          })
           // 2. Wake the machine (before storage resolve — if we crash after
           //    resolve but before wake, the request is no longer pending and
           //    the in-memory resolution is lost, stranding the session)
@@ -49,60 +46,19 @@ export class InteractionCommands extends ServiceMap.Service<
             requestId: input.requestId,
           })
           // 3. Resolve in storage (best-effort cleanup after wake)
-          yield* promptHandler.respond(input.requestId, input.decision, input.content)
-        }),
-
-        respondHandoff: Effect.fn("InteractionCommands.respondHandoff")(function* (
-          input: RespondHandoffInput,
-        ) {
-          if (input.decision !== "confirm") {
-            handoffHandler.storeResolution(input.sessionId, input.branchId, "reject")
-            yield* agentLoop.respondInteraction({
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              requestId: input.requestId,
-            })
-            yield* handoffHandler.respond(input.requestId, "reject", undefined, input.reason)
-            return { childSessionId: undefined, childBranchId: undefined }
-          }
-
-          const entry = yield* handoffHandler.claim(input.requestId)
-          if (entry === undefined) {
-            return { childSessionId: undefined, childBranchId: undefined }
-          }
-
-          const parentSession = yield* queries.getSession(entry.sessionId)
-          const result = yield* commands.createSession({
-            ...(parentSession?.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
-            parentSessionId: entry.sessionId,
-            parentBranchId: entry.branchId,
-            initialPrompt: `[Handoff]\n\n${entry.summary}`,
-          })
-
-          handoffHandler.storeResolution(input.sessionId, input.branchId, "confirm")
-          yield* agentLoop.respondInteraction({
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            requestId: input.requestId,
-          })
-          yield* handoffHandler.respond(input.requestId, "confirm", result.sessionId)
-          return { childSessionId: result.sessionId, childBranchId: result.branchId }
-        }),
-
-        respondQuestions: Effect.fn("InteractionCommands.respondQuestions")(function* (
-          input: RespondQuestionsInput,
-        ) {
-          const decision =
-            input.cancelled === true
-              ? ({ _tag: "cancelled" } as const)
-              : { _tag: "answered" as const, answers: [...input.answers] }
-          askUserHandler.storeResolution(input.sessionId, input.branchId, decision)
-          yield* agentLoop.respondInteraction({
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            requestId: input.requestId,
-          })
-          yield* askUserHandler.respond(input.requestId, [...input.answers], input.cancelled)
+          yield* approvalService.respond(input.requestId)
+          // 4. Publish resolution event
+          yield* eventPublisher
+            .publish(
+              new InteractionResolved({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                requestId: input.requestId,
+                approved: input.approved,
+                ...(input.notes !== undefined ? { notes: input.notes } : {}),
+              }),
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
         }),
       } satisfies InteractionCommandsService
     }),

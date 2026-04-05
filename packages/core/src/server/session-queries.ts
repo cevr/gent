@@ -176,10 +176,11 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
               (r) => r.sessionId === input.sessionId && r.branchId === input.branchId,
             )
             if (match === undefined) return undefined
+            const parsed = JSON.parse(match.paramsJson) as { text?: string; metadata?: unknown }
             return {
               requestId: match.requestId,
-              tag: match.type,
-              event: JSON.parse(match.paramsJson) as unknown,
+              text: parsed.text ?? "",
+              ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
             }
           }),
           Effect.option,

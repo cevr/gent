@@ -4,7 +4,7 @@
 // The TUI discovers *.client.{tsx,ts,js,mjs} files from extension directories,
 // imports them, and resolves contributions with scope precedence (project > user > builtin).
 
-import type { InteractionEventTag, ActiveInteractionOf, InteractionResolution } from "./event"
+import type { ActiveInteraction, ApprovalResult } from "./event"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
@@ -15,9 +15,9 @@ import type {
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
 
 /** Props passed to an interaction renderer component */
-export interface InteractionRendererProps<T extends InteractionEventTag = InteractionEventTag> {
-  readonly event: ActiveInteractionOf<T>
-  readonly resolve: (result: InteractionResolution<T>) => void
+export interface InteractionRendererProps {
+  readonly event: ActiveInteraction
+  readonly resolve: (result: ApprovalResult) => void
 }
 
 /** Props passed to a custom composer surface component */
@@ -29,29 +29,19 @@ export interface ComposerSurfaceProps {
   readonly mode: "editing" | "shell"
 }
 
-/** Base interaction renderer contribution — erased tag for heterogeneous arrays */
-export interface AnyInteractionRendererContribution {
-  readonly eventTag: InteractionEventTag
+/** Interaction renderer contribution */
+export interface InteractionRendererContribution {
+  /** Matches against metadata.type to route to the right renderer. undefined = default renderer. */
+  readonly metadataType?: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly component: (props: any) => unknown
+  readonly component: (props: InteractionRendererProps) => unknown
 }
 
-/**
- * Type-safe interaction renderer contribution.
- * Links event tag to component props at compile time.
- */
-export interface InteractionRendererContribution<
-  T extends InteractionEventTag,
-> extends AnyInteractionRendererContribution {
-  readonly eventTag: T
-  readonly component: (props: InteractionRendererProps<T>) => unknown
-}
-
-/** Factory that enforces tag–component type coupling */
-export const defineInteractionRenderer = <T extends InteractionEventTag>(
-  eventTag: T,
-  component: (props: InteractionRendererProps<T>) => unknown,
-): InteractionRendererContribution<T> => ({ eventTag, component })
+/** Factory for defining an interaction renderer */
+export const defineInteractionRenderer = (
+  component: (props: InteractionRendererProps) => unknown,
+  metadataType?: string,
+): InteractionRendererContribution => ({ metadataType, component })
 
 /** What a TUI extension contributes after setup */
 export interface ExtensionClientSetup<TComponent = unknown> {
@@ -86,8 +76,8 @@ export interface ExtensionClientSetup<TComponent = unknown> {
     readonly component: TComponent // receives { open, onClose } props
   }>
   /** Interaction renderers — take over composer during interactive prompts.
-   *  Use defineInteractionRenderer() for type-safe tag–component coupling. */
-  readonly interactionRenderers?: ReadonlyArray<AnyInteractionRendererContribution>
+   *  Use defineInteractionRenderer() for type-safe coupling. */
+  readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
   /** Custom composer surface — replaces the default textarea */
   readonly composerSurface?: TComponent
   /** Border label producers — called each render to contribute labels to the session border */

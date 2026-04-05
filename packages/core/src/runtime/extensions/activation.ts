@@ -205,11 +205,6 @@ export const collectValidationFailures = (
     "provider",
   )
   collectScopedCollisions(
-    (setup) => setup.interactionHandlers,
-    (handler) => handler.type,
-    "interaction handler",
-  )
-  collectScopedCollisions(
     (setup) => setup.promptSections,
     (section) => section.id,
     "prompt section",

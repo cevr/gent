@@ -1,12 +1,14 @@
 /**
  * Cold interaction mechanics.
  *
- * Each handler (Prompt, Handoff, AskUser) uses the same pattern:
- * generate requestId → persist to storage → publish event → fail with
- * InteractionPendingError. The agent loop machine catches this and
- * transitions to WaitingForInteraction. When the client responds,
- * the resolution is stored and the machine resumes ExecutingTools —
- * the tool re-calls present(), finds the stored resolution, and continues.
+ * Tools call `ctx.approve({ text, metadata? })` to request human input.
+ * The approval service generates a requestId, persists to storage,
+ * publishes InteractionPresented, then fails with InteractionPendingError.
+ * The agent loop machine catches this and parks in WaitingForInteraction.
+ *
+ * When the client responds, the resolution `{ approved, notes? }` is stored
+ * keyed by requestId. The machine resumes ExecutingTools — the tool re-calls
+ * approve(), finds the stored resolution, and continues.
  *
  * No Deferred, no blocked fiber. Interactions survive server restarts.
  */
@@ -16,6 +18,22 @@ import { EventStoreError } from "./event"
 import type { BranchId, SessionId } from "./ids"
 
 // ============================================================================
+// Approval schemas
+// ============================================================================
+
+/** Request params for ctx.approve() */
+export interface ApprovalRequest {
+  readonly text: string
+  readonly metadata?: unknown
+}
+
+/** Decision returned from ctx.approve() */
+export interface ApprovalDecision {
+  readonly approved: boolean
+  readonly notes?: string
+}
+
+// ============================================================================
 // Interaction pending signal
 // ============================================================================
 
@@ -23,7 +41,6 @@ export class InteractionPendingError {
   readonly _tag = "InteractionPendingError" as const
   constructor(
     readonly requestId: string,
-    readonly interactionType: InteractionRequestType,
     readonly sessionId: SessionId,
     readonly branchId: BranchId,
   ) {}
@@ -35,11 +52,9 @@ export class InteractionPendingError {
 
 export type InteractionRequestStatus = "pending" | "resolved"
 
-export type InteractionRequestType = "prompt" | "handoff" | "ask-user"
-
 export interface InteractionRequestRecord {
   readonly requestId: string
-  readonly type: InteractionRequestType
+  readonly type: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly paramsJson: string
@@ -47,34 +62,37 @@ export interface InteractionRequestRecord {
   readonly createdAt: number
 }
 
-const interactionJsonCodec = <TParams>(schema: Schema.Schema<TParams>) =>
-  Schema.fromJsonString(schema as Schema.Any)
+/** All interaction records use this type — the old per-handler types are gone */
+export const INTERACTION_TYPE = "approval" as const
 
-export const encodeInteractionParams = <TParams>(
-  schema: Schema.Schema<TParams>,
-  params: TParams,
-  interactionType: InteractionRequestType,
+const ApprovalRequestSchema = Schema.Struct({
+  text: Schema.String,
+  metadata: Schema.optional(Schema.Unknown),
+})
+
+const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema as unknown as Schema.Any)
+
+export const encodeInteractionParams = (
+  params: ApprovalRequest,
 ): Effect.Effect<string, EventStoreError> =>
-  Schema.encodeEffect(interactionJsonCodec(schema))(params).pipe(
+  Schema.encodeEffect(interactionJsonCodec)(params).pipe(
     Effect.mapError(
       (cause) =>
         new EventStoreError({
-          message: `Failed to encode ${interactionType} interaction params`,
+          message: "Failed to encode interaction params",
           cause,
         }),
     ),
   )
 
-export const decodeInteractionParams = <TParams>(
-  schema: Schema.Schema<TParams>,
+export const decodeInteractionParams = (
   paramsJson: string,
-  interactionType: InteractionRequestType,
-): Effect.Effect<TParams, EventStoreError> =>
-  Schema.decodeUnknownEffect(interactionJsonCodec(schema))(paramsJson).pipe(
+): Effect.Effect<ApprovalRequest, EventStoreError> =>
+  Schema.decodeUnknownEffect(interactionJsonCodec)(paramsJson).pipe(
     Effect.mapError(
       (cause) =>
         new EventStoreError({
-          message: `Failed to decode ${interactionType} interaction params`,
+          message: "Failed to decode interaction params",
           cause,
         }),
     ),
@@ -84,19 +102,20 @@ export const decodeInteractionParams = <TParams>(
 // Interaction service
 // ============================================================================
 
-export interface InteractionService<TParams, TDecision> {
+export interface InteractionService {
   readonly present: (
-    params: TParams,
-  ) => Effect.Effect<TDecision, EventStoreError | InteractionPendingError>
-  readonly respond: (
-    requestId: string,
-    decision: TDecision,
-    extra?: string,
-  ) => Effect.Effect<void, EventStoreError>
-  /** Store a resolution for cold-mode resumption (keyed by session+branch) */
-  readonly storeResolution: (sessionId: SessionId, branchId: BranchId, decision: TDecision) => void
+    params: ApprovalRequest,
+    ctx: { sessionId: SessionId; branchId: BranchId },
+  ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
+  readonly respond: (requestId: string) => Effect.Effect<void, EventStoreError>
+  /** Store a resolution for cold-mode resumption (keyed by requestId) */
+  readonly storeResolution: (requestId: string, decision: ApprovalDecision) => void
   /** Re-publish event for a persisted pending request (recovery after restart) */
-  readonly rehydrate: (requestId: string, params: TParams) => Effect.Effect<void, EventStoreError>
+  readonly rehydrate: (
+    requestId: string,
+    params: ApprovalRequest,
+    ctx: { sessionId: SessionId; branchId: BranchId },
+  ) => Effect.Effect<void, EventStoreError>
 }
 
 /**
@@ -108,115 +127,96 @@ export interface InteractionStorageConfig {
   readonly resolve: (requestId: string) => Effect.Effect<void, never>
 }
 
-export interface InteractionServiceConfig<TParams, TDecision> {
-  readonly type: InteractionRequestType
-  readonly paramsSchema?: Schema.Schema<TParams>
-  readonly onPresent: (requestId: string, params: TParams) => Effect.Effect<void, EventStoreError>
-  readonly onRespond: (
+export interface InteractionServiceConfig {
+  readonly onPresent: (
     requestId: string,
-    params: TParams,
-    decision: TDecision,
-    extra?: string,
+    params: ApprovalRequest,
+    ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<void, EventStoreError>
-  readonly autoResolve?: (params: TParams) => TDecision | undefined
-  /** Extract session/branch from params for durable persistence */
-  readonly getContext?: (params: TParams) => { sessionId: SessionId; branchId: BranchId }
+  readonly onRespond?: (
+    requestId: string,
+    decision: ApprovalDecision,
+  ) => Effect.Effect<void, EventStoreError>
+  readonly autoResolve?: (params: ApprovalRequest) => ApprovalDecision | undefined
   /** Storage callbacks — omit for in-memory-only (tests) */
   readonly storage?: InteractionStorageConfig
 }
 
-export const makeInteractionService = <TParams, TDecision>(
-  config: InteractionServiceConfig<TParams, TDecision>,
-): InteractionService<TParams, TDecision> => {
-  /** Stored resolutions for cold interaction resumption — keyed by "sessionId:branchId" */
-  const storedResolutions = new Map<string, TDecision>()
-  const resolutionKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
+export const makeInteractionService = (config: InteractionServiceConfig): InteractionService => {
+  /** Stored resolutions keyed by requestId */
+  const storedResolutions = new Map<string, ApprovalDecision>()
+  /** Reverse lookup: sessionId:branchId → requestId (at most one pending per session+branch) */
+  const pendingByContext = new Map<string, string>()
+  const contextKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
 
   return {
-    storeResolution: (sessionId, branchId, decision) => {
-      storedResolutions.set(resolutionKey(sessionId, branchId), decision)
+    storeResolution: (requestId, decision) => {
+      storedResolutions.set(requestId, decision)
     },
 
-    present: Effect.fn("InteractionService.present")(function* (params: TParams) {
+    present: Effect.fn("InteractionService.present")(function* (
+      params: ApprovalRequest,
+      ctx: { sessionId: SessionId; branchId: BranchId },
+    ) {
       const auto = config.autoResolve?.(params)
       if (auto !== undefined) return auto
 
       // Check for a stored resolution (cold interaction resumption).
-      // When the machine re-enters ExecutingTools after WaitingForInteraction,
-      // the tool re-calls present(). The resolution was stored by respond()
-      // keyed by session+branch.
-      const ctx = config.getContext?.(params)
-      if (ctx !== undefined) {
-        const key = resolutionKey(ctx.sessionId, ctx.branchId)
-        const stored = storedResolutions.get(key)
+      // The tool re-calls present() after the machine resumes. The resolution
+      // was stored by requestId via storeResolution(). We find the requestId
+      // through the context reverse lookup.
+      const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
+      const pendingRequestId = pendingByContext.get(ctxKey)
+      if (pendingRequestId !== undefined) {
+        const stored = storedResolutions.get(pendingRequestId)
         if (stored !== undefined) {
-          storedResolutions.delete(key)
-          // Resolve in storage so it's not rehydrated on next restart
+          storedResolutions.delete(pendingRequestId)
+          pendingByContext.delete(ctxKey)
           if (config.storage !== undefined) {
-            // Use a no-op requestId since we don't know the original
-            // (storage.resolve is a best-effort cleanup)
+            yield* config.storage.resolve(pendingRequestId)
           }
           return stored
         }
       }
 
       const requestId = Bun.randomUUIDv7()
+      pendingByContext.set(ctxKey, requestId)
 
       // Persist to storage before publishing event (crash-safe)
-      if (config.storage !== undefined && config.getContext !== undefined) {
-        if (config.paramsSchema === undefined) {
-          return yield* new EventStoreError({
-            message: `${config.type} interaction storage requires paramsSchema`,
-          })
-        }
-        const storageCtx = config.getContext(params)
-        const paramsJson = yield* encodeInteractionParams(config.paramsSchema, params, config.type)
+      if (config.storage !== undefined) {
+        const paramsJson = yield* encodeInteractionParams(params)
         yield* config.storage.persist({
           requestId,
-          type: config.type,
-          sessionId: storageCtx.sessionId,
-          branchId: storageCtx.branchId,
+          type: INTERACTION_TYPE,
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
           paramsJson,
           status: "pending",
           createdAt: yield* Clock.currentTimeMillis,
         })
       }
 
-      yield* config.onPresent(requestId, params)
+      yield* config.onPresent(requestId, params, ctx)
 
       // Signal the machine to park in WaitingForInteraction.
-      // The tool fiber exits, the machine checkpoints, and when respond() is called,
-      // it stores the resolution. The machine resumes ExecutingTools, the tool re-runs,
-      // and present() finds the stored resolution above.
-      const pendingCtx = ctx ?? config.getContext?.(params)
-      return yield* Effect.fail(
-        new InteractionPendingError(
-          requestId,
-          config.type,
-          pendingCtx?.sessionId ?? ("" as SessionId),
-          pendingCtx?.branchId ?? ("" as BranchId),
-        ),
-      )
+      return yield* Effect.fail(new InteractionPendingError(requestId, ctx.sessionId, ctx.branchId))
     }),
 
-    respond: Effect.fn("InteractionService.respond")(function* (
-      requestId: string,
-      _decision: TDecision,
-      _extra?: string,
-    ) {
-      // Resolve in storage
+    respond: Effect.fn("InteractionService.respond")(function* (requestId: string) {
       if (config.storage !== undefined) {
         yield* config.storage.resolve(requestId)
       }
+      // onRespond is optional — events can be published here if needed
+      // but the primary response path is storeResolution + machine wake
     }),
 
     rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
       requestId: string,
-      params: TParams,
+      params: ApprovalRequest,
+      ctx: { sessionId: SessionId; branchId: BranchId },
     ) {
       // Re-publish the event so reconnecting clients render the dialog.
-      // No Deferred needed — the machine is in WaitingForInteraction from checkpoint.
-      yield* config.onPresent(requestId, params)
+      yield* config.onPresent(requestId, params, ctx)
     }),
   }
 }

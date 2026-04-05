@@ -2,10 +2,8 @@ import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
-import type { InteractionHandlerType } from "../domain/extension.js"
 import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
-import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
 import { Permission, PermissionRule } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { Skills } from "../domain/skills.js"
@@ -14,6 +12,7 @@ import { BuiltinExtensions } from "../extensions/index.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
+import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
@@ -33,11 +32,10 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import { AskUserHandler } from "../tools/ask-user.js"
+import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "./event-publisher.js"
 import { buildBasePromptSections } from "./system-prompt.js"
-import type { InteractionRequestType } from "../domain/interaction-request.js"
 
 /** Marker service — construction triggers recovery of pending interaction requests */
 class InteractionRecoveryTag extends ServiceMap.Service<
@@ -279,73 +277,63 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
   const baseWithPermission = Layer.merge(baseServicesLive, permissionLive)
 
-  // Interaction handler layers — resolved from extension registry with builtin fallback.
-  const resolveHandlerLayer = <A, R>(
-    type: InteractionHandlerType,
-    fallback: Layer.Layer<A, never, R>,
-  ) =>
-    Layer.provide(
-      Layer.unwrap(
-        Effect.gen(function* () {
-          const registry = yield* ExtensionRegistry
-          const h = yield* registry.getInteractionHandler(type)
-          return (h?.layer ?? fallback) as Layer.Layer<A, never, R>
-        }),
-      ),
-      baseWithPermission,
-    )
-  const interactionHandlersLive = Layer.mergeAll(
-    resolveHandlerLayer("ask-user", AskUserHandler.Live),
-    resolveHandlerLayer("prompt", PromptHandler.Live),
-    resolveHandlerLayer("handoff", HandoffHandler.Live),
+  // ApprovalService — single handler for all interaction types
+  const approvalServiceLive = Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const store = yield* InteractionStorage
+        return ApprovalService.LiveWithStorage({
+          persist: (record) => store.persist(record).pipe(Effect.catchEager(() => Effect.void)),
+          resolve: (requestId) =>
+            store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+        })
+      }),
+    ),
+    baseWithPermission,
   )
+
   const promptPresenterLive = Layer.provide(
     PromptPresenter.Live,
-    Layer.merge(interactionHandlersLive, baseWithPermission),
+    Layer.merge(approvalServiceLive, baseWithPermission),
   )
   const toolRunnerLive = Layer.provide(
     ToolRunner.Live,
-    Layer.merge(baseWithPermission, interactionHandlersLive),
+    Layer.merge(baseWithPermission, approvalServiceLive),
   )
 
   const allDeps = Layer.mergeAll(
     baseWithPermission,
-    interactionHandlersLive,
+    approvalServiceLive,
     toolRunnerLive,
     promptPresenterLive,
   )
 
   // Recover pending interaction requests from storage.
-  // Dispatches each record to the appropriate handler's rehydrate method,
-  // which re-creates the deferred and re-publishes the event so clients
-  // re-present dialogs.
+  // Iterates persisted pending records and calls approvalService.rehydrate()
+  // generically — no per-handler dispatch needed.
   const interactionRecoveryLive = Layer.effect(
     InteractionRecoveryTag,
     Effect.gen(function* () {
       const interactionStore = yield* InteractionStorage
-      const promptHandler = yield* PromptHandler
-      const handoffHandler = yield* HandoffHandler
-      const askUserHandler = yield* AskUserHandler
+      const approvalService = yield* ApprovalService
 
       const pending = yield* interactionStore.listPending()
       if (pending.length === 0) return { recovered: 0 }
 
-      const handlers: Record<
-        InteractionRequestType,
-        (record: (typeof pending)[number]) => Effect.Effect<void>
-      > = {
-        prompt: (r) => promptHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
-        handoff: (r) => handoffHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
-        "ask-user": (r) => askUserHandler.rehydrate(r).pipe(Effect.catchEager(() => Effect.void)),
-      }
-
       let recovered = 0
       for (const record of pending) {
-        const handler = handlers[record.type]
-        if (handler !== undefined) {
-          yield* handler(record)
-          recovered++
-        }
+        const params = yield* decodeInteractionParams(record.paramsJson).pipe(
+          Effect.option,
+          Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
+        )
+        if (params === undefined) continue
+        yield* approvalService
+          .rehydrate(record.requestId, params, {
+            sessionId: record.sessionId,
+            branchId: record.branchId,
+          })
+          .pipe(Effect.catchEager(() => Effect.void))
+        recovered++
       }
 
       if (recovered > 0) {

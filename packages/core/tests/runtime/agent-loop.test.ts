@@ -10,8 +10,8 @@ import { Message, TextPart, Session, Branch } from "@gent/core/domain/message"
 import { Agents } from "@gent/core/domain/agent"
 import { defineTool, type AnyToolDefinition } from "@gent/core/domain/tool"
 import { Permission } from "@gent/core/domain/permission"
-import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import { EventStore } from "@gent/core/domain/event"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
@@ -58,7 +58,6 @@ describe("AgentLoop actor model", () => {
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
       EventStore.Test(),
-      HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,
     )
@@ -78,7 +77,6 @@ describe("AgentLoop actor model", () => {
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
-      HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,
       recorderLayer,
@@ -188,7 +186,6 @@ describe("AgentLoop actor model", () => {
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
       EventStore.Test(),
-      HandoffHandler.Test(),
       ToolRunner.Test(),
       BunServices.layer,
     )
@@ -622,14 +619,13 @@ describe("AgentLoop.runOnce", () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const extRegistry = makeTestExtRegistry()
-    const toolDeps = Layer.mergeAll(extRegistry, Permission.Test())
+    const toolDeps = Layer.mergeAll(extRegistry, Permission.Test(), ApprovalService.Test())
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
-      HandoffHandler.Test(),
       BunServices.layer,
       recorderLayer,
       eventStoreLayer,
@@ -740,8 +736,8 @@ describe("Tool concurrency", () => {
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
       EventStore.Test(),
-      HandoffHandler.Test(),
       Permission.Test(),
+      ApprovalService.Test(),
       BunServices.layer,
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
