@@ -139,7 +139,7 @@ const resolveSessionRuntimeAgent = (
   client: Pick<GentNamespacedClient, "session">,
   session: SessionInfo,
 ): Effect.Effect<AgentName | undefined, GentRpcError> => {
-  if (session.branchId === undefined) return Effect.succeed(undefined)
+  if (session.branchId === undefined) return Effect.void.pipe(Effect.as(undefined))
   return client.session
     .getSnapshot({
       sessionId: session.id,

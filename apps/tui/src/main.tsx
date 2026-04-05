@@ -367,11 +367,13 @@ const command = main.pipe(
 // CLI
 const cli = Command.run(command, {
   version: "0.0.0",
-}).pipe(Effect.provide(PlatformLayer))
+})
 const TraceLoggerLayer = Layer.unwrap(
   makeClientTraceLogger().pipe(Effect.map((logger) => Logger.layer([logger]))),
 )
-const mainEffect = cli.pipe(Effect.provide(Layer.provide(TraceLoggerLayer, PlatformLayer)))
+const CliRuntimeLayer = Layer.merge(PlatformLayer, Layer.provide(TraceLoggerLayer, PlatformLayer))
+// @effect-diagnostics-next-line strictEffectProvide:off entrypoint layer provision
+const mainEffect = cli.pipe(Effect.provide(CliRuntimeLayer))
 
 const gracefulCliTeardown: Runtime.Teardown = (exit, onExit) => {
   if (Exit.isSuccess(exit)) {

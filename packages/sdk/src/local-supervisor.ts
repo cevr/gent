@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Ref, Scope, Semaphore } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Scope, Semaphore } from "effect"
 import type { RpcClient, RpcGroup } from "effect/unstable/rpc"
 import type { GentRpcs } from "@gent/core/server/rpcs.js"
 import {
@@ -92,7 +92,7 @@ export const startLocalSupervisor = <E, R>(
         Effect.gen(function* () {
           const stopped = yield* Ref.get(stoppedRef)
           if (stopped) {
-            return yield* Effect.fail(new GentConnectionError({ message: "local runtime stopped" }))
+            return yield* new GentConnectionError({ message: "local runtime stopped" })
           }
 
           const scope = yield* Scope.make()
@@ -106,16 +106,16 @@ export const startLocalSupervisor = <E, R>(
             }
             yield* Ref.set(clientRef, undefined)
             const squashed = Cause.squash(exit.cause)
-            const error = squashed instanceof GentConnectionError ? squashed : mapError(squashed)
+            const error = Schema.is(GentConnectionError)(squashed) ? squashed : mapError(squashed)
             const currentGeneration = yield* Ref.get(generationRef)
             const stoppedNow = yield* Ref.get(stoppedRef)
             if (currentGeneration !== generation || stoppedNow) {
               yield* Deferred.succeed(ready, void 0)
-              return yield* Effect.fail(error)
+              return yield* error
             }
             yield* emit({ _tag: "disconnected", reason: error.message })
             yield* Deferred.succeed(ready, void 0)
-            return yield* Effect.fail(error)
+            return yield* error
           }
 
           const currentGeneration = yield* Ref.get(generationRef)

@@ -165,11 +165,9 @@ export const makeInteractionService = <TParams, TDecision>(
       // Persist to storage before publishing event (crash-safe)
       if (config.storage !== undefined && config.getContext !== undefined) {
         if (config.paramsSchema === undefined) {
-          return yield* Effect.fail(
-            new EventStoreError({
-              message: `${config.type} interaction storage requires paramsSchema`,
-            }),
-          )
+          return yield* new EventStoreError({
+            message: `${config.type} interaction storage requires paramsSchema`,
+          })
         }
         const storageCtx = config.getContext(params)
         const paramsJson = yield* encodeInteractionParams(config.paramsSchema, params, config.type)
