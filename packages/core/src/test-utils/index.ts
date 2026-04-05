@@ -321,32 +321,6 @@ export const mockToolCallResponse = (
   new FinishChunk({ finishReason: "tool_calls" }),
 ]
 
-// Test Effect Runner
-
-export const runTest = <A, E>(effect: Effect.Effect<A, E, never>, config: TestLayerConfig = {}) =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(createTestLayer(config))
-        return yield* effect.pipe(Effect.provide(context))
-      }),
-    ),
-  )
-
-// Run with recording
-
-export const runTestWithRecording = <A, E>(
-  effect: Effect.Effect<A, E, SequenceRecorder>,
-  config: Omit<TestLayerConfig, "recording"> = {},
-) =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(createRecordingTestLayer(config))
-        return yield* effect.pipe(Effect.provide(context))
-      }),
-    ),
-  )
 import type { ToolCallId } from "../domain/ids.js"
 
 // E2E test layer
