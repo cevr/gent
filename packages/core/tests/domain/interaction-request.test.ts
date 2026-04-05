@@ -150,6 +150,32 @@ describe("Interaction Request", () => {
     )
   })
 
+  test("rehydrate + storeResolution + present returns stored value (restart-resume)", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        // Simulate a fresh service after restart — no in-memory state
+        const interaction = makeInteractionService({
+          onPresent: () => Effect.void,
+        })
+
+        const sessionId = "s-restart" as SessionId
+        const branchId = "b-restart" as BranchId
+        const requestId = "req-restart-1"
+
+        // Rehydrate rebuilds the pendingByContext reverse lookup
+        yield* interaction.rehydrate(requestId, { text: "Approve?" }, { sessionId, branchId })
+
+        // Client responds — store the resolution
+        interaction.storeResolution(requestId, { approved: true, notes: "yes" })
+
+        // Tool re-calls present() — should find stored resolution via context lookup
+        const result = yield* interaction.present({ text: "Approve?" }, { sessionId, branchId })
+        expect(result.approved).toBe(true)
+        expect(result.notes).toBe("yes")
+      }),
+    )
+  })
+
   test("autoResolve skips storage persistence", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

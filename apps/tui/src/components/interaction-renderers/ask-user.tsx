@@ -32,15 +32,8 @@ export function AskUserRenderer(props: InteractionRendererProps) {
     if (questionIndex() < questions().length - 1) {
       setQuestionIndex((i) => i + 1)
     } else {
-      // All questions answered — join answers as notes
-      const notes = nextAnswers
-        .map((a, i) => {
-          const q = questions()[i]
-          const label = q?.header ?? q?.question ?? `Q${i + 1}`
-          return `${label}: ${a.join(", ")}`
-        })
-        .join("\n")
-      props.resolve({ approved: true, notes })
+      // All questions answered — encode as JSON for structured roundtrip
+      props.resolve({ approved: true, notes: JSON.stringify(nextAnswers) })
     }
   }
 

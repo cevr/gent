@@ -65,8 +65,20 @@ export const AskUserTool = defineTool({
     if (!decision.approved) {
       return { answers: [], cancelled: true }
     }
-    // Parse structured answers from notes if available
-    const answers = decision.notes !== undefined ? [[decision.notes]] : [[]]
+    // Parse structured answers from notes (JSON-encoded string[][])
+    let answers: string[][] = [[]]
+    if (decision.notes !== undefined) {
+      try {
+        const parsed = JSON.parse(decision.notes) as unknown
+        if (Array.isArray(parsed) && parsed.every(Array.isArray)) {
+          answers = parsed as string[][]
+        } else {
+          answers = [[decision.notes]]
+        }
+      } catch {
+        answers = [[decision.notes]]
+      }
+    }
     return { answers }
   }),
 })

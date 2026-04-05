@@ -215,6 +215,10 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
       params: ApprovalRequest,
       ctx: { sessionId: SessionId; branchId: BranchId },
     ) {
+      // Rebuild the context reverse lookup so post-restart present() can find
+      // the stored resolution by sessionId:branchId → requestId.
+      const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
+      pendingByContext.set(ctxKey, requestId)
       // Re-publish the event so reconnecting clients render the dialog.
       yield* config.onPresent(requestId, params, ctx)
     }),

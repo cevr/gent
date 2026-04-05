@@ -1,6 +1,10 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import { ExtensionEventBus, type BusEnvelope } from "@gent/core/runtime/extensions/event-bus"
+import { interpretEffects } from "@gent/core/runtime/extensions/extension-actor-shared"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import type { ExtensionEffect } from "@gent/core/domain/extension"
+import type { SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("ExtensionEventBus", () => {
   const run = <A>(effect: Effect.Effect<A, never, ExtensionEventBus>) =>
@@ -110,6 +114,43 @@ describe("ExtensionEventBus", () => {
       }),
     )
     expect(called).toBe(false)
+  })
+
+  test("busEmit effect flows through interpretEffects to bus listener", async () => {
+    const received: BusEnvelope[] = []
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const bus = yield* ExtensionEventBus
+        const turnControl = yield* ExtensionTurnControl
+
+        // Register a listener
+        yield* bus.on("ext:test-emit", (env) => {
+          received.push(env)
+          return Effect.void
+        })
+
+        // Simulate a BusEmit effect from a hook
+        const effects: ReadonlyArray<ExtensionEffect> = [
+          { _tag: "BusEmit", channel: "ext:test-emit", payload: { from: "hook" } },
+        ]
+
+        yield* interpretEffects(effects, "s1" as SessionId, "b1" as BranchId, {
+          turnControl,
+          busEmit: (channel, payload) =>
+            bus.emit({
+              channel,
+              payload,
+              sessionId: "s1" as SessionId,
+              branchId: "b1" as BranchId,
+            }),
+        })
+      }).pipe(Effect.provide(ExtensionEventBus.Live), Effect.provide(ExtensionTurnControl.Test())),
+    )
+
+    expect(received.length).toBe(1)
+    expect(received[0]!.channel).toBe("ext:test-emit")
+    expect(received[0]!.payload).toEqual({ from: "hook" })
+    expect(received[0]!.sessionId).toBe("s1")
   })
 
   test("withSubscriptions pre-registers handlers", async () => {
