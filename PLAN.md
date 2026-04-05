@@ -1,6 +1,6 @@
 # Extension Runtime Audit And Simplification Plan
 
-Status: active. Batch 5 completed on 2026-04-05.
+Status: active. Batch 6 completed on 2026-04-05.
 
 ## Batch Tracker
 
@@ -9,7 +9,7 @@ Status: active. Batch 5 completed on 2026-04-05.
 - [x] Batch 3 — Delete The Adapters And Standardize On One Actor Substrate
 - [x] Batch 4 — Thin Server/Client Truth
 - [x] Batch 5 — Consolidate Tests Around Behavior Seams
-- [ ] Batch 6 — Remove High-Value Suppression Debt
+- [x] Batch 6 — Remove High-Value Suppression Debt
 - [ ] Batch 7 — Final Verification
 
 ## Context

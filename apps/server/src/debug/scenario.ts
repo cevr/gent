@@ -55,7 +55,6 @@ const createParentTurnMessages = (
   searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
 ) => {
-  // @effect-diagnostics-next-line *:off
   const now = new Date()
 
   const assistant = new Message({

@@ -215,12 +215,12 @@ const program = Effect.scoped(
 
     // stdout messages parsed by supervisor — must stay as console.log
     if (config.isWorker) {
-      // @effect-diagnostics-next-line *:off
+      // @effect-diagnostics-next-line globalConsoleInEffect:off
       console.log(`GENT_WORKER_READY ${baseUrl}`)
     } else {
-      // @effect-diagnostics-next-line *:off
+      // @effect-diagnostics-next-line globalConsoleInEffect:off
       console.log(`Gent server ready on ${baseUrl}`)
-      // @effect-diagnostics-next-line *:off
+      // @effect-diagnostics-next-line globalConsoleInEffect:off
       console.log(`Swagger UI: ${baseUrl}/docs`)
     }
 

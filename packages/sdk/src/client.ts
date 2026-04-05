@@ -198,13 +198,10 @@ function makeRuntime(
   lifecycle: GentLifecycle,
 ): GentRuntime {
   return {
-    // @effect-diagnostics-next-line *:off
     cast: (effect) => {
       Effect.runForkWith(services)(effect)
     },
-    // @effect-diagnostics-next-line *:off
     fork: (effect) => Effect.runForkWith(services)(effect),
-    // @effect-diagnostics-next-line *:off
     run: (effect) => Effect.runPromiseWith(services)(effect),
     lifecycle,
   }
