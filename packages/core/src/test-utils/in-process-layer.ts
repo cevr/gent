@@ -13,7 +13,6 @@ import { AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
 import { Skills } from "../domain/skills.js"
 import { DebugProvider } from "../debug/provider.js"
-import { HandoffHandler, PromptHandler } from "../domain/interaction-handlers.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import type { Provider } from "../providers/provider.js"
@@ -28,7 +27,7 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { AskUserHandler } from "../tools/ask-user.js"
+import { AskUserHandler } from "../extensions/interaction-tools/ask-user.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
@@ -63,8 +62,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     extensionRegistryLive,
     extensionRuntimeLive,
     Permission.Test(),
-    PromptHandler.Test(["yes"]),
-    HandoffHandler.Test(["confirm"]),
     AskUserHandler.Test([["yes"]]),
     Skills.Test(),
     ConfigService.Test(),

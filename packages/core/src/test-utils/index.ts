@@ -19,7 +19,7 @@ import {
 import { Permission } from "../domain/permission.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { AskUserHandler } from "../tools/ask-user.js"
+import { AskUserHandler } from "../extensions/interaction-tools/ask-user.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
@@ -320,7 +320,6 @@ export {
   type E2ELayerConfig,
   withTinyContextWindow,
   trackingApprovalService,
-  trackingHandoffHandler,
 } from "./e2e-layer.js"
 
 // Extension test harnesses

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { AskUserTool } from "@gent/core/tools/ask-user"
+import { AskUserTool } from "@gent/core/extensions/interaction-tools/ask-user"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"

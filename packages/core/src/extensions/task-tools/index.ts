@@ -1,23 +1,23 @@
 import { Effect, Schema } from "effect"
 import { Event as MEvent, Machine, Slot, State as MState, type ProvideSlots } from "effect-machine"
-import { extension } from "./api.js"
-import { TaskCreateTool } from "../tools/task-create.js"
-import { TaskListTool } from "../tools/task-list.js"
-import { TaskGetTool } from "../tools/task-get.js"
-import { TaskUpdateTool } from "../tools/task-update.js"
-import { TaskStopTool } from "../tools/task-stop.js"
-import { TaskOutputTool } from "../tools/task-output.js"
-import { TaskStorage } from "./task-tools-storage.js"
-import { TaskService, type TaskRuntimeDeps } from "./task-tools-service.js"
-import { AgentEvent } from "../domain/event.js"
-import { Task, TaskStatus } from "../domain/task.js"
-import { BranchId, SessionId, TaskId } from "../domain/ids.js"
+import { extension } from "../api.js"
+import { TaskCreateTool } from "./task-create.js"
+import { TaskListTool } from "./task-list.js"
+import { TaskGetTool } from "./task-get.js"
+import { TaskUpdateTool } from "./task-update.js"
+import { TaskStopTool } from "./task-stop.js"
+import { TaskOutputTool } from "./task-output.js"
+import { TaskStorage } from "../task-tools-storage.js"
+import { TaskService, type TaskRuntimeDeps } from "../task-tools-service.js"
+import { AgentEvent } from "../../domain/event.js"
+import { Task, TaskStatus } from "../../domain/task.js"
+import { BranchId, SessionId, TaskId } from "../../domain/ids.js"
 import type {
   ExtensionActorDefinition,
   ExtensionReduceContext,
   ReduceResult,
-} from "../domain/extension.js"
-import { TASK_TOOLS_EXTENSION_ID, TaskOutputSummary, TaskProtocol } from "./task-tools-protocol.js"
+} from "../../domain/extension.js"
+import { TASK_TOOLS_EXTENSION_ID, TaskOutputSummary, TaskProtocol } from "../task-tools-protocol.js"
 
 // ── Task list actor — projects task state as extension UI snapshot ──
 

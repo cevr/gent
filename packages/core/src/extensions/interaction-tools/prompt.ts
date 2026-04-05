@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
+import { defineTool } from "../../domain/tool.js"
+import { PromptPresenter } from "../../domain/prompt-presenter.js"
 
 // Prompt Params — discriminated union on mode
 

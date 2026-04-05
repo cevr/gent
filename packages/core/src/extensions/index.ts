@@ -3,9 +3,9 @@ import { FsToolsExtension } from "./fs-tools/index.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { NetworkToolsExtension } from "./network-tools/index.js"
 import { SubagentToolsExtension } from "./subagent-tools/index.js"
-import { InteractionToolsExtension } from "./interaction-tools.js"
+import { InteractionToolsExtension } from "./interaction-tools/index.js"
 import { SessionToolsExtension } from "./session-tools/index.js"
-import { TaskExtension } from "./task-tools.js"
+import { TaskExtension } from "./task-tools/index.js"
 import { WorkflowToolsExtension } from "./workflow-tools/index.js"
 import { AgentsExtension } from "./agents.js"
 import { PlanExtension } from "./plan.js"
@@ -16,7 +16,6 @@ import { OpenAIExtension } from "./openai/index.js"
 import { BedrockExtension } from "./bedrock/index.js"
 import { GoogleExtension } from "./google/index.js"
 import { MistralExtension } from "./mistral/index.js"
-import { InteractionHandlersExtension } from "./interaction-handlers.js"
 import { HandoffExtension } from "./handoff.js"
 
 export {
@@ -32,12 +31,10 @@ export {
   PlanExtension,
   AutoExtension,
   MemoryExtension,
-  InteractionHandlersExtension,
   HandoffExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
-  InteractionHandlersExtension,
   HandoffExtension,
   FsToolsExtension,
   ExecToolsExtension,

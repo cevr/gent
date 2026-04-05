@@ -19,7 +19,7 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Provider } from "@gent/core/providers/provider"
-import { AskUserHandler } from "@gent/core/tools/ask-user"
+import { AskUserHandler } from "@gent/core/extensions/interaction-tools/ask-user"
 
 const testExtensions = resolveExtensions([
   {

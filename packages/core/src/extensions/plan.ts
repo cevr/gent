@@ -538,8 +538,8 @@ const planActor: ExtensionActorDefinition<
 
 // ── Extension ──
 
-import { PlanTool } from "../tools/plan.js"
-export { PlanTool, PlanParams } from "../tools/plan.js"
+import { PlanTool } from "./plan-tool.js"
+export { PlanTool, PlanParams } from "./plan-tool.js"
 
 export const PlanExtension = extension("@gent/plan", (ext) => {
   ext.actor(planActor)

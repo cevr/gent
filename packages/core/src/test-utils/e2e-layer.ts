@@ -43,7 +43,7 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { AskUserHandler } from "../tools/ask-user.js"
+import { AskUserHandler } from "../extensions/interaction-tools/ask-user.js"
 import { Test as MemoryVaultTest } from "../extensions/memory/vault.js"
 import {
   reconcileLoadedExtensions,
@@ -276,6 +276,3 @@ export const trackingApprovalService = () =>
     })
     return { layer, presentCalled }
   })
-
-/** @deprecated Use trackingApprovalService instead */
-export const trackingHandoffHandler = trackingApprovalService

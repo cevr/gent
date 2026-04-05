@@ -10,7 +10,6 @@ import type { Provider } from "@gent/core/providers/provider"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/core/domain/agent"
 import { type AnyToolDefinition, defineTool } from "@gent/core/domain/tool"
-import { HandoffHandler } from "@gent/core/domain/interaction-handlers"
 import {
   BaseEventStore,
   EventStore,
@@ -99,7 +98,7 @@ const makeLayer = (
     ExtensionStateRuntime.Test(),
     ExtensionTurnControl.Test(),
     EventStore.Test(),
-    HandoffHandler.Test(),
+
     ToolRunner.Test(),
     BunServices.layer,
   )
@@ -122,7 +121,7 @@ const makeLayerWithEvents = (
     ExtensionStateRuntime.Test(),
     ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
-    HandoffHandler.Test(),
+
     ToolRunner.Test(),
     BunServices.layer,
   )

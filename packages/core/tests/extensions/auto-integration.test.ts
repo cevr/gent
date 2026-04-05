@@ -9,7 +9,7 @@ import {
 import {
   createE2ELayer,
   withTinyContextWindow,
-  trackingHandoffHandler,
+  trackingApprovalService,
 } from "@gent/core/test-utils/e2e-layer"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
@@ -290,7 +290,7 @@ describe("Auto extension E2E", () => {
 
   it.live("handoff dedup: handoff extension skips when auto is active", () =>
     Effect.gen(function* () {
-      const { layer: handoffLayer, presentCalled } = yield* trackingHandoffHandler()
+      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
       const { layer: providerLayer } = yield* createSequenceProvider([
         textStep("Starting auto."),
@@ -347,7 +347,7 @@ describe("Auto extension E2E", () => {
 
   it.live("auto handoff emits QueueFollowUp, not HandoffPresented", () =>
     Effect.gen(function* () {
-      const { layer: handoffLayer, presentCalled } = yield* trackingHandoffHandler()
+      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
       const { layer: providerLayer } = yield* createSequenceProvider([
         textStep("Working on it."),
@@ -387,7 +387,7 @@ describe("Auto extension E2E", () => {
     Effect.gen(function* () {
       yield* withTinyContextWindow(
         Effect.gen(function* () {
-          const { layer: handoffLayer, presentCalled } = yield* trackingHandoffHandler()
+          const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
           const { layer: providerLayer } = yield* createSequenceProvider([
             textStep("x".repeat(2000)), // ~500 tokens — context over 85%

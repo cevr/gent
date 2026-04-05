@@ -1,7 +1,7 @@
 import { ServiceMap, Effect, Layer, Schema } from "effect"
-import { defineTool, type ToolContext } from "../domain/tool.js"
-import { type Question, QuestionSchema, QuestionOptionSchema } from "../domain/event.js"
-import type { ApprovalDecision } from "../domain/interaction-request.js"
+import { defineTool, type ToolContext } from "../../domain/tool.js"
+import { type Question, QuestionSchema, QuestionOptionSchema } from "../../domain/event.js"
+import type { ApprovalDecision } from "../../domain/interaction-request.js"
 
 // AskUser Params — canonical questions[] input
 // Reuses QuestionSchema from event.ts with tool-specific length constraints.

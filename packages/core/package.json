@@ -8,7 +8,6 @@
     "./storage/*": "./src/storage/*",
     "./providers/*": "./src/providers/*",
     "./runtime/*": "./src/runtime/*",
-    "./tools/*": "./src/tools/*",
     "./extensions": "./src/extensions/index.ts",
     "./extensions/*": "./src/extensions/*",
     "./server/*": "./src/server/*",

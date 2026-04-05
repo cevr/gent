@@ -14,7 +14,7 @@ import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { AskUserHandler } from "@gent/core/tools/ask-user"
+import { AskUserHandler } from "@gent/core/extensions/interaction-tools/ask-user"
 
 describe("Session Snapshot", () => {
   it.live("getSessionSnapshot only returns persisted state", () => {

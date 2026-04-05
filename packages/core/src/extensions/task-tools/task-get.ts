@@ -1,8 +1,8 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
-import type { TaskId } from "../domain/ids.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
-import { TaskProtocol } from "../extensions/task-tools-protocol.js"
+import { defineTool } from "../../domain/tool.js"
+import type { TaskId } from "../../domain/ids.js"
+import { ExtensionStateRuntime } from "../../runtime/extensions/state-runtime.js"
+import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),

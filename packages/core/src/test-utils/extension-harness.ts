@@ -35,7 +35,6 @@ import type {
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { PromptHandler, HandoffHandler } from "../domain/interaction-handlers.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import {
@@ -49,7 +48,7 @@ import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { Skills } from "../domain/skills.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { AskUserHandler } from "../tools/ask-user.js"
+import { AskUserHandler } from "../extensions/interaction-tools/ask-user.js"
 
 // ── Options ──
 
@@ -317,8 +316,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
         subagentRunnerLayer,
         PromptPresenter.Test(),
         Permission.Test(),
-        PromptHandler.Test(["yes"]),
-        HandoffHandler.Test(["confirm"]),
         AskUserHandler.Test([["yes"]]),
         AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

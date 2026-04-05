@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { HandoffTool } from "@gent/core/tools/handoff"
+import { HandoffTool } from "@gent/core/extensions/handoff-tool"
 import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"

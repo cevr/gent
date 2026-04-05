@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { PromptTool } from "@gent/core/tools/prompt"
+import { PromptTool } from "@gent/core/extensions/interaction-tools/prompt"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
