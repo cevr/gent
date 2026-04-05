@@ -35,11 +35,11 @@ const makeSwappableClient = (
             state._tag === "disconnected"
               ? state.reason
               : `local runtime unavailable (state: ${state._tag})`
-          throw new GentConnectionError({ message: reason })
+          return Effect.fail(new GentConnectionError({ message: reason }))
         }
         const method = (client as Record<string, unknown>)[key]
         if (typeof method !== "function") {
-          throw new Error(`local supervisor rpc method missing: ${String(key)}`)
+          return Effect.fail(new GentConnectionError({ message: `rpc method missing: ${key}` }))
         }
         return (method as (...methodArgs: ReadonlyArray<unknown>) => unknown)(...args)
       }
