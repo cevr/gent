@@ -2,18 +2,16 @@ import { Show } from "solid-js"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
 import { useClient } from "../client/index"
-import { useExtensionUI } from "../extensions/context"
 
 export function ConnectionWidget() {
   const client = useClient()
-  const extensionUI = useExtensionUI()
   const { theme } = useTheme()
   const disconnectedReason = () => {
     const state = client.connectionState()
     if (state?._tag !== "disconnected" || state.reason === "stopped") return null
     return state.reason
   }
-  const healthSummary = () => extensionUI.health().summary
+  const healthSummary = () => client.extensionHealth().summary
   const hasFailedExtensions = () => healthSummary().failedExtensions.length > 0
   const hasFailedActors = () => healthSummary().failedActors.length > 0
   const hasFailedScheduledJobs = () => healthSummary().failedScheduledJobs.length > 0

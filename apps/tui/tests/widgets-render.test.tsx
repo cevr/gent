@@ -9,7 +9,7 @@ import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
-import type { GentRuntime } from "../src/client"
+import { useClient, type GentRuntime } from "../src/client"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const syntaxStyle = () => SyntaxStyle.create()
@@ -24,6 +24,34 @@ const testSession: SessionInfo = {
   parentBranchId: undefined,
   createdAt: Date.now(),
   updatedAt: Date.now(),
+}
+
+const nextSession: SessionInfo = {
+  id: "session-next" as SessionId,
+  name: "Next Session",
+  cwd: "/tmp/gent-next",
+  reasoningLevel: undefined,
+  branchId: "branch-next" as BranchId,
+  parentSessionId: undefined,
+  parentBranchId: undefined,
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+}
+
+const HealthControlsProbe = (props: {
+  expose: (controls: { switchSession: () => void; clearSession: () => void }) => void
+}) => {
+  const client = useClient()
+  props.expose({
+    switchSession: () =>
+      client.switchSession(
+        nextSession.id,
+        nextSession.branchId as BranchId,
+        nextSession.name ?? "Next Session",
+      ),
+    clearSession: () => client.clearSession(),
+  })
+  return <text>{client.extensionHealth().summary.failedActors.join(",")}</text>
 }
 
 const createMutableRuntime = (initialState: ConnectionState) => {
@@ -288,6 +316,7 @@ describe("TUI renderer surfaces", () => {
 
   test("ConnectionWidget refreshes extension status after reconnect generation changes", async () => {
     const lifecycle = createMutableRuntime({ _tag: "connected", generation: 0 })
+    let callCount = 0
     let currentHealth = {
       extensions: [
         {
@@ -321,6 +350,7 @@ describe("TUI renderer surfaces", () => {
       client: createMockClient({
         extension: {
           listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+            callCount += 1
             expect(sessionId).toBe(testSession.id)
             return Effect.succeed(currentHealth)
           },
@@ -329,6 +359,7 @@ describe("TUI renderer surfaces", () => {
     })
 
     expect(renderFrame(setup)).toContain("failed session actors")
+    expect(callCount).toBe(1)
 
     currentHealth = {
       extensions: [],
@@ -343,6 +374,77 @@ describe("TUI renderer surfaces", () => {
     await Promise.resolve()
     await setup.renderOnce()
     lifecycle.emit({ _tag: "connected", generation: 1 })
+    await Promise.resolve()
+    await setup.renderOnce()
+    await Promise.resolve()
+    await setup.renderOnce()
+
+    const frame = renderFrame(setup)
+    expect(callCount).toBe(2)
+    expect(frame).not.toContain("failed session actors")
+    expect(frame).not.toContain("@gent/plan")
+  })
+
+  test("ConnectionWidget clears stale extension status when switching sessions", async () => {
+    let controls!: { switchSession: () => void; clearSession: () => void }
+    const setup = await renderWithProviders(
+      () => (
+        <>
+          <ConnectionWidget />
+          <HealthControlsProbe expose={(next) => (controls = next)} />
+        </>
+      ),
+      {
+        initialSession: testSession,
+        client: createMockClient({
+          extension: {
+            listStatus: ({ sessionId }: { sessionId?: SessionId }) =>
+              Effect.succeed(
+                sessionId === testSession.id
+                  ? {
+                      extensions: [
+                        {
+                          manifest: { id: "@gent/plan" },
+                          kind: "builtin" as const,
+                          sourcePath: "builtin",
+                          status: "degraded" as const,
+                          activation: { status: "active" as const },
+                          actor: {
+                            extensionId: "@gent/plan",
+                            sessionId: testSession.id,
+                            branchId: testSession.branchId,
+                            status: "failed" as const,
+                            error: "actor boom",
+                          },
+                          scheduler: { status: "healthy" as const, failures: [] },
+                        },
+                      ],
+                      summary: {
+                        status: "degraded" as const,
+                        subtitle: "extension runtime degraded",
+                        failedExtensions: [],
+                        failedActors: ["@gent/plan"],
+                        failedScheduledJobs: [],
+                      },
+                    }
+                  : {
+                      extensions: [],
+                      summary: {
+                        status: "healthy" as const,
+                        failedExtensions: [],
+                        failedActors: [],
+                        failedScheduledJobs: [],
+                      },
+                    },
+              ),
+          },
+        }),
+      },
+    )
+
+    expect(renderFrame(setup)).toContain("@gent/plan")
+
+    controls.switchSession()
     await Promise.resolve()
     await setup.renderOnce()
     await Promise.resolve()

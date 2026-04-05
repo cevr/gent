@@ -115,6 +115,7 @@ export interface ClientContextValue {
   isReconnecting: () => boolean
   connectionGeneration: () => number
   connectionIssue: () => string | null
+  extensionHealth: () => ExtensionHealthSnapshot
 
   // Agent state setters (for local errors only)
   setError: (error: string | null) => void
@@ -132,9 +133,6 @@ export interface ClientContextValue {
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: () => Effect.Effect<readonly MessageInfoReadonly[], GentRpcError>
   listSessions: () => Effect.Effect<readonly SessionInfo[], GentRpcError>
-  getExtensionHealth: (
-    sessionId?: SessionId,
-  ) => Effect.Effect<ExtensionHealthSnapshot, GentRpcError>
   listBranches: () => Effect.Effect<readonly BranchInfo[], GentRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
   getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
@@ -161,6 +159,16 @@ export interface ClientContextValue {
 }
 
 const ClientContext = createContext<ClientContextValue>()
+
+const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
+  extensions: [],
+  summary: {
+    status: "healthy",
+    failedExtensions: [],
+    failedActors: [],
+    failedScheduledJobs: [],
+  },
+}
 
 export function useClient(): ClientContextValue {
   const ctx = useContext(ClientContext)
@@ -238,6 +246,8 @@ export function ClientProvider(props: ClientProviderProps) {
     runtime.lifecycle.getState(),
   )
   const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null)
+  const [extensionHealth, setExtensionHealth] =
+    createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
   const [lastSeenEventId, setLastSeenEventId] = createSignal<number | null>(null)
   const [lastSeenSessionKey, setLastSeenSessionKey] = createSignal<string | null>(null)
 
@@ -279,6 +289,44 @@ export function ClientProvider(props: ClientProviderProps) {
     const state = connectionState()
     return state?._tag === "connecting" || state?._tag === "reconnecting"
   }
+
+  let extensionHealthLoadVersion = 0
+
+  createEffect(
+    on(
+      () => [workerEpoch(), session()?.sessionId] as const,
+      ([epoch, sessionId]) => {
+        const version = ++extensionHealthLoadVersion
+        if (connectionState()?._tag !== "connected" || epoch === null) {
+          setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+          return
+        }
+
+        cast(
+          client.extension
+            .listStatus({
+              ...(sessionId !== undefined ? { sessionId } : {}),
+            })
+            .pipe(
+              Effect.tap((nextHealth) =>
+                Effect.sync(() => {
+                  if (version !== extensionHealthLoadVersion) return
+                  setExtensionHealth(nextHealth)
+                }),
+              ),
+              Effect.catchEager((error) =>
+                Effect.sync(() => {
+                  if (version !== extensionHealthLoadVersion) return
+                  setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+                  log.warn("extension.health.refresh.failed", { error: String(error) })
+                }),
+              ),
+            ),
+        )
+      },
+      { defer: false },
+    ),
+  )
 
   // Subscribe to events when session becomes active - SINGLE shared subscription
   // Uses on() to explicitly track only sessionKey, not other signals read inside
@@ -498,6 +546,7 @@ export function ClientProvider(props: ClientProviderProps) {
     connectionState,
     waitForTransportReady: () => runtime.lifecycle.waitForReady,
     isReconnecting,
+    extensionHealth,
     connectionGeneration: () => {
       const state = connectionState()
       if (state === undefined) return 0
@@ -575,6 +624,7 @@ export function ClientProvider(props: ClientProviderProps) {
       setAgentStore({ agent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
+      setExtensionHealth(EMPTY_EXTENSION_HEALTH)
       dispatchSession({
         _tag: "Activated",
         session: { sessionId, branchId, name, reasoningLevel: undefined },
@@ -586,6 +636,7 @@ export function ClientProvider(props: ClientProviderProps) {
       setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
+      setExtensionHealth(EMPTY_EXTENSION_HEALTH)
     },
 
     // Return Effects for caller to run
@@ -596,11 +647,6 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     listSessions: () => client.session.list(),
-
-    getExtensionHealth: (sessionId) =>
-      client.extension.listStatus({
-        ...(sessionId !== undefined ? { sessionId } : {}),
-      }),
 
     listBranches: () => {
       const s = session()
