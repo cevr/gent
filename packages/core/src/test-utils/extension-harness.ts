@@ -48,7 +48,6 @@ import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { Skills } from "../domain/skills.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { AskUserHandler } from "../extensions/interaction-tools/ask-user.js"
 
 // ── Options ──
 
@@ -316,7 +315,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
         subagentRunnerLayer,
         PromptPresenter.Test(),
         Permission.Test(),
-        AskUserHandler.Test([["yes"]]),
         AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         Skills.Test(),

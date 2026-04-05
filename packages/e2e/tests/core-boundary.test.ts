@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
-import { AskUserHandler } from "@gent/core/extensions/interaction-tools/ask-user"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Message } from "@gent/core/domain/message"
@@ -94,11 +93,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
-    const deps = Layer.mergeAll(
-      baseWithActorProcess,
-      AskUserHandler.Test([]),
-      ApprovalService.Test(),
-    )
+    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test())
     return Layer.provideMerge(AppServicesLive, deps)
   }
 
@@ -193,11 +188,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
-    const deps = Layer.mergeAll(
-      baseWithActorProcess,
-      AskUserHandler.Test([]),
-      ApprovalService.Test(),
-    )
+    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test())
     const layer = Layer.provideMerge(AppServicesLive, deps)
 
     await Effect.runPromise(

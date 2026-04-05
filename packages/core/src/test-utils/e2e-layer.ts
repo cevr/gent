@@ -43,7 +43,6 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { AskUserHandler } from "../extensions/interaction-tools/ask-user.js"
 import { Test as MemoryVaultTest } from "../extensions/memory/vault.js"
 import {
   reconcileLoadedExtensions,
@@ -171,7 +170,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         extensionRuntimeLive,
         Permission.Test(),
         ApprovalService.Test(),
-        AskUserHandler.Test([["yes"]]),
         Skills.Test(),
         ConfigService.Test(),
         ModelRegistry.Test(),

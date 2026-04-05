@@ -19,7 +19,6 @@ import {
 import { Permission } from "../domain/permission.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { AskUserHandler } from "../extensions/interaction-tools/ask-user.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
@@ -142,45 +141,10 @@ export const RecordingEventStore: Layer.Layer<
   }),
 )
 
-// Recording AskUserHandler
-
-export const RecordingAskUserHandler = (
-  responses: ReadonlyArray<ReadonlyArray<string>>,
-): Layer.Layer<AskUserHandler, never, SequenceRecorder> =>
-  Layer.effect(
-    AskUserHandler,
-    Effect.gen(function* () {
-      const recorder = yield* SequenceRecorder
-      const indexRef = yield* Ref.make(0)
-
-      return {
-        askMany: Effect.fn("RecordingAskUserHandler.askMany")(function* (questions, ctx) {
-          yield* recorder.record({
-            service: "AskUserHandler",
-            method: "askMany",
-            args: { questions, ctx },
-          })
-          const idx = yield* Ref.getAndUpdate(indexRef, (i) => i + 1)
-          const answers = responses[idx] ?? [""]
-          return { approved: true, notes: answers.join("\n") }
-        }),
-        respond: Effect.fn("RecordingAskUserHandler.respond")(function* () {
-          yield* recorder.record({
-            service: "AskUserHandler",
-            method: "respond",
-          })
-        }),
-        storeResolution: () => {},
-        rehydrate: () => Effect.void,
-      }
-    }),
-  )
-
 // Test Layer Config
 
 export interface TestLayerConfig {
   providerResponses?: ReadonlyArray<ReadonlyArray<StreamChunk>>
-  askUserResponses?: ReadonlyArray<ReadonlyArray<string>>
   tools?: ReadonlyArray<AnyToolDefinition>
   recording?: boolean
   approvalDecisions?: ReadonlyArray<{ approved: boolean; notes?: string }>
@@ -192,7 +156,6 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
   const providerResponses = config.providerResponses ?? [
     [new FinishChunk({ finishReason: "stop" })],
   ]
-  const askUserResponses = config.askUserResponses ?? [["yes"]]
   const approvalDecisions = config.approvalDecisions ?? [{ approved: true }]
   const tools = config.tools ?? []
 
@@ -209,7 +172,6 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     ]),
     EventStore.Test(),
     Permission.Test(),
-    AskUserHandler.Test(askUserResponses),
     ApprovalService.Test(approvalDecisions),
     ExtensionTurnControl.Test(),
     AgentLoop.Test(),
@@ -223,7 +185,6 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   const providerResponses = config.providerResponses ?? [
     [new FinishChunk({ finishReason: "stop" })],
   ]
-  const askUserResponses = config.askUserResponses ?? [["yes"]]
   const approvalDecisions = config.approvalDecisions ?? [{ approved: true }]
   const tools = config.tools ?? []
 
@@ -245,7 +206,6 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
   ).pipe(
     Layer.provideMerge(RecordingProvider(providerResponses)),
     Layer.provideMerge(RecordingEventStore),
-    Layer.provideMerge(RecordingAskUserHandler(askUserResponses)),
     Layer.provideMerge(SequenceRecorder.Live),
   )
 }

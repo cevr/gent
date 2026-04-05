@@ -19,7 +19,6 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Provider } from "@gent/core/providers/provider"
-import { AskUserHandler } from "@gent/core/extensions/interaction-tools/ask-user"
 
 const testExtensions = resolveExtensions([
   {
@@ -79,11 +78,7 @@ const makeTestLayer = (logs: {
     Permission.Live([], "allow"),
     ConfigService.Test(),
   )
-  const deps = Layer.mergeAll(
-    baseWithActorProcess,
-    AskUserHandler.Test([["yes"]]),
-    ApprovalService.Test(),
-  )
+  const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test())
   return Layer.provideMerge(AppServicesLive, deps)
 }
 

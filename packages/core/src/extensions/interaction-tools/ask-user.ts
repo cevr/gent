@@ -1,7 +1,6 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
-import { defineTool, type ToolContext } from "../../domain/tool.js"
+import { Effect, Schema } from "effect"
+import { defineTool } from "../../domain/tool.js"
 import { type Question, QuestionSchema, QuestionOptionSchema } from "../../domain/event.js"
-import type { ApprovalDecision } from "../../domain/interaction-request.js"
 
 // AskUser Params — canonical questions[] input
 // Reuses QuestionSchema from event.ts with tool-specific length constraints.
@@ -36,45 +35,6 @@ export const AskUserResult = Schema.Struct({
     description: "True when the user cancelled the interaction",
   }),
 })
-
-// ============================================================================
-// AskUser Handler (legacy tag — test stub only)
-// ============================================================================
-
-export interface AskUserHandlerService {
-  readonly askMany: (
-    questions: ReadonlyArray<Question>,
-    ctx: ToolContext,
-  ) => Effect.Effect<ApprovalDecision>
-  readonly respond: () => Effect.Effect<void>
-  readonly storeResolution: () => void
-  readonly rehydrate: () => Effect.Effect<void>
-}
-
-export class AskUserHandler extends ServiceMap.Service<AskUserHandler, AskUserHandlerService>()(
-  "@gent/core/src/tools/ask-user/AskUserHandler",
-) {
-  static Test = (responses: ReadonlyArray<ReadonlyArray<string>>): Layer.Layer<AskUserHandler> => {
-    let callIndex = 0
-    return Layer.succeed(AskUserHandler, {
-      askMany: () => {
-        const _ = responses[callIndex++]
-        return Effect.succeed({ approved: true })
-      },
-      respond: () => Effect.void,
-      storeResolution: () => {},
-      rehydrate: () => Effect.void,
-    })
-  }
-
-  static TestCancelled = (): Layer.Layer<AskUserHandler> =>
-    Layer.succeed(AskUserHandler, {
-      askMany: () => Effect.succeed({ approved: false }),
-      respond: () => Effect.void,
-      storeResolution: () => {},
-      rehydrate: () => Effect.void,
-    })
-}
 
 // AskUser Tool — uses ctx.approve() with structured question metadata
 
