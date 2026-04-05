@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
 import { App } from "../src/app"
+import { resolveInitialState } from "../src/app-bootstrap"
 import { Route, useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
@@ -23,8 +24,62 @@ function StateProbe(props: {
   return <box />
 }
 
-describe("app startup race", () => {
-  test("bootstrap navigates to session route without auth gate blocking", async () => {
+describe("app bootstrap", () => {
+  test("continue mode resumes the latest session for cwd", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* Gent.test(baseLocalLayer())
+
+          const first = yield* client.session.create({ cwd: repoRoot })
+          yield* Effect.sleep("5 millis")
+          const second = yield* client.session.create({ cwd: repoRoot })
+
+          const state = yield* resolveInitialState({
+            client,
+            cwd: repoRoot,
+            session: Option.none(),
+            continue_: true,
+            headless: false,
+            prompt: Option.none(),
+            promptArg: Option.none(),
+          })
+
+          expect(state._tag).toBe("session")
+          if (state._tag !== "session") return
+          expect(state.session.id).toBe(second.sessionId)
+          expect(state.session.id).not.toBe(first.sessionId)
+        }),
+      ),
+    )
+  }, 5_000)
+
+  test("continue mode creates a session from prompt when none exists", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* Gent.test(baseLocalLayer())
+
+          const state = yield* resolveInitialState({
+            client,
+            cwd: repoRoot,
+            session: Option.none(),
+            continue_: true,
+            headless: false,
+            prompt: Option.some("bootstrap prompt"),
+            promptArg: Option.none(),
+          })
+
+          expect(state._tag).toBe("session")
+          if (state._tag !== "session") return
+          expect(state.prompt).toBe("bootstrap prompt")
+          expect(state.session.branchId).toBeDefined()
+        }),
+      ),
+    )
+  }, 5_000)
+
+  test("startup navigates to session without auth gate blocking", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
