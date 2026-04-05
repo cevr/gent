@@ -26,78 +26,45 @@ function AppContent(props: AppProps) {
   const [authGateState, setAuthGateState] = createSignal<AuthGateState>(
     !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0 ? "open" : "closed",
   )
-  // Seed auth gate key from current route/agent so sessionAuthPending() starts false.
-  // Bootstrap already resolved auth — no need to wait for the first RPC round-trip.
-  const initialAuthGateKey = (() => {
-    const routeTag = router.route()._tag
-    if (props.debugMode || (routeTag !== "session" && routeTag !== "auth")) return null
-    return `${routeTag}:${client.agent() ?? "pending"}`
-  })()
-  const [authGateKey, setAuthGateKey] = createSignal<string | null>(initialAuthGateKey)
-  let authGateVersion = 0
+  // Track which agent was last validated so sessionAuthPending can detect unvalidated state
+  const [validatedAgent, setValidatedAgent] = createSignal<string | undefined>(
+    // Bootstrap already validated the initial agent
+    client.agent(),
+  )
 
-  const desiredAuthGateKey = (
-    routeTag: AppRoute["_tag"] = router.route()._tag,
-    agentName = client.agent(),
-  ): string | null => {
-    if (props.debugMode || (routeTag !== "session" && routeTag !== "auth")) return null
-    return `${routeTag}:${agentName ?? "pending"}`
-  }
-
-  const refreshAuthGate = (
-    agentName = client.agent(),
-    routeTag: AppRoute["_tag"] = router.route()._tag,
-  ) => {
-    const key = desiredAuthGateKey(routeTag, agentName)
-    if (props.debugMode || routeTag === "branchPicker") {
-      authGateVersion += 1
-      setAuthGateKey(key)
-      setAuthGateState("closed")
-      return
-    }
-
-    if (agentName === undefined) {
-      authGateVersion += 1
-      setAuthGateKey(key)
-      setAuthGateState("closed")
-      return
-    }
-
-    const version = ++authGateVersion
-    setAuthGateKey(key)
-    setAuthGateState("checking")
-    client.runtime.cast(
-      client.client.auth
-        .listProviders({
-          ...(agentName !== undefined ? { agentName } : {}),
-        })
-        .pipe(
-          Effect.tap((providers) =>
-            Effect.sync(() => {
-              if (version !== authGateVersion) return
-              setAuthGateState(
-                providers.some((provider) => provider.required && !provider.hasKey)
-                  ? "open"
-                  : "closed",
-              )
-            }),
-          ),
-          Effect.catchEager((error) =>
-            Effect.sync(() => {
-              if (version !== authGateVersion) return
-              setAuthGateState("closed")
-              client.log.error("app:auth-gate", { error: String(error), agentName })
-            }),
-          ),
-        ),
-    )
-  }
-
+  // Re-check auth when agent or route changes (startup already resolved initial state).
+  // Version counter discards stale RPC results when agent/route changes mid-flight.
+  let authCheckVersion = 0
   createEffect(
     on(
       () => [client.agent(), router.route()._tag] as const,
       ([agentName, routeTag]) => {
-        refreshAuthGate(agentName, routeTag)
+        if (props.debugMode || agentName === undefined) return
+        if (routeTag === "branchPicker") {
+          authCheckVersion += 1
+          setAuthGateState("closed")
+          return
+        }
+        const version = ++authCheckVersion
+        setAuthGateState("checking")
+        client.runtime.cast(
+          client.client.auth.listProviders({ agentName }).pipe(
+            Effect.tap((providers) =>
+              Effect.sync(() => {
+                if (version !== authCheckVersion) return
+                setValidatedAgent(agentName)
+                setAuthGateState(providers.some((p) => p.required && !p.hasKey) ? "open" : "closed")
+              }),
+            ),
+            Effect.catchEager(() =>
+              Effect.sync(() => {
+                if (version !== authCheckVersion) return
+                setValidatedAgent(agentName)
+                setAuthGateState("closed")
+              }),
+            ),
+          ),
+        )
       },
       { defer: false },
     ),
@@ -112,7 +79,7 @@ function AppContent(props: AppProps) {
   const sessionAuthPending = () =>
     !props.debugMode &&
     isRoute.session(router.route()) &&
-    (desiredAuthGateKey() !== authGateKey() || authGateState() === "checking")
+    (authGateState() !== "closed" || validatedAgent() !== client.agent())
 
   return (
     <box flexDirection="column" width="100%" height="100%">
@@ -160,10 +127,7 @@ function AppContent(props: AppProps) {
         <Match when={isRoute.auth(router.route())}>
           <Auth
             enforceAuth={authGateState() === "open"}
-            onResolved={() => {
-              setAuthGateState("closed")
-              refreshAuthGate()
-            }}
+            onResolved={() => setAuthGateState("closed")}
           />
         </Match>
       </Switch>
