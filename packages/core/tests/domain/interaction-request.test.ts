@@ -176,6 +176,68 @@ describe("Interaction Request", () => {
     )
   })
 
+  test("cold-resume with InteractionStorage: persist → new service → rehydrate → resolve", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const is = yield* InteractionStorage
+
+        const storageCallbacks: InteractionStorageConfig = {
+          persist: (record) =>
+            is.persist(record).pipe(
+              Effect.asVoid,
+              Effect.catchEager(() => Effect.void),
+            ),
+          resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+        }
+
+        const sessionId = "s-cold-resume" as SessionId
+        const branchId = "b-cold-resume" as BranchId
+
+        // Phase 1: original service — present() persists and throws
+        const service1 = makeInteractionService({
+          onPresent: () => Effect.void,
+          storage: storageCallbacks,
+        })
+
+        const error = yield* Effect.flip(
+          service1.present({ text: "Approve deployment?" }, { sessionId, branchId }),
+        )
+        expect(error._tag).toBe("InteractionPendingError")
+        const requestId = error.requestId
+
+        // Verify persisted to SQL
+        const pending = yield* is.listPending()
+        expect(pending.some((r) => r.requestId === requestId)).toBe(true)
+
+        // Phase 2: simulate restart — create a fresh service instance (no in-memory state)
+        const service2 = makeInteractionService({
+          onPresent: () => Effect.void,
+          storage: storageCallbacks,
+        })
+
+        // Load pending request from storage and rehydrate
+        const persisted = pending.find((r) => r.requestId === requestId)!
+        const params = JSON.parse(persisted.paramsJson) as { text: string; metadata?: unknown }
+        yield* service2.rehydrate(requestId, params, { sessionId, branchId })
+
+        // Client responds
+        service2.storeResolution(requestId, { approved: true, notes: "ship it" })
+
+        // Tool re-calls present() — should find the stored resolution
+        const result = yield* service2.present(
+          { text: "Approve deployment?" },
+          { sessionId, branchId },
+        )
+        expect(result.approved).toBe(true)
+        expect(result.notes).toBe("ship it")
+
+        // Verify resolved in storage
+        const afterResolve = yield* is.listPending()
+        expect(afterResolve.some((r) => r.requestId === requestId)).toBe(false)
+      }).pipe(Effect.provide(storageLive)),
+    )
+  })
+
   test("autoResolve skips storage persistence", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

@@ -3,7 +3,6 @@ import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { InteractionStorage } from "../storage/interaction-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
@@ -48,7 +47,6 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
     SessionQueries,
     Effect.gen(function* () {
       const storage = yield* Storage
-      const interactionStore = yield* InteractionStorage
       const actorProcess = yield* ActorProcess
       const extensionStateRuntime = yield* ExtensionStateRuntime
 
@@ -169,23 +167,23 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
             Effect.catchEager(() => Effect.succeed([] as const)),
           )
 
-        // Active interaction — find pending request for this session+branch
-        const activeInteraction = yield* interactionStore.listPending().pipe(
-          Effect.map((requests) => {
-            const match = requests.find(
-              (r) => r.sessionId === input.sessionId && r.branchId === input.branchId,
-            )
-            if (match === undefined) return undefined
-            const parsed = JSON.parse(match.paramsJson) as { text?: string; metadata?: unknown }
-            return {
-              requestId: match.requestId,
-              text: parsed.text ?? "",
-              ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
-            }
-          }),
-          Effect.option,
-          Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
+        // Active interaction — read from @gent/interaction-tools actor snapshot
+        const interactionSnap = extensionSnapshots.find(
+          (s) => s.extensionId === "@gent/interaction-tools",
         )
+        const interactionModel = interactionSnap?.model as
+          | { requestId?: string; text?: string; metadata?: unknown }
+          | undefined
+        const activeInteraction =
+          interactionModel?.requestId !== undefined
+            ? {
+                requestId: interactionModel.requestId,
+                text: interactionModel.text ?? "",
+                ...(interactionModel.metadata !== undefined
+                  ? { metadata: interactionModel.metadata }
+                  : {}),
+              }
+            : undefined
 
         return {
           sessionId: input.sessionId,
