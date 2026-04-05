@@ -32,7 +32,12 @@ import { WorkspaceProvider } from "./workspace/index"
 import { EnvProvider } from "./env/context"
 import { ExtensionUIProvider } from "./extensions/context"
 import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
-import { resolveInitialState, resolveStartupAuthState, type InitialState } from "./app-bootstrap"
+import {
+  resolveInteractiveBootstrap,
+  resolveInitialState,
+  resolveStartupAuthState,
+  type InitialState,
+} from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 
@@ -276,6 +281,21 @@ const main = Command.make(
         return
       }
 
+      // Block until supervisor is ready (same as headless path)
+      yield* bundle.runtime.lifecycle.waitForReady
+
+      // Resolve session + auth before rendering — eliminates the loading route
+      const { bootstrap, initialAgent } = yield* resolveInteractiveBootstrap({
+        client: bundle.client,
+        cwd,
+        sessionId: Option.getOrUndefined(session),
+        continue_: continue_ || debug,
+        prompt: Option.getOrUndefined(prompt),
+        debugMode: debug,
+      })
+
+      const missingAuth = bootstrap.missingAuthProviders
+
       // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
       // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
       const envWithShutdown = {
@@ -294,20 +314,12 @@ const main = Command.make(
                   client={bundle.client}
                   runtime={bundle.runtime}
                   log={log}
-                  initialSession={undefined}
-                  initialAgent={undefined}
+                  initialSession={bootstrap.initialSession}
+                  initialAgent={initialAgent}
                 >
                   <ExtensionUIProvider>
-                    <RouterProvider initialRoute={{ _tag: "loading" }}>
-                      <App
-                        debugMode={debug}
-                        startup={{
-                          cwd,
-                          sessionId: Option.getOrUndefined(session),
-                          continue_: continue_ || debug,
-                          prompt: Option.getOrUndefined(prompt),
-                        }}
-                      />
+                    <RouterProvider initialRoute={bootstrap.initialRoute}>
+                      <App debugMode={debug} missingAuthProviders={missingAuth} />
                     </RouterProvider>
                   </ExtensionUIProvider>
                 </ClientProvider>

@@ -4,14 +4,15 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { onMount } from "solid-js"
 import { App } from "../src/app"
-import { Route, useRouter, type RouterContextValue } from "../src/router"
+import { resolveInteractiveBootstrap } from "../src/app-bootstrap"
+import { useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness"
 import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { DebugProvider } from "@gent/core/debug/provider.js"
 import { Gent } from "@gent/sdk"
-import { waitForCondition, waitForFrame, repoRoot } from "./helpers"
+import { waitForFrame, repoRoot } from "./helpers"
 
 function StateProbe(props: {
   readonly onReady: (ctx: { client: ClientContextValue; router: RouterContextValue }) => void
@@ -34,18 +35,39 @@ describe("session lifecycle", () => {
           )
           let ctx: { client: ClientContextValue; router: RouterContextValue } | undefined
 
+          // Pre-resolve bootstrap (same as main.tsx now does)
+          const { bootstrap } = yield* resolveInteractiveBootstrap({
+            client,
+            cwd: repoRoot,
+            continue_: false,
+            debugMode: false,
+          })
+
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
               () => (
                 <>
                   <StateProbe onReady={(c) => (ctx = c)} />
-                  <App startup={{ cwd: repoRoot, continue_: false }} />
+                  <App />
                 </>
               ),
               {
                 client,
                 runtime,
-                initialRoute: Route.loading(),
+                initialRoute: bootstrap.initialRoute,
+                initialSession: bootstrap.initialSession
+                  ? {
+                      id: bootstrap.initialSession.sessionId,
+                      name: bootstrap.initialSession.name,
+                      cwd: repoRoot,
+                      branchId: bootstrap.initialSession.branchId,
+                      reasoningLevel: bootstrap.initialSession.reasoningLevel,
+                      parentSessionId: undefined,
+                      parentBranchId: undefined,
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                    }
+                  : undefined,
                 cwd: repoRoot,
                 width: 100,
                 height: 32,
@@ -54,12 +76,8 @@ describe("session lifecycle", () => {
           )
           yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
-          // Wait for bootstrap → session
-          yield* waitForCondition(
-            setup,
-            () => ctx?.router.route()._tag === "session",
-            "route = session",
-          )
+          // Route should already be session
+          expect(ctx?.router.route()._tag).toBe("session")
 
           // Allow auth gate + feed to settle
           yield* Effect.sleep("300 millis")
@@ -87,18 +105,39 @@ describe("session lifecycle", () => {
           )
           let ctx: { client: ClientContextValue; router: RouterContextValue } | undefined
 
+          // Pre-resolve bootstrap
+          const { bootstrap } = yield* resolveInteractiveBootstrap({
+            client,
+            cwd: repoRoot,
+            continue_: false,
+            debugMode: false,
+          })
+
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
               () => (
                 <>
                   <StateProbe onReady={(c) => (ctx = c)} />
-                  <App startup={{ cwd: repoRoot, continue_: false }} />
+                  <App />
                 </>
               ),
               {
                 client,
                 runtime,
-                initialRoute: Route.loading(),
+                initialRoute: bootstrap.initialRoute,
+                initialSession: bootstrap.initialSession
+                  ? {
+                      id: bootstrap.initialSession.sessionId,
+                      name: bootstrap.initialSession.name,
+                      cwd: repoRoot,
+                      branchId: bootstrap.initialSession.branchId,
+                      reasoningLevel: bootstrap.initialSession.reasoningLevel,
+                      parentSessionId: undefined,
+                      parentBranchId: undefined,
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                    }
+                  : undefined,
                 cwd: repoRoot,
                 width: 100,
                 height: 32,
@@ -106,13 +145,6 @@ describe("session lifecycle", () => {
             ),
           )
           yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
-
-          // Wait for session route
-          yield* waitForCondition(
-            setup,
-            () => ctx?.router.route()._tag === "session",
-            "route = session",
-          )
 
           // Allow feed to subscribe
           yield* Effect.sleep("300 millis")

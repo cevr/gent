@@ -144,11 +144,6 @@ describe("createAppRouter", () => {
 })
 
 describe("Route constructors", () => {
-  test("Route.loading creates loading route", () => {
-    const route = Route.loading()
-    expect(route).toEqual({ _tag: "loading" })
-  })
-
   test("Route.session creates session route", () => {
     const route = Route.session("session-123", "branch-456")
     expect(route).toEqual({
@@ -160,12 +155,6 @@ describe("Route constructors", () => {
 })
 
 describe("isRoute type guards", () => {
-  test("isRoute.loading identifies loading routes", async () => {
-    const { isRoute } = await import("../src/router/types.js")
-    expect(isRoute.loading(Route.loading())).toBe(true)
-    expect(isRoute.loading(Route.auth())).toBe(false)
-  })
-
   test("isRoute.session identifies session routes", async () => {
     const { isRoute } = await import("../src/router/types.js")
     expect(isRoute.session(Route.session("s", "b"))).toBe(true)

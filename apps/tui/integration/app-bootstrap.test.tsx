@@ -4,14 +4,14 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
 import { App } from "../src/app"
-import { resolveInitialState } from "../src/app-bootstrap"
-import { Route, useRouter, type RouterContextValue } from "../src/router"
+import { resolveInitialState, resolveInteractiveBootstrap } from "../src/app-bootstrap"
+import { useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness"
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
 import { Gent } from "@gent/sdk"
-import { waitForCondition, waitForFrame, repoRoot } from "./helpers"
+import { waitForFrame, repoRoot } from "./helpers"
 
 function StateProbe(props: {
   readonly onReady: (ctx: { client: ClientContextValue; router: RouterContextValue }) => void
@@ -79,11 +79,24 @@ describe("app bootstrap", () => {
     )
   }, 5_000)
 
-  test("startup navigates to session without auth gate blocking", async () => {
+  test("pre-render bootstrap resolves session and agent", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const { client, runtime } = yield* Gent.test(baseLocalLayer())
+
+          // Simulate what main.tsx now does before render: resolve bootstrap
+          const { bootstrap } = yield* resolveInteractiveBootstrap({
+            client,
+            cwd: repoRoot,
+            continue_: false,
+            debugMode: false,
+          })
+
+          expect(bootstrap.initialSession).toBeDefined()
+          expect(bootstrap.initialRoute._tag).toBe("session")
+
+          // Render with pre-resolved state
           let ctx: { client: ClientContextValue; router: RouterContextValue } | undefined
 
           const setup = yield* Effect.promise(() =>
@@ -95,18 +108,26 @@ describe("app bootstrap", () => {
                       ctx = c
                     }}
                   />
-                  <App
-                    startup={{
-                      cwd: repoRoot,
-                      continue_: false,
-                    }}
-                  />
+                  <App />
                 </>
               ),
               {
                 client,
                 runtime,
-                initialRoute: Route.loading(),
+                initialRoute: bootstrap.initialRoute,
+                initialSession: bootstrap.initialSession
+                  ? {
+                      id: bootstrap.initialSession.sessionId,
+                      name: bootstrap.initialSession.name,
+                      cwd: repoRoot,
+                      branchId: bootstrap.initialSession.branchId,
+                      reasoningLevel: bootstrap.initialSession.reasoningLevel,
+                      parentSessionId: undefined,
+                      parentBranchId: undefined,
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                    }
+                  : undefined,
                 cwd: repoRoot,
                 width: 100,
                 height: 32,
@@ -116,22 +137,12 @@ describe("app bootstrap", () => {
           yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
           expect(ctx).toBeDefined()
-
-          // Wait for bootstrap to complete — route transitions from "loading" to "session"
-          yield* waitForCondition(
-            setup,
-            () => ctx!.router.route()._tag === "session",
-            "route = session",
-          )
-
+          // Route should already be session — no loading transition needed
           expect(ctx!.router.route()._tag).toBe("session")
-          // Agent should be set (not undefined) after bootstrap
-          expect(ctx!.client.agent()).toBeDefined()
 
-          // Allow auth gate RPC to complete through Effect runtime
+          // Allow auth gate to settle
           yield* Effect.sleep("200 millis")
 
-          // After settling, the session view should appear (not "Loading session…")
           const frame = yield* waitForFrame(
             setup,
             (f) => !f.includes("Loading session"),

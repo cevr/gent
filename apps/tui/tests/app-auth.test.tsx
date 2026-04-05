@@ -177,43 +177,6 @@ describe("App auth gate", () => {
     setup.renderer.destroy()
   })
 
-  test("loading route renders while the runtime is disconnected", async () => {
-    const runtime = createMockRuntime()
-    runtime.lifecycle = {
-      getState: () => ({ _tag: "disconnected", reason: "boot boom" }),
-      subscribe: (listener) => {
-        listener({ _tag: "disconnected", reason: "boot boom" })
-        return () => {}
-      },
-      restart: Effect.void,
-      waitForReady: Effect.void,
-    }
-
-    const setup = await renderWithProviders(
-      () => (
-        <App
-          startup={{
-            cwd: "/tmp/project",
-            continue_: false,
-          }}
-        />
-      ),
-      {
-        runtime,
-        initialRoute: Route.loading(),
-      },
-    )
-
-    const frame = await waitForRenderedFrame(
-      setup,
-      (next) => next.includes("Loading Gent") && next.includes("runtime unavailable"),
-      "loading with runtime unavailable",
-    )
-
-    expect(frame).toContain("boot boom")
-    setup.renderer.destroy()
-  })
-
   test("branch resume with a prompt waits for auth before sending the first turn", async () => {
     let ctx: ClientContextValue | undefined
     let router: RouterContextValue | undefined
