@@ -70,6 +70,8 @@ import type { PermissionResult } from "../domain/permission.js"
 import type { Message, MessageMetadata } from "../domain/message.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { interpretEffects } from "../runtime/extensions/extension-actor-shared.js"
+import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
+import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import {
   createExtensionStorage,
   type ExtensionStorage,
@@ -428,8 +430,27 @@ const drainEffects = (effects: ExtensionEffect[], hookKey: string, input: unknow
     const ctx = extractContext(hookKey, input)
     const tc = yield* Effect.serviceOption(ExtensionTurnControl)
     if (tc._tag === "Some" && ctx.sessionId !== undefined) {
+      const bus = yield* Effect.serviceOption(ExtensionEventBus)
+      const stateRuntime = yield* Effect.serviceOption(ExtensionStateRuntime)
       yield* interpretEffects(effects, ctx.sessionId as never, ctx.branchId as never, {
         turnControl: tc.value,
+        busEmit:
+          bus._tag === "Some"
+            ? (channel, payload) =>
+                bus.value.emit({
+                  channel,
+                  payload,
+                  sessionId: ctx.sessionId as never,
+                  branchId: ctx.branchId as never,
+                })
+            : undefined,
+        send:
+          stateRuntime._tag === "Some"
+            ? (sessionId, message) =>
+                stateRuntime.value
+                  .send(sessionId, message)
+                  .pipe(Effect.catchEager(() => Effect.void))
+            : undefined,
       }).pipe(Effect.catchDefect(() => Effect.void))
     }
   })
@@ -519,6 +540,21 @@ const mergeShutdownHooks = (
     ...effects,
   ]
   return all.length > 0 ? Effect.all(all, { discard: true }).pipe(Effect.asVoid) : undefined
+}
+
+/** Merge ext.protocol() definitions into actor.protocols. Returns updated actor or original. */
+const mergeProtocolsIntoActor = (
+  actor: AnyExtensionActorDefinition | undefined,
+  protocols: Map<string, ReturnType<typeof listExtensionProtocolDefinitions>[number]>,
+): AnyExtensionActorDefinition | undefined => {
+  if (actor === undefined || protocols.size === 0) return actor
+  const protocolRecord: Record<string, unknown> = {
+    ...(actor.protocols ?? {}),
+  }
+  for (const [tag, definition] of protocols) {
+    protocolRecord[tag] = definition
+  }
+  return { ...actor, protocols: protocolRecord }
 }
 
 /**
@@ -767,12 +803,18 @@ export const extension = (
         )
       }
 
+      // ext.protocol() is sugar — canonical home is actor.protocols.
+      actorResult = mergeProtocolsIntoActor(actorResult, protocols)
+
       const onStartup = mergeStartupHooks(startupFns, startupEffects)
       const onShutdown = mergeShutdownHooks(shutdownFns, shutdownEffects)
+      // setup.protocols populated for backward compat (state-runtime reads both paths)
       return {
         ...(tools.length > 0 ? { tools } : {}),
         ...(agents.length > 0 ? { agents } : {}),
-        ...(protocols.size > 0 ? { protocols: [...protocols.values()] } : {}),
+        ...(protocols.size > 0 && actorResult === undefined
+          ? { protocols: [...protocols.values()] }
+          : {}),
         ...(promptSections.length > 0 ? { promptSections } : {}),
         ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),

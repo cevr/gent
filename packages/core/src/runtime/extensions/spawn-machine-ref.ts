@@ -19,6 +19,7 @@ import {
   makePersistCodec,
 } from "./extension-actor-shared.js"
 import { ExtensionTurnControl } from "./turn-control.js"
+import { ExtensionEventBus } from "./event-bus.js"
 
 export const spawnMachineExtensionRef = <
   State extends { readonly _tag: string },
@@ -53,6 +54,7 @@ export const spawnMachineExtensionRef = <
 
       const turnControl = yield* ExtensionTurnControl
       const storage = yield* Effect.serviceOption(Storage)
+      const bus = yield* Effect.serviceOption(ExtensionEventBus)
       const versionRef = yield* Ref.make(0)
       const startedRef = yield* Ref.make(false)
       const protocolError = (
@@ -129,6 +131,16 @@ export const spawnMachineExtensionRef = <
         interpretEffects(effects, ctx.sessionId, branchId, {
           turnControl,
           persistFn: actor.persist === true ? persistState : undefined,
+          busEmit:
+            bus._tag === "Some"
+              ? (channel, payload) =>
+                  bus.value.emit({
+                    channel,
+                    payload,
+                    sessionId: ctx.sessionId,
+                    branchId,
+                  })
+              : undefined,
         }).pipe(
           Effect.catchDefect((defect) =>
             Effect.logWarning("extension effect interpretation defect").pipe(
