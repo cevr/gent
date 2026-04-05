@@ -157,9 +157,13 @@ function AppContent(props: AppProps) {
                 } else {
                   client.clearSession()
                 }
-                // Pre-seed auth gate before navigating so the session Match callback
-                // sees the correct state on its first (non-reactive) evaluation.
-                refreshAuthGate(initialAgent, bootstrap.initialRoute._tag)
+                // Bootstrap already resolved auth — seed the gate with the result
+                // so the session Match callback's first evaluation sees "closed".
+                // The bootstrap called auth.listProviders and knows missingProviders.
+                const preseedKey = desiredAuthGateKey(bootstrap.initialRoute._tag, initialAgent)
+                authGateVersion += 1
+                setAuthGateKey(preseedKey)
+                setAuthGateState(bootstrap.missingAuthProviders !== undefined ? "open" : "closed")
                 router.navigate(bootstrap.initialRoute)
               }),
             ),
