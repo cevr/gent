@@ -14,14 +14,13 @@ import {
 import type { AgentEvent, ExtensionUiSnapshot } from "../../domain/event.js"
 import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/event.js"
 import type {
-  ExtensionActorDefinition,
+  AnyExtensionActorDefinition,
   ExtensionActorStatusInfo,
   ExtensionDeriveContext,
   ExtensionReduceContext,
   ExtensionRef,
   ExtensionSnapshot,
   LoadedExtension,
-  SpawnExtensionRef,
   TurnProjection,
 } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
@@ -33,6 +32,7 @@ import type {
 } from "../../domain/extension-protocol.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import { CurrentExtensionSession, CurrentMailboxSession } from "./extension-actor-shared.js"
+import { spawnMachineExtensionRef } from "./spawn-machine-ref.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 
 interface ExtensionProtocolRegistry {
@@ -41,12 +41,12 @@ interface ExtensionProtocolRegistry {
 
 interface ActorEntry {
   readonly ref: ExtensionRef
-  readonly actor?: ExtensionActorDefinition
+  readonly actor?: AnyExtensionActorDefinition
 }
 
 interface ActorSpawnSpec {
   readonly extensionId: string
-  readonly actor: ExtensionActorDefinition
+  readonly actor: AnyExtensionActorDefinition
 }
 
 interface PublishMailboxItem {
@@ -123,38 +123,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
           const spawnByExtension = new Map<string, ActorSpawnSpec>()
           const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
           for (const ext of extensions) {
-            const legacyProjection = ext.setup.projection
-            let legacySnapshot: ExtensionActorDefinition["snapshot"] | undefined
-            let legacyTurn: ExtensionActorDefinition["turn"] | undefined
-            if (legacyProjection !== undefined) {
-              const legacyDerive = legacyProjection.derive
-              if (legacyProjection.uiModelSchema !== undefined || legacyDerive !== undefined) {
-                legacySnapshot = {
-                  schema: legacyProjection.uiModelSchema,
-                  project:
-                    legacyDerive === undefined
-                      ? undefined
-                      : (state: unknown) => legacyDerive(state, undefined).uiModel,
-                }
-              }
-              if (legacyDerive !== undefined) {
-                legacyTurn = {
-                  project: (state: unknown, ctx: ExtensionDeriveContext) => {
-                    const { uiModel: _, ...turn } = legacyDerive(state, ctx)
-                    return turn
-                  },
-                }
-              }
-            }
-            const actor =
-              ext.setup.actor ??
-              (ext.setup.spawn !== undefined
-                ? {
-                    spawn: ext.setup.spawn as SpawnExtensionRef<never>,
-                    ...(legacySnapshot === undefined ? {} : { snapshot: legacySnapshot }),
-                    ...(legacyTurn === undefined ? {} : { turn: legacyTurn }),
-                  }
-                : undefined)
+            const actor = ext.setup.actor
             if (actor !== undefined) {
               const spec = {
                 extensionId: ext.manifest.id,
@@ -279,9 +248,13 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               })
 
               const spawnExit = yield* Effect.exit(
-                (spec.actor.spawn as SpawnExtensionRef<never>)({ sessionId, branchId }).pipe(
-                  Effect.provideService(ExtensionTurnControl, turnControl),
-                ),
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+                (
+                  spawnMachineExtensionRef(spec.extensionId, spec.actor, {
+                    sessionId,
+                    branchId,
+                  }) as Effect.Effect<ExtensionRef, never, never>
+                ).pipe(Effect.provideService(ExtensionTurnControl, turnControl)),
               )
 
               if (spawnExit._tag === "Failure") {
@@ -836,7 +809,9 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                     }
                     const { state } = snapshot
                     if (state === undefined) continue
-                    const turnExit = yield* Effect.exit(Effect.sync(() => turnProject(state, ctx)))
+                    const turnExit = yield* Effect.exit(
+                      Effect.sync(() => turnProject(state as { readonly _tag: string }, ctx)),
+                    )
                     const derived =
                       turnExit._tag === "Success"
                         ? turnExit.value
@@ -930,9 +905,11 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                     }
                     const { state, epoch } = snapshot
                     if (state === undefined) continue
-                    const project = snapshotConfig.project ?? ((value: unknown) => value)
+                    const project =
+                      snapshotConfig.project ??
+                      ((value: { readonly _tag: string }) => value as unknown)
                     const snapshotProjectExit = yield* Effect.exit(
-                      Effect.sync(() => project(state)),
+                      Effect.sync(() => project(state as { readonly _tag: string })),
                     )
                     let model =
                       snapshotProjectExit._tag === "Success"

@@ -1,12 +1,12 @@
 # Extension Runtime Audit And Simplification Plan
 
-Status: proposed on 2026-04-03.
+Status: active. Batch 3 completed on 2026-04-04.
 
 ## Batch Tracker
 
-- [ ] Batch 1 — Tell The Truth About Ownership
-- [ ] Batch 2 — One Mailbox For All Actor Ingress
-- [ ] Batch 3 — Delete The Adapters And Standardize On One Actor Substrate
+- [x] Batch 1 — Tell The Truth About Ownership
+- [x] Batch 2 — One Mailbox For All Actor Ingress
+- [x] Batch 3 — Delete The Adapters And Standardize On One Actor Substrate
 - [ ] Batch 4 — Thin Server/Client Truth
 - [ ] Batch 5 — Consolidate Tests Around Behavior Seams
 - [ ] Batch 6 — Remove High-Value Suppression Debt

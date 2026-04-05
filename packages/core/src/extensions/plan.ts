@@ -1,5 +1,5 @@
 /**
- * Plan extension — stateful actor using fromReducer.
+ * Plan extension — stateful actor backed by effect-machine.
  *
  * State: mode (normal/plan/executing) + plan steps + task tracking.
  * Derive: tool policy restrictions in plan mode, prompt context injection, UI model.
@@ -10,15 +10,17 @@
  */
 
 import { Schema } from "effect"
+import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import type {
+  ExtensionActorDefinition,
   ExtensionDeriveContext,
-  ExtensionProjection,
   ExtensionReduceContext,
   ReduceResult,
+  TurnProjection,
 } from "../domain/extension.js"
-import type { AgentEvent } from "../domain/event.js"
+import { AgentEvent } from "../domain/event.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { extension, fromReducer } from "./api.js"
+import { extension } from "./api.js"
 import { PLAN_EXTENSION_ID, PlanProtocol } from "./plan-protocol.js"
 export { PLAN_EXTENSION_ID } from "./plan-protocol.js"
 
@@ -189,7 +191,7 @@ Mark items complete as you finish them. Stay focused on the current item.`,
 
 // ── Derive ──
 
-const deriveProjection = (state: PlanState, _ctx?: ExtensionDeriveContext): ExtensionProjection => {
+const deriveProjection = (state: PlanState, _ctx?: ExtensionDeriveContext) => {
   const progress = {
     total: state.steps.length,
     completed: state.steps.filter((s) => s.status === "completed").length,
@@ -452,15 +454,86 @@ export const PlanActorConfig = {
   receive,
 }
 
-const planActor = fromReducer<PlanState, PlanIntent>({
-  ...PlanActorConfig,
-  stateSchema: PlanState,
-  messageSchema: PlanIntent,
-  uiModelSchema: PlanUiModel,
-  persist: true,
+const PlanMachineState = MState({
+  Active: {
+    plan: PlanState,
+  },
 })
 
-export const PlanSpawnActor = planActor.spawn
+const PlanMachineEvent = MEvent({
+  Published: {
+    event: AgentEvent,
+  },
+  TogglePlan: {},
+  ExecutePlan: {},
+  RefinePlan: {},
+})
+
+const planMachine = Machine.make({
+  state: PlanMachineState,
+  event: PlanMachineEvent,
+  initial: PlanMachineState.Active({ plan: PlanActorConfig.initial }),
+})
+  .on(PlanMachineState.Active, PlanMachineEvent.Published, ({ state, event }) => {
+    const nextPlan = reduce(state.plan, event.event, {
+      sessionId: "" as never,
+      branchId: undefined,
+    }).state
+    return nextPlan === state.plan ? state : PlanMachineState.Active({ plan: nextPlan })
+  })
+  .on(PlanMachineState.Active, PlanMachineEvent.TogglePlan, ({ state }) => {
+    const nextPlan = receive(state.plan, { _tag: "TogglePlan" }).state
+    return nextPlan === state.plan ? state : PlanMachineState.Active({ plan: nextPlan })
+  })
+  .on(PlanMachineState.Active, PlanMachineEvent.ExecutePlan, ({ state }) => {
+    const nextPlan = receive(state.plan, { _tag: "ExecutePlan" }).state
+    return nextPlan === state.plan ? state : PlanMachineState.Active({ plan: nextPlan })
+  })
+  .on(PlanMachineState.Active, PlanMachineEvent.RefinePlan, ({ state }) => {
+    const nextPlan = receive(state.plan, { _tag: "RefinePlan" }).state
+    return nextPlan === state.plan ? state : PlanMachineState.Active({ plan: nextPlan })
+  })
+
+const projectSnapshot = (state: typeof PlanMachineState.Type): PlanUiModel => {
+  const { uiModel } = deriveProjection(state.plan)
+  return uiModel as PlanUiModel
+}
+
+const projectTurn = (
+  state: typeof PlanMachineState.Type,
+  ctx: ExtensionDeriveContext,
+): TurnProjection => {
+  const { uiModel: _, ...turn } = deriveProjection(state.plan, ctx)
+  return turn
+}
+
+const planActor: ExtensionActorDefinition<
+  typeof PlanMachineState.Type,
+  typeof PlanMachineEvent.Type
+> = {
+  machine: planMachine,
+  mapEvent: (event) => PlanMachineEvent.Published({ event }),
+  mapCommand: (message) => {
+    if (!Schema.is(PlanIntent)(message)) return undefined
+    switch (message._tag) {
+      case "TogglePlan":
+        return PlanMachineEvent.TogglePlan
+      case "ExecutePlan":
+        return PlanMachineEvent.ExecutePlan
+      case "RefinePlan":
+        return PlanMachineEvent.RefinePlan
+    }
+  },
+  snapshot: {
+    schema: PlanUiModel,
+    project: projectSnapshot,
+  },
+  turn: {
+    project: projectTurn,
+  },
+  stateSchema: PlanMachineState,
+  persist: true,
+}
 
 // ── Extension ──
 

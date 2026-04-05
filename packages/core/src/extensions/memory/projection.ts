@@ -1,14 +1,12 @@
 /**
- * Memory extension projection — prompt injection + UI model.
- *
- * derive: injects compact memory summary as prompt section + exposes
- * memory counts and top entries as uiModel for TUI.
+ * Memory extension projections.
  */
 
-import type { ExtensionDeriveContext, ExtensionProjection } from "../../domain/extension.js"
+import type { TurnProjection } from "../../domain/extension.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { MemoryState } from "./state.js"
 import { projectDisplayName } from "./vault.js"
+import { Schema } from "effect"
 
 const MAX_PROMPT_ENTRIES = 8
 const RECALL_HINT = "Use memory_recall to read full memory details or search for specific topics."
@@ -60,32 +58,39 @@ const buildMemorySection = (state: MemoryState): PromptSection | undefined => {
   }
 }
 
-// ── Derive ──
+export const MemorySnapshot = Schema.Struct({
+  sessionCount: Schema.Number,
+  vaultCount: Schema.Number,
+  entries: Schema.Array(
+    Schema.Struct({
+      title: Schema.String,
+      scope: Schema.Literals(["session", "project", "global"]),
+      summary: Schema.String,
+    }),
+  ),
+})
+export type MemorySnapshot = typeof MemorySnapshot.Type
 
-export const deriveProjection = (
-  state: MemoryState,
-  _ctx?: ExtensionDeriveContext,
-): ExtensionProjection => {
+export const projectMemorySnapshot = (state: MemoryState): MemorySnapshot => ({
+  sessionCount: state.sessionMemories.length,
+  vaultCount: state.vaultIndex.length,
+  entries: [
+    ...state.sessionMemories.slice(0, 5).map((m) => ({
+      title: m.title,
+      scope: "session" as const,
+      summary: m.content.slice(0, 80),
+    })),
+    ...state.vaultIndex.slice(0, 5).map((e) => ({
+      title: e.title,
+      scope: e.frontmatter.scope,
+      summary: e.summary,
+    })),
+  ],
+})
+
+export const projectMemoryTurn = (state: MemoryState): TurnProjection => {
   const section = buildMemorySection(state)
-  const uiModel = {
-    sessionCount: state.sessionMemories.length,
-    vaultCount: state.vaultIndex.length,
-    entries: [
-      ...state.sessionMemories.slice(0, 5).map((m) => ({
-        title: m.title,
-        scope: "session" as const,
-        summary: m.content.slice(0, 80),
-      })),
-      ...state.vaultIndex.slice(0, 5).map((e) => ({
-        title: e.title,
-        scope: e.frontmatter.scope,
-        summary: e.summary,
-      })),
-    ],
-  }
-
   return {
     promptSections: section !== undefined ? [section] : [],
-    uiModel,
   }
 }

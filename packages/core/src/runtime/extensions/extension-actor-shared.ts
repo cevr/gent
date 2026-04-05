@@ -1,17 +1,7 @@
-/**
- * Shared logic for fromMachine and fromReducer extension actors.
- *
- * Extracts buildProjectionConfig and interpretEffects — the two
- * largest shared pieces between the two actor constructors.
- */
+/** Shared logic for extension actors. */
 
 import { Effect, Schema, ServiceMap } from "effect"
-import type {
-  ExtensionDeriveContext,
-  ExtensionEffect,
-  ExtensionProjection,
-  ExtensionProjectionConfig,
-} from "../../domain/extension.js"
+import type { ExtensionEffect } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
 
@@ -39,24 +29,7 @@ export const makePersistCodec = <S>(schema: Schema.Schema<S>) => {
 }
 
 /**
- * Build ExtensionProjectionConfig from a derive function.
- * Identical between fromMachine and fromReducer — extracted to avoid duplication.
- */
-export const buildProjectionConfig = <State>(config: {
-  derive?: (state: State, ctx?: ExtensionDeriveContext) => ExtensionProjection
-  uiModelSchema?: Schema.Schema<unknown>
-}): ExtensionProjectionConfig | undefined => {
-  const deriveFn = config.derive
-  if (deriveFn === undefined) return undefined
-
-  return {
-    derive: (state: unknown, ctx?: ExtensionDeriveContext) => deriveFn(state as State, ctx),
-    uiModelSchema: config.uiModelSchema,
-  }
-}
-
-/**
- * Interpret extension effects — shared by fromReducer and fromMachine.
+ * Interpret extension effects.
  * Each effect is wrapped in catchDefect to prevent one bad effect from
  * crashing the actor.
  */

@@ -7,14 +7,17 @@
  * Prompt injection: compact summary + recall tool for deep dives.
  */
 
-import { Effect } from "effect"
-import type { ReduceResult } from "../../domain/extension.js"
+import { Effect, Schema } from "effect"
+import { Event as MEvent, Machine, Slot, State as MState } from "effect-machine"
+import type { ReduceResult, ExtensionActorDefinition } from "../../domain/extension.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
-import { extension, fromReducer } from "../api.js"
+import { AgentEvent } from "../../domain/event.js"
+import { extension } from "../api.js"
 import {
   type MemoryState,
   type SessionMemory,
   initialMemoryState,
+  MemoryStateSchema,
   reduce,
   addSessionMemory,
   removeSessionMemory,
@@ -23,9 +26,9 @@ import {
 } from "./state.js"
 import { MemoryTools } from "./tools.js"
 import { MemoryIntent } from "./intents.js"
-import { deriveProjection } from "./projection.js"
+import { MemorySnapshot, projectMemorySnapshot, projectMemoryTurn } from "./projection.js"
 import { MemoryAgents } from "./agents.js"
-import { MemoryVault, Live as MemoryVaultLive, projectKey } from "./vault.js"
+import { MemoryEntrySchema, MemoryVault, Live as MemoryVaultLive, projectKey } from "./vault.js"
 import { MemoryDreamJobs } from "./dreaming.js"
 
 export const MEMORY_EXTENSION_ID = "@gent/memory"
@@ -76,28 +79,121 @@ export const MemoryActorConfig = {
   id: MEMORY_EXTENSION_ID,
   initial: initialMemoryState,
   reduce,
-  derive: deriveProjection,
   receive,
 }
 
-const memoryActor = fromReducer<MemoryState, MemoryIntent, never, MemoryVault>({
-  ...MemoryActorConfig,
-  messageSchema: MemoryIntent,
-  onInit: ({ updateState, sessionCwd }) =>
+const MemoryMachineState = MState({
+  Active: {
+    memory: MemoryStateSchema,
+  },
+})
+
+const MemoryMachineEvent = MEvent({
+  Published: {
+    event: AgentEvent,
+  },
+  Intent: {
+    message: MemoryIntent,
+  },
+  HydrateVaultIndex: {
+    entries: Schema.Array(MemoryEntrySchema),
+  },
+  SetProjectKey: {
+    key: Schema.optional(Schema.String),
+  },
+})
+
+const MemoryMachineSlots = Slot.define({
+  loadBootState: Slot.fn(
+    {
+      sessionCwd: Schema.optional(Schema.String),
+    },
+    Schema.Struct({
+      entries: Schema.Array(MemoryEntrySchema),
+      projectKey: Schema.optional(Schema.String),
+    }),
+  ),
+})
+
+const memoryMachine = Machine.make({
+  state: MemoryMachineState,
+  event: MemoryMachineEvent,
+  slots: MemoryMachineSlots,
+  initial: MemoryMachineState.Active({ memory: initialMemoryState }),
+})
+  .on(MemoryMachineState.Active, MemoryMachineEvent.Published, ({ state, event }) => {
+    const nextMemory = reduce(state.memory as MemoryState, event.event, {
+      sessionId: "" as never,
+      branchId: undefined,
+    }).state
+    return nextMemory === state.memory ? state : MemoryMachineState.Active({ memory: nextMemory })
+  })
+  .on(MemoryMachineState.Active, MemoryMachineEvent.Intent, ({ state, event }) => {
+    const nextMemory = receive(state.memory as MemoryState, event.message).state
+    return nextMemory === state.memory ? state : MemoryMachineState.Active({ memory: nextMemory })
+  })
+  .on(MemoryMachineState.Active, MemoryMachineEvent.HydrateVaultIndex, ({ state, event }) =>
+    MemoryMachineState.Active({
+      memory: updateVaultIndex(state.memory, event.entries),
+    }),
+  )
+  .on(MemoryMachineState.Active, MemoryMachineEvent.SetProjectKey, ({ state, event }) =>
+    MemoryMachineState.Active({
+      memory: setProjectKey(state.memory, event.key),
+    }),
+  )
+
+const memoryActor: ExtensionActorDefinition<
+  typeof MemoryMachineState.Type,
+  typeof MemoryMachineEvent.Type,
+  MemoryVault,
+  typeof MemoryMachineSlots.definitions
+> = {
+  machine: memoryMachine,
+  slots: () =>
     Effect.gen(function* () {
       const vault = yield* MemoryVault
-      yield* vault.ensureDirs()
-
-      const entries = yield* vault.list()
-      yield* updateState((s) => updateVaultIndex(s, entries))
-
-      if (sessionCwd !== undefined) {
-        const key = projectKey(sessionCwd)
-        yield* updateState((s) => setProjectKey(s, key))
-        yield* vault.ensureDirs(key)
+      return {
+        loadBootState: ({ sessionCwd }) =>
+          Effect.gen(function* () {
+            yield* vault.ensureDirs()
+            const entries = yield* vault.list()
+            const key = sessionCwd !== undefined ? projectKey(sessionCwd) : undefined
+            if (key !== undefined) {
+              yield* vault.ensureDirs(key)
+            }
+            return {
+              entries,
+              projectKey: key,
+            }
+          }),
       }
     }),
-})
+  mapEvent: (event) => MemoryMachineEvent.Published({ event }),
+  mapCommand: (message) =>
+    Schema.is(MemoryIntent)(message) ? MemoryMachineEvent.Intent({ message }) : undefined,
+  snapshot: {
+    schema: MemorySnapshot,
+    project: (state) => projectMemorySnapshot(state.memory),
+  },
+  turn: {
+    project: (state) => projectMemoryTurn(state.memory),
+  },
+  onInit: ({ send, sessionCwd, slots }) =>
+    Effect.gen(function* () {
+      if (slots === undefined) return
+      const boot = yield* slots.loadBootState({ sessionCwd })
+      yield* send(
+        MemoryMachineEvent.HydrateVaultIndex({
+          entries: boot.entries,
+        }),
+      )
+
+      if (boot.projectKey !== undefined) {
+        yield* send(MemoryMachineEvent.SetProjectKey({ key: boot.projectKey }))
+      }
+    }),
+}
 
 // ── Extension ──
 

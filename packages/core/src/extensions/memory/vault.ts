@@ -28,6 +28,14 @@ export interface MemoryFrontmatter {
   readonly source: MemorySource
 }
 
+export const MemoryFrontmatterSchema = Schema.Struct({
+  scope: MemoryScope,
+  tags: Schema.Array(Schema.String),
+  created: Schema.String,
+  updated: Schema.String,
+  source: MemorySource,
+})
+
 export interface MemoryEntry {
   /** Relative path within vault (e.g. "global/my-topic.md") */
   readonly path: string
@@ -35,6 +43,13 @@ export interface MemoryEntry {
   readonly summary: string
   readonly frontmatter: MemoryFrontmatter
 }
+
+export const MemoryEntrySchema = Schema.Struct({
+  path: Schema.String,
+  title: Schema.String,
+  summary: Schema.String,
+  frontmatter: MemoryFrontmatterSchema,
+})
 
 // ── Frontmatter parsing ──
 

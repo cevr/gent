@@ -174,7 +174,7 @@ describe("extension activation isolation", () => {
                 execute: () => Effect.void,
               },
             ],
-            scheduledJobs: [
+            jobs: [
               {
                 id: "reflect",
                 schedule: "0 21 * * 1-5",

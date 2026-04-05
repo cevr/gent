@@ -5,7 +5,7 @@ import { NetworkToolsExtension } from "./network-tools.js"
 import { SubagentToolsExtension } from "./subagent-tools.js"
 import { InteractionToolsExtension } from "./interaction-tools.js"
 import { SessionToolsExtension } from "./session-tools.js"
-import { TaskToolsExtension } from "./task-tools.js"
+import { TaskExtension } from "./task-tools.js"
 import { WorkflowToolsExtension } from "./workflow-tools.js"
 import { AgentsExtension } from "./agents.js"
 import { PlanExtension } from "./plan.js"
@@ -26,7 +26,7 @@ export {
   SubagentToolsExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
-  TaskToolsExtension,
+  TaskExtension,
   WorkflowToolsExtension,
   AgentsExtension,
   PlanExtension,
@@ -45,7 +45,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   SubagentToolsExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
-  TaskToolsExtension,
+  TaskExtension,
   WorkflowToolsExtension,
   AgentsExtension,
   PlanExtension,

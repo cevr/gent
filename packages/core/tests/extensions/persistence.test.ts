@@ -3,10 +3,10 @@ import { Effect, Layer, Schema } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
-import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { reducerActor } from "./helpers/reducer-actor"
 
 const sessionId = "persist-session" as SessionId
 const branchId = "persist-branch" as BranchId
@@ -18,7 +18,7 @@ interface CounterState {
 const CounterSchema = Schema.Struct({ count: Schema.Number })
 
 const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
-  const { spawn, projection } = fromReducer<CounterState>({
+  const actor = reducerActor<CounterState>({
     id,
     initial: { count: 0 },
     stateSchema: CounterSchema,
@@ -34,12 +34,7 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
     },
     derive: (state) => ({ uiModel: state }),
   })
-  return {
-    manifest: { id },
-    kind: "builtin",
-    sourcePath: "builtin",
-    setup: { spawn, projection },
-  }
+  return { manifest: { id }, kind: "builtin", sourcePath: "builtin", setup: { actor } }
 }
 
 const makeLayer = (extensions: LoadedExtension[]) =>
@@ -70,8 +65,11 @@ describe("Extension state persistence", () => {
         extensionId: "persist-counter",
       })
       expect(loaded).toBeDefined()
-      const parsed = JSON.parse(loaded!.stateJson) as CounterState
-      expect(parsed.count).toBe(1)
+      const parsed = JSON.parse(loaded!.stateJson) as {
+        readonly _tag: "Active"
+        readonly value: CounterState
+      }
+      expect(parsed.value.count).toBe(1)
       expect(loaded!.version).toBe(1)
     }).pipe(Effect.provide(layer))
   })
@@ -86,7 +84,7 @@ describe("Extension state persistence", () => {
       yield* storage.saveExtensionState({
         sessionId,
         extensionId: "persist-counter",
-        stateJson: JSON.stringify({ count: 42 }),
+        stateJson: JSON.stringify({ _tag: "Active", value: { count: 42 } }),
         version: 10,
       })
 
@@ -127,8 +125,11 @@ describe("Extension state persistence", () => {
         extensionId: "persist-counter",
       })
       expect(loaded).toBeDefined()
-      const parsed = JSON.parse(loaded!.stateJson) as CounterState
-      expect(parsed.count).toBe(2)
+      const parsed = JSON.parse(loaded!.stateJson) as {
+        readonly _tag: "Active"
+        readonly value: CounterState
+      }
+      expect(parsed.value.count).toBe(2)
       expect(loaded!.version).toBe(2)
     }).pipe(Effect.provide(layer))
   })
@@ -137,7 +138,7 @@ describe("Extension state persistence", () => {
     "persist: true auto-persists on every state change without explicit Persist effect",
     () => {
       // Auto-persist extension: no Persist effect emitted, but persist: true
-      const { spawn: autoPersistSpawn } = fromReducer<CounterState>({
+      const actor = reducerActor<CounterState>({
         id: "auto-persist",
         initial: { count: 0 },
         stateSchema: CounterSchema,
@@ -154,7 +155,7 @@ describe("Extension state persistence", () => {
         manifest: { id: "auto-persist" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { spawn: autoPersistSpawn },
+        setup: { actor },
       }
 
       const layer = makeLayer([autoPersistExt])
@@ -173,23 +174,27 @@ describe("Extension state persistence", () => {
           extensionId: "auto-persist",
         })
         expect(loaded).toBeDefined()
-        const parsed = JSON.parse(loaded!.stateJson) as CounterState
-        expect(parsed.count).toBe(1)
+        const parsed = JSON.parse(loaded!.stateJson) as {
+          readonly _tag: "Active"
+          readonly value: CounterState
+        }
+        expect(parsed.value.count).toBe(1)
       }).pipe(Effect.provide(layer))
     },
   )
 
   it.live("non-persistent actor does not write to storage", () => {
-    const { spawn: ephemeralSpawn } = fromReducer<{ value: number }>({
+    const actor = reducerActor<{ value: number }>({
       id: "ephemeral",
       initial: { value: 0 },
+      stateSchema: Schema.Struct({ value: Schema.Number }),
       reduce: (state) => ({ state: { value: state.value + 1 } }),
     })
     const nonPersistent: LoadedExtension = {
       manifest: { id: "ephemeral" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { spawn: ephemeralSpawn },
+      setup: { actor },
     }
 
     const layer = makeLayer([nonPersistent])
@@ -274,7 +279,7 @@ describe("Extension state storage", () => {
 
 describe("Persistence edge cases", () => {
   it.live("corrupted persisted state falls back to initial", () => {
-    const { spawn, projection } = fromReducer<CounterState>({
+    const actor = reducerActor<CounterState>({
       id: "corrupt-test",
       initial: { count: 0 },
       stateSchema: CounterSchema,
@@ -290,7 +295,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "corrupt-test" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { spawn, projection },
+      setup: { actor },
     }
 
     const layer = makeLayer([ext])
@@ -325,7 +330,7 @@ describe("Persistence edge cases", () => {
   })
 
   it.live("hydration failure does not prevent actor from functioning", () => {
-    const { spawn, projection } = fromReducer<CounterState>({
+    const actor = reducerActor<CounterState>({
       id: "resilient",
       initial: { count: 0 },
       stateSchema: CounterSchema,
@@ -341,7 +346,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "resilient" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { spawn, projection },
+      setup: { actor },
     }
 
     const layer = makeLayer([ext])

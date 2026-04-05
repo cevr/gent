@@ -165,7 +165,7 @@ const resolveDesiredJobs = (
 
     const desired: DesiredScheduledJob[] = []
     for (const ext of extensions) {
-      for (const job of ext.setup.jobs ?? ext.setup.scheduledJobs ?? []) {
+      for (const job of ext.setup.jobs ?? []) {
         const name = jobName(ext.manifest.id, job.id)
         const scriptPath = path.join(
           jobsDir,

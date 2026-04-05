@@ -1,13 +1,15 @@
 import { describe, test, expect, beforeAll } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { extension } from "@gent/core/extensions/api"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { AgentRunSpawned } from "@gent/core/domain/event"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Permission } from "@gent/core/domain/permission"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
+import { reducerActor } from "./helpers/reducer-actor"
 
 describe("extension api", () => {
   test("setup exposes declared tools, prompt sections, and agents", async () => {
@@ -214,12 +216,16 @@ describe("extension tools through ToolRunner.run", () => {
 })
 
 describe("state-backed extension api", () => {
-  test("stateful actor extensions expose actor plus compatibility spawn/projection", async () => {
-    const { fromReducer } = await import("@gent/core/runtime/extensions/from-reducer")
+  test("stateful actor extensions expose the actor surface only", async () => {
     const ext = extension("state-agent-run-alias", (b) => {
       b.actor(
-        fromReducer({
+        reducerActor({
           initial: { seenType: false, seenTag: false, seenRawTag: false },
+          stateSchema: Schema.Struct({
+            seenType: Schema.Boolean,
+            seenTag: Schema.Boolean,
+            seenRawTag: Schema.Boolean,
+          }),
           id: "state-agent-run-alias",
           reduce: (state, event) => {
             if (event._tag === "AgentRunSpawned") {
@@ -244,16 +250,12 @@ describe("state-backed extension api", () => {
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.actor).toBeDefined()
-    expect(setup.spawn).toBeDefined()
-    expect(setup.projection).toBeDefined()
     const actorLayer = ExtensionTurnControl.Test()
     const actor = await Effect.runPromise(
-      setup
-        .actor!.spawn({
-          sessionId: "s1" as SessionId,
-          branchId: "b1" as BranchId,
-        })
-        .pipe(Effect.provide(actorLayer)),
+      spawnMachineExtensionRef("state-agent-run-alias", setup.actor!, {
+        sessionId: "s1" as SessionId,
+        branchId: "b1" as BranchId,
+      }).pipe(Effect.provide(actorLayer)),
     )
 
     await Effect.runPromise(actor.start.pipe(Effect.provide(actorLayer)))
@@ -273,7 +275,10 @@ describe("state-backed extension api", () => {
     )
 
     const snapshot = await Effect.runPromise(actor.snapshot.pipe(Effect.provide(actorLayer)))
-    expect(snapshot.state).toEqual({ seenType: true, seenTag: true, seenRawTag: true })
+    expect(snapshot.state).toEqual({
+      _tag: "Active",
+      value: { seenType: true, seenTag: true, seenRawTag: true },
+    })
     await Effect.runPromise(actor.stop.pipe(Effect.provide(actorLayer)))
   })
 
@@ -292,6 +297,5 @@ describe("state-backed extension api", () => {
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.jobs?.map((job) => job.id)).toEqual(["reflect"])
-    expect(setup.scheduledJobs?.map((job) => job.id)).toEqual(["reflect"])
   })
 })

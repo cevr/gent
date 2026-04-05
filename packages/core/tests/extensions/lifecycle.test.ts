@@ -8,21 +8,21 @@ import {
   createExtensionHarness,
   createToolTestLayer,
 } from "@gent/core/test-utils/extension-harness"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { reducerActor } from "./helpers/reducer-actor"
 
 describe("createExtensionHarness", () => {
   test("WorkflowToolsExtension provides audit tool", () => {
     const harness = createExtensionHarness(WorkflowToolsExtension)
     expect(harness.tools.has("audit")).toBe(true)
-    expect(harness.spawn).toBeUndefined()
+    expect(harness.actor).toBeUndefined()
   })
 
   test("SubagentToolsExtension provides delegate tools (handoff in @gent/handoff)", () => {
@@ -30,12 +30,12 @@ describe("createExtensionHarness", () => {
     expect(harness.tools.has("delegate")).toBe(true)
     expect(harness.tools.has("handoff")).toBe(false)
     expect(harness.tools.has("code_review")).toBe(true)
-    expect(harness.spawn).toBeUndefined()
+    expect(harness.actor).toBeUndefined()
   })
 
-  test("PlanExtension provides spawn and plan tool", () => {
+  test("PlanExtension provides actor and plan tool", () => {
     const harness = createExtensionHarness(PlanExtension)
-    expect(harness.spawn).toBeDefined()
+    expect(harness.actor).toBeDefined()
     expect(harness.tools.has("plan")).toBe(true)
   })
 })
@@ -74,9 +74,10 @@ const sessionId = "lifecycle-session" as SessionId
 const branchId = "lifecycle-branch" as BranchId
 
 const makeCounterExtension = (id: string): LoadedExtension => {
-  const { spawn, projection } = fromReducer({
+  const actor = reducerActor({
     id,
     initial: { count: 0 },
+    stateSchema: Schema.Struct({ count: Schema.Number }),
     reduce: (state: { count: number }, event) => {
       if (event._tag === "TurnCompleted") return { state: { count: state.count + 1 } }
       return { state }
@@ -87,7 +88,7 @@ const makeCounterExtension = (id: string): LoadedExtension => {
     manifest: { id },
     kind: "builtin",
     sourcePath: "builtin",
-    setup: { spawn, projection },
+    setup: { actor },
   }
 }
 
@@ -152,19 +153,19 @@ describe("Actor lifecycle", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  test("PlanExtension harness exposes projection", () => {
+  test("PlanExtension harness exposes actor snapshot + turn projections", () => {
     const harness = createExtensionHarness(PlanExtension)
-    expect(harness.projection).toBeDefined()
-    expect(harness.projection!.derive).toBeInstanceOf(Function)
+    expect(harness.actor).toBeDefined()
+    expect(harness.actor!.snapshot).toBeDefined()
+    expect(harness.actor!.turn).toBeDefined()
   })
 
   test("derive with ctx.agent access returns uiModel when ctx is undefined", () => {
-    const { projection } = fromReducer({
+    const actor = reducerActor({
       id: "ctx-safety-test",
       initial: { label: "" },
+      stateSchema: Schema.Struct({ label: Schema.String }),
       reduce: (state: { label: string }) => ({ state }),
-      // derive reads ctx.agent.name — will throw when ctx is undefined
-      // The runtime wraps derive calls in catchDefect, so this is safe
       derive: (state: { label: string }, ctx?) => ({
         uiModel: {
           label: state.label,
@@ -172,18 +173,13 @@ describe("Actor lifecycle", () => {
         },
       }),
     })
-    expect(projection.derive).toBeInstanceOf(Function)
-    // With context
-    const withCtx = projection.derive!(
-      { label: "test" },
-      {
-        agent: { name: "test-agent" } as never,
-        allTools: [],
-      },
-    )
-    expect((withCtx.uiModel as { agentName: string }).agentName).toBe("test-agent")
-    // Without context — author handles undefined ctx gracefully
-    const noCtx = projection.derive!({ label: "test" }, undefined)
-    expect((noCtx.uiModel as { agentName: string }).agentName).toBe("no-agent")
+    const state = { _tag: "Active", value: { label: "test" } } as const
+    const withCtx = actor.turn!.project(state, {
+      agent: { name: "test-agent" } as never,
+      allTools: [],
+    })
+    const noCtx = actor.snapshot!.project!(state)
+    expect(withCtx.promptSections).toBeUndefined()
+    expect((noCtx as { agentName: string }).agentName).toBe("no-agent")
   })
 })

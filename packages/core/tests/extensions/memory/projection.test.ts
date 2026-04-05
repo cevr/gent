@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { deriveProjection } from "@gent/core/extensions/memory/projection"
+import { projectMemorySnapshot, projectMemoryTurn } from "@gent/core/extensions/memory/projection"
 import {
   initialMemoryState,
   addSessionMemory,
@@ -7,13 +7,6 @@ import {
   setProjectKey,
 } from "@gent/core/extensions/memory/state"
 import type { MemoryEntry } from "@gent/core/extensions/memory/vault"
-import { AgentDefinition } from "@gent/core/domain/agent"
-
-const deriveCtx = {
-  agent: new AgentDefinition({ name: "test" as never }),
-  allTools: [],
-}
-
 const makeEntry = (path: string, title: string, scope: "global" | "project"): MemoryEntry => ({
   path,
   title,
@@ -29,7 +22,7 @@ const makeEntry = (path: string, title: string, scope: "global" | "project"): Me
 
 describe("memory projection", () => {
   test("empty state produces no prompt sections", () => {
-    const result = deriveProjection(initialMemoryState, deriveCtx)
+    const result = projectMemoryTurn(initialMemoryState)
     expect(result.promptSections ?? []).toEqual([])
   })
 
@@ -40,7 +33,7 @@ describe("memory projection", () => {
       tags: [],
       created: "2026-01-01T00:00:00Z",
     })
-    const result = deriveProjection(state, deriveCtx)
+    const result = projectMemoryTurn(state)
     const sections = result.promptSections ?? []
     expect(sections.length).toBe(1)
     expect(sections[0]!.content).toContain("API Style")
@@ -53,7 +46,7 @@ describe("memory projection", () => {
       makeEntry("global/pattern-b.md", "Pattern B", "global"),
     ]
     const state = updateVaultIndex(initialMemoryState, entries)
-    const result = deriveProjection(state, deriveCtx)
+    const result = projectMemoryTurn(state)
     const sections = result.promptSections ?? []
     expect(sections.length).toBe(1)
     expect(sections[0]!.content).toContain("Pattern A")
@@ -64,7 +57,7 @@ describe("memory projection", () => {
     const entries = [makeEntry("project/gent-abc123/gotcha.md", "SQLite Gotcha", "project")]
     let state = updateVaultIndex(initialMemoryState, entries)
     state = setProjectKey(state, "gent-abc123")
-    const result = deriveProjection(state, deriveCtx)
+    const result = projectMemoryTurn(state)
     const sections = result.promptSections ?? []
     expect(sections.length).toBe(1)
     expect(sections[0]!.content).toContain("Project:")
@@ -76,7 +69,7 @@ describe("memory projection", () => {
       makeEntry(`global/entry-${i}.md`, `Entry ${i}`, "global"),
     )
     const state = updateVaultIndex(initialMemoryState, entries)
-    const result = deriveProjection(state, deriveCtx)
+    const result = projectMemoryTurn(state)
     const sections = result.promptSections ?? []
     expect(sections.length).toBe(1)
     // Count bullet points — should be capped
@@ -92,8 +85,7 @@ describe("memory projection", () => {
       created: "2026-01-01T00:00:00Z",
     })
     state = updateVaultIndex(state, [makeEntry("global/g.md", "Global", "global")])
-    const result = deriveProjection(state, deriveCtx)
-    const ui = result.uiModel as { sessionCount: number; vaultCount: number; entries: unknown[] }
+    const ui = projectMemorySnapshot(state)
     expect(ui.sessionCount).toBe(1)
     expect(ui.vaultCount).toBe(1)
     expect(ui.entries.length).toBe(2)

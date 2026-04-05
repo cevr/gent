@@ -10,23 +10,24 @@
  * Gate: counsel review is hardcoded (AwaitingCounsel blocks until counsel called)
  * Safety: maxIterations ceiling + turnsSinceCheckpoint watchdog
  *
- * Uses effect-machine for state transitions, fromMachine for actor wrapping.
+ * Uses effect-machine directly for state transitions and actor runtime.
  */
 
 import { Effect, Schema } from "effect"
-import { Machine, State as MState, Event as MEvent } from "effect-machine"
+import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
   defineInterceptor,
+  type ExtensionActorDefinition,
   type ExtensionDeriveContext,
   type ExtensionEffect,
-  type ExtensionProjection,
   type ToolResultInput,
   type TurnAfterInput,
+  type TurnProjection,
 } from "../domain/extension.js"
 import type { AgentEvent } from "../domain/event.js"
-import type { SessionId } from "../domain/ids.js"
+import { SessionId } from "../domain/ids.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { extension, fromMachine } from "./api.js"
+import { extension } from "./api.js"
 import { AUTO_EXTENSION_ID, AutoProtocol } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "../tools/auto-checkpoint.js"
 import { AutoJournal, type CheckpointRow } from "./auto-journal.js"
@@ -145,6 +146,31 @@ export const AutoUiModel = Schema.Struct({
 })
 export type AutoUiModel = typeof AutoUiModel.Type
 
+const ReplayCheckpoint = Schema.Struct({
+  type: Schema.Literal("checkpoint"),
+  iteration: Schema.Number,
+  status: Schema.Literals(["continue", "complete", "abandon"]),
+  summary: Schema.String,
+  learnings: Schema.optional(Schema.String),
+  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  nextIdea: Schema.optional(Schema.String),
+})
+
+const ReplayCounsel = Schema.Struct({
+  type: Schema.Literal("counsel"),
+  iteration: Schema.Number,
+})
+
+const ReplaySeed = Schema.Struct({
+  goal: Schema.String,
+  maxIterations: Schema.Number,
+  rows: Schema.Array(Schema.Union([ReplayCheckpoint, ReplayCounsel])),
+})
+
+const AutoMachineSlots = Slot.define({
+  loadReplaySeed: Slot.fn({ sessionId: SessionId }, Schema.NullOr(ReplaySeed)),
+})
+
 // ── Prompt sections ──
 
 const workingPromptSection = (state: Extract<MachineState, { _tag: "Working" }>): PromptSection => {
@@ -204,6 +230,7 @@ const counselPromptSection = (
 const autoMachine = Machine.make({
   state: MachineState,
   event: MachineEvent,
+  slots: AutoMachineSlots,
   initial: MachineState.Inactive({}),
 })
   // Inactive + StartAuto → Working
@@ -295,7 +322,7 @@ const autoMachine = Machine.make({
 
 // ── Derive ──
 
-const derive = (state: MachineState, _ctx?: ExtensionDeriveContext): ExtensionProjection => {
+const derive = (state: MachineState, _ctx?: ExtensionDeriveContext) => {
   if (state._tag === "Inactive") {
     const uiModel: AutoUiModel = { active: false, learningsCount: 0 }
     return { toolPolicy: { exclude: [AUTO_CHECKPOINT_TOOL] }, uiModel }
@@ -331,14 +358,23 @@ const derive = (state: MachineState, _ctx?: ExtensionDeriveContext): ExtensionPr
   }
 }
 
+const projectSnapshot = (state: MachineState): AutoUiModel => {
+  const { uiModel } = derive(state)
+  return (uiModel ?? { active: false, learningsCount: 0 }) as AutoUiModel
+}
+
+const projectTurn = (state: MachineState, ctx: ExtensionDeriveContext): TurnProjection => {
+  const { uiModel: _, ...turn } = derive(state, ctx)
+  return turn
+}
+
 // ── afterTransition ──
 
 const afterTransition = (
   before: MachineState,
   after: MachineState,
 ): ReadonlyArray<ExtensionEffect> => {
-  // Note: fromMachine already persists on transition when persist: true.
-  // No need to emit Persist effect here.
+  // Persist happens in the actor runtime on each state change.
   const effects: ExtensionEffect[] = []
 
   // → Working: only on genuine entry (not TurnTick which keeps Working → Working at same iteration)
@@ -374,8 +410,6 @@ const afterTransition = (
       metadata: { extensionId: "auto", hidden: true },
     })
   }
-
-  // cancelled/wedged/completed/abandoned: persist handled by fromMachine
 
   return effects
 }
@@ -441,6 +475,7 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 export const AutoActorConfig = {
   id: AUTO_EXTENSION_ID,
   initial: { _tag: "Inactive" as const } satisfies AutoState,
+  derive: (state: AutoState, ctx?: ExtensionDeriveContext) => derive(state as MachineState, ctx),
   reduce: (state: AutoState, event: AgentEvent): { state: AutoState } => {
     const mapped = mapEvent(event)
     if (mapped === undefined) return { state }
@@ -554,7 +589,6 @@ export const AutoActorConfig = {
 
     return { state }
   },
-  derive: derive as (state: AutoState, ctx?: ExtensionDeriveContext) => ExtensionProjection,
   receive: (state: AutoState, message: AutoIntent): { state: AutoState } => {
     switch (message._tag) {
       case "StartAuto": {
@@ -597,65 +631,91 @@ export const AutoActorConfig = {
 
 // ── Actor (effect-machine based) ──
 
-const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent, never, AutoJournal>({
-  id: AUTO_EXTENSION_ID,
-  built: autoMachine,
+const autoActor: ExtensionActorDefinition<
+  MachineState,
+  MachineEvent,
+  AutoJournal | Storage,
+  typeof AutoMachineSlots.definitions
+> = {
+  machine: autoMachine,
+  slots: () =>
+    Effect.gen(function* () {
+      const journalOpt = yield* Effect.serviceOption(AutoJournal)
+      const storageOpt = yield* Effect.serviceOption(Storage)
+      if (journalOpt._tag === "None") {
+        return {
+          loadReplaySeed: () => Effect.succeed(null),
+        }
+      }
+      const journal = journalOpt.value
+      return {
+        loadReplaySeed: ({ sessionId }: { readonly sessionId: SessionId }) =>
+          Effect.gen(function* () {
+            const active = yield* journal.readActive()
+            if (active === undefined) return null
+
+            if (storageOpt._tag === "Some") {
+              const store = storageOpt.value
+              const session = yield* store
+                .getSession(sessionId)
+                .pipe(Effect.catchEager(() => Effect.void as Effect.Effect<undefined>))
+              if (session?.parentSessionId === undefined) return null
+              if (active.sessionId === undefined) return null
+
+              const ancestors = yield* store
+                .getSessionAncestors(sessionId)
+                .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
+              const ancestorIds = new Set(ancestors.map((ancestor) => ancestor.id as string))
+              if (!ancestorIds.has(active.sessionId)) return null
+            }
+
+            const config = active.rows.find((row) => row.type === "config")
+            if (config === undefined || config.type !== "config") return null
+
+            return {
+              goal: config.goal,
+              maxIterations: config.maxIterations,
+              rows: active.rows.filter(
+                (row): row is typeof ReplayCheckpoint.Type | typeof ReplayCounsel.Type =>
+                  row.type === "checkpoint" || row.type === "counsel",
+              ),
+            }
+          }),
+      }
+    }),
   mapEvent,
-  mapMessage,
-  messageSchema: AutoIntent,
-  derive,
+  mapCommand: (message, state) =>
+    Schema.is(AutoIntent)(message) ? mapMessage(message, state) : undefined,
+  snapshot: {
+    schema: AutoUiModel,
+    project: projectSnapshot,
+  },
+  turn: {
+    project: projectTurn,
+  },
   stateSchema: MachineState.plain as Schema.Schema<MachineState>,
-  uiModelSchema: AutoUiModel,
   persist: true,
   afterTransition,
   onInit: (ctx) =>
     Effect.gen(function* () {
-      const journalOpt = yield* Effect.serviceOption(AutoJournal)
-      if (journalOpt._tag === "None") return
-      const journal = journalOpt.value
-      const active = yield* journal.readActive()
-      if (active === undefined) return
+      if (ctx.slots === undefined) return
+      const replaySeed = yield* ctx.slots.loadReplaySeed({ sessionId: ctx.sessionId })
+      if (replaySeed === null) return
 
       // Check if current state is already non-Inactive (hydrated from persistence)
       const current = (yield* ctx.snapshot) as MachineState
       if (current._tag !== "Inactive") return
 
-      // Only replay in child sessions whose ancestry matches the journal's originator
-      const storageOpt = yield* Effect.serviceOption(Storage)
-      if (storageOpt._tag === "Some") {
-        const store = storageOpt.value
-        const session = yield* store
-          .getSession(ctx.sessionId as SessionId)
-          .pipe(Effect.catchEager(() => Effect.void as Effect.Effect<undefined>))
-
-        // Root sessions never replay
-        if (session?.parentSessionId === undefined) return
-
-        // Journal must have a sessionId — fail closed for legacy pointers without one
-        if (active.sessionId === undefined) return
-
-        // Verify this session descends from the journal's originator
-        const ancestors = yield* store
-          .getSessionAncestors(ctx.sessionId as SessionId)
-          .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-        const ancestorIds = new Set(ancestors.map((a) => a.id as string))
-        if (!ancestorIds.has(active.sessionId)) return
-      }
-
-      // Replay journal rows as machine events
-      const config = active.rows.find((r) => r.type === "config")
-      if (config === undefined || config.type !== "config") return
-
       // Start the machine
       yield* ctx.send(
         MachineEvent.StartAuto({
-          goal: config.goal,
-          maxIterations: config.maxIterations,
+          goal: replaySeed.goal,
+          maxIterations: replaySeed.maxIterations,
         }),
       )
 
       // Replay checkpoints and counsel signals in order
-      for (const row of active.rows) {
+      for (const row of replaySeed.rows) {
         if (row.type === "checkpoint") {
           yield* ctx.send(
             MachineEvent.AutoSignal({
@@ -674,14 +734,11 @@ const autoActor = fromMachine<MachineState, MachineEvent, AutoIntent, never, Aut
 
       yield* Effect.logInfo("auto.onInit.replayed").pipe(
         Effect.annotateLogs({
-          journalPath: active.path,
-          rowCount: active.rows.length,
+          rowCount: replaySeed.rows.length + 1,
         }),
       )
-    }).pipe(Effect.catchEager(() => Effect.void)),
-})
-
-export const AutoSpawnActor = autoActor.spawn
+    }),
+}
 
 // ── tool.result interceptor — JSONL append on checkpoint/counsel ──
 

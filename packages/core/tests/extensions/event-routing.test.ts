@@ -15,7 +15,7 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { fromReducer } from "@gent/core/runtime/extensions/from-reducer"
+import { reducerActor } from "./helpers/reducer-actor"
 
 // ── Test extension that records every event _tag it sees ──
 
@@ -25,7 +25,7 @@ interface RecorderState {
 
 const RecorderSchema = Schema.Struct({ seen: Schema.Array(Schema.String) })
 
-const recorderReducer = fromReducer<RecorderState>({
+const recorderReducer = reducerActor<RecorderState>({
   id: "test-recorder",
   initial: { seen: [] },
   stateSchema: RecorderSchema,
@@ -53,7 +53,7 @@ interface SnapshotCounterState {
 
 const SnapshotCounterSchema = Schema.Struct({ snapshotsSeen: Schema.Number })
 
-const snapshotCounterReducer = fromReducer<SnapshotCounterState>({
+const snapshotCounterReducer = reducerActor<SnapshotCounterState>({
   id: "snapshot-counter",
   initial: { snapshotsSeen: 0 },
   stateSchema: SnapshotCounterSchema,
@@ -175,7 +175,7 @@ describe("EventPublisher — event routing", () => {
   it.live("invalid uiModel is dropped when uiModelSchema validation fails", () => {
     // Extension with a strict schema that rejects what deriveUi actually returns
     const strictSchema = Schema.Struct({ count: Schema.Number, label: Schema.String })
-    const badModelActor = fromReducer({
+    const badModelActor = reducerActor({
       id: "bad-model",
       initial: { count: 0 },
       reduce: (state: { count: number }, event): ReduceResult<{ count: number }> => {
@@ -230,7 +230,7 @@ describe("EventPublisher — event routing", () => {
     "derive that crashes on ctx=undefined still produces UI snapshots for other extensions",
     () => {
       // Extension with derive that reads ctx.agent (crashes when ctx is undefined)
-      const crashingDerive = fromReducer({
+      const crashingDerive = reducerActor({
         id: "crashing-derive",
         initial: { value: 0 },
         reduce: (state: { value: number }) => ({ state: { value: state.value + 1 } }),

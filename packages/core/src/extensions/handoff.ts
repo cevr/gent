@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
+import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import { defineInterceptor } from "../domain/extension.js"
-import type { TurnAfterInput } from "../domain/extension.js"
+import type { ExtensionActorDefinition, TurnAfterInput } from "../domain/extension.js"
 import type { Message } from "../domain/message.js"
 import { HandoffHandler } from "../domain/interaction-handlers.js"
 import { HandoffTool } from "../tools/handoff.js"
@@ -10,7 +11,7 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
 import { estimateContextPercent } from "../runtime/context-estimation.js"
 import { DEFAULTS } from "../domain/defaults.js"
-import { extension, fromReducer } from "./api.js"
+import { extension } from "./api.js"
 import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
 
 // Cooldown state — per session, managed by actor lifecycle
@@ -23,25 +24,47 @@ type CooldownIntent = typeof CooldownIntent.Type
 
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
 
-const cooldownActor = fromReducer<CooldownState, CooldownIntent>({
-  id: EXTENSION_ID,
-  initial: { cooldown: 0 },
-  messageSchema: CooldownIntent,
-  reduce: (state, event) => {
-    // Decrement cooldown on each completed turn
-    if (event._tag === "TurnCompleted" && state.cooldown > 0) {
-      return { state: { cooldown: state.cooldown - 1 } }
-    }
-    return { state }
+const CooldownMachineState = MState({
+  Active: {
+    cooldown: Schema.Number,
   },
-  receive: (state: CooldownState, message: CooldownIntent) => {
-    if (message._tag === "Suppress") {
-      return { state: { cooldown: message.count } }
-    }
-    return { state }
-  },
-  derive: (state: CooldownState) => ({ uiModel: state }),
 })
+
+const CooldownMachineEvent = MEvent({
+  TurnCompleted: {},
+  Suppress: {
+    count: Schema.Number,
+  },
+})
+
+const cooldownMachine = Machine.make({
+  state: CooldownMachineState,
+  event: CooldownMachineEvent,
+  initial: CooldownMachineState.Active({ cooldown: 0 }),
+})
+  .on(CooldownMachineState.Active, CooldownMachineEvent.TurnCompleted, ({ state }) =>
+    state.cooldown > 0 ? CooldownMachineState.Active({ cooldown: state.cooldown - 1 }) : state,
+  )
+  .on(CooldownMachineState.Active, CooldownMachineEvent.Suppress, ({ event }) =>
+    CooldownMachineState.Active({ cooldown: event.count }),
+  )
+
+const cooldownActor: ExtensionActorDefinition<
+  typeof CooldownMachineState.Type,
+  typeof CooldownMachineEvent.Type
+> = {
+  machine: cooldownMachine,
+  mapEvent: (event) =>
+    event._tag === "TurnCompleted" ? CooldownMachineEvent.TurnCompleted : undefined,
+  mapCommand: (message) =>
+    Schema.is(CooldownIntent)(message) && message._tag === "Suppress"
+      ? CooldownMachineEvent.Suppress({ count: message.count })
+      : undefined,
+  snapshot: {
+    schema: Schema.Struct({ cooldown: Schema.Number }),
+    project: (state) => ({ cooldown: state.cooldown }),
+  },
+}
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   const recentText = messages

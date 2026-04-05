@@ -1,4 +1,5 @@
 import type { Effect, Layer, Schema } from "effect"
+import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
@@ -211,22 +212,16 @@ export interface TurnProjection {
   readonly promptSections?: ReadonlyArray<PromptSection>
 }
 
-/** What derive() produces — projections from extension state */
-export interface ExtensionProjection extends TurnProjection {
-  /** Serializable UI model snapshot for client rendering */
-  readonly uiModel?: unknown
-}
-
-export interface ExtensionActorSnapshotConfig {
+export interface ExtensionActorSnapshotConfig<State = unknown> {
   /** Optional runtime validation for the public snapshot payload. */
   readonly schema?: Schema.Schema<unknown>
   /** If omitted, runtime uses actor state as the public snapshot. */
-  readonly project?: (state: unknown) => unknown
+  readonly project?: (state: State) => unknown
 }
 
-export interface ExtensionActorTurnConfig {
+export interface ExtensionActorTurnConfig<State = unknown> {
   /** Derive turn directives from actor state. Pure projection only. */
-  readonly project: (state: unknown, ctx: ExtensionDeriveContext) => TurnProjection
+  readonly project: (state: State, ctx: ExtensionDeriveContext) => TurnProjection
 }
 
 // Extension Actor — OTP-inspired unified state model
@@ -283,32 +278,37 @@ export interface ExtensionRef {
   readonly stop: Effect.Effect<void>
 }
 
-export interface ExtensionActorDefinition {
-  readonly spawn: SpawnExtensionRef
-  readonly snapshot?: ExtensionActorSnapshotConfig
-  readonly turn?: ExtensionActorTurnConfig
+export interface ExtensionActorDefinition<
+  State extends { readonly _tag: string } = { readonly _tag: string },
+  Event extends { readonly _tag: string } = { readonly _tag: string },
+  SlotsR = never,
+  SD extends SlotsDef = Record<string, never>,
+> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly machine: Machine.Machine<State, Event, never, any, any, SD>
+  readonly slots?: (ctx: {
+    readonly sessionId: SessionId
+    readonly branchId?: BranchId
+  }) => Effect.Effect<ProvideSlots<SD>, never, SlotsR>
+  readonly mapEvent?: (event: AgentEvent) => Event | undefined
+  readonly mapCommand?: (message: AnyExtensionCommandMessage, state: State) => Event | undefined
+  readonly mapRequest?: (message: AnyExtensionRequestMessage, state: State) => Event | undefined
+  readonly snapshot?: ExtensionActorSnapshotConfig<State>
+  readonly turn?: ExtensionActorTurnConfig<State>
+  readonly stateSchema?: Schema.Schema<State>
+  readonly persist?: boolean
+  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
+  readonly onInit?: (ctx: {
+    readonly sessionId: SessionId
+    readonly snapshot: Effect.Effect<State>
+    readonly send: (event: Event) => Effect.Effect<boolean>
+    readonly sessionCwd?: string
+    readonly slots?: SlotCalls<SD>
+  }) => Effect.Effect<void>
 }
 
-/**
- * Projection config — framework-owned.
- *
- * Single derive function handles both turn-time and UI projection:
- * - ctx provided → turn-time (prompt assembly, tool policy)
- * - ctx undefined → UI-only (snapshots, widget rendering)
- */
-export interface ExtensionProjectionConfig {
-  readonly derive?: (state: unknown, ctx?: ExtensionDeriveContext) => ExtensionProjection
-  readonly uiModelSchema?: Schema.Schema<unknown>
-}
-
-/** Factory function that spawns an extension ref for a session.
- *  May require services from context — the runtime provides them at spawn time.
- */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type SpawnExtensionRef<R = any> = (ctx: {
-  readonly sessionId: SessionId
-  readonly branchId?: BranchId
-}) => Effect.Effect<ExtensionRef, never, R>
+export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any, any>
 
 /** Tag-conditional tool injection — declarative replacement for old tools.visible interceptor */
 export interface TagInjection {
@@ -364,11 +364,7 @@ export interface ExtensionSetup {
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Layer<never, never, object>
   /** Session-scoped stateful actor. Omit for stateless extensions. */
-  readonly actor?: ExtensionActorDefinition
-  /** @deprecated Transitional compatibility for old runtime/tests. */
-  readonly spawn?: SpawnExtensionRef
-  /** @deprecated Transitional compatibility for old runtime/tests. */
-  readonly projection?: ExtensionProjectionConfig
+  readonly actor?: AnyExtensionActorDefinition
   /** Declarative tag-conditional tool injections */
   readonly tagInjections?: ReadonlyArray<TagInjection>
   /** Provider contributions — register AI provider implementations */
@@ -377,8 +373,6 @@ export interface ExtensionSetup {
   readonly interactionHandlers?: ReadonlyArray<InteractionHandlerContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */
   readonly jobs?: ReadonlyArray<ScheduledJobContribution>
-  /** @deprecated Transitional compatibility for old activation/tests. */
-  readonly scheduledJobs?: ReadonlyArray<ScheduledJobContribution>
   /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
   readonly promptSections?: ReadonlyArray<PromptSection>
   /** Fire-and-forget event observers. Receive raw AgentEvent after reduction.

@@ -9,7 +9,12 @@
 import { Schema } from "effect"
 import type { AgentEvent } from "../../domain/event.js"
 import type { ExtensionReduceContext, ReduceResult } from "../../domain/extension.js"
-import type { MemoryEntry, MemoryScope, MemorySource } from "./vault.js"
+import {
+  MemoryEntrySchema,
+  type MemoryEntry,
+  type MemoryScope,
+  type MemorySource,
+} from "./vault.js"
 
 // ── Session memory (volatile) ──
 
@@ -29,8 +34,14 @@ export interface MemoryState {
   /** Cached vault index — refreshed on session start */
   readonly vaultIndex: ReadonlyArray<MemoryEntry>
   /** Detected project key for this session (if any) */
-  readonly projectKey: string | undefined
+  readonly projectKey?: string
 }
+
+export const MemoryStateSchema = Schema.Struct({
+  sessionMemories: Schema.Array(SessionMemory),
+  vaultIndex: Schema.Array(MemoryEntrySchema),
+  projectKey: Schema.optional(Schema.String),
+})
 
 export const initialMemoryState: MemoryState = {
   sessionMemories: [],

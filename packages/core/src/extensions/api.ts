@@ -42,9 +42,7 @@ import {
   type TurnAfterInput,
   type ToolResultInput,
   type ExtensionDeriveContext,
-  type ExtensionProjection,
-  type ExtensionProjectionConfig,
-  type ExtensionActorDefinition,
+  type AnyExtensionActorDefinition,
   type ExtensionReduceContext,
   type ReduceResult,
   type ExtensionEffect,
@@ -52,7 +50,6 @@ import {
   type InteractionHandlerContribution,
   type ScheduledJobContribution,
   type TagInjection,
-  type SpawnExtensionRef,
 } from "../domain/extension.js"
 import {
   ExtensionProtocolError,
@@ -71,7 +68,6 @@ import type { PromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PermissionResult } from "../domain/permission.js"
 import type { Message, MessageMetadata } from "../domain/message.js"
-import { fromReducer } from "../runtime/extensions/from-reducer.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { interpretEffects } from "../runtime/extensions/extension-actor-shared.js"
 import {
@@ -83,16 +79,6 @@ import { join as joinPath } from "node:path"
 
 // ── Re-exports for full-power extension authors ──
 
-export {
-  fromReducer,
-  type FromReducerConfig,
-  type FromReducerResult,
-} from "../runtime/extensions/from-reducer.js"
-export {
-  fromMachine,
-  type FromMachineConfig,
-  type FromMachineResult,
-} from "../runtime/extensions/from-machine.js"
 export {
   defineTool,
   ToolDefinitionBrand,
@@ -110,13 +96,10 @@ export {
   type InteractionHandlerContribution,
   type ScheduledJobContribution,
   type TagInjection,
-  type SpawnExtensionRef,
-  type ExtensionProjectionConfig,
   type ExtensionEffect,
   type ReduceResult,
   type ExtensionReduceContext,
   type ExtensionDeriveContext,
-  type ExtensionProjection,
   type SystemPromptInput,
   type ToolExecuteInput,
   type PermissionCheckInput,
@@ -259,7 +242,7 @@ interface SimpleHookHandlers {
   readonly "tool.result": TransformHandler<ToolResultInput, unknown>
 }
 
-// ── Actor Result (from fromReducer/fromMachine) ──
+// ── Actor Result ──
 
 // ── Extension Builder ──
 
@@ -299,7 +282,7 @@ export interface ExtensionBuilder {
   interceptor(descriptor: ExtensionInterceptorDescriptor): void
   interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
   /** Register a stateful actor. Stateless extensions can omit this. */
-  actor(actor: ExtensionActorDefinition): void
+  actor(actor: AnyExtensionActorDefinition): void
   /** Register public protocol definitions for this extension boundary. */
   protocol(protocol: ExtensionProtocol): void
   /** Provide a service Layer. Multiple calls merge. */
@@ -570,7 +553,7 @@ export const extension = (
         string,
         ReturnType<typeof listExtensionProtocolDefinitions>[number]
       >()
-      let actorResult: ExtensionActorDefinition | undefined
+      let actorResult: AnyExtensionActorDefinition | undefined
 
       // Stack-based effect buffer for imperative side effects.
       // Stack is necessary because interceptor chains nest via next() — an outer
@@ -754,25 +737,6 @@ export const extension = (
 
       const onStartup = mergeStartupHooks(startupFns, startupEffects)
       const onShutdown = mergeShutdownHooks(shutdownFns, shutdownEffects)
-      const compatibilityProjection: ExtensionSetup["projection"] | undefined = (() => {
-        const actor = actorResult
-        if (actor === undefined) return undefined
-        if (actor.turn === undefined && actor.snapshot === undefined) return undefined
-        return {
-          derive: (state, ctx) => ({
-            ...(ctx !== undefined ? (actor.turn?.project(state, ctx) ?? {}) : {}),
-            ...(() => {
-              const snapshot = actor.snapshot
-              if (snapshot === undefined) return {}
-              const project = snapshot.project ?? ((value: unknown) => value)
-              const uiModel = project(state)
-              return uiModel === undefined ? {} : { uiModel }
-            })(),
-          }),
-          uiModelSchema: actor.snapshot?.schema,
-        }
-      })()
-
       return {
         ...(tools.length > 0 ? { tools } : {}),
         ...(agents.length > 0 ? { agents } : {}),
@@ -782,18 +746,11 @@ export const extension = (
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
         ...(providers.length > 0 ? { providers } : {}),
         ...(interactionHandlers.length > 0 ? { interactionHandlers } : {}),
-        ...(jobs.length > 0 ? { jobs, scheduledJobs: jobs } : {}),
+        ...(jobs.length > 0 ? { jobs } : {}),
         ...(tagInjections.length > 0 ? { tagInjections } : {}),
         ...(observers.length > 0 ? { observers } : {}),
         ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),
-        ...(actorResult !== undefined
-          ? {
-              actor: actorResult,
-              // Transitional compatibility for older runtime/tests.
-              spawn: actorResult.spawn,
-              projection: compatibilityProjection,
-            }
-          : {}),
+        ...(actorResult !== undefined ? { actor: actorResult } : {}),
         onStartup,
         onShutdown,
       } satisfies ExtensionSetup

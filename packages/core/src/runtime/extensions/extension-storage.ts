@@ -3,7 +3,7 @@
  *
  * Namespaced by extension ID. JSON files at ~/.gent/extensions/<id>/storage/<key>.json.
  * No schema validation — JSON in, JSON out. For extensions that need
- * durable state without the full actor/fromReducer machinery.
+ * durable state without the full extension actor runtime.
  */
 
 // @effect-diagnostics-next-line nodeBuiltinImport:off

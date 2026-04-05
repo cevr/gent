@@ -23,15 +23,14 @@ import {
   type AgentEvent,
 } from "../domain/event.js"
 import type {
+  AnyExtensionActorDefinition,
   ExtensionDeriveContext,
-  ExtensionProjection,
-  ExtensionProjectionConfig,
   ExtensionReduceContext,
   ExtensionSetup,
   GentExtension,
   LoadedExtension,
   ReduceResult,
-  SpawnExtensionRef,
+  TurnProjection,
 } from "../domain/extension.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -111,7 +110,7 @@ export const expectNoChange = <T>(before: T, after: T): void => {
 // ── Actor Harness ──
 
 /**
- * Create a pure synchronous harness for testing fromReducer-based actors.
+ * Create a pure synchronous harness for testing extension actor projections.
  *
  * Wraps the reduce/derive/receive functions so tests can call them
  * without Effect runtime — useful for pure state transition testing.
@@ -122,7 +121,7 @@ export interface ActorHarnessResult<State, Message = void> {
     event: AgentEvent,
     ctx?: ExtensionReduceContext,
   ) => ReduceResult<State>
-  readonly derive: (state: State) => ExtensionProjection
+  readonly derive: (state: State) => TurnProjection & { readonly uiModel?: unknown }
   readonly receive: Message extends void
     ? undefined
     : (state: State, message: Message) => ReduceResult<State>
@@ -140,7 +139,10 @@ export interface ActorHarnessConfig<State, Message = void> {
     event: AgentEvent,
     ctx: ExtensionReduceContext,
   ) => ReduceResult<State>
-  readonly derive?: (state: State, ctx: ExtensionDeriveContext) => ExtensionProjection
+  readonly derive?: (
+    state: State,
+    ctx: ExtensionDeriveContext,
+  ) => TurnProjection & { readonly uiModel?: unknown }
   readonly receive?: (state: State, message: Message) => ReduceResult<State>
 }
 
@@ -176,7 +178,7 @@ export function createActorHarness<State, Message = void>(
     reduceCtx?: ExtensionReduceContext,
   ): ReduceResult<State> => config.reduce(state, event, reduceCtx ?? ctx)
 
-  const derive = (state: State): ExtensionProjection =>
+  const derive = (state: State): TurnProjection & { readonly uiModel?: unknown } =>
     config.derive !== undefined ? config.derive(state, deriveCtx) : {}
 
   const receiveHandler = config.receive
@@ -204,8 +206,7 @@ export interface ExtensionHarnessResult {
   readonly setup: ExtensionSetup
   readonly tools: Map<string, AnyToolDefinition>
   readonly agents: Map<string, AgentDefinition>
-  readonly spawn: SpawnExtensionRef | undefined
-  readonly projection: ExtensionProjectionConfig | undefined
+  readonly actor: AnyExtensionActorDefinition | undefined
   readonly tagInjections: ExtensionSetup["tagInjections"]
   readonly hooks: ExtensionSetup["hooks"]
 }
@@ -237,8 +238,7 @@ export const createExtensionHarness = (
     setup,
     tools,
     agents,
-    spawn: setup.spawn,
-    projection: setup.projection,
+    actor: setup.actor,
     tagInjections: setup.tagInjections,
     hooks: setup.hooks,
   }

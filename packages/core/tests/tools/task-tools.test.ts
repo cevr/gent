@@ -12,7 +12,7 @@ import type { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { TaskService } from "@gent/core/extensions/task-tools-service"
-import { TaskToolsExtension } from "@gent/core/extensions/task-tools"
+import { TaskExtension } from "@gent/core/extensions/task-tools"
 
 const mockRunnerSuccess = {
   run: (params) =>
@@ -31,7 +31,7 @@ const ctx: ToolContext = {
 }
 
 const layer = createToolTestLayer({
-  extensions: [TaskToolsExtension],
+  extensions: [TaskExtension],
   subagentRunner: mockRunnerSuccess,
 })
 
