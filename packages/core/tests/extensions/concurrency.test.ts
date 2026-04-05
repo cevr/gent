@@ -1,20 +1,13 @@
 /**
- * Tests for extension concurrency safety:
- * - Deferred readiness in getOrSpawnActors
- * - Queued nested delivery in EventPublisher
+ * Tests for extension runtime concurrency:
+ * - concurrent actor spawn for the same session
+ * - ordered delivery across actor restarts
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer } from "effect"
-import {
-  BaseEventStore,
-  EventStore,
-  type AgentEvent,
-  SessionStarted,
-  TurnCompleted,
-} from "@gent/core/domain/event"
+import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
-import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -24,7 +17,7 @@ const sessionId = "test-session" as SessionId
 const branchId = "test-branch" as BranchId
 
 describe("extension concurrency", () => {
-  describe("getOrSpawnActors Deferred readiness", () => {
+  describe("actor spawn serialization", () => {
     it.live("concurrent reduce calls for same session share actors", () => {
       let spawnCount = 0
       const actor = reducerActor<{ count: number }>({
@@ -71,122 +64,11 @@ describe("extension concurrency", () => {
     })
   })
 
-  describe("EventPublisher queued delivery", () => {
-    it.live("nested publish from extension context is queued and eventually reduced", () => {
-      const delivered: string[] = []
-      const nestedDelivered = Effect.runSync(Deferred.make<void>())
-      let publishFromReduce: ((event: AgentEvent) => Effect.Effect<void>) | undefined
-
-      const baseLayer = Layer.succeed(BaseEventStore, {
-        publish: () => Effect.void,
-        subscribe: () => Effect.void as never,
-        removeSession: () => Effect.void,
-      })
-
-      const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-        publish: (event) =>
-          Effect.gen(function* () {
-            delivered.push(event._tag)
-            if (
-              event._tag === "SessionStarted" &&
-              delivered.length === 1 &&
-              publishFromReduce !== undefined
-            ) {
-              yield* publishFromReduce({
-                _tag: "NestedEvent",
-                sessionId,
-                branchId,
-              } as unknown as AgentEvent).pipe(
-                Effect.provideService(CurrentExtensionSession, {
-                  sessionId,
-                }),
-              )
-            }
-            if (event._tag === "NestedEvent") {
-              yield* Deferred.succeed(nestedDelivered, void 0)
-            }
-            return false
-          }),
-        notifyObservers: () => Effect.void,
-        deriveAll: () => Effect.succeed([]),
-        send: () => Effect.void,
-        ask: () => Effect.die("not implemented"),
-        getUiSnapshots: () => Effect.succeed([]),
-        getActorStatuses: () => Effect.succeed([]),
-        terminateAll: () => Effect.void,
-      })
-
-      const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
-
-      return Effect.gen(function* () {
-        const publisher = yield* EventPublisher
-        publishFromReduce = publisher.publish
-        yield* publisher.publish(new SessionStarted({ sessionId, branchId }))
-        yield* Deferred.await(nestedDelivered)
-        expect(delivered).toEqual(["SessionStarted", "NestedEvent"])
-      }).pipe(Effect.provide(layer))
-    })
-
-    it.live("nested publish from extension context still appends to base store", () => {
-      const published: string[] = []
-      const nestedDelivered = Effect.runSync(Deferred.make<void>())
-      let publishFromReduce: ((event: AgentEvent) => Effect.Effect<void>) | undefined
-
-      const baseLayer = Layer.succeed(BaseEventStore, {
-        publish: (event: AgentEvent) => {
-          published.push(event._tag)
-          return Effect.void
-        },
-        subscribe: () => Effect.void as never,
-        removeSession: () => Effect.void,
-      })
-
-      const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-        publish: (event) =>
-          Effect.gen(function* () {
-            if (
-              event._tag === "SessionStarted" &&
-              published.length === 1 &&
-              publishFromReduce !== undefined
-            ) {
-              yield* publishFromReduce({
-                _tag: "NestedEvent",
-                sessionId,
-                branchId,
-              } as unknown as AgentEvent).pipe(
-                Effect.provideService(CurrentExtensionSession, {
-                  sessionId,
-                }),
-              )
-            }
-            if (event._tag === "NestedEvent") {
-              yield* Deferred.succeed(nestedDelivered, void 0)
-            }
-            return false
-          }),
-        notifyObservers: () => Effect.void,
-        deriveAll: () => Effect.succeed([]),
-        send: () => Effect.void,
-        ask: () => Effect.die("not implemented"),
-        getUiSnapshots: () => Effect.succeed([]),
-        getActorStatuses: () => Effect.succeed([]),
-        terminateAll: () => Effect.void,
-      })
-
-      const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
-
-      return Effect.gen(function* () {
-        const publisher = yield* EventPublisher
-        publishFromReduce = publisher.publish
-        yield* publisher.publish(new SessionStarted({ sessionId, branchId }))
-        yield* Deferred.await(nestedDelivered)
-        expect(published).toEqual(["SessionStarted", "NestedEvent"])
-      }).pipe(Effect.provide(layer))
-    })
-
+  describe("delivery ordering across restarts", () => {
     it.live("runtime restart preserves same-session delivery ordering", () =>
       Effect.gen(function* () {
         const delivered: string[] = []
+        const firstDeliveryEntered = yield* Deferred.make<void>()
         let first = true
 
         const extensions = [
@@ -201,6 +83,9 @@ describe("extension concurrency", () => {
                 reduce: (state, event) => {
                   if (first && event._tag === "SessionStarted") {
                     first = false
+                    Effect.runSync(
+                      Deferred.succeed(firstDeliveryEntered, void 0).pipe(Effect.ignore),
+                    )
                     throw new Error("first delivery boom")
                   }
                   delivered.push(event._tag)
@@ -226,7 +111,7 @@ describe("extension concurrency", () => {
           yield* Effect.all(
             [
               publisher.publish(new SessionStarted({ sessionId, branchId })),
-              Effect.sleep("1 millis").pipe(
+              Deferred.await(firstDeliveryEntered).pipe(
                 Effect.andThen(
                   publisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 25 })),
                 ),
