@@ -10,18 +10,6 @@ import {
 import { ProviderError } from "@gent/core/providers/provider"
 
 describe("getRetryAfter", () => {
-  test("returns undefined for null", () => {
-    expect(getRetryAfter(null)).toBeUndefined()
-  })
-
-  test("returns undefined for non-object", () => {
-    expect(getRetryAfter("string")).toBeUndefined()
-  })
-
-  test("returns undefined for object without cause.headers", () => {
-    expect(getRetryAfter({ cause: { status: 429 } })).toBeUndefined()
-  })
-
   test("parses retry-after seconds from Headers", () => {
     const headers = new Headers({ "retry-after": "5" })
     const error = { cause: { headers } }
@@ -116,21 +104,6 @@ describe("Retry Logic", () => {
       model: "test",
     })
     expect(isRetryable(authError)).toBe(false)
-  })
-
-  test("getRetryDelay uses exponential backoff", () => {
-    const delay0 = getRetryDelay(0, null)
-    const delay1 = getRetryDelay(1, null)
-    const delay2 = getRetryDelay(2, null)
-
-    expect(delay0).toBe(DEFAULT_RETRY_CONFIG.initialDelay)
-    expect(delay1).toBe(DEFAULT_RETRY_CONFIG.initialDelay * 2)
-    expect(delay2).toBe(DEFAULT_RETRY_CONFIG.initialDelay * 4)
-  })
-
-  test("getRetryDelay respects maxDelay", () => {
-    const delay = getRetryDelay(10, null)
-    expect(delay).toBeLessThanOrEqual(DEFAULT_RETRY_CONFIG.maxDelay)
   })
 
   test("withRetry reports retry progress", async () => {

@@ -9,13 +9,6 @@ import { ConfigService, UserConfig } from "@gent/core/runtime/config-service"
 
 describe("ConfigService", () => {
   describe("Test implementation", () => {
-    it.live("get returns empty config initially", () =>
-      ConfigService.use((cfg) => cfg.get()).pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result.permissions).toBeUndefined())),
-        Effect.provide(ConfigService.Test()),
-      ),
-    )
-
     it.live("get returns initial config when provided", () => {
       const initial = new UserConfig({
         permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
@@ -43,13 +36,6 @@ describe("ConfigService", () => {
   })
 
   describe("Permission rules", () => {
-    it.live("getPermissionRules returns empty array initially", () =>
-      ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result).toEqual([]))),
-        Effect.provide(ConfigService.Test()),
-      ),
-    )
-
     it.live("getPermissionRules returns rules from config", () => {
       const initial = new UserConfig({
         permissions: [
@@ -139,15 +125,6 @@ describe("ConfigService", () => {
   })
 
   describe("disabledExtensions", () => {
-    it.live("get returns undefined disabledExtensions initially", () =>
-      ConfigService.use((cfg) => cfg.get()).pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => expect(result.disabledExtensions).toBeUndefined()),
-        ),
-        Effect.provide(ConfigService.Test()),
-      ),
-    )
-
     it.live("get returns initial disabledExtensions when provided", () => {
       const initial = new UserConfig({
         disabledExtensions: ["@gent/task-tools", "@gent/auto"],

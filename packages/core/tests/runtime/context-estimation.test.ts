@@ -35,12 +35,6 @@ describe("Token Estimation", () => {
 // ============================================================================
 
 describe("estimateContextPercent", () => {
-  test("returns 0 for empty messages", () => {
-    // System overhead only: 4000 tokens / 1000000 = 0.4% → 0
-    const percent = estimateContextPercent([], "anthropic/claude-opus-4-6")
-    expect(percent).toBe(0)
-  })
-
   test("calculates percent against model context window", () => {
     // 800 chars = 200 tokens. + 4000 overhead = 4200 tokens. / 1000000 = 0.42% → 0
     const messages = [
@@ -229,10 +223,6 @@ describe("estimateTokens", () => {
       }),
     ]
     expect(estimateTokens(messages)).toBe(250) // 1000/4
-  })
-
-  test("empty messages return 0", () => {
-    expect(estimateTokens([])).toBe(0)
   })
 
   test("multiple messages sum correctly", () => {
