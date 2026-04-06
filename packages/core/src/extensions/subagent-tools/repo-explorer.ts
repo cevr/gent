@@ -1,7 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { $ } from "bun"
-import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // RepoExplorer Tool Error
 
@@ -111,12 +110,10 @@ export const RepoExplorerTool = defineTool({
   description:
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, get paths.",
   params: RepoExplorerParams,
-  execute: Effect.fn("RepoExplorerTool.execute")(function* (params) {
+  execute: Effect.fn("RepoExplorerTool.execute")(function* (params, ctx) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const runtimePlatform = yield* RuntimePlatform
-    const home = runtimePlatform.home
-    const cacheDir = path.join(home, ".cache", "repo")
+    const cacheDir = path.join(ctx.home, ".cache", "repo")
     const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 

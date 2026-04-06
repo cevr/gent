@@ -4,7 +4,6 @@ import { AgentRunnerService, getDurableAgentRunSessionId } from "../../domain/ag
 import { requireAgent } from "../../runtime/extensions/registry.js"
 import { headTailChars } from "../../domain/output-buffer.js"
 import { $ } from "bun"
-import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // Librarian Tool Error
 
@@ -93,9 +92,7 @@ export const LibrarianTool = defineTool({
     const runner = yield* AgentRunnerService
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const runtimePlatform = yield* RuntimePlatform
-    const home = runtimePlatform.home
-    const cacheDir = path.join(home, ".cache", "repo")
+    const cacheDir = path.join(ctx.home, ".cache", "repo")
     const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 

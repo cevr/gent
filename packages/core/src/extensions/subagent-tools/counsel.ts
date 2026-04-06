@@ -6,7 +6,6 @@ import {
   getDurableAgentRunSessionId,
 } from "../../domain/agent.js"
 import { requireAgent } from "../../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 // Counsel Tool Error
 
@@ -50,7 +49,6 @@ export const CounselTool = defineTool({
   execute: Effect.fn("CounselTool.execute")(function* (params, ctx) {
     const runner = yield* AgentRunnerService
     const fs = yield* FileSystem.FileSystem
-    const platform = yield* RuntimePlatform
 
     // Always spawn deepwork (GPT) as the adversarial reviewer — read-only, no mutations
     const deepwork = yield* requireAgent("deepwork")
@@ -97,7 +95,7 @@ Instructions:
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
       toolCallId: ctx.toolCallId,
-      cwd: platform.cwd,
+      cwd: ctx.cwd,
     })
 
     if (result._tag === "error") {

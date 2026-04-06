@@ -13,6 +13,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { TaskService } from "@gent/core/extensions/task-tools-service"
 import { TaskExtension } from "@gent/core/extensions/task-tools"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 
 const mockRunnerSuccess = {
   run: (params) =>
@@ -24,11 +25,21 @@ const mockRunnerSuccess = {
     }),
 }
 
-const ctx: ToolContext = {
-  sessionId: "s1" as SessionId,
-  branchId: "b1",
-  toolCallId: "tc1",
-}
+const makeCtx = Effect.gen(function* () {
+  const runtime = yield* ExtensionStateRuntime
+  return {
+    sessionId: "s1" as SessionId,
+    branchId: "b1",
+    toolCallId: "tc1",
+    cwd: "/tmp",
+    home: "/tmp",
+    extensions: {
+      send: (message, branchId) => runtime.send("s1" as SessionId, message, branchId ?? "b1"),
+      ask: (message, branchId) => runtime.ask("s1" as SessionId, message, branchId ?? "b1"),
+    },
+    approve: () => Effect.die("approve() not wired in test"),
+  } satisfies ToolContext
+})
 
 const layer = createToolTestLayer({
   extensions: [TaskExtension],
@@ -59,6 +70,7 @@ describe("TaskCreateTool", () => {
   it.live("creates a task and returns id", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const result = yield* TaskCreateTool.execute({ subject: "Fix auth bug" }, ctx)
       expect(result.taskId).toBeDefined()
       expect(result.subject).toBe("Fix auth bug")
@@ -69,6 +81,7 @@ describe("TaskCreateTool", () => {
   it.live("creates task with dependencies", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const t1 = yield* TaskCreateTool.execute({ subject: "First" }, ctx)
       const t2 = yield* TaskCreateTool.execute(
         {
@@ -87,6 +100,7 @@ describe("TaskListTool", () => {
   it.live("lists tasks for session", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       yield* TaskCreateTool.execute({ subject: "Task A" }, ctx)
       yield* TaskCreateTool.execute({ subject: "Task B" }, ctx)
       const result = yield* TaskListTool.execute({}, ctx)
@@ -99,6 +113,7 @@ describe("TaskListTool", () => {
   it.live("returns empty for no tasks", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const result = yield* TaskListTool.execute({}, ctx)
       expect(result.tasks.length).toBe(0)
       expect(result.summary).toBe("No tasks")
@@ -110,6 +125,7 @@ describe("TaskGetTool", () => {
   it.live("returns task details", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const created = yield* TaskCreateTool.execute(
         {
           subject: "Review code",
@@ -126,6 +142,7 @@ describe("TaskGetTool", () => {
   it.live("returns error for missing task", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const result = yield* TaskGetTool.execute({ taskId: "nonexistent" }, ctx)
       expect(result.error).toContain("not found")
     }).pipe(Effect.provide(layer)),
@@ -136,6 +153,7 @@ describe("TaskUpdateTool", () => {
   it.live("updates task status", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const created = yield* TaskCreateTool.execute({ subject: "Fix it" }, ctx)
       // Must follow valid transition: pending → in_progress → completed
       yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
@@ -150,6 +168,7 @@ describe("TaskUpdateTool", () => {
   it.live("publishes completed event when status becomes completed", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const eventStore = yield* EventStore
       const eventsFiber = yield* Effect.forkChild(
         eventStore.subscribe({ sessionId: "s1" as SessionId }).pipe(
@@ -201,6 +220,7 @@ describe("DelegateTool background mode", () => {
   it.live("returns running status via background param", () =>
     Effect.gen(function* () {
       yield* setup
+      const ctx = yield* makeCtx
       const result = yield* DelegateTool.execute(
         {
           agent: "explore" as const,

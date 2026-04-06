@@ -9,10 +9,8 @@ import {
 } from "../../domain/agent.js"
 import type { SessionId } from "../../domain/ids.js"
 import type { Task } from "../../domain/task.js"
-import { ExtensionStateRuntime } from "../../runtime/extensions/state-runtime.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 import { ExtensionRegistry } from "../../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
@@ -53,7 +51,6 @@ export const DelegateTool = defineTool({
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
     const runner = yield* AgentRunnerService
     const registry = yield* ExtensionRegistry
-    const platform = yield* RuntimePlatform
 
     const caller = ctx.agentName !== undefined ? yield* registry.getAgent(ctx.agentName) : undefined
 
@@ -95,28 +92,25 @@ export const DelegateTool = defineTool({
     }
 
     const backgroundSingle = Effect.fn("DelegateTool.backgroundSingle")(function* () {
-      const extensionRuntime = yield* ExtensionStateRuntime
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const task = yield* extensionRuntime
+      const task = yield* ctx.extensions
         .ask(
-          ctx.sessionId,
           TaskProtocol.CreateTask({
             sessionId: ctx.sessionId,
             branchId: ctx.branchId,
             subject: params.description ?? params.task ?? "background task",
             agentType: resolved.agent.name,
             prompt: params.task,
-            cwd: platform.cwd,
+            cwd: ctx.cwd,
           }),
           ctx.branchId,
         )
         .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
       if (task === undefined)
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
-      const result = yield* extensionRuntime.ask(
-        ctx.sessionId,
+      const result = yield* ctx.extensions.ask(
         TaskProtocol.RunTask({ taskId: task.id }),
         ctx.branchId,
       )
@@ -124,7 +118,6 @@ export const DelegateTool = defineTool({
     })
 
     const backgroundParallel = Effect.fn("DelegateTool.backgroundParallel")(function* () {
-      const extensionRuntime = yield* ExtensionStateRuntime
       const tasks = params.tasks ?? []
       if (tasks.length > MAX_PARALLEL_TASKS) {
         return { error: `Too many parallel tasks (max ${MAX_PARALLEL_TASKS})` }
@@ -134,16 +127,15 @@ export const DelegateTool = defineTool({
       for (const item of tasks) {
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
-        const task = yield* extensionRuntime
+        const task = yield* ctx.extensions
           .ask(
-            ctx.sessionId,
             TaskProtocol.CreateTask({
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
               subject: summarizeTaskSubject(item.task),
               agentType: resolved.agent.name,
               prompt: item.task,
-              cwd: platform.cwd,
+              cwd: ctx.cwd,
             }),
             ctx.branchId,
           )
@@ -151,11 +143,7 @@ export const DelegateTool = defineTool({
         if (task === undefined) {
           return { error: "Background tasks unavailable — task-tools extension is disabled" }
         }
-        yield* extensionRuntime.ask(
-          ctx.sessionId,
-          TaskProtocol.RunTask({ taskId: task.id }),
-          ctx.branchId,
-        )
+        yield* ctx.extensions.ask(TaskProtocol.RunTask({ taskId: task.id }), ctx.branchId)
         taskIds.push(task.id)
       }
       return { taskIds, status: "running" as const, count: taskIds.length }
@@ -176,7 +164,7 @@ export const DelegateTool = defineTool({
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
-          cwd: platform.cwd,
+          cwd: ctx.cwd,
         })
 
         results.push(result)
@@ -228,7 +216,7 @@ export const DelegateTool = defineTool({
               parentSessionId: ctx.sessionId,
               parentBranchId: ctx.branchId,
               toolCallId: ctx.toolCallId,
-              cwd: platform.cwd,
+              cwd: ctx.cwd,
             })
           }),
         )
@@ -262,7 +250,7 @@ export const DelegateTool = defineTool({
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-        cwd: platform.cwd,
+        cwd: ctx.cwd,
       })
 
       if (result._tag === "error") {

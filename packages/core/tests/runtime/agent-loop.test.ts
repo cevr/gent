@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Provider, ProviderError, FinishChunk } from "@gent/core/providers/provider"
@@ -57,6 +58,7 @@ describe("AgentLoop actor model", () => {
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
       ToolRunner.Test(),
       BunServices.layer,
@@ -77,6 +79,7 @@ describe("AgentLoop actor model", () => {
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ToolRunner.Test(),
       BunServices.layer,
       recorderLayer,
@@ -185,6 +188,7 @@ describe("AgentLoop actor model", () => {
       makeTestExtRegistry(),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
       ToolRunner.Test(),
       BunServices.layer,
@@ -600,13 +604,20 @@ describe("AgentLoop.runOnce", () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const extRegistry = makeTestExtRegistry()
-    const toolDeps = Layer.mergeAll(extRegistry, Permission.Test(), ApprovalService.Test())
+    const toolDeps = Layer.mergeAll(
+      extRegistry,
+      Permission.Test(),
+      ApprovalService.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ExtensionStateRuntime.Test(),
+    )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       BunServices.layer,
       recorderLayer,
       eventStoreLayer,

@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import type { TaskId } from "../../domain/ids.js"
-import { ExtensionStateRuntime } from "../../runtime/extensions/state-runtime.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskOutputParams = Schema.Struct({
@@ -17,9 +16,7 @@ export const TaskOutputTool = defineTool({
     "Get the output messages from a task's child session. Returns the conversation between the agent and tools.",
   params: TaskOutputParams,
   execute: Effect.fn("TaskOutputTool.execute")(function* (params, ctx) {
-    const runtime = yield* ExtensionStateRuntime
-    const result = yield* runtime.ask(
-      ctx.sessionId,
+    const result = yield* ctx.extensions.ask(
       TaskProtocol.GetTaskOutput({ taskId: params.taskId as TaskId }),
       ctx.branchId,
     )

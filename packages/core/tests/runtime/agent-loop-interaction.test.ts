@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import {
@@ -117,6 +118,7 @@ describe("Cold interaction lifecycle", () => {
       makeExtRegistry([tool]),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ApprovalService.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
@@ -183,6 +185,7 @@ describe("Cold interaction lifecycle", () => {
       makeExtRegistry([tool]),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
       ApprovalService.Test(),
       Permission.Live([], "allow"),
@@ -243,6 +246,7 @@ describe("Cold interaction lifecycle", () => {
       makeExtRegistry(),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
       ToolRunner.Test(),
       BunServices.layer,
@@ -317,6 +321,7 @@ describe("Cold interaction lifecycle", () => {
       makeExtRegistry([tool]),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
       ApprovalService.Test(),
       Permission.Live([], "allow"),

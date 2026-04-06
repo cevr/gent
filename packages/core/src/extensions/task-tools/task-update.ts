@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import type { TaskStatus } from "../../domain/task.js"
 import type { TaskId } from "../../domain/ids.js"
-import { ExtensionStateRuntime } from "../../runtime/extensions/state-runtime.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskUpdateParams = Schema.Struct({
@@ -23,9 +22,7 @@ export const TaskUpdateTool = defineTool({
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TaskUpdateParams,
   execute: Effect.fn("TaskUpdateTool.execute")(function* (params, ctx) {
-    const runtime = yield* ExtensionStateRuntime
-    const updated = yield* runtime.ask(
-      ctx.sessionId,
+    const updated = yield* ctx.extensions.ask(
       TaskProtocol.UpdateTask({
         taskId: params.taskId as TaskId,
         status: params.status as TaskStatus | undefined,

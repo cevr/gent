@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import type { TaskId } from "../../domain/ids.js"
-import { ExtensionStateRuntime } from "../../runtime/extensions/state-runtime.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskStopParams = Schema.Struct({
@@ -17,9 +16,7 @@ export const TaskStopTool = defineTool({
     "Stop a running or pending task. Interrupts the task's agent fiber and sets status to stopped.",
   params: TaskStopParams,
   execute: Effect.fn("TaskStopTool.execute")(function* (params, ctx) {
-    const runtime = yield* ExtensionStateRuntime
-    const updated = yield* runtime.ask(
-      ctx.sessionId,
+    const updated = yield* ctx.extensions.ask(
       TaskProtocol.StopTask({ taskId: params.taskId as TaskId }),
       ctx.branchId,
     )

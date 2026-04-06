@@ -289,6 +289,7 @@ export {
   expectNoChange,
   createExtensionHarness,
   createToolTestLayer,
+  testToolContext,
   type ActorHarnessOptions,
   type ActorHarnessConfig,
   type ActorHarnessResult,

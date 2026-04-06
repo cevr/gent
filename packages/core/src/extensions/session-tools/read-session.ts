@@ -5,7 +5,6 @@ import { requireAgent } from "../../runtime/extensions/registry.js"
 import { headTailChars } from "../../domain/output-buffer.js"
 import type { Message, MessagePart, Branch } from "../../domain/message.js"
 import type { SessionId } from "../../domain/ids.js"
-import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 
 // Read Session Error
@@ -140,7 +139,6 @@ export const ReadSessionTool = defineTool({
     // If goal provided, use AI extraction
     if (params.goal !== undefined) {
       const runner = yield* AgentRunnerService
-      const platform = yield* RuntimePlatform
 
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
 
@@ -150,7 +148,7 @@ export const ReadSessionTool = defineTool({
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-        cwd: platform.cwd,
+        cwd: ctx.cwd,
       })
 
       if (result._tag === "error") {

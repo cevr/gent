@@ -12,6 +12,12 @@ const ctx: ToolContext = {
   sessionId: "test-session",
   branchId: "test-branch",
   toolCallId: "test-call",
+  cwd: "/tmp",
+  home: "/tmp",
+  extensions: {
+    send: () => Effect.die("not wired"),
+    ask: () => Effect.die("not wired"),
+  },
 }
 
 const mockRunnerSuccess = Layer.succeed(AgentRunnerService, {

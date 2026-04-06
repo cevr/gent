@@ -5,6 +5,8 @@ import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { AgentRunSpawned } from "@gent/core/domain/event"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Permission } from "@gent/core/domain/permission"
@@ -168,6 +170,8 @@ describe("extension tools through ToolRunner.run", () => {
       ),
       Permission.Test(),
       ApprovalService.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ExtensionStateRuntime.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(baseDeps))
     layer = Layer.mergeAll(baseDeps, runnerLayer)

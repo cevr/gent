@@ -1,6 +1,12 @@
 import type { Effect, Schema } from "effect"
 import type { AgentName } from "./agent"
 import type { EventStoreError } from "./event"
+import type {
+  AnyExtensionCommandMessage,
+  AnyExtensionRequestMessage,
+  ExtensionProtocolError,
+  ExtractExtensionReply,
+} from "./extension-protocol"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type {
   ApprovalDecision,
@@ -48,11 +54,30 @@ export interface ToolContext {
   readonly branchId: BranchId
   readonly toolCallId: ToolCallId
   readonly agentName?: AgentName
+  /** Working directory — replaces direct RuntimePlatform access in tools */
+  readonly cwd: string
+  /** Home directory — replaces direct RuntimePlatform access in tools */
+  readonly home: string
+  /** Extension actor RPC — replaces direct ExtensionStateRuntime access in tools */
+  readonly extensions: ToolContextExtensions
   /** Request human approval. Cold — throws InteractionPendingError, machine parks, survives restarts.
    *  Wired by ToolRunner.Live — available in all tool execute() calls. */
   readonly approve: (
     params: ApprovalRequest,
   ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
+}
+
+export interface ToolContextExtensions {
+  /** Fire-and-forget message to an extension actor */
+  readonly send: (
+    message: AnyExtensionCommandMessage,
+    branchId?: BranchId,
+  ) => Effect.Effect<void, ExtensionProtocolError>
+  /** Request/reply with an extension actor */
+  readonly ask: <M extends AnyExtensionRequestMessage>(
+    message: M,
+    branchId?: BranchId,
+  ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
 }
 
 // Tool Factory

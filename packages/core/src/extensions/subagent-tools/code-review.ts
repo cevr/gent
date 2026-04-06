@@ -7,7 +7,6 @@ import {
 } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import { requireAgent, ExtensionRegistry } from "../../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 import {
   requireText,
   runCommand as runCommandBase,
@@ -273,14 +272,13 @@ export const CodeReviewTool = defineTool({
   params: CodeReviewParams,
   execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: ToolContext) {
     const runner = yield* AgentRunnerService
-    const platform = yield* RuntimePlatform
 
     const mode = params.mode ?? "report"
     const runnerContext: WorkflowRunContext = {
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
       toolCallId: ctx.toolCallId,
-      cwd: platform.cwd,
+      cwd: ctx.cwd,
     }
 
     const reviewer = yield* requireAgent("reviewer")

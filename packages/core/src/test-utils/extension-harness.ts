@@ -35,7 +35,7 @@ import type {
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import type { AnyToolDefinition } from "../domain/tool.js"
+import type { AnyToolDefinition, ToolContext } from "../domain/tool.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import {
   reconcileLoadedExtensions,
@@ -343,3 +343,18 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
     }),
   ).pipe(Layer.provide(BunServices.layer))
 }
+
+/** Default ToolContext for tests — overridable via spread */
+export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext => ({
+  sessionId: "test-session" as SessionId,
+  branchId: "test-branch" as BranchId,
+  toolCallId: "test-call" as ToolCallId,
+  cwd: "/tmp",
+  home: "/tmp",
+  extensions: {
+    send: () => Effect.die("extensions.send() not wired in test"),
+    ask: () => Effect.die("extensions.ask() not wired in test"),
+  },
+  approve: () => Effect.die("approve() not wired in test"),
+  ...overrides,
+})

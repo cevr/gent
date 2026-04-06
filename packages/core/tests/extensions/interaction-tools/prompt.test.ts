@@ -12,6 +12,12 @@ const ctx: ToolContext = {
   branchId: "test-branch" as BranchId,
   toolCallId: "test-call" as ToolCallId,
   approve: () => Effect.succeed({ approved: true }),
+  cwd: "/tmp",
+  home: "/tmp",
+  extensions: {
+    send: () => Effect.die("not wired"),
+    ask: () => Effect.die("not wired"),
+  },
 }
 
 const PlatformLayer = Layer.merge(

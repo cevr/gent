@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { AgentName } from "../../domain/agent.js"
 import type { TaskId } from "../../domain/ids.js"
-import { ExtensionStateRuntime } from "../../runtime/extensions/state-runtime.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskCreateParams = Schema.Struct({
@@ -30,9 +29,7 @@ export const TaskCreateTool = defineTool({
     "Create a durable task with optional dependencies. Tasks persist across turns and can be run in the background. Set agent + prompt for executable tasks.",
   params: TaskCreateParams,
   execute: Effect.fn("TaskCreateTool.execute")(function* (params, ctx) {
-    const runtime = yield* ExtensionStateRuntime
-    const task = yield* runtime.ask(
-      ctx.sessionId,
+    const task = yield* ctx.extensions.ask(
       TaskProtocol.CreateTask({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
@@ -47,8 +44,7 @@ export const TaskCreateTool = defineTool({
 
     if (params.blockedBy !== undefined) {
       for (const depId of params.blockedBy) {
-        yield* runtime.ask(
-          ctx.sessionId,
+        yield* ctx.extensions.ask(
           TaskProtocol.AddDependency({ taskId: task.id, blockedById: depId as TaskId }),
           ctx.branchId,
         )

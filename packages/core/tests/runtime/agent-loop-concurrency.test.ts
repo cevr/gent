@@ -3,6 +3,7 @@ import { Effect, Layer, Schema } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Provider, ToolCallChunk, FinishChunk } from "@gent/core/providers/provider"
@@ -92,6 +93,7 @@ describe("Tool concurrency", () => {
       makeTestExtRegistry([toolA, toolB]),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
       Permission.Test(),
       ApprovalService.Test(),

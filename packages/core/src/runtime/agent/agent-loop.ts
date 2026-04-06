@@ -477,7 +477,13 @@ const executeToolCalls = (params: {
           branchId: params.branchId,
           toolCallId: toolCall.toolCallId,
           agentName: params.currentTurnAgent,
-          // Overridden by ToolRunner.Live with the real ApprovalService delegate
+          // Overridden by ToolRunner.Live with real values
+          cwd: "",
+          home: "",
+          extensions: {
+            send: () => Effect.die("extensions.send() called without ToolRunner wiring"),
+            ask: () => Effect.die("extensions.ask() called without ToolRunner wiring"),
+          },
           approve: () => Effect.die("approve() called without ToolRunner wiring"),
         }
         const run = params.toolRunner

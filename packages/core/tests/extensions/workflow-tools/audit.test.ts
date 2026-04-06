@@ -32,6 +32,12 @@ const ctx: ToolContext = {
   branchId: "test-branch",
   toolCallId: "test-call",
   agentName: "cowork",
+  cwd: "/tmp",
+  home: "/tmp",
+  extensions: {
+    send: () => Effect.die("not wired"),
+    ask: () => Effect.die("not wired"),
+  },
 }
 
 const makeSuccess = (

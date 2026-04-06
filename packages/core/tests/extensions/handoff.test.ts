@@ -14,6 +14,12 @@ const makeCtx = (approvalService: { present: ToolContext["approve"] }): ToolCont
   branchId: "test-branch" as BranchId,
   toolCallId: "test-call" as ToolCallId,
   approve: approvalService.present,
+  cwd: "/tmp",
+  home: "/tmp",
+  extensions: {
+    send: () => Effect.die("not wired"),
+    ask: () => Effect.die("not wired"),
+  },
 })
 
 const mockRunnerSuccess = Layer.succeed(AgentRunnerService, {
