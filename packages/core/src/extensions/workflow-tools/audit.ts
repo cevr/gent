@@ -183,7 +183,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   const registry = yield* ExtensionRegistry
   const [primaryModel, reviewerModel] = yield* registry.resolveDualModelPair()
   const auditOverrides = {
-    allowedActions: ["read"] as const,
+    allowedTools: ["grep", "glob", "read", "memory_search"] as const,
     deniedTools: ["bash"] as const,
   }
 

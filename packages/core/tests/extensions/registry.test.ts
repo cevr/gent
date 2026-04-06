@@ -358,12 +358,12 @@ describe("ExtensionRegistry", () => {
     expect(agents.map((a) => a.name)).toContain("deepwork")
   })
 
-  test("resolveToolPolicy filters by allowedActions", async () => {
+  test("resolveToolPolicy filters by allowedTools", async () => {
     const readTool = makeTool("read", "read")
     const bashTool = makeTool("bash", "exec")
     const agent = new AgentDefinition({
       name: "explore" as never,
-      allowedActions: ["read"],
+      allowedTools: ["read"],
     })
 
     const registry = await buildRegistry([
@@ -375,14 +375,13 @@ describe("ExtensionRegistry", () => {
     expect(tools[0]?.name).toBe("read")
   })
 
-  test("resolveToolPolicy filters by allowedTools", async () => {
+  test("resolveToolPolicy allowedTools restricts to exact set", async () => {
     const readTool = makeTool("read", "read")
     const bashTool = makeTool("bash", "exec")
     const editTool = makeTool("edit", "edit")
     const agent = new AgentDefinition({
       name: "explore" as never,
-      allowedActions: ["read"],
-      allowedTools: ["bash"],
+      allowedTools: ["read", "bash"],
     })
 
     const registry = await buildRegistry([

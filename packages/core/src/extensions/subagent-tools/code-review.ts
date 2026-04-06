@@ -189,7 +189,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   const [modelA, modelB] = yield* registry.resolveDualModelPair()
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
   const reviewOverrides = {
-    allowedActions: ["read"] as const,
+    allowedTools: ["grep", "glob", "read", "memory_search"] as const,
     deniedTools: ["bash"] as const,
   }
 

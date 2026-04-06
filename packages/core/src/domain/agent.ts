@@ -2,7 +2,7 @@ import { ServiceMap, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import { ModelId } from "./model"
-import type { ToolAction as ToolActionType, AnyToolDefinition } from "./tool"
+import type { AnyToolDefinition } from "./tool"
 
 // Agent definitions
 
@@ -22,16 +22,6 @@ export type ReasoningEffort = typeof ReasoningEffort.Type
 export const AgentPersistence = Schema.Literals(["durable", "ephemeral"])
 export type AgentPersistence = typeof AgentPersistence.Type
 
-export const ToolAction = Schema.Literals([
-  "read",
-  "edit",
-  "exec",
-  "delegate",
-  "interact",
-  "network",
-  "state",
-])
-
 /** Brand symbol for detecting full AgentDefinition vs SimpleAgentDef in overloaded APIs */
 export const AgentDefinitionBrand: unique symbol = Symbol.for("@gent/AgentDefinition")
 
@@ -41,11 +31,9 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   model: Schema.optional(ModelId),
   systemPromptAddendum: Schema.optional(Schema.String),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
-  allowedActions: Schema.optional(Schema.Array(ToolAction)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
   temperature: Schema.optional(Schema.Number),
   reasoningEffort: Schema.optional(ReasoningEffort),
-  canDelegateToAgents: Schema.optional(Schema.Array(AgentName)),
   persistence: Schema.optional(AgentPersistence),
 }) {}
 
@@ -143,7 +131,6 @@ export const Agents = {
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
     model: "anthropic/claude-opus-4-6" as ModelId,
-    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     systemPromptAddendum: COWORK_PROMPT,
   }),
 
@@ -151,7 +138,6 @@ export const Agents = {
     name: "deepwork",
     description: "Adversarial reviewer — used by counsel tool for cross-vendor review",
     model: "openai/gpt-5.4" as ModelId,
-    canDelegateToAgents: ["explore", "architect", "librarian", "finder", "reviewer", "auditor"],
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
   }),
@@ -160,8 +146,7 @@ export const Agents = {
     name: "explore",
     description: "Fast codebase exploration - finds files, searches patterns",
     model: "openai/gpt-5.4-mini" as ModelId,
-    allowedActions: ["read"],
-    allowedTools: ["bash"],
+    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
     systemPromptAddendum: EXPLORE_PROMPT,
     persistence: "ephemeral",
   }),
@@ -170,7 +155,7 @@ export const Agents = {
     name: "architect",
     description: "Designs implementation approaches",
     model: "anthropic/claude-opus-4-6" as ModelId,
-    allowedActions: ["read", "network"],
+    allowedTools: ["grep", "glob", "read", "memory_search", "websearch", "webfetch"],
     systemPromptAddendum: ARCHITECT_PROMPT,
   }),
 
@@ -178,7 +163,7 @@ export const Agents = {
     name: "librarian",
     description: "Answers questions about external repos using local cached clones",
     model: "openai/gpt-5.4-mini" as ModelId,
-    allowedActions: ["read"],
+    allowedTools: ["grep", "glob", "read", "memory_search"],
     systemPromptAddendum: LIBRARIAN_PROMPT,
     persistence: "ephemeral",
   }),
@@ -203,8 +188,7 @@ export const Agents = {
     name: "finder",
     description: "Fast multi-step codebase search via cheap model",
     model: "openai/gpt-5.4-mini" as ModelId,
-    allowedActions: ["read"],
-    allowedTools: ["bash"],
+    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
     systemPromptAddendum: FINDER_PROMPT,
     persistence: "ephemeral",
   }),
@@ -213,8 +197,7 @@ export const Agents = {
     name: "reviewer",
     description: "Structured code review with severity-graded comments",
     model: "openai/gpt-5.4-mini" as ModelId,
-    allowedActions: ["read"],
-    allowedTools: ["bash"],
+    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
     systemPromptAddendum: REVIEWER_PROMPT,
     persistence: "ephemeral",
   }),
@@ -223,8 +206,7 @@ export const Agents = {
     name: "auditor",
     description: "Audits code for a specific concern category",
     model: "openai/gpt-5.4-mini" as ModelId,
-    allowedActions: ["read"],
-    allowedTools: ["bash"],
+    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
     systemPromptAddendum: AUDITOR_PROMPT,
     persistence: "ephemeral",
   }),
@@ -246,7 +228,6 @@ export const resolveAgentPersistence = (
 
 export interface AgentExecutionOverrides {
   readonly modelId?: ModelId
-  readonly allowedActions?: ReadonlyArray<ToolActionType>
   readonly allowedTools?: ReadonlyArray<string>
   readonly deniedTools?: ReadonlyArray<string>
   readonly reasoningEffort?: ReasoningEffort
@@ -259,7 +240,6 @@ export interface AgentExecutionOverrides {
 
 export const AgentExecutionOverridesSchema = Schema.Struct({
   modelId: Schema.optional(ModelId),
-  allowedActions: Schema.optional(Schema.Array(ToolAction)),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
   reasoningEffort: Schema.optional(ReasoningEffort),

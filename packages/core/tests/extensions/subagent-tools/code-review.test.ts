@@ -71,7 +71,7 @@ describe("CodeReviewTool", () => {
         const reviewOverrides = capturedOverrides.find(
           (overrides) => overrides?.["deniedTools"] !== undefined,
         )
-        expect(reviewOverrides?.["allowedActions"]).toEqual(["read"])
+        expect(reviewOverrides?.["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
         expect(reviewOverrides?.["deniedTools"]).toEqual(["bash"])
       }),
       Effect.provide(layer),

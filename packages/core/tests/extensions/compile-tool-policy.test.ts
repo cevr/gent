@@ -43,20 +43,22 @@ describe("compileToolPolicy", () => {
     expect(names(tools)).toEqual(names(allTools))
   })
 
-  test("allowedActions filters by action", () => {
-    const agent = new AgentDefinition({ name: "cowork", allowedActions: ["read"] })
+  test("allowedTools filters by name", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      allowedTools: ["read", "grep", "glob", "search_skills"],
+    })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
     expect(names(tools)).toEqual(["glob", "grep", "read", "search_skills"])
   })
 
-  test("allowedActions + allowedTools unions", () => {
+  test("allowedTools restricts to exact set", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      allowedActions: ["read"],
-      allowedTools: ["bash"],
+      allowedTools: ["bash", "read"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
-    expect(names(tools)).toEqual(["bash", "glob", "grep", "read", "search_skills"])
+    expect(names(tools)).toEqual(["bash", "read"])
   })
 
   test("allowedTools: [] means no tools", () => {
@@ -68,17 +70,17 @@ describe("compileToolPolicy", () => {
   test("deniedTools removes from result", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      allowedActions: ["read"],
+      allowedTools: ["read", "grep", "glob", "search_skills"],
       deniedTools: ["grep"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
     expect(names(tools)).toEqual(["glob", "read", "search_skills"])
   })
 
-  test("multiple actions", () => {
+  test("allowedTools with network tools", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      allowedActions: ["read", "network"],
+      allowedTools: ["read", "grep", "glob", "search_skills", "webfetch", "websearch"],
     })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], [])
     expect(names(tools)).toEqual(["glob", "grep", "read", "search_skills", "webfetch", "websearch"])
@@ -104,7 +106,7 @@ describe("compileToolPolicy", () => {
   test("extension projection include adds tools", () => {
     const agent = new AgentDefinition({
       name: "cowork",
-      allowedActions: ["read"],
+      allowedTools: ["read", "grep", "glob", "search_skills"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [], projections)

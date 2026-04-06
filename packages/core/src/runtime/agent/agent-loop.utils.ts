@@ -26,6 +26,7 @@ export const buildTurnPrompt = (
   agent: AgentDefinition,
   tools: ReadonlyArray<AnyToolDefinition>,
   extraSections?: ReadonlyArray<PromptSection>,
+  delegationTargets?: ReadonlyArray<AgentDefinition>,
 ): string => {
   const sections: PromptSection[] = [...baseSections]
 
@@ -64,6 +65,21 @@ export const buildTurnPrompt = (
       content: `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
       priority: 44,
     })
+  }
+
+  // Delegation targets — synthesized from registered agents when delegate is available
+  const hasDelegate = tools.some((t) => t.name === "delegate")
+  if (hasDelegate && delegationTargets !== undefined && delegationTargets.length > 0) {
+    const targets = delegationTargets
+      .filter((a) => a.name !== agent.name && a.description !== undefined)
+      .map((a) => `- **${a.name}**: ${a.description}`)
+    if (targets.length > 0) {
+      sections.push({
+        id: "delegation-targets",
+        content: `## Delegation Targets\n\nAgents available via the \`delegate\` tool:\n\n${targets.join("\n")}`,
+        priority: 46,
+      })
+    }
   }
 
   // Extension-contributed sections

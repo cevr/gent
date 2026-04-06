@@ -49,7 +49,7 @@ import {
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId, type ToolCallId } from "../../domain/ids.js"
-import { type AnyToolDefinition, type ToolAction, type ToolContext } from "../../domain/tool.js"
+import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -271,11 +271,13 @@ const resolveTurnContext = (params: {
       )
 
     // Build tool-aware prompt, then run through prompt.system interceptor
+    const allAgents = yield* params.extensionRegistry.listAgents()
     const turnPrompt = buildTurnPrompt(
       params.baseSections,
       effectiveAgent,
       tools,
       extensionSections,
+      allAgents,
     )
     const systemPrompt = yield* params.extensionRegistry.hooks.runInterceptor(
       "prompt.system",
@@ -959,7 +961,6 @@ const resolveStoredAgent = (params: {
   })
 
 const hasAgentOverrides = (overrides: AgentExecutionOverrides | undefined) =>
-  overrides?.allowedActions !== undefined ||
   overrides?.allowedTools !== undefined ||
   overrides?.deniedTools !== undefined ||
   overrides?.reasoningEffort !== undefined ||
@@ -988,11 +989,6 @@ const applyAgentOverrides = (
 
   return new AgentDefinition({
     ...agent,
-    ...(overrides?.allowedActions !== undefined
-      ? {
-          allowedActions: overrides.allowedActions as ReadonlyArray<ToolAction>,
-        }
-      : {}),
     ...(overrides?.allowedTools !== undefined ? { allowedTools: overrides.allowedTools } : {}),
     ...(overrides?.deniedTools !== undefined ? { deniedTools: overrides.deniedTools } : {}),
     ...(overrides?.reasoningEffort !== undefined

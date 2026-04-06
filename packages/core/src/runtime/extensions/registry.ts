@@ -364,23 +364,13 @@ const filterToolsForAgent = (
   allTools: ReadonlyArray<AnyToolDefinition>,
   agent: AgentDefinition,
 ): AnyToolDefinition[] => {
-  const hasAllowList = agent.allowedActions !== undefined || agent.allowedTools !== undefined
+  let tools: AnyToolDefinition[]
 
-  let tools: AnyToolDefinition[] = hasAllowList ? [] : [...allTools]
-
-  if (hasAllowList) {
-    const actions = agent.allowedActions !== undefined ? new Set(agent.allowedActions) : undefined
-    const names = agent.allowedTools !== undefined ? new Set(agent.allowedTools) : undefined
-    const included = new Set<string>()
-
-    for (const t of allTools) {
-      const byAction = actions !== undefined && actions.has(t.action)
-      const byName = names !== undefined && names.has(t.name)
-      if ((byAction || byName) && !included.has(t.name)) {
-        tools.push(t)
-        included.add(t.name)
-      }
-    }
+  if (agent.allowedTools !== undefined) {
+    const names = new Set(agent.allowedTools)
+    tools = allTools.filter((t) => names.has(t.name))
+  } else {
+    tools = [...allTools]
   }
 
   if (agent.deniedTools !== undefined) {

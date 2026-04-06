@@ -52,8 +52,6 @@ export const DelegateTool = defineTool({
     const runner = yield* AgentRunnerService
     const registry = yield* ExtensionRegistry
 
-    const caller = ctx.agentName !== undefined ? yield* registry.getAgent(ctx.agentName) : undefined
-
     const hasChain = (params.chain?.length ?? 0) > 0
     const hasTasks = (params.tasks?.length ?? 0) > 0
     const hasSingle = params.agent !== undefined && params.task !== undefined
@@ -63,19 +61,11 @@ export const DelegateTool = defineTool({
       return { error: "Specify exactly one mode: agent+task, tasks[], or chain[]" }
     }
 
-    const ensureAllowed = (agentName: string) => {
-      if (caller === undefined || caller.canDelegateToAgents === undefined) return true
-      return Schema.is(AgentName)(agentName) && caller.canDelegateToAgents.includes(agentName)
-    }
-
     const resolveAgent = (agentName: string) =>
       registry.getAgent(agentName).pipe(
         Effect.map((agent) => {
           if (agent === undefined) {
             return { ok: false as const, error: `Unknown agent: ${agentName}` }
-          }
-          if (!ensureAllowed(agent.name)) {
-            return { ok: false as const, error: `Not allowed to delegate to: ${agentName}` }
           }
           return { ok: true as const, agent }
         }),

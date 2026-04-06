@@ -275,7 +275,7 @@ describe("Audit Tool", () => {
       Effect.map(() => {
         expect(auditOverrides.length).toBeGreaterThan(0)
         for (const overrides of auditOverrides) {
-          expect(overrides?.["allowedActions"]).toEqual(["read"])
+          expect(overrides?.["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
           expect(overrides?.["deniedTools"]).toEqual(["bash"])
         }
       }),

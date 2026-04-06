@@ -139,11 +139,11 @@ describe("CounselTool", () => {
   })
 
   it.live("spawns agent with restricted read-only tools", () => {
-    let capturedAllowedActions: readonly string[] | undefined
+    let capturedAllowedTools: readonly string[] | undefined
     let capturedDeniedTools: readonly string[] | undefined
     const capturingRunner = Layer.succeed(AgentRunnerService, {
       run: (params) => {
-        capturedAllowedActions = params.agent.allowedActions
+        capturedAllowedTools = params.agent.allowedTools
         capturedDeniedTools = params.agent.deniedTools
         return Effect.succeed({
           _tag: "success" as const,
@@ -156,10 +156,8 @@ describe("CounselTool", () => {
     const layer = Layer.mergeAll(capturingRunner, platformLayer)
     return CounselTool.execute({ prompt: "review" }, ctx).pipe(
       Effect.map(() => {
-        expect(capturedAllowedActions).toBeDefined()
-        expect(capturedAllowedActions).toContain("read")
-        expect(capturedAllowedActions).not.toContain("edit")
-        expect(capturedAllowedActions).not.toContain("exec")
+        expect(capturedAllowedTools).toBeDefined()
+        expect(capturedAllowedTools).toEqual(["grep", "glob", "read", "memory_search"])
         expect(capturedDeniedTools).toBeDefined()
         expect(capturedDeniedTools).toContain("bash")
       }),

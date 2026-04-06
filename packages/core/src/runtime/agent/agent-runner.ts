@@ -203,9 +203,6 @@ const normalizeOverrides = (overrides: AgentExecutionOverrides | undefined) =>
     ? undefined
     : {
         ...(overrides.modelId !== undefined ? { modelId: overrides.modelId } : {}),
-        ...(overrides.allowedActions !== undefined
-          ? { allowedActions: overrideArray(overrides.allowedActions) }
-          : {}),
         ...(overrides.allowedTools !== undefined
           ? { allowedTools: overrideArray(overrides.allowedTools) }
           : {}),

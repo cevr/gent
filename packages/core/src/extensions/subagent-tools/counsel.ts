@@ -54,7 +54,7 @@ export const CounselTool = defineTool({
     const deepwork = yield* requireAgent("deepwork")
     const reviewer = new AgentDefinition({
       ...deepwork,
-      allowedActions: ["read"],
+      allowedTools: ["grep", "glob", "read", "memory_search"],
       deniedTools: ["bash"],
     })
 

@@ -122,7 +122,6 @@ describe("AgentExecutionOverrides", () => {
           persistence: "durable",
           overrides: {
             modelId: "custom/model" as ModelId,
-            allowedActions: ["read", "edit"],
             allowedTools: ["bash", "grep"],
             deniedTools: ["write"],
             reasoningEffort: "high",
@@ -133,7 +132,6 @@ describe("AgentExecutionOverrides", () => {
 
         expect(capturedInput).toBeDefined()
         expect(capturedInput!.overrides?.modelId).toBe("custom/model")
-        expect(capturedInput!.overrides?.allowedActions).toEqual(["read", "edit"])
         expect(capturedInput!.overrides?.allowedTools).toEqual(["bash", "grep"])
         expect(capturedInput!.overrides?.deniedTools).toEqual(["write"])
         expect(capturedInput!.overrides?.reasoningEffort).toBe("high")
