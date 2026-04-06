@@ -122,7 +122,6 @@ export declare namespace ExtensionContext {
 
     readonly createChildSession: (params: {
       name?: string
-      prompt?: string
       cwd?: string
     }) => Promise<{ sessionId: SessionId; branchId: BranchId }>
 

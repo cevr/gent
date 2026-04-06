@@ -147,7 +147,6 @@ export declare namespace ExtensionHostContext {
 
     readonly createChildSession: (params: {
       name?: string
-      prompt?: string
       cwd?: string
     }) => Effect.Effect<
       { sessionId: SessionId; branchId: BranchId },

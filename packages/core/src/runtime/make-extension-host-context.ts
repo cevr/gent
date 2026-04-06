@@ -194,6 +194,13 @@ export const makeExtensionHostContext = (
 
     switchBranch: (params) =>
       Effect.gen(function* () {
+        const targetBranch = yield* deps.storage.getBranch(params.toBranchId)
+        if (targetBranch === undefined) {
+          return yield* Effect.die(`Branch "${params.toBranchId}" not found`)
+        }
+        if (targetBranch.sessionId !== runInfo.sessionId) {
+          return yield* Effect.die(`Branch "${params.toBranchId}" belongs to a different session`)
+        }
         const session = yield* deps.storage.getSession(runInfo.sessionId)
         if (session === undefined) return yield* Effect.die("Current session not found")
         const updated = new Session({
@@ -244,7 +251,16 @@ export const makeExtensionHostContext = (
         if (sessionId === runInfo.sessionId) {
           return yield* Effect.die("Cannot delete the current session from within it")
         }
-        yield* deps.storage.deleteSession(sessionId)
+        // Prefer SessionCommands for full cleanup (terminate actors, events, etc.)
+        const { SessionCommands } = yield* Effect.promise(
+          () => import("../server/session-commands.js"),
+        )
+        const cmds = yield* Effect.serviceOption(SessionCommands)
+        if (cmds._tag === "Some") {
+          yield* cmds.value.deleteSession(sessionId).pipe(Effect.catchEager(() => Effect.void))
+        } else {
+          yield* deps.storage.deleteSession(sessionId)
+        }
       }),
 
     deleteBranch: (branchId) =>
