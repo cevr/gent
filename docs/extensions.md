@@ -47,6 +47,15 @@ export default extension("my-ext", async (ext, ctx) => {
 
 The factory runs at **setup time** (not import time), receives setup context, and can be async.
 
+## Dual-Surface API
+
+The extension builder has two surfaces for hooks and commands:
+
+- **`ext.on(key, handler)`** — Effect-native. Handlers return `Effect`, ctx is `ExtensionHostContext`.
+- **`ext.async.on(key, handler)`** — Promise-based. Handlers return `Promise`, ctx is `ExtensionContext`.
+
+Both register the same interceptors. Same capabilities, different ergonomics. Use `ext.async.*` if you don't want Effect; use `ext.*` for full Effect power.
+
 ### ext.tool(def)
 
 Register a tool:
@@ -80,7 +89,7 @@ ext.agent({
 
 ### ext.command(name, options)
 
-Register a slash command. Handler receives args and `ExtensionHostContext`:
+Register a slash command. Handler receives args and `ExtensionContext` (Promise-based):
 
 ```ts
 ext.command("deploy", {
@@ -88,8 +97,7 @@ ext.command("deploy", {
   handler: async (args, ctx) => {
     const result = await ext.exec("deploy", [args])
     console.log(result.stdout)
-    // Steer the agent via ctx.turn
-    await Effect.runPromise(ctx.turn.queueFollowUp({ content: `Deployed: ${result.stdout}` }))
+    await ctx.turn.queueFollowUp({ content: `Deployed: ${result.stdout}` })
   },
 })
 ```
@@ -103,20 +111,6 @@ const result = await ext.exec("git", ["status"])
 if (result.exitCode !== 0) console.error(result.stderr)
 ```
 
-### ext.sendMessage(content, metadata?)
-
-Queue a follow-up message after the current turn completes. Only usable from `ext.on()` handlers:
-
-```ts
-ext.on("turn.after", (input) => {
-  ext.sendMessage("Follow-up analysis complete")
-})
-```
-
-### ext.sendUserMessage(content)
-
-Inject a user message mid-turn. Only usable from `ext.on()` handlers.
-
 ### ext.promptSection(section)
 
 Add a static system prompt section:
@@ -129,35 +123,83 @@ ext.promptSection({
 })
 ```
 
-### ext.on(key, handler)
+### ext.on(key, handler) — Effect-native hooks
 
-Register hook interceptors. Six hook points available:
+Register Effect-native interceptor hooks. Seven hook points available:
 
-| Hook               | Type            | Description                    |
-| ------------------ | --------------- | ------------------------------ |
-| `prompt.system`    | Transform       | Modify the system prompt       |
-| `tool.execute`     | Transform       | Intercept tool execution       |
-| `permission.check` | Transform       | Override permission decisions  |
-| `context.messages` | Transform       | Filter/modify context messages |
-| `tool.result`      | Transform       | Enrich/modify tool results     |
-| `turn.after`       | Fire-and-forget | Post-turn side effects         |
+| Hook               | Type            | Description                      |
+| ------------------ | --------------- | -------------------------------- |
+| `prompt.system`    | Transform       | Modify the system prompt         |
+| `tool.execute`     | Transform       | Intercept tool execution         |
+| `permission.check` | Transform       | Override permission decisions    |
+| `context.messages` | Transform       | Filter/modify context messages   |
+| `tool.result`      | Transform       | Enrich/modify tool results       |
+| `turn.after`       | Fire-and-forget | Post-turn side effects           |
+| `message.input`    | Transform       | Transform user input before send |
 
-**Transform hooks** receive `(input, next)` — call `next(input)` to continue the chain:
+Handlers receive `(input, next, ctx)` where `next` returns `Effect` and `ctx` is `ExtensionHostContext`:
 
 ```ts
-ext.on("prompt.system", async (input, next) => {
-  const result = await next(input)
-  return result + "\n\nCustom footer."
-})
+ext.on("prompt.system", (input, next, ctx) =>
+  next(input).pipe(Effect.map((result) => result + "\nCustom footer.")),
+)
+
+ext.on("turn.after", (input, next, ctx) =>
+  Effect.gen(function* () {
+    yield* next(input)
+    yield* Effect.logInfo(`Turn completed in ${input.durationMs}ms`)
+  }),
+)
+
+ext.on("message.input", (input, next, ctx) =>
+  Effect.gen(function* () {
+    const content = yield* next(input)
+    return content.replace(/todo:/gi, "[ACTION ITEM]:")
+  }),
+)
 ```
 
-**Fire-and-forget hooks** receive `(input)` only:
+### ext.async.on(key, handler) — Promise-based hooks
+
+Same hooks, Promise ergonomics. Handlers receive `(input, next, ctx)` where `next` returns `Promise` and `ctx` is `ExtensionContext`:
 
 ```ts
-ext.on("turn.after", async (input) => {
+ext.async.on("prompt.system", async (input, next, ctx) => {
+  const result = await next(input)
+  return result + "\nCustom footer."
+})
+
+ext.async.on("turn.after", async (input, next, ctx) => {
+  await next(input)
   console.log(`Turn completed in ${input.durationMs}ms`)
 })
+
+ext.async.on("message.input", async (input, next, ctx) => {
+  const content = await next(input)
+  return content.replace(/todo:/gi, "[ACTION ITEM]:")
+})
 ```
+
+### Imperative Side Effects
+
+Queue follow-up turns or inject messages from `ext.async.on()` handlers — no actors needed:
+
+```ts
+ext.async.on("turn.after", async (input, next) => {
+  await next(input)
+  if (shouldContinue(input)) {
+    ext.sendMessage("Continue working on the task.")
+  }
+})
+
+ext.async.on("tool.result", async (input, next) => {
+  const result = await next(input)
+  ext.sendUserMessage("I noticed something — let me check.")
+  return result
+})
+```
+
+Available in `turn.after`, `tool.execute`, `tool.result`, `context.messages`, `message.input` handlers. Not available in `prompt.system` or `permission.check` (throws descriptive error).
 
 ### ext.onStartup(fn) / ext.onShutdown(fn)
 
@@ -171,6 +213,50 @@ ext.onShutdown(async () => {
   /* cleanup */
 })
 ```
+
+### File-Backed Storage
+
+Simple key-value storage, namespaced by extension ID:
+
+```ts
+// Available at setup time and in handlers
+await ext.storage.set("config", { theme: "dark" })
+const config = await ext.storage.get("config")
+await ext.storage.delete("config")
+const keys = await ext.storage.list()
+```
+
+Stored at `~/.gent/extensions/<id>/storage/<key>.json`. Keys must be alphanumeric with hyphens/underscores.
+
+### Event Observation
+
+Subscribe to events via the channel-based event bus:
+
+```ts
+ext.bus.on("agent:*", (envelope) => {
+  console.log(`[${envelope.channel}] payload=${JSON.stringify(envelope.payload)}`)
+})
+```
+
+## Validation
+
+The framework validates all loaded extensions before creating the registry:
+
+- **Duplicate IDs** in same scope → conflicting extension degrades
+- **Same-name tools** from different extensions in same scope → conflicting extension degrades
+- **Same-name agents** from different extensions in same scope → conflicting extension degrades
+- **Same-id providers** from different extensions in same scope → conflicting extension degrades
+- **Same-id prompt sections** from different extensions in same scope → conflicting extension degrades
+
+Cross-scope: higher scope wins silently (project overrides user overrides builtin).
+
+## Full-Power Methods
+
+The same `extension()` builder has additional methods for Effect-aware extensions. These are used by builtins and advanced authors.
+
+### ext.tool(fullToolDef) / ext.agent(agentDefinition)
+
+`tool()` and `agent()` are overloaded — they accept both simple defs (shown above) and full domain objects created via `defineTool()` / `defineAgent()`.
 
 ### ext.actor(actor)
 
@@ -227,143 +313,6 @@ Rules:
 - actor owns state, snapshot, and turn projection
 - actor transitions stay explicit: pure state changes in handlers, side effects through declared slots
 
-### Imperative Side Effects
-
-Queue follow-up turns or inject messages from hook handlers — no actors needed:
-
-```ts
-ext.on("turn.after", async (input) => {
-  if (shouldContinue(input)) {
-    ext.queueFollowUp("Continue working on the task.")
-  }
-})
-
-ext.on("tool.result", async (input, next) => {
-  const result = await next(input)
-  ext.interject("I noticed something — let me check.")
-  return result
-})
-```
-
-Available in `turn.after`, `tool.execute`, `tool.result`, `context.messages` handlers. Not available in `prompt.system` or `permission.check` (throws descriptive error).
-
-### File-Backed Storage
-
-Simple key-value storage, namespaced by extension ID:
-
-```ts
-// Available at setup time and in handlers
-await ext.storage.set("config", { theme: "dark" })
-const config = await ext.storage.get("config")
-await ext.storage.delete("config")
-const keys = await ext.storage.list()
-```
-
-Stored at `~/.gent/extensions/<id>/storage/<key>.json`. Keys must be alphanumeric with hyphens/underscores.
-
-### Event Observation
-
-Subscribe to events via the channel-based event bus:
-
-```ts
-ext.bus.on("agent:*", (envelope) => {
-  console.log(`[${envelope.channel}] payload=${JSON.stringify(envelope.payload)}`)
-})
-```
-
-## Validation
-
-The framework validates all loaded extensions before creating the registry:
-
-- **Duplicate IDs** in same scope → conflicting extension degrades
-- **Same-name tools** from different extensions in same scope → conflicting extension degrades
-- **Same-name agents** from different extensions in same scope → conflicting extension degrades
-- **Same-id providers** from different extensions in same scope → conflicting extension degrades
-- **Same-type interaction handlers** from different extensions in same scope → conflicting extension degrades
-- **Same-id prompt sections** from different extensions in same scope → conflicting extension degrades
-
-Cross-scope: higher scope wins silently (project overrides user overrides builtin).
-
-## Full-Power Methods
-
-The same `extension()` builder has additional methods for Effect-aware extensions. These are used by builtins and advanced authors.
-
-### ext.tool(fullToolDef) / ext.agent(agentDefinition)
-
-`tool()` and `agent()` are overloaded — they accept both simple defs (shown above) and full domain objects created via `defineTool()` / `defineAgent()`.
-
-### ext.interceptor(key, run)
-
-Register a raw Effect interceptor (bypassing the Promise-based `on()` wrapper):
-
-```ts
-import { extension, defineInterceptor } from "@gent/core/extensions/api"
-
-extension("my-ext", (ext) => {
-  ext.interceptor("prompt.system", (input, next) =>
-    next({ ...input, basePrompt: input.basePrompt + "\nExtra." }),
-  )
-})
-```
-
-### ext.actor(actor)
-
-Register one actor-shaped definition.
-
-```ts
-import { extension } from "@gent/core/extensions/api"
-import { Effect, Schema } from "effect"
-import { Event as MEvent, Machine, Slot, State as MState } from "effect-machine"
-import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
-
-const CounterProtocol = {
-  Increment: ExtensionMessage("my-ext", "Increment", {}),
-}
-
-const CounterState = MState({
-  Active: { count: Schema.Number },
-})
-
-const CounterSlots = Slot.define({
-  writeAudit: Slot.fn({ count: Schema.Number }),
-})
-
-const CounterEvent = MEvent({
-  Increment: {},
-})
-
-const myActor = {
-  machine: Machine.make({
-    state: CounterState,
-    event: CounterEvent,
-    slots: CounterSlots,
-    initial: CounterState.Active({ count: 0 }),
-  }).on(CounterState.Active, CounterEvent.Increment, ({ state, slots }) =>
-    slots
-      .writeAudit({ count: state.count + 1 })
-      .pipe(Effect.as(CounterState.Active({ count: state.count + 1 }))),
-  ),
-  slots: () =>
-    Effect.succeed({
-      writeAudit: () => Effect.void,
-    }),
-  mapCommand: (message) =>
-    message.extensionId === "my-ext" && message._tag === "Increment"
-      ? CounterEvent.Increment({})
-      : undefined,
-  snapshot: {
-    schema: Schema.Struct({ count: Schema.Number }),
-    project: (state) => ({ count: state.count }),
-  },
-}
-
-extension("my-ext", (ext) => {
-  ext.actor({ ...myActor, protocols: CounterProtocol })
-})
-```
-
-`mapCommand()` and `mapRequest()` only run for messages declared through `actor.protocols`. Without a protocol definition, gent rejects the message before actor dispatch.
-
 ### ext.jobs(...jobs)
 
 Register durable host-owned scheduled jobs.
@@ -401,14 +350,6 @@ ext.provider({
   name: "My Provider",
   resolveModel: (name, auth) => createModel(name, auth?.key),
 })
-```
-
-### ext.interactionHandler(handler)
-
-Register interaction handlers (permission, prompt, handoff, ask-user):
-
-```ts
-ext.interactionHandler({ type: "permission", layer: MyPermissionHandler.Live })
 ```
 
 ### ext.onStartupEffect(effect) / ext.onShutdownEffect(effect)
