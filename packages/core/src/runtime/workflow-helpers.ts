@@ -3,11 +3,8 @@
  */
 
 import { Effect, Schema } from "effect"
-import type { ModelId } from "../domain/model.js"
 import { AgentRunError } from "../domain/agent.js"
-import type { AgentDefinition, AgentRunResult, AgentRunner } from "../domain/agent.js"
-import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
-import { RuntimePlatform } from "./runtime-platform.js"
+import type { AgentRunResult } from "../domain/agent.js"
 
 // ── Shell Command Runner ──
 
@@ -16,56 +13,27 @@ class CommandError extends Schema.TaggedErrorClass<CommandError>()("CommandError
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-/** Run a shell command, returning stdout. Returns empty string on failure. */
-export const runCommand = (cmd: string[]): Effect.Effect<string, never, RuntimePlatform> =>
-  Effect.gen(function* () {
-    const platform = yield* RuntimePlatform
-    return yield* Effect.tryPromise({
-      try: async () => {
-        const proc = Bun.spawn(cmd, {
-          cwd: platform.cwd,
-          stdout: "pipe",
-          stderr: "pipe",
-        })
-        const [stdout, stderr, exitCode] = await Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
-          proc.exited,
-        ])
-        if (exitCode !== 0) {
-          throw new CommandError({ message: stderr || `Command failed: ${cmd.join(" ")}` })
-        }
-        return stdout
-      },
-      catch: (e) => new CommandError({ message: String(e), cause: e }),
-    }).pipe(Effect.orElseSucceed(() => ""))
-  })
-
-// ── Adversarial Pair Runner ──
-
-export interface WorkflowRunContext {
-  parentSessionId: SessionId
-  parentBranchId: BranchId
-  toolCallId?: ToolCallId
-  cwd: string
-}
-
-/** Spawn same prompt with both models in parallel */
-export const runAdversarialPair = (
-  runner: AgentRunner,
-  agent: AgentDefinition,
-  prompt: string,
-  modelA: ModelId,
-  modelB: ModelId,
-  ctx: WorkflowRunContext,
-): Effect.Effect<readonly [AgentRunResult, AgentRunResult], AgentRunError> =>
-  Effect.all(
-    [
-      runner.run({ agent, prompt, ...ctx, overrides: { modelId: modelA } }),
-      runner.run({ agent, prompt, ...ctx, overrides: { modelId: modelB } }),
-    ] as const,
-    { concurrency: 2 },
-  )
+/** Run a shell command in a given cwd, returning stdout. Returns empty string on failure. */
+export const runCommand = (cmd: string[], cwd: string): Effect.Effect<string> =>
+  Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(cmd, {
+        cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      if (exitCode !== 0) {
+        throw new CommandError({ message: stderr || `Command failed: ${cmd.join(" ")}` })
+      }
+      return stdout
+    },
+    catch: (e) => new CommandError({ message: String(e), cause: e }),
+  }).pipe(Effect.orElseSucceed(() => ""))
 
 // ── Require Text ──
 

@@ -62,19 +62,22 @@ const summarizeComments = (comments: ReadonlyArray<ReviewComment>) => {
   return summary
 }
 
-const runCommand = (cmd: string[]) =>
-  runCommandBase(cmd).pipe(
+const runShellCommand = (cmd: string[], cwd: string) =>
+  runCommandBase(cmd, cwd).pipe(
     Effect.filterOrFail(
       (out) => out !== "",
       () => new CodeReviewError({ message: `Failed to run command: ${cmd.join(" ")}` }),
     ),
   )
 
-const resolveReviewInput = (params: {
-  content?: string
-  files?: ReadonlyArray<string>
-  diffSpec?: string
-}) => {
+const resolveReviewInput = (
+  params: {
+    content?: string
+    files?: ReadonlyArray<string>
+    diffSpec?: string
+  },
+  cwd: string,
+) => {
   if (params.content !== undefined && params.content.trim() !== "") {
     return Effect.succeed(params.content)
   }
@@ -88,7 +91,7 @@ const resolveReviewInput = (params: {
     args.push("--", ...params.files)
   }
 
-  return runCommand(args)
+  return runShellCommand(args, cwd)
 }
 
 const buildReviewPrompt = (reviewInput: string, description?: string) =>
@@ -251,11 +254,14 @@ export const CodeReviewTool = defineTool({
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = yield* ctx.agent.require(callerAgentName)
 
-    const reviewInput = yield* resolveReviewInput({
-      content: params.content,
-      files: params.files,
-      diffSpec: params.diff_spec,
-    })
+    const reviewInput = yield* resolveReviewInput(
+      {
+        content: params.content,
+        files: params.files,
+        diffSpec: params.diff_spec,
+      },
+      ctx.cwd,
+    )
 
     // Adversarial review cycle (always runs)
     const report = yield* runReviewCycle({
