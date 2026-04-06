@@ -227,8 +227,12 @@ type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 
 // ── Hook Types for ext.on() ──
 
-type TransformHandler<I, O> = (input: I, next: (input: I) => Promise<O>) => O | Promise<O>
-type FireAndForgetHandler<I> = (input: I) => void | Promise<void>
+type TransformHandler<I, O> = (
+  input: I,
+  next: (input: I) => Promise<O>,
+  ctx: ExtensionHostContext,
+) => O | Promise<O>
+type FireAndForgetHandler<I> = (input: I, ctx: ExtensionHostContext) => void | Promise<void>
 
 interface SimpleHookHandlers {
   readonly "prompt.system": TransformHandler<SystemPromptInput, string>
@@ -460,15 +464,15 @@ const wrapTransformHandler =
   ): ((
     input: I,
     next: (input: I) => Effect.Effect<O>,
-    _ctx: ExtensionHostContext,
+    ctx: ExtensionHostContext,
   ) => Effect.Effect<O>) =>
-  (input, next, _ctx) => {
+  (input, next, ctx) => {
     const effects: ExtensionEffect[] = []
     effectBinder.bind(effects, hookKey)
     return Effect.tryPromise({
       try: () => {
         const effectNext = (i: I) => Effect.runPromise(next(i))
-        return Promise.resolve(handler(input, effectNext))
+        return Promise.resolve(handler(input, effectNext, ctx))
       },
       catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
     }).pipe(
@@ -488,15 +492,15 @@ const wrapFireAndForgetHandler =
   ): ((
     input: I,
     next: (input: I) => Effect.Effect<void>,
-    _ctx: ExtensionHostContext,
+    ctx: ExtensionHostContext,
   ) => Effect.Effect<void>) =>
-  (input, next, _ctx) =>
+  (input, next, ctx) =>
     Effect.gen(function* () {
       yield* next(input)
       const effects: ExtensionEffect[] = []
       effectBinder.bind(effects, hookKey)
       yield* Effect.tryPromise({
-        try: () => Promise.resolve(handler(input)),
+        try: () => Promise.resolve(handler(input, ctx)),
         catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
       }).pipe(Effect.orDie, Effect.ensuring(Effect.sync(() => effectBinder.unbind())))
       yield* drainEffects(effects, hookKey, input)
