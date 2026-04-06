@@ -3,18 +3,27 @@
  *
  * Contributed by @gent/task-tools extension via setup.layer.
  * When the extension is disabled, TaskStorage is absent and callers degrade gracefully.
+ *
+ * Owns its own DDL — no dependency on host Storage service.
  */
 
 import { Clock, ServiceMap, Effect, Layer, Schema } from "effect"
 import { Task } from "../domain/task.js"
 import type { SessionId, BranchId, TaskId } from "../domain/ids.js"
 import { SqlClient } from "effect/unstable/sql"
-import { Storage, StorageError } from "../storage/sqlite-storage.js"
+
+export class TaskStorageError extends Schema.TaggedErrorClass<TaskStorageError>()(
+  "TaskStorageError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
 
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
 
-const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
+const mapError = (message: string) => (e: unknown) => new TaskStorageError({ message, cause: e })
 
 const safeJsonParse = (s: string): unknown => {
   try {
@@ -58,12 +67,12 @@ const taskFromRow = (row: TaskRow) =>
   })
 
 export interface TaskStorageService {
-  readonly createTask: (task: Task) => Effect.Effect<Task, StorageError>
-  readonly getTask: (id: TaskId) => Effect.Effect<Task | undefined, StorageError>
+  readonly createTask: (task: Task) => Effect.Effect<Task, TaskStorageError>
+  readonly getTask: (id: TaskId) => Effect.Effect<Task | undefined, TaskStorageError>
   readonly listTasks: (
     sessionId: SessionId,
     branchId?: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Task>, StorageError>
+  ) => Effect.Effect<ReadonlyArray<Task>, TaskStorageError>
   readonly updateTask: (
     id: TaskId,
     fields: Partial<{
@@ -72,22 +81,62 @@ export interface TaskStorageService {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Task | undefined, StorageError>
-  readonly deleteTask: (id: TaskId) => Effect.Effect<void, StorageError>
-  readonly addTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
-  readonly removeTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
-  readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
+  ) => Effect.Effect<Task | undefined, TaskStorageError>
+  readonly deleteTask: (id: TaskId) => Effect.Effect<void, TaskStorageError>
+  readonly addTaskDep: (
+    taskId: TaskId,
+    blockedById: TaskId,
+  ) => Effect.Effect<void, TaskStorageError>
+  readonly removeTaskDep: (
+    taskId: TaskId,
+    blockedById: TaskId,
+  ) => Effect.Effect<void, TaskStorageError>
+  readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, TaskStorageError>
 }
 
 export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageService>()(
   "@gent/core/src/extensions/task-tools-storage/TaskStorage",
 ) {
-  /** Requires Storage to ensure DDL (CREATE TABLE tasks/task_deps) has been initialized */
-  static Live: Layer.Layer<TaskStorage, never, SqlClient.SqlClient | Storage> = Layer.effect(
+  /** Runs its own DDL — only requires SqlClient, not host Storage */
+  static Live: Layer.Layer<TaskStorage, never, SqlClient.SqlClient> = Layer.effect(
     TaskStorage,
     Effect.gen(function* () {
-      yield* Storage // ensures schema initialization has completed
       const sql = yield* SqlClient.SqlClient
+
+      // Extension-owned DDL — fatal if this fails
+      yield* Effect.all([
+        sql.unsafe(`
+          CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            owner TEXT,
+            agent_type TEXT,
+            prompt TEXT,
+            cwd TEXT,
+            metadata TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+          )
+        `),
+        sql.unsafe(`
+          CREATE TABLE IF NOT EXISTS task_deps (
+            task_id TEXT NOT NULL,
+            blocked_by_id TEXT NOT NULL,
+            PRIMARY KEY (task_id, blocked_by_id),
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+            FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
+          )
+        `),
+        sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`),
+        sql.unsafe(
+          `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
+        ),
+      ]).pipe(Effect.orDie)
 
       return {
         createTask: Effect.fn("TaskStorage.createTask")(
@@ -98,7 +147,7 @@ export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageServ
                 : yield* Effect.try({
                     try: () => encodeMetadataJson(task.metadata),
                     catch: () =>
-                      new StorageError({ message: "Task metadata is not JSON-serializable" }),
+                      new TaskStorageError({ message: "Task metadata is not JSON-serializable" }),
                   })
             yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
             return task
@@ -139,7 +188,7 @@ export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageServ
               "stopped",
             ])
             if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
-              return yield* new StorageError({
+              return yield* new TaskStorageError({
                 message: `Invalid task status: ${fields.status}`,
               })
             }
@@ -167,7 +216,8 @@ export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageServ
                 params.push(
                   yield* Effect.try({
                     try: () => encodeMetadataJson(fields.metadata),
-                    catch: () => new StorageError({ message: "Metadata is not JSON-serializable" }),
+                    catch: () =>
+                      new TaskStorageError({ message: "Metadata is not JSON-serializable" }),
                   }),
                 )
               }

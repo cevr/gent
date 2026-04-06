@@ -378,35 +378,6 @@ const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      description TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      owner TEXT,
-      agent_type TEXT,
-      prompt TEXT,
-      cwd TEXT,
-      metadata TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-    )
-  `)
-
-  yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS task_deps (
-      task_id TEXT NOT NULL,
-      blocked_by_id TEXT NOT NULL,
-      PRIMARY KEY (task_id, blocked_by_id),
-      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-      FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
-    )
-  `)
-
-  yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS interaction_requests (
       request_id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -453,10 +424,6 @@ const initSchema = Effect.gen(function* () {
   )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
-  yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
-  yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
-  )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)`)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_interaction_requests_status ON interaction_requests(status)`,
