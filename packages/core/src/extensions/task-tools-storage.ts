@@ -74,11 +74,9 @@ export interface TaskStorageService {
     }>,
   ) => Effect.Effect<Task | undefined, StorageError>
   readonly deleteTask: (id: TaskId) => Effect.Effect<void, StorageError>
-  readonly claimTask: (id: TaskId) => Effect.Effect<Task | undefined, StorageError>
   readonly addTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
   readonly removeTaskDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, StorageError>
   readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
-  readonly getTaskDependents: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, StorageError>
 }
 
 export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageService>()(
@@ -195,19 +193,6 @@ export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageServ
           Effect.mapError(mapError("Failed to delete task")),
         ),
 
-        claimTask: Effect.fn("TaskStorage.claimTask")(
-          function* (id) {
-            const now = yield* Clock.currentTimeMillis
-            yield* sql`UPDATE tasks SET status = 'in_progress', updated_at = ${now} WHERE id = ${id} AND status = 'pending'`
-            const rows =
-              yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-            const row = rows[0]
-            if (row === undefined || row.status !== "in_progress") return undefined
-            return taskFromRow(row)
-          },
-          Effect.mapError(mapError("Failed to claim task")),
-        ),
-
         addTaskDep: (taskId, blockedById) =>
           sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`.pipe(
             Effect.asVoid,
@@ -230,16 +215,6 @@ export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageServ
             return rows.map((r) => r.blocked_by_id)
           },
           Effect.mapError(mapError("Failed to get task deps")),
-        ),
-
-        getTaskDependents: Effect.fn("TaskStorage.getTaskDependents")(
-          function* (taskId) {
-            const rows = yield* sql<{
-              task_id: TaskId
-            }>`SELECT task_id FROM task_deps WHERE blocked_by_id = ${taskId}`
-            return rows.map((r) => r.task_id)
-          },
-          Effect.mapError(mapError("Failed to get task dependents")),
         ),
       } satisfies TaskStorageService
     }),

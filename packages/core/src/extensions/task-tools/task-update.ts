@@ -7,7 +7,7 @@ import { TaskProtocol } from "../task-tools-protocol.js"
 export const TaskUpdateParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to update" }),
   status: Schema.optional(
-    Schema.Literals(["pending", "in_progress", "completed", "failed"]).annotate({
+    Schema.Literals(["pending", "in_progress", "completed", "failed", "stopped"]).annotate({
       description: "New status",
     }),
   ),

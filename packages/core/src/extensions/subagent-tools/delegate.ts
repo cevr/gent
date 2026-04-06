@@ -76,6 +76,60 @@ export const DelegateTool = defineTool({
       return `${task.slice(0, 60)}…`
     }
 
+    const spawnBackgroundTask = (task: Task, agent: { name: string }) =>
+      Effect.gen(function* () {
+        // Set task to in_progress
+        yield* ctx.extension
+          .ask(TaskProtocol.UpdateTask({ taskId: task.id, status: "in_progress" }), ctx.branchId)
+          .pipe(Effect.catchEager(() => Effect.void))
+
+        const resolvedAgent = yield* ctx.agent.get(agent.name)
+        if (resolvedAgent === undefined) {
+          yield* ctx.extension
+            .ask(
+              TaskProtocol.UpdateTask({
+                taskId: task.id,
+                status: "failed",
+                metadata: { error: `Unknown agent: ${agent.name}` },
+              }),
+              ctx.branchId,
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
+          return
+        }
+
+        const result = yield* ctx.agent.run({
+          agent: resolvedAgent,
+          prompt: task.prompt ?? task.subject,
+          toolCallId: ctx.toolCallId,
+        })
+
+        if (result._tag === "success") {
+          yield* ctx.extension
+            .ask(
+              TaskProtocol.UpdateTask({
+                taskId: task.id,
+                status: "completed",
+                owner: result.sessionId,
+                metadata: { childSessionId: result.sessionId },
+              }),
+              ctx.branchId,
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
+        } else {
+          yield* ctx.extension
+            .ask(
+              TaskProtocol.UpdateTask({
+                taskId: task.id,
+                status: "failed",
+                metadata: { error: result.error },
+              }),
+              ctx.branchId,
+            )
+            .pipe(Effect.catchEager(() => Effect.void))
+        }
+      }).pipe(Effect.catchEager(() => Effect.void))
+
     const backgroundSingle = Effect.fn("DelegateTool.backgroundSingle")(function* () {
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
@@ -95,11 +149,9 @@ export const DelegateTool = defineTool({
         .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
       if (task === undefined)
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
-      const result = yield* ctx.extension.ask(
-        TaskProtocol.RunTask({ taskId: task.id }),
-        ctx.branchId,
-      )
-      return { taskId: result.taskId, status: result.status }
+
+      yield* Effect.forkChild(spawnBackgroundTask(task, resolved.agent))
+      return { taskId: task.id, status: "running" }
     })
 
     const backgroundParallel = Effect.fn("DelegateTool.backgroundParallel")(function* () {
@@ -128,7 +180,7 @@ export const DelegateTool = defineTool({
         if (task === undefined) {
           return { error: "Background tasks unavailable — task-tools extension is disabled" }
         }
-        yield* ctx.extension.ask(TaskProtocol.RunTask({ taskId: task.id }), ctx.branchId)
+        yield* Effect.forkChild(spawnBackgroundTask(task, resolved.agent))
         taskIds.push(task.id)
       }
       return { taskIds, status: "running" as const, count: taskIds.length }

@@ -18,7 +18,6 @@ import { SessionSubscriptions } from "./session-subscriptions.js"
 import { InteractionCommands } from "./interaction-commands.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { TaskProtocol } from "../extensions/task-tools-protocol.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
 
 // ============================================================================
@@ -231,13 +230,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       "auth.callback": ({ sessionId, provider, method, authorizationId, code }) =>
         providerAuth.callback(sessionId, provider, method, authorizationId, code),
-
-      // -- task --
-      "task.output": ({ sessionId, taskId }) =>
-        extensionStateRuntime.ask(sessionId, TaskProtocol.GetTaskOutput({ taskId })).pipe(
-          Effect.map((result) => result ?? { status: "pending" as const, messageCount: 0 }),
-          Effect.catchEager(() => Effect.succeed({ status: "pending" as const, messageCount: 0 })),
-        ),
 
       // -- extension --
       "extension.listStatus": ({ sessionId }) =>

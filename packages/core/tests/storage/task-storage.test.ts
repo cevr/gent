@@ -137,20 +137,6 @@ describe("Task Dependencies", () => {
       expect(deps).toEqual(["t1"])
     }))
 
-  test("getTaskDependents", () =>
-    Effect.gen(function* () {
-      const { storage } = yield* setup
-      yield* storage.createTask(makeTask("t1"))
-      yield* storage.createTask(makeTask("t2"))
-      yield* storage.createTask(makeTask("t3"))
-      yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
-      yield* storage.addTaskDep("t3" as TaskId, "t1" as TaskId)
-      const dependents = yield* storage.getTaskDependents("t1" as TaskId)
-      expect(dependents.length).toBe(2)
-      expect(dependents).toContain("t2")
-      expect(dependents).toContain("t3")
-    }))
-
   test("removeTaskDep", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
@@ -169,8 +155,9 @@ describe("Task Dependencies", () => {
       yield* storage.createTask(makeTask("t2"))
       yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
       yield* storage.deleteTask("t2" as TaskId)
-      const dependents = yield* storage.getTaskDependents("t1" as TaskId)
-      expect(dependents.length).toBe(0)
+      // After deleting t2, its dep entries should also be gone
+      const deps = yield* storage.getTaskDeps("t2" as TaskId)
+      expect(deps.length).toBe(0)
     }))
 
   test("duplicate dep is idempotent", () =>

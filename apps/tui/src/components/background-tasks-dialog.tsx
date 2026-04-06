@@ -4,12 +4,12 @@
  * Features:
  * - List tasks with status indicators
  * - Navigate with j/k, select with enter for detail view
- * - Stop tasks with x
+ * - Stop tasks with x (via task_update → stopped)
  * - Close with escape
  */
 
 import { createSignal, createEffect, Show, For } from "solid-js"
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { Task } from "@gent/core/domain/task.js"
 import type { TaskId } from "@gent/core/domain/ids.js"
@@ -47,10 +47,6 @@ export function BackgroundTasksDialog(props: {
 
   const [selectedIdx, setSelectedIdx] = createSignal(0)
   const [detailTaskId, setDetailTaskId] = createSignal<TaskId | undefined>(undefined)
-  const [detailMessages, setDetailMessages] = createSignal<
-    ReadonlyArray<{ role: string; excerpt: string }> | undefined
-  >(undefined)
-  const [detailError, setDetailError] = createSignal(false)
 
   // Reset selection when tasks change
   createEffect(() => {
@@ -67,36 +63,9 @@ export function BackgroundTasksDialog(props: {
       clientCtx.client.extension
         .ask({
           sessionId: sid,
-          message: TaskProtocol.StopTask({ taskId }),
+          message: TaskProtocol.UpdateTask({ taskId, status: "stopped" }),
         })
         .pipe(Effect.catchEager(() => Effect.void)),
-    )
-  }
-
-  const loadOutput = (taskId: TaskId) => {
-    const sid = clientCtx.session()?.sessionId
-    if (sid === undefined) return
-    setDetailError(false)
-    cast(
-      clientCtx.client.extension
-        .ask({
-          sessionId: sid,
-          message: TaskProtocol.GetTaskOutput({ taskId }),
-        })
-        .pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(TaskProtocol.GetTaskOutput.replyDecoder)),
-          Effect.tap((result) =>
-            Effect.sync(() => {
-              setDetailMessages(result?.messages ?? [])
-            }),
-          ),
-          Effect.catchEager(() =>
-            Effect.sync(() => {
-              setDetailError(true)
-              setDetailMessages([])
-            }),
-          ),
-        ),
     )
   }
 
@@ -107,8 +76,6 @@ export function BackgroundTasksDialog(props: {
       if (event.name === "escape") {
         if (detailTaskId() !== undefined) {
           setDetailTaskId(undefined)
-          setDetailMessages(undefined)
-          setDetailError(false)
         } else {
           props.onClose()
         }
@@ -132,7 +99,6 @@ export function BackgroundTasksDialog(props: {
         const task = tasks[selectedIdx()]
         if (task !== undefined) {
           setDetailTaskId(task.id)
-          loadOutput(task.id)
         }
         return true
       }
@@ -175,13 +141,6 @@ export function BackgroundTasksDialog(props: {
     return id !== undefined ? props.tasks.find((t) => t.id === id) : undefined
   }
 
-  const taskProgress = (task: Task) => {
-    const meta = task.metadata as
-      | { progress?: { toolCount?: number; tokenCount?: number } }
-      | undefined
-    return meta?.progress
-  }
-
   const left = () => Math.max(0, Math.floor((dimensions().width - PANEL_WIDTH) / 2))
   const top = () => Math.max(0, Math.floor((dimensions().height - PANEL_HEIGHT) / 2))
 
@@ -215,46 +174,11 @@ export function BackgroundTasksDialog(props: {
                     <span style={{ fg: theme.text }}>{detailTask()?.agentType}</span>
                   </text>
                 </Show>
-                {(() => {
-                  const dt = detailTask()
-                  const p = dt !== undefined ? taskProgress(dt) : undefined
-                  if (p === undefined) return null
-                  return (
-                    <text>
-                      <span style={{ fg: theme.textMuted }}>Progress: </span>
-                      <span style={{ fg: theme.text }}>
-                        {p.toolCount ?? 0} tools, {p.tokenCount ?? 0} tokens
-                      </span>
-                    </text>
-                  )
-                })()}
-                <text />
-                <Show
-                  when={detailMessages() !== undefined}
-                  fallback={
-                    <text>
-                      <span style={{ fg: theme.textMuted }}>Loading...</span>
-                    </text>
-                  }
-                >
-                  <Show when={detailError()}>
-                    <text>
-                      <span style={{ fg: theme.error }}>Failed to load output</span>
-                    </text>
-                  </Show>
-                  <For each={[...(detailMessages() ?? [])]}>
-                    {(msg) => (
-                      <text>
-                        <span style={{ fg: theme.primary }}>{msg.role}: </span>
-                        <span style={{ fg: theme.textMuted }}>{msg.excerpt || "(empty)"}</span>
-                      </text>
-                    )}
-                  </For>
-                  <Show when={!detailError() && (detailMessages() ?? []).length === 0}>
-                    <text>
-                      <span style={{ fg: theme.textMuted }}>No messages yet</span>
-                    </text>
-                  </Show>
+                <Show when={detailTask()?.description !== undefined}>
+                  <text>
+                    <span style={{ fg: theme.textMuted }}>Description: </span>
+                    <span style={{ fg: theme.text }}>{detailTask()?.description}</span>
+                  </text>
                 </Show>
               </box>
             }
@@ -272,7 +196,6 @@ export function BackgroundTasksDialog(props: {
               <For each={[...props.tasks]}>
                 {(task, idx) => {
                   const selected = () => idx() === selectedIdx()
-                  const progress = () => taskProgress(task)
                   return (
                     <text>
                       <span style={{ fg: selected() ? theme.primary : theme.textMuted }}>
@@ -285,12 +208,6 @@ export function BackgroundTasksDialog(props: {
                         {" "}
                         {task.subject}
                       </span>
-                      <Show when={task.status === "in_progress" && progress() !== undefined}>
-                        <span style={{ fg: theme.textMuted }}>
-                          {" "}
-                          ({progress()?.toolCount ?? 0} tools)
-                        </span>
-                      </Show>
                     </text>
                   )
                 }}

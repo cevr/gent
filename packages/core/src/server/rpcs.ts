@@ -13,7 +13,6 @@ import { InteractionRpcs } from "./rpcs/interaction.js"
 import { PermissionRpcs } from "./rpcs/permission.js"
 import { ModelRpcs } from "./rpcs/model.js"
 import { AuthRpcs } from "./rpcs/auth.js"
-import { TaskRpcs } from "./rpcs/task.js"
 import { SkillRpcs } from "./rpcs/skill.js"
 import { ExtensionRpcs } from "./rpcs/extension.js"
 import { ActorRpcs } from "./rpcs/actor.js"
@@ -29,7 +28,6 @@ export {
   PermissionRpcs,
   ModelRpcs,
   AuthRpcs,
-  TaskRpcs,
   SkillRpcs,
   ExtensionRpcs,
   ActorRpcs,
@@ -103,7 +101,6 @@ export class GentRpcs extends RpcGroup.make().merge(
   PermissionRpcs,
   ModelRpcs,
   AuthRpcs,
-  TaskRpcs,
   SkillRpcs,
   ExtensionRpcs,
   ActorRpcs,

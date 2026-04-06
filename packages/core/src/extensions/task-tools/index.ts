@@ -5,10 +5,8 @@ import { TaskCreateTool } from "./task-create.js"
 import { TaskListTool } from "./task-list.js"
 import { TaskGetTool } from "./task-get.js"
 import { TaskUpdateTool } from "./task-update.js"
-import { TaskStopTool } from "./task-stop.js"
-import { TaskOutputTool } from "./task-output.js"
 import { TaskStorage } from "../task-tools-storage.js"
-import { TaskService, type TaskRuntimeDeps } from "../task-tools-service.js"
+import { TaskService } from "../task-tools-service.js"
 import { AgentEvent } from "../../domain/event.js"
 import { Task, TaskStatus } from "../../domain/task.js"
 import { BranchId, SessionId, TaskId } from "../../domain/ids.js"
@@ -17,7 +15,8 @@ import type {
   ExtensionReduceContext,
   ReduceResult,
 } from "../../domain/extension.js"
-import { TASK_TOOLS_EXTENSION_ID, TaskOutputSummary, TaskProtocol } from "../task-tools-protocol.js"
+import { TASK_TOOLS_EXTENSION_ID, TaskProtocol } from "../task-tools-protocol.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 
 // ── Task list actor — projects task state as extension UI snapshot ──
 
@@ -123,13 +122,6 @@ const TaskInstance = Schema.instanceOf(Task)
 const NullableTaskInstance = Schema.NullOr(TaskInstance)
 const TaskInstanceArray = Schema.Array(TaskInstance)
 
-const TaskRunResult = Schema.Struct({
-  taskId: TaskId,
-  status: Schema.String,
-  sessionId: Schema.optional(SessionId),
-  branchId: Schema.optional(BranchId),
-})
-
 const TaskMachineSlots = Slot.define({
   hydrateTasks: Slot.fn({ sessionId: SessionId }, Schema.Array(Task)),
   createTask: Slot.fn(
@@ -163,10 +155,7 @@ const TaskMachineSlots = Slot.define({
     },
     NullableTaskInstance,
   ),
-  runTask: Slot.fn({ taskId: TaskId }, TaskRunResult),
-  stopTask: Slot.fn({ taskId: TaskId }, NullableTaskInstance),
   deleteTask: Slot.fn({ taskId: TaskId }),
-  getTaskOutput: Slot.fn({ taskId: TaskId }, Schema.NullOr(TaskOutputSummary)),
   addDependency: Slot.fn({ taskId: TaskId, blockedById: TaskId }),
   removeDependency: Slot.fn({ taskId: TaskId, blockedById: TaskId }),
   getDependencies: Slot.fn({ taskId: TaskId }, Schema.Array(TaskId)),
@@ -215,29 +204,11 @@ const TaskMachineEvent = MEvent({
     },
     Schema.NullOr(Task),
   ),
-  RunTask: MEvent.reply(
-    {
-      taskId: TaskId,
-    },
-    TaskRunResult,
-  ),
-  StopTask: MEvent.reply(
-    {
-      taskId: TaskId,
-    },
-    Schema.NullOr(Task),
-  ),
   DeleteTask: MEvent.reply(
     {
       taskId: TaskId,
     },
     Schema.Null,
-  ),
-  GetTaskOutput: MEvent.reply(
-    {
-      taskId: TaskId,
-    },
-    Schema.NullOr(TaskOutputSummary),
   ),
   AddDependency: MEvent.reply(
     {
@@ -310,28 +281,10 @@ const taskMachine = Machine.make({
       return Machine.reply(TaskMachineState.Active({ tasks: state.tasks }), reply)
     }),
   )
-  .on(TaskMachineState.Active, TaskMachineEvent.RunTask, ({ state, event, slots }) =>
-    Effect.gen(function* () {
-      const reply = yield* slots.runTask({ taskId: event.taskId })
-      return Machine.reply(TaskMachineState.Active({ tasks: state.tasks }), reply)
-    }),
-  )
-  .on(TaskMachineState.Active, TaskMachineEvent.StopTask, ({ state, event, slots }) =>
-    Effect.gen(function* () {
-      const reply = yield* slots.stopTask({ taskId: event.taskId })
-      return Machine.reply(TaskMachineState.Active({ tasks: state.tasks }), reply)
-    }),
-  )
   .on(TaskMachineState.Active, TaskMachineEvent.DeleteTask, ({ state, event, slots }) =>
     Effect.gen(function* () {
       yield* slots.deleteTask({ taskId: event.taskId })
       return Machine.reply(TaskMachineState.Active({ tasks: state.tasks }), null)
-    }),
-  )
-  .on(TaskMachineState.Active, TaskMachineEvent.GetTaskOutput, ({ state, event, slots }) =>
-    Effect.gen(function* () {
-      const reply = yield* slots.getTaskOutput({ taskId: event.taskId })
-      return Machine.reply(TaskMachineState.Active({ tasks: state.tasks }), reply)
     }),
   )
   .on(TaskMachineState.Active, TaskMachineEvent.AddDependency, ({ state, event, slots }) =>
@@ -356,52 +309,32 @@ const taskMachine = Machine.make({
 const provideTaskMachineSlots = Effect.gen(function* () {
   const taskService = yield* TaskService
   const taskStorage = yield* TaskStorage
-  const runtimeDeps = yield* Effect.services<TaskRuntimeDeps>()
-  const run = <A, E>(effect: Effect.Effect<A, E, TaskRuntimeDeps>) =>
-    effect.pipe(Effect.provideServices(runtimeDeps))
+  const eventPublisher = yield* EventPublisher
 
   return {
-    hydrateTasks: ({ sessionId }) => run(taskStorage.listTasks(sessionId).pipe(Effect.orDie)),
-    createTask: (params) => run(taskService.create(params)),
-    getTask: ({ taskId }) => run(taskService.get(taskId)).pipe(Effect.map((task) => task ?? null)),
-    listTasks: ({ sessionId, branchId }) => run(taskService.list(sessionId, branchId)),
+    hydrateTasks: ({ sessionId }) => taskStorage.listTasks(sessionId).pipe(Effect.orDie),
+    createTask: (params) =>
+      taskService.create(params).pipe(Effect.provideService(EventPublisher, eventPublisher)),
+    getTask: ({ taskId }) => taskService.get(taskId).pipe(Effect.map((task) => task ?? null)),
+    listTasks: ({ sessionId, branchId }) => taskService.list(sessionId, branchId),
     updateTask: ({ taskId, ...fields }) =>
-      run(taskService.update(taskId, fields).pipe(Effect.orDie)).pipe(
+      taskService.update(taskId, fields).pipe(
+        Effect.orDie,
+        Effect.provideService(EventPublisher, eventPublisher),
         Effect.map((task) => task ?? null),
       ),
-    runTask: ({ taskId }) => run(taskService.run(taskId)),
-    stopTask: ({ taskId }) =>
-      run(taskService.stop(taskId)).pipe(Effect.map((task) => task ?? null)),
-    deleteTask: ({ taskId }) => run(taskService.remove(taskId)),
-    getTaskOutput: ({ taskId }) =>
-      run(taskService.getOutput(taskId)).pipe(
-        Effect.map((output) =>
-          output === undefined
-            ? null
-            : {
-                status: output.status,
-                messageCount: output.messages.length,
-                messages: output.messages.map((m) => {
-                  const excerpt = m.parts
-                    .filter((part): part is { type: "text"; text: string } => part.type === "text")
-                    .map((part) => part.text)
-                    .join("\n")
-                    .slice(0, 200)
-                  return { role: m.role, excerpt }
-                }),
-              },
-        ),
-      ),
-    addDependency: ({ taskId, blockedById }) => run(taskService.addDep(taskId, blockedById)),
-    removeDependency: ({ taskId, blockedById }) => run(taskService.removeDep(taskId, blockedById)),
-    getDependencies: ({ taskId }) => run(taskService.getDeps(taskId)),
+    deleteTask: ({ taskId }) =>
+      taskService.remove(taskId).pipe(Effect.provideService(EventPublisher, eventPublisher)),
+    addDependency: ({ taskId, blockedById }) => taskService.addDep(taskId, blockedById),
+    removeDependency: ({ taskId, blockedById }) => taskService.removeDep(taskId, blockedById),
+    getDependencies: ({ taskId }) => taskService.getDeps(taskId),
   } satisfies ProvideSlots<typeof TaskMachineSlots.definitions>
 })
 
 const taskListActor: ExtensionActorDefinition<
   typeof TaskMachineState.Type,
   typeof TaskMachineEvent.Type,
-  TaskStorage | TaskService | TaskRuntimeDeps,
+  TaskStorage | TaskService | EventPublisher,
   typeof TaskMachineSlots.definitions
 > = {
   machine: taskMachine,
@@ -426,21 +359,9 @@ const taskListActor: ExtensionActorDefinition<
         const request = message as ReturnType<typeof TaskProtocol.UpdateTask>
         return TaskMachineEvent.UpdateTask(request)
       }
-      case "RunTask": {
-        const request = message as ReturnType<typeof TaskProtocol.RunTask>
-        return TaskMachineEvent.RunTask(request)
-      }
-      case "StopTask": {
-        const request = message as ReturnType<typeof TaskProtocol.StopTask>
-        return TaskMachineEvent.StopTask(request)
-      }
       case "DeleteTask": {
         const request = message as ReturnType<typeof TaskProtocol.DeleteTask>
         return TaskMachineEvent.DeleteTask(request)
-      }
-      case "GetTaskOutput": {
-        const request = message as ReturnType<typeof TaskProtocol.GetTaskOutput>
-        return TaskMachineEvent.GetTaskOutput(request)
       }
       case "AddDependency": {
         const request = message as ReturnType<typeof TaskProtocol.AddDependency>
@@ -485,8 +406,6 @@ export const TaskExtension = extension("@gent/task-tools", (ext) => {
   ext.tool(TaskListTool)
   ext.tool(TaskGetTool)
   ext.tool(TaskUpdateTool)
-  ext.tool(TaskStopTool)
-  ext.tool(TaskOutputTool)
   ext.layer(TaskStorage.Live)
   ext.layer(TaskService.Live)
   ext.actor(taskListActor)
