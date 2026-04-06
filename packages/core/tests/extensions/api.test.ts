@@ -223,6 +223,173 @@ describe("extension api", () => {
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     await Effect.runPromise(setup.onStartup!)
   })
+  test("ext.async.on() handlers receive ExtensionContext with Promise methods", async () => {
+    let receivedCtx: unknown = undefined
+    const ext = extension("async-ctx-test", (b) => {
+      b.async.on("turn.after", async (input, next, ctx) => {
+        await next(input)
+        receivedCtx = ctx
+      })
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const loaded = {
+      manifest: ext.manifest,
+      kind: "user" as const,
+      sourcePath: "test",
+      setup,
+    }
+
+    const resolved = resolveExtensions([loaded])
+    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
+    const compiled = compileHooks(resolved.extensions)
+    const stubCtx = {
+      sessionId: "async-s" as SessionId,
+      branchId: "async-b" as BranchId,
+      cwd: "/tmp",
+      home: "/tmp",
+      session: {
+        listMessages: () => Effect.succeed([]),
+      },
+    } as ExtensionHostContext
+
+    await Effect.runPromise(
+      compiled.runInterceptor(
+        "turn.after",
+        {
+          sessionId: "async-s" as SessionId,
+          branchId: "async-b" as BranchId,
+          durationMs: 42,
+          agentName: "cowork" as never,
+          interrupted: false,
+        },
+        () => Effect.void,
+        stubCtx,
+      ),
+    )
+
+    expect(receivedCtx).toBeDefined()
+    // ExtensionContext has Promise-returning methods, not Effect
+    const ctx = receivedCtx as { sessionId: string; session: { listMessages: () => unknown } }
+    expect(ctx.sessionId).toBe("async-s")
+    const result = ctx.session.listMessages()
+    expect(result).toBeInstanceOf(Promise)
+  })
+
+  test("ext.async.on() turn.after handler can skip next", async () => {
+    let nextCalled = false
+    const ext = extension("async-skip-test", (b) => {
+      b.async.on("turn.after", async (_input, _next) => {
+        // intentionally not calling next
+      })
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const resolved = resolveExtensions([
+      { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
+    ])
+    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
+    const compiled = compileHooks(resolved.extensions)
+    const stubCtx = {
+      sessionId: "s" as SessionId,
+      branchId: "b" as BranchId,
+      cwd: "/tmp",
+      home: "/tmp",
+    } as ExtensionHostContext
+
+    await Effect.runPromise(
+      compiled.runInterceptor(
+        "turn.after",
+        {
+          sessionId: "s" as SessionId,
+          branchId: "b" as BranchId,
+          durationMs: 0,
+          agentName: "cowork" as never,
+          interrupted: false,
+        },
+        () => {
+          nextCalled = true
+          return Effect.void
+        },
+        stubCtx,
+      ),
+    )
+
+    expect(nextCalled).toBe(false)
+  })
+
+  test("message.input interceptor transforms user input", async () => {
+    const ext = extension("input-transform-test", (b) => {
+      b.on("message.input", (input, next) =>
+        next({ ...input, content: input.content.toUpperCase() }),
+      )
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const resolved = resolveExtensions([
+      { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
+    ])
+    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
+    const compiled = compileHooks(resolved.extensions)
+    const stubCtx = {
+      sessionId: "s" as SessionId,
+      branchId: "b" as BranchId,
+      cwd: "/tmp",
+      home: "/tmp",
+    } as ExtensionHostContext
+
+    const result = await Effect.runPromise(
+      compiled.runInterceptor(
+        "message.input",
+        { content: "hello world", sessionId: "s" as SessionId, branchId: "b" as BranchId },
+        (i) => Effect.succeed(i.content),
+        stubCtx,
+      ),
+    )
+
+    expect(result).toBe("HELLO WORLD")
+  })
+
+  test("message.input chain composes multiple interceptors", async () => {
+    const ext1 = extension("input-chain-1", (b) => {
+      b.on("message.input", (input, next) => next({ ...input, content: input.content + " [ext1]" }))
+    })
+    const ext2 = extension("input-chain-2", (b) => {
+      b.on("message.input", (input, next) => next({ ...input, content: input.content + " [ext2]" }))
+    })
+
+    const setup1 = await Effect.runPromise(
+      ext1.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
+    )
+    const setup2 = await Effect.runPromise(
+      ext2.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
+    )
+    const resolved = resolveExtensions([
+      { manifest: ext1.manifest, kind: "user" as const, sourcePath: "test", setup: setup1 },
+      { manifest: ext2.manifest, kind: "user" as const, sourcePath: "test", setup: setup2 },
+    ])
+    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
+    const compiled = compileHooks(resolved.extensions)
+    const stubCtx = {
+      sessionId: "s" as SessionId,
+      branchId: "b" as BranchId,
+      cwd: "/tmp",
+      home: "/tmp",
+    } as ExtensionHostContext
+
+    const result = await Effect.runPromise(
+      compiled.runInterceptor(
+        "message.input",
+        { content: "base", sessionId: "s" as SessionId, branchId: "b" as BranchId },
+        (i) => Effect.succeed(i.content),
+        stubCtx,
+      ),
+    )
+
+    // Interceptors compose: ext1 runs inside ext2's next chain
+    expect(result).toContain("[ext1]")
+    expect(result).toContain("[ext2]")
+  })
 })
 
 describe("extension tools through ToolRunner.run", () => {
