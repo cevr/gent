@@ -55,17 +55,6 @@ export const EventPublisherLive: Layer.Layer<
             }
           }
 
-          yield* stateRuntime.notifyObservers(event).pipe(
-            Effect.provideService(CurrentExtensionSession, extensionSession),
-            Effect.catchEager((error) =>
-              logDeliveryFailure("extension.observer.notify.failed", {
-                sessionId,
-                event: event._tag,
-                error: String(error),
-              }),
-            ),
-          )
-
           if (bus !== undefined) {
             yield* bus
               .emit({

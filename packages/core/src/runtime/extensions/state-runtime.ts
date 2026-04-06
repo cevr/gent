@@ -108,7 +108,6 @@ export interface ExtensionStateRuntimeService {
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<ExtensionActorStatusInfo>>
   readonly terminateAll: (sessionId: SessionId) => Effect.Effect<void>
-  readonly notifyObservers: (event: AgentEvent) => Effect.Effect<void>
 }
 
 export class ExtensionStateRuntime extends ServiceMap.Service<
@@ -135,24 +134,14 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               spawnSpecs.push(spec)
               spawnByExtension.set(ext.manifest.id, spec)
             }
-            // Collect protocols from both setup.protocols (legacy) and actor.protocols (preferred)
-            const allDefs = [
-              ...(ext.setup.protocols ?? []),
-              ...(actor?.protocols !== undefined
+            const allDefs =
+              actor?.protocols !== undefined
                 ? listExtensionProtocolDefinitions(actor.protocols)
-                : []),
-            ]
+                : []
             for (const definition of allDefs) {
               const byTag = protocolMap.get(definition.extensionId) ?? new Map()
               byTag.set(definition._tag, definition)
               protocolMap.set(definition.extensionId, byTag)
-            }
-          }
-
-          const allObservers: Array<(event: AgentEvent) => void | Promise<void>> = []
-          for (const ext of extensions) {
-            if (ext.setup.observers !== undefined) {
-              allObservers.push(...ext.setup.observers)
             }
           }
 
@@ -992,20 +981,6 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                     })
                   }
                 }),
-              ),
-
-            notifyObservers: (event) =>
-              Effect.forEach(
-                allObservers,
-                (observer) =>
-                  Effect.tryPromise({
-                    try: () => Promise.resolve(observer(event)),
-                    catch: () => undefined,
-                  }).pipe(
-                    Effect.catchDefect(() => Effect.void),
-                    Effect.catchEager(() => Effect.void),
-                  ),
-                { concurrency: "unbounded", discard: true },
               ),
           } as ExtensionStateRuntimeService
           return { runtimeScope, service }

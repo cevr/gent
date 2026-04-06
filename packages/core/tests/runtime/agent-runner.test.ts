@@ -23,7 +23,6 @@ import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
 } from "@gent/core/runtime/extensions/state-runtime"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { rmSync } from "node:fs"
 
@@ -513,7 +512,6 @@ describe("AgentRunner", () => {
       getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
-      notifyObservers: () => Effect.void,
     }
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,
@@ -583,105 +581,6 @@ describe("AgentRunner", () => {
 
     expect(publishedSessionIds.length).toBeGreaterThan(0)
     expect(new Set(publishedSessionIds)).toEqual(new Set(["parent-session-reduce"]))
-  })
-
-  test("ephemeral mirrored child events still notify observers and bus listeners", async () => {
-    const storageLayer = Storage.TestWithSql()
-    const baseEventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
-    const observedTags: string[] = []
-    const busChannels: string[] = []
-    const stateRuntime: ExtensionStateRuntimeService = {
-      publish: () => Effect.succeed(false),
-      deriveAll: () => Effect.succeed([]),
-      send: () => Effect.void,
-      ask: () => Effect.die("not used"),
-      getUiSnapshots: () => Effect.succeed([]),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-      notifyObservers: (event) =>
-        Effect.sync(() => {
-          observedTags.push(event._tag)
-        }),
-    }
-    const eventPublisherLayer = Layer.provide(
-      EventPublisherLive,
-      Layer.merge(baseEventStoreLayer, Layer.succeed(ExtensionStateRuntime, stateRuntime)),
-    )
-    const bus = {
-      emit: (envelope: { channel: string }) =>
-        Effect.sync(() => {
-          busChannels.push(envelope.channel)
-        }),
-      on: () => Effect.succeed(() => undefined),
-    }
-    const deps = Layer.mergeAll(
-      storageLayer,
-      baseEventStoreLayer,
-      eventPublisherLayer,
-      testRegistryLayer,
-      Provider.Test([
-        [
-          new ToolCallChunk({
-            toolCallId: "tc-ephemeral-bus",
-            toolName: "bash",
-            input: { command: "pwd" },
-          }),
-          new FinishChunk({ finishReason: "tool_calls" }),
-        ],
-        [new TextChunk({ text: "tool finished" }), new FinishChunk({ finishReason: "stop" })],
-      ]),
-      ToolRunner.Test(),
-      Layer.succeed(ExtensionStateRuntime, stateRuntime),
-      Layer.succeed(ExtensionEventBus, bus),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.void,
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
-    )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
-    const layer = Layer.mergeAll(deps, runnerLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const runner = yield* AgentRunnerService
-
-        const now = new Date()
-        const session = new Session({
-          id: "parent-session-bus",
-          name: "Parent",
-          createdAt: now,
-          updatedAt: now,
-        })
-        const branch = new Branch({
-          id: "parent-branch-bus",
-          sessionId: session.id,
-          createdAt: now,
-        })
-
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
-
-        yield* runner.run({
-          agent: Agents.explore,
-          prompt: "run helper with observer fanout",
-          parentSessionId: session.id,
-          parentBranchId: branch.id,
-          cwd: process.cwd(),
-        })
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(observedTags).toContain("ToolCallStarted")
-    expect(observedTags).toContain("ToolCallSucceeded")
-    expect(busChannels).toContain("agent:ToolCallStarted")
-    expect(busChannels).toContain("agent:ToolCallSucceeded")
   })
 
   test("durable override persists child sessions for helper agents", async () => {

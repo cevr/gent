@@ -1,7 +1,6 @@
 import { describe, test, expect, beforeAll } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { extension } from "@gent/core/extensions/api"
-import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { AgentRunSpawned } from "@gent/core/domain/event"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -35,18 +34,6 @@ describe("extension api", () => {
     expect(setup.tools?.map((tool) => tool.name)).toEqual(["greet"])
     expect(setup.promptSections?.map((section) => section.id)).toEqual(["custom-rules"])
     expect(setup.agents?.map((agent) => agent.name)).toEqual(["helper"])
-  })
-
-  test("duplicate protocol tags fail at setup time", async () => {
-    const TogglePlan = ExtensionMessage("test-dup-protocol", "TogglePlan", {})
-    const ext = extension("test-dup-protocol", (b) => {
-      b.protocol({ TogglePlan })
-      b.protocol({ TogglePlan })
-    })
-
-    await expect(
-      Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
-    ).rejects.toThrow("ExtensionProtocolError")
   })
 
   test("factory receives setup context and can be async", async () => {

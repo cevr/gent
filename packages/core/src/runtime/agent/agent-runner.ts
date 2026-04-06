@@ -431,7 +431,6 @@ const NoopExtensionStateRuntime: ExtensionStateRuntimeService = {
   getUiSnapshots: () => Effect.succeed([]),
   getActorStatuses: () => Effect.succeed([]),
   terminateAll: () => Effect.void,
-  notifyObservers: () => Effect.void,
 }
 
 const buildEphemeralLoopLayer = (params: {
@@ -692,7 +691,6 @@ export const InProcessRunner = (
       const extensionRegistry = yield* ExtensionRegistry
       const provider = yield* Provider
       const toolRunner = yield* ToolRunner
-      const stateRuntimeOpt = yield* Effect.serviceOption(ExtensionStateRuntime)
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
       const notifyMirroredEventObservers = (event: AgentEvent) => {
@@ -700,9 +698,6 @@ export const InProcessRunner = (
         const branchId = getEventBranchId(event)
         return Effect.all(
           [
-            stateRuntimeOpt._tag === "Some"
-              ? stateRuntimeOpt.value.notifyObservers(event)
-              : Effect.void,
             busOpt._tag === "Some" && sessionId !== undefined
               ? busOpt.value.emit({
                   channel: `agent:${event._tag}`,
@@ -882,7 +877,6 @@ export const SubprocessRunner = (
       const extensionRegistry = yield* ExtensionRegistry
       const provider = yield* Provider
       const toolRunner = yield* ToolRunner
-      const stateRuntimeOpt = yield* Effect.serviceOption(ExtensionStateRuntime)
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
       const notifyMirroredEventObservers = (event: AgentEvent) => {
@@ -890,9 +884,6 @@ export const SubprocessRunner = (
         const branchId = getEventBranchId(event)
         return Effect.all(
           [
-            stateRuntimeOpt._tag === "Some"
-              ? stateRuntimeOpt.value.notifyObservers(event)
-              : Effect.void,
             busOpt._tag === "Some" && sessionId !== undefined
               ? busOpt.value.emit({
                   channel: `agent:${event._tag}`,

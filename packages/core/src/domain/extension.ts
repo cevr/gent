@@ -10,7 +10,6 @@ import type { ExtensionHostContext } from "./extension-host-context"
 import type { PromptSection } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
-  AnyExtensionMessageDefinition,
   AnyExtensionRequestMessage,
   ExtensionProtocolError,
   ExtractExtensionReply,
@@ -302,7 +301,7 @@ export interface ExtensionActorDefinition<
   readonly turn?: ExtensionActorTurnConfig<State>
   readonly stateSchema?: Schema.Schema<State>
   readonly persist?: boolean
-  /** Protocol definitions owned by this actor. Subsumes ext.protocol(). */
+  /** Protocol definitions owned by this actor. */
   readonly protocols?: Readonly<Record<string, unknown>>
   readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
   readonly onInit?: (ctx: {
@@ -357,7 +356,6 @@ export interface ScheduledJobContribution {
 export interface ExtensionSetup {
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   readonly agents?: ReadonlyArray<AgentDefinition>
-  readonly protocols?: ReadonlyArray<AnyExtensionMessageDefinition>
   readonly hooks?: ExtensionHooks
   readonly layer?: Layer.Layer<never, never, object>
   /** Session-scoped stateful actor. Omit for stateless extensions. */
@@ -370,10 +368,6 @@ export interface ExtensionSetup {
   readonly jobs?: ReadonlyArray<ScheduledJobContribution>
   /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
   readonly promptSections?: ReadonlyArray<PromptSection>
-  /** Fire-and-forget event observers. Receive raw AgentEvent after reduction.
-   *  Errors are caught and logged — one failing observer doesn't affect others.
-   *  @deprecated Use bus subscriptions via `ext.bus.on("agent:*", handler)` instead. */
-  readonly observers?: ReadonlyArray<(event: AgentEvent) => void | Promise<void>>
   /** Bus channel subscriptions — registered at startup time.
    *  Each entry: { pattern, handler } where handler receives BusEnvelope.
    *  Handler can return void, Promise<void>, or Effect<void>. */

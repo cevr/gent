@@ -1,14 +1,9 @@
 /**
  * ExtensionEventBus — channel-based pub/sub for extension communication.
  *
- * Unifies three previously separate mechanisms into one primitive:
- * - Agent event observation (replaces `ext.observe()`)
- * - Client protocol fanout for non-owning observers
- * - Extension-to-extension communication
- *
  * Dispatch rules:
  * - Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId
- * - `ext.bus.on("agent:*", handler)` is the new `ext.observe()`
+ * - `ext.bus.on("agent:*", handler)` matches all agent events
  * - `ext.bus.on("extensionId:channel", handler)` for targeted side-effects
  * - Handlers run as bus-local side effects, not as actor reducers
  * - Errors caught per-handler — one failing handler doesn't affect others

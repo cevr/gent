@@ -41,7 +41,6 @@ describe("EventPublisher", () => {
       getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
-      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
@@ -88,7 +87,6 @@ describe("EventPublisher", () => {
       getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
-      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
@@ -138,7 +136,6 @@ describe("EventPublisher", () => {
       getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
-      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
@@ -174,7 +171,6 @@ describe("EventPublisher", () => {
       getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
-      notifyObservers: () => Effect.void,
     })
 
     const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
@@ -185,50 +181,6 @@ describe("EventPublisher", () => {
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     expect(delivered).toBe(0)
-  })
-
-  test("observer-triggered same-session publish completes without deadlocking", async () => {
-    const delivered: string[] = []
-    const observedNested = Effect.runSync(Deferred.make<void>())
-    let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
-
-    const baseLayer = Layer.succeed(BaseEventStore, {
-      publish: () => Effect.void,
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
-
-    const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
-      publish: (event) =>
-        Effect.gen(function* () {
-          delivered.push(event._tag)
-          if (event._tag === "ObservedNestedEvent") {
-            yield* Deferred.succeed(observedNested, void 0)
-          }
-          return false
-        }),
-      deriveAll: () => Effect.succeed([]),
-      send: () => Effect.void,
-      ask: () => Effect.die("not implemented"),
-      getUiSnapshots: () => Effect.succeed([]),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-      notifyObservers: (event) =>
-        event._tag === "OuterEvent" && publishFn !== undefined
-          ? publishFn(makeEvent("ObservedNestedEvent", "session-1", "branch-1"))
-          : Effect.void,
-    })
-
-    const layer = Layer.provide(EventPublisherLive, Layer.merge(baseLayer, stateRuntimeLayer))
-
-    await Effect.gen(function* () {
-      const publisher = yield* EventPublisher
-      publishFn = publisher.publish
-      yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
-      yield* Deferred.await(observedNested)
-    }).pipe(Effect.provide(layer), Effect.runPromise)
-
-    expect(delivered).toEqual(["OuterEvent", "ObservedNestedEvent"])
   })
 
   test("bus-triggered same-session publish completes without deadlocking", async () => {
@@ -257,7 +209,6 @@ describe("EventPublisher", () => {
       getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
-      notifyObservers: () => Effect.void,
     })
 
     const busLayer = Layer.succeed(ExtensionEventBus, {

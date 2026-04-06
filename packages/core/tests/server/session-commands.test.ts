@@ -36,7 +36,6 @@ describe("SessionCommands", () => {
           getUiSnapshots: () => Effect.succeed([]),
           getActorStatuses: () => Effect.succeed([]),
           terminateAll: () => Effect.void,
-          notifyObservers: () => Effect.void,
         }),
         Permission.Live([], "allow"),
         ConfigService.Test(),

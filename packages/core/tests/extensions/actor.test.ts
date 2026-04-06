@@ -337,7 +337,7 @@ describe("ExtensionStateRuntime", () => {
         manifest: { id: "flaky-command" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: flaky, protocols: [Ping] },
+        setup: { actor: { ...flaky, protocols: { Ping } } },
       },
     ])
 
@@ -391,7 +391,7 @@ describe("ExtensionStateRuntime", () => {
         manifest: { id: "flaky-request" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: flaky, protocols: [Ping] },
+        setup: { actor: { ...flaky, protocols: { Ping } } },
       },
     ])
 
@@ -427,18 +427,20 @@ describe("ExtensionStateRuntime", () => {
         kind: "builtin",
         sourcePath: "builtin",
         setup: {
-          actor: reducerActor<{ count: number }, never, ReturnType<typeof GetCount>>({
-            id: "counter",
-            initial: { count: 0 },
-            stateSchema: Schema.Struct({ count: Schema.Number }),
-            reduce: (state) => ({ state }),
-            request: (state) =>
-              Effect.succeed({
-                state,
-                reply: { count: "not-a-number" } as unknown,
-              }),
-          }),
-          protocols: [GetCount],
+          actor: {
+            ...reducerActor<{ count: number }, never, ReturnType<typeof GetCount>>({
+              id: "counter",
+              initial: { count: 0 },
+              stateSchema: Schema.Struct({ count: Schema.Number }),
+              reduce: (state) => ({ state }),
+              request: (state) =>
+                Effect.succeed({
+                  state,
+                  reply: { count: "not-a-number" } as unknown,
+                }),
+            }),
+            protocols: { GetCount },
+          },
         },
       },
     ])

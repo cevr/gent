@@ -50,12 +50,7 @@ import {
   type ScheduledJobContribution,
   type TagInjection,
 } from "../domain/extension.js"
-import {
-  ExtensionProtocolError,
-  type ExtensionProtocol,
-  type AnyExtensionCommandMessage,
-  listExtensionProtocolDefinitions,
-} from "../domain/extension-protocol.js"
+import { type AnyExtensionCommandMessage } from "../domain/extension-protocol.js"
 import {
   defineTool,
   ToolDefinitionBrand,
@@ -291,8 +286,6 @@ export interface ExtensionBuilder {
   interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
   /** Register a stateful actor. Stateless extensions can omit this. */
   actor(actor: AnyExtensionActorDefinition): void
-  /** Register public protocol definitions for this extension boundary. */
-  protocol(protocol: ExtensionProtocol): void
   /** Provide a service Layer. Multiple calls merge. */
   layer(layer: Layer.Layer<never, never, object>): void
   /** Register an AI model provider. */
@@ -306,22 +299,12 @@ export interface ExtensionBuilder {
   /** Register an Effect-based shutdown hook. Composes with onShutdown(). */
   onShutdownEffect(effect: Effect.Effect<void>): void
 
-  // ── Event observation ──
-
-  /** Observe all events (including diagnostic) without needing actors or state.
-   *  Fire-and-forget: return value ignored, errors caught and logged.
-   *  Runs after reduction — no re-entrance risk.
-   *  @deprecated Use `ext.bus.on("agent:*", handler)` instead. */
-  observe(handler: (event: AgentEvent) => void | Promise<void>): void
-
   // ── Event bus ──
 
-  /** Channel-based event bus for extension communication.
-   *  Replaces `observe()` with richer routing and effectful side effects. */
+  /** Channel-based event bus for extension communication. */
   readonly bus: {
     /** Subscribe to a bus channel.
      *  Pattern: exact match (e.g. `"@gent/task-tools:StopTask"`) or wildcard (`"agent:*"`).
-     *  `"agent:*"` matches all agent events — equivalent to `ext.observe()`.
      *  Handler can return void, Promise<void>, or Effect<void>. */
     on(
       pattern: string,
@@ -551,21 +534,6 @@ const mergeShutdownHooks = (
   return all.length > 0 ? Effect.all(all, { discard: true }).pipe(Effect.asVoid) : undefined
 }
 
-/** Merge ext.protocol() definitions into actor.protocols. Returns updated actor or original. */
-const mergeProtocolsIntoActor = (
-  actor: AnyExtensionActorDefinition | undefined,
-  protocols: Map<string, ReturnType<typeof listExtensionProtocolDefinitions>[number]>,
-): AnyExtensionActorDefinition | undefined => {
-  if (actor === undefined || protocols.size === 0) return actor
-  const protocolRecord: Record<string, unknown> = {
-    ...(actor.protocols ?? {}),
-  }
-  for (const [tag, definition] of protocols) {
-    protocolRecord[tag] = definition
-  }
-  return { ...actor, protocols: protocolRecord }
-}
-
 /**
  * Create an extension. One API for both simple and full-power extensions.
  *
@@ -590,13 +558,8 @@ export const extension = (
       const providers: ProviderContribution[] = []
       const jobs: ScheduledJobContribution[] = []
       const tagInjections: TagInjection[] = []
-      const observers: Array<(event: AgentEvent) => void | Promise<void>> = []
       const busSubscriptions: BusSubscriptionEntry[] = []
       const layers: Array<Layer.Layer<never, never, object>> = []
-      const protocols = new Map<
-        string,
-        ReturnType<typeof listExtensionProtocolDefinitions>[number]
-      >()
       let actorResult: AnyExtensionActorDefinition | undefined
 
       // Stack-based effect buffer for imperative side effects.
@@ -756,25 +719,6 @@ export const extension = (
           actorResult = actor
         },
 
-        protocol: (protocol) => {
-          for (const definition of listExtensionProtocolDefinitions(protocol)) {
-            if (definition.extensionId !== id) {
-              throw new Error(
-                `extension "${id}": protocol definition "${definition._tag}" belongs to "${definition.extensionId}"`,
-              )
-            }
-            if (protocols.has(definition._tag)) {
-              throw new ExtensionProtocolError({
-                extensionId: id,
-                tag: definition._tag,
-                phase: "registration",
-                message: `duplicate protocol definition for "${definition._tag}"`,
-              })
-            }
-            protocols.set(definition._tag, definition)
-          }
-        },
-
         layer: (l) => {
           layers.push(l)
         },
@@ -783,7 +727,6 @@ export const extension = (
         tagInjection: (t) => tagInjections.push(t),
         onStartupEffect: (e) => startupEffects.push(e),
         onShutdownEffect: (e) => shutdownEffects.push(e),
-        observe: (handler) => observers.push(handler),
         bus: {
           on: (pattern, handler) => busSubscriptions.push({ pattern, handler }),
         },
@@ -812,25 +755,17 @@ export const extension = (
         )
       }
 
-      // ext.protocol() is sugar — canonical home is actor.protocols.
-      actorResult = mergeProtocolsIntoActor(actorResult, protocols)
-
       const onStartup = mergeStartupHooks(startupFns, startupEffects)
       const onShutdown = mergeShutdownHooks(shutdownFns, shutdownEffects)
-      // setup.protocols populated for backward compat (state-runtime reads both paths)
       return {
         ...(tools.length > 0 ? { tools } : {}),
         ...(agents.length > 0 ? { agents } : {}),
-        ...(protocols.size > 0 && actorResult === undefined
-          ? { protocols: [...protocols.values()] }
-          : {}),
         ...(promptSections.length > 0 ? { promptSections } : {}),
         ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
         ...(providers.length > 0 ? { providers } : {}),
         ...(jobs.length > 0 ? { jobs } : {}),
         ...(tagInjections.length > 0 ? { tagInjections } : {}),
-        ...(observers.length > 0 ? { observers } : {}),
         ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),
         ...(actorResult !== undefined ? { actor: actorResult } : {}),
         onStartup,
