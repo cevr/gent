@@ -1,7 +1,7 @@
 /**
  * Cold interaction mechanics.
  *
- * Tools call `ctx.approve({ text, metadata? })` to request human input.
+ * Tools call `ctx.interaction.approve({ text, metadata? })` to request human input.
  * The approval service generates a requestId, persists to storage,
  * publishes InteractionPresented, then fails with InteractionPendingError.
  * The agent loop machine catches this and parks in WaitingForInteraction.
@@ -21,13 +21,13 @@ import type { BranchId, SessionId } from "./ids"
 // Approval schemas
 // ============================================================================
 
-/** Request params for ctx.approve() */
+/** Request params for ctx.interaction.approve() */
 export interface ApprovalRequest {
   readonly text: string
   readonly metadata?: unknown
 }
 
-/** Decision returned from ctx.approve() */
+/** Decision returned from ctx.interaction.approve() */
 export interface ApprovalDecision {
   readonly approved: boolean
   readonly notes?: string
