@@ -179,7 +179,14 @@ Use read, grep, and glob tools to explore the code at ${cachePath} and answer th
 
     return {
       output: parts.join(""),
-      metadata: { spec: params.spec, cachePath, sessionId },
+      metadata: {
+        spec: params.spec,
+        cachePath,
+        sessionId,
+        agentName: result.agentName,
+        usage: result.usage,
+        toolCalls: result.toolCalls,
+      },
     }
   }),
 })
