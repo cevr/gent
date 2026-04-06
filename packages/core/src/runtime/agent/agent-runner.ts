@@ -373,6 +373,9 @@ const makeSharedRunnerHelpers = (
     toolCallId?: ToolCallId
     sessionId: SessionId
     agentName: string
+    usage?: { input: number; output: number; cost?: number }
+    preview?: string
+    savedPath?: string
   }) =>
     eventPublisher.publish(
       new AgentRunSucceeded({
@@ -381,6 +384,9 @@ const makeSharedRunnerHelpers = (
         agentName: params.agentName,
         toolCallId: params.toolCallId,
         branchId: params.parentBranchId,
+        usage: params.usage,
+        preview: params.preview,
+        savedPath: params.savedPath,
       }),
     )
 
@@ -626,12 +632,17 @@ const runEphemeralAgent = (params: {
       sessionId,
     })
 
+    const preview = result.text.length > 200 ? result.text.slice(0, 200) + "…" : result.text
+
     yield* params.shared.publishAgentRunSucceeded({
       parentSessionId: params.parentSessionId,
       parentBranchId: params.parentBranchId,
       toolCallId: params.toolCallId,
       sessionId,
       agentName: params.agentName,
+      usage: result.usage,
+      preview,
+      savedPath,
     })
 
     yield* WideEvent.set({
@@ -813,12 +824,17 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                   sessionId,
                 })
+                const preview =
+                  result.text.length > 200 ? result.text.slice(0, 200) + "…" : result.text
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
                   sessionId,
                   agentName: params.agent.name,
+                  usage: result.usage,
+                  preview,
+                  savedPath,
                 })
 
                 yield* WideEvent.set({
@@ -1022,12 +1038,17 @@ export const SubprocessRunner = (
                   agentName: params.agent.name,
                   sessionId,
                 })
+                const preview =
+                  result.text.length > 200 ? result.text.slice(0, 200) + "…" : result.text
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
                   sessionId,
                   agentName: params.agent.name,
+                  usage: result.usage,
+                  preview,
+                  savedPath,
                 })
 
                 yield* WideEvent.set({

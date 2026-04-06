@@ -3,9 +3,10 @@
  *
  * Listens for AgentRunSpawned/Succeeded/Failed on a parent event stream,
  * opens per-child event subscriptions, and tracks child tool call state.
- * Live-only — replays events from EventStore subscription, no durable bootstrap.
+ * Entries persist after completion as the single TUI source of truth.
+ * Child subscription fibers are interrupted on terminal state.
  */
-import { Effect, FiberSet, PubSub, Ref, Stream } from "effect"
+import { Effect, Fiber, FiberSet, PubSub, Ref, Stream } from "effect"
 import type { Scope } from "effect"
 import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event.js"
 import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids.js"
@@ -27,6 +28,9 @@ export interface ChildSessionEntry {
   agentName: string
   status: "running" | "completed" | "error"
   toolCalls: ChildToolCall[]
+  usage?: { input: number; output: number; cost?: number }
+  preview?: string
+  savedPath?: string
 }
 
 export type ChildSessionChange =
@@ -56,6 +60,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
     const eventStore = yield* EventStore
 
     const entries = yield* Ref.make(new Map<string, ChildSessionEntry>())
+    const childFibers = yield* Ref.make(new Map<string, Fiber.Fiber<void>>())
     const pubsub = yield* PubSub.unbounded<ChildSessionChange>()
     const fiberSet = yield* FiberSet.make<void>()
 
@@ -113,12 +118,29 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
       })
 
     const subscribeChild = (childSessionId: string) =>
-      FiberSet.run(fiberSet)(
-        Stream.runForEach(
-          eventStore.subscribe({ sessionId: childSessionId as SessionId }),
-          (envelope: EventEnvelope) => handleChildEvent(childSessionId, envelope.event),
-        ).pipe(Effect.catchEager(() => Effect.void)),
-      )
+      Effect.gen(function* () {
+        const fiber = yield* FiberSet.run(fiberSet)(
+          Stream.runForEach(
+            eventStore.subscribe({ sessionId: childSessionId as SessionId }),
+            (envelope: EventEnvelope) => handleChildEvent(childSessionId, envelope.event),
+          ).pipe(Effect.catchEager(() => Effect.void)),
+        )
+        yield* Ref.update(childFibers, (m) => new Map(m).set(childSessionId, fiber))
+      })
+
+    const interruptChild = (childSessionId: string) =>
+      Effect.gen(function* () {
+        const fibers = yield* Ref.get(childFibers)
+        const fiber = fibers.get(childSessionId)
+        if (fiber !== undefined) {
+          yield* Fiber.interrupt(fiber).pipe(Effect.catchEager(() => Effect.void))
+          yield* Ref.update(childFibers, (m) => {
+            const next = new Map(m)
+            next.delete(childSessionId)
+            return next
+          })
+        }
+      })
 
     const handleParentEvent = (event: AgentEvent) =>
       Effect.gen(function* () {
@@ -141,7 +163,10 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             }
             yield* Ref.update(entries, (m) => new Map(m).set(childId, entry))
             yield* publish({ _tag: "added", entry })
-            yield* subscribeChild(childId)
+            // Only subscribe to live events for running children — skip for terminal entries on replay
+            if (entry.status === "running") {
+              yield* subscribeChild(childId)
+            }
             break
           }
 
@@ -151,9 +176,16 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             const entry = current.get(childId)
             if (entry === undefined) return
 
-            const updated = { ...entry, status: "completed" as const }
+            const updated: ChildSessionEntry = {
+              ...entry,
+              status: "completed" as const,
+              usage: event.usage,
+              preview: event.preview,
+              savedPath: event.savedPath,
+            }
             yield* Ref.update(entries, (m) => new Map(m).set(childId, updated))
             yield* publish({ _tag: "updated", childSessionId: childId, entry: updated })
+            yield* interruptChild(childId)
             break
           }
 
@@ -166,26 +198,12 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             const updated = { ...entry, status: "error" as const }
             yield* Ref.update(entries, (m) => new Map(m).set(childId, updated))
             yield* publish({ _tag: "updated", childSessionId: childId, entry: updated })
+            yield* interruptChild(childId)
             break
           }
 
-          case "ToolCallSucceeded":
-          case "ToolCallFailed": {
-            // Parent tool call completed — remove all child entries for this toolCallId
-            const tcId = event.toolCallId
-            const current = yield* Ref.get(entries)
-            for (const [childId, entry] of current) {
-              if (entry.toolCallId === tcId) {
-                yield* Ref.update(entries, (m) => {
-                  const next = new Map(m)
-                  next.delete(childId)
-                  return next
-                })
-                yield* publish({ _tag: "removed", childSessionId: childId })
-              }
-            }
-            break
-          }
+          // Entries persist after parent tool completion — the tracker is the single
+          // source of truth for completed subagent state in the TUI.
         }
       })
 

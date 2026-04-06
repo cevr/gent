@@ -261,6 +261,15 @@ export class AgentRunSucceeded extends Schema.TaggedClass<AgentRunSucceeded>()(
     agentName: Schema.String,
     toolCallId: Schema.optional(ToolCallId),
     branchId: Schema.optional(BranchId),
+    usage: Schema.optional(
+      Schema.Struct({
+        input: Schema.Number,
+        output: Schema.Number,
+        cost: Schema.optional(Schema.Number),
+      }),
+    ),
+    preview: Schema.optional(Schema.String),
+    savedPath: Schema.optional(Schema.String),
   },
 ) {}
 
