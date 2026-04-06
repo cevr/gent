@@ -266,11 +266,15 @@ export interface ExtensionBuilder {
 
   // ── Imperative side effects (usable from ext.on() handlers) ──
 
-  /** Queue a follow-up message after the current turn completes.
-   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  /** Send a follow-up message after the current turn completes.
+   *  Only usable from ext.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
+  sendMessage(content: string, metadata?: MessageMetadata): void
+  /** Inject a user message mid-turn (interrupts the current turn).
+   *  Only usable from ext.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
+  sendUserMessage(content: string): void
+  /** @deprecated Use sendMessage() instead. */
   queueFollowUp(content: string, metadata?: MessageMetadata): void
-  /** Inject a message mid-turn (interrupts the current turn).
-   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  /** @deprecated Use sendUserMessage() instead. */
   interject(content: string): void
   /** Publish a message to the event bus.
    *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
@@ -580,6 +584,23 @@ export const extension = (
 
       const extensionStorage = createExtensionStorage(id, joinPath(ctx.home, ".gent", "extensions"))
 
+      const pushEffect = (caller: string, effect: ExtensionEffect) => {
+        const top = effectStack[effectStack.length - 1]
+        if (top === undefined) {
+          throw new Error(
+            `ext.${caller}() called outside of a hook handler. ` +
+              `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
+          )
+        }
+        if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
+          throw new Error(
+            `ext.${caller}() is not available in "${top.hookKey}" handlers. ` +
+              `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
+          )
+        }
+        top.effects.push(effect)
+      }
+
       const builder: ExtensionBuilder = {
         storage: extensionStorage,
 
@@ -632,72 +653,24 @@ export const extension = (
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         }) as any,
 
-        queueFollowUp: (content, metadata?) => {
-          const top = effectStack[effectStack.length - 1]
-          if (top === undefined) {
-            throw new Error(
-              `ext.queueFollowUp() called outside of a hook handler. ` +
-                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
-            )
-          }
-          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
-            throw new Error(
-              `ext.queueFollowUp() is not available in "${top.hookKey}" handlers. ` +
-                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
-            )
-          }
-          top.effects.push({ _tag: "QueueFollowUp", content, metadata })
+        sendMessage: (content, metadata?) => {
+          pushEffect("sendMessage", { _tag: "QueueFollowUp", content, metadata })
         },
-
+        sendUserMessage: (content) => {
+          pushEffect("sendUserMessage", { _tag: "Interject", content })
+        },
+        queueFollowUp: (content, metadata?) => {
+          pushEffect("queueFollowUp", { _tag: "QueueFollowUp", content, metadata })
+        },
         interject: (content) => {
-          const top = effectStack[effectStack.length - 1]
-          if (top === undefined) {
-            throw new Error(
-              `ext.interject() called outside of a hook handler. ` +
-                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
-            )
-          }
-          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
-            throw new Error(
-              `ext.interject() is not available in "${top.hookKey}" handlers. ` +
-                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
-            )
-          }
-          top.effects.push({ _tag: "Interject", content })
+          pushEffect("interject", { _tag: "Interject", content })
         },
 
         busEmit: (channel, payload) => {
-          const top = effectStack[effectStack.length - 1]
-          if (top === undefined) {
-            throw new Error(
-              `ext.busEmit() called outside of a hook handler. ` +
-                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
-            )
-          }
-          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
-            throw new Error(
-              `ext.busEmit() is not available in "${top.hookKey}" handlers. ` +
-                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
-            )
-          }
-          top.effects.push({ _tag: "BusEmit", channel, payload })
+          pushEffect("busEmit", { _tag: "BusEmit", channel, payload })
         },
-
         send: (message) => {
-          const top = effectStack[effectStack.length - 1]
-          if (top === undefined) {
-            throw new Error(
-              `ext.send() called outside of a hook handler. ` +
-                `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
-            )
-          }
-          if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
-            throw new Error(
-              `ext.send() is not available in "${top.hookKey}" handlers. ` +
-                `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
-            )
-          }
-          top.effects.push({ _tag: "Send", message })
+          pushEffect("send", { _tag: "Send", message })
         },
 
         onStartup: (fn) => startupFns.push(fn),
