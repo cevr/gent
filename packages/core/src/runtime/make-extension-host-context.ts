@@ -8,7 +8,7 @@
 import { DateTime, Effect } from "effect"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
-import type { BranchId, SessionId } from "../domain/ids.js"
+import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import type { ExtensionStateRuntimeService } from "./extensions/state-runtime.js"
 import type { RuntimePlatformShape } from "./runtime-platform.js"
 import type { ApprovalServiceShape } from "./approval-service.js"
@@ -17,11 +17,15 @@ import type { ExtensionRegistryService } from "./extensions/registry.js"
 import type { ExtensionTurnControlService } from "./extensions/turn-control.js"
 import type { StorageService } from "../storage/sqlite-storage.js"
 import type { SearchStorageService } from "../storage/search-storage.js"
-import type { Message } from "../domain/message.js"
+import { Message, Session, Branch } from "../domain/message.js"
 import type { EventPublisherService } from "../domain/event-publisher.js"
 import { estimateContextPercent } from "./context-estimation.js"
-import { SessionNameUpdated } from "../domain/event.js"
-import { Session } from "../domain/message.js"
+import {
+  SessionNameUpdated,
+  BranchCreated,
+  BranchSwitched,
+  SessionStarted,
+} from "../domain/event.js"
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimePlatformShape
@@ -125,6 +129,134 @@ export const makeExtensionHostContext = (
         return estimateContextPercent(messages, modelId)
       }),
     search: (query, options) => deps.searchStorage.searchMessages(query, options),
+
+    listBranches: () => deps.storage.listBranches(runInfo.sessionId),
+
+    createBranch: (params) =>
+      Effect.gen(function* () {
+        const branch = new Branch({
+          id: Bun.randomUUIDv7() as BranchId,
+          sessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+          name: params.name,
+          createdAt: yield* DateTime.nowAsDate,
+        })
+        yield* deps.storage.createBranch(branch)
+        yield* deps.eventPublisher.publish(
+          new BranchCreated({
+            sessionId: runInfo.sessionId,
+            branchId: branch.id,
+            parentBranchId: runInfo.branchId,
+          }),
+        )
+        return { branchId: branch.id }
+      }),
+
+    forkBranch: (params) =>
+      Effect.gen(function* () {
+        const messages = yield* deps.storage.listMessages(runInfo.branchId)
+        const targetIndex = messages.findIndex((m) => m.id === params.atMessageId)
+        if (targetIndex === -1) return yield* Effect.die("Message not found in current branch")
+
+        const branch = new Branch({
+          id: Bun.randomUUIDv7() as BranchId,
+          sessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+          parentMessageId: params.atMessageId,
+          name: params.name,
+          createdAt: yield* DateTime.nowAsDate,
+        })
+        yield* deps.storage.createBranch(branch)
+
+        for (const msg of messages.slice(0, targetIndex + 1)) {
+          yield* deps.storage.createMessage(
+            new Message({
+              id: Bun.randomUUIDv7() as MessageId,
+              sessionId: msg.sessionId,
+              branchId: branch.id,
+              role: msg.role,
+              parts: msg.parts,
+              createdAt: msg.createdAt,
+              ...(msg.turnDurationMs !== undefined ? { turnDurationMs: msg.turnDurationMs } : {}),
+            }),
+          )
+        }
+
+        yield* deps.eventPublisher.publish(
+          new BranchCreated({
+            sessionId: runInfo.sessionId,
+            branchId: branch.id,
+            parentBranchId: runInfo.branchId,
+          }),
+        )
+        return { branchId: branch.id }
+      }),
+
+    switchBranch: (params) =>
+      Effect.gen(function* () {
+        const session = yield* deps.storage.getSession(runInfo.sessionId)
+        if (session === undefined) return yield* Effect.die("Current session not found")
+        const updated = new Session({
+          ...session,
+          activeBranchId: params.toBranchId,
+          updatedAt: yield* DateTime.nowAsDate,
+        })
+        yield* deps.storage.updateSession(updated)
+        yield* deps.eventPublisher.publish(
+          new BranchSwitched({
+            sessionId: runInfo.sessionId,
+            fromBranchId: runInfo.branchId,
+            toBranchId: params.toBranchId,
+          }),
+        )
+      }),
+
+    createChildSession: (params) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.nowAsDate
+        const sessionId = Bun.randomUUIDv7() as SessionId
+        const branchId = Bun.randomUUIDv7() as BranchId
+        const session = new Session({
+          id: sessionId,
+          name: params.name ?? "child session",
+          cwd: params.cwd ?? deps.platform.cwd,
+          parentSessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+          createdAt: now,
+          updatedAt: now,
+          activeBranchId: branchId,
+        })
+        yield* deps.storage.createSession(session)
+        const branch = new Branch({
+          id: branchId,
+          sessionId,
+          createdAt: now,
+        })
+        yield* deps.storage.createBranch(branch)
+        yield* deps.eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
+        return { sessionId, branchId }
+      }),
+
+    getChildSessions: () => deps.storage.getChildSessions(runInfo.sessionId),
+
+    deleteSession: (sessionId) =>
+      Effect.gen(function* () {
+        if (sessionId === runInfo.sessionId) {
+          return yield* Effect.die("Cannot delete the current session from within it")
+        }
+        yield* deps.storage.deleteSession(sessionId)
+      }),
+
+    deleteBranch: (branchId) =>
+      Effect.gen(function* () {
+        if (branchId === runInfo.branchId) {
+          return yield* Effect.die("Cannot delete the current branch")
+        }
+        yield* deps.storage.deleteBranch(branchId)
+      }),
+
+    deleteMessages: (params) =>
+      deps.storage.deleteMessages(runInfo.branchId, params.afterMessageId),
   },
 
   interaction: {

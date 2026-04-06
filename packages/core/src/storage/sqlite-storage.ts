@@ -79,6 +79,7 @@ export interface StorageService {
   readonly listBranches: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
+  readonly deleteBranch: (id: BranchId) => Effect.Effect<void, StorageError>
   readonly updateBranchSummary: (
     branchId: BranchId,
     summary: string,
@@ -569,6 +570,13 @@ const makeStorage = Effect.gen(function* () {
         Effect.asVoid,
         Effect.mapError(mapError("Failed to update branch summary")),
         Effect.withSpan("Storage.updateBranchSummary"),
+      ),
+
+    deleteBranch: (id) =>
+      sql`DELETE FROM branches WHERE id = ${id}`.pipe(
+        Effect.asVoid,
+        Effect.mapError(mapError("Failed to delete branch")),
+        Effect.withSpan("Storage.deleteBranch"),
       ),
 
     countMessages: Effect.fn("Storage.countMessages")(

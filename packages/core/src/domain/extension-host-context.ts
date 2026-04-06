@@ -14,7 +14,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "./extension-protocol"
-import type { BranchId, SessionId, ToolCallId } from "./ids"
+import type { BranchId, MessageId, SessionId, ToolCallId } from "./ids"
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -125,6 +125,50 @@ export declare namespace ExtensionHostContext {
         limit?: number
       },
     ) => Effect.Effect<ReadonlyArray<SearchResult>, StorageError>
+
+    // Branch operations
+
+    readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, StorageError>
+
+    readonly createBranch: (params: {
+      name?: string
+    }) => Effect.Effect<{ branchId: BranchId }, StorageError | EventStoreError>
+
+    readonly forkBranch: (params: {
+      atMessageId: MessageId
+      name?: string
+    }) => Effect.Effect<{ branchId: BranchId }, StorageError | EventStoreError>
+
+    readonly switchBranch: (params: {
+      toBranchId: BranchId
+    }) => Effect.Effect<void, StorageError | EventStoreError>
+
+    // Session tree
+
+    readonly createChildSession: (params: {
+      name?: string
+      prompt?: string
+      cwd?: string
+    }) => Effect.Effect<
+      { sessionId: SessionId; branchId: BranchId },
+      StorageError | EventStoreError
+    >
+
+    readonly getChildSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
+
+    // Deletion
+
+    readonly deleteSession: (
+      sessionId: SessionId,
+    ) => Effect.Effect<void, StorageError | EventStoreError>
+
+    readonly deleteBranch: (branchId: BranchId) => Effect.Effect<void, StorageError>
+
+    // Message mutation
+
+    readonly deleteMessages: (params: {
+      afterMessageId?: MessageId
+    }) => Effect.Effect<void, StorageError>
   }
 
   interface Interaction {

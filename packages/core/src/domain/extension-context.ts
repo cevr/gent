@@ -23,7 +23,7 @@ import type {
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "./extension-protocol.js"
-import type { BranchId, SessionId, ToolCallId } from "./ids.js"
+import type { BranchId, MessageId, SessionId, ToolCallId } from "./ids.js"
 import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 import type { ModelId } from "./model.js"
@@ -104,6 +104,39 @@ export declare namespace ExtensionContext {
         limit?: number
       },
     ) => Promise<ReadonlyArray<SearchResult>>
+
+    // Branch operations
+
+    readonly listBranches: () => Promise<ReadonlyArray<Branch>>
+
+    readonly createBranch: (params: { name?: string }) => Promise<{ branchId: BranchId }>
+
+    readonly forkBranch: (params: {
+      atMessageId: MessageId
+      name?: string
+    }) => Promise<{ branchId: BranchId }>
+
+    readonly switchBranch: (params: { toBranchId: BranchId }) => Promise<void>
+
+    // Session tree
+
+    readonly createChildSession: (params: {
+      name?: string
+      prompt?: string
+      cwd?: string
+    }) => Promise<{ sessionId: SessionId; branchId: BranchId }>
+
+    readonly getChildSessions: () => Promise<ReadonlyArray<Session>>
+
+    // Deletion
+
+    readonly deleteSession: (sessionId: SessionId) => Promise<void>
+
+    readonly deleteBranch: (branchId: BranchId) => Promise<void>
+
+    // Message mutation
+
+    readonly deleteMessages: (params: { afterMessageId?: MessageId }) => Promise<void>
   }
 
   interface Interaction {
@@ -165,6 +198,15 @@ export const toExtensionContext = (ctx: ExtensionHostContext): ExtensionContext 
     renameCurrent: (name) => run(ctx.session.renameCurrent(name)),
     estimateContextPercent: (options) => run(ctx.session.estimateContextPercent(options)),
     search: (query, options) => run(ctx.session.search(query, options)),
+    listBranches: () => run(ctx.session.listBranches()),
+    createBranch: (params) => run(ctx.session.createBranch(params)),
+    forkBranch: (params) => run(ctx.session.forkBranch(params)),
+    switchBranch: (params) => run(ctx.session.switchBranch(params)),
+    createChildSession: (params) => run(ctx.session.createChildSession(params)),
+    getChildSessions: () => run(ctx.session.getChildSessions()),
+    deleteSession: (sessionId) => run(ctx.session.deleteSession(sessionId)),
+    deleteBranch: (branchId) => run(ctx.session.deleteBranch(branchId)),
+    deleteMessages: (params) => run(ctx.session.deleteMessages(params)),
   },
 
   interaction: {
