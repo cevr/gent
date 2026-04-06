@@ -37,18 +37,8 @@ export interface ToolDefinition<
   ) => Effect.Effect<Result, Error, Deps>
 }
 
-/** @deprecated Use `ctx.extension` instead — kept for backward compatibility */
-export interface ToolContextExtensions {
-  readonly send: ExtensionHostContext.Extension["send"]
-  readonly ask: ExtensionHostContext.Extension["ask"]
-}
-
 export interface ToolContext extends ExtensionHostContext {
   readonly toolCallId: ToolCallId
-  /** @deprecated Use `ctx.extension` — kept for backward compat during migration */
-  readonly extensions: ToolContextExtensions
-  /** @deprecated Use `ctx.interaction.approve` — kept for backward compat during migration */
-  readonly approve: ExtensionHostContext.Interaction["approve"]
 }
 
 // Tool Factory

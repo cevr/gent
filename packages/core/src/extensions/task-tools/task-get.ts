@@ -15,7 +15,7 @@ export const TaskGetTool = defineTool({
   description: "Get full details of a task including description, dependencies, and owner session.",
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {
-    const task = yield* ctx.extensions.ask(
+    const task = yield* ctx.extension.ask(
       TaskProtocol.GetTask({ taskId: params.taskId as TaskId }),
       ctx.branchId,
     )
@@ -23,7 +23,7 @@ export const TaskGetTool = defineTool({
       return { error: `Task not found: ${params.taskId}` }
     }
 
-    const deps = yield* ctx.extensions.ask(
+    const deps = yield* ctx.extension.ask(
       TaskProtocol.GetDependencies({ taskId: params.taskId as TaskId }),
       ctx.branchId,
     )

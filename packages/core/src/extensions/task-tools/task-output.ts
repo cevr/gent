@@ -16,7 +16,7 @@ export const TaskOutputTool = defineTool({
     "Get the output messages from a task's child session. Returns the conversation between the agent and tools.",
   params: TaskOutputParams,
   execute: Effect.fn("TaskOutputTool.execute")(function* (params, ctx) {
-    const result = yield* ctx.extensions.ask(
+    const result = yield* ctx.extension.ask(
       TaskProtocol.GetTaskOutput({ taskId: params.taskId as TaskId }),
       ctx.branchId,
     )

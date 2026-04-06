@@ -22,7 +22,7 @@ export const TaskUpdateTool = defineTool({
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TaskUpdateParams,
   execute: Effect.fn("TaskUpdateTool.execute")(function* (params, ctx) {
-    const updated = yield* ctx.extensions.ask(
+    const updated = yield* ctx.extension.ask(
       TaskProtocol.UpdateTask({
         taskId: params.taskId as TaskId,
         status: params.status as TaskStatus | undefined,

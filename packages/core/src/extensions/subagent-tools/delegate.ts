@@ -80,7 +80,7 @@ export const DelegateTool = defineTool({
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const task = yield* ctx.extensions
+      const task = yield* ctx.extension
         .ask(
           TaskProtocol.CreateTask({
             sessionId: ctx.sessionId,
@@ -95,7 +95,7 @@ export const DelegateTool = defineTool({
         .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
       if (task === undefined)
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
-      const result = yield* ctx.extensions.ask(
+      const result = yield* ctx.extension.ask(
         TaskProtocol.RunTask({ taskId: task.id }),
         ctx.branchId,
       )
@@ -112,7 +112,7 @@ export const DelegateTool = defineTool({
       for (const item of tasks) {
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
-        const task = yield* ctx.extensions
+        const task = yield* ctx.extension
           .ask(
             TaskProtocol.CreateTask({
               sessionId: ctx.sessionId,
@@ -128,7 +128,7 @@ export const DelegateTool = defineTool({
         if (task === undefined) {
           return { error: "Background tasks unavailable — task-tools extension is disabled" }
         }
-        yield* ctx.extensions.ask(TaskProtocol.RunTask({ taskId: task.id }), ctx.branchId)
+        yield* ctx.extension.ask(TaskProtocol.RunTask({ taskId: task.id }), ctx.branchId)
         taskIds.push(task.id)
       }
       return { taskIds, status: "running" as const, count: taskIds.length }

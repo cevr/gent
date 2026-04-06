@@ -16,7 +16,7 @@ export const TaskStopTool = defineTool({
     "Stop a running or pending task. Interrupts the task's agent fiber and sets status to stopped.",
   params: TaskStopParams,
   execute: Effect.fn("TaskStopTool.execute")(function* (params, ctx) {
-    const updated = yield* ctx.extensions.ask(
+    const updated = yield* ctx.extension.ask(
       TaskProtocol.StopTask({ taskId: params.taskId as TaskId }),
       ctx.branchId,
     )

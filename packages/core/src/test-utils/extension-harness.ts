@@ -384,11 +384,5 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
     queueFollowUp: dieStub("turn.queueFollowUp"),
     interject: dieStub("turn.interject"),
   },
-  // Backward-compat aliases
-  extensions: {
-    send: dieStub("extensions.send"),
-    ask: dieStub("extensions.ask"),
-  },
-  approve: dieStub("approve"),
   ...overrides,
 })

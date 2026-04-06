@@ -12,7 +12,7 @@ export const TaskListTool = defineTool({
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,
   execute: Effect.fn("TaskListTool.execute")(function* (_params, ctx) {
-    const tasks = yield* ctx.extensions.ask(
+    const tasks = yield* ctx.extension.ask(
       TaskProtocol.ListTasks({ sessionId: ctx.sessionId, branchId: ctx.branchId }),
       ctx.branchId,
     )

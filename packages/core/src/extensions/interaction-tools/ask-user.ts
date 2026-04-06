@@ -36,7 +36,7 @@ export const AskUserResult = Schema.Struct({
   }),
 })
 
-// AskUser Tool — uses ctx.approve() with structured question metadata
+// AskUser Tool — uses ctx.interaction.approve() with structured question metadata
 
 const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
   questions
@@ -58,7 +58,7 @@ export const AskUserTool = defineTool({
   promptSnippet: "Ask the user questions with optional predefined options",
   params: AskUserParams,
   execute: Effect.fn("AskUserTool.execute")(function* (params, ctx) {
-    const decision = yield* ctx.approve({
+    const decision = yield* ctx.interaction.approve({
       text: formatQuestionsText(params.questions),
       metadata: { type: "ask-user", questions: params.questions },
     })

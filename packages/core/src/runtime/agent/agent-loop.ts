@@ -518,11 +518,6 @@ const executeToolCalls = (params: {
             queueFollowUp: die("turn.queueFollowUp"),
             interject: die("turn.interject"),
           },
-          extensions: {
-            send: die("extensions.send"),
-            ask: die("extensions.ask"),
-          },
-          approve: die("approve"),
         }
         const run = params.toolRunner
           .run(toolCall, ctx)

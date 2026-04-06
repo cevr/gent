@@ -157,17 +157,16 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                       }),
                     ),
               },
-              extensions: {
-                send: (message, branchId) =>
-                  extensionStateRuntime.send(ctx.sessionId, message, branchId ?? ctx.branchId),
-                ask: (message, branchId) =>
-                  extensionStateRuntime.ask(ctx.sessionId, message, branchId ?? ctx.branchId),
+              interaction: {
+                approve: (params) =>
+                  approvalService.present(params, {
+                    sessionId: ctx.sessionId,
+                    branchId: ctx.branchId,
+                  }),
+                present: () => Effect.die("interaction.present not wired in ToolRunner"),
+                confirm: () => Effect.die("interaction.confirm not wired in ToolRunner"),
+                review: () => Effect.die("interaction.review not wired in ToolRunner"),
               },
-              approve: (params) =>
-                approvalService.present(params, {
-                  sessionId: ctx.sessionId,
-                  branchId: ctx.branchId,
-                }),
             }
 
             // Run tool.execute interceptor, falling back to direct tool execution

@@ -126,7 +126,7 @@ export const BashTool = defineTool({
     // Guardrail check — ephemeral, not persisted through Permission service
     const risk = classify(command)
     if (risk.level !== "safe") {
-      const decision = yield* ctx.approve({
+      const decision = yield* ctx.interaction.approve({
         text: `This command is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\nAllow execution?`,
         metadata: { type: "bash-guardrail", level: risk.level },
       })
